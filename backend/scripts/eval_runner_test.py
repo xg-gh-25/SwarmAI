@@ -342,12 +342,14 @@ class TestProgrammaticFirstCascade:
 
 
 class TestCanaryTeeth:
-    """verify_teeth: after a canary's positive command passes, execute its
-    negative_command and require the OK-marker to be ABSENT (wire-broken =>
-    marker gone). A canary whose marker survives the negative variant is
-    vacuous => FAIL. Teeth are OFF by default (gate/nightly only)."""
+    """verify_teeth: after a canary's positive passes, execute the
+    negative_command and require it to AFFIRMATIVELY emit its FAIL token
+    (negative_expected_contains) AND omit the positive marker. Teeth are
+    OPT-IN (only fire when negative_expected_contains is declared) — so cases
+    using the opposite convention (eval_spine_probe prints _OK on a successful
+    negative) are NOT runtime-executed. OFF by default at the param level too."""
 
-    def _case(self, command, expected, negative=None):
+    def _case(self, command, expected, negative=None, neg_expected=None):
         c = {
             "id": "GS_TEETH_TEST",
             "category": "compliance",
@@ -358,60 +360,75 @@ class TestCanaryTeeth:
         }
         if negative is not None:
             c["verification"]["negative_command"] = negative
+        if neg_expected is not None:
+            c["verification"]["negative_expected_contains"] = neg_expected
         return c
 
     def test_teeth_off_by_default_ignores_negative(self):
-        """AC3/AC4 back-compat: verify_teeth defaults False — the negative is
-        never run, even if present. Behaves exactly as today."""
+        """back-compat: verify_teeth defaults False — the negative is never run,
+        even when fully declared. Behaves exactly as today."""
         repo = _find_swarmai_repo()
-        # negative would FAIL teeth (marker present), but teeth are off → passed
-        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")
-        result = eval_canary_pass(case, repo)
+        case = self._case("echo M_OK", "M_OK", negative="echo M_OK", neg_expected="M_FAIL")
+        result = eval_canary_pass(case, repo)  # default verify_teeth=False
         assert result["status"] == "passed"
 
     def test_vacuous_negative_still_prints_marker_is_RED(self):
-        """AC1 (the teeth): positive passes, but the negative variant STILL
-        prints the marker => the probe doesn't actually discriminate => FAIL."""
+        """AC1: positive passes, but the negative STILL prints the positive
+        marker => vacuous probe => FAIL (even though FAIL token would match)."""
         repo = _find_swarmai_repo()
-        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")
+        # negative echoes BOTH the positive marker and the fail token
+        case = self._case("echo M_OK", "M_OK", negative="echo 'M_OK M_FAIL'", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
         assert result["status"] == "failed", result
-        assert "teeth" in result["notes"].lower() or "vacuous" in result["notes"].lower()
+        assert "vacuous" in result["notes"].lower()
 
-    def test_real_negative_omits_marker_is_GREEN(self):
-        """AC2: positive passes AND the negative variant omits the marker
-        (it discriminates) => passed."""
+    def test_real_negative_emits_fail_token_is_GREEN(self):
+        """AC2: positive passes AND negative emits its FAIL token AND omits the
+        positive marker (it discriminates) => passed."""
         repo = _find_swarmai_repo()
-        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo DIFFERENT")
+        case = self._case("echo M_OK", "M_OK", negative="echo M_FAIL", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
         assert result["status"] == "passed", result
 
-    def test_negative_that_errors_without_marker_is_GREEN(self):
-        """AC5: a negative that exits non-zero (e.g. `false`) and prints no
-        marker is a valid teeth-pass — it proved the wire can fail."""
+    def test_typo_or_noop_negative_is_RED(self):
+        """AC5/HIGH-1: a negative that never ran the wire (typo => exit 127, or
+        a no-op like `true`) emits NO fail token => NO TEETH => FAIL.
+        'marker merely absent' must NOT pass."""
         repo = _find_swarmai_repo()
-        case = self._case("echo MARKER_OK", "MARKER_OK", negative="false")
+        for bad_neg in ("this_is_a_typo_cmd_xyz", "true"):
+            case = self._case("echo M_OK", "M_OK", negative=bad_neg, neg_expected="M_FAIL")
+            result = eval_canary_pass(case, repo, verify_teeth=True)
+            assert result["status"] == "failed", (bad_neg, result)
+            assert "no teeth" in result["notes"].lower(), (bad_neg, result)
+
+    def test_not_opted_in_skips_teeth(self):
+        """CRITICAL-1: a case with negative_command but NO
+        negative_expected_contains is NOT runtime-executed (spine-probe
+        convention is left alone). Even a vacuous negative passes."""
+        repo = _find_swarmai_repo()
+        case = self._case("echo M_OK", "M_OK", negative="echo M_OK")  # no neg_expected
         result = eval_canary_pass(case, repo, verify_teeth=True)
         assert result["status"] == "passed", result
 
-    def test_no_negative_command_passes_under_teeth(self):
-        """AC4: a canary with NO negative_command is untouched even when
-        verify_teeth=True (back-compat for pre-teeth cases)."""
+    def test_fail_token_in_stderr_only_is_RED(self):
+        """MEDIUM-1: match on stdout only. A fail token that appears solely in
+        stderr (e.g. command echoed in an error) does NOT count as emitted."""
         repo = _find_swarmai_repo()
-        case = self._case("echo MARKER_OK", "MARKER_OK")  # no negative
+        # 'M_FAIL' only reaches stderr via the not-found command name echo
+        case = self._case("echo M_OK", "M_OK", negative="M_FAIL_not_a_real_cmd", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
-        assert result["status"] == "passed", result
+        assert result["status"] == "failed", result
+        assert "no teeth" in result["notes"].lower(), result
 
     def test_teeth_threaded_through_run_eval(self):
         """AC3: verify_teeth threads run_eval -> evaluate_case -> eval_canary_pass.
-        A vacuous case fails ONLY when run_eval is called with verify_teeth=True."""
+        A vacuous opted-in case fails ONLY when run_eval verify_teeth=True."""
         from backend.scripts.eval_runner import run_eval
         repo = _find_swarmai_repo()
-        gs = {"cases": [self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")]}
-        # teeth off → passes
+        gs = {"cases": [self._case("echo M_OK", "M_OK",
+                                    negative="echo 'M_OK M_FAIL'", neg_expected="M_FAIL")]}
         r_off = run_eval(gs, "manual", None, repo)
         assert r_off["cases"][0]["status"] == "passed"
-        # teeth on → the vacuous negative is caught
         r_on = run_eval(gs, "manual", None, repo, verify_teeth=True)
         assert r_on["cases"][0]["status"] == "failed", r_on["cases"][0]
 

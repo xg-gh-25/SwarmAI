@@ -480,7 +480,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
             }
 
         # Teeth: the positive passed. If asked, prove the probe actually
-        # discriminates by running the negative variant — the marker MUST vanish.
+        # discriminates by running the negative variant.
         teeth_result = _verify_canary_teeth(verification, expected, repo_root, cmd_timeout) if verify_teeth else None
         if teeth_result is not None:
             return teeth_result
@@ -495,25 +495,40 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
 
 def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
                          cmd_timeout: int) -> dict | None:
-    """Execute a canary's negative_command and verify it does NOT print the
-    expected marker — the proof that the probe discriminates (has teeth).
+    """Execute a canary's negative_command and verify the probe discriminates —
+    it affirmatively emits its FAIL token (`negative_expected_contains`) AND
+    omits the positive marker (`expected_contains`).
 
-    Returns None when there are no teeth to check (no negative_command, or no
-    expected marker to look for) — the caller then treats the positive pass as
-    the verdict. Returns a {"status": "failed"} dict only when the marker
-    SURVIVES the negative variant (vacuous probe). A teeth-pass falls through to
-    None so the positive verdict stands.
+    OPT-IN by `negative_expected_contains`. Returns None (positive verdict
+    stands) when that field is absent — so a case that only declares
+    `negative_command` for the gate_teeth EXISTENCE check is NOT runtime-executed.
+    This is deliberate: two negative-command conventions coexist in the repo and
+    are output-identical for "success" so they cannot be auto-discriminated —
+      • recall_chain_probe.py negatives print `<NAME>_FAIL` + exit 1 (marker gone)
+      • eval_spine_probe.py negatives print `<NAME>_OK` + exit 0 (marker PRESENT)
+    A marker-absence rule would false-FAIL every spine probe (Gate-2 CRITICAL-1),
+    and "marker merely absent" is unfalsifiable — a typo'd/no-op negative
+    (`true`, exit 127) prints nothing and would pass vacuously (Gate-2 HIGH-1).
+    Requiring the negative to AFFIRMATIVELY print its own FAIL token closes both:
+    only a negative that actually ran the wire and saw it break emits the token.
 
-    Teeth-pass condition (pre-mortem refinement): the negative must have RAN
-    (no TimeoutExpired/exception) AND the marker must be ABSENT. A negative that
-    errors before printing (e.g. `false`) and omits the marker is a valid pass —
-    it proved the wire can fail. Marker-absence is the invariant, NOT the return
-    code (pytest -k <none> exits 5, a probe negative exits 1 — both make the
-    marker vanish).
+    Teeth-pass (returns None, positive verdict stands): negative RAN (no
+    timeout/exception) AND its output CONTAINS `negative_expected_contains` AND
+    does NOT contain `expected_contains`.
+    Teeth-FAIL (returns failed dict): the positive marker survived the negative
+    (vacuous probe), OR the negative did not emit its FAIL token (it never
+    reached/broke the wire — e.g. a typo, a no-op, or a crash-before-print).
+    Matching is on stdout only (stderr can echo the command string / tracebacks
+    that incidentally contain a marker — Gate-2 MEDIUM-1).
     """
+    negative_expected = (verification.get("negative_expected_contains") or "").strip()
+    if not negative_expected:
+        return None  # not opted into runtime teeth — positive verdict stands
+
     negative_command = (verification.get("negative_command") or "").strip()
-    if not negative_command or not expected:
-        return None  # nothing to verify — positive verdict stands
+    if not negative_command:
+        return {"status": "failed",
+                "notes": "teeth: negative_expected_contains declared but no negative_command to run"}
 
     safety_error = _validate_canary_command(negative_command)
     if safety_error:
@@ -529,15 +544,25 @@ def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
     except Exception as e:
         return {"status": "failed", "notes": f"negative_command errored: {str(e)[:150]} — teeth inconclusive"}
 
-    neg_output = neg.stdout + neg.stderr
-    if expected in neg_output:
+    # stdout ONLY — stderr can echo the command string or a traceback that
+    # incidentally contains a marker substring (Gate-2 MEDIUM-1).
+    neg_out = neg.stdout
+    if expected and expected in neg_out:
         return {
             "status": "failed",
-            "notes": (f"VACUOUS (no teeth): negative_command still produced marker "
-                      f"'{expected}' — the probe does not discriminate a broken wire. "
+            "notes": (f"VACUOUS (no teeth): negative_command still produced the positive "
+                      f"marker '{expected}' — the probe does not discriminate a broken wire. "
                       f"neg exit={neg.returncode}.")
         }
-    return None  # teeth held — marker absent — positive verdict stands
+    if negative_expected not in neg_out:
+        return {
+            "status": "failed",
+            "notes": (f"NO TEETH: negative_command did not emit its FAIL token "
+                      f"'{negative_expected}' (it never ran/broke the real wire — typo, "
+                      f"no-op, or crash-before-print). neg exit={neg.returncode}. "
+                      f"out[:120]={neg_out[:120]!r}")
+        }
+    return None  # teeth held — FAIL token present, positive marker absent — positive verdict stands
 
 
 def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None = None) -> dict:
@@ -2140,11 +2165,15 @@ def main():
     run_p.add_argument("--programmatic-only", action="store_true",
                        help="Skip LLM-judge cases — run only fast deterministic evaluators "
                             "(the BVT gate set). Zero Bedrock cost; refreshes the gate report.")
-    run_p.add_argument("--verify-teeth", action="store_true",
-                       help="For each canary with a negative_command, ALSO run the negative "
-                            "variant and require the marker to vanish (proves the probe "
-                            "discriminates). Doubles subprocess cost — gate/nightly/local-gate-report "
-                            "only, NOT the per-session health hook.")
+    run_p.add_argument("--verify-teeth", dest="verify_teeth", action="store_true", default=True,
+                       help="(default ON) For each canary that opts in via "
+                            "negative_expected_contains, run the negative variant and require "
+                            "it to emit its FAIL token while omitting the positive marker "
+                            "(proves the probe discriminates). ON for all gate-report producers "
+                            "(CLI/nightly/GUI) so the committed bvt is deterministic; the "
+                            "per-session health hook leaves it OFF (deadline-bound).")
+    run_p.add_argument("--no-verify-teeth", dest="verify_teeth", action="store_false",
+                       help="Disable canary teeth (skip the negative-variant execution).")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate golden_set.yaml schema")
