@@ -88,12 +88,18 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     # Rank entries by BM25 against the query (same scorer as the hybrid leg).
     docs = {str(i): e for i, e in enumerate(entries)}
     scores = memory_index._bm25_scores(query, docs)
-    if scores:
-        order = sorted(docs, key=lambda k: scores.get(k, 0.0), reverse=True)
-    else:
-        # No lexical overlap (e.g. a pure-vector synonym query): preserve the
-        # original on-disk order so the section still surfaces its head entries.
-        order = list(docs)
+    if not scores:
+        # No entry shares query vocabulary. The SECTION scored relevant (via its
+        # index-line keywords or a vector hit), but no individual entry does —
+        # so returning arbitrary HEAD entries would re-introduce the exact
+        # head-position bias this slicer exists to remove (Gate-2 Finding A,
+        # run_c1624c89). Skip the section instead: the caller treats an empty
+        # slice as "no entry matched" and continues to the next ranked section,
+        # so a genuinely-matching section still surfaces and a falsely-broad one
+        # stays silent rather than injecting wrong-but-head content with
+        # drilled=True. Precision > coverage on the recall READ path.
+        return ""
+    order = sorted(docs, key=lambda k: scores.get(k, 0.0), reverse=True)
 
     # Walk entries highest-rank-first, accumulating whole entries until budget.
     # Measure the ACTUAL joined-output token count each step (estimate_tokens is

@@ -372,3 +372,38 @@ def test_g1_no_embed_non_coe_query_not_dead():
     )
     assert res.hit_layer != "none", "no-embed recall is dead for non-COE query"
     assert "task_budget" in res.content
+
+
+def test_g1_no_entry_match_skips_section_not_head_bias():
+    """Gate-2 Finding A: when a section scores relevant (index keywords) but NO
+    entry body shares query vocabulary, the slicer must NOT emit arbitrary head
+    entries (re-introducing head-position bias). It returns empty → caller skips."""
+    from core import context_recall
+
+    # Decisions section: index line carries the query keywords, but every entry
+    # body is about an unrelated topic (zero lexical overlap with the query).
+    pad = "networking dns routing subnet gateway packet latency throughput"
+    entries = "\n".join(
+        f"- [decision] **Unrelated networking note {i}** — {pad} {pad} (2026-02-{(i % 28) + 1:02d})"
+        for i in range(80)
+    )
+    index = (
+        "## Memory Index\n"
+        "<!-- MEMORY_INDEX_START -->\n"
+        "- [DEC32] task_budget desktop channel precompact override | 2026-06-17, task_budget, precompact\n"
+        "<!-- MEMORY_INDEX_END -->\n"
+    )
+    mem = f"{index}\n## Decisions\n{entries}\n\n## Open Threads\n- none\n"
+
+    sliced = context_recall._slice_section_entries(
+        "\n".join(
+            f"- [decision] **Unrelated networking note {i}** — {pad} {pad}"
+            for i in range(80)
+        ),
+        "task_budget desktop channel precompact",  # zero overlap with bodies
+        budget_tokens=1500,
+    )
+    assert sliced == "", (
+        "slicer emitted head entries for a zero-overlap query — head-position "
+        f"bias re-introduced: {sliced[:160]!r}"
+    )
