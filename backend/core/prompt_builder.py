@@ -631,18 +631,14 @@ class PromptBuilder:
                 exclude_files = set(CHANNEL_LIGHT_EXCLUDE)
                 logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
             # Owner DM and chat tabs: full context (no exclusion)
-
-            # O2: EVOLUTION.md only for coding sessions — corrections, capabilities,
-            # and optimizations are irrelevant when user is doing research/reports/chat.
-            # Saves ~5K tokens for non-coding sessions.
-            if not channel_context:  # Only for desktop chat tabs
-                try:
-                    from .proactive_intelligence import _detect_active_coding_project
-                    if not _detect_active_coding_project(Path(working_directory)):
-                        exclude_files = exclude_files or set()
-                        exclude_files.add("EVOLUTION.md")
-                except Exception:
-                    pass  # Proactive module unavailable — include EVOLUTION by default
+            #
+            # NOTE: EVOLUTION.md loads UNCONDITIONALLY on desktop (like KNOWLEDGE.md).
+            # The old O2 "coding-session-only" gate (removed run_6d2cc624) excluded it
+            # from non-coding sessions to save ~5K tokens — but that premise is stale:
+            # EVOLUTION.md is now the cognitive failure registry (CLASS A/A′/B/C), and
+            # those biases surface in ANY session, not just coding. PRI08 (power >
+            # token budget) makes the 5K on a 91K/1M budget a worthwhile trade.
+            # Channel exclusions below are unchanged (group / non-owner still drop it).
 
             # Memory injection is always active — auto-selects full injection
             # (< 30K tokens) or selective mode (≥ 30K).  No config flag needed.

@@ -280,3 +280,78 @@ class TestMCPSubsetConfiguration:
         mock_load.assert_called_once()
         call_kwargs = mock_load.call_args
         assert call_kwargs[1]["channel_context"] == {"channel_type": "slack"}
+
+
+class TestEvolutionUnconditionalLoad:
+    """EVOLUTION.md must load on a desktop chat tab regardless of whether a
+    coding project is active — it carries cognitive failure history (CLASS A/B),
+    which is relevant in ANY session, not just coding ones. The old O2 gate
+    (prompt_builder.py:635-645) excluded it from non-coding desktop sessions;
+    this asserts that gate is gone. Drives the REAL build_system_prompt (not the
+    _simulate_build re-impl, which never had the gate — GUI14: test the real fn).
+    """
+
+    def _assembled_text(self, agent_config: dict) -> str:
+        """The ASSEMBLED context text — this reflects exclusion. The metadata
+        `files` list does NOT (it iterates all CONTEXT_FILES specs regardless of
+        exclude_filenames), so asserting against it would be vacuous (Gate-2
+        test-theater trap, caught run_6d2cc624). The section header only appears
+        when the file actually made it into the prompt."""
+        meta = agent_config.get("_system_prompt_metadata", {})
+        return meta.get("full_text", "")
+
+    def _run_build(self, workspace, *, coding: bool, channel_context=None) -> dict:
+        """Build the system prompt, forcing the coding-detection result, and
+        return the agent_config. `generate_codebase_map` is mocked to None so the
+        build stays confined to `workspace` (Gate-2: the real "SwarmAI" name would
+        otherwise pull this repo's on-disk code_intel.db into the prompt — a
+        non-hermetic leak)."""
+        import asyncio
+        import unittest.mock as mock
+
+        builder = _make_builder()
+        agent_config: dict = {}
+        with mock.patch(
+            "core.proactive_intelligence._detect_active_coding_project",
+            return_value=("SwarmAI" if coding else None),
+        ), mock.patch(
+            "core.proactive_intelligence.get_focus_keywords",
+            return_value="",
+        ), mock.patch(
+            "core.code_intel.codebase_map.generate_codebase_map",
+            return_value=None,
+        ):
+            asyncio.run(builder.build_system_prompt(
+                agent_config=agent_config,
+                working_directory=str(workspace),
+                channel_context=channel_context,
+            ))
+        return agent_config
+
+    def test_evolution_loaded_on_noncoding_desktop(self, tmp_path):
+        """The bug-revealing case: non-coding desktop session must STILL load
+        EVOLUTION.md into the assembled prompt. Under the old O2 gate the
+        'Evolution Registry' section was excluded → this asserts RED on old code."""
+        text = self._assembled_text(self._run_build(tmp_path, coding=False))
+        # Guard: build actually assembled content (not an empty/failed pass).
+        assert "Memory" in text, f"build did not assemble context: {text[:200]!r}"
+        assert "Evolution Registry" in text, (
+            "EVOLUTION.md excluded from a non-coding desktop session — "
+            "the O2 coding-gate must be removed"
+        )
+
+    def test_evolution_still_excluded_for_nonowner_channel(self, tmp_path):
+        """Regression guard for the REAL risk (Gate-2 concern 2): removing the
+        desktop O2 gate must NOT leak EVOLUTION.md into a non-owner CHANNEL prompt.
+        CHANNEL_LIGHT_EXCLUDE still drops it. This pins the channel-exclusion path —
+        a DIFFERENT code path from the desktop test above (not a near-duplicate)."""
+        ctx = {"is_owner": False, "is_group": False, "channel_type": "slack"}
+        text = self._assembled_text(
+            self._run_build(tmp_path, coding=False, channel_context=ctx)
+        )
+        # Guard: build assembled SOMETHING (non-owner channel still loads most files).
+        assert text, "build produced empty prompt for non-owner channel"
+        assert "Evolution Registry" not in text, (
+            "EVOLUTION.md leaked into a non-owner channel prompt — "
+            "CHANNEL_LIGHT_EXCLUDE must still drop it"
+        )
