@@ -323,6 +323,14 @@ export interface ForceClearStreamInput {
   /** Backend mirror's reported state string (e.g. 'cold','idle','streaming',
    *  'waiting_input'), or undefined if the session is missing/evicted. */
   reportedState: string | undefined;
+  /** A resume is genuinely IN FLIGHT for this tab (the FE saw session_resuming
+   *  and has not yet received data; bounded by its own 60s resume timeout).
+   *  During a cold --resume the backend mirror reports 'cold'/'idle' for the
+   *  spawn + transcript-replay window (often >30s on heavy sessions) even though
+   *  it IS working — without this the reconciler force-clears the spinner mid-
+   *  resume ("resume needs two sends / spinner vanished"). This flag
+   *  disambiguates a spawning resume from a genuinely dead/evicted session. */
+  resumeInProgress?: boolean;
   /** ms since the tab's reconcile stream-start stamp (for the active-state cap). */
   activeGuardAge: number;
   /** Reconcile-owned stamp of when the stuck condition was first observed. */
@@ -352,6 +360,7 @@ export type ForceClearReason =
   | 'no_session'        // tab has no backend session id
   | 'backend_streaming' // backend mirror reports streaming — spinner is correct
   | 'active_backend'    // backend in an active state (waiting_input) within cap
+  | 'resuming'          // a resume is in flight — cold/idle is spawn, not stuck
   | 'too_fresh'         // stuck but within the settle window
   | 'stuck';            // stuck past the settle window → force-clear
 
@@ -377,7 +386,7 @@ export interface ForceClearDecision {
 export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClearDecision {
   const {
     drainPending, hasQueuedMessage, queueAge, hasSessionId,
-    backendIsStreaming, reportedState, activeGuardAge,
+    backendIsStreaming, reportedState, resumeInProgress, activeGuardAge,
     idleStreamingSince, now,
     queueImmunityMs = 60_000, settleMs = 30_000, activeGuardMaxMs = 7_200_000,
   } = input;
@@ -399,6 +408,14 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
       && activeGuardAge < activeGuardMaxMs) {
     return { verdict: 'reset-and-skip', reason: 'active_backend' };
   }
+
+  // A resume genuinely in flight: the backend reports 'cold'/'idle' during the
+  // spawn + --resume replay window, but it IS working. Exempt so the spinner is
+  // not force-cleared mid-resume. Bounded by the FE's own 60s resume timeout,
+  // which clears isResuming → the reconciler resumes force-clearing if it then
+  // turns out genuinely stuck. A dead/evicted session has isResuming=false and
+  // still force-clears below.
+  if (resumeInProgress) return { verdict: 'reset-and-skip', reason: 'resuming' };
 
   // Stuck condition holds (frontend streaming, backend not). Honor the settle
   // window anchored to the reconcile-owned stamp.

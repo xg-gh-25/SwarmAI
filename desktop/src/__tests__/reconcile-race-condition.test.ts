@@ -47,7 +47,7 @@ interface MockTabState {
   isResuming?: boolean;
 }
 
-type ReconcileAction = 'skip_not_streaming' | 'skip_drain_or_queue' | 'skip_no_session' | 'skip_backend_streaming' | 'skip_active_backend' | 'skip_too_fresh' | 'clear';
+type ReconcileAction = 'skip_not_streaming' | 'skip_drain_or_queue' | 'skip_no_session' | 'skip_backend_streaming' | 'skip_active_backend' | 'skip_resuming' | 'skip_too_fresh' | 'clear';
 
 /**
  * Thin ADAPTER over the production decision function `forceClearStreamVerdict`
@@ -75,6 +75,7 @@ function reconcileDecision(
     hasSessionId: !!tabState.sessionId,
     backendIsStreaming,
     reportedState: backendState,
+    resumeInProgress: !!tabState.isResuming,
     activeGuardAge: now - (tabState._reconcileStreamStart ?? 0),
     idleStreamingSince: tabState._idleStreamingSince,
     now,
@@ -86,6 +87,7 @@ function reconcileDecision(
     return reason === 'no_session' ? 'skip_no_session'
       : reason === 'backend_streaming' ? 'skip_backend_streaming'
       : reason === 'active_backend' ? 'skip_active_backend'
+      : reason === 'resuming' ? 'skip_resuming'
       : 'skip_drain_or_queue';
   }
   if (verdict === 'wait-settle') {

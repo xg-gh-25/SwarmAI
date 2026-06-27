@@ -1447,6 +1447,7 @@ export function useChatStreamingLifecycle(
             hasSessionId: true,
             backendIsStreaming: backendState?.streaming ?? false,
             reportedState: backendState?.state,
+            resumeInProgress: !!tabState.isResuming,
             activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
             idleStreamingSince: tabState._idleStreamingSince,
             now: Date.now(),

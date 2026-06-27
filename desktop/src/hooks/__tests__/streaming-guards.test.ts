@@ -517,12 +517,34 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     ).toBe('force-clear');
   });
 
-  // CURRENT (pre-fix) behavior on a COLD-resume spawn window. Documented here so
-  // the upcoming cold-resume fix is a VISIBLE, intentional change to this case
-  // (cold should become exempt while a resume is genuinely in progress). Today
-  // it force-clears, which is the "resume needs two sends / spinner vanished"
-  // bug — NOT yet fixed by this protection-net commit.
-  it('DOCUMENTS current cold-resume behavior: cold + settled → force-clear (the bug)', () => {
-    expect(forceClearStreamVerdict({ ...base, reportedState: 'cold' }).verdict).toBe('force-clear');
+  // ── THE COLD-RESUME FIX (step 2) ──────────────────────────────────────────
+  // A cold --resume reports backend 'cold'/'idle' during the spawn + transcript
+  // replay (often >30s). resumeInProgress (FE saw session_resuming, no data yet)
+  // exempts it so the spinner is NOT force-cleared mid-resume. A genuinely
+  // dead/evicted session (resumeInProgress=false) still force-clears.
+  it('FIX: cold backend + resume in flight → exempt (no force-clear)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'cold', resumeInProgress: true }),
+    ).toEqual({ verdict: 'reset-and-skip', reason: 'resuming' });
+  });
+
+  it('FIX: idle backend + resume in flight → exempt (heavy --resume replay)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'idle', resumeInProgress: true }).verdict,
+    ).toBe('reset-and-skip');
+  });
+
+  it('PRESERVED: cold backend + NOT resuming → still force-clears (dead/evicted)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'cold', resumeInProgress: false }).verdict,
+    ).toBe('force-clear');
+  });
+
+  it('PRESERVED: resumeInProgress never overrides genuine backend streaming', () => {
+    // Defense-in-depth: if backend is streaming, that wins (reason stays
+    // backend_streaming) — resumeInProgress doesn't mask a real live turn.
+    expect(
+      forceClearStreamVerdict({ ...base, backendIsStreaming: true, resumeInProgress: true }).reason,
+    ).toBe('backend_streaming');
   });
 });
