@@ -977,3 +977,46 @@ class TestUsageDecayGate:
         usage = _json.loads((ctx / ".memory-usage.json").read_text())
         # Corrupt sidecar → fail safe → no decay, counts intact.
         assert usage["PIT07"] == 40.0
+
+    def test_corrupt_sidecar_self_heals(self, hook, tmp_path, monkeypatch):
+        """Gate-2 MEDIUM (run_241014d4): a corrupt sidecar must be REWRITTEN to a
+        valid date this run, so decay resumes the next day. Without the heal, the
+        corrupt file is re-read forever and decay is permanently disabled."""
+        import json as _json
+        from datetime import date
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40.0}))
+        (ctx / ".memory-usage-meta.json").write_text("{not valid json")
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)
+
+        # Corrupt sidecar healed to a valid today's-date JSON (self-repair).
+        meta = _json.loads((ctx / ".memory-usage-meta.json").read_text())
+        assert meta["last_decay"] == date.today().isoformat()
+
+    def test_future_sidecar_clamped_and_healed(self, hook, tmp_path, monkeypatch):
+        """Gate-2 MEDIUM (run_241014d4): a last_decay in the FUTURE (clock skew /
+        hand-edit) gives negative days_elapsed → decay skipped. The future date
+        must be clamped to today and rewritten, else decay stays disabled until the
+        wall clock passes the bogus future date."""
+        import json as _json
+        from datetime import date, timedelta
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40.0}))
+        future = (date.today() + timedelta(days=5)).isoformat()
+        (ctx / ".memory-usage-meta.json").write_text(_json.dumps({"last_decay": future}))
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)
+
+        # No decay this run (future → clamped to today → days_elapsed 0), counts intact...
+        usage = _json.loads((ctx / ".memory-usage.json").read_text())
+        assert usage["PIT07"] == 40.0
+        # ...but the bogus future date is healed to today so decay resumes normally.
+        meta = _json.loads((ctx / ".memory-usage-meta.json").read_text())
+        assert meta["last_decay"] == date.today().isoformat()
