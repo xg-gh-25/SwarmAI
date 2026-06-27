@@ -152,21 +152,30 @@ class TestFlushGenerationGuardTimeoutPath:
         assert unit.state == SessionState.IDLE
 
     @pytest.mark.asyncio
-    async def test_flush_kills_on_timeout_when_generation_stable(self, unit):
-        """Normal timeout: generation stable → kill subprocess for clean respawn."""
+    async def test_flush_leaves_subprocess_alive_on_timeout(self, unit):
+        """Normal timeout: generation stable → do NOT kill (design choice 2026-06-20).
+
+        On flush timeout the subprocess is likely still executing a tool call.
+        Killing it would destroy output that session_router persists to DB and
+        the frontend recovers via reconciliation. So flush leaves it alive (and
+        IDLE); the 12h TTL handles a truly-stuck process. The subprocess also
+        stays warm for the next send to resume — consistent with the user-Stop
+        warm invariant (see SessionUnit.interrupt / flush_subprocess_pipe).
+        """
         # Mock interrupt to hang
         async def hanging_interrupt():
             await asyncio.sleep(100)
 
         unit._client.interrupt = hanging_interrupt
 
-        # Patch kill
+        # Patch kill to detect any (wrong) kill attempt
         unit.kill = AsyncMock()
 
         await unit.flush_subprocess_pipe(timeout=0.1)
 
-        # Should have killed
-        unit.kill.assert_called_once()
+        # Must NOT kill — output may still be in flight, subprocess stays warm.
+        unit.kill.assert_not_called()
+        assert unit.state == SessionState.IDLE
 
 
 class TestFlushCancelledError:
