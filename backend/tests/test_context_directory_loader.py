@@ -345,10 +345,16 @@ class TestComputeTokenBudget:
 # ── _enforce_token_budget() truncate_from unit tests ──────────────────
 
 
-class TestEnforceTokenBudgetTruncateFrom:
-    """Unit tests for truncate_from support in _enforce_token_budget().
+class TestEnforceTokenBudgetNoTruncate:
+    """Unit tests for the NO-TRUNCATE read-line policy (XG directive 2026-06-28,
+    pure-filesystem recall design §3.5).
 
-    Validates: Requirements 16.1, 16.3, 16.4, 16.5
+    The assembly line does NOT arbitrate content by size. On budget overshoot it
+    emits a WARNING and returns the FULL content untruncated — size governance is
+    the separate write-side management line's job. These tests REPLACE the old
+    truncate_from tests (truncation behavior was removed by design).
+
+    Validates: pure-filesystem recall design §3.5 (read-line does not truncate).
     """
 
     def _make_loader(self, tmp_dirs, token_budget=DEFAULT_TOKEN_BUDGET):
@@ -359,50 +365,39 @@ class TestEnforceTokenBudgetTruncateFrom:
             templates_dir=templates_dir,
         )
 
-    def test_tail_truncation_keeps_beginning(self, tmp_dirs):
-        """truncate_from='tail' keeps first N words (default behavior)."""
+    def test_overshoot_returns_full_content_untruncated(self, tmp_dirs):
+        """When total exceeds budget, content is returned FULL — no truncation."""
         loader = self._make_loader(tmp_dirs, token_budget=50)
-        # Create a section with many words that will exceed budget
         long_content = " ".join(f"word{i}" for i in range(200))
         sections = [
             (0, "Fixed", "small", False, "tail"),
             (5, "Big", long_content, True, "tail"),
         ]
         result = loader._enforce_token_budget(sections, budget=50)
-        # The truncated section should start with "word0"
+        # Identical to input — every word preserved, no truncation indicator.
+        assert result == sections
         _, _, content, _, _ = result[1]
         assert content.startswith("word0")
-        assert "[Truncated:" in content
+        assert content.rstrip().endswith("word199")
+        assert "[Truncated:" not in content
 
-    def test_head_truncation_keeps_end(self, tmp_dirs):
-        """truncate_from='head' keeps last N words (newest preserved)."""
-        loader = self._make_loader(tmp_dirs, token_budget=50)
-        long_content = " ".join(f"word{i}" for i in range(200))
+    def test_overshoot_emits_warning_log(self, tmp_dirs, caplog):
+        """Overshoot emits a WARNING (the signal for the write-side line)."""
+        import logging
+        loader = self._make_loader(tmp_dirs, token_budget=10)
+        long_content = " ".join(f"word{i}" for i in range(500))
         sections = [
             (0, "Fixed", "small", False, "tail"),
             (5, "Big", long_content, True, "head"),
         ]
-        result = loader._enforce_token_budget(sections, budget=50)
-        _, _, content, _, _ = result[1]
-        # Head truncation: indicator at the start, last words preserved
-        assert content.startswith("[Truncated:")
-        assert "word199" in content
-
-    def test_head_truncation_does_not_contain_first_words(self, tmp_dirs):
-        """Head truncation should remove the beginning words."""
-        loader = self._make_loader(tmp_dirs, token_budget=50)
-        long_content = " ".join(f"word{i}" for i in range(200))
-        sections = [
-            (0, "Fixed", "small", False, "tail"),
-            (5, "Big", long_content, True, "head"),
-        ]
-        result = loader._enforce_token_budget(sections, budget=50)
-        _, _, content, _, _ = result[1]
-        # First words should be gone (truncated from head)
-        assert "word0 word1 word2" not in content
+        with caplog.at_level(logging.WARNING):
+            loader._enforce_token_budget(sections, budget=10)
+        assert any(
+            "exceeds token budget" in r.message for r in caplog.records
+        ), "expected a budget-overshoot WARNING"
 
     def test_no_truncation_when_under_budget(self, tmp_dirs):
-        """Sections under budget are returned unchanged."""
+        """Sections under budget are returned unchanged (unchanged behavior)."""
         loader = self._make_loader(tmp_dirs, token_budget=100_000)
         sections = [
             (0, "A", "hello world", False, "tail"),
@@ -411,30 +406,33 @@ class TestEnforceTokenBudgetTruncateFrom:
         result = loader._enforce_token_budget(sections, budget=100_000)
         assert result == sections
 
-    def test_budget_parameter_overrides_instance(self, tmp_dirs):
-        """Explicit budget param is used instead of self.token_budget."""
+    def test_under_budget_emits_no_warning(self, tmp_dirs, caplog):
+        """No warning when content fits — warning is overshoot-only."""
+        import logging
         loader = self._make_loader(tmp_dirs, token_budget=100_000)
+        sections = [(0, "A", "hello world", False, "tail")]
+        with caplog.at_level(logging.WARNING):
+            loader._enforce_token_budget(sections, budget=100_000)
+        assert not any(
+            "exceeds token budget" in r.message for r in caplog.records
+        )
+
+    def test_truncatable_flag_no_longer_causes_truncation(self, tmp_dirs):
+        """Even truncatable=True sections survive intact on overshoot.
+
+        Mutation guard: if someone re-introduces truncation, the truncatable
+        section would shrink and this assertion would catch it.
+        """
+        loader = self._make_loader(tmp_dirs, token_budget=30)
         long_content = " ".join(f"w{i}" for i in range(500))
         sections = [
             (0, "Fixed", "small", False, "tail"),
             (5, "Big", long_content, True, "tail"),
         ]
-        # Pass a very small budget — should trigger truncation
         result = loader._enforce_token_budget(sections, budget=30)
-        _, _, content, _, _ = result[1]
-        assert "[Truncated:" in content
-
-    def test_full_removal_preserves_truncate_from(self, tmp_dirs):
-        """When a section is fully removed, truncate_from is preserved."""
-        loader = self._make_loader(tmp_dirs, token_budget=10)
-        long_content = " ".join(f"w{i}" for i in range(500))
-        sections = [
-            (0, "Fixed", "small content here", False, "tail"),
-            (9, "Big", long_content, True, "head"),
-        ]
-        result = loader._enforce_token_budget(sections, budget=10)
-        _, _, _, _, truncate_from = result[1]
-        assert truncate_from == "head"
+        _, _, content, truncatable, _ = result[1]
+        assert truncatable is True
+        assert content == long_content  # byte-identical, fully preserved
 
 
 # ── L1 Cache Budget-Tier Tests ─────────────────────────────────────────

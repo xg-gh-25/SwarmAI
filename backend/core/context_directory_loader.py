@@ -813,42 +813,23 @@ class ContextDirectoryLoader:
         if total <= effective_budget:
             return sections
 
-        # Sort truncatable sections by priority descending (lowest priority first)
-        truncatable_indices = [
-            i for i, (_, _, _, trunc, _) in enumerate(sections) if trunc
-        ]
-        truncatable_indices.sort(
-            key=lambda i: sections[i][0], reverse=True
+        # ── Read-line does NOT truncate (XG directive 2026-06-28, pure-filesystem
+        # recall design §3.5). The assembly line's ONLY job is to assemble; it must
+        # NOT arbitrate content by size. Size/health/decay/archive is a SEPARATE
+        # write-side management line — the read+assembly line DEFAULTS to trusting
+        # that the files/knowledge it loads are healthy and within spec. On
+        # overshoot we emit a WARNING (so the management line has a signal) and
+        # inject the FULL content untruncated, letting the model's large context
+        # window carry it. Truncating here was management logic mis-placed in the
+        # read path. The model >> any byte budget (PRI08: power over token budget).
+        logger.warning(
+            "context assembly exceeds token budget: %d > %d tokens "
+            "(%d sections) — injecting FULL content untruncated (read-line does "
+            "not arbitrate by size; size governance is the write-side management "
+            "line's job, see pure-filesystem recall design §3.5)",
+            total, effective_budget, len(sections),
         )
-
-        result = list(sections)
-
-        for idx in truncatable_indices:
-            if total <= effective_budget:
-                break
-
-            priority, section_name, content, truncatable, truncate_from = result[idx]
-            original_tokens = _section_tokens(section_name, content)
-            overshoot = total - effective_budget
-
-            if overshoot >= original_tokens:
-                # Remove the entire section content
-                indicator = f"\n\n[Truncated: {original_tokens:,} → 0 tokens]"
-                new_content = indicator.strip()
-                new_tokens = _section_tokens(section_name, new_content)
-                total -= (original_tokens - new_tokens)
-                result[idx] = (priority, section_name, new_content, truncatable, truncate_from)
-            else:
-                # Partially truncate
-                new_content = self._truncate_section(
-                    content, section_name, original_tokens,
-                    overshoot, truncate_from, _section_tokens,
-                )
-                new_tokens = _section_tokens(section_name, new_content)
-                total -= (original_tokens - new_tokens)
-                result[idx] = (priority, section_name, new_content, truncatable, truncate_from)
-
-        return result
+        return sections
 
     def _truncate_section(
         self,

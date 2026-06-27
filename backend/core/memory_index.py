@@ -1069,25 +1069,22 @@ def select_memory_sections(
     # ── Temporal validity: extract superseded keys for scoring ──
     superseded = _extract_superseded_keys(memory_content)
 
-    # ── Section scoring: hybrid (vector+keyword) or keyword-only ──
+    # ── Section scoring: keyword-only (pure-filesystem, 2026-06-28) ──
+    # The vector/hybrid branch was REMOVED (pure-filesystem recall design §3.3,
+    # §5.1): no Titan embedding on any read path. Scoring is BM25 keyword over the
+    # index block. The ``memory_embeddings`` parameter is RETAINED (default False)
+    # but inert — it is asserted by test_memory_wiring.py (the prod-keyword-only
+    # contract) and removing it would KeyError that guard (Gate-2 HIGH-1). If
+    # ``memory_embeddings=True`` is ever passed, we still do keyword-only and warn,
+    # so no caller silently expects a vector leg that no longer exists.
     if user_message:
         if memory_embeddings:
-            # Try hybrid scoring; fall back to keyword-only on any failure
-            # or when hybrid returns empty (no embeddings in DB yet)
-            try:
-                matched_sections = _hybrid_section_scores(user_message)
-            except Exception as exc:
-                logger.warning("Hybrid scoring failed, falling back to keyword: %s", exc)
-                matched_sections = {}
-
-            # Hybrid empty = no embeddings yet or Bedrock down.
-            # Merge in keyword results so we never lose recall.
-            kw_sections = _keyword_section_scores(user_message, index_block, superseded)
-            for sec, score in kw_sections.items():
-                if sec not in matched_sections or score > matched_sections[sec]:
-                    matched_sections[sec] = score
-        else:
-            matched_sections = _keyword_section_scores(user_message, index_block, superseded)
+            logger.warning(
+                "select_memory_sections called with memory_embeddings=True, but "
+                "the vector leg was removed (pure-filesystem design §3.3); using "
+                "keyword-only scoring."
+            )
+        matched_sections = _keyword_section_scores(user_message, index_block, superseded)
 
         # Add matched sections (sorted by score, best first)
         for sec_name, _ in sorted(

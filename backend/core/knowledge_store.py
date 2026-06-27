@@ -32,7 +32,21 @@ logger = logging.getLogger(__name__)
 EMBEDDING_DIM = 1024  # Bedrock Titan v2
 
 # Directories to skip when scanning Knowledge/
-_SKIP_DIRS = {"Archives", "__pycache__", ".git", ".artifacts"}
+# Archives is NO LONGER skipped (pure-filesystem recall design §3.2/§5.8,
+# 2026-06-28): long-term archived memory (MEMORY-archive-*.md) must be reachable
+# by FTS5 recall — it was the real gap (recall could never see archived memory).
+_SKIP_DIRS = {"__pycache__", ".git", ".artifacts"}
+
+# Skip job/signal FLOW-LOG dirs — they are time-series dumps (channel-monitor
+# logs, job results), not memory; indexing them floods FTS5 with noise (design
+# §5.8). Memory-class archives (MEMORY-archive-*.md, loose .md) ARE indexed.
+# NOTE: this matches a `JobResults*` dir at ANY level — both the top-level
+# `Knowledge/JobResults/` (131 flow-log files, previously indexed as noise) AND
+# nested `Archives/JobResults-*` — because the part-walk below includes the
+# top-level subdir name. This top-level exclusion is INTENTIONAL (same noise
+# class, design §5.8 spirit), not an accident — adversarial-review-confirmed.
+_SKIP_NESTED_DIRS = {"JobResults-2026-May", "JobResults-2026Q1"}
+_SKIP_NESTED_PREFIXES = ("JobResults",)  # any JobResults* dir = flow log, skip
 
 # Heading regex: ## or ### (not #, which is the file title)
 _HEADING_RE = re.compile(r"^(#{2,3})\s+(.+)$", re.MULTILINE)
@@ -589,9 +603,20 @@ def sync_knowledge_index(
         if not subdir.is_dir() or subdir.name in _SKIP_DIRS:
             continue
         for md_file in sorted(subdir.rglob("*.md")):
-            if md_file.is_file():
-                rel_path = f"{subdir.name}/{md_file.relative_to(subdir)}"
-                current_files[rel_path] = md_file
+            if not md_file.is_file():
+                continue
+            # Skip job/signal flow-log subdirs nested under Archives (or anywhere):
+            # they are time-series dumps, not memory (design §5.8). Check every
+            # path part so e.g. Archives/JobResults-2026Q1/*.md is excluded.
+            rel_to_sub = md_file.relative_to(subdir)
+            parts = (subdir.name, *rel_to_sub.parts[:-1])
+            if any(
+                p in _SKIP_NESTED_DIRS or p.startswith(_SKIP_NESTED_PREFIXES)
+                for p in parts
+            ):
+                continue
+            rel_path = f"{subdir.name}/{rel_to_sub}"
+            current_files[rel_path] = md_file
 
     # Remove entries for deleted files
     indexed_files = store.get_indexed_files()

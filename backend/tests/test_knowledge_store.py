@@ -344,6 +344,38 @@ class TestSyncKnowledgeIndex:
         assert stats["files_scanned"] >= 1
         assert stats["chunks_added"] >= 1
 
+    def test_sync_indexes_archives_but_skips_jobresults(self, tmp_path):
+        """DoD4 (pure-filesystem recall design §3.2/§5.8): Archives/*.md IS now
+        indexed (long-term memory reachable by recall), BUT JobResults* flow-log
+        subdirs nested under Archives are EXCLUDED (time-series noise)."""
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        archives = knowledge_dir / "Archives"
+        archives.mkdir(parents=True)
+        # A real archived-memory file → MUST be indexed
+        (archives / "MEMORY-archive-2026-04.md").write_text(
+            "# Archive\n\n## Old Decision\n\nzebrafish-marker unique archived memory."
+        )
+        # A job flow-log nested dir → MUST be skipped
+        joblog = archives / "JobResults-2026Q1"
+        joblog.mkdir()
+        (joblog / "2026-01-01-scan.md").write_text(
+            "# Job\n\n## Result\n\nzebrafish-marker but this is flow-log noise."
+        )
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+
+        # The archived memory is findable; the job log is not.
+        indexed = {r["source_file"] for r in store.fts5_search("zebrafish-marker", limit=10)}
+        assert any("MEMORY-archive-2026-04" in s for s in indexed), \
+            "archived memory must be indexed (the real recall gap this fixes)"
+        assert not any("JobResults" in s for s in indexed), \
+            "JobResults flow-logs must be excluded (design §5.8 noise filter)"
+
     def test_sync_delta_skips_unchanged(self, tmp_path):
         from core.knowledge_store import KnowledgeStore, sync_knowledge_index
 

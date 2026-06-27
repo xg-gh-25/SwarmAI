@@ -642,14 +642,16 @@ class PromptBuilder:
 
             # Memory injection is always active — auto-selects full injection
             # (< 30K tokens) or selective mode (≥ 30K).  No config flag needed.
-            # Build keyword hint for selective mode's section matching.
+            #
+            # NO guess-keyword (pure-filesystem recall design §1.3, 2026-06-28):
+            # at prompt-assembly time the user's real message does NOT exist yet,
+            # so the old `get_focus_keywords()` (briefing-focus titles as a query
+            # proxy) was a structural mis-match — selecting MEMORY sections against
+            # a GUESS. We pass NO query here; selective mode falls back to its
+            # rule-based section loading (recent/pinned), and the REAL query-driven
+            # recall happens AFTER the first user message via
+            # session_router._maybe_inject_recall (runtime leg, real query).
             memory_keyword_hint = ""
-            if not channel_context:
-                try:
-                    from .proactive_intelligence import get_focus_keywords
-                    memory_keyword_hint = get_focus_keywords(working_directory)
-                except Exception:
-                    pass  # Proactive module unavailable — rule-based only
 
             _t1 = time.perf_counter()
             context_text = loader.load_all(
@@ -695,7 +697,7 @@ class PromptBuilder:
                     [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
                     key=lambda f: f.stem,
                     reverse=True,
-                )[:1]
+                )[:2]  # last 2 days (pure-filesystem recall design §3.1, DoD3)
                 for daily_file in da_files:
                     try:
                         daily_content = daily_file.read_text(encoding="utf-8").strip()

@@ -112,6 +112,31 @@ def _codeintel_recall(query: str, project: Optional[str] = None,
     if graph is None:
         return []  # project has no code_intel.db — unavailable, not empty-create
 
+    # Freshness guard (pure-filesystem recall design §3.x/DoD5, 2026-06-28):
+    # grep is always live; the AST graph can DRIFT (teammate rebase, a missed
+    # watcher window, a failed incremental update) and then silently return STALE
+    # edges — "confidently wrong", worse than grep. Before trusting the graph,
+    # check it against HEAD (cheap `git rev-parse`). We do NOT block on staleness
+    # (the index may still be useful) — we STAMP each hit with `stale` + `reason`
+    # so the consuming agent knows "this graph is as-of an older commit, verify
+    # against the live file". This is the code-layer cure for the same
+    # stale-comment-fooled-me class the MEMORY line keeps hitting (R16b).
+    stale_flag = False
+    stale_reason = None
+    try:
+        from .code_intel.freshness import check_freshness
+        fr = check_freshness(graph)
+        stale_flag = bool(getattr(fr, "stale", False))
+        stale_reason = getattr(fr, "reason", None)
+        if stale_flag:
+            logger.info(
+                "codeintel recall: graph STALE vs HEAD (%s) — hits stamped "
+                "stale=True so the agent verifies against live files",
+                stale_reason or "unknown",
+            )
+    except Exception as exc:  # noqa: BLE001 — freshness is best-effort; never block recall
+        logger.debug("codeintel recall: freshness check failed (non-fatal): %s", exc)
+
     try:
         hits = graph.search_symbols(query, limit=limit)
     except Exception as exc:  # noqa: BLE001
@@ -125,6 +150,10 @@ def _codeintel_recall(query: str, project: Optional[str] = None,
             hits[0] = {**hits[0], "callers": [c[0] for c in callers[:5]]}
         except Exception as exc:  # noqa: BLE001
             logger.debug("codeintel recall: find_callers failed: %s", exc)
+
+    # Stamp freshness on every hit (DoD5) — cheap, lets the agent discount stale edges.
+    if stale_flag:
+        hits = [{**h, "graph_stale": True, "stale_reason": stale_reason} for h in hits]
     return hits
 
 

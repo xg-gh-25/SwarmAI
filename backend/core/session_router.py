@@ -370,8 +370,22 @@ async def _maybe_inject_recall(
         if recalled:
             # Append to this options instance only — safe even if options is
             # rebuilt on retry (system_prompt is a plain str, so += makes a new str).
+            # Agentic re-search hint (pure-filesystem recall design §3.4 / DoD6):
+            # keyword recall has NO vector/semantic leg (by design) — its blind
+            # spot is "right idea, different words" (e.g. query "resume 慢" vs
+            # stored "cold-start 延迟"). The replacement for vector is NOT an FTS5
+            # synonym dictionary, it is AGENTIC re-search: the agent has Read/Grep
+            # and can re-query with synonyms / broader terms if the recall below
+            # looks thin. This footer makes that affordance explicit (cheap, ~30
+            # tokens) so a weak keyword hit doesn't silently become a miss.
+            _agentic_hint = (
+                "\n\n_(Recall above is keyword/FTS-based — no semantic match. If it "
+                "looks thin or off-topic for your task, re-search yourself: Grep "
+                "`Knowledge/` (incl. `Archives/`) with synonyms or broader terms.)_"
+            )
             options.system_prompt = (
-                options.system_prompt + f"\n\n## Recalled Knowledge\n{recalled}"
+                options.system_prompt
+                + f"\n\n## Recalled Knowledge\n{recalled}{_agentic_hint}"
             )
             # Observability (loud-on-success counterpart to loud-on-degradation):
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
@@ -383,8 +397,16 @@ async def _maybe_inject_recall(
                 len(recalled), len(recalled) // 4, keywords[:80],
             )
         else:
-            # Genuine no-match (not a failure — failures are counted/logged inside
-            # _recall_for_query). Visible so a persistently empty recall is noticed.
+            # Genuine no-match. NOT a failure (failures are counted/logged inside
+            # _recall_for_query) — but inject an agentic re-search nudge (DoD6) so
+            # a keyword miss prompts the agent to try synonyms itself rather than
+            # silently proceeding with zero recall (the keyword-only blind spot).
+            options.system_prompt = (
+                options.system_prompt
+                + "\n\n## Recalled Knowledge\n_(Keyword recall found no direct match "
+                "for this query. If prior context likely exists under different "
+                "wording, Grep `Knowledge/` (incl. `Archives/`) with synonyms.)_"
+            )
             logger.info("recall ran but matched nothing | keywords=%s", keywords[:80])
     except asyncio.TimeoutError:
         # DISASTER: recall hung past the cap. This should NEVER happen in normal
