@@ -181,8 +181,12 @@ async def save_session_to_memory(req: SaveSessionRequest):
     """Extract key decisions/lessons from a chat session and save to MEMORY.md.
 
     This powers the frontend 🧠 "Save to Memory" button. Uses LLM extraction
-    (Sonnet) to identify important entries, deduplicates against existing
-    MEMORY.md content, and writes via ``locked_write.py``.
+    (Sonnet) to identify important entries, then writes via ``locked_write.py``
+    with ``dedup=True`` — a MECHANICAL filter (120-char prefix + bold-title
+    match, shared with distillation via ``filter_duplicate_entries``) drops
+    entries already present in MEMORY.md, inside the write lock. (The LLM prompt
+    also sees existing content as a soft hint, but the mechanical filter is the
+    real guarantee — R3-C.)
 
     The ``since_message_idx`` field enables incremental saves — on a second
     click within the same session, only new messages are processed.
@@ -249,26 +253,14 @@ async def get_recall_coverage():
     endpoint reads committed coverage; trust it only insofar as writers commit.
     Verification surface for the backfill convergence (M1).
     """
-    try:
-        from core.vec_db import open_vec_db
-
-        with open_vec_db() as conn:
-            if conn is None:
-                return {"available": False, "reason": "sqlite-vec not loaded"}
-            entries = conn.execute("SELECT COUNT(*) FROM memory_entries").fetchone()[0]
-            vec = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
-            orphan = conn.execute(
-                "SELECT COUNT(*) FROM memory_entries me "
-                "LEFT JOIN memory_vec mv ON me.key = mv.key WHERE mv.key IS NULL"
-            ).fetchone()[0]
-        coverage_pct = round(vec * 100.0 / entries, 1) if entries else 0.0
-        return {
-            "available": True,
-            "entries": entries,
-            "vec": vec,
-            "orphan": orphan,
-            "coverage_pct": coverage_pct,
-        }
-    except Exception as exc:  # noqa: BLE001 — endpoint must not 500 on a read
-        logger.warning("recall coverage read failed: %s", exc)
-        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}
+    # Memory vector recall was RETIRED (pure-filesystem READ-line finalize,
+    # run_2f621986, design 2026-06-28 §3). memory_vec is no longer written or
+    # read — recall is keyword/FTS5 only. This endpoint previously reported
+    # memory_vec coverage; it now reports the retirement so any UI/monitor that
+    # polls it sees an explicit "not applicable" instead of a 500 on a table that
+    # is intentionally empty/absent.
+    return {
+        "available": False,
+        "reason": "memory vector recall retired (pure-filesystem, keyword/FTS5 only)",
+        "retired": True,
+    }

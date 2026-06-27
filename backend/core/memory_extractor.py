@@ -337,7 +337,11 @@ def _write_entries(
     text = "\n".join(entries)
 
     try:
-        locked_read_modify_write(memory_path, section, text, mode="prepend")
+        # dedup=True (R3-C): apply the SAME mechanical dedup distillation uses
+        # (120-char prefix + bold-title), inside the lock against existing
+        # content — the LLM prompt's soft dedup is non-deterministic and a
+        # re-saved session (since_message_idx) can re-extract the same entry.
+        locked_read_modify_write(memory_path, section, text, mode="prepend", dedup=True)
         return True
     except LockedWriteError as e:
         logger.error("locked_write failed for section %s: %s", section, e)

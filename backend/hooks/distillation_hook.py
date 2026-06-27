@@ -1357,46 +1357,22 @@ class DistillationTriggerHook:
             else:
                 existing = ""
 
-            # Dedup: filter out entries already present using TWO strategies:
-            # (1) 120-char prefix match (existing, catches exact duplicates)
-            # (2) Bold-title match (new, catches entries with same topic but
-            #     different detail — e.g. [LL06] and [LL10] both titled
-            #     "CJK 没有词边界..." are the same lesson with different IDs)
+            # Dedup: filter out entries already present, via the SHARED
+            # single-source helper (R3-C, run_55c6ab8f). Same two strategies
+            # this code used inline since dedup was added — now living in ONE
+            # place (scripts.locked_write.filter_duplicate_entries) so the
+            # memory_extractor write path uses identical logic and the two
+            # can't drift:
+            # (1) 120-char prefix match (catches exact duplicates)
+            # (2) Bold-title match (catches same-topic reworded dups — e.g.
+            #     [LL06]/[LL10] both titled "CJK 没有词边界...")
+            # The helper preserves the deliberate asymmetry: prefix-set is
+            # static (existing only), title-set is mutated intra-batch.
             if existing:
-                existing_lines_lower = {
-                    ln.strip()[:120].lower()
-                    for ln in existing.splitlines()
-                    if ln.strip()
-                }
-                # Extract bold titles from existing: "**Some Title**" → "some title"
-                existing_titles = set()
-                for ln in existing.splitlines():
-                    m = re.search(r"\*\*(.+?)\*\*", ln)
-                    if m:
-                        existing_titles.add(m.group(1).strip().lower())
-
-                new_lines = []
-                for line in text.splitlines():
-                    entry_key = line.strip()[:120].lower()
-                    # Strategy 1: exact prefix match
-                    if entry_key and entry_key in existing_lines_lower:
-                        continue
-                    # Strategy 2: bold title match (catches reworded duplicates)
-                    title_match = re.search(r"\*\*(.+?)\*\*", line)
-                    if title_match:
-                        title = title_match.group(1).strip().lower()
-                        if title and title in existing_titles:
-                            logger.debug(
-                                "distillation dedup: skipping duplicate title '%s'",
-                                title[:60],
-                            )
-                            continue
-                        # Also add to existing_titles for intra-batch dedup
-                        existing_titles.add(title)
-                    new_lines.append(line)
-                if not new_lines:
+                from scripts.locked_write import filter_duplicate_entries
+                text = filter_duplicate_entries(existing, text)
+                if not text.strip():
                     return  # all entries already present
-                text = "\n".join(new_lines)
 
             # Modify + write under the same lock
             new_content = _modify_content(existing, section, text, "prepend")

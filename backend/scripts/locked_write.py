@@ -55,6 +55,78 @@ class LockedWriteError(Exception):
     pass
 
 
+def entry_dedup_keys(line: str) -> tuple[str | None, str | None]:
+    """Compute the two dedup match keys for a single MEMORY.md entry line.
+
+    SINGLE SOURCE of the dedup match logic shared by distillation_hook and
+    memory_extractor (R3-C, run_55c6ab8f). Mirrors the keys distillation has
+    used inline since its dedup was added:
+
+    - prefix key: ``line.strip()[:120].lower()`` — catches exact/near-exact dups
+    - title key:  the lowercased bold title (``**...**``) — catches reworded dups
+      with the same headline (e.g. two lessons titled "CJK 没有词边界..." that
+      differ only in detail/ID).
+
+    Returns ``(prefix_key, title_key)``; either may be ``None`` (blank line →
+    both None; no bold title → title None).
+    """
+    stripped = line.strip()
+    if not stripped:
+        return (None, None)
+    prefix_key = stripped[:120].lower()
+    m = re.search(r"\*\*(.+?)\*\*", line)
+    title_key = m.group(1).strip().lower() if m else None
+    return (prefix_key, title_key)
+
+
+def filter_duplicate_entries(existing_content: str, candidate_text: str) -> str:
+    """Drop candidate lines already present in ``existing_content``.
+
+    SINGLE SOURCE of the dedup behavior shared by both MEMORY.md writers
+    (R3-C). Behavior is byte-identical to distillation_hook's historical inline
+    dedup, including its deliberate asymmetry (verified against the original at
+    distillation_hook.py:1360-1399):
+
+    - The **prefix set** is built ONCE from ``existing_content`` and is STATIC —
+      intra-batch prefix collisions are NOT deduped (only collisions against
+      pre-existing content are).
+    - The **title set** is seeded from ``existing_content`` and is MUTATED as we
+      walk the candidate lines, so a second candidate line sharing a bold title
+      with an earlier candidate line IS dropped (intra-batch title dedup).
+
+    A fully-filtered batch returns ``""`` — callers MUST guard against writing
+    an empty string (an empty write corrupts the target section).
+    """
+    if not existing_content:
+        return candidate_text
+
+    existing_lines_lower = {
+        ln.strip()[:120].lower()
+        for ln in existing_content.splitlines()
+        if ln.strip()
+    }
+    existing_titles: set[str] = set()
+    for ln in existing_content.splitlines():
+        m = re.search(r"\*\*(.+?)\*\*", ln)
+        if m:
+            existing_titles.add(m.group(1).strip().lower())
+
+    new_lines: list[str] = []
+    for line in candidate_text.splitlines():
+        prefix_key, title_key = entry_dedup_keys(line)
+        # Strategy 1: exact prefix match against STATIC existing set
+        if prefix_key and prefix_key in existing_lines_lower:
+            continue
+        # Strategy 2: bold-title match against MUTATED title set (intra-batch)
+        if title_key is not None:
+            if title_key and title_key in existing_titles:
+                continue
+            existing_titles.add(title_key)
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
 def _find_section_range(content: str, section: str):
     """Find the start and end positions of a markdown section.
 
@@ -441,7 +513,8 @@ def locked_field_modify(
 
 
 def locked_read_modify_write(
-    file_path: Path, section: str, text: str, mode: str = "append"
+    file_path: Path, section: str, text: str, mode: str = "append",
+    *, dedup: bool = False,
 ):
     """Acquire flock, read file, modify section, write back, release.
 
@@ -450,6 +523,14 @@ def locked_read_modify_write(
         section: Section header to find (e.g. "Recent Context").
         text: Content to append, prepend, or replace.
         mode: "append" (default), "prepend", or "replace".
+        dedup: When True, filter out candidate lines already present in the
+            file (via ``filter_duplicate_entries``) BEFORE modifying — applied
+            INSIDE the lock against the just-read content (no TOCTOU). If the
+            filter removes everything, the write is a NO-OP (returns without
+            touching the file) — never injects a bare blank line. Default
+            False keeps all existing callers byte-identical. (R3-C: gives the
+            memory_extractor write path the same mechanical dedup distillation
+            already has, single-sourced.)
 
     Raises:
         LockedWriteError: If the lock cannot be acquired within
@@ -535,6 +616,15 @@ def locked_read_modify_write(
                         f"Memory injection blocked — pattern '{pattern}' "
                         f"detected in content: {text[:80]!r}"
                     )
+
+        # Dedup (R3-C): filter candidate lines already present, against the
+        # content just read UNDER THE LOCK (no TOCTOU). Mandatory empty-guard —
+        # if everything is filtered, return a NO-OP rather than letting
+        # _modify_content inject a bare blank line into the section.
+        if dedup:
+            text = filter_duplicate_entries(content, text)
+            if not text.strip():
+                return
 
         # Modify the content
         new_content = _modify_content(content, section, text, mode)
