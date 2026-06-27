@@ -211,4 +211,37 @@ describe('TabView — render source: more-complete wins, never prop while stream
 
     expect(queryByTestId('bubble-a-real')).not.toBeNull();
   });
+
+  it('STREAMING: empty store + prop has an answer → prop rescues (no blank freeze)', () => {
+    // The "卡18分钟" case (frontend.log: 18308cab storeChars 0 / propChars 11246 /
+    // isStreaming true). A backend eviction tore down the SSE mid-stream and the
+    // store mirror was left empty (and, in the still-open hop, the store object
+    // itself re-created empty). A real in-flight turn ALWAYS carries an assistant
+    // placeholder, so an EMPTY store while streaming is never a live turn — the
+    // streaming safety net renders the prop instead of a blank, spinning bubble.
+    messageStoreRegistry.getOrCreate('A').replace([]);
+    const restoredProp = [msg('prop-evicted', 'the answer the backend already produced')];
+
+    const { queryByTestId } = render(<TabView {...props('A', true, restoredProp, true)} />);
+
+    expect(queryByTestId('bubble-prop-evicted')).not.toBeNull();
+  });
+
+  it('STREAMING: store HAS an assistant placeholder → prop never rescues (no cross-turn clobber)', () => {
+    // Turn-start: the store carries an assistant placeholder (empty content) while
+    // a longer PREVIOUS answer still sits in the prop. The safety net is gated on
+    // `!sa` (NO assistant at all), and the placeholder makes `sa` defined, so the
+    // stale longer prop must NOT render over the just-started turn.
+    const placeholder: Message = {
+      id: 'ph', role: 'assistant', content: [{ type: 'text', text: '' }],
+      timestamp: new Date().toISOString(),
+    };
+    messageStoreRegistry.getOrCreate('A').replace([placeholder]);
+    const longerStaleProp = [msg('prev-long', 'a much longer previous answer from the last turn')];
+
+    const { queryByTestId } = render(<TabView {...props('A', true, longerStaleProp, true)} />);
+
+    expect(queryByTestId('bubble-ph')).not.toBeNull();      // live placeholder wins
+    expect(queryByTestId('bubble-prev-long')).toBeNull();   // stale prop NOT used
+  });
 });

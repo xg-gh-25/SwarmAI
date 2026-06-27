@@ -175,27 +175,46 @@ function TabViewImpl({
   const isPlainAnswer = (m: Message | undefined): boolean =>
     !!m && Array.isArray(m.content) && m.content.every((b) => b.type === 'text' || b.type === 'thinking');
 
-  // ── Render source: MORE-COMPLETE WINS, but the prop is NEVER used while
-  //    streaming — AND a longer prop can only win for the SAME last message. ──
-  // The store is the authoritative live-turn source. The prop (`messagesProp` =
-  // tabState.messages) is a MIRROR of the store, kept in sync by the lifecycle
-  // subscription, so in steady state it only ever LAGS the store (shorter) — the
-  // one time it legitimately leads is a cold start, where the store lazy-loads
-  // from the backend (momentarily empty, or a shorter incompletely-persisted
-  // row) while the restored prop already holds the full last answer (frontend.log:
-  // storeChars 0→155 vs propChars 1860 → store-only rendered a blank/truncated
-  // bubble). Two narrow, guarded rescues — never while streaming:
-  //   (a) STARTUP GAP: the store has NO assistant yet but the prop does → render
-  //       the restored prop so the tab isn't blank during the load window.
-  //   (b) SAME-MESSAGE truncation: the store's last assistant and the prop's are
-  //       the SAME message (same id) but the store loaded a shorter copy, and that
-  //       message has NO interactive block → swap in the prop's fuller content for
-  //       that one message (keep the store's array shape + every other message).
-  // The same-id guard makes a longer OLDER/different prop turn unable to clobber a
-  // newer (possibly shorter) store turn; the interactive guard prevents dropping a
-  // live question/permission/escalation. Symmetric with the store-vs-DB merge
-  // guard (MessageStore._mergePreservingInteractive).
-  const storeMsgs = storeMessages ?? [];
+  // ── Mirror-desync guard: prefer the LIVE store snapshot over the React mirror ──
+  // `sub.messages` is React state synced FROM the store by the subscription
+  // callback — but that callback only runs while the tab is active AND while the
+  // subscription keeps firing. If the SSE is torn down mid-stream (backend
+  // EVICTION: the session vanishes from the states map → no more notify), the
+  // mirror is left STALE-EMPTY while the store's own `_messages` never lost a
+  // thing (no store mutation ran → no STORE-CLOBBER). The render then read the
+  // empty mirror and, because `isStreaming` forces store-only, painted a blank
+  // bubble that spun until the 90s watchdog — the "卡18分钟" freeze (frontend.log:
+  // 18308cab storeChars 9434→0 in 77ms, propChars 11246, isStreaming true).
+  // The store is authoritative: read its live snapshot and use whichever of
+  // (mirror, live snapshot) carries the more-complete last assistant. getSnapshot()
+  // returns a ref-stable cached array (rebuilt only when `_messages` changes), so
+  // in steady state mirror===live and this is a no-op that preserves the
+  // keep-mounted "same array ref → no re-render" property.
+  const mirrorMsgs = storeMessages ?? [];
+  const liveMsgs = sub?.store?.getSnapshot() ?? mirrorMsgs;
+  const storeMsgs = asstChars(lastAsst(liveMsgs)) > asstChars(lastAsst(mirrorMsgs))
+    ? liveMsgs
+    : mirrorMsgs;
+
+  // ── Render source: MORE-COMPLETE WINS — symmetric across mirror/store/prop. ──
+  // The store (`storeMsgs`, now desync-guarded above) is the authoritative
+  // live-turn source. The prop (`messagesProp` = tabState.messages) is a second
+  // MIRROR; in steady state it only LAGS the store, leading only at cold start
+  // (store lazy-loads empty/short while the restored prop holds the full last
+  // answer — storeChars 0→155 vs propChars 1860). Three narrow, guarded rescues:
+  //   (s) STREAMING SAFETY NET: store has NO assistant message AT ALL (`!sa`) but
+  //       the prop does → the store mirror AND its live snapshot are both empty
+  //       (the still-open eviction/recovery hop where the store object itself was
+  //       re-created empty). A real in-flight turn ALWAYS carries an assistant
+  //       placeholder in the store, so `!sa` here is NEVER a live turn — there is
+  //       nothing to clobber. Render the prop instead of a blank, spinning bubble.
+  //   (a) STARTUP GAP (idle): store has no assistant yet but the prop does.
+  //   (b) SAME-MESSAGE truncation (idle): store's last assistant and the prop's
+  //       are the SAME id but the store loaded a shorter copy with NO interactive
+  //       block → swap in the prop's fuller content for that one message only.
+  // The same-id / interactive guards keep a longer OLDER/different prop turn from
+  // clobbering a newer store turn and never drop a live question/permission/
+  // escalation. Symmetric with MessageStore._mergePreservingInteractive.
   const sa = lastAsst(storeMsgs);
   const pa = lastAsst(messagesProp);
   const storeChars = asstChars(sa);
@@ -203,7 +222,8 @@ function TabViewImpl({
 
   let messages: Message[];
   if (isStreaming) {
-    messages = storeMsgs;
+    // (s) streaming safety net — only when the store carries no assistant at all.
+    messages = (!sa && pa) ? messagesProp : storeMsgs;
   } else if (!sa && pa) {
     // (a) startup gap — store has no assistant yet, render the restored prop.
     messages = messagesProp;
