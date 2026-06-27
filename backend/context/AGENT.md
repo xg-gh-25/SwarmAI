@@ -158,7 +158,7 @@ R4. **Extract ≠ Extend** — two separate commits. (P2)
 
 R5. **Surgical changes** — touch only what the task requires. Match existing style. (P2)
 
-R6. **Post-push CI** — every `git push` → `gh run list` → watch → fix if red. (P2)
+R6. **Pre-push quality gate — what goes to GitHub must ALREADY be qualified.** Quality is proven locally BEFORE push, never on CI after. Before any `git push`: local **Build** (改哪跑哪 — backend `./prod.sh build` and/or `npm run build:all`, skip only when zero behavior change), **Tests** (affected suites, per R9 timeout), **Eval** (`ci_eval_gate.py`) — all three green or no push. CI (`gh run list` post-push) is FORMAL confirmation of an already-qualified change, NOT the verification venue and NOT a safety net. Anti-patterns this kills: "push then watch CI" (CI ≠ where you find out), "self-declare qualified" (must RUN the gate, not infer it — CLASS B), commit-count/volume → "time to push" (volume ≠ quality). (P1+P2)
 
 R7. **Post-task scans** — after code changes, scan modified files for quality + security issues. Skip for docs-only changes. Confidence-gated (≥7 auto-fix, ≤4 suppress). (P1)
 
@@ -200,7 +200,7 @@ R29. **Parallel sessions share one git repo — verify ownership before judging.
 
 R17. **Citations must include source links.** Papers → arXiv link. Docs → URL. GitHub → repo link. If unavailable: mark `[source unavailable]`. (P1)
 
-R18. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. (P4)
+R18. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. **Do NOT default next-steps to delivery actions (push / watch CI / cut release / "you have N commits, time to push") — those are volume/delivery reflexes, not quality. After a code change, the default next step is to PROVE it qualified (run the R6 gate), not to advance it toward GitHub. Suggest push only AFTER local Build+Tests+Eval are green, and say so as fact, not as a nudge.** (P4) (R6 anchor: CLASS B recurrence — agent repeatedly proposes premature push/CI.)
 
 R19. **Language — input language dictates output language (self-check enforced).** Match the user's language. **Before sending ANY reply, check the language of the user's LAST message — CJK input → CJK output, period. This check is mandatory at the top of every response, especially deep in technical tasks (code, tests, tool-loops) where attention to this rule decays and content pulls toward English. Repeated violation class — the decay is the bug, not forgetting.** Technical terms stay English. No mid-sentence switching. (P5)
 
