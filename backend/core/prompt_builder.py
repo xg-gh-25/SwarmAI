@@ -673,6 +673,19 @@ class PromptBuilder:
             )
             _t_load = time.perf_counter() - _t1
 
+            # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
+            # the 11 context files are token-budgeted inside load_all(), but the
+            # EPHEMERAL sections appended below (DailyActivity, briefing, user
+            # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
+            # just `+=` onto context_text against a fixed EPHEMERAL_HEADROOM
+            # reservation with no combined ceiling. On a 1M model that is fine
+            # (the design bets on it), but a silent overshoot means ephemeral
+            # content quietly eats the budget the context files were supposed to
+            # keep. Capture the budgeted-loader baseline HERE so the
+            # injection-complete log below can report ephemeral = total − loader
+            # and WARN (not crash, not truncate) when it exceeds the reservation.
+            _loader_tok = ContextDirectoryLoader.estimate_tokens(context_text)
+
             # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
             bootstrap_path = context_dir / "BOOTSTRAP.md"
             if bootstrap_path.exists():
@@ -803,12 +816,35 @@ class PromptBuilder:
                 )
                 _t_total = time.perf_counter() - _t_total_start
                 _est_tokens = ContextDirectoryLoader.estimate_tokens(context_text)
+                # recall#G: ephemeral = everything appended after the budgeted
+                # loader baseline (briefing/suggestions/digest/editor/MCP; resume
+                # is injected later, separately, and is budget-enforced in
+                # build_resume_context). _loader_tok is set right after load_all();
+                # guard against the rare path where it wasn't (defensive).
+                _ephemeral_tok = max(_est_tokens - locals().get("_loader_tok", 0), 0)
                 logger.info(
-                    "Injected centralized context: %d chars, ~%d tokens, "
+                    "Injected centralized context: %d chars, ~%d tokens "
+                    "(loader=%d, ephemeral=%d / headroom=%d), "
                     "timing: total=%.2fs (ensure=%.3fs, load=%.3fs, briefing=%.3fs)",
                     len(context_text), _est_tokens,
+                    locals().get("_loader_tok", 0), _ephemeral_tok, EPHEMERAL_HEADROOM,
                     _t_total, _t_ensure, _t_load, _t_briefing,
                 )
+                # WARN (never truncate, never crash): the ephemeral sections are
+                # cognition/continuity content — we do NOT clip them mid-assembly
+                # (that would silently drop a briefing health-warning or a user
+                # suggestion). We surface the overshoot so it is VISIBLE instead of
+                # silently eating the context-file budget. The 1M model absorbs it;
+                # the warning is the signal to revisit what ephemeral content costs.
+                if _ephemeral_tok > EPHEMERAL_HEADROOM:
+                    logger.warning(
+                        "ephemeral context (%d tok) exceeds reserved headroom "
+                        "(%d tok) by %d — briefing/digest/suggestions are eating "
+                        "into the context-file budget. Not truncated (cognition "
+                        "content); revisit ephemeral section sizes.",
+                        _ephemeral_tok, EPHEMERAL_HEADROOM,
+                        _ephemeral_tok - EPHEMERAL_HEADROOM,
+                    )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
             for spec in CONTEXT_FILES:

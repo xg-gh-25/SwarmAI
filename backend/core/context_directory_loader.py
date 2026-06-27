@@ -1079,6 +1079,20 @@ class ContextDirectoryLoader:
 
             # When files are excluded (group channels) or progressive memory
             # is active, skip L1 cache — both are session-specific.
+            #
+            # ⚠️ INTENTIONAL, NOT DEAD CODE (run_a16d61ad, work-stream H): every
+            # DESKTOP chat session passes memory_smart=True (selective MEMORY
+            # injection), so on the desktop main path the L1 cache is NEITHER read
+            # (here) NOR written (below) — it is effectively bypassed by design.
+            # This is correct, not a regression: selective memory injection picks
+            # MEMORY sections by the session's keyword hint, so the assembled
+            # prompt is SESSION-SPECIFIC and would POISON a shared L1 cache (one
+            # session's recalled sections served to the next). L1 still serves the
+            # non-selective paths (no exclusions AND no smart-memory — e.g. a full
+            # MEMORY < FULL_INJECTION_THRESHOLD, or callers that opt out). The
+            # apparent "every desktop session re-assembles" cost is the price of
+            # correct selective injection; it is NOT a cache that silently stopped
+            # working. (Audited 2026-06-28; Kiro prompt#4 — confirmed by-design.)
             if not exclude_filenames and not memory_smart:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
                 if cached:

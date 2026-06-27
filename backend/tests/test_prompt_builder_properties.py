@@ -352,3 +352,68 @@ class TestEvolutionUnconditionalLoad:
             "EVOLUTION.md leaked into a non-owner channel prompt — "
             "CHANNEL_LIGHT_EXCLUDE must still drop it"
         )
+
+
+class TestEphemeralBudgetCeiling:
+    """recall#G (run_a16d61ad): ephemeral sections (briefing/digest/suggestions)
+    are appended AFTER the budgeted loader output with only a fixed headroom
+    reservation. An overshoot must be VISIBLE (WARNING) but NEVER truncated —
+    ephemeral content is cognition/continuity, not clippable filler."""
+
+    def _run_build(self, workspace) -> dict:
+        import asyncio
+        import unittest.mock as mock
+
+        builder = _make_builder()
+        agent_config: dict = {}
+        with mock.patch(
+            "core.proactive_intelligence.get_focus_keywords", return_value="",
+        ):
+            asyncio.run(builder.build_system_prompt(
+                agent_config=agent_config,
+                working_directory=str(workspace),
+            ))
+        return agent_config
+
+    def test_oversized_ephemeral_warns_and_does_not_truncate(self, tmp_path, caplog):
+        """An oversized briefing → WARNING logged + the briefing content survives
+        intact (not clipped). Mutation: remove the `if _ephemeral_tok > ...` warn
+        block → no warning → RED. Truncating it instead → content-missing → RED."""
+        import logging
+        import unittest.mock as mock
+
+        # A unique, huge marker briefing — far beyond EPHEMERAL_HEADROOM (~9K tok).
+        marker = "ZZUNIQUEBRIEFINGMARKERZZ"
+        huge_briefing = "## Session Briefing\n" + (marker + " ") * 12000  # ~36K+ tok
+
+        with mock.patch(
+            "core.proactive_intelligence.build_session_briefing",
+            return_value=huge_briefing,
+        ), caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
+            agent_config = self._run_build(tmp_path)
+
+        full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
+        # 1) Content NOT truncated — the whole oversized briefing survived.
+        assert full.count(marker) >= 12000, (
+            f"ephemeral briefing was truncated (found {full.count(marker)} of 12000 "
+            "markers) — cognition content must NEVER be clipped, only WARNED about"
+        )
+        # 2) Overshoot was made VISIBLE.
+        assert any(
+            "exceeds reserved headroom" in r.message for r in caplog.records
+        ), "oversized ephemeral content must emit a WARNING (observability, recall#G)"
+
+    def test_normal_ephemeral_no_warning(self, tmp_path, caplog):
+        """A normal-sized briefing must NOT trip the ceiling warning (no false alarm)."""
+        import logging
+        import unittest.mock as mock
+
+        with mock.patch(
+            "core.proactive_intelligence.build_session_briefing",
+            return_value="## Session Briefing\n**System health:** ok",
+        ), caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
+            self._run_build(tmp_path)
+
+        assert not any(
+            "exceeds reserved headroom" in r.message for r in caplog.records
+        ), "normal ephemeral content must not trip the ceiling warning"
