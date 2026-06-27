@@ -833,6 +833,12 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 ):
                     continue
 
+                # Read resume_attempts HERE (hoisted above the supersede branch —
+                # the deliberate-pause guard below needs it to decide whether a crash
+                # orphan has exhausted its resume budget; the auto-resume block further
+                # down re-reads it under its own lock). Gate-1 Item-1.
+                resume_attempts = run_data.get("resume_attempts", 0)
+
                 # SUPERSEDED SKIP + MARK: a PAUSED run older than the newest
                 # COMPLETED run in this project WAS finished by a later run. Mark
                 # it abandoned (status=abandoned + abandon_reason=superseded_by_<id>)
@@ -853,10 +859,36 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 # running run is handled by the orphan-transition path below
                 # (running→paused), and becomes supersede-eligible only on the
                 # NEXT session once it is paused.
+                #
+                # DELIBERATE-PAUSE GUARD (run_17e3399c): supersede archives ONLY a
+                # genuine crash orphan that has EXHAUSTED its resume budget — never a
+                # run paused awaiting a human decision. Two false-archive vectors this
+                # closes (both verified against real run data + Gate-1 review):
+                #   (a) a run deliberately paused for an L2/judgment/Gate-BLOCK decision
+                #       (checkpoint.reason carries a true-trigger) must keep surfacing
+                #       until the human decides — recency must NOT bury it (the bug:
+                #       6 such runs were silently archived in production).
+                #   (b) a fresh crash orphan (resume_attempts < MAX) must finish its
+                #       auto-resume budget first — archiving it here short-circuits the
+                #       resume block below (Gate-1 Attack-1).
+                # Discriminant REUSES the single-source, word-boundary matcher from
+                # artifact_cli (NOT a hand-rolled substring denylist — substring
+                # 'l2'/'block' false-matches 'model2'/'roadblock', a bug class this
+                # codebase already fixed at artifact_cli:1542; Gate-1 Item-3). The exact
+                # crash marker 'session_crash_auto_detected' is NOT a true-trigger
+                # (verified: '_crash_' is mid-word, no \\b match), so it is gated by
+                # resume-budget instead. Empty reason → neither deliberate nor crash →
+                # supersede-eligible (no leak; :856 is the ONLY paused→abandoned writer).
+                from scripts.artifact_cli import _checkpoint_reason_has_true_trigger
+                _reason = (run_data.get("checkpoint", {}) or {}).get("reason") or ""
+                _is_deliberate = _checkpoint_reason_has_true_trigger(_reason)
+                _is_crash = _reason == "session_crash_auto_detected"
                 if (
                     status == "paused"
                     and run_ts is not None
                     and newest_completed_ts > run_ts
+                    and not _is_deliberate
+                    and (not _is_crash or resume_attempts >= _MAX_PIPELINE_RESUME_ATTEMPTS)
                 ):
                     sup_id = newest_completed_id
                     lock_file = run_dir / ".resume.lock"
@@ -866,10 +898,19 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         # Re-read under lock — a parallel session may have changed
                         # status (e.g. resumed → running anew) since the scan.
-                        # Re-check status==paused under lock: if it resumed to
-                        # running, leave it alone (don't archive a now-live run).
+                        # Re-check status==paused AND re-evaluate the guard under lock:
+                        # a parallel session may have resumed it (→ running) OR rewritten
+                        # checkpoint.reason / resume_attempts since the scan.
                         fresh = json.loads(run_file.read_text(encoding="utf-8"))
-                        if fresh.get("status") == "paused":
+                        _fresh_reason = (fresh.get("checkpoint", {}) or {}).get("reason") or ""
+                        _fresh_deliberate = _checkpoint_reason_has_true_trigger(_fresh_reason)
+                        _fresh_crash = _fresh_reason == "session_crash_auto_detected"
+                        _fresh_attempts = fresh.get("resume_attempts", 0)
+                        if (
+                            fresh.get("status") == "paused"
+                            and not _fresh_deliberate
+                            and (not _fresh_crash or _fresh_attempts >= _MAX_PIPELINE_RESUME_ATTEMPTS)
+                        ):
                             fresh["status"] = "abandoned"
                             fresh["abandon_reason"] = (
                                 f"superseded_by_{sup_id}" if sup_id

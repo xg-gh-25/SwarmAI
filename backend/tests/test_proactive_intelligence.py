@@ -1151,7 +1151,8 @@ class TestPipelineSupersedeAndActiveSkip:
 
     def _make_run(self, workspace, project="TestProj", run_id="run_abc",
                   status="paused", requirement="Fix bug", resume_attempts=0,
-                  next_stage="build", updated_at=None, minutes_ago=5):
+                  next_stage="build", updated_at=None, minutes_ago=5,
+                  reason="session_crash_auto_detected"):
         from datetime import datetime, timezone, timedelta
         runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
         runs_dir.mkdir(parents=True, exist_ok=True)
@@ -1161,7 +1162,7 @@ class TestPipelineSupersedeAndActiveSkip:
             "id": run_id, "status": status, "requirement": requirement,
             "resume_attempts": resume_attempts, "updated_at": updated_at,
             "stages": [{"stage": "evaluate", "status": "completed"}],
-            "checkpoint": {"next_stage": next_stage, "reason": "session crash"},
+            "checkpoint": {"next_stage": next_stage, "reason": reason},
         }
         run_file = runs_dir / "run.json"
         run_file.write_text(json.dumps(run_data, indent=2))
@@ -1201,8 +1202,10 @@ class TestPipelineSupersedeAndActiveSkip:
         from datetime import datetime, timezone, timedelta
         older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         newer = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        # resume_attempts=3 (exhausted): a crash orphan is supersede-eligible only
+        # after its resume budget is used up (Plan C, Gate-1 Attack-1 fix).
         self._make_run(tmp_path, run_id="run_old_paused", status="paused",
-                       resume_attempts=0, updated_at=older)
+                       resume_attempts=3, updated_at=older)
         self._make_run(tmp_path, run_id="run_new_done", status="completed",
                        updated_at=newer)
         result = _get_paused_pipeline_highlights(tmp_path)
@@ -1215,7 +1218,7 @@ class TestPipelineSupersedeAndActiveSkip:
         older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         newer = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         sup = self._make_run(tmp_path, run_id="run_old_paused", status="paused",
-                             updated_at=older)
+                             resume_attempts=3, updated_at=older)
         self._make_run(tmp_path, run_id="run_new_done", status="completed",
                        updated_at=newer)
         _get_paused_pipeline_highlights(tmp_path)
@@ -1223,6 +1226,80 @@ class TestPipelineSupersedeAndActiveSkip:
         assert data["status"] == "abandoned", f"expected abandoned, got {data['status']}"
         assert data.get("abandon_reason") == "superseded_by_run_new_done", \
             f"expected superseded_by marker, got {data.get('abandon_reason')}"
+
+    # ── ① deliberate-pause guard (run_17e3399c) — supersede must NOT archive a
+    #    run paused awaiting a human decision, even when a newer completed run exists.
+    #    Plan C: reuse artifact_cli._checkpoint_reason_has_true_trigger (word-boundary,
+    #    single-source vocab) + gate crash orphans on resume_attempts>=MAX. ──
+    def _sibling_done(self, tmp_path):
+        """Create a newer COMPLETED sibling so newest_completed_ts>run_ts is true
+        (makes the supersede branch reachable — without it the branch never fires)."""
+        from datetime import datetime, timezone, timedelta
+        newer = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        self._make_run(tmp_path, run_id="run_new_done", status="completed",
+                       updated_at=newer)
+
+    def test_deliberate_pause_not_superseded(self, tmp_path):
+        """AC1: a paused run whose checkpoint.reason is a deliberate human-decision
+        signal (L2/Gate BLOCK/judgment) is NEVER archived by recency — the user
+        must still be reminded to decide. THE BUG FIX."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        sup = self._make_run(tmp_path, run_id="run_l2", status="paused",
+                             resume_attempts=3, updated_at=older,
+                             reason="L2 BLOCK (STEERING#7 collision): needs XG decision")
+        self._sibling_done(tmp_path)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(sup.read_text())
+        assert data["status"] == "paused", \
+            f"deliberate-pause run must NOT be archived, got {data['status']}"
+        assert any("run_l2" in ln for ln in result), \
+            f"deliberate-pause run must still surface, got: {result}"
+
+    def test_crash_orphan_resume_budget_not_superseded(self, tmp_path):
+        """AC3: a crash orphan with resume_attempts<MAX is NOT archived — it must
+        finish its auto-resume budget first (Gate-1 Attack-1)."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        sup = self._make_run(tmp_path, run_id="run_fresh_crash", status="paused",
+                             resume_attempts=0, updated_at=older,
+                             reason="session_crash_auto_detected")
+        self._sibling_done(tmp_path)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(sup.read_text())
+        assert data["status"] == "paused", \
+            f"fresh crash orphan must keep resume budget, got {data['status']}"
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            f"fresh crash orphan must still auto-resume, got: {result}"
+
+    def test_empty_reason_run_still_superseded(self, tmp_path):
+        """AC4: a paused run with EMPTY reason IS archived (no leak — Gate-1
+        Attack-3). Empty is not a deliberate-decision signal."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        sup = self._make_run(tmp_path, run_id="run_empty", status="paused",
+                             resume_attempts=3, updated_at=older, reason="")
+        self._sibling_done(tmp_path)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(sup.read_text())
+        assert data["status"] == "abandoned", \
+            f"empty-reason run must be archived (no leak), got {data['status']}"
+
+    def test_substring_trap_not_false_matched_as_deliberate(self, tmp_path):
+        """AC5: a reason containing 'l2'/'crash' as a SUBSTRING but not a whole word
+        (e.g. 'model2 render crash') must NOT be treated as deliberate — it is
+        archived. Proves the word-boundary matcher (vs substring) is in use; this
+        test FAILS under a naive substring denylist (Gate-1 Attack-3 / Item-3)."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        sup = self._make_run(tmp_path, run_id="run_trap", status="paused",
+                             resume_attempts=3, updated_at=older,
+                             reason="model2 render pipeline crashed mid-step")
+        self._sibling_done(tmp_path)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(sup.read_text())
+        assert data["status"] == "abandoned", \
+            f"substring-trap reason must NOT be preserved as deliberate, got {data['status']}"
 
     # ── AC3: precision — genuine open run still surfaced ──
     def test_genuine_open_paused_run_still_surfaced(self, tmp_path):
