@@ -272,7 +272,18 @@ class DddCultivationOrchestrator:
     # ── Channel 1: DDD Staleness ───────────────────────────────────────────
 
     def _ch_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
-        """Flag DDD docs stale >14 days vs active code commits."""
+        """Flag DDD docs stale >14 days vs active code commits.
+
+        Git-call batching (cultivation 2s-budget fix): the recent-commit count
+        is computed ONCE PER PROJECT, not per-doc-per-path. Previously this ran
+        (a) the identical Strategy-1 `--grep` query twice when both TECH.md and
+        PRODUCT.md were stale, and (b) Strategy-2 as one `git log` subprocess
+        PER watched path in a loop — so a project with 6 watch paths spawned
+        6+ git processes, blowing the 2.0s channel budget (CHANNEL_TIMEOUT
+        ×17/day). Now: ≤2 git calls per project with stale docs, and Strategy-2
+        passes ALL watch paths to a single `git log -- p1 p2 …` (git accepts
+        multiple pathspecs). swarmai_root is resolved at most once.
+        """
         findings = []
         projects_dir = root / "Projects"
         if not projects_dir.is_dir():
@@ -280,59 +291,71 @@ class DddCultivationOrchestrator:
 
         cutoff = datetime.now() - timedelta(days=14)
         gate_mgr = self._get_gate_manager(root)  # Create once, reuse per-finding
+        swarmai_root: "Path | bool | None" = None  # resolve lazily, at most once
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
                 continue
 
+            # Collect stale DDD docs first — git is only queried if at least one
+            # doc is stale, and only ONCE for the whole project.
+            stale_docs: list[tuple[str, datetime]] = []
             for ddd_name in ("TECH.md", "PRODUCT.md"):
                 ddd_file = project_dir / ddd_name
                 if not ddd_file.exists():
                     continue
-
                 mtime = datetime.fromtimestamp(ddd_file.stat().st_mtime)
                 if mtime > cutoff:
                     continue
+                stale_docs.append((ddd_name, mtime))
 
-                try:
-                    # Strategy 1: grep commit messages for project name
-                    result = subprocess.run(
-                        ["git", "log", "--oneline", "--since=14 days ago",
-                         "--grep", project_dir.name, "--", "."],
-                        cwd=ws_path, capture_output=True, text=True,
-                        timeout=_GIT_TIMEOUT,
-                    )
-                    commit_count = len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
+            if not stale_docs:
+                continue  # no stale docs → no git work for this project
 
-                    # Strategy 2: check watched source paths (catches commits
-                    # that don't mention the project name in commit message).
-                    # NOTE: runs against SWARMAI repo, not SwarmWS.
-                    if commit_count == 0 and project_dir.name in _SOURCE_WATCH_PATHS:
-                        swarmai_root = _find_swarmai_root()
-                        if swarmai_root:
-                            for watch_path in _SOURCE_WATCH_PATHS[project_dir.name]:
-                                path_result = subprocess.run(
-                                    ["git", "log", "--oneline", "--since=14 days ago",
-                                     "--", watch_path],
-                                    cwd=str(swarmai_root),
-                                    capture_output=True, text=True,
-                                    timeout=_GIT_TIMEOUT,
-                                )
-                                if path_result.stdout.strip():
-                                    commit_count = len(path_result.stdout.strip().splitlines())
-                                    break  # One matching path is enough
+            commit_count = 0
+            try:
+                # Strategy 1: grep commit messages for project name (one call).
+                result = subprocess.run(
+                    ["git", "log", "--oneline", "--since=14 days ago",
+                     "--grep", project_dir.name, "--", "."],
+                    cwd=ws_path, capture_output=True, text=True,
+                    timeout=_GIT_TIMEOUT,
+                )
+                commit_count = len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
 
-                    if commit_count > 0:
-                        days_stale = (datetime.now() - mtime).days
-                        findings.append(
-                            f"DDD-STALE: {project_dir.name}/{ddd_name} "
-                            f"({days_stale}d old, {commit_count} recent commits)"
+                # Strategy 2: watched source paths — ONE git call over ALL paths
+                # (was one subprocess per path). Catches commits that don't
+                # mention the project name. NOTE: runs against SWARMAI repo.
+                if commit_count == 0 and project_dir.name in _SOURCE_WATCH_PATHS:
+                    if swarmai_root is None:
+                        swarmai_root = _find_swarmai_root() or False
+                    if swarmai_root:
+                        watch_paths = _SOURCE_WATCH_PATHS[project_dir.name]
+                        path_result = subprocess.run(
+                            ["git", "log", "--oneline", "--since=14 days ago",
+                             "--", *watch_paths],
+                            cwd=str(swarmai_root),
+                            capture_output=True, text=True,
+                            timeout=_GIT_TIMEOUT,
                         )
-                        # Gate trigger: staleness detected = file_tracker gate fires
-                        if gate_mgr:
-                            gate_mgr.record_trigger("file_tracker")
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
+                        commit_count = (
+                            len(path_result.stdout.strip().splitlines())
+                            if path_result.stdout.strip() else 0
+                        )
+            except (subprocess.TimeoutExpired, OSError):
+                commit_count = 0
+
+            if commit_count > 0:
+                for ddd_name, mtime in stale_docs:
+                    days_stale = (datetime.now() - mtime).days
+                    findings.append(
+                        f"DDD-STALE: {project_dir.name}/{ddd_name} "
+                        f"({days_stale}d old, {commit_count} recent commits)"
+                    )
+                    # Gate trigger: staleness detected = file_tracker gate fires
+                    # (recorded per stale doc, preserving prior behavior).
+                    if gate_mgr:
+                        gate_mgr.record_trigger("file_tracker")
 
         return findings
 

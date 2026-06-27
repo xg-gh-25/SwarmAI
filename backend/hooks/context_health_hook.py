@@ -111,6 +111,16 @@ class ContextHealthHook:
         # BackgroundHookExecutor has 30s timeout — 25s leaves 5s headroom.
         _cultivation_deadline = time.monotonic() + 25.0
 
+        # Whole-refresh wall-clock budget for the HEAVY, un-budgeted index syncs
+        # below (knowledge library / transcript / code_intel). These run in a
+        # thread the executor's asyncio timeout CANNOT cancel, and embedding a
+        # large changeset (first full index ~100s; Bedrock retries on transient
+        # ModelErrorException stretch it further) pushed the hook past the 180s
+        # executor timeout — "Background hook 'context_health' timed out" ×12/day.
+        # Sized under 180s with headroom; the syncs are DELTA (content_hash), so
+        # deferring the tail to the next session is safe and self-healing.
+        _refresh_deadline = time.monotonic() + 120.0
+
         # Reset dirty flag — will be set if any cultivation writes to DDD docs.
         self._ddd_docs_modified = False
 
@@ -196,17 +206,32 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: knowledge library sync skipped: %s", exc)
 
-        # Transcript indexing (incremental, <10s) — P1 Memory Architecture v2
-        try:
-            self._sync_transcript_index(root)
-        except Exception as exc:
-            logger.debug("context_health: transcript sync skipped: %s", exc)
+        # Transcript indexing (incremental, <10s) — P1 Memory Architecture v2.
+        # Budget gate: the knowledge-library embed above can run long on a large
+        # changeset; if we're past the refresh budget, defer the remaining heavy
+        # syncs to the next session instead of risking the 180s executor timeout.
+        if time.monotonic() <= _refresh_deadline:
+            try:
+                self._sync_transcript_index(root)
+            except Exception as exc:
+                logger.debug("context_health: transcript sync skipped: %s", exc)
 
-        # Code Intelligence — incremental graph refresh (<2s for typical changeset)
-        try:
-            self._refresh_code_intel(root)
-        except Exception as exc:
-            logger.debug("context_health: code_intel refresh skipped: %s", exc)
+            # Code Intelligence — incremental graph refresh (<2s typical changeset)
+            if time.monotonic() <= _refresh_deadline:
+                try:
+                    self._refresh_code_intel(root)
+                except Exception as exc:
+                    logger.debug("context_health: code_intel refresh skipped: %s", exc)
+            else:
+                logger.info(
+                    "context_health: refresh budget reached — deferring code_intel "
+                    "refresh to next session",
+                )
+        else:
+            logger.info(
+                "context_health: refresh budget reached after knowledge sync — "
+                "deferring transcript + code_intel indexing to next session",
+            )
 
         # Refresh PROJECTS.md if: (a) cultivation modified DDD docs, or
         # (b) Projects/ directory itself changed (create/rename/delete).
