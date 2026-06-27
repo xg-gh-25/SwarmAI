@@ -107,6 +107,17 @@ _GATE_CODE_PATHS = [
 # slower — bounded by a per-case timeout. The gate reads the COMMITTED report
 # (ci_eval_gate), not the per-session canary, so a generous timeout never flakes
 # the gate. MUST mirror golden_case_validator._GATE_ELIGIBLE_EVALUATORS.
+_GATE_TIERS = frozenset({"active", "stable"})
+# The ONLY tiers the regression gate trusts. Fail-closed ALLOWLIST (not a
+# denylist of draft/archived): a future tier wired to a gate-eligible evaluator
+# must be added here DELIBERATELY, never admitted by default. active = standard
+# trusted case; stable = promote()-proven case (still returned by get_golden_set
+# as an active gate member). draft (not yet trustworthy) and archived (soft-
+# deleted) are absent by construction, as is any unknown/experimental tier.
+# NOTE: the 3-4 other tier-set sites in eval_service (get_golden_set excludes
+# only archived; affected_by excludes archived+stable; promote excludes
+# archived+stable+draft) encode DIFFERENT intents and are deliberately NOT
+# unified with this constant.
 _GATE_ELIGIBLE_EVALUATORS = frozenset(
     {"file_contains", "keyword_match", "trajectory_exact",
      "trajectory_in_order", "trajectory_any_order", "canary_pass"}
@@ -171,14 +182,14 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
             continue
         if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
             continue
-        # Not-active tiers never gate: draft = not yet trustworthy (compute_bvt's
-        # own G2 rule); archived = soft-deleted (delete_case sets tier='archived').
-        # eval_service's archived-excluding readers (get_golden_set:386,
-        # active_cases:560) already drop archived from active use — but compute_bvt
-        # was the lone gate path that DIDN'T, so a soft-deleted gate-eligible+stamped
-        # case leaked into the BVT (empirically counted; run_5edf2cc0 fix). (Draft
-        # exclusion is compute_bvt's alone — get_golden_set still returns drafts.)
-        if c.get("tier") in ("draft", "archived"):
+        # Fail-closed ALLOWLIST: only _GATE_TIERS (active, stable) gate. This
+        # excludes draft (not yet trustworthy — compute_bvt's own G2 rule),
+        # archived (soft-deleted; delete_case sets tier='archived' — was the lone
+        # gate-path leak before run_5edf2cc0), AND any unknown/future tier that
+        # hasn't been deliberately added to _GATE_TIERS. The default 'active'
+        # preserves the prior denylist's treatment of tier-less legacy cases
+        # (None counted) — mirrors get_golden_set:254's .get("tier","active").
+        if c.get("tier", "active") not in _GATE_TIERS:
             continue
         # G1/G8: only cases carrying a CURRENT validated_by_4gate stamp (matching
         # the canonical body hash) count. A case edited outside the sanctioned

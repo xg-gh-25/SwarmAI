@@ -16,6 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.eval_runner import compute_code_digest, compute_bvt  # noqa: E402
+from scripts.golden_case_validator import compute_case_stamp  # noqa: E402
 
 
 def _git(cmd, cwd):
@@ -76,11 +77,20 @@ def test_digest_changes_when_private_golden_set_changes(git_repo):
 
 
 def _cases_results(specs):
-    """specs: list of (eval_method, evaluators, status)."""
+    """specs: list of (eval_method, evaluators, status).
+
+    Cases are auto-stamped (validated_by_4gate) and tier='active' so they pass
+    compute_bvt's stamp gate (run_5edf2cc0) + tier allowlist (_GATE_TIERS). The
+    BVT-admission edge cases (draft/archived/unknown-tier/unstamped exclusion)
+    are covered exhaustively in tests/test_bvt_admission.py — here the cases must
+    be admissible so the tests exercise green/red/exclusion-by-EVALUATOR logic.
+    """
     cases, results = [], []
     for i, (method, evs, status) in enumerate(specs):
         cid = f"C{i}"
-        cases.append({"id": cid, "eval_method": method, "evaluators": evs})
+        c = {"id": cid, "eval_method": method, "evaluators": evs, "tier": "active"}
+        c["validated_by_4gate"] = compute_case_stamp(c)
+        cases.append(c)
         results.append({"id": cid, "status": status})
     return cases, results
 
