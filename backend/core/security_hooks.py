@@ -159,6 +159,24 @@ def _is_dangerous_rm(command: str) -> bool:
     return False
 
 
+# Raw-text destructive signatures, used ONLY as the fail-closed fallback when
+# shlex cannot tokenize a command (e.g. an apostrophe in a comment). Matching
+# the bare word "git"/"gh" here was too broad — it gated read-only `git log`
+# whenever a script comment contained an apostrophe. These regexes look for an
+# actually-destructive verb/flag in the raw string instead.
+_IRREVERSIBLE_FALLBACK_RE = re.compile(
+    # forced / deleting / history-rewriting push
+    r"git\s+push\b[^\n;|&]*?(?:--force|--force-with-lease|--delete|--mirror|--prune|\s-\w*[fd])"
+    # gh <noun> delete / delete-asset
+    r"|gh\s+\S+\s+delete(?:-asset)?\b"
+    # gh repo edit … --visibility (clears stars, irreversible — C041)
+    r"|gh\s+repo\s+edit\b[^\n;|&]*?--visibility"
+    # gh api destructive REST method or visibility field
+    r"|gh\s+api\b[^\n;|&]*?(?:-X\s*(?:DELETE|PATCH|PUT)|--method[ =]\s*(?:DELETE|PATCH|PUT)|visibility=)",
+    re.IGNORECASE,
+)
+
+
 def _is_irreversible_external_op(command: str) -> bool:
     """Fail-closed predicate: is this an IRREVERSIBLE destructive EXTERNAL op?
 
@@ -200,9 +218,10 @@ def _is_irreversible_external_op(command: str) -> bool:
     are NOT recognized — they need a real shell parser. The fail-closed
     ``mentions_target`` arm only catches UNPARSEABLE input; these parse cleanly.
     """
-    # A command that mentions gh/git but cannot be tokenized cannot be proven
-    # safe → fail closed. (Only fail closed for our targets, not every command.)
-    mentions_target = ("gh" in command.split()) or ("git" in command.split())
+    # NOTE: unparseable input (shlex ValueError) is handled in the `except`
+    # below via _IRREVERSIBLE_FALLBACK_RE. We deliberately do NOT fail closed on
+    # the mere presence of "git"/"gh" — that gated benign reads like `git log`
+    # whenever a script comment contained an apostrophe (`Find ws_path's repo`).
     # shlex does NOT treat ';' as a standalone token unless it is space-padded
     # (it leaves `status;` glued). Pad bare ';' so segment-splitting sees it —
     # but NOT a ';' inside quotes (a -m message). Quote-aware pad: only outside
@@ -217,7 +236,12 @@ def _is_irreversible_external_op(command: str) -> bool:
     try:
         all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
     except ValueError:
-        return mentions_target
+        # Unparseable input cannot be tokenized for precise judgment. Fail
+        # closed ONLY when a destructive signature is literally visible in the
+        # raw text — not on the bare presence of "git"/"gh" (PIT: an apostrophe
+        # in a comment, `Find ws_path's git repo`, made shlex choke and flagged
+        # a read-only `git log`).
+        return bool(_IRREVERSIBLE_FALLBACK_RE.search(command))
     if not all_tokens:
         return False
     # Re-split any token that carries a glued ';' (e.g. 'status;') into the word

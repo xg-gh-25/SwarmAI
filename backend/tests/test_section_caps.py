@@ -138,6 +138,43 @@ class TestSectionCaps:
                     count += 1
             assert count <= cap, f"Section '{name}' has {count} entries, cap is {cap}"
 
+    def test_bulk_evict_guard_limits_position_only_eviction(self, tmp_path):
+        """Gate-2 F1: when entries lack decay metadata, eviction is position-only,
+        so a single cycle must NOT bulk-relocate more than BULK_EVICT_LIMIT."""
+        from hooks.distillation_hook import (
+            DistillationTriggerHook, SECTION_CAPS, BULK_EVICT_LIMIT,
+        )
+
+        cap = SECTION_CAPS["Guidelines"]
+        # Far over cap, NO decay metadata (the real-file condition that triggers
+        # oldest-first fallback). Overflow = cap + BULK_EVICT_LIMIT + 50.
+        n = cap + BULK_EVICT_LIMIT + 50
+        entries = [f"2026-01-{(i%28)+1:02d}: **Entry {i}** — detail" for i in range(n)]
+        content = _build_memory_md({"Guidelines": entries})
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(content)
+        (tmp_path / "Knowledge" / "Archives").mkdir(parents=True)
+
+        DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
+
+        result = memory_path.read_text()
+        in_section = False
+        remaining = 0
+        for line in result.splitlines():
+            if line.strip() == "## Guidelines":
+                in_section = True
+                continue
+            if line.strip().startswith("## ") and in_section:
+                break
+            if in_section and line.strip().startswith("- ") and not line.strip().startswith("- [Archived]"):
+                remaining += 1
+        # Guard caps eviction at BULK_EVICT_LIMIT, so remaining stays HIGH
+        # (n - BULK_EVICT_LIMIT), NOT trimmed all the way down to cap.
+        assert remaining == n - BULK_EVICT_LIMIT, (
+            f"bulk-evict guard should limit removal to {BULK_EVICT_LIMIT}; "
+            f"remaining={remaining}, expected={n - BULK_EVICT_LIMIT}"
+        )
+
     def test_no_modification_under_cap(self, tmp_path):
         """20 entries in a 30-cap section -> no change."""
         from hooks.distillation_hook import DistillationTriggerHook

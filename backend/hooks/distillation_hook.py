@@ -64,15 +64,29 @@ ARCHIVE_DAYS = 90  # Move files older than this to Archives/
 # evergreen ones (Principles/Corrections/COE Registry/Open Threads/Standing
 # Preferences) are bounded by decay/reclaim, not count. Validated at import
 # (below) so a future rename fails loud instead of silently orphaning entries.
+# Caps reconciled against live counts (Gate-2 F1): the live MEMORY.md has
+# Guidelines≈217 / Pitfalls≈179, and entries lack the `sessions:` field that
+# _enforce_section_caps' "smart eviction" needs — so a cap far below the live
+# count would mass-evict by file POSITION (oldest-first), relocating ~280
+# load-bearing entries in one cycle. Caps are set ABOVE current reality so the
+# first runs trim only genuine overflow; ratchet down later as decay reclaims.
+# A bulk-eviction guard (BULK_EVICT_LIMIT) backstops the position-only fallback.
 SECTION_CAPS = {  # section name → max entries (count, NOT token — R3-8)
-    "Decisions": 40,
-    "Guidelines": 60,
-    "Pitfalls": 60,
-    "Models": 20,
-    "Processes": 20,
+    "Decisions": 60,
+    "Guidelines": 230,
+    "Pitfalls": 200,
+    "Models": 30,
+    "Processes": 30,
     "COE Registry": 15,
-    "Open Threads": 10,
+    "Open Threads": 20,
 }
+
+# Backstop for the position-only eviction fallback (Gate-2 F1): when decay
+# metadata is unavailable (so eviction would be pure oldest-first), never
+# archive more than this many entries from one section in a single cycle. A
+# larger overflow is a signal to surface (health probe) and ratchet caps, not
+# to bulk-relocate by position. Smart (decay-ranked) eviction is uncapped.
+BULK_EVICT_LIMIT = 20
 
 # Fail-loud guard: every cap key must be a real current section. A dead key
 # means the section is silently uncapped (the bug R3 fixes). logger.error
@@ -2078,10 +2092,24 @@ class DistillationTriggerHook:
 
                     # Sort by decay score ascending — lowest score evicted first
                     eviction_order = sorted(entry_indices, key=_entry_decay_score)
-                    if not decay_available:
-                        # No decay metadata anywhere: fall back to oldest-first (bottom of section)
-                        eviction_order = list(reversed(entry_indices))
                     overflow_count = len(entry_indices) - cap
+                    if not decay_available:
+                        # No decay metadata anywhere: fall back to oldest-first
+                        # (bottom of section). Gate-2 F1 backstop: position-only
+                        # eviction is risky (can evict high-ref entries by mere
+                        # position), so never bulk-relocate more than
+                        # BULK_EVICT_LIMIT in one cycle — a larger overflow means
+                        # caps need ratcheting, surfaced by the write-gov health
+                        # probe, not silently mass-archived here.
+                        eviction_order = list(reversed(entry_indices))
+                        if overflow_count > BULK_EVICT_LIMIT:
+                            logger.warning(
+                                "section '%s' over cap by %d but decay metadata "
+                                "unavailable — limiting eviction to %d (position-"
+                                "only fallback guard, Gate-2 F1)",
+                                section_name, overflow_count, BULK_EVICT_LIMIT,
+                            )
+                            overflow_count = BULK_EVICT_LIMIT
                     evict_set = set(eviction_order[:overflow_count])
 
                     # Include metadata/detail lines that follow evicted entries

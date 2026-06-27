@@ -303,13 +303,16 @@ def _parse_extraction(raw: str) -> dict[str, list[str]]:
 # that the index/recall/caps never manage (R3 write-target drift fix).
 #   key_decisions  → Decisions
 #   lessons_learned→ Guidelines (a lesson is a guideline in the 7-type schema)
-#   open_threads / recent_context → Open Threads (the live churn section for
-#       in-flight context; both legacy keys fold here)
+#   open_threads / recent_context → Processes (Gate-2 F3: NOT "Open Threads" —
+#       that section is structured with ### P0/P1/P2 subsections, and prepend
+#       writes would land an unstructured bullet above the structure, breaking
+#       the format the deleted comment warned about. Processes is a flat bullet
+#       list (process-type), the correct home for unstructured in-flight notes.)
 _SECTION_MAP = {
     "key_decisions": MEMORY_TYPE_TO_SECTION["decision"],
     "lessons_learned": MEMORY_TYPE_TO_SECTION["guideline"],
-    "open_threads": "Open Threads",
-    "recent_context": "Open Threads",
+    "open_threads": MEMORY_TYPE_TO_SECTION["process"],
+    "recent_context": MEMORY_TYPE_TO_SECTION["process"],
 }
 
 
