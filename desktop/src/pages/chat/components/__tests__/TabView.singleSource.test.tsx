@@ -159,7 +159,7 @@ describe('TabView — render source: more-complete wins, never prop while stream
   it('idle: same-id but store has an interactive block — store wins (question not dropped)', () => {
     // Store's last assistant carries a live ask_user_question block (FE-synthesized,
     // never in the prop). Even though the prop has longer plain text for the same
-    // id, the interactive guard keeps the store so the question UI is preserved.
+    // id, the plain-answer guard keeps the store so the question UI is preserved.
     const storeMsg: Message = {
       id: 'm1', role: 'assistant', timestamp: new Date().toISOString(),
       content: [
@@ -171,6 +171,25 @@ describe('TabView — render source: more-complete wins, never prop while stream
     const fullerProp = [msg('m1', 'a much longer plain-text answer without the question block')];
 
     // Must not throw and must render the store message (same id → one bubble).
+    const { queryByTestId } = render(<TabView {...props('A', true, fullerProp)} />);
+    expect(queryByTestId('bubble-m1')).not.toBeNull();
+  });
+
+  it('idle: same-id but store has a tool_use block — store wins (tool block not dropped)', () => {
+    // Store's last assistant has [text, tool_use]. asstChars counts text only, so a
+    // longer plain-text prop would otherwise "win" and a naive content-swap would
+    // drop the tool_use. The plain-answer guard (text/thinking only) blocks the
+    // swap → store wins, tool_use preserved.
+    const storeMsg: Message = {
+      id: 'm1', role: 'assistant', timestamp: new Date().toISOString(),
+      content: [
+        { type: 'text', text: 'short' } as Message['content'][number],
+        { type: 'tool_use', id: 't1', name: 'bash', input: {} } as unknown as Message['content'][number],
+      ],
+    };
+    messageStoreRegistry.getOrCreate('A').replace([storeMsg]);
+    const fullerProp = [msg('m1', 'a much longer plain text answer that lacks the tool_use block entirely')];
+
     const { queryByTestId } = render(<TabView {...props('A', true, fullerProp)} />);
     expect(queryByTestId('bubble-m1')).not.toBeNull();
   });

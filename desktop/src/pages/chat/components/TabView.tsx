@@ -166,11 +166,14 @@ function TabViewImpl({
       (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
       0,
     ) : -1;
-  // Interactive blocks are FRONTEND-synthesized (never persisted) and live only
-  // in the store/its mirror — a prop content-swap must never drop them.
-  const INTERACTIVE = new Set(['ask_user_question', 'cmd_permission_request', 'escalation']);
-  const hasInteractive = (m: Message | undefined): boolean =>
-    !!m && Array.isArray(m.content) && m.content.some((b) => INTERACTIVE.has(b.type));
+  // A "plain" answer is text/thinking only — branch (b)'s content-swap is
+  // restricted to these so it can NEVER drop a tool_use / tool_result /
+  // interactive (ask_user_question / cmd_permission_request / escalation) block
+  // the store carries (asstChars counts text only, and the prop mirror isn't
+  // guaranteed to include those blocks). A truncated answer to rescue is text,
+  // so this loses no real coverage.
+  const isPlainAnswer = (m: Message | undefined): boolean =>
+    !!m && Array.isArray(m.content) && m.content.every((b) => b.type === 'text' || b.type === 'thinking');
 
   // ── Render source: MORE-COMPLETE WINS, but the prop is NEVER used while
   //    streaming — AND a longer prop can only win for the SAME last message. ──
@@ -207,7 +210,7 @@ function TabViewImpl({
     // (a) startup gap — store has no assistant yet, render the restored prop.
     messages = messagesProp;
     chosen = 'prop-startup';
-  } else if (sa && pa && sa.id === pa.id && propChars > storeChars && !hasInteractive(sa)) {
+  } else if (sa && pa && sa.id === pa.id && propChars > storeChars && isPlainAnswer(sa)) {
     // (b) same-message truncation — swap in the prop's fuller content only.
     messages = storeMsgs.map((m) => (m.id === sa.id ? { ...m, content: pa.content } : m));
     chosen = 'prop-content';
