@@ -18,6 +18,7 @@ from unittest.mock import patch, AsyncMock
 from core.context_injector import (
     _compact_tool_args,
     _compute_resume_budget,
+    _compute_layer_caps,
     _summarize_tool_blocks,
     _format_message,
     _filter_tool_only_messages,
@@ -78,6 +79,58 @@ class TestComputeResumeBudget:
             budget, max_msgs, fetch = _compute_resume_budget(window, is_channel=True)
             assert budget == 32_000
             assert max_msgs == 50
+
+
+# ── _compute_layer_caps (elastic budget-driven caps) ──────────────────
+
+
+class TestComputeLayerCaps:
+    """Per-layer CHAR budgets derived from token_budget (run_6d5f60dd).
+
+    The fix for resume under-fill: a generous 150K budget filled only ~4%
+    because extraction used FIXED item-counts. These caps make each layer's
+    size a pure function of the budget — complex sessions fill more, simple
+    stay lean, channel stays small.
+    """
+
+    def test_returns_all_layer_keys(self):
+        caps = _compute_layer_caps(150_000)
+        for key in ("recent_chars", "tool_results_chars",
+                    "conclusions_chars", "directives_chars", "tool_item_trunc"):
+            assert key in caps, f"missing layer cap: {key}"
+
+    def test_monotonic_in_budget(self):
+        """AC3: every layer cap must grow with the budget (1M > 200K > 32K)."""
+        big = _compute_layer_caps(150_000)      # 1M model budget
+        mid = _compute_layer_caps(60_000)       # 200K model budget
+        small = _compute_layer_caps(32_000)     # channel budget
+        for key in ("recent_chars", "tool_results_chars",
+                    "conclusions_chars", "directives_chars"):
+            assert big[key] > mid[key] > small[key], (
+                f"{key} not monotonic: {big[key]} / {mid[key]} / {small[key]}"
+            )
+
+    def test_shares_leave_checkpoint_headroom(self):
+        """Trimmable layer shares must sum to < 100% of budget so the
+        untrimmable checkpoint + uncommitted have room (Gate-1 finding 2)."""
+        caps = _compute_layer_caps(150_000)
+        budget_chars = 150_000 * 4
+        trimmable = (caps["recent_chars"] + caps["tool_results_chars"]
+                     + caps["conclusions_chars"] + caps["directives_chars"])
+        assert trimmable < budget_chars, "no headroom for checkpoint"
+        # headroom should be a meaningful fraction (≥10%), not a sliver
+        assert (budget_chars - trimmable) >= 0.10 * budget_chars
+
+    def test_tool_item_trunc_has_floor(self):
+        """Per-item truncation floor = 300 (today's value) — never regress
+        below it even on a tiny budget (Gate-1 finding 3: per-item floor)."""
+        assert _compute_layer_caps(32_000)["tool_item_trunc"] >= 300
+        assert _compute_layer_caps(150_000)["tool_item_trunc"] >= 300
+
+    def test_tool_item_trunc_scales_up_with_budget(self):
+        """A large budget allows keeping more than 300 chars per tool summary."""
+        assert (_compute_layer_caps(150_000)["tool_item_trunc"]
+                > _compute_layer_caps(32_000)["tool_item_trunc"])
 
 
 # ── _compact_tool_args ─────────────────────────────────────────────

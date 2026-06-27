@@ -881,6 +881,60 @@ def _compute_resume_budget(
         return (20_000, 80, 200)
 
 
+# Per-layer char-budget shares of the total token budget (run_6d5f60dd).
+# These sum to 0.85 — deliberately < 1.0 so the UNTRIMMABLE checkpoint base
+# + uncommitted git state (Gate-1 finding 2) have ~15% headroom before the
+# final clamp engages. Larger shares would push checkpoint+layers past the
+# budget on every large session. recent_turns dominates (it carries the
+# actual conversational substance), tool_results next, then the smaller
+# conclusions/directives layers.
+_LAYER_SHARES = {
+    "recent_chars": 0.45,
+    "tool_results_chars": 0.25,
+    "conclusions_chars": 0.10,
+    "directives_chars": 0.05,
+}
+# Per-ITEM truncation floor — today's value, NEVER regress below it even on a
+# tiny (channel) budget (Gate-1 finding 3: the floor is per-ITEM, not a
+# per-layer aggregate; a per-layer floor = today's max would blow the 32K
+# channel). Scales UP with budget so a large session keeps more of each
+# tool-result summary.
+_TOOL_ITEM_TRUNC_FLOOR = 300
+_TOOL_ITEM_TRUNC_MAX = 4_000
+
+
+def _compute_layer_caps(token_budget: int) -> dict[str, int]:
+    """Derive per-layer CHAR budgets from the token budget (elastic caps).
+
+    The resume under-fill fix (run_6d5f60dd): extraction used FIXED
+    item-counts (conclusions 5, directives 10, tool_results 15, turns 30)
+    that capped a 972-message session at ~6K tokens even with a 150K budget
+    (~4% utilisation). These caps make each layer's size a pure function of
+    the budget — complex sessions fill toward the budget, simple stay lean,
+    channel (32K) stays small — while ``_trim_to_budget`` + the final clamp
+    remain the hard safety bound.
+
+    Returns a dict of char budgets per layer + the per-item tool truncation:
+    ``recent_chars``, ``tool_results_chars``, ``conclusions_chars``,
+    ``directives_chars``, ``tool_item_trunc``.
+
+    Monotonic in ``token_budget`` (larger budget → larger caps), so channel
+    < 200K-model < 1M-model automatically.
+    """
+    budget_chars = max(0, token_budget) * 4  # ~4 chars per token
+    caps = {
+        key: int(budget_chars * share)
+        for key, share in _LAYER_SHARES.items()
+    }
+    # Per-item tool-summary truncation: floor 300 (today), scales up with the
+    # tool_results layer budget, capped so a single summary can't dominate.
+    caps["tool_item_trunc"] = max(
+        _TOOL_ITEM_TRUNC_FLOOR,
+        min(_TOOL_ITEM_TRUNC_MAX, caps["tool_results_chars"] // 12),
+    )
+    return caps
+
+
 # ─── Legacy assembly (kept for backward compat + fallback) ───────────
 
 def _assemble_context(messages: list[str], was_truncated: bool) -> str:
