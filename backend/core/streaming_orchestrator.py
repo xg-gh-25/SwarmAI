@@ -791,7 +791,14 @@ class StreamingOrchestrator:
                                     "session_id=%s action=%s",
                                     self._parent.session_id, level.value,
                                 )
-                                await self._parent.interrupt()
+                                # recycle_after=True: compaction ENDS the turn and
+                                # `return`s immediately (no warm continuation), and
+                                # a compaction interrupt genuinely poisons the
+                                # subprocess (instant error_during_execution on
+                                # reuse). So unlike a user Stop — which must stay
+                                # WARM (see SessionUnit.interrupt CRITICAL block) —
+                                # compaction is a legitimate recycle-to-COLD source.
+                                await self._parent.interrupt(recycle_after=True)
                                 return
                     elif isinstance(block, ToolResultBlock):
                         # ── Clear sub-agent progress when Agent tool completes ──

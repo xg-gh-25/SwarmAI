@@ -2504,22 +2504,23 @@ class SessionUnit:
                 "session_unit.flush_pipe session_id=%s — pipe flushed",
                 self.session_id,
             )
-            # ── Recycle-on-flush (PIT01 zombie fix, disconnect path) ────────
-            # A CLEAN interrupt return means the turn actually stopped (no tool
-            # mid-flight — that path times out and is handled below). The
-            # subprocess is now in the same corrupt turn-state as a user Stop,
-            # so the next send() would reuse a poisoned process → zombie. Recycle
-            # it via the same blessed kill path (preserves --resume identity).
-            # Only on the IDLE-alive state: if the flush already drove us elsewhere
-            # (DEAD/COLD via a concurrent kill), there is nothing warm to recycle.
-            if self.state == SessionState.IDLE and self._client is not None:
-                await self._arm_recovery_checkpoint("flush_recycle")
-                await self._crash_to_cold_async(clear_identity=False)
-                logger.info(
-                    "session_unit.flush_recycle session_id=%s — poisoned "
-                    "subprocess recycled to COLD after clean flush",
-                    self.session_id,
-                )
+            # ╔══════════════════════════════════════════════════════════════╗
+            # ║ CRITICAL — DO NOT recycle the flushed subprocess to COLD.      ║
+            # ║ Keep it WARM in IDLE. Same invariant as interrupt() (below).   ║
+            # ╚══════════════════════════════════════════════════════════════╝
+            # A clean interrupt return means the turn stopped (no tool mid-flight
+            # — that path times out and is handled below, also non-destructive).
+            # The subprocess stays WARM in IDLE so the next send() resumes the
+            # conversation in the SAME live process — instant, no cold --resume.
+            #
+            # This used to `flush_recycle` → COLD (commit 3b030f41, PIT01). On a
+            # disconnect-then-Stop (the FE aborts the SSE before /stop lands, so
+            # THIS path — not interrupt() — fires on most Stops) that turned every
+            # Stop into a multi-minute cold --resume on heavy sessions, then the
+            # 90s FE watchdog force-ended it → "resume 根本起不来". The rare genuine
+            # poison is caught lazily by the orchestrator's zombie self-heal
+            # (streaming_orchestrator.py ~999), so pre-emptive recycle here is
+            # strictly worse. Do NOT re-add it. See interrupt()'s CRITICAL block.
         except asyncio.CancelledError:
             # Cancelled externally (e.g. timeout wrapper or session teardown).
             logger.info(
@@ -2547,7 +2548,12 @@ class SessionUnit:
 
     # ── Interactive methods (task 3.3) ─────────────────────────────
 
-    async def interrupt(self, timeout: float = 5.0, autonomous: bool = False) -> bool:
+    async def interrupt(
+        self,
+        timeout: float = 5.0,
+        autonomous: bool = False,
+        recycle_after: bool = False,
+    ) -> bool:
         """Interrupt active query. SDK interrupt() with kill fallback.
 
         ``autonomous`` (run_fb6e94a9): when True, this is a system-initiated
@@ -2558,20 +2564,30 @@ class SessionUnit:
         eligible. Default False preserves the user-Stop semantics for all
         existing callers.
 
+        ``recycle_after``: when True, the warm subprocess is recycled to COLD
+        after a successful interrupt (``_crash_to_cold_async``, --resume id
+        preserved). This is ONLY for callers that KNOW the turn truly poisons
+        the subprocess and will NOT continue warm — i.e. **compaction**
+        (streaming_orchestrator ~794). It defaults to False so a USER STOP keeps
+        the subprocess WARM in IDLE for instant resume. See the CRITICAL block
+        at the success path below before changing this default.
+
         State transitions (success path):
 
-        - autonomous=False (user Stop / compaction): STREAMING → IDLE →
-          (recycle) → COLD. A soft interrupt leaves the subprocess in a
-          corrupt turn-state, so it is immediately recycled via
-          ``_crash_to_cold_async(clear_identity=False)`` (PIT01 zombie fix).
-          ``_sdk_session_id`` is preserved, so the next ``send()`` respawns
-          clean WITH ``--resume``. The subprocess does NOT stay warm.
+        - autonomous=False, recycle_after=False (USER STOP, the default):
+          STREAMING → IDLE, subprocess stays **WARM**. The next ``send()``
+          continues the conversation in the SAME live process — instant, no
+          ``--resume`` replay. THIS IS THE CORE RESUME MECHANISM (see below).
+        - recycle_after=True (compaction only): STREAMING → IDLE →
+          ``_crash_to_cold_async(clear_identity=False)`` → COLD. The turn ended
+          and the subprocess is genuinely poisoned, so recycle. ``_sdk_session_id``
+          is preserved → next ``send()`` respawns clean WITH ``--resume``.
         - autonomous=True (tool-hang watchdog only): STREAMING → IDLE,
           subprocess stays WARM and reusable so the model can reroute
           mid-stream without a respawn (recycling would collapse the warm
           base rung of the escalation ladder).
         - timeout / error: STREAMING → DEAD → COLD (subprocess force-killed).
-        - WAITING_INPUT → IDLE (then the same autonomous-gated recycle).
+        - WAITING_INPUT → IDLE (warm unless recycle_after).
 
         Returns True if the interrupt SUCCEEDED (the turn stopped) — this is
         NOT a subprocess-alive signal. After a non-autonomous interrupt the
@@ -2673,43 +2689,53 @@ class SessionUnit:
                 self.session_id, self.pid,
             )
 
-            # ── Recycle-on-interrupt (PIT01 zombie fix) ─────────────────────
-            # A soft interrupt leaves the CLI subprocess in a corrupt turn-state.
-            # If left warm (IDLE), the next send() reuses it and the CLI returns
-            # an INSTANT empty error_during_execution → the zombie detector kills
-            # + respawns (a ~10s stall on the user's next turn). Every zombie in
-            # the daemon log is preceded by a user Stop. So for a USER Stop we
-            # recycle the poisoned subprocess NOW via the blessed kill path
-            # (_crash_to_cold_async: real kill + FD cleanup, holds _lock).
-            # clear_identity=False preserves _sdk_session_id, so the next send()
-            # (COLD → _ensure_spawned at line ~1617) respawns clean WITH --resume
-            # and the conversation continues seamlessly.
+            # ╔══════════════════════════════════════════════════════════════╗
+            # ║ CRITICAL — DO NOT recycle a USER-STOP subprocess to COLD.      ║
+            # ║ This is the core WARM-RESUME mechanism. Read before editing.   ║
+            # ╚══════════════════════════════════════════════════════════════╝
+            # A user Stop leaves the subprocess WARM in IDLE. The next send()
+            # continues the SAME live process — instant, NO --resume replay.
             #
-            # AUTONOMOUS interrupts (autonomous=True) are EXCLUDED: the tool-hang
-            # watchdog (line ~1284) deliberately leaves the process warm and does
-            # NOT return — it lets the model reroute mid-stream without a full
-            # respawn. Recycling there would collapse the warm "base rung" into
-            # the escalated kill rung.
+            # History (the regression this comment exists to prevent re-adding):
+            # Commit 3b030f41 (2026-06-26, "PIT01 zombie") made EVERY user Stop
+            # `_crash_to_cold_async` → COLD, so the next send had to cold
+            # `--resume` the whole transcript. To dodge a RARE, already-handled
+            # zombie (~10s self-heal) it imposed an ALWAYS-PAID cold replay. On a
+            # heavy session that is catastrophic: session 7f755afa (985 msgs,
+            # ~1.9M cache_read tokens) on 2026-06-27 streamed 13:58→14:04 — 6.5
+            # MINUTES with no output — and the 90s frontend watchdog force-ended
+            # it mid-replay → the user-visible "stop 后 resume 根本起不来". The fix
+            # for a narrow surface bug had torn down the whole resume mechanism.
             #
-            # NOTE on compaction: the CompactionGuard escalation
-            # (streaming_orchestrator.py ~754) calls interrupt() with NO autonomous
-            # arg → autonomous=False → it RECYCLES, and that is CORRECT: compaction
-            # `return`s immediately after the interrupt (the turn ENDS — no warm
-            # reroute), and compaction_guard.py's own note confirms a compaction
-            # interrupt poisons the subprocess (instant error_during_execution on
-            # reuse) — i.e. it IS a PIT01 source. So recycle covers user Stop AND
-            # compaction (both end the turn); only the watchdog (keeps streaming)
-            # stays warm.
+            # The zombie is ALREADY handled — lazily and tightly — by the
+            # orchestrator's "Poisoned-subprocess self-heal (Layer 2)" /
+            # `zombie_via_error` (streaming_orchestrator.py ~999): if a reused
+            # warm subprocess really is poisoned it returns an INSTANT empty
+            # error_during_execution (<2s, no content) → that guard kills it and
+            # raises a retriable "Zombie subprocess detected" → send() respawns
+            # with --resume and the turn is retried (NOT lost). So:
+            #   • common case (subprocess fine)      → instant warm continuation
+            #   • rare case (genuinely poisoned)     → existing self-heal, ONLY then
+            # Pre-emptive recycle here is strictly worse: it forces the rare cost
+            # onto every Stop. If you are tempted to re-add it, you are
+            # re-introducing 3b030f41. DON'T.
             #
-            # _arm_recovery_checkpoint enriches the next send()'s resume context
-            # with "where I left off" (NO new kill — it only annotates the kill
-            # that's about to happen here).
-            if not autonomous:
+            # recycle_after=True is reserved for callers whose turn truly ends and
+            # poisons the process with no warm continuation — i.e. COMPACTION
+            # (streaming_orchestrator ~794), which `return`s right after. The
+            # watchdog (autonomous=True) also stays warm to keep its base rung.
+            if recycle_after and not autonomous:
                 await self._arm_recovery_checkpoint("interrupt_recycle")
                 await self._crash_to_cold_async(clear_identity=False)
                 logger.info(
-                    "session_unit.interrupt_recycle session_id=%s — poisoned "
-                    "subprocess recycled to COLD (resume id preserved)",
+                    "session_unit.interrupt_recycle session_id=%s — turn-ending "
+                    "interrupt recycled to COLD (resume id preserved)",
+                    self.session_id,
+                )
+            else:
+                logger.info(
+                    "session_unit.interrupt_warm session_id=%s — subprocess kept "
+                    "WARM in IDLE for instant resume (no cold --resume)",
                     self.session_id,
                 )
             return True

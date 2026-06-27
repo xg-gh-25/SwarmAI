@@ -1788,9 +1788,11 @@ class SessionRouter:
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
         interrupted = await unit.interrupt()
-        # PIT01 recycle: a user Stop now recycles the poisoned subprocess to COLD,
-        # so `interrupted=True` (the turn was stopped) no longer implies the
-        # process is alive. Re-read is_alive for the accurate liveness signal.
+        # A user Stop now keeps the subprocess WARM in IDLE (see
+        # SessionUnit.interrupt CRITICAL block — recycle-to-COLD on Stop was the
+        # 3b030f41 regression that made heavy-session resume take minutes). So
+        # `interrupted=True` means the turn stopped AND the process is alive and
+        # ready for an instant warm resume. is_alive reflects that.
         return {
             "success": True,
             "message": "Interrupted" if interrupted else "Killed (interrupt timed out)",
