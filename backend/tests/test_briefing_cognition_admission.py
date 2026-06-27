@@ -170,16 +170,25 @@ class TestBriefingStillRendersEndToEnd:
 class TestStructuredTwinUnchanged:
     """build_session_briefing_data (Welcome Screen) keeps feed data — dashboard is its right home."""
 
-    def test_feed_helpers_still_exist(self):
-        # These helpers are SHARED with the data twin and must NOT be deleted.
+    def test_feed_helpers_not_deleted_by_this_commit(self):
+        # SCOPE BOUNDARY (corrected after Gate-2 adversarial): these helpers are
+        # NOT deleted by the cognition-admission CUT. NOTE the accurate reason —
+        # they are currently 0-caller in production (the data twin
+        # build_session_briefing_data reads signal_digest.json / .job-results.jsonl
+        # INLINE, it does NOT call these helpers). They are out-of-scope dead-code,
+        # not "shared with the twin"; deleting them is a separate cleanup (a
+        # follow-up), and this CUT must not silently take them. This test pins the
+        # boundary: the CUT removed APPENDS, not these helper definitions.
         for name in ("_get_signal_highlights", "_get_job_result_highlights"):
             assert hasattr(pi, name), (
-                f"{name} is used by build_session_briefing_data (Welcome Screen) — must NOT be deleted."
+                f"{name} must not be deleted by the cognition-admission CUT "
+                "(out-of-scope dead-code cleanup, tracked as a follow-up)."
             )
 
     def test_data_twin_still_builds_feed_sections(self):
-        # The structured twin still references signals/jobs in its source (unchanged consumer).
+        # The structured twin still produces feed data (reads signal/job JSON inline).
+        # It is the correct home for dashboard feed — this CUT must not touch it.
         src = inspect.getsource(pi.build_session_briefing_data)
-        assert "_get_signal_highlights" in src or "signals" in src, (
+        assert "signal" in src.lower() or "job" in src.lower(), (
             "build_session_briefing_data must remain the feed-data consumer (frontend dashboard)."
         )
