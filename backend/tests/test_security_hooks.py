@@ -176,6 +176,142 @@ class TestDangerousRmPredicate:
         assert "rm -rf *" not in json.loads(f.read_text())["patterns"]
 
 
+class TestIrreversibleExternalOpPredicate:
+    """C041 structural gate: an inference-driven `gh repo edit --visibility private`
+    on the public product repo wiped 209 GitHub stars (irreversible). The gate had
+    ZERO coverage for irreversible EXTERNAL ops. This predicate (token-aware, mirrors
+    _is_dangerous_rm) flags them so the existing approval/auto-deny flow blocks them
+    pending sign-off. Glob is insufficient (skeptic-proven): cannot distinguish
+    `:branch` delete from `src:dst`, `-f` from `feature-f*`, `--force-with-lease`
+    from a safe push."""
+
+    def test_irreversible_ops_blocked(self):
+        from core.security_hooks import _is_irreversible_external_op
+        for cmd in [
+            # repo visibility — the C041 op, both spaced and = forms
+            "gh repo edit xg-gh-25/SwarmAI --visibility private",
+            "gh repo edit --visibility=private",
+            "gh repo edit OWNER/REPO --visibility public",
+            # repo / release deletion
+            "gh repo delete xg-gh-25/SwarmAI",
+            "gh repo delete OWNER/REPO --yes",
+            "gh release delete v1.2.3",
+            # force push — long, short, bundled, and the safer-but-still-rewriting lease
+            "git push --force",
+            "git push -f origin main",
+            "git push --force origin main",
+            "git push -uf origin main",          # bundled short flags
+            "git push --force-with-lease",        # still rewrites remote history
+            "git push --force-with-lease origin feature",
+            # remote-branch delete — flag form AND colon-refspec form
+            "git push origin --delete oldbranch",
+            "git push origin -d oldbranch",
+            "git push origin :oldbranch",         # colon-refspec delete (empty left)
+        ]:
+            assert _is_irreversible_external_op(cmd) is True, f"Expected '{cmd}' to be blocked"
+
+    def test_safe_external_ops_allowed(self):
+        from core.security_hooks import _is_irreversible_external_op
+        for cmd in [
+            # read-only / non-destructive gh
+            "gh repo view xg-gh-25/SwarmAI",
+            "gh repo list",
+            "gh pr list",
+            "gh repo edit OWNER/REPO --add-topic ai-agent",
+            "gh repo edit OWNER/REPO --description 'new desc'",
+            "gh release list",
+            "gh release view v1.2.3",
+            # normal pushes — no force, no delete
+            "git push",
+            "git push origin main",
+            "git push --set-upstream origin feature",
+            "git push origin src:dst",            # normal refspec (both sides present)
+            "git push git@github.com:xg-gh-25/SwarmAI.git main",  # SSH URL contains ':'
+            "git push origin feature-fix",        # '-f' substring inside a branch name
+            # unrelated commands the predicate must ignore
+            "ls -la",
+            "git status",
+            "git commit -m 'fix'",
+            "echo gh repo delete",                # not an actual invocation
+        ]:
+            assert _is_irreversible_external_op(cmd) is False, f"Expected '{cmd}' to be allowed"
+
+    def test_unparseable_gh_git_fails_closed(self):
+        """A gh/git-push command we cannot tokenize (unbalanced quotes) → dangerous.
+        A non-gh/non-push unparseable command is not this predicate's concern."""
+        from core.security_hooks import _is_irreversible_external_op
+        assert _is_irreversible_external_op('gh repo delete "unbalanced') is True
+        assert _is_irreversible_external_op('git push --force "unbalanced') is True
+        # non-target unparseable → not flagged by THIS predicate
+        assert _is_irreversible_external_op('echo "unbalanced') is False
+
+    def test_predicate_wired_into_gate_match(self):
+        """The predicate must be OR-d into the gate's is_dangerous check, so a match
+        routes through the existing approval/deny flow (not a separate path)."""
+        from core.security_hooks import _is_irreversible_external_op, load_dangerous_patterns
+        import fnmatch
+        # The C041 op is NOT covered by globs — only the predicate catches it.
+        cmd = "gh repo edit xg-gh-25/SwarmAI --visibility private"
+        assert not any(fnmatch.fnmatch(cmd, p) for p in load_dangerous_patterns())
+        assert _is_irreversible_external_op(cmd) is True
+
+    def test_adversarial_bypasses_blocked(self):
+        """Gate-2 adversarial (run_73a54e70) found 5 CRITICAL + 3 HIGH bypasses of
+        the first-cut predicate. Each MUST be blocked. A bypass here re-enables the
+        exact C041 incident class."""
+        from core.security_hooks import _is_irreversible_external_op as f
+        cases = {
+            # C1 — git global flags shift the subcommand position
+            "git -C /repo push --force origin main": "git -C global flag",
+            "git --git-dir=/r/.git push -f": "git --git-dir global flag",
+            "git -c user.name=x push --force": "git -c global flag",
+            # C2 — '+' force-refspec
+            "git push origin +main": "+refspec force push",
+            "git push origin +refs/heads/main": "+refspec force push (full ref)",
+            # C3 — --mirror / --prune delete remote refs
+            "git push --mirror origin": "--mirror wipes remote refs",
+            "git push origin --prune 'refs/heads/*'": "--prune deletes remote refs",
+            # C4 — gh api REST equivalent of the C041 op (the worst one)
+            "gh api repos/OWNER/REPO -X PATCH -f visibility=private": "gh api visibility PATCH",
+            "gh api -X DELETE repos/OWNER/REPO": "gh api DELETE method",
+            "gh api --method DELETE repos/OWNER/REPO": "gh api --method DELETE",
+            # C5 — env-var prefix defeats the startswith cheap-gate
+            "GH_TOKEN=xxx gh repo delete OWNER/REPO --yes": "env-prefixed gh delete",
+            "GIT_SSH_COMMAND=ssh git push --force": "env-prefixed force push",
+            # H1 — other destructive gh verbs/nouns
+            "gh secret delete MY_SECRET": "gh secret delete",
+            "gh release delete-asset v1.0 asset.zip": "gh release delete-asset",
+            # H2 — destructive op chained after a benign command
+            "git status && git push --force origin main": "chained force push (&&)",
+            "git status; gh repo delete OWNER/REPO": "chained gh delete (;)",
+            # N1 (Gate-2 2nd pass) — newline separator (fix-induced, PIT56)
+            "git status\ngit push --force": "newline-chained force push",
+            "echo hi\ngh repo delete OWNER/REPO": "newline-chained gh delete",
+            # N2 (Gate-2 2nd pass) — bundled -XDELETE (C4 twin)
+            "gh api repos/OWNER/REPO -XDELETE": "gh api bundled -XDELETE",
+            "gh api -XPATCH repos/OWNER/REPO -f visibility=private": "gh api bundled -XPATCH",
+        }
+        for cmd, why in cases.items():
+            assert f(cmd) is True, f"BYPASS not blocked [{why}]: {cmd!r}"
+
+    def test_adversarial_false_blocks_still_safe(self):
+        """The bypass fixes must NOT start over-blocking safe ops."""
+        from core.security_hooks import _is_irreversible_external_op as f
+        for cmd in [
+            "git -C /repo push origin main",          # global flag + SAFE push
+            "git -c user.name=x push origin main",    # global flag + safe push
+            "git push origin src:dst",                # normal refspec
+            "git push git@github.com:o/r.git main",   # SSH URL (':' but non-empty left)
+            "git status && git commit -m x",          # chained, neither destructive
+            "gh api repos/OWNER/REPO",                # gh api READ (no -X, no visibility)
+            "gh api user",                            # gh api read
+            "gh secret list",                         # gh secret non-delete
+            "gh repo edit OWNER/REPO --add-topic visibility-stuff",  # topic, not --visibility
+            "ENV_VAR=1 git push origin main",         # env prefix + safe push
+        ]:
+            assert f(cmd) is False, f"FALSE-BLOCK on safe op: {cmd!r}"
+
+
 # ---------------------------------------------------------------------------
 # Governance file gate tests
 # ---------------------------------------------------------------------------

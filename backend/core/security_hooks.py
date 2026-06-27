@@ -159,6 +159,203 @@ def _is_dangerous_rm(command: str) -> bool:
     return False
 
 
+def _is_irreversible_external_op(command: str) -> bool:
+    """Fail-closed predicate: is this an IRREVERSIBLE destructive EXTERNAL op?
+
+    C041 (2026-06-27): an inference-driven ``gh repo edit … --visibility private``
+    on the public product repo wiped 209 GitHub stars — irreversible, no undo. The
+    ``dangerous_command_gate`` had zero coverage for external ops (it guarded only
+    local ``rm -rf`` + a glob list). This predicate flags the irreversible-external
+    class so the SAME approval/auto-deny flow blocks them pending an explicit
+    sign-off — never on inference alone.
+
+    Token-aware (``shlex``), NOT glob: a glob cannot distinguish ``git push origin
+    :branch`` (delete) from ``src:dst`` (normal), ``-f`` from a ``feature-f*`` branch
+    name, or ``--force-with-lease`` from a safe push (skeptic-proven, run_73a54e70).
+
+    Flags True for:
+    - ``gh repo edit … --visibility[=…]`` (visibility toggle clears stars)
+    - ``gh repo delete …`` / ``gh release delete …``
+    - ``git push`` with force (``--force``, ``--force-with-lease``, ``-f`` incl.
+      bundled short flags like ``-uf``) — all rewrite remote history
+    - ``git push`` remote-branch delete (``--delete``/``-d`` flag, OR a colon-refspec
+      ``:branch`` with an empty left side)
+
+    Non-gh / non-git-push commands always return False (other patterns judge
+    those). Unparseable (shlex ValueError) on a command mentioning gh/git → True
+    (fail closed). Everything else under gh/git push that is not in the
+    irreversible set → False (safe daily ops are not blocked).
+
+    Gate-2 hardened (run_73a54e70) against: git global flags shifting the
+    subcommand (``git -C p push -f``), ``+refspec`` force push, ``--mirror``/
+    ``--prune`` ref-deleters, the ``gh api`` REST equivalent of the visibility
+    toggle, env-var prefixes (``GH_TOKEN=x gh repo delete``), other destructive
+    gh verbs (``secret delete``, ``delete-asset``), and ops chained after a
+    benign command (``git status && git push -f``) including newline-separated.
+
+    ACCEPTED RESIDUALS (Gate-2 2nd pass, LOW — documented not hidden, same posture
+    as ``pytest_command_guard``'s indirect-invocation leak): a wrapper that takes
+    its own argument (``nice -n 10 gh repo delete``, ``timeout 5 gh …``) and
+    subshell/command-substitution grouping (``(git push -f)``, ``$(git push -f)``)
+    are NOT recognized — they need a real shell parser. The fail-closed
+    ``mentions_target`` arm only catches UNPARSEABLE input; these parse cleanly.
+    """
+    # A command that mentions gh/git but cannot be tokenized cannot be proven
+    # safe → fail closed. (Only fail closed for our targets, not every command.)
+    mentions_target = ("gh" in command.split()) or ("git" in command.split())
+    # shlex does NOT treat ';' as a standalone token unless it is space-padded
+    # (it leaves `status;` glued). Pad bare ';' so segment-splitting sees it —
+    # but NOT a ';' inside quotes (a -m message). Quote-aware pad: only outside
+    # quoted spans. Cheap approach: shlex first, then also split each token on
+    # a trailing/leading ';'. Simpler + correct: pad ';' that is not quoted.
+    # Newlines are shell separators too (multi-line Bash: heredocs, `&&\n`
+    # chains). shlex treats `\n` as plain whitespace, which would fuse a
+    # second-line destructive op into the first line's segment (Gate-2 N1,
+    # a fix-induced bypass — PIT56). Normalize raw newlines to `;` separators
+    # BEFORE tokenizing. A newline inside a quoted message is rare and at worst
+    # splits the (benign) message into two non-destructive segments.
+    try:
+        all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
+    except ValueError:
+        return mentions_target
+    if not all_tokens:
+        return False
+    # Re-split any token that carries a glued ';' (e.g. 'status;') into the word
+    # and a standalone ';' separator. shlex already stripped quotes, so a ';'
+    # surviving in a token is a real shell separator, not message text.
+    _resplit: list[str] = []
+    for tok in all_tokens:
+        if ";" in tok and tok != ";":
+            parts = tok.split(";")
+            for idx, p in enumerate(parts):
+                if p:
+                    _resplit.append(p)
+                if idx < len(parts) - 1:
+                    _resplit.append(";")
+        else:
+            _resplit.append(tok)
+    all_tokens = _resplit
+
+    # Split into segments on shell separators so a destructive op chained after
+    # a benign command (`git status && git push -f`, `x; gh repo delete y`) is
+    # evaluated on its own. shlex keeps `;`/`&&`/`|` as standalone tokens.
+    _SEPARATORS = {";", "&&", "||", "|", "&"}
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for tok in all_tokens:
+        if tok in _SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+
+    return any(_segment_is_irreversible(seg) for seg in segments)
+
+
+def _segment_is_irreversible(tokens: list[str]) -> bool:
+    """Judge ONE command segment (already split on shell separators)."""
+    # Strip leading env-assignments (NAME=val) and benign wrapper words so the
+    # real command word is found: `GH_TOKEN=x gh repo delete`, `sudo gh …`,
+    # `env A=b git push -f`, `command git push -f`.
+    _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
+            i += 1  # env assignment NAME=value
+        elif t in _WRAPPERS:
+            i += 1
+        else:
+            break
+    tokens = tokens[i:]
+    if not tokens:
+        return False
+
+    # ── gh family ──
+    if tokens[0] == "gh":
+        sub = tokens[1:]
+        if not sub:
+            return False
+        noun = sub[0]
+        rest = sub[1:]
+        # gh api — the REST surface. DELETE/PATCH/PUT methods, or any field
+        # setting visibility, are the irreversible class (C041's REST twin).
+        if noun == "api":
+            for j, t in enumerate(rest):
+                if t in ("-X", "--method"):
+                    if j + 1 < len(rest) and rest[j + 1].upper() in ("DELETE", "PATCH", "PUT"):
+                        return True
+                if t.startswith("--method="):
+                    if t.split("=", 1)[1].upper() in ("DELETE", "PATCH", "PUT"):
+                        return True
+                # bundled short form `-XDELETE` / `-X=DELETE` (Gate-2 N2)
+                if t.startswith("-X") and len(t) > 2:
+                    if t[2:].lstrip("=").upper() in ("DELETE", "PATCH", "PUT"):
+                        return True
+                # -f/-F/--field/--raw-field visibility=… (the literal C041 op)
+                if t in ("-f", "-F", "--field", "--raw-field"):
+                    if j + 1 < len(rest) and rest[j + 1].startswith("visibility="):
+                        return True
+                if t.startswith(("--field=", "--raw-field=")) and "visibility=" in t:
+                    return True
+            return False
+        # Any destructive verb at the verb position, regardless of noun:
+        # `gh repo delete`, `gh secret delete`, `gh release delete-asset`, …
+        if rest and rest[0] in ("delete", "delete-asset"):
+            return True
+        # gh repo edit … --visibility (spaced or =form). Only --visibility is
+        # irreversible; --add-topic/--description/etc. are safe edits.
+        if noun == "repo" and rest and rest[0] == "edit":
+            for t in rest[1:]:
+                if t == "--visibility" or t.startswith("--visibility="):
+                    return True
+        return False
+
+    # ── git family ── (handle global options that precede the subcommand:
+    # `git -C path push -f`, `git --git-dir=… push -f`, `git -c k=v push -f`)
+    if tokens[0] == "git":
+        k = 1
+        while k < len(tokens):
+            t = tokens[k]
+            if t in ("-C", "-c", "--namespace"):
+                k += 2  # option that consumes a value
+            elif t.startswith(("--git-dir", "--work-tree", "--namespace=", "-C", "-c")):
+                k += 1  # =form, self-contained
+            elif t.startswith("-"):
+                k += 1  # any other global flag
+            else:
+                break  # the subcommand
+        if k >= len(tokens) or tokens[k] != "push":
+            return False
+        args = tokens[k + 1:]
+        for tok in args:
+            if tok.startswith("--"):
+                if tok in ("--force", "--force-with-lease", "--delete",
+                           "--mirror", "--prune"):
+                    return True
+                if tok.startswith("--force-with-lease="):
+                    return True
+            elif tok.startswith("-") and tok != "-":
+                # short flags, possibly bundled (-uf, -fd). 'f'=force, 'd'=delete.
+                short = tok[1:]
+                if "f" in short or "d" in short:
+                    return True
+            else:
+                # operand refspec. Leading ':' = remote-branch delete (empty
+                # left side); leading '+' = forced ref update. "src:dst" and an
+                # SSH URL "git@host:repo" have a non-empty left side → safe.
+                if tok.startswith(":") and len(tok) > 1:
+                    return True
+                if tok.startswith("+") and len(tok) > 1:
+                    return True
+        return False
+
+    return False
+
+
 def load_dangerous_patterns() -> list[str]:
     """Load glob patterns from ``~/.swarm-ai/dangerous_commands.json``.
 
@@ -357,10 +554,13 @@ def create_dangerous_command_gate(
             return {"decision": "approve"}
 
         # Check if command matches any dangerous pattern (glob) OR is a
-        # dangerous recursive rm (predicate — fix #3, allows /tmp & /var/folders).
+        # dangerous recursive rm (predicate — fix #3, allows /tmp & /var/folders)
+        # OR is an irreversible destructive external op (C041 — gh repo
+        # edit/delete, git push --force/delete; predicate, not glob).
         is_dangerous = (
             any(fnmatch.fnmatch(command, p) for p in patterns)
             or _is_dangerous_rm(command)
+            or _is_irreversible_external_op(command)
         )
         if not is_dangerous:
             return {"decision": "approve"}
