@@ -1137,10 +1137,13 @@ def select_memory_sections(
     # sqlite connections) on every session start.  Cap at 2 snippets.
     if user_message:
         try:
-            from core.session_recall import SessionRecall
-            from core.app_config_manager import app_config_manager
-            # Resolve DB path from config (single source of truth),
-            # falling back to the default location.
+            # DB path is the single source of truth for SessionRecall, and
+            # _get_session_recall does its own SessionRecall import + caching.
+            # (Two dead imports lived here — `SessionRecall` (unused) and
+            # `app_config_manager`, which does NOT exist: the module exports the
+            # AppConfigManager CLASS / .instance(). The latter raised ImportError
+            # on every call and the bare-except silently killed this whole block,
+            # so SessionRecall was NEVER injected in prod selective mode. run_edfad326.)
             from jobs.paths import DB_PATH as _db_path_recall
             db_path = _db_path_recall
             if db_path.exists():
@@ -1151,8 +1154,11 @@ def select_memory_sections(
                     if used_tokens + recall_tokens <= max_tokens:
                         parts.append(recall_text)
                         used_tokens += recall_tokens
-        except Exception:
-            pass  # Graceful degradation
+        except Exception as exc:
+            # GC19: log the failure type — a bare `except: pass` here is exactly
+            # what hid the dead-import bug above. Loud-on-degradation.
+            logger.warning("SessionRecall injection skipped: %s: %s",
+                           type(exc).__name__, exc)
 
     # ── Footer: hint about remaining content ──
     loaded_section_names = {

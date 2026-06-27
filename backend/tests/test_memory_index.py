@@ -316,6 +316,54 @@ class TestSelectMemorySections:
         assert "## Principles" in result
         assert "## Open Threads" in result
 
+    def test_selective_injection_runs_session_recall(self, monkeypatch, tmp_path):
+        """Regression (run_edfad326): SessionRecall MUST be injected in the
+        selective branch. A dead `from core.app_config_manager import
+        app_config_manager` (the symbol doesn't exist) used to raise ImportError
+        that the bare-except swallowed, silently killing the whole block — recall
+        was never injected in prod. This forces the block to execute and asserts
+        the recall text appears. Goes RED if the dead import returns.
+
+        Mocks only the boundaries: _get_session_recall (so no real DB) + a
+        DB_PATH that exists. Drives the REAL select_memory_sections selective
+        path with a genuine >30K fixture."""
+        import core.memory_index as mi
+        from core.context_directory_loader import ContextDirectoryLoader
+
+        # >30K fixture so the selective branch runs (full injection skips recall).
+        big = ("word " * 18000).strip()
+        pit = ("pit " * 18000).strip()
+        mem = (
+            "<!-- MEMORY_INDEX_START -->\n## Memory Index\n"
+            "- [DEC01] caching prefix decision | caching, prefix\n"
+            "<!-- MEMORY_INDEX_END -->\n\n## Open Threads\n- P0 alpha\n"
+            "\n## Decisions\n- [DEC01] caching prefix — " + ("d " * 200) +
+            "\n\n## Guidelines\n- [GUI01] g — " + big +
+            "\n\n## Pitfalls\n- [PIT01] p — " + pit + "\n"
+        )
+        assert ContextDirectoryLoader.estimate_tokens(mem) >= mi.FULL_INJECTION_THRESHOLD, \
+            "fixture must exceed threshold to exercise the selective branch"
+
+        SENTINEL = "## Session Recall\n\nSENTINEL_RECALL_INJECTED"
+
+        class _FakeRecall:
+            def recall_about(self, topic, max_sessions=2, budget_chars=3000):
+                return SENTINEL
+
+        # DB_PATH must exist for the block; point it at a real tmp file.
+        db = tmp_path / "data.db"
+        db.write_text("")
+        monkeypatch.setattr("jobs.paths.DB_PATH", db)
+        monkeypatch.setattr(mi, "_get_session_recall", lambda _p: _FakeRecall())
+
+        out = mi.select_memory_sections(
+            memory_content=mem, user_message="caching prefix",
+            session_signals={}, memory_embeddings=False,
+        )
+        assert "Not loaded" in out, "fixture did not take the selective branch"
+        assert "SENTINEL_RECALL_INJECTED" in out, \
+            "SessionRecall was NOT injected — the block is dead (dead import regressed?)"
+
 
 # ── Integration: Index in MEMORY.md ──────────────────────────────────
 
