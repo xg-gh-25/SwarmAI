@@ -200,6 +200,69 @@ class TestGracefulFallback:
         result = client.embed_text("test query")
         assert result is None
 
+    def test_embed_text_retries_transient_error_then_succeeds(self):
+        """Retryable ModelErrorException retries and succeeds on a later attempt."""
+        from botocore.exceptions import ClientError
+        from core.embedding_client import EmbeddingClient, EMBEDDING_DIM
+
+        client = EmbeddingClient(region="us-west-2")
+        mock_bedrock = MagicMock()
+        err = ClientError(
+            {"Error": {"Code": "ModelErrorException", "Message": "transient"}},
+            "InvokeModel",
+        )
+        good = {"body": MagicMock()}
+        good["body"].read.return_value = json.dumps(
+            {"embedding": [0.1] * EMBEDDING_DIM}
+        ).encode()
+        mock_bedrock.invoke_model.side_effect = [err, good]  # fail once, then succeed
+        client._client = mock_bedrock
+
+        with patch("core.embedding_client.time.sleep"):  # don't actually sleep
+            result = client.embed_text("q")
+
+        assert result is not None
+        assert len(result) == EMBEDDING_DIM
+        assert mock_bedrock.invoke_model.call_count == 2
+
+    def test_embed_text_does_not_retry_non_retryable(self):
+        """A non-retryable error (validation) fails fast — no retry."""
+        from botocore.exceptions import ClientError
+        from core.embedding_client import EmbeddingClient
+
+        client = EmbeddingClient(region="us-west-2")
+        mock_bedrock = MagicMock()
+        mock_bedrock.invoke_model.side_effect = ClientError(
+            {"Error": {"Code": "ValidationException", "Message": "bad input"}},
+            "InvokeModel",
+        )
+        client._client = mock_bedrock
+
+        with patch("core.embedding_client.time.sleep"):
+            result = client.embed_text("q")
+
+        assert result is None
+        assert mock_bedrock.invoke_model.call_count == 1  # no retry
+
+    def test_embed_text_caps_retries_on_persistent_transient(self):
+        """Persistent retryable error stops after the max attempt count."""
+        from botocore.exceptions import ClientError
+        from core.embedding_client import EmbeddingClient, _EMBED_MAX_RETRIES
+
+        client = EmbeddingClient(region="us-west-2")
+        mock_bedrock = MagicMock()
+        mock_bedrock.invoke_model.side_effect = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+            "InvokeModel",
+        )
+        client._client = mock_bedrock
+
+        with patch("core.embedding_client.time.sleep"):
+            result = client.embed_text("q")
+
+        assert result is None
+        assert mock_bedrock.invoke_model.call_count == _EMBED_MAX_RETRIES + 1
+
     def test_vector_search_returns_empty_on_no_embedding(self, vec_db):
         """vector_search with None query embedding returns empty list."""
         from core.memory_embeddings import MemoryEmbeddingStore

@@ -239,3 +239,87 @@ class TestSourceWatchPaths:
 
         assert findings == []
         mock_run.assert_not_called()  # Should short-circuit on mtime check
+
+    def test_strategy2_batches_all_watch_paths_in_one_call(self, tmp_path):
+        """Strategy 2 must query ALL watched paths in a SINGLE git call.
+
+        Regression guard for the cultivation 2s-budget fix: previously this
+        spawned one `git log` subprocess PER watched path (N spawns → blew the
+        budget, CHANNEL_TIMEOUT ×17/day). Now it must be a single multi-pathspec
+        call.
+        """
+        import time
+        from core.ddd_orchestrator import DddCultivationOrchestrator, _SOURCE_WATCH_PATHS
+
+        project_dir = tmp_path / "Projects" / "AIDLC"
+        project_dir.mkdir(parents=True)
+        tech_file = project_dir / "TECH.md"
+        tech_file.write_text("# AIDLC Tech")
+        old_time = time.time() - (20 * 86400)
+        os.utime(tech_file, (old_time, old_time))
+
+        orch = DddCultivationOrchestrator()
+        strategy2_calls = []
+
+        def mock_run(cmd, **kwargs):
+            result = MagicMock()
+            if "--grep" in cmd:
+                result.stdout = ""  # Strategy 1: no message match → fall to Strategy 2
+            else:
+                strategy2_calls.append(cmd)  # path-scoped Strategy 2 call
+                result.stdout = "abc123 commit\n"
+            return result
+
+        fake_swarmai = tmp_path / "swarmai"
+        (fake_swarmai / "backend").mkdir(parents=True)
+        with patch("core.ddd_orchestrator.subprocess.run", side_effect=mock_run), \
+             patch("core.ddd_orchestrator._find_swarmai_root", return_value=fake_swarmai):
+            findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
+
+        assert len(findings) == 1
+        # Exactly ONE Strategy-2 git call (batched), not one per watched path.
+        assert len(strategy2_calls) == 1
+        # That single call includes EVERY watched path for AIDLC.
+        cmd = strategy2_calls[0]
+        for wp in _SOURCE_WATCH_PATHS["AIDLC"]:
+            assert wp in cmd, f"watch path {wp} missing from batched git call: {cmd}"
+
+    def test_both_docs_share_single_strategy1_call(self, tmp_path):
+        """Both TECH.md + PRODUCT.md stale → Strategy 1 git runs ONCE per project.
+
+        Regression guard: previously the identical `--grep` query ran once per
+        stale doc (2× for a project with both docs stale). Now it is computed
+        once per project and reused for every stale doc.
+        """
+        import time
+        from core.ddd_orchestrator import DddCultivationOrchestrator
+
+        project_dir = tmp_path / "Projects" / "AIDLC"
+        project_dir.mkdir(parents=True)
+        old_time = time.time() - (20 * 86400)
+        for name in ("TECH.md", "PRODUCT.md"):
+            f = project_dir / name
+            f.write_text(f"# AIDLC {name}")
+            os.utime(f, (old_time, old_time))
+
+        orch = DddCultivationOrchestrator()
+        grep_calls = []
+
+        def mock_run(cmd, **kwargs):
+            result = MagicMock()
+            if "--grep" in cmd:
+                grep_calls.append(cmd)
+                result.stdout = "abc123 feat(aidlc): change\n"  # Strategy 1 finds commits
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("core.ddd_orchestrator.subprocess.run", side_effect=mock_run):
+            findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
+
+        # Both docs flagged
+        assert len(findings) == 2
+        assert any("TECH.md" in f for f in findings)
+        assert any("PRODUCT.md" in f for f in findings)
+        # Strategy 1 git ran exactly ONCE (deduped), not once per stale doc.
+        assert len(grep_calls) == 1
