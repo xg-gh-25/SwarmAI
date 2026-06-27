@@ -281,10 +281,10 @@ class TestUsageRefBridge:
         usage = {"COE02": 50, "PIT99": 2}  # PIT99 below threshold
         m = build_usage_ref_map(memory, usage, threshold=10)
         # COE02 (usage 50, >= threshold) → title mapped, log-damped
-        assert "Slack bot scope issue" in m
-        assert m["Slack bot scope issue"] == round(__import__("math").log2(50 + 1))  # ~6
+        assert ("COE Registry", "Slack bot scope issue") in m
+        assert m[("COE Registry", "Slack bot scope issue")] == round(__import__("math").log2(50 + 1))  # ~6
         # PIT99 below threshold → NOT in map (stays ref:0, reclaim-eligible)
-        assert "Some rare pitfall" not in m
+        assert ("Pitfalls", "Some rare pitfall") not in m
 
     def test_below_threshold_not_protected(self):
         """NEGATIVE: low-usage entries stay absent → ref:0 → reclaim still works."""
@@ -301,11 +301,11 @@ class TestUsageRefBridge:
         from core.memory_decay import build_usage_ref_map
         import math
         memory = (
-            "<!-- MEMORY_INDEX_START -->\n- [KD00] Hot entry | x\n<!-- MEMORY_INDEX_END -->\n"
+            "<!-- MEMORY_INDEX_START -->\n- [MOD00] Hot entry | x\n<!-- MEMORY_INDEX_END -->\n"
             "## Models\n- [model] **Hot entry** — body (2026-06-01)\n"
         )
-        m = build_usage_ref_map(memory, {"KD00": 142}, threshold=10)
-        assert m["Hot entry"] == round(math.log2(143))  # ~7, not 142
+        m = build_usage_ref_map(memory, {"MOD00": 142}, threshold=10)
+        assert m[("Models", "Hot entry")] == round(math.log2(143))  # ~7, not 142
 
     def test_pipe_in_title_not_broken(self):
         """Index line splits on FIRST ' | ' only; title before it preserved."""
@@ -315,4 +315,4 @@ class TestUsageRefBridge:
             "## Decisions\n- [decision] **A or B decision** — body (2026-06-01)\n"
         )
         m = build_usage_ref_map(memory, {"DEC01": 20}, threshold=10)
-        assert "A or B decision" in m
+        assert ("Decisions", "A or B decision") in m

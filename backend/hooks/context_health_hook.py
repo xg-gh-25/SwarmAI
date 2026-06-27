@@ -1564,7 +1564,7 @@ class ContextHealthHook:
                     for e in entries:
                         if e.section in evergreen:
                             continue  # evergreen never reclaimed; ranking moot
-                        damped = ref_map.get(e.title)
+                        damped = ref_map.get((e.section, e.title))
                         if damped and damped > e.ref_count:
                             e.ref_count = damped
                             bumped += 1

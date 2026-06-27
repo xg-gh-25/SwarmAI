@@ -304,12 +304,21 @@ def bump_entry_references(
 # for the removed toxic prose-bump. NOT wired to assess_decay (which no longer
 # reads ref — see ddd_entry_lifecycle R2-prime).
 #
-# Join: usage is keyed by INDEX-ID; the index block carries `- [ID] Title | ...`;
-# body entries carry the SAME `**Title**`. So ID→title→body is the bridge.
-# Threshold: only usage >= threshold gets a ref, so reclaim is NOT neutered for
-# the long tail (median usage is high because _track_memory_usage counts every
-# transcript mention cumulatively). Damping: log2 so a 142-use entry → ref ~7,
-# never a raw 142 monopoly.
+# Join: usage is keyed by INDEX-ID; the index block carries `- [ID] Title | ...`.
+# The ID prefix (SP/GUI/PIT/...) maps deterministically to a SECTION via
+# MEMORY_PREFIX_TO_SECTION, so we key the result by (section, title) — NOT title
+# alone. This kills the cross-section title-collision false-protect Gate-2 found:
+# "Customer/Account output" exists in BOTH evergreen Standing Preferences (SP01,
+# heavy usage) AND non-evergreen Guidelines (GUI165, light usage); a bare-title
+# join lent SP01's usage to the reclaimable GUI165 entry. (section, title) keeps
+# them distinct, and the lifecycle's evergreen-skip drops the SP01 copy anyway.
+# Threshold: only usage >= threshold earns a ref, so reclaim is NOT neutered for
+# the long tail. Damping: log2 so a 142-use entry → ref ~7, never a raw monopoly.
+# KNOWN follow-up (Gate-2 Finding 2): _track_memory_usage is all-time cumulative,
+# so ref is a one-way ratchet — recency-windowing the usage signal is a separate
+# signal-quality epic. The (section,title) fix removes the acute risk (generic
+# titles like "Correction"/"DISCUSSION" now resolve to their OWN section, not a
+# collision), but a once-hot-now-cold entry stays protected until that lands.
 
 _INDEX_ID_TITLE_RE = re.compile(r"^- \[([A-Z]{2,3}\d{2,3})\]\s+(.+)$", re.MULTILINE)
 USAGE_REF_THRESHOLD = 10  # min cumulative usage to earn reclaim-protection
@@ -319,18 +328,22 @@ def build_usage_ref_map(
     memory_content: str,
     usage_counts: "dict[str, int]",
     threshold: int = USAGE_REF_THRESHOLD,
-) -> "dict[str, int]":
-    """Map body-entry TITLE → log-damped ref, for entries whose index-ID has
-    usage >= threshold. Returns only the genuinely-used entries (others stay
+) -> "dict[tuple[str, str], int]":
+    """Map (section, title) → log-damped ref, for body entries whose index-ID
+    has usage >= threshold. Returns only the genuinely-used entries (others stay
     ref:0 → reclaim-eligible).
 
-    Join path: usage[ID] → index line `- [ID] Title | aliases` → Title → body
-    `**Title**`. Splits the index line on the FIRST ` | ` only (titles may
-    contain inner brackets but not a pre-alias pipe — verified on live file).
-    Duplicate titles keep the max ref. Idempotent: pure function of current
-    usage (SET semantics, never accumulates).
+    Keyed by (section, title) via the ID-prefix→section map so two same-titled
+    entries in different sections never cross-assign usage (Gate-2 Finding 1/3).
+    Splits the index line on the FIRST ` | ` only. Same (section,title) keeps the
+    max ref. Idempotent: pure function of current usage (SET semantics).
     """
     import math
+    from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
+
+    def _prefix(eid: str) -> str:
+        m = re.match(r"^([A-Z]{2,3})", eid)
+        return m.group(1) if m else ""
 
     # Parse index block ID → title.
     start = memory_content.find("MEMORY_INDEX_START")
@@ -339,7 +352,7 @@ def build_usage_ref_map(
         return {}
     index_block = memory_content[start:end]
 
-    ref_map: dict[str, int] = {}
+    ref_map: dict[tuple[str, str], int] = {}
     for m in _INDEX_ID_TITLE_RE.finditer(index_block):
         entry_id, rest = m.group(1), m.group(2)
         usage = usage_counts.get(entry_id, 0)
@@ -349,8 +362,12 @@ def build_usage_ref_map(
         title = rest.split(" | ", 1)[0].strip()
         if not title:
             continue
+        section = MEMORY_PREFIX_TO_SECTION.get(_prefix(entry_id))
+        if not section:
+            continue  # unknown prefix → cannot place safely, skip
         damped = round(math.log2(usage + 1))
         if damped < 1:
             continue
-        ref_map[title] = max(ref_map.get(title, 0), damped)
+        key = (section, title)
+        ref_map[key] = max(ref_map.get(key, 0), damped)
     return ref_map
