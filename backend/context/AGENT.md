@@ -162,9 +162,17 @@ R6. **Post-push CI** — every `git push` → `gh run list` → watch → fix if
 
 R7. **Post-task scans** — after code changes, scan modified files for quality + security issues. Skip for docs-only changes. Confidence-gated (≥7 auto-fix, ≤4 suppress). (P1)
 
+R25. **Comprehensive review, not patching** — every fix improves its neighborhood. If a fix ADDS net complexity → wrong layer; good fixes delete code or move it to the right abstraction. Two modules doing the same thing → merge immediately. Exception: P0 fires — patch first, refactor in follow-up. (P2)
+
+R26. **No big-bang refactors** — modules >500 lines use the strangler-fig pattern: old code stays until new paths pass integration tests. Never "delete first, fix forward." (P2)
+
+R27. **Contract migration: grep ALL consumers (including reads).** A commit claiming "single writer" / "sole authority" / "remove dual-write" → MUST grep ALL callers of the OLD API and confirm each migrated. The question is NOT "is the new code correct?" but "are ALL old consumers converted?" — include READ paths (tab switch, session load), not just writes (send). Evidence: COE03+COE10 (3 exposures, same class). (P1+P2)
+
+R28. **Recovery paths must have execution tests.** Any crash/error/timeout recovery path needs ≥1 test that FORCES execution (mock the trigger, assert the path runs). "Compiles" ≠ "executes"; a recovery handler with zero coverage = P0 gap. Evidence: COE06 (stale subprocess reused without liveness check) + COE10 (`self._pid` AttributeError = path never ran). (P1)
+
 ## Rules — Operations (P1, P4)
 
-R8. **s_swarm-* skills** for all SwarmAI ops. Never raw shell scripts. SwarmAI-project-only. (P4)
+R8. **s_swarm-* skills** for all SwarmAI ops — Build=`s_swarm-build`, Deploy/Restart=`s_swarm-daemon`, Release=`s_swarm-release`, CI=`s_swarm-ci`. Never raw shell scripts. SwarmAI-project-only. Exception: debugging a broken skill AFTER invoking it and observing its failure. (P4)
 
 R9. **Full test suite needs user approval.** Targeted tests proactive. `SWARMAI_SUITE=1` for full. Never pipe long-running commands through `| tail`. Max 2 test runs per task. (P1)
 
@@ -174,7 +182,7 @@ R10. **Codebase-first** — all product changes in `swarmai/`, not workspace onl
 
 R11. **Release via `s_swarm-release`** — version bump only through release skill. Scope gate: ≤20 freely, 21-40 sign-off, >40 split. (P2)
 
-R12. **Daemon lifecycle** — `kill SIGTERM` for restart (KeepAlive auto-restarts), `bootout` only for permanent stop. Never from child process. (P1)
+R12. **Daemon lifecycle** — `kill SIGTERM` = restart (KeepAlive auto-restarts); `bootout` = permanent deregister only; deploy = SIGKILL+bootout+rsync+bootstrap. Never from child process. **Restart/stop/deploy is destructive — ALWAYS get explicit user approval first; never restart "just to verify."** (P1)
 
 R13. **Environment** — `nc -z` for port checks (never `lsof`). `asyncio.to_thread()` + timeout for subprocess in async. Never assume shell env in daemon. CJK matching uses substring fallback. (P1)
 
@@ -182,9 +190,11 @@ R14. **Deploy scope = rollback scope** — 1:1. One format + multiple writers = 
 
 R15. **Read ANY API before coding against it** — external OR internal. Never code from memory. "I know this codebase" = highest-risk assertion (C033: 3 non-existent internal APIs in 1 session). Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
 
-R16. **Deploy topology is a design decision, not an afterthought.** Before starting multi-subsystem work (>1 coupled component sharing a critical path): (1) identify shared integration paths, (2) define deploy order + per-subsystem smoke criteria, (3) declare this in EVALUATE stage output. "How do we ship this safely?" is answered before coding, not after. Blast radius = deploy scope × path coupling × recovery reliability. Evidence: C037 — 3 subsystems × 1 unverified shared path × 0 independent smoke = 5 P0/P1 regressions. (P2)
+R16. **Deploy topology is a design decision, not an afterthought.** Before starting multi-subsystem work (>1 coupled component sharing a critical path): (1) identify shared integration paths, (2) define deploy order + per-subsystem smoke criteria, (3) declare this in EVALUATE stage output. "How do we ship this safely?" is answered before coding, not after. **Coupled subsystems deploy+smoke EACH independently before combining** — "build succeeds" ≠ "works in prod"; smoke = send 1 msg → stream → content persists on tab switch. Exception: pure refactors with zero behavior change. Blast radius = deploy scope × path coupling × recovery reliability. Evidence: C037/COE10 — 3 subsystems × 1 unverified shared path × 0 independent smoke = 5 P0/P1 regressions. (P2)
 
 R16b. **Observe before asserting a cause — runtime state AND tool/user signals.** Any causal claim that *explains a failure, anomaly, runtime/deploy state, or user intent* ("because X", "due to Y", "Z rejected it", "the user did W", "next message uses X", "effective immediately", "no restart needed") MUST, in the SAME turn, either (a) cite an observation — a log line, live endpoint, state query, mtime/embedded-content check, or a re-read of the raw signal's actual meaning — or (b) be explicitly tagged speculation ("likely / I haven't confirmed"). **Mechanical trigger:** before writing "because/due to/caused by/rejected/the user wanted" to explain something, stop — is there a same-turn observation behind it? If no → tag it speculation or go observe first. **A tool-result string's wording ≠ its cause:** a cancelled/interrupted tool returns "user doesn't want to proceed" = the turn was interrupted, NOT a deliberate user rejection. Reading code/strings = mental model; observation = real behavior — orthogonal claims. **"Is X built/deployed/running?" is the highest-recurrence variant — answer it ONLY by grep+run, never by reading a comment or recalling a prior session.** A stale comment that says "not yet built" is a symptom of legibility decaying faster than it can be read; trust code/tests over comments, always. Evidence (5+ occurrences, escalated): 4× deployment-state inference wrong in one session (C038); twice fabricated "tool-layer rejection + PIT01 poisoning" from an interruption artifact; channel-model "next msg = 4.8, no restart" true only by luck; "is this built?" misread 4× in one parallel session (2026-06-25), 2 of them caused by a lying comment. (P1+P2)
+
+R29. **Parallel sessions share one git repo — verify ownership before judging.** NEVER assume an unfamiliar working-tree/staged change is junk: identify the owning session first (`git status`, `git log`, sibling `.artifacts/runs/`, in-flight tasks). Don't revert/restage/"clean up" another session's work. Shared files: verify git auto-merge succeeded + counts/refs in consumer docs are synced. (P1+P4)
 
 ## Rules — Communication (P1, P3)
 
@@ -215,11 +225,13 @@ When any change is proposed (by user directive, pipeline reflect, self-detection
 1. **Classify:** Principle / Rule / Gate / Knowledge?
 2. **Parent:** Which principle (P1-P7) does this serve?
 3. **Conflict:** Contradicts or duplicates existing?
-4. **Budget:** Principles ≤12, Rules ≤25, STEERING ≤15. At cap → run the JUDGMENT below (cap is a smoke-test, not a guillotine).
+4. **Budget:** Principles ≤12, Rules ≤30, STEERING ≤15. At cap → run the JUDGMENT below (cap is a smoke-test, not a guillotine).
 
 Surface the classification brief to the decider. User has final authority after seeing the brief. Agent-initiated changes need 3x evidence OR user approval before promotion.
 
-**Budgets are smoke-tests, not guillotines** (SOUL principles ≤12 · AGENT rules ≤25 · STEERING ≤15).
+**Propose proactively (don't wait to be asked):** on detecting (1) a rule violated 3+× same class, (2) a rule contradicting observed behavior or a user directive, or (3) stale context data — surface the fix immediately. Propose = proactive; unilateral apply to SOUL/AGENT/STEERING still needs user approval. "Follow the Process" includes maintaining the process itself.
+
+**Budgets are smoke-tests, not guillotines** (SOUL principles ≤12 · AGENT rules ≤30 · STEERING ≤15).
 Hitting the cap does NOT mean "retire one to make room." It triggers a JUDGMENT, one of three:
 1. New item is **same-source** as an existing one → don't add, **fold into** that one (redundancy — independent of the number).
 2. New item is a genuinely independent axis AND an existing item is **no longer load-bearing** (wallpaper) → replace it.
