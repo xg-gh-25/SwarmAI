@@ -227,17 +227,22 @@ class TestAssessDecay:
         new_entry_transitions = [t for t in transitions if "Adversarial" in t.entry.title]
         assert len(new_entry_transitions) == 0  # Grace period
 
-    def test_high_ref_gets_extended_grace(self):
-        """AC10: ref >= 10 gets 180d before dormant (2x normal)."""
+    def test_high_ref_no_longer_gets_extended_grace(self):
+        """R2-prime (run_e50621b6): ref_count NO LONGER grants extended decay
+        grace. ref is a dead input (no live body producer — Gate-2 verified), so
+        honoring it only preserved toxic prose residue. An entry 100 days idle
+        decays at the normal 90d threshold REGARDLESS of ref_count."""
         entries = parse_entries(SAMPLE_CONTENT)
-        # Entry[1] has ref:7, set to ref:10 and last_referenced 100 days ago
-        entries[1].ref_count = 10
+        entries[1].ref_count = 10  # would have bought 2x grace pre-R2-prime
+        # past the 30d grace (created) AND 100d idle (last_referenced)
+        entries[1].created_date = date(2026, 2, 1)
         entries[1].last_referenced = date(2026, 2, 8)  # 100 days before 2026-05-19
         today = date(2026, 5, 19)
         transitions = assess_decay(entries, today)
-        # 100 days < 180 day grace → should NOT transition
+        # 100 days > 90d normal threshold → NOW transitions (ref ignored, no 2x)
         high_ref_transitions = [t for t in transitions if "5 rounds" in t.entry.title]
-        assert len(high_ref_transitions) == 0
+        assert len(high_ref_transitions) == 1
+        assert high_ref_transitions[0].new_state == "dormant"
 
 
 # ── AC7: evaluate_demotion ───────────────────────────────────────────────────
@@ -576,9 +581,17 @@ class TestIsKeepClass:
         assert is_keep_class(_entry("x", entry_type="decision", ref=0)) is True
         assert is_keep_class(_entry("x", entry_type="model", ref=0)) is True
 
-    def test_high_ref_is_kept(self):
+    def test_high_ref_no_longer_kept_by_ref_alone(self):
+        """R2-prime (run_e50621b6): the ref>=2 keep-rule is REMOVED. ref is a
+        dead input carrying toxic prose residue, so a plain guideline kept ONLY
+        by ref is now correctly reclaimable. Keep-class = evergreen OR keep-type
+        OR COE only. (A keep-TYPE entry is still kept regardless of ref — that's
+        the honest protection.)"""
         from core.ddd_entry_lifecycle import is_keep_class
-        assert is_keep_class(_entry("x", entry_type="guideline", ref=2)) is True
+        # plain guideline, high ref, no other keep signal → NO LONGER kept
+        assert is_keep_class(_entry("x", entry_type="guideline", ref=2)) is False
+        # but a keep-TYPE entry stays kept (type, not ref, protects it)
+        assert is_keep_class(_entry("x", entry_type="principle", ref=0)) is True
 
     def test_coe_in_title_is_kept(self):
         from core.ddd_entry_lifecycle import is_keep_class

@@ -729,7 +729,7 @@ class DddCultivationOrchestrator:
         Uses fcntl advisory lock to prevent concurrent read-modify-write.
         """
         import fcntl
-        from datetime import date as _date, timedelta as _timedelta
+        from datetime import date as _date
         from core.ddd_entry_lifecycle import (
             archive_entries,
             assess_decay,
