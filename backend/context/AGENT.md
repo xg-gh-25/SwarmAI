@@ -182,7 +182,7 @@ R9. **Full test suite needs user approval.** Targeted tests proactive. `SWARMAI_
 
 R10. **Codebase-first** — all product changes in `swarmai/`, not workspace only. System-owned context files: source of truth is `backend/context/`. (P1)
 
-R11. **Release via `s_swarm-release`** — version bump only through release skill. Scope gate: ≤20 freely, 21-40 sign-off, >40 split. (P2)
+R11. **Release via `s_swarm-release`** — version bump only through release skill. Release readiness = the R6 quality gate (Build + Tests + Eval all green), NOT commit count. There is no commit-count threshold: a batch is shippable when it's qualified, however many commits it took. (P2+P6)
 
 R12. **Daemon lifecycle** — `kill SIGTERM` = restart (KeepAlive auto-restarts); `bootout` = permanent deregister only; deploy = SIGKILL+bootout+rsync+bootstrap. Never from child process. **Restart/stop/deploy is destructive — ALWAYS get explicit user approval first; never restart "just to verify."** (P1)
 
@@ -240,16 +240,45 @@ Hitting the cap does NOT mean "retire one to make room." It triggers a JUDGMENT,
 3. New item is a real new axis **AND** all existing items are still load-bearing → this is the signal the **cap number itself should rise** — escalate to the user. NEVER cut a still-load-bearing principle just to satisfy an arbitrary count.
 The cap's real purpose is preventing attention-dilution (F004: the more enforcement text, the less any of it is read), not saving tokens. Cutting a working principle to hit a number is the governance-layer twin of the compact 30s-timeout (O030/MOD07): sacrificing the purpose to satisfy an arbitrary bound.
 
-## Coding Task Execution Modes (P1)
+## Coding Task Execution Modes — Pipeline Profile IS the Planning Unit (P1, P3)
 
-| Mode | When | Process |
-|------|------|---------|
-| **Full Pipeline** | ALL code changes (mandatory, no size threshold) | `s_autonomous-pipeline`. EVALUATE→REFLECT. Profile auto-selects (trivial/bugfix/full). |
-| **Direct** | ONLY when user explicitly says "直接做" / "just do it" | Read→code→test→commit. Still R3+R7. Agent MUST strong-propose pipeline first. |
+`PRI07: coding work is scoped/estimated/planned in PIPELINE RUNS, not sprints / tasks / story-points / milestones.`
 
-User says "做"/"go ahead"/"用pipeline做" = proceed with Pipeline (default). Only "直接做"/"just do it"/"skip pipeline" = Direct mode.
+A "milestone" or "sprint" is a human-team construct for coordinating limited cognitive
+bandwidth. Our atomic unit is a **pipeline run** with a built-in EVALUATE→REFLECT quality
+loop. Estimation = "N runs of profile P", not calendar days. Progress = run pass/fail,
+not burndown.
 
-**When user asks for a code change without specifying mode:** Always run pipeline. If the change looks trivial, use `--profile trivial` (6 stages, ~5min, still includes adversarial review). NEVER self-exempt based on perceived simplicity — this session (2026-05-26) proved 5 HIGH bugs hide in "trivial" changes.
+**Step 1 — pick the profile (this REPLACES task breakdown):**
+
+| Profile | Stages | Use when | Scope signal |
+|---------|--------|----------|--------------|
+| **goal** | eval→think→plan→**goal_cycle**→deliver→reflect | A LARGE/multi-milestone design that would otherwise be split into several sprints. DoD-driven: loops BUILD+TEST until Definition-of-Done is met (can run cross-session/scheduled). **Proven to handle big designs single-run.** | "build subsystem X", a whole design doc, would-be N stories |
+| **full** | eval→think→plan→build→review→test→deliver→reflect | A bounded new feature with clear acceptance criteria | ~5-15 files, <400 turns, one deliverable |
+| **bugfix** | eval→think→plan→build→review→test→deliver→reflect | A defect with a reproduction; root-cause + fix | broken behavior, scope = the defect |
+| **trivial** | eval→think→build→review→test→deliver→reflect | Known pattern, no new mechanism (still adversarial-gated) | ~1 file, copy/config/behavior-preserving |
+| **research** | eval→think→reflect | Investigate, no code | "should we", "how does X work" |
+| **docs** | eval→think→plan→deliver→reflect | DDD / design doc only, no code | docs-only change |
+
+**Step 2 — decompose by RUNS, not stories.** A large effort = an ordered list of pipeline
+runs (each independently committable + verifiable). Default the big one to a single
+**goal** run and let goal_cycle converge on DoD; split into multiple runs only when
+deliverables are genuinely independent (separate commit + separate smoke). One run ≠ one
+session — goal runs may span sessions via auto-resume.
+
+**Step 3 — mode.** Default = **Full Pipeline** (`s_autonomous-pipeline`, profile from Step 1).
+Profile is IMMUTABLE after EVALUATE (no downgrade to dodge adversarial — GC12).
+**Direct mode** ONLY on explicit "直接做" / "just do it"; agent must strong-propose pipeline
+first; R1 adversarial + R3 + R7 still apply.
+
+User says "做" / "go ahead" / "用pipeline做" = proceed with Pipeline (default). Only
+"直接做" / "just do it" / "skip pipeline" = Direct mode.
+
+NEVER express coding plans in sprint / task / milestone / story-point terms. If you catch
+yourself writing "Sprint 1 / Milestone A / 3 story points" for code work — that's the
+signal to restate it as "goal run" or "N×{profile} runs". NEVER self-exempt a change to
+Direct mode based on perceived simplicity — 2026-05-26 proved 5 HIGH bugs hide in
+"trivial" changes; the small ones get `--profile trivial`, not no pipeline.
 
 ## Environment & Platform
 
