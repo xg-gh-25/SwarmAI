@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 VECTOR_WEIGHT = 0.6
 KEYWORD_WEIGHT = 0.4
 RECALL_THRESHOLD = 0.05  # Low — power first
+# Floor for the min-max-normalized FTS5 score. Without it the worst keyword match
+# in a multi-hit set normalizes to 0.0 and, on a keyword-only leg (vec_score=0),
+# hybrid = KEYWORD_WEIGHT*0 = 0 < RECALL_THRESHOLD → the match is silently dropped.
+# 0.3 keeps the weakest real keyword hit above threshold: 0.4*0.3 = 0.12 > 0.05.
+FTS_SCORE_FLOOR = 0.3
 DEFAULT_MAX_TOKENS = 15_000
 _CHARS_PER_TOKEN = 4  # rough estimate; code-heavy content may be ~2-3 chars/token
 
@@ -98,7 +103,15 @@ class RecallEngine:
                 rank_range = max_rank - min_rank if max_rank != min_rank else 1.0
 
                 for r in fts_results:
-                    score = 1.0 - (r["fts_rank"] - min_rank) / rank_range if rank_range else 1.0
+                    norm = 1.0 - (r["fts_rank"] - min_rank) / rank_range if rank_range else 1.0
+                    # Floor the normalized score so the WORST keyword match is not
+                    # zeroed. With pure min-max, the lowest-ranked hit gets 0.0 →
+                    # on a keyword-only leg (vec_score=0) hybrid = 0.4*0 = 0 <
+                    # RECALL_THRESHOLD → it is silently DROPPED. This bites every
+                    # multi-hit Memory recall (the synchronous path is keyword-only).
+                    # Map [0,1] → [FTS_SCORE_FLOOR,1] so a real match always clears
+                    # the threshold on the keyword leg alone. (run_bbd79e84 Gate-2)
+                    score = FTS_SCORE_FLOOR + (1.0 - FTS_SCORE_FLOOR) * norm
                     key = f"{prefix}{r['id']}"
                     fts_scored[key] = {**r, "fts_score": score}
 

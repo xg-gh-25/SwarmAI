@@ -306,17 +306,107 @@ def _codeintel_live(negative: bool = False) -> int:
     return 1
 
 
+def _recall_budget(negative: bool = False) -> int:
+    """RECALL WIRE (architectural invariant, deterministic — no wall-clock race):
+    the REAL session_router._maybe_inject_recall must inject the keyword(FTS5)
+    recall floor into options.system_prompt while invoking the Bedrock embed
+    ZERO times on the synchronous first-token path. That embed-free guarantee is
+    the fix for the dead path: prod left this injecting NOTHING for months because
+    the embed (430ms warm / 2343ms cold) sat on a 150ms-budgeted critical path.
+    The other probes + test_recall_injection's mocks bypass this by mocking
+    _recall_for_query or using an instant embed. run_bbd79e84.
+
+    Drives the REAL _maybe_inject_recall + _recall_for_query against a real seeded
+    sqlite DB. The embed stub COUNTS calls + would block 0.5s if ever reached →
+    a deterministic assertion (count==0 AND floor landed), not a flaky timer race.
+
+    negative=True (teeth): assert the OPPOSITE invariant (embed_calls > 0) — which
+    is false on the fixed code → OK marker must NOT print → exit 1. Deterministic
+    (a call-count assertion), not a wall-clock race that DB size would mask."""
+    import asyncio
+    import contextlib
+    import sqlite3 as _sq
+    import tempfile as _tf
+    from unittest.mock import MagicMock
+
+    import sqlite_vec as _sv
+
+    from core import session_router as sr
+    from core.memory_embeddings import MemoryEmbeddingStore
+
+    embed_calls = {"n": 0}
+
+    def _slow_counting_embed(_text):
+        embed_calls["n"] += 1
+        time.sleep(0.5)  # Bedrock latency; on the sync path this MUST never run
+        return [0.0] * 1024
+
+    with _tf.TemporaryDirectory() as d:
+        db = Path(d) / "mem.db"
+        conn = _sq.connect(str(db))
+        try:
+            conn.enable_load_extension(True)
+            _sv.load(conn)
+            conn.enable_load_extension(False)
+            store = MemoryEmbeddingStore(conn)
+            store.ensure_tables()
+            store.upsert_entry(
+                key="COE05", section="COE Registry",
+                title="exit code -9 cascading SIGKILL failure",
+                full_text="exit code -9 cascading SIGKILL OOM crash recovery resume",
+                keywords=["sigkill", "oom", "crash", "recovery", "resume"],
+                embedding=None,  # un-embedded → exercises the KEYWORD floor
+            )
+        finally:
+            conn.close()
+
+        opts = MagicMock()
+        opts.system_prompt = "## Base"
+        unit = MagicMock()
+        unit._recall_injected = False
+        unit.is_channel_session = False
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch("jobs.paths.DB_PATH", db))
+            stack.enter_context(patch("core.vec_db._DEFAULT_DB_PATH", db))
+            stack.enter_context(
+                patch.object(sr, "_get_cached_embed_fn", lambda: _slow_counting_embed))
+            asyncio.run(sr._maybe_inject_recall(
+                user_message="sigkill oom crash recovery resume",
+                options=opts, unit=unit))
+
+    landed = "Recalled Knowledge" in opts.system_prompt
+    no_bedrock = embed_calls["n"] == 0
+
+    # The wire is intact iff the keyword floor landed AND Bedrock was never called
+    # on the synchronous path. The OK marker prints ONLY then.
+    # negative (teeth): demand the BROKEN invariant (embed WAS called) — which is
+    # false on fixed code, so OK is withheld → exit 1, proving the assertion bites.
+    if negative:
+        if not no_bedrock:  # embed was called → would be the bug
+            print("RECALL_BUDGET_OK")
+            return 0
+        print("RECALL_BUDGET_TEETH (sync path correctly embed-free; teeth withhold OK)")
+        return 1
+    if landed and no_bedrock:
+        print("RECALL_BUDGET_OK")
+        return 0
+    print(f"RECALL_BUDGET_FAIL (landed={landed}, embed_calls={embed_calls['n']})")
+    return 1
+
+
 _SCENARIOS = {
     "synonym_guard": _synonym_guard,
     "stale_index": _stale_index,
     "missing_vector": _missing_vector,
     "knowledge_live": _knowledge_live,
     "codeintel_live": _codeintel_live,
+    "recall_budget": _recall_budget,
 }
 
 # Scenarios that accept a 2nd arg "negative" (teeth mode): break the wire →
 # the OK marker must NOT appear → exit 1. Used as each case's negative_command.
-_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live"}
+_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live", "recall_budget"}
 
 
 def main(argv: list[str] | None = None) -> int:

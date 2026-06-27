@@ -233,3 +233,46 @@ class TestDistillationEnrichment:
         assert "2026-04-01" in entry
         assert "DailyActivity/2026-04-01.md" in entry
         assert "commit" not in entry.lower()
+
+
+# ── FTS_SCORE_FLOOR regression (run_bbd79e84 Gate-2 MEDIUM) ──
+#
+# Min-max rank normalization zeroed the WORST keyword match in a multi-hit set.
+# On a keyword-only leg (vec_score=0) that means hybrid = 0.4*0 = 0 < threshold →
+# the weakest relevant entry is SILENTLY DROPPED. This bit every multi-hit Memory
+# recall once the synchronous recall path went keyword-only. FTS_SCORE_FLOOR keeps
+# the weakest real match above threshold. Mutation-verified: floor=0.0 → B drops.
+
+def test_fts_score_floor_keeps_weakest_keyword_hit():
+    """A multi-hit keyword-only recall must NOT silently drop the worst match."""
+    from core.memory_embeddings import MemoryEmbeddingStore
+    from core.memory_recall_store import MemoryRecallStore
+    from core.recall_engine import (
+        RecallEngine, FTS_SCORE_FLOOR, KEYWORD_WEIGHT, RECALL_THRESHOLD,
+    )
+
+    # The floor must keep the weakest hit above threshold on the keyword leg alone.
+    assert KEYWORD_WEIGHT * FTS_SCORE_FLOOR > RECALL_THRESHOLD, (
+        "FTS_SCORE_FLOOR too low — weakest keyword match would be dropped"
+    )
+
+    conn = _make_conn()
+    store = MemoryEmbeddingStore(conn)
+    store.ensure_tables()
+    # A = strong (3 term matches), B = weak (1 term match — the one that was dropped)
+    store.upsert_entry(key="A", section="COE Registry",
+                       title="sigkill oom crash",
+                       full_text="sigkill oom crash recovery resume",
+                       keywords=["sigkill", "oom", "crash"], embedding=None)
+    store.upsert_entry(key="B", section="Lessons Learned",
+                       title="resume only",
+                       full_text="resume handling notes",
+                       keywords=["resume"], embedding=None)
+
+    engine = RecallEngine(MemoryRecallStore(conn))
+    results = engine.search("sigkill oom crash recovery resume", embed_fn=None)
+    keys = {r["id"] for r in results}
+    assert "A" in keys, "strong keyword match must surface"
+    assert "B" in keys, (
+        "weakest keyword match was silently dropped — FTS_SCORE_FLOOR regression"
+    )

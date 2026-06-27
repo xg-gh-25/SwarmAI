@@ -50,7 +50,13 @@ _SDK_SUPPORTS_MULTIMODAL: bool = False
 # Activates RecallEngine L2/L3 using the user's actual query instead
 # of generic proactive keywords.  Runs once per session, 150ms timeout.
 
-_RECALL_TIMEOUT_S = 0.15  # 150ms hard timeout (generous for thread + DB)
+_RECALL_TIMEOUT_S = 0.4  # 400ms budget — fits the keyword(FTS5) floor (measured
+# 150-265ms, 4/4 reliable). The OLD 150ms wall lost a race with the real FTS5 path
+# (145-153ms) → every first-message recall TimeoutError'd → ZERO knowledge injected
+# in prod. The synchronous first-token path is keyword-ONLY (embed disabled, see
+# _recall_for_query allow_embed): a Bedrock embed is 430ms warm / 2343ms cold and
+# MUST NOT block the first token (recall is "enhancement, not critical path"). The
+# vector leg runs opportunistically off the critical path. (run_bbd79e84)
 # Recall budget is intentionally lower than the 15K default in recall_engine.py.
 # This injection is additive to an already-assembled system prompt (~30-50K),
 # so we cap at 8K to avoid pushing context over budget on large sessions.
@@ -140,12 +146,19 @@ def _get_cached_embed_fn():
     return _cached_embed_fn if _cached_embed_fn else None
 
 
-def _recall_for_query(query: str, max_tokens: int) -> str:
-    """Run hybrid FTS5+vector recall against the Knowledge Library.
+def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) -> str:
+    """Run hybrid FTS5+vector recall across Knowledge + Transcript + Memory.
 
     Thin wrapper around existing RecallEngine infrastructure.
     Uses ``open_vec_db()`` context manager for thread-safe connection
     (this runs in ``asyncio.to_thread``).
+
+    ``allow_embed`` (default False): when False, the VECTOR leg is disabled
+    (``embed_fn=None``) so NO Bedrock embed runs. This is the synchronous
+    first-token path — a Bedrock embed (430ms warm / 2343ms cold) must not block
+    the response. The keyword(FTS5) leg is the guaranteed floor and is local
+    sqlite. Pass True only from an OFF-critical-path caller that can afford the
+    embed latency (run_bbd79e84).
 
     Graph enrichment: extracts entities from query, queries knowledge graph
     for related entry IDs/titles, appends them to enrich the recall context.
@@ -175,9 +188,19 @@ def _recall_for_query(query: str, max_tokens: int) -> str:
             except Exception:
                 pass  # Transcript recall unavailable — Knowledge-only is fine
 
+            # Include MemoryRecallStore so the user's real query also recalls
+            # MEMORY.md entries. Memory had NO keyword leg before this adapter
+            # (memory has no fts table); the adapter provides a real one.
+            try:
+                from .memory_recall_store import MemoryRecallStore
+                additional_stores.append(MemoryRecallStore(conn))
+            except Exception:
+                pass  # Memory recall unavailable — other domains still work
+
             engine = RecallEngine(store, additional_stores=additional_stores)
 
-            embed_fn = _get_cached_embed_fn()
+            # Keyword-only on the critical path (allow_embed=False) — no Bedrock.
+            embed_fn = _get_cached_embed_fn() if allow_embed else None
 
             recalled = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
 

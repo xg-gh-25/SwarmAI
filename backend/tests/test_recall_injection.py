@@ -210,3 +210,161 @@ class TestMaybeInjectRecall:
         original_base = "## Base system prompt content"
         assert mock_options.system_prompt == original_base
         assert mock_unit._recall_injected is True
+
+
+# ── REAL-PATH integration (the test that was missing — run_bbd79e84) ──
+#
+# The mock-based tests above patch _recall_for_query, so they NEVER exercised
+# the real timeout-vs-latency reality. Production measured: keyword(FTS5) recall
+# = 150-265ms, Bedrock embed = 430ms warm / 2343ms cold. With the old 150ms hard
+# timeout, the real path TimeoutError'd EVERY first message → zero knowledge
+# injected, while every mocked test passed (test-theater, GUI16/PIT13 class).
+#
+# These tests drive the REAL _maybe_inject_recall + _recall_for_query (NOT mocked)
+# through the real asyncio timeout wrapper, against a REAL seeded sqlite DB (the
+# same _build_db / patch("jobs.paths.DB_PATH") pattern recall_chain_probe.py uses).
+# The embed leg is a DELAYED STUB simulating Bedrock latency. Non-creds-dependent.
+
+import contextlib
+import sqlite3
+import tempfile
+from pathlib import Path
+
+
+def _seed_memory_db(db_path: Path) -> None:
+    """Create a real memory_entries + memory_vec DB with one keyword-matchable
+    entry, so the keyword(FTS5) floor through MemoryRecallStore has data to find.
+    Mirrors recall_chain_probe._build_db."""
+    import sqlite_vec
+    from core.memory_embeddings import MemoryEmbeddingStore
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        store = MemoryEmbeddingStore(conn)
+        store.ensure_tables()
+        # Un-embedded (vector=None) → exercises the KEYWORD leg specifically,
+        # which is exactly the synchronous floor the fix resurrects.
+        store.upsert_entry(
+            key="COE05", section="COE Registry",
+            title="exit code -9 cascading SIGKILL failure",
+            full_text="exit code -9 cascading SIGKILL OOM crash recovery resume",
+            keywords=["sigkill", "oom", "crash", "recovery", "resume"],
+            embedding=None,
+        )
+    finally:
+        conn.close()
+
+
+@contextlib.contextmanager
+def _seeded_db():
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "mem.db"
+        _seed_memory_db(db)
+        # _recall_for_query opens via open_vec_db() → jobs.paths.DB_PATH.
+        with patch("jobs.paths.DB_PATH", db), \
+                patch("core.vec_db._DEFAULT_DB_PATH", db):
+            yield db
+
+
+class TestRealRecallPathBudget:
+    """Drive the REAL recall path (no mock of _recall_for_query) through the
+    real timeout wrapper against a real seeded DB. Proves the keyword floor
+    lands within budget even when the embed (vector) leg is slow — the reality
+    the mocked tests missed."""
+
+    @pytest.fixture
+    def mock_unit(self):
+        unit = MagicMock()
+        unit._recall_injected = False
+        unit.is_channel_session = False
+        return unit
+
+    @pytest.fixture
+    def mock_options(self):
+        options = MagicMock()
+        options.system_prompt = "## Base system prompt content"
+        return options
+
+    @pytest.mark.asyncio
+    async def test_sync_path_never_calls_bedrock_embed(self, mock_unit, mock_options):
+        """THE load-bearing invariant: the synchronous first-token recall path
+        must NEVER invoke the Bedrock embed (430ms warm / 2343ms cold). The bug
+        was that the embed WAS on this path, blowing the timeout → zero recall.
+
+        Asserting embed-call-count == 0 is non-vacuous regardless of DB size: it
+        proves the architectural guarantee (keyword-only floor, no Bedrock block)
+        directly, not via a latency race that a small test DB would mask.
+        """
+        from core import session_router as sr
+
+        embed_calls = {"n": 0}
+
+        def _counting_slow_embed(_text):
+            embed_calls["n"] += 1
+            time.sleep(0.5)  # simulate Bedrock; if ever reached on sync path, RED
+            return [0.0] * 1024
+
+        with _seeded_db():
+            with patch("core.session_router._get_cached_embed_fn",
+                       return_value=_counting_slow_embed):
+                await sr._maybe_inject_recall(
+                    user_message="sigkill oom crash recovery resume",
+                    options=mock_options,
+                    unit=mock_unit,
+                )
+
+        # Keyword floor landed AND Bedrock was never called on the critical path.
+        assert mock_unit._recall_injected is True
+        assert "Recalled Knowledge" in mock_options.system_prompt
+        assert embed_calls["n"] == 0, (
+            f"Synchronous recall path called Bedrock embed {embed_calls['n']}x — "
+            "it MUST be keyword-only (the original dead-path bug). "
+            "_recall_for_query default allow_embed must be False."
+        )
+
+    @pytest.mark.asyncio
+    async def test_recall_for_query_allow_embed_gates_bedrock(self):
+        """Direct contract test: allow_embed=False → 0 embed calls;
+        allow_embed=True → embed reachable. Proves the gate is the real switch,
+        non-vacuous on any DB size (asserts the call count, not a latency race)."""
+        from core import session_router as sr
+
+        embed_calls = {"n": 0}
+
+        def _counting_embed(_text):
+            embed_calls["n"] += 1
+            return [0.0] * 1024
+
+        with _seeded_db():
+            with patch("core.session_router._get_cached_embed_fn",
+                       return_value=_counting_embed):
+                # Default (sync path) must not embed.
+                sr._recall_for_query("sigkill oom crash recovery resume", 8000)
+                assert embed_calls["n"] == 0, "allow_embed defaults False but embed was called"
+
+                # Explicit off-path caller may embed.
+                embed_calls["n"] = 0
+                sr._recall_for_query("sigkill oom crash recovery resume", 8000,
+                                     allow_embed=True)
+                assert embed_calls["n"] > 0, "allow_embed=True but embed was never reached"
+
+    @pytest.mark.asyncio
+    async def test_memory_entry_recallable_by_keyword(self, mock_unit, mock_options):
+        """AC4: a MEMORY entry is recallable by keyword through the real path
+        (MemoryRecallStore keyword leg). Proves Memory is wired, not cosmetic."""
+        from core import session_router as sr
+
+        with _seeded_db():
+            await sr._maybe_inject_recall(
+                user_message="sigkill oom crash recovery resume",
+                options=mock_options,
+                unit=mock_unit,
+            )
+
+        assert "Recalled Knowledge" in mock_options.system_prompt
+        # The seeded MEMORY entry's content must appear — proves Memory domain
+        # contributed via its real keyword leg (not silently swallowed).
+        assert "SIGKILL" in mock_options.system_prompt or "sigkill" in mock_options.system_prompt.lower()
