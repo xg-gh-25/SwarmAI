@@ -321,11 +321,18 @@ async def _maybe_inject_recall(
 ) -> None:
     """Augment the system prompt with recalled knowledge from the user's query.
 
-    CORRECTNESS-FIRST (run_4d06640b): runs BOTH legs (keyword FTS5 + vector
-    semantic) to COMPLETION synchronously before generating, so the answer is
-    built on the FULL brain — not a latency-trimmed subset. Priority is accurate +
-    capable, NOT first-token speed (user directive). Measured ~1.1s warm / ~2-3s
-    cold (Bedrock embed cold) — that latency is ACCEPTED; correctness > the seconds.
+    CORRECTNESS-FIRST (run_4d06640b): runs the recall leg to COMPLETION
+    synchronously before generating, so the answer is built on the FULL brain —
+    not a latency-trimmed subset. Priority is accurate + capable, NOT first-token
+    speed (user directive). Measured ~1-3s — that latency is ACCEPTED.
+
+    PURE-FILESYSTEM (run_2f621986, design 2026-06-28 §3.3): recall is now
+    keyword/FTS5/BM25 ONLY — the vector/Bedrock-embed leg was retired. The call
+    below passes allow_embed=False. The "right idea, different words" blind spot
+    is covered by AGENTIC re-search (the footer hint nudges the agent to re-grep
+    with synonyms), NOT by an embedding leg. (Prior text here claimed "BOTH legs /
+    allow_embed=True / Bedrock embed cold" — that was a stale lie; the embed leg
+    was already gone. PIT25 stale-comment class.)
 
     Runs ONCE per session on the first user message (``_recall_injected`` guard).
 
@@ -366,8 +373,9 @@ async def _maybe_inject_recall(
     _t_recall_start = time.perf_counter()
 
     try:
-        # BOTH legs (allow_embed=True), synchronous, to completion. The disaster
-        # cap only fires on a code hang; normal recall (~1-3s) never reaches it.
+        # Keyword/FTS5 leg only (allow_embed=False), synchronous, to completion.
+        # The disaster cap only fires on a code hang; normal recall (~1-3s) never
+        # reaches it.
         recalled = await asyncio.wait_for(
             asyncio.to_thread(
                 _recall_for_query,
