@@ -27,12 +27,13 @@ class TestSectionCaps:
     """Test suite for section cap enforcement with archival."""
 
     def test_enforce_caps_trims_oldest(self, tmp_path):
-        """35 RC entries -> 30 after enforcement."""
+        """(cap+5) Guidelines entries -> trimmed to cap after enforcement."""
         from hooks.distillation_hook import DistillationTriggerHook, SECTION_CAPS
 
-        # Build memory with 35 Recent Context entries
-        entries = [f"2026-01-{i+1:02d}: **Entry {i+1}** — detail" for i in range(35)]
-        content = _build_memory_md({"Recent Context": entries})
+        cap = SECTION_CAPS["Guidelines"]
+        # Build memory with cap+5 Guidelines entries (must exceed cap to trim)
+        entries = [f"2026-01-{i+1:02d}: **Entry {i+1}** — detail" for i in range(cap + 5)]
+        content = _build_memory_md({"Guidelines": entries})
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 
@@ -43,26 +44,26 @@ class TestSectionCaps:
         DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
 
         result = memory_path.read_text()
-        rc_entries = [l for l in result.splitlines() if l.strip().startswith("- ") and "Recent Context" not in l]
-        # Filter to only entries under Recent Context section
-        in_rc = False
-        rc_count = 0
+        # Filter to only entries under the Guidelines section
+        in_section = False
+        count = 0
         for line in result.splitlines():
-            if line.strip() == "## Recent Context":
-                in_rc = True
+            if line.strip() == "## Guidelines":
+                in_section = True
                 continue
-            if line.strip().startswith("## ") and in_rc:
+            if line.strip().startswith("## ") and in_section:
                 break
-            if in_rc and line.strip().startswith("- ") and not line.strip().startswith("- [Archived]"):
-                rc_count += 1
-        assert rc_count <= SECTION_CAPS["Recent Context"]
+            if in_section and line.strip().startswith("- ") and not line.strip().startswith("- [Archived]"):
+                count += 1
+        assert count <= cap
 
     def test_overflow_archived(self, tmp_path):
         """Trimmed entries appear in archive file."""
-        from hooks.distillation_hook import DistillationTriggerHook
+        from hooks.distillation_hook import DistillationTriggerHook, SECTION_CAPS
 
-        entries = [f"2026-03-{i+1:02d}: **Entry {i+1}** — detail" for i in range(35)]
-        content = _build_memory_md({"Recent Context": entries})
+        entries = [f"2026-03-{i+1:02d}: **Entry {i+1}** — detail"
+                   for i in range(SECTION_CAPS["Guidelines"] + 5)]
+        content = _build_memory_md({"Guidelines": entries})
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 
@@ -77,7 +78,7 @@ class TestSectionCaps:
         archive_path = archives_dir / archive_name
         assert archive_path.exists(), f"Archive file {archive_name} should exist"
         archive_content = archive_path.read_text()
-        assert "Recent Context" in archive_content
+        assert "Guidelines" in archive_content
 
     def test_archive_format(self, tmp_path):
         """Archive file has proper markdown structure."""
@@ -142,7 +143,7 @@ class TestSectionCaps:
         from hooks.distillation_hook import DistillationTriggerHook
 
         entries = [f"2026-03-{i+1:02d}: **Entry {i+1}** — detail" for i in range(20)]
-        content = _build_memory_md({"Recent Context": entries})
+        content = _build_memory_md({"Guidelines": entries})
         memory_path = tmp_path / "MEMORY.md"
         memory_path.write_text(content)
 

@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
+from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
 from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
@@ -54,13 +55,39 @@ UNDISTILLED_THRESHOLD = 0  # Run every session close (was 2 — caused 1-2 day s
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 ARCHIVE_DAYS = 90  # Move files older than this to Archives/
-SECTION_CAPS = {  # Max entries per MEMORY.md section after distillation
-    "Key Decisions": 40,
-    "Lessons Learned": 35,
-    "Recent Context": 20,
+
+# Max entries per MEMORY.md section after distillation. Keys MUST be current
+# section names from the MEMORY_SECTIONS SSoT (ddd_entry_lifecycle.py) — the
+# legacy "Key Decisions"/"Lessons Learned"/"Recent Context" names were removed
+# in PRI01, leaving the high-churn sections (Guidelines/Pitfalls/Decisions)
+# silently uncapped. Caps apply to the non-evergreen churning sections; the
+# evergreen ones (Principles/Corrections/COE Registry/Open Threads/Standing
+# Preferences) are bounded by decay/reclaim, not count. Validated at import
+# (below) so a future rename fails loud instead of silently orphaning entries.
+SECTION_CAPS = {  # section name → max entries (count, NOT token — R3-8)
+    "Decisions": 40,
+    "Guidelines": 60,
+    "Pitfalls": 60,
+    "Models": 20,
+    "Processes": 20,
     "COE Registry": 15,
     "Open Threads": 10,
 }
+
+# Fail-loud guard: every cap key must be a real current section. A dead key
+# means the section is silently uncapped (the bug R3 fixes). logger.error
+# (not raise) — a bad key must surface in logs/health, not crash distillation.
+try:
+    from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES as _MEMORY_SECTION_NAMES
+    _dead_cap_keys = [k for k in SECTION_CAPS if k not in _MEMORY_SECTION_NAMES]
+    if _dead_cap_keys:
+        logger.error(
+            "distillation SECTION_CAPS has keys not in MEMORY_SECTIONS SSoT "
+            "(these sections are silently uncapped): %s",
+            _dead_cap_keys,
+        )
+except Exception as _e:  # pragma: no cover — SSoT import should always succeed
+    logger.error("distillation: could not validate SECTION_CAPS against SSoT: %s", _e)
 
 # Centralized patterns — shared with summarization.py via extraction_patterns.py.
 # Distillation uses the STRICT variant (runs on already-extracted DailyActivity).
@@ -311,8 +338,8 @@ class DistillationTriggerHook:
         """Extract entries from DailyActivity files and write to MEMORY.md + EVOLUTION.md.
 
         Extracts four categories:
-        - Decisions → MEMORY.md "Key Decisions"
-        - Lessons → MEMORY.md "Lessons Learned"
+        - Decisions → MEMORY.md "Decisions" (MEMORY_TYPE_TO_SECTION)
+        - Lessons → MEMORY.md "Guidelines" (a lesson is a guideline, 7-type schema)
         - COE signals → MEMORY.md "COE Registry" (cross-session problem tracking)
         - Corrections → EVOLUTION.md "Corrections Captured" (agent behavior fixes)
 
@@ -498,14 +525,20 @@ class DistillationTriggerHook:
                 if self._passes_frequency_gate(e, da_files_data)
             ]
 
-        # Batched writes to MEMORY.md — one lock acquisition per section
+        # Batched writes to MEMORY.md — one lock acquisition per section.
+        # Targets derive from the MEMORY_SECTIONS SSoT (MEMORY_TYPE_TO_SECTION):
+        # decisions → "Decisions", lessons → "Guidelines" (a lesson is a
+        # guideline in the 7-type schema). The legacy "Key Decisions" /
+        # "Lessons Learned" names were removed in PRI01; writing to them made
+        # _modify_content fall back to an orphan "## Distilled" section that the
+        # index, recall, and caps never manage (R3 write-target drift fix).
         if all_decisions:
             self._run_locked_write(
-                memory_path, "Key Decisions", "\n".join(all_decisions)
+                memory_path, MEMORY_TYPE_TO_SECTION["decision"], "\n".join(all_decisions)
             )
         if all_lessons:
             self._run_locked_write(
-                memory_path, "Lessons Learned", "\n".join(all_lessons)
+                memory_path, MEMORY_TYPE_TO_SECTION["guideline"], "\n".join(all_lessons)
             )
 
         # Write COE registry entries
@@ -1980,7 +2013,6 @@ class DistillationTriggerHook:
         # Load decay scores for smart eviction (lowest-decay-score first).
         # Falls back to oldest-first if no decay metadata exists in entries.
         from core.memory_decay import compute_decay_score, _META_RE as _DECAY_META_RE
-        _KEY_RE = re.compile(r"\[((?:KD|LL|RC|COE|OT)\d{2,3})\]")
         today = date.today()
         decay_available = False
 

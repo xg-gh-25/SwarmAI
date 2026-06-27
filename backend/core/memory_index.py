@@ -962,15 +962,18 @@ def select_memory_sections(
     # ── Rule-based section loading ──
     sections_to_load: set[str] = set()
 
+    # Section names are current (post-PRI01): Recent Context→Open Threads,
+    # Lessons Learned→Guidelines. The old literals silently no-op'd because the
+    # sections no longer exist (R3 write-governance drift fix).
     if signals.get("is_resume"):
-        sections_to_load.add("Recent Context")
+        sections_to_load.add("Open Threads")
 
     if signals.get("has_coe"):
         sections_to_load.add("COE Registry")
-        sections_to_load.add("Lessons Learned")
+        sections_to_load.add("Guidelines")
 
     if signals.get("is_first_session_today"):
-        sections_to_load.add("Recent Context")
+        sections_to_load.add("Open Threads")
 
     # ── Temporal validity: extract superseded keys for scoring ──
     superseded = _extract_superseded_keys(memory_content)

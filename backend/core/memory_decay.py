@@ -38,8 +38,13 @@ SPACING_BONUS = 0.3         # Stability gain per distinct session (Cepeda effect
 VOLUME_FACTOR = 0.2         # Diminishing log(1+ref_count) contribution
 MAX_STABILITY = 10.0        # Cap so no entry becomes immortal
 
-# Sections whose entries are immune to decay/archival
-PERMANENT_SECTIONS = frozenset({"Key Decisions", "COE Registry"})
+# Sections whose entries are immune to decay/archival. Derived from the
+# MEMORY_SECTIONS SSoT (evergreen flag) rather than hardcoded — the old literal
+# {"Key Decisions", "COE Registry"} referenced "Key Decisions", a section
+# removed in PRI01, so it protected nothing real (R3 write-governance fix). The
+# SSoT deliberately makes Decisions NON-evergreen (decisions decay); evergreen =
+# {Principles, Corrections, COE Registry, Open Threads, Standing Preferences}.
+from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS as PERMANENT_SECTIONS
 
 # Regex for MEMORY entry IDs (KD01, LL03, RC15, COE02, OT01)
 _ENTRY_ID_RE = re.compile(r"\b((?:KD|LL|RC|COE|OT)\d{2,3})\b")

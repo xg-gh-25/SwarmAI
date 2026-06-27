@@ -123,8 +123,18 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
                          "detail": f"exception: {e}"})
 
     # ── 4. Required sections ───────────────────────────────────────
-    required = ["## Recent Context", "## Key Decisions", "## Lessons Learned",
-                "## COE Registry", "## Open Threads"]
+    # Derive from the MEMORY_SECTIONS SSoT — the old hardcoded list checked for
+    # "Recent Context"/"Key Decisions"/"Lessons Learned", sections removed in
+    # PRI01, so this check failed every run on the absence of deliberately-gone
+    # sections (R3 write-governance fix). Use the evergreen/permanent sections
+    # as "required" — those are the structurally stable ones that should always
+    # exist; churn sections may legitimately be empty.
+    try:
+        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        required = [f"## {s}" for s in sorted(MEMORY_EVERGREEN_SECTIONS)]
+    except Exception:
+        required = ["## Principles", "## Corrections", "## COE Registry",
+                    "## Open Threads", "## Standing Preferences"]
     missing = [s for s in required if s not in memory_content]
     if not missing:
         findings.append({"check": "required_sections", "status": "pass",

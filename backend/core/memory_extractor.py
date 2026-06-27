@@ -25,6 +25,7 @@ from typing import Any
 
 # Direct import — avoids sys.executable subprocess which breaks in PyInstaller bundles
 from scripts.locked_write import locked_read_modify_write, LockedWriteError
+from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
 
 logger = logging.getLogger(__name__)
 
@@ -295,15 +296,20 @@ def _parse_extraction(raw: str) -> dict[str, list[str]]:
     return result
 
 
-# Map extraction keys to MEMORY.md section headers.
-# Note: open_threads maps to "Recent Context" (not "Open Threads") because
-# Open Threads now uses P0/P1/P2 subsections that require structured writes.
-# Unstructured LLM-extracted items would break the section format.
+# Map extraction keys to MEMORY.md section headers. Values MUST be current
+# section names from the MEMORY_SECTIONS SSoT — the legacy "Key Decisions" /
+# "Lessons Learned" / "Recent Context" names were removed in PRI01, and writing
+# to a missing section silently orphans the entry into a "## Distilled" fallback
+# that the index/recall/caps never manage (R3 write-target drift fix).
+#   key_decisions  → Decisions
+#   lessons_learned→ Guidelines (a lesson is a guideline in the 7-type schema)
+#   open_threads / recent_context → Open Threads (the live churn section for
+#       in-flight context; both legacy keys fold here)
 _SECTION_MAP = {
-    "key_decisions": "Key Decisions",
-    "lessons_learned": "Lessons Learned",
-    "open_threads": "Recent Context",
-    "recent_context": "Recent Context",
+    "key_decisions": MEMORY_TYPE_TO_SECTION["decision"],
+    "lessons_learned": MEMORY_TYPE_TO_SECTION["guideline"],
+    "open_threads": "Open Threads",
+    "recent_context": "Open Threads",
 }
 
 

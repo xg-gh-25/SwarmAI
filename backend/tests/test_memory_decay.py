@@ -148,17 +148,26 @@ class TestArchiveCandidates:
         assert len(candidates) == 0
 
     def test_permanent_section_immune(self):
-        """Entries in PERMANENT sections are never archive candidates."""
-        from core.memory_decay import get_archive_candidates, EntryDecayInfo
+        """Entries in PERMANENT (evergreen) sections are never archive candidates.
+
+        PERMANENT_SECTIONS now derives from the MEMORY_SECTIONS SSoT evergreen
+        flag (R3 fix). "COE Registry" is evergreen → immune. Note: "Decisions"
+        is deliberately NON-evergreen in the SSoT (decisions decay), so the old
+        "Key Decisions" immunity was itself wrong — this test uses a genuinely
+        evergreen section.
+        """
+        from core.memory_decay import get_archive_candidates, EntryDecayInfo, PERMANENT_SECTIONS
 
         today = date(2026, 6, 7)
+        evergreen_section = "COE Registry"
+        assert evergreen_section in PERMANENT_SECTIONS  # guard: this IS evergreen
         entry = EntryDecayInfo(
-            entry_id="KD01",
+            entry_id="COE01",
             ref_count=0,
             sessions_referenced=0,
             last_referenced=None,
             created=today - timedelta(days=200),
-            section="Key Decisions",
+            section=evergreen_section,
         )
         candidates = get_archive_candidates([entry], today)
         assert len(candidates) == 0

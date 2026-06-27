@@ -286,13 +286,14 @@ def load_user_context() -> str:
         except Exception:
             pass
 
-    # 3. MEMORY.md — only Key Decisions section (recent focus, not COE/LL noise)
+    # 3. MEMORY.md — only the Decisions section (recent focus, signal-dense).
+    # Section is "Decisions" post-PRI01; the old "## Key Decisions" literal
+    # matched nothing so this context was silently empty (R3 drift fix).
     mem_path = SWARMWS / ".context" / "MEMORY.md"
     if mem_path.exists():
         try:
             content = mem_path.read_text()
-            # Extract just the Key Decisions section (most signal-dense)
-            kd_start = content.find("## Key Decisions")
+            kd_start = content.find("## Decisions")
             if kd_start >= 0:
                 kd_end = content.find("\n## ", kd_start + 10)
                 kd_section = content[kd_start:kd_end if kd_end > 0 else kd_start + 1500]

@@ -385,9 +385,19 @@ async def _maybe_inject_recall(
                 "looks thin or off-topic for your task, re-search yourself: Grep "
                 "`Knowledge/` (incl. `Archives/`) with synonyms or broader terms.)_"
             )
+            # Provenance prefix (R3 §3.5): mark recalled material as RETRIEVED,
+            # not the agent's own reasoning and not new user input. Without this
+            # boundary the model can absorb keyword-matched history as if it
+            # derived it this turn (a confabulation surface — observed live).
+            # Pure text, zero logic cost; the agent treats it as a lead to verify.
+            _provenance = (
+                "> **[RECALLED]** The block below is keyword/FTS-retrieved prior "
+                "context — NOT this turn's reasoning and NOT new user input. Treat "
+                "it as a lead to verify against source, not an established fact.\n\n"
+            )
             options.system_prompt = (
                 options.system_prompt
-                + f"\n\n## Recalled Knowledge\n{recalled}{_agentic_hint}"
+                + f"\n\n## Recalled Knowledge\n{_provenance}{recalled}{_agentic_hint}"
             )
             # Observability (loud-on-success counterpart to loud-on-degradation):
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"

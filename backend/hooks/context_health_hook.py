@@ -842,7 +842,9 @@ class ContextHealthHook:
         """Extract confident REFLECT lessons to MEMORY.md with lifecycle metadata.
 
         Only lessons that DDD cultivation accepted (confident) get promoted here.
-        Uses classify_entry_type for type assignment. Appends to Lessons Learned.
+        Uses classify_entry_type for type assignment, then routes each lesson to
+        its current section via MEMORY_TYPE_TO_SECTION (e.g. guideline→Guidelines,
+        pitfall→Pitfalls) — not the removed "Lessons Learned" section.
         """
         from core.ddd_entry_lifecycle import classify_entry_type
 
@@ -2251,6 +2253,11 @@ class ContextHealthHook:
         # 10. Governance budget enforcement (Three-Layer Governance)
         findings += self._check_governance_budgets(root, context_dir)
 
+        # 10b. Write-side governance health (R3): catch the drift class that let
+        #      caps/section-targets silently rot. Entry-count based (NOT token —
+        #      R3-8: the token estimator is ~33% off, can't gate on it).
+        findings += self._check_write_governance(context_dir)
+
         # 11. Context token budget measurement
         if context_dir.is_dir():
             findings += self._check_token_budget(context_dir)
@@ -2494,6 +2501,74 @@ class ContextHealthHook:
             findings.append(
                 f"[context/budget] WARNING: {total_tokens}/{self._WARNING_THRESHOLD} "
                 f"tokens. Top: {top3}. Plan compression before next weekly run."
+            )
+
+        return findings
+
+    def _check_write_governance(self, context_dir: Path) -> list[str]:
+        """Write-side governance health (R3). Zero-LLM, entry-count based.
+
+        Catches the drift class that silently rotted memory governance:
+          1. caps-key validity  — every SECTION_CAPS key is a real current
+             section (a dead key = that section is silently uncapped).
+          2. section over-cap   — any section whose live entry count exceeds
+             its cap with no reclaim progress (membership bloat).
+          3. orphan sections    — duplicate/orphan "## Distilled" sections (the
+             fallback target when a write goes to a non-existent section).
+
+        Counts ENTRIES, never tokens (R3-8: the token estimator is ~33% off;
+        gating governance on it would be building on a broken ruler). A finding
+        is a smoke alarm surfaced to the briefing, never an auto-mutation.
+        """
+        findings: list[str] = []
+        memory_path = context_dir / "MEMORY.md"
+        if not memory_path.exists():
+            return findings
+
+        try:
+            from hooks.distillation_hook import SECTION_CAPS
+            from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES
+        except Exception as exc:  # pragma: no cover — SSoT import should succeed
+            return [f"[write-gov] could not load SSoT for write-governance check: {exc}"]
+
+        # 1. caps-key validity (defense against BROKEN-1 recurrence)
+        dead_keys = [k for k in SECTION_CAPS if k not in MEMORY_SECTION_NAMES]
+        if dead_keys:
+            findings.append(
+                f"[write-gov] SECTION_CAPS dead keys (section silently uncapped): {dead_keys}"
+            )
+
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+        except OSError:
+            return findings
+
+        # Count entries per section (bullets directly under each "## <name>").
+        import re as _re
+        section_counts: dict[str, int] = {}
+        current: str | None = None
+        for line in content.splitlines():
+            if line.startswith("## "):
+                current = line[3:].strip()
+                section_counts.setdefault(current, 0)
+            elif current and _re.match(r"^- (?!\[Archived\])", line.strip()):
+                section_counts[current] = section_counts.get(current, 0) + 1
+
+        # 2. section over-cap (entry count, not token)
+        for sec, cap in SECTION_CAPS.items():
+            n = section_counts.get(sec, 0)
+            if n > cap:
+                findings.append(
+                    f"[write-gov] section '{sec}' over cap: {n}/{cap} entries "
+                    f"(reclaim/decay not keeping up)"
+                )
+
+        # 3. orphan "## Distilled" sections (misfile fallback signature)
+        distilled = content.count("\n## Distilled")
+        if distilled:
+            findings.append(
+                f"[write-gov] {distilled} orphan '## Distilled' section(s) — "
+                f"a write targeted a non-existent section (drift); reconcile into real sections"
             )
 
         return findings

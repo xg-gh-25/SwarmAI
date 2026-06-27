@@ -1,4 +1,30 @@
 # Changelog
+## [Unreleased]
+
+### 🤖 Autonomous Pipeline — coding-task execution (2026-06-24 → 06-28)
+Focus of this arc: make the pipeline **waste less work and stall less**, not lower per-turn latency. Changes cluster at the front of the pipeline (think-before-build), profile selection, escalation delivery, and run management.
+
+#### Added
+- **Universal Understanding Gate at EVALUATE→THINK** — fail-closed profile gate forces the run to confirm it understands the task before coding (2479fed2, 58923b50).
+- **Self-Socratic ambiguity scan in EVALUATE + THINK** — clarification layer surfaces ambiguity before build instead of discovering it half-way (5389c2ca, 00636aa7).
+- **Greenfield-only Working-Backwards lens in EVALUATE** — applies the WB lens only to greenfield goals (78d3ce91, 8d54802e).
+- **REPRO gate + diagnostic-challenge for bug tasks** — diagnose/reproduce before building a bug-class fix (58bb0287, a4ad5c4d).
+- **In-band L2 escalation via AskUserQuestion** — pipeline escalates to the human in-band instead of emitting directives that never execute; closes the auto-resume "DELIVERY gap" (run_6c482b10 / f0da3a72) (8952cbe7, a00ae461, c48de62b).
+- **`schema` subcommand + `--quiet` document publish** — removes GUI03 publishing friction (87540fb4).
+
+#### Fixed
+- **Profile-selection ordering** — `goal` profile was over-selected; reordered selection + auto-record document publish (53dd788c).
+- **M1 solution-language false positives** — `i'll`/`ill`, `we-can`, imperative forms, and the verb `lets` no longer trip the intent guard (6434a597, 8a966789).
+- **Goal-cycle multi-goal runs** — C3 contraction-bypass + M1 strips quoted spans (citations ≠ plan intent); C4 routing auto-resolves `consumed_artifacts` from completed producers; Gate 0 surfaced in COMPLETE summary (8c5e0449, 535c97cb, 44f87428, 650dbfb4).
+- **`--quiet` failure footgun** — silent publish failure now caught, with contract test (26faf691).
+- **Run management** — deliberately-paused runs no longer auto-archived; `orphan` vs `superseded` abandon_reason split; REPORT.md reflect-lessons stale-freeze fixed (b3907935, 25956c9e, b38ce417).
+
+#### Changed / Docs
+- **Skill docs aligned to reality** — 3-gate / 10-stage / 2-mode model, version, and INIT briefing (f6b0a039, 650dbfb4).
+- **REFLECT anti-patterns captured** — RP42 sample-encoded discriminator, RP43 destructive op keyed by non-unique field, RP44 identity-gate, RP45 injected-deps-leave-wiring-untested (b236d69b, 3994523f, bbd069f0, aed4904f).
+
+> Note: the perceived **speed** improvement comes mostly from non-pipeline changes in the same window — `perf(cultivation)` git-call batching + context_health budget gate (7452e410), watchdog false-kill fixes, and the single-branch consolidation that finally ships all accumulated fixes in one build.
+
 ## [1.16.2] - 2026-05-20
 
 ### 🧠 Cognitive Evolution (P0 — most impactful change in this release)
