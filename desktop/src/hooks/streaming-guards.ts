@@ -345,6 +345,23 @@ export interface ForceClearStreamInput {
  *  - 'force-clear': stuck past the settle window — force endStreaming. */
 export type ForceClearVerdict = 'reset-and-skip' | 'wait-settle' | 'force-clear';
 
+/** Why the verdict was reached. Observable so tests (and logs) can assert the
+ *  exact guard that fired without a duplicated decision mirror. */
+export type ForceClearReason =
+  | 'drain_or_queue'    // drain gap or fresh (<60s) queued message
+  | 'no_session'        // tab has no backend session id
+  | 'backend_streaming' // backend mirror reports streaming — spinner is correct
+  | 'active_backend'    // backend in an active state (waiting_input) within cap
+  | 'too_fresh'         // stuck but within the settle window
+  | 'stuck';            // stuck past the settle window → force-clear
+
+/** Result of the force-clear decision: the verdict (drives the hook) plus the
+ *  reason (single-source observability — no separate decision mirror). */
+export interface ForceClearDecision {
+  verdict: ForceClearVerdict;
+  reason: ForceClearReason;
+}
+
 /**
  * Decide whether the reconcile loop should force-clear a tab's spinner.
  *
@@ -357,7 +374,7 @@ export type ForceClearVerdict = 'reset-and-skip' | 'wait-settle' | 'force-clear'
  *   drain → queue(<60s) → no-sid → backend-streaming → active-state(capped)
  *   → settle-window → force-clear.
  */
-export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClearVerdict {
+export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClearDecision {
   const {
     drainPending, hasQueuedMessage, queueAge, hasSessionId,
     backendIsStreaming, reportedState, activeGuardAge,
@@ -366,24 +383,26 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   } = input;
 
   // Drain gap / fresh queue / no session = intentional or unknown, never stuck.
-  if (drainPending) return 'reset-and-skip';
-  if (hasQueuedMessage && queueAge < queueImmunityMs) return 'reset-and-skip';
-  if (!hasSessionId) return 'reset-and-skip';
+  if (drainPending) return { verdict: 'reset-and-skip', reason: 'drain_or_queue' };
+  if (hasQueuedMessage && queueAge < queueImmunityMs) {
+    return { verdict: 'reset-and-skip', reason: 'drain_or_queue' };
+  }
+  if (!hasSessionId) return { verdict: 'reset-and-skip', reason: 'no_session' };
 
   // Backend genuinely streaming → the spinner is CORRECT. Never clear.
-  if (backendIsStreaming) return 'reset-and-skip';
+  if (backendIsStreaming) return { verdict: 'reset-and-skip', reason: 'backend_streaming' };
 
   // Active backend states (subprocess alive + working) are exempt, time-capped
   // so a lost waiting_input event can't hang the spinner forever.
   const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
   if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState)
       && activeGuardAge < activeGuardMaxMs) {
-    return 'reset-and-skip';
+    return { verdict: 'reset-and-skip', reason: 'active_backend' };
   }
 
   // Stuck condition holds (frontend streaming, backend not). Honor the settle
   // window anchored to the reconcile-owned stamp.
   const streamAge = idleStreamingSince === undefined ? 0 : now - idleStreamingSince;
-  if (streamAge < settleMs) return 'wait-settle';
-  return 'force-clear';
+  if (streamAge < settleMs) return { verdict: 'wait-settle', reason: 'too_fresh' };
+  return { verdict: 'force-clear', reason: 'stuck' };
 }

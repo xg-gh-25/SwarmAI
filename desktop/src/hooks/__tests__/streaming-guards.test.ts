@@ -473,47 +473,47 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     // The load-bearing invariant: backend streaming === spinner is correct.
     expect(
       forceClearStreamVerdict({ ...base, backendIsStreaming: true, reportedState: 'streaming' }),
-    ).toBe('reset-and-skip');
+    ).toEqual({ verdict: 'reset-and-skip', reason: 'backend_streaming' });
   });
 
   it('NEVER force-clears while the backend is waiting_input (within the cap)', () => {
     expect(
-      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input' }),
+      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input' }).verdict,
     ).toBe('reset-and-skip');
   });
 
   it('NEVER force-clears during a brief drain gap', () => {
-    expect(forceClearStreamVerdict({ ...base, drainPending: true })).toBe('reset-and-skip');
+    expect(forceClearStreamVerdict({ ...base, drainPending: true }).verdict).toBe('reset-and-skip');
   });
 
   it('NEVER force-clears with a fresh queued message (<60s)', () => {
     expect(
-      forceClearStreamVerdict({ ...base, hasQueuedMessage: true, queueAge: 10_000 }),
+      forceClearStreamVerdict({ ...base, hasQueuedMessage: true, queueAge: 10_000 }).verdict,
     ).toBe('reset-and-skip');
   });
 
   it('skips (no clear) when the tab has no backend session id', () => {
-    expect(forceClearStreamVerdict({ ...base, hasSessionId: false })).toBe('reset-and-skip');
+    expect(forceClearStreamVerdict({ ...base, hasSessionId: false }).verdict).toBe('reset-and-skip');
   });
 
   it('force-clears a genuinely stuck spinner (idle backend, settled, no immunity)', () => {
     // The legitimate purpose MUST be preserved: a stale stream still clears.
-    expect(forceClearStreamVerdict(base)).toBe('force-clear');
+    expect(forceClearStreamVerdict(base)).toEqual({ verdict: 'force-clear', reason: 'stuck' });
   });
 
   it('waits out the settle window before clearing (no premature clear)', () => {
     expect(
-      forceClearStreamVerdict({ ...base, idleStreamingSince: base.now - 5_000 }),
+      forceClearStreamVerdict({ ...base, idleStreamingSince: base.now - 5_000 }).verdict,
     ).toBe('wait-settle');
     // undefined stamp = first observation → treat age as 0 → wait
     expect(
-      forceClearStreamVerdict({ ...base, idleStreamingSince: undefined }),
+      forceClearStreamVerdict({ ...base, idleStreamingSince: undefined }).verdict,
     ).toBe('wait-settle');
   });
 
   it('active-state guard expires after the cap (lost waiting_input cannot hang forever)', () => {
     expect(
-      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input', activeGuardAge: 7_200_001 }),
+      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input', activeGuardAge: 7_200_001 }).verdict,
     ).toBe('force-clear');
   });
 
@@ -523,6 +523,6 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
   // it force-clears, which is the "resume needs two sends / spinner vanished"
   // bug — NOT yet fixed by this protection-net commit.
   it('DOCUMENTS current cold-resume behavior: cold + settled → force-clear (the bug)', () => {
-    expect(forceClearStreamVerdict({ ...base, reportedState: 'cold' })).toBe('force-clear');
+    expect(forceClearStreamVerdict({ ...base, reportedState: 'cold' }).verdict).toBe('force-clear');
   });
 });

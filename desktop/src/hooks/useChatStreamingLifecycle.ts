@@ -1440,7 +1440,7 @@ export function useChatStreamingLifecycle(
           // streaming-guards.test.ts: "backend streaming → NEVER force-clear" is
           // the load-bearing invariant). The hook only APPLIES side effects per
           // verdict — the stuck-vs-live judgement lives in the tested function.
-          const verdict = forceClearStreamVerdict({
+          const { verdict } = forceClearStreamVerdict({
             drainPending: !!tabState.drainPending,
             hasQueuedMessage: !!tabState.queuedMessage,
             queueAge,

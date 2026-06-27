@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import type { ContentBlock, Message } from '../types';
+import { forceClearStreamVerdict } from '../hooks/streaming-guards';
 
 // ---------------------------------------------------------------------------
 // Helpers: simulate the reconcile decision logic extracted from
@@ -39,6 +40,8 @@ interface MockTabState {
   streamStartTime?: number;
   /** Reconcile-OWNED backstop clock. ONLY the poll writes it. */
   _idleStreamingSince?: number;
+  /** When the queued message was enqueued (for the 60s queue-immunity window). */
+  _queuedAt?: number;
   messages: Message[];
   isReconnecting?: boolean;
   isResuming?: boolean;
@@ -46,24 +49,14 @@ interface MockTabState {
 
 type ReconcileAction = 'skip_not_streaming' | 'skip_drain_or_queue' | 'skip_no_session' | 'skip_backend_streaming' | 'skip_active_backend' | 'skip_too_fresh' | 'clear';
 
-/** Backend states meaning "subprocess alive and working" — never force-clear. */
-const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
-
 /**
- * Pure function that mirrors the reconcile decision logic
- * (useChatStreamingLifecycle.ts L1371-1488).
- *
- * The backstop clock `_idleStreamingSince` is OWNED by this poll:
- * - stamped (set to `now`) the first time the stuck condition is observed
- *   (frontend=streaming + backend NOT streaming + NOT an active backend state),
- * - cleared (set undefined) whenever that condition does NOT hold (backend
- *   streaming, backend active, or after force-clear).
- *
- * Because setIsStreaming / reconnect / heal-grace / elapsed-timer NEVER write
- * this field, a daemon-restart reconnect loop (which churns streamStartTime and
- * _reconcileStreamStart) cannot postpone the deadline. The mirror MUTATES
- * tabState._idleStreamingSince exactly like the production poll so tests can
- * assert the stamp/clear lifecycle across successive polls.
+ * Thin ADAPTER over the production decision function `forceClearStreamVerdict`
+ * (streaming-guards.ts). There is no longer a hand-copied decision mirror —
+ * this delegates the actual judgement to the SAME function the hook calls, then
+ * (a) maps the verdict+reason to the granular ReconcileAction the tests assert,
+ * and (b) applies the same `_idleStreamingSince` stamp/clear side effects the
+ * production poll applies, so the clock-lifecycle tests still hold. This closes
+ * the mirror-vs-production drift gap the file's source-guard test warns about.
  */
 function reconcileDecision(
   tabState: MockTabState,
@@ -71,44 +64,35 @@ function reconcileDecision(
   now: number = Date.now(),
   backendState?: string,
 ): ReconcileAction {
-  // L1371: only check streaming tabs
+  // Hook-level guard (not part of the pure fn): only streaming tabs are checked.
   if (!tabState.isStreaming) return 'skip_not_streaming';
 
-  // drain/queue immunity — NOT the stuck condition, so reset the backstop clock
-  // (mirrors production: clock must not age through a drain/queue gap).
-  if (tabState.drainPending || tabState.queuedMessage) {
+  const queueAge = tabState._queuedAt ? now - tabState._queuedAt : 0;
+  const { verdict, reason } = forceClearStreamVerdict({
+    drainPending: !!tabState.drainPending,
+    hasQueuedMessage: !!tabState.queuedMessage,
+    queueAge,
+    hasSessionId: !!tabState.sessionId,
+    backendIsStreaming,
+    reportedState: backendState,
+    activeGuardAge: now - (tabState._reconcileStreamStart ?? 0),
+    idleStreamingSince: tabState._idleStreamingSince,
+    now,
+  });
+
+  // Apply the SAME side effects the production hook applies per verdict.
+  if (verdict === 'reset-and-skip') {
     tabState._idleStreamingSince = undefined;
-    return 'skip_drain_or_queue';
+    return reason === 'no_session' ? 'skip_no_session'
+      : reason === 'backend_streaming' ? 'skip_backend_streaming'
+      : reason === 'active_backend' ? 'skip_active_backend'
+      : 'skip_drain_or_queue';
   }
-
-  // L1385-1386: need session ID — also resets clock (not stuck).
-  if (!tabState.sessionId) {
-    tabState._idleStreamingSince = undefined;
-    return 'skip_no_session';
+  if (verdict === 'wait-settle') {
+    if (tabState._idleStreamingSince === undefined) tabState._idleStreamingSince = now;
+    return 'skip_too_fresh';
   }
-
-  // L1391: backend still streaming → clear backstop clock + skip
-  if (backendIsStreaming) {
-    tabState._idleStreamingSince = undefined;
-    return 'skip_backend_streaming';
-  }
-
-  // L1401-1406: active-backend guard — re-armable clock is CORRECT here.
-  // Active backend → condition does not hold → clear backstop clock.
-  const activeGuardAge = now - (tabState._reconcileStreamStart ?? 0);
-  if (backendState && ACTIVE_BACKEND_STATES.has(backendState) && activeGuardAge < 7_200_000) {
-    tabState._idleStreamingSince = undefined;
-    return 'skip_active_backend';
-  }
-
-  // Stuck condition holds → stamp the reconcile-owned clock on first observation.
-  if (tabState._idleStreamingSince === undefined) {
-    tabState._idleStreamingSince = now;
-  }
-  const streamAge = now - tabState._idleStreamingSince;
-  if (streamAge < 30_000) return 'skip_too_fresh';
-
-  // All guards passed → force clear (production also clears _idleStreamingSince here)
+  // verdict === 'force-clear'
   tabState._idleStreamingSince = undefined;
   return 'clear';
 }
