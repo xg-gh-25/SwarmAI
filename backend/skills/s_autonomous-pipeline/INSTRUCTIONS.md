@@ -146,16 +146,26 @@ based on the evaluation's scope classification:
 - **Goal:** goal_cycle loops BUILD+TEST per cycle, periodic REVIEW, final adversarial
   inside goal_cycle, then exits to DELIVER → REFLECT.
 
-**When to use Goal:**
-- "Done" is defined by an **externally measurable condition** — a command exits 0,
-  a metric reaches a threshold, all items in a list are addressed.
-- The work requires **iteration toward a target** where you can't predict how many
-  changes are needed upfront.
+**When to use Goal — the defining test is ITERATION-toward-a-moving-target, NOT
+mere verifiability:**
+- A **metric/threshold** to reach (coverage ≥90%, latency <X), OR a **bulk sweep**
+  (fix all N warnings, migrate all call sites), OR **convergence** where you can't
+  predict how many changes upfront.
+- ⚠️ "A command exits 0 when done" is NOT a goal signal by itself — *almost every*
+  change can be wrapped in an exit-0 check. That over-broad heuristic is what
+  mis-routed a 3-line fix to goal (the heaviest profile, run_ae689ce0). The
+  question is whether you must ITERATE, not whether the result is checkable.
 
-**When to use Full:**
+**When to use Full (the default for a bounded change):**
 - "Done" is the **artifact existing and passing review** — feature implemented,
-  code committed, tests pass. The deliverable IS the proof.
+  code committed, tests pass. The deliverable IS the proof. ONE known change, even
+  if a test verifies it, is full (or bugfix/trivial if it matched those size gates).
 - The work is **bounded** — you know the approach, the files, the shape of done.
+
+**Prefer the lightest profile that fits** (docs/trivial/bugfix before full before
+goal). The decision tree in `stages/evaluate.md` evaluates the size/bug gates
+FIRST and goal LAST, on purpose — don't reach for goal because the outcome happens
+to be test-checkable.
 
 If the evaluate stage doesn't classify scope, default to **full**.
 The user can override: "skip research, I know the approach" → switch to bugfix.
@@ -1420,6 +1430,14 @@ All commands use: `python backend/scripts/artifact_cli.py <command> [args]`
 # Artifacts
 discover --project <P> --types <types> --full    # find upstream artifacts
 publish  --project <P> --type <T> --producer s_autonomous-pipeline --summary "<S>" --stage <stg> --data '<json>'
+#   ⚡ publish --stage AUTO-RECORDS the stage into run.json (status="recorded" +
+#   artifact_id), so you do NOT need a separate run-update just to CREATE the stage
+#   record. BUT you STILL MUST run-update to FINALIZE each stage: set
+#   status="completed" + stage_doc_consumed=true (+ token_cost/decisions/
+#   consumed_artifacts). This is NOT optional — a stage left at status="recorded"
+#   BLOCKS completion (run-update --status completed requires every stage to reach
+#   completed/done/skipped). What you SAVE is the redundant EXTRA run-update that
+#   only re-states what publish already wrote — not the finalizing one.
 state    --project <P>                           # current pipeline state
 advance  --project <P> --state <stage>           # advance state machine
 

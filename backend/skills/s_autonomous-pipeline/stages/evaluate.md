@@ -347,51 +347,73 @@ re-discovering a failure costs hours.
 
 ### Profile Selection (Decision Tree)
 
-**Core principle:** The distinction between goal and full is NOT about scope or
-file count — it's about how "done" is verified.
+**Core principle:** The distinction between goal and full is NOT about whether
+"done" is *verifiable* (almost everything is) — it's about whether reaching done
+requires ITERATING toward a moving target. Goal = converge to a metric / sweep an
+open set / N-unknown changes. Full = one bounded change you can scope upfront.
 
 ```dot
 digraph profile_selection {
   rankdir=TB;
   start [label="Parse requirement", shape=ellipse];
-  q1 [label="Can 'done' be verified by\na shell command (exit 0)?", shape=diamond];
-  goal [label="GOAL", shape=box, style=filled, fillcolor="#e6ffe6"];
-  q2 [label="Clear bug with\nknown root cause?", shape=diamond];
-  bugfix [label="BUGFIX", shape=box, style=filled, fillcolor="#fff2e6"];
-  q3 [label="≤1 file, config/const\nonly, no logic?", shape=diamond];
-  trivial [label="TRIVIAL", shape=box, style=filled, fillcolor="#f2f2f2"];
-  q4 [label="No code output?\n(research only)", shape=diamond];
-  research [label="RESEARCH", shape=box, style=filled, fillcolor="#e6f2ff"];
-  q5 [label="Only .md/.rst\nchanges?", shape=diamond];
+  q0 [label="Only .md/.rst\nchanges?", shape=diamond];
   docs [label="DOCS", shape=box, style=filled, fillcolor="#f9f2ff"];
+  q1 [label="No code output?\n(research only)", shape=diamond];
+  research [label="RESEARCH", shape=box, style=filled, fillcolor="#e6f2ff"];
+  q2 [label="≤1 file, config/const\nonly, no logic?", shape=diamond];
+  trivial [label="TRIVIAL", shape=box, style=filled, fillcolor="#f2f2f2"];
+  q3 [label="Clear bug with\nknown root cause?", shape=diamond];
+  bugfix [label="BUGFIX", shape=box, style=filled, fillcolor="#fff2e6"];
+  q4 [label="ITERATIVE goal? (metric/threshold,\nbulk sweep, or N-unknown convergence —\nNOT merely 'a test will pass')", shape=diamond];
+  goal [label="GOAL", shape=box, style=filled, fillcolor="#e6ffe6"];
   full [label="FULL (default)", shape=box, style=filled, fillcolor="#ffe6e6"];
 
-  start -> q1;
-  q1 -> goal [label="yes"];
+  start -> q0;
+  q0 -> docs [label="yes"];
+  q0 -> q1 [label="no"];
+  q1 -> research [label="yes"];
   q1 -> q2 [label="no"];
-  q2 -> bugfix [label="yes"];
+  q2 -> trivial [label="yes"];
   q2 -> q3 [label="no"];
-  q3 -> trivial [label="yes"];
+  q3 -> bugfix [label="yes"];
   q3 -> q4 [label="no"];
-  q4 -> research [label="yes"];
-  q4 -> q5 [label="no"];
-  q5 -> docs [label="yes"];
-  q5 -> full [label="no"];
+  q4 -> goal [label="yes"];
+  q4 -> full [label="no"];
 }
 ```
 
 **Evaluate each condition sequentially.** The first YES determines the profile.
 If all conditions are NO, default to FULL.
 
-**Goal indicators (ANY ONE → goal):**
+> **⚠️ ORDER MATTERS — the SIZE/shape gates come BEFORE goal (fixed run_c236e4b1).**
+> The old tree asked "can 'done' be verified by a shell command (exit 0)?" FIRST and
+> routed any YES to goal. But *almost every* code change has a test that exits 0, so
+> that catch-all sent even a 3-line fix to **goal — the heaviest profile** (loops
+> build+test per cycle). That is exactly the mis-pick that cost a 3-stale-test fix a
+> full goal run (run_ae689ce0, profile=goal). Goal is now the LAST gate before FULL,
+> and requires a genuinely *iterative* target — not mere test-verifiability.
+
+**Goal indicators (ALL of goal require iteration-toward-a-moving-target — a passing
+test alone is NEVER a goal indicator):**
 - Metric/threshold targets: "Get X to Y%", "Reduce X below Y"
 - Bulk/sweep operations: "Migrate all", "Fix all warnings", "Remove all instances"
 - Quality hardening: "Fix all findings", "Make X production-ready"
-- Iterative convergence: "Investigate and fix", optimization toward target
+- Iterative convergence: "Investigate and fix" where the number of changes is unknown upfront
 
-**Decision heuristic:** Can you write a shell command that returns exit 0 only
-when the requirement is fully satisfied? YES → goal. NO (done = "review says
-it's good") → full.
+**NOT goal (route to bugfix/trivial/full):** a single bounded change whose "done" is
+"the feature exists and its test passes" — even though that test exits 0. One known
+fix → bugfix (clear root cause) or trivial (≤1 file, no logic) or full (multi-file
+feature). "A test will pass" describes almost everything; it does not make a task goal.
+
+**Decision heuristic (goal vs full ONLY — apply after the size/bug gates above
+have ruled out trivial/bugfix/docs/research):** Does "done" require *iterating
+toward a moving target* whose number of steps you can't predict upfront (a metric
+to reach, an open-ended set to sweep)? YES → goal. A single bounded change whose
+"done" is "it's built and the test passes" → **full** (or bugfix/trivial if it
+matched those size gates first). Note: nearly every change *can* be wrapped in a
+shell command that exits 0 — that fact alone is NOT a goal signal; the iteration
+is. (This corrects the old "any exit-0-verifiable → goal" heuristic that mis-routed
+small fixes to the heaviest profile.)
 
 ### Intelligence-Informed Profile Selection (Meta-Intelligence L3)
 
