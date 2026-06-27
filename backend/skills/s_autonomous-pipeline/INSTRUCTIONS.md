@@ -26,7 +26,7 @@ For every pipeline run, follow this loop:
                Quality Convergence Loop (6-layer gate × max 3 iterations) →
                push-ready or escalate. Then: Report, CI.
 5. REFLECT  -- Read stages/reflect.md, execute: lessons → IMPROVEMENT.md → DDD loop closed
-6. COMPLETE -- summarize, record metrics, final run state
+6. COMPLETE -- read stages/complete.md (output format), summarize, record metrics, final run state
 ```
 
 ---
@@ -395,6 +395,7 @@ Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
 | test | `stages/test.md` | `scripts/wtf_gate.py` |
 | deliver | `stages/deliver.md` | — |
 | reflect | `stages/reflect.md` | — |
+| complete | `stages/complete.md` (Step 6 — output format spec; fresh-read at the decision point) | — |
 
 After reading, execute the stage behavior inline in this session.
 DO NOT invoke sibling skills via slash commands — you ARE the pipeline.
@@ -751,117 +752,22 @@ This is the LAST thing you output — never end a pipeline run without it.
 
    **If blocked:** fix the issue, then retry. You CANNOT bypass — code-enforced.
 
-2. **OUTPUT THE COMPLETION SUMMARY TO CHAT (MANDATORY — never skip):**
+2. **Read `backend/skills/s_autonomous-pipeline/stages/complete.md` NOW, then OUTPUT
+   THE COMPLETION SUMMARY + EXECUTIVE SUMMARY TO CHAT (MANDATORY — never skip):**
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Pipeline COMPLETE — run_<id>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   🚨 **Fresh-read at the decision point (do NOT output from memory).** The exact
+   format — the `━━━` summary-box variants (full / goal / trivial-bugfix) and the
+   Executive Summary spec — lives in `stages/complete.md`, not inline here. Read it
+   the moment you reach this step, exactly like every other stage reads its
+   `stages/<stage>.md`. This is deliberate: the format used to be inline ~750 lines
+   up and silently decayed out of the attention window by the time a run reached
+   COMPLETE (F004) — the summary box "disappeared." Reading the doc fresh is the fix.
 
-<2-3 sentence TL;DR: what was built, what problem it solves>
+   `stages/complete.md` contains both mandatory outputs in order:
+   - **The completion summary box** — pick the variant matching this run's profile.
+   - **The Executive Summary** — immediately after the box (skip ONLY for trivial/bugfix).
 
-Profile: <profile> | Stages: <N>/10 completed
-Commit: <git hash> | Files: <N> changed, +<A>/-<D> lines
-
-Phase A (Decision):
-  ① EVALUATE → GO | ★ Gate 0 → <PASS/BLOCK> (diagnose-before-build, in EVALUATE)
-  ② THINK → <approach> | ③ PLAN → <N> AC
-  ④ ★ Gate 1 → <PASS/WARN/BLOCK>
-
-Phase B (Execution):
-  ⑤ BUILD → <N>R→<N>G, <N> tests | ⑥ REVIEW → <N> findings
-  ⑦ TEST → <N> passed, 0 failed
-
-Phase C (Delivery):
-  ⑧ ★ Gate 2 → <N> findings, <M> fixed | convergence: <iter>/3
-  ⑨ DELIVER → 6L pass, push-ready
-  ⑩ REFLECT → <N> lessons → IMPROVEMENT.md
-
-Report: .artifacts/runs/<run_id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-For **goal profile**, use this variant:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Pipeline COMPLETE — run_<id>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-<2-3 sentence TL;DR>
-
-Profile: goal | DoD: <X>/<Y> met in <N> cycles
-
-Phase A (Decision):
-  ① EVALUATE → GO | ★ Gate 0 → <PASS/BLOCK> (diagnose-before-build, in EVALUATE)
-  ② THINK → <approach> | ③ PLAN → DoD defined
-  ④ ★ Gate 1 → <verdict>
-
-Phase B (Execution — <N> cycles):
-  ⑤⑦ BUILD+TEST × <N> cycles | ⑥ REVIEW (periodic, <M> times)
-
-Phase C (Delivery):
-  ⑧ ★ Gate 2 (on total diff) → <N> findings, all fixed
-  ⑨ DELIVER → 6L pass, push-ready
-  ⑩ REFLECT → <N> lessons (aggregated from mini-reflects)
-
-Commit: <git hash> | Files: <N> changed
-Report: .artifacts/runs/<run_id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-For **trivial/bugfix** (compact — no phase headers in body):
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Pipeline COMPLETE — run_<id>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-<1-2 sentence TL;DR>
-
-A: ①GO ★G0<verdict> ③<N>AC ④★<verdict> | B: ⑤<N>R<N>G ⑥<findings> ⑦<pass> | C: ⑧★<findings> ⑨push-ready ⑩<N>lessons
-Commit: <hash> | Files: <N> changed
-Report: .artifacts/runs/<run_id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-3. **OUTPUT EXECUTIVE SUMMARY (MANDATORY — immediately after the stage box):**
-
-   The stage box shows process. The executive summary shows **outcome**.
-   Without it, the user has to ask "so what changed?" every time.
-
-   ```
-   ## Executive Summary
-
-   **Before → After:**
-   | Aspect | Before | After |
-   |--------|--------|-------|
-   | <key dimension 1> | <old state> | <new state> |
-   | <key dimension 2> | <old state> | <new state> |
-
-   **Key Decisions:**
-   - <decision 1 — what was chosen and why (1 line)>
-   - <decision 2>
-
-   **Lessons Learned:**
-   - <lesson 1 — reusable insight (1 line)>
-   - <lesson 2>
-
-   **Next Steps:**
-   - <suggested action 1 — what to do next>
-   - <suggested action 2>
-   - <suggested action 3>
-   ```
-
-   **Rules for Executive Summary:**
-   - Before→After table: 2-4 rows, each showing a measurable change. No "N/A→implemented" filler.
-   - Key Decisions: only taste/judgment decisions (not mechanical). Max 3.
-   - Lessons: insights that apply beyond this specific task. Max 3.
-   - Next Steps: actionable prompts the user could type next. Always include 2-3.
-   - Total length: 10-20 lines. Not a report — a briefing.
-
-   **Skip Executive Summary ONLY for trivial/bugfix profiles** (they're too small to have
-   meaningful before/after or lessons).
-
-4. **STOP.** Do not add explanatory text after the executive summary. Do not ask
+3. **STOP.** Do not add explanatory text after the executive summary. Do not ask
    "would you like me to push?" The summary is the terminal output.
    User will respond if they want more.
 
