@@ -1,4 +1,28 @@
 
+### 2026-06-27: GS_RTH001 — __new__ test-harness attr drift (GC15 recurrence) (run_916d233f)
+<!-- ref:0 | last:none | decay:active | source:pipeline -->
+**What:** GS_RTH001 (runtime_health eval) was red: `fault_inject_recovery._build_bare_unit()` builds a `SessionUnit` via `__new__` (deliberately bypassing `__init__` for isolation) to drive the REAL retry loop, but didn't provision `_recycle_kill_pending` — which `retry_manager.py:215` reads on every retry iteration. Commit `6f968370` (06-26) added that read + an `__init__:652` default, but did NOT update the `__new__` harness → AttributeError → RECOVERY_FAILED. Fixed by provisioning the 3 retry-path parent attrs the harness was missing (`_recycle_kill_pending` + `_recovery_coordinator` + `_buffer_overflow_recovery`). Production was always safe (`__init__` sets the default); only the `__new__` harness drifted.
+**Lesson:** This is **GC15 (new per-instance state field → grep ALL construction sites) extended to `__new__`-based test builders.** When a new `self.X` is added to a class `__init__` AND read in a hot loop, the grep for "all construction sites" MUST include `__new__`-based harnesses/test builders — they bypass `__init__` and silently drift. Mechanical guard for completeness: `grep -oE 'self\._parent\.[A-Za-z_]+' retry_manager.py | sort -u`, then diff against what the bare-unit builder provides (minus class attrs). Caught a related drift class: the prod path is safe precisely because `__init__` defaults it — which is exactly why the harness bug was invisible until the eval ran the real loop. GUI: a test harness that bypasses `__init__` owns the contract of self-provisioning every attr its target reads — and that contract rots every time the target gains a field.
+**Gate value:** Gate-2 adversarial independently re-derived the 23-attr completeness, mutation-tested the fix (removing `_recycle_kill_pending` → reproduces the exact AttributeError = load-bearing), and caught 2 LOW comment-drift findings (a "24 reads" miscount + an undocumented OOM-branch latent-None risk) — both fixed in-run (P4, not deferred).
+
+### 2026-06-27: negative_command teeth execution — opt-in via affirmative FAIL token (run_241be9da)
+<!-- ref:0 | last:none | decay:active | source:pipeline -->
+**What:** Wired `negative_command` teeth into `eval_canary_pass` — `negative_command` was dead config (gate_teeth + add_case required it to EXIST, but no eval path EXECUTED it; a vacuous canary whose marker survives a broken wire passed undetected). Now `verify_teeth` (default ON for CLI/nightly/GUI gate-report producers, OFF for the deadline-bound per-session health hook) runs the negative and requires it to discriminate.
+
+**What worked:** TDD RED→GREEN; Gate-1 plan-attack folded 3 caller/false-pass gaps in before coding; Gate-2 adversarial (2 rounds) was the load-bearing gate.
+
+**What FAILED (CLASS A authorship trap, recurred — caught only by Gate-2, NOT my tests):**
+- My first design used **marker-ABSENCE** ("broken wire => OK marker gone => pass"). 7 self-authored tests all GREEN. But the contract was WRONG: a parallel session's `eval_spine_probe.py` uses the OPPOSITE convention — its negative prints `<NAME>_OK` + exit 0 on a *successful* break (marker PRESENT). The two conventions are **output-identical for "success"** → no single rule discriminates → marker-absence false-FAILED 2 live spine cases. Self-authored green tests inherit the author's blind spot; only the mutation-running adversary caught it (would have flipped the nightly gate RED).
+- Marker-absence is **unfalsifiable**: a typo'd (exit 127) / no-op (`true`) negative prints nothing → passed vacuously (HIGH-1).
+- **Stamp-staleness silent gate-defeat:** adding `negative_expected_contains` to the 8 stamped cases without re-running `stamp_golden_cases.py` made `compute_bvt` drop all 8 → teeth protected ZERO gate cases until re-stamped (Gate-2 round-2 HIGH).
+
+**Lessons (reusable):**
+1. When a field has **multiple in-repo producers**, an implicit semantic WILL collide — make it EXPLICIT opt-in (here: `negative_expected_contains`, an affirmative FAIL token the negative must emit).
+2. A teeth/discriminator check must require the negative to **affirmatively signal it broke the wire**, not merely fail to print success. "Absence of X" is unfalsifiable.
+3. Any edit to a **stamped** golden-case body MUST re-run `stamp_golden_cases.py` — else the case silently leaves the BVT.
+4. Match on **stdout only** for canary markers — stderr echoes command names/tracebacks that incidentally contain a marker.
+5. Scope discipline (C039) held: a pre-existing `GS_RTH001` runtime_health failure (SessionUnit AttributeError, another session's domain) surfaced during the gate run — flagged in meta_review, NOT fixed.
+
 ### 2026-06-26: v1.21.0 release + DMG criterion + streaming-markdown throttle (run_087e097e)
 <!-- ref:0 | last:none | decay:active | source:manual -->
 
