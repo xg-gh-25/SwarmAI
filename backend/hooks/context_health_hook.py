@@ -113,13 +113,18 @@ class ContextHealthHook:
 
         # Whole-refresh wall-clock budget for the HEAVY, un-budgeted index syncs
         # below (knowledge library / transcript / code_intel). These run in a
-        # thread the executor's asyncio timeout CANNOT cancel, and embedding a
+        # thread the executor's asyncio timeout CANNOT cancel, so embedding a
         # large changeset (first full index ~100s; Bedrock retries on transient
-        # ModelErrorException stretch it further) pushed the hook past the 180s
-        # executor timeout — "Background hook 'context_health' timed out" ×12/day.
-        # Sized under 180s with headroom; the syncs are DELTA (content_hash), so
-        # deferring the tail to the next session is safe and self-healing.
-        _refresh_deadline = time.monotonic() + 120.0
+        # ModelErrorException stretch it further) keeps the thread alive long
+        # after the executor's 30s timeout already fired — recording a spurious
+        # "Background hook 'context_health' timed out" + a false CONSECUTIVE
+        # CRITICAL, while the work silently completes off-budget.
+        # Fix: size this budget UNDER the real 30s executor timeout (matches
+        # _cultivation_deadline=25s, 5s headroom) so the deferral guards below
+        # fire BEFORE the executor cancels — the tail syncs are DELTA
+        # (content_hash), so deferring them to the next session is safe and
+        # self-healing, and the hook now exits clean instead of "timed out".
+        _refresh_deadline = time.monotonic() + 25.0
 
         # Reset dirty flag — will be set if any cultivation writes to DDD docs.
         self._ddd_docs_modified = False
@@ -202,14 +207,14 @@ class ContextHealthHook:
         # so the git gate was blocking them from ever being indexed.
         # Bug: previously inside git-rev gate, only 1/160 files indexed.
         try:
-            self._sync_knowledge_library(root)
+            self._sync_knowledge_library(root, deadline=_refresh_deadline)
         except Exception as exc:
             logger.debug("context_health: knowledge library sync skipped: %s", exc)
 
         # Transcript indexing (incremental, <10s) — P1 Memory Architecture v2.
         # Budget gate: the knowledge-library embed above can run long on a large
         # changeset; if we're past the refresh budget, defer the remaining heavy
-        # syncs to the next session instead of risking the 180s executor timeout.
+        # syncs to the next session instead of overrunning the 30s executor timeout.
         if time.monotonic() <= _refresh_deadline:
             try:
                 self._sync_transcript_index(root)
@@ -1427,9 +1432,37 @@ class ContextHealthHook:
         """
         _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
 
+        usage_path = root / ".context" / ".memory-usage.json"
+        usage_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Lock the WHOLE read-modify-write (Gate-2 MEDIUM, run_241014d4): two
+        # near-simultaneous session-closes run this on the shared thread pool with
+        # no synchronization, risking double-decay, lost citation bursts, or a torn
+        # sidecar. Non-blocking + skip-if-busy (matches the MEMORY.md writer below):
+        # a skipped tracking run is harmless (next session re-counts from the
+        # 7-day transcript window); a corrupted file is not.
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+        lock_path = usage_path.with_suffix(".json.lock")
+        lock_fd = None
+        try:
+            lock_fd = open(lock_path, "w")  # noqa: SIM115
+            flock_exclusive_nb(lock_fd)
+        except OSError:
+            if lock_fd:
+                lock_fd.close()
+            logger.debug("context_health: memory-usage lock busy, skipping track")
+            return
+
+        try:
+            self._track_memory_usage_locked(root, usage_path, _KEY_RE)
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
+
+    def _track_memory_usage_locked(self, root, usage_path, _KEY_RE) -> None:
+        """Body of _track_memory_usage, run under the memory-usage file lock."""
         # Load existing usage. Values may be int (legacy) or float (post-decay) —
         # the decay below turns them to float; all readers are float-safe.
-        usage_path = root / ".context" / ".memory-usage.json"
         usage: dict[str, float] = {}
         if usage_path.exists():
             try:
@@ -1458,16 +1491,27 @@ class ContextHealthHook:
             from core.memory_decay import decay_usage_counts
             today = date.today()
             last_decay = today
+            _force_heal = False  # rewrite the sidecar even when no decay happens
             if meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     last_decay = date.fromisoformat(meta["last_decay"])
+                    if last_decay > today:
+                        # Future last_decay (clock skew / hand-edit): negative
+                        # days_elapsed would skip decay forever until the wall clock
+                        # passes the bogus date. Clamp to today + heal the sidecar.
+                        last_decay = today
+                        _force_heal = True
                 except (json.JSONDecodeError, OSError, KeyError, ValueError):
-                    last_decay = today  # corrupt sidecar → fail safe, no decay
+                    # Corrupt sidecar → fail safe (no decay THIS run) but HEAL it,
+                    # else it is re-read corrupt forever and decay is permanently
+                    # disabled with no signal (Gate-2 MEDIUM, run_241014d4).
+                    last_decay = today
+                    _force_heal = True
             days_elapsed = (today - last_decay).days
             if days_elapsed > 0:
                 usage = decay_usage_counts(usage, days_elapsed)
-            if days_elapsed > 0 or not meta_path.exists():
+            if days_elapsed > 0 or not meta_path.exists() or _force_heal:
                 _meta_to_write = today.isoformat()
 
         # Source 1: Recent session transcripts (last 7 days)
@@ -1533,18 +1577,23 @@ class ContextHealthHook:
                 for key in _KEY_RE.findall(body):
                     usage[key] = usage.get(key, 0) + 1
 
-        usage_path.parent.mkdir(parents=True, exist_ok=True)
-        usage_path.write_text(json.dumps(usage, indent=2, sort_keys=True), encoding="utf-8")
+        # Atomic write (tmp + os.replace) so a crash/torn-write never leaves a
+        # partial counts file for the next reader (Gate-2 MEDIUM, run_241014d4).
+        _tmp = usage_path.with_suffix(".json.tmp")
+        _tmp.write_text(json.dumps(usage, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(_tmp, usage_path)
 
         # Write the decay sidecar AFTER the counts (Gate-1 flaw 3 write-order):
         # if a crash lands between these two writes, next run sees an UNADVANCED
         # last_decay and re-decays (self-correcting) — never marks decay done over
-        # undecayed counts.
+        # undecayed counts. Atomic for the same torn-write reason.
         if _meta_to_write is not None:
             try:
-                meta_path.write_text(
+                _mtmp = meta_path.with_suffix(".json.tmp")
+                _mtmp.write_text(
                     json.dumps({"last_decay": _meta_to_write}), encoding="utf-8"
                 )
+                os.replace(_mtmp, meta_path)
             except OSError:
                 pass
 
@@ -1884,12 +1933,16 @@ class ContextHealthHook:
             # to stay empty for weeks. This is P0 infrastructure.
             logger.warning("context_health: memory embedding sync FAILED: %s", exc)
 
-    def _sync_knowledge_library(self, root: Path) -> None:
+    def _sync_knowledge_library(self, root: Path, deadline: float | None = None) -> None:
         """Incremental sync of Knowledge/ files into FTS5 + sqlite-vec.
 
         Scans Knowledge/ for new/changed .md files, chunks them, and
         delta-syncs into knowledge_chunks + knowledge_fts + knowledge_vec.
         Typical: 1-3 file changes, <5s. First full index: ~100s.
+
+        ``deadline`` (time.monotonic) bounds the per-file embed loop so a large
+        changeset can't overrun the 30s executor timeout — remaining files
+        defer to the next session (content_hash delta-sync makes this safe).
 
         Failures are silent — recall engine degrades gracefully.
         """
@@ -1930,14 +1983,29 @@ class ContextHealthHook:
             def _safe_embed(text: str) -> list[float] | None:
                 return client.embed_text(text)
 
-            stats = sync_knowledge_index(store, knowledge_dir, embed_fn=_safe_embed)
+            stats = sync_knowledge_index(
+                store, knowledge_dir, embed_fn=_safe_embed, deadline=deadline,
+            )
+            if stats.get("deferred", 0) > 0:
+                logger.info(
+                    "context_health: refresh budget reached mid knowledge-library "
+                    "sync — deferring %d file(s) to next session",
+                    stats["deferred"],
+                )
 
             # R4a: heal chunks orphaned by a prior failed embed (Bedrock down at
             # index time). Without this the delta-sync content_hash check skips
             # them forever → permanently keyword-only. Mirrors the memory_vec
             # orphan recovery above. Best-effort, capped per session.
+            # Budget-gated: skip when the sync above already deferred for time —
+            # this issues up to 10 more Bedrock embeds, and running them
+            # post-deadline would reintroduce the overrun the deadline prevents.
+            # Orphans self-heal next session (delta-sync is idempotent).
             try:
-                recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
+                if stats.get("deferred", 0) > 0:
+                    recovered = 0
+                else:
+                    recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
                 if recovered:
                     remaining = conn.execute(
                         "SELECT COUNT(*) FROM knowledge_chunks kc "

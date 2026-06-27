@@ -398,6 +398,53 @@ class TestSyncKnowledgeIndex:
         sync_knowledge_index(store, knowledge_dir, embed_fn=embed_fn)
         assert embed_fn.call_count >= 1
 
+    def test_deadline_defers_remaining_files(self, tmp_path):
+        """A past deadline stops the per-file loop before any embed, deferring
+        the rest to the next session (context_health 30s-timeout false-alarm
+        fix). The defer must happen BEFORE embed_fn is ever called."""
+        import time
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        notes_dir = knowledge_dir / "Notes"
+        notes_dir.mkdir(parents=True)
+        for i in range(5):
+            (notes_dir / f"n{i}.md").write_text(f"# Note {i}\n\nContent {i}.")
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+
+        embed_fn = MagicMock(return_value=[0.1] * 1024)
+        # Deadline already in the past → loop breaks on the first file.
+        stats = sync_knowledge_index(
+            store, knowledge_dir, embed_fn=embed_fn,
+            deadline=time.monotonic() - 1.0,
+        )
+        assert stats["files_scanned"] == 0
+        assert stats["deferred"] == 5
+        assert stats["chunks_added"] == 0
+        embed_fn.assert_not_called()
+
+    def test_no_deadline_processes_all(self, tmp_path):
+        """Regression: deadline=None (default) must process every file —
+        the budget gate is opt-in, never changes the unbounded behavior."""
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+
+        knowledge_dir = tmp_path / "Knowledge"
+        notes_dir = knowledge_dir / "Notes"
+        notes_dir.mkdir(parents=True)
+        for i in range(4):
+            (notes_dir / f"n{i}.md").write_text(f"# Note {i}\n\nContent {i}.")
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+
+        stats = sync_knowledge_index(store, knowledge_dir, embed_fn=None)
+        assert stats["files_scanned"] == 4
+        assert stats["deferred"] == 0
+
 
 # ── knowledge_fts corruption fix (run_1d198980) ──
 

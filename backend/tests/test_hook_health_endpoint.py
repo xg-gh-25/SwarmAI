@@ -187,3 +187,85 @@ class TestHealthEndpointVersionObservability:
         assert body["status"] == "initializing"
         assert "version" in body
         assert "sdk" in body
+
+
+class TestConsecutiveFailureLogLevel:
+    """A consecutive-failure 'timeout' is graceful-degrade → WARNING, never
+    CRITICAL. A real fault (exception text) still escalates to CRITICAL.
+
+    Regression guard for the context_health false-alarm: the hook ran out of
+    its wall-clock budget (slow Bedrock embed) and deferred DELTA work to the
+    next session — self-healing, not a fault — yet the executor logged a
+    CRITICAL 'investigate immediately' on every run. timeout reason must be
+    WARNING; only deterministic faults (corruption/missing-dep/config) stay
+    CRITICAL.
+    """
+
+    def _executor(self):
+        from core.session_hooks import (
+            BackgroundHookExecutor,
+            SessionLifecycleHookManager,
+        )
+        return BackgroundHookExecutor(SessionLifecycleHookManager())
+
+    def test_consecutive_timeouts_warn_not_critical(self, caplog):
+        import logging
+        ex = self._executor()
+        with caplog.at_level(logging.WARNING, logger="core.session_hooks"):
+            for _ in range(3):  # >= CONSECUTIVE_FAILURE_ALERT_THRESHOLD
+                # Mirrors the real TimeoutError call sites (session_hooks.py
+                # :530/:585): error_msg="timeout" AND the explicit is_timeout
+                # flag — the flag, not the string, is what downgrades to WARNING.
+                ex._record_hook_result(
+                    "context_health", False, "timeout", is_timeout=True
+                )
+
+        criticals = [r for r in caplog.records if r.levelno >= logging.CRITICAL]
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert not criticals, "timeout must NOT escalate to CRITICAL"
+        assert any("timed out" in r.getMessage() for r in warnings)
+
+    def test_consecutive_real_faults_still_critical(self, caplog):
+        import logging
+        ex = self._executor()
+        with caplog.at_level(logging.WARNING, logger="core.session_hooks"):
+            for _ in range(3):
+                ex._record_hook_result(
+                    "evolution_maintenance", False, "zlib decompression error"
+                )
+
+        criticals = [r for r in caplog.records if r.levelno >= logging.CRITICAL]
+        assert criticals, "a real (non-timeout) fault must stay CRITICAL"
+        assert any("NOT transient" in r.getMessage() for r in criticals)
+
+    def test_fault_whose_text_contains_timeout_still_critical(self, caplog):
+        """Finding 2 guard: a deterministic fault whose ERROR TEXT merely
+        contains the word 'timeout' (e.g. a botocore ReadTimeoutError from a
+        MISconfigured endpoint, a SQLite lock-wait) must STILL escalate. The
+        timeout/fault split keys on the explicit is_timeout flag set only by
+        the TimeoutError handler — never on the error string."""
+        import logging
+        ex = self._executor()
+        with caplog.at_level(logging.WARNING, logger="core.session_hooks"):
+            for _ in range(3):
+                # is_timeout defaults False — this is the str(exc) fault path,
+                # even though the message says "Read timeout on endpoint URL".
+                ex._record_hook_result(
+                    "knowledge_sync", False,
+                    'Read timeout on endpoint URL: "https://bedrock..."',
+                )
+
+        criticals = [r for r in caplog.records if r.levelno >= logging.CRITICAL]
+        assert criticals, "a fault is CRITICAL even if its text says 'timeout'"
+        assert any("NOT transient" in r.getMessage() for r in criticals)
+
+    def test_success_resets_consecutive_counter(self, caplog):
+        import logging
+        ex = self._executor()
+        with caplog.at_level(logging.WARNING, logger="core.session_hooks"):
+            ex._record_hook_result("h", False, "zlib error")
+            ex._record_hook_result("h", False, "zlib error")
+            ex._record_hook_result("h", True)  # reset
+            ex._record_hook_result("h", False, "zlib error")  # only 1 in a row
+        # 1 consecutive < threshold(3) → no CRITICAL emitted
+        assert not [r for r in caplog.records if r.levelno >= logging.CRITICAL]

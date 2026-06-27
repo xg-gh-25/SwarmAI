@@ -21,6 +21,7 @@ import logging
 import re
 import struct
 import sqlite3
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -548,6 +549,7 @@ def sync_knowledge_index(
     store: "KnowledgeStore",
     knowledge_dir: Path,
     embed_fn: Optional[Callable[[str], Optional[list[float]]]] = None,
+    deadline: Optional[float] = None,
 ) -> dict:
     """Scan Knowledge/ directory, chunk, and delta-sync to the store.
 
@@ -555,10 +557,18 @@ def sync_knowledge_index(
         store: KnowledgeStore instance (tables must be ensured).
         knowledge_dir: Path to Knowledge/ directory.
         embed_fn: Optional embedding function. If None, skips vector indexing.
+        deadline: Optional ``time.monotonic()`` wall-clock deadline. The
+            heaviest cost here is the per-chunk Bedrock embed; on a large
+            changeset (first full index ~100s) this can overrun the caller's
+            executor timeout, recording a spurious hook "timeout". When given,
+            the per-file loop stops cleanly once the deadline passes, leaving
+            the remaining files for the next session — the delta-sync is
+            content_hash based, so deferral is safe and self-healing. The
+            ``deferred`` stat reports how many files were skipped this way.
 
     Returns:
         Stats dict: files_scanned, chunks_added, chunks_skipped,
-        chunks_removed, files_removed, embed_calls.
+        chunks_removed, files_removed, embed_calls, deferred.
     """
     stats = {
         "files_scanned": 0,
@@ -567,6 +577,7 @@ def sync_knowledge_index(
         "chunks_removed": 0,
         "files_removed": 0,
         "embed_calls": 0,
+        "deferred": 0,
     }
 
     if not knowledge_dir.is_dir():
@@ -590,6 +601,14 @@ def sync_knowledge_index(
 
     # Process each file
     for rel_path, full_path in current_files.items():
+        # Wall-clock budget: stop before the caller's executor timeout fires.
+        # Checked at the top of the loop (before the per-chunk embed, the
+        # expensive part) so we never start a file we can't afford. Remaining
+        # files carry to the next session (delta-sync is content_hash based).
+        if deadline is not None and time.monotonic() > deadline:
+            stats["deferred"] = len(current_files) - stats["files_scanned"]
+            break
+
         stats["files_scanned"] += 1
 
         try:

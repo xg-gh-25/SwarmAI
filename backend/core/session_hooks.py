@@ -269,6 +269,7 @@ class BackgroundHookExecutor:
 
     def _record_hook_result(
         self, hook_name: str, success: bool, error_msg: str = "",
+        is_timeout: bool = False,
     ) -> None:
         """Record a hook execution result for status reporting.
 
@@ -295,15 +296,36 @@ class BackgroundHookExecutor:
             stats["last_error"] = error_msg[:200] if error_msg else ""
 
             if stats["consecutive_failures"] >= self.CONSECUTIVE_FAILURE_ALERT_THRESHOLD:
-                logger.critical(
-                    "Hook '%s' has failed %d consecutive times. "
-                    "Last error: %s. This is NOT transient — "
-                    "investigate immediately (archive corruption? "
-                    "missing dependency? config error?).",
-                    hook_name,
-                    stats["consecutive_failures"],
-                    stats["last_error"] or "(no message)",
-                )
+                # A timeout is graceful-degrade, not a deterministic fault: the
+                # hook ran out of wall-clock budget (e.g. a slow Bedrock embed)
+                # and its work is DELTA/self-healing — it picks up next session.
+                # Escalating that to CRITICAL "investigate immediately" is a
+                # false alarm (context_health timed out ×6/day under Bedrock
+                # latency, none of it an actual fault). Reserve CRITICAL for hard
+                # faults (archive corruption, missing dependency, config error)
+                # that fail deterministically forever. NB: discriminate on the
+                # explicit is_timeout flag set by the TimeoutError handler, NOT
+                # on the error text — a real fault whose message merely contains
+                # "timeout" (e.g. botocore ReadTimeoutError from a MISconfigured
+                # endpoint, a SQLite lock-wait) must still escalate.
+                if is_timeout:
+                    logger.warning(
+                        "Hook '%s' has timed out %d consecutive times "
+                        "(budget exhausted, work deferred to next session — "
+                        "self-healing, not a fault).",
+                        hook_name,
+                        stats["consecutive_failures"],
+                    )
+                else:
+                    logger.critical(
+                        "Hook '%s' has failed %d consecutive times. "
+                        "Last error: %s. This is NOT transient — "
+                        "investigate immediately (archive corruption? "
+                        "missing dependency? config error?).",
+                        hook_name,
+                        stats["consecutive_failures"],
+                        stats["last_error"] or "(no message)",
+                    )
 
     def fire(self, context: HookContext, skip_hooks: list[str] | None = None) -> None:
         """Enqueue all hooks for serialized background execution.
@@ -505,7 +527,7 @@ class BackgroundHookExecutor:
                         context.session_id,
                     )
                 except asyncio.TimeoutError:
-                    self._record_hook_result(hook.name, False, "timeout")
+                    self._record_hook_result(hook.name, False, "timeout", is_timeout=True)
                     logger.error(
                         "Background hook '%s' timed out for session %s",
                         hook.name,
@@ -560,7 +582,7 @@ class BackgroundHookExecutor:
                 context.session_id,
             )
         except asyncio.TimeoutError:
-            self._record_hook_result(hook.name, False, "timeout")
+            self._record_hook_result(hook.name, False, "timeout", is_timeout=True)
             logger.error(
                 "Background hook '%s' timed out for session %s",
                 hook.name,
