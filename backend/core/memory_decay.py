@@ -292,3 +292,65 @@ def bump_entry_references(
         )
 
     return "\n".join(result_lines)
+
+
+# ── R2-real usage→ref bridge (run_77504e11) ──────────────────────────────────
+# Connects the LIVE per-entry usage signal (.memory-usage.json, written by
+# context_health_hook._track_memory_usage from real transcript [ID] citations)
+# to body-entry ref_count. ref is consumed by ddd_entry_lifecycle's
+# _is_reclaimable_noise (ref!=0 → protected from physical strip) and
+# get_stage_knowledge (ref drives injection ranking). So a genuinely-used entry
+# survives reclaim AND resurfaces higher in injection — the honest replacement
+# for the removed toxic prose-bump. NOT wired to assess_decay (which no longer
+# reads ref — see ddd_entry_lifecycle R2-prime).
+#
+# Join: usage is keyed by INDEX-ID; the index block carries `- [ID] Title | ...`;
+# body entries carry the SAME `**Title**`. So ID→title→body is the bridge.
+# Threshold: only usage >= threshold gets a ref, so reclaim is NOT neutered for
+# the long tail (median usage is high because _track_memory_usage counts every
+# transcript mention cumulatively). Damping: log2 so a 142-use entry → ref ~7,
+# never a raw 142 monopoly.
+
+_INDEX_ID_TITLE_RE = re.compile(r"^- \[([A-Z]{2,3}\d{2,3})\]\s+(.+)$", re.MULTILINE)
+USAGE_REF_THRESHOLD = 10  # min cumulative usage to earn reclaim-protection
+
+
+def build_usage_ref_map(
+    memory_content: str,
+    usage_counts: "dict[str, int]",
+    threshold: int = USAGE_REF_THRESHOLD,
+) -> "dict[str, int]":
+    """Map body-entry TITLE → log-damped ref, for entries whose index-ID has
+    usage >= threshold. Returns only the genuinely-used entries (others stay
+    ref:0 → reclaim-eligible).
+
+    Join path: usage[ID] → index line `- [ID] Title | aliases` → Title → body
+    `**Title**`. Splits the index line on the FIRST ` | ` only (titles may
+    contain inner brackets but not a pre-alias pipe — verified on live file).
+    Duplicate titles keep the max ref. Idempotent: pure function of current
+    usage (SET semantics, never accumulates).
+    """
+    import math
+
+    # Parse index block ID → title.
+    start = memory_content.find("MEMORY_INDEX_START")
+    end = memory_content.find("MEMORY_INDEX_END")
+    if start == -1 or end == -1 or end < start:
+        return {}
+    index_block = memory_content[start:end]
+
+    ref_map: dict[str, int] = {}
+    for m in _INDEX_ID_TITLE_RE.finditer(index_block):
+        entry_id, rest = m.group(1), m.group(2)
+        usage = usage_counts.get(entry_id, 0)
+        if usage < threshold:
+            continue
+        # Title is everything before the first ' | ' (alias delimiter).
+        title = rest.split(" | ", 1)[0].strip()
+        if not title:
+            continue
+        damped = round(math.log2(usage + 1))
+        if damped < 1:
+            continue
+        ref_map[title] = max(ref_map.get(title, 0), damped)
+    return ref_map

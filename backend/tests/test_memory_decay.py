@@ -259,3 +259,60 @@ class TestListContentHandling:
         entry_ids = {"KD01", "KD02"}
         found = scan_session_for_memory_refs(messages, entry_ids)
         assert found == {"KD01"}
+
+
+class TestUsageRefBridge:
+    """R2-real (run_77504e11): bridge the LIVE .memory-usage.json signal to body
+    entry ref_count. ref is consumed by _is_reclaimable_noise (protect from strip)
+    + get_stage_knowledge (injection ranking). Only GENUINELY-used entries
+    (usage >= threshold) get a log-damped ref so reclaim isn't neutered for all."""
+
+    def test_build_usage_ref_map_joins_id_to_title(self):
+        from core.memory_decay import build_usage_ref_map
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n"
+            "- [COE02] Slack bot scope issue | alias, foo\n"
+            "- [PIT99] Some rare pitfall | bar\n"
+            "<!-- MEMORY_INDEX_END -->\n"
+            "## Pitfalls\n"
+            "- [pitfall] **Slack bot scope issue** — body (2026-06-01)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )
+        usage = {"COE02": 50, "PIT99": 2}  # PIT99 below threshold
+        m = build_usage_ref_map(memory, usage, threshold=10)
+        # COE02 (usage 50, >= threshold) → title mapped, log-damped
+        assert "Slack bot scope issue" in m
+        assert m["Slack bot scope issue"] == round(__import__("math").log2(50 + 1))  # ~6
+        # PIT99 below threshold → NOT in map (stays ref:0, reclaim-eligible)
+        assert "Some rare pitfall" not in m
+
+    def test_below_threshold_not_protected(self):
+        """NEGATIVE: low-usage entries stay absent → ref:0 → reclaim still works."""
+        from core.memory_decay import build_usage_ref_map
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n- [GUI50] Minor thing | x\n<!-- MEMORY_INDEX_END -->\n"
+            "## Guidelines\n- [guideline] **Minor thing** — body (2026-06-01)\n"
+        )
+        m = build_usage_ref_map(memory, {"GUI50": 3}, threshold=10)
+        assert m == {}
+
+    def test_log_damping_caps_monopoly(self):
+        """usage 142 must NOT become ref 142 — log-damped to keep proportion sane."""
+        from core.memory_decay import build_usage_ref_map
+        import math
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n- [KD00] Hot entry | x\n<!-- MEMORY_INDEX_END -->\n"
+            "## Models\n- [model] **Hot entry** — body (2026-06-01)\n"
+        )
+        m = build_usage_ref_map(memory, {"KD00": 142}, threshold=10)
+        assert m["Hot entry"] == round(math.log2(143))  # ~7, not 142
+
+    def test_pipe_in_title_not_broken(self):
+        """Index line splits on FIRST ' | ' only; title before it preserved."""
+        from core.memory_decay import build_usage_ref_map
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n- [DEC01] A or B decision | alias\n<!-- MEMORY_INDEX_END -->\n"
+            "## Decisions\n- [decision] **A or B decision** — body (2026-06-01)\n"
+        )
+        m = build_usage_ref_map(memory, {"DEC01": 20}, threshold=10)
+        assert "A or B decision" in m

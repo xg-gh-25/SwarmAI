@@ -1541,18 +1541,35 @@ class ContextHealthHook:
 
             today = date.today()
 
-            # ── Ref bump: REMOVED (R2-prime, run_e50621b6). The DailyActivity
-            # prose-substring scan was a TOXIC fake signal: generic-titled entries
-            # ("DISCUSSION" ref:1009, "Correction" ref:965) got bumped by mere
-            # word coincidence in prose → fake HIGH_REF 2x decay protection, while
-            # 382/392 real entries starved at ref:0. The HONEST ref producer is
-            # memory_decay.bump_entry_references (distillation_hook.py:1828), which
-            # matches real entry-IDs cited in actual session messages. ref_count,
-            # assess_decay's HIGH_REF branch, and is_keep_class's ref leg are all
-            # KEPT — they correctly consume that honest signal. Only this prose
-            # producer is removed. (Gate-1 verified: ref is a live honest signal,
-            # not dead — do NOT rip out its consumers.)
+            # ── Usage→ref bridge (R2-real, run_77504e11). The toxic DailyActivity
+            # prose-substring bump was removed (R2-prime); THIS is its honest
+            # replacement. Real per-entry usage lives in .memory-usage.json
+            # (_track_memory_usage scans transcripts for [ID] citations). Bridge it
+            # to body ref_count via index-ID→title→body, log-damped, only for
+            # usage >= threshold (so reclaim is NOT neutered for the long tail).
+            # ref is consumed by _is_reclaimable_noise (protect used entries from
+            # physical strip) + get_stage_knowledge (rank used entries higher in
+            # injection) — NOT by assess_decay (which no longer reads ref, R2-prime).
+            # So a genuinely-used entry survives reclaim AND resurfaces. Setting
+            # ref BEFORE inject means the existing inject_entry_metadata persists it
+            # (ref is already a field it writes) — single canonical writer, no
+            # clobber, no new format.
             bumped = 0
+            try:
+                from core.memory_decay import build_usage_ref_map
+                usage_path = root / ".context" / ".memory-usage.json"
+                if usage_path.exists():
+                    usage_counts = json.loads(usage_path.read_text(encoding="utf-8"))
+                    ref_map = build_usage_ref_map(content, usage_counts)
+                    for e in entries:
+                        if e.section in evergreen:
+                            continue  # evergreen never reclaimed; ranking moot
+                        damped = ref_map.get(e.title)
+                        if damped and damped > e.ref_count:
+                            e.ref_count = damped
+                            bumped += 1
+            except Exception as exc:  # noqa: BLE001 — bridge is best-effort
+                logger.warning("context_health: usage→ref bridge failed: %s", exc)
 
             # ── Decay: assess state transitions ──
             transitions = assess_decay(entries, today, evergreen_sections=evergreen)

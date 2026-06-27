@@ -854,3 +854,36 @@ class TestNoProseBump:
             f"prose-bump still active — 'Correction' got bumped to ref:{m.group(1)} "
             f"from DailyActivity prose coincidence:\n{content}"
         )
+
+
+class TestUsageRefBridge:
+    """R2-real (run_77504e11): _run_memory_lifecycle bridges .memory-usage.json
+    to body ref_count (reclaim-protection + injection-priority), log-damped,
+    threshold-gated, survives the inject round-trip."""
+
+    def test_usage_bridge_sets_body_ref_and_survives_roundtrip(self, hook, tmp_path):
+        import json as _json
+        from core.ddd_entry_lifecycle import parse_entries
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / "MEMORY.md").write_text(
+            "<!-- MEMORY_INDEX_START -->\n"
+            "- [PIT07] Gate caught a real bug | gate, adversarial\n"
+            "- [GUI99] Rarely used note | x\n"
+            "<!-- MEMORY_INDEX_END -->\n"
+            "## Pitfalls\n"
+            "_lessons_\n\n"
+            "- [pitfall] **Gate caught a real bug** — body (2026-06-01)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+            "- [guideline] **Rarely used note** — body (2026-06-01)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40, "GUI99": 2}))
+
+        hook._run_memory_lifecycle(ws)
+        content = (ctx / "MEMORY.md").read_text()
+
+        entries = {e.title: e.ref_count for e in parse_entries(content)}
+        assert entries.get("Gate caught a real bug", 0) > 0, f"used entry not bridged:\n{content}"
+        assert entries.get("Rarely used note", 0) == 0, "below-threshold entry wrongly protected"
