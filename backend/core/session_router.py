@@ -355,6 +355,16 @@ async def _maybe_inject_recall(
         unit._recall_injected = True
         return
 
+    # Instrumentation (READ-line observability, design §2 P2/P3): measure the
+    # recall leg wall-clock AND the base system-prompt token size BEFORE injection,
+    # so the post-injection log can report base + recall = TOTAL first-message
+    # context + how long the recall leg took. Uses the single CJK-aware estimator
+    # (estimate_tokens) — NOT the old `len//4` — so the number matches the
+    # assembly-log estimator (design §1: kill the dual-estimator divergence).
+    from .context_directory_loader import ContextDirectoryLoader
+    _base_tok = ContextDirectoryLoader.estimate_tokens(options.system_prompt or "")
+    _t_recall_start = time.perf_counter()
+
     try:
         # BOTH legs (allow_embed=True), synchronous, to completion. The disaster
         # cap only fires on a code hang; normal recall (~1-3s) never reaches it.
@@ -369,6 +379,7 @@ async def _maybe_inject_recall(
             ),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
+        _recall_ms = (time.perf_counter() - _t_recall_start) * 1000.0
         if recalled:
             # Append to this options instance only — safe even if options is
             # rebuilt on retry (system_prompt is a plain str, so += makes a new str).
@@ -403,10 +414,24 @@ async def _maybe_inject_recall(
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
             # was ambiguous between "working" and "never ran". This makes a live
             # injection visible. INFO (not DEBUG) — the daemon file handler drops
-            # DEBUG. ~chars/4 is a rough token estimate (cap is _RECALL_MAX_TOKENS).
+            # DEBUG.
+            #
+            # Token count uses the SINGLE CJK-aware estimator (estimate_tokens),
+            # NOT the old `len//4` — so this number is consistent with the
+            # assembly-log estimator (design §1: dual-estimator divergence killed).
+            # The "first-msg total context" line answers the question the prior
+            # logging could not: base (11 files + briefing) + recall = the REAL
+            # system-prompt size the model sees on message #1, and how long the
+            # recall leg took (design §2 P2/P3).
+            _recall_tok = ContextDirectoryLoader.estimate_tokens(recalled)
             logger.info(
                 "recall injected: +%d chars (~%d tok) into system prompt | keywords=%s",
-                len(recalled), len(recalled) // 4, keywords[:80],
+                len(recalled), _recall_tok, keywords[:80],
+            )
+            logger.info(
+                "first-msg context assembled: base=%d tok + recall=%d tok = "
+                "TOTAL %d tok | recall_leg=%.0fms",
+                _base_tok, _recall_tok, _base_tok + _recall_tok, _recall_ms,
             )
         else:
             # Genuine no-match. NOT a failure (failures are counted/logged inside
@@ -419,7 +444,11 @@ async def _maybe_inject_recall(
                 "for this query. If prior context likely exists under different "
                 "wording, Grep `Knowledge/` (incl. `Archives/`) with synonyms.)_"
             )
-            logger.info("recall ran but matched nothing | keywords=%s", keywords[:80])
+            logger.info(
+                "recall ran but matched nothing | keywords=%s | "
+                "first-msg context: base=%d tok (no recall) | recall_leg=%.0fms",
+                keywords[:80], _base_tok, _recall_ms,
+            )
     except asyncio.TimeoutError:
         # DISASTER: recall hung past the cap. This should NEVER happen in normal
         # operation (recall is ~1-3s, cap is 8s) — if it fires, recall code has a
