@@ -242,6 +242,31 @@ class TestIrreversibleExternalOpPredicate:
         from core.security_hooks import _is_irreversible_external_op
         assert _is_irreversible_external_op('gh repo delete "unbalanced') is True
         assert _is_irreversible_external_op('git push --force "unbalanced') is True
+
+    def test_unparseable_benign_git_not_flagged(self):
+        """Regression: an UNPARSEABLE command (apostrophe in a comment) that only
+        does a READ (git log/status/diff, gh view/list) must NOT be gated.
+
+        The original fail-closed branch returned True for ANY unparseable command
+        containing the word 'git'/'gh', so a script whose comment held an
+        apostrophe — `# Find ws_path's git repo` — forced an approval prompt on a
+        read-only `git log`. The fallback now matches a destructive SIGNATURE,
+        not the bare tool name."""
+        from core.security_hooks import _is_irreversible_external_op
+        # The exact real-world command that triggered the false positive.
+        assert _is_irreversible_external_op(
+            "# Strategy 1 runs with cwd=ws_path. Find ws_path's git repo\n"
+            "git log --oneline -8"
+        ) is False
+        for cmd in [
+            "# don't worry\n git status",
+            "echo it's fine; git diff HEAD~1",
+            "# what's new\n gh pr list",
+            "# can't tell\n gh repo view",
+        ]:
+            assert _is_irreversible_external_op(cmd) is False, (
+                f"Expected unparseable read '{cmd[:40]}' to be allowed"
+            )
         # non-target unparseable → not flagged by THIS predicate
         assert _is_irreversible_external_op('echo "unbalanced') is False
 
