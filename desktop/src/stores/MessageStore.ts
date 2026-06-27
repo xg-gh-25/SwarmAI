@@ -66,6 +66,13 @@ export class MessageStore {
   private _fallbackTimerId: ReturnType<typeof setTimeout> | null = null;
   private _watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private _watchdogTimeoutMs: number;
+  // Diagnostic: liveness touches received during the CURRENT streaming session
+  // (reset in startStreaming, ++ in touch). Logged on a watchdog fire so a fire
+  // is conclusive: touches>0 = events were arriving then stopped (real silence);
+  // touches=0 = NO liveness event ever reached this store while streaming (e.g.
+  // heartbeats not delivered during a cold --resume → the fix is inert, look at
+  // the backend/transport, not the watchdog).
+  private _touchCount = 0;
   private _pendingReconcileThunk: (() => void) | null = null;
   private _reconcileGen = 0;
   private _initializeGen = 0;
@@ -266,6 +273,7 @@ export class MessageStore {
     }
     this._streamingMessageId = messageId;
     this._phase = 'streaming';
+    this._touchCount = 0;  // diagnostic: count liveness touches this session
     this._resetWatchdog();
   }
 
@@ -304,6 +312,7 @@ export class MessageStore {
    */
   touch(): void {
     if (this._destroyed || this._phase !== 'streaming') return;
+    this._touchCount++;
     this._resetWatchdog();
   }
 
@@ -512,7 +521,13 @@ export class MessageStore {
     if (this._phase === 'streaming') {
       this._watchdogTimer = setTimeout(() => {
         if (this._phase === 'streaming' && !this._destroyed) {
-          console.warn('[MessageStore] Watchdog: no update for %dms, forcing endStreaming', this._watchdogTimeoutMs);
+          // Template literal (NOT %d) — the frontend.log persister does not do
+          // printf substitution, so %d showed up literally. touchCount makes a
+          // fire conclusive (see _touchCount field doc).
+          console.warn(
+            `[MessageStore] Watchdog: no liveness for ${this._watchdogTimeoutMs}ms, `
+            + `forcing endStreaming (touches this session=${this._touchCount})`,
+          );
           this.endStreaming();
         }
       }, this._watchdogTimeoutMs);

@@ -309,9 +309,12 @@ async function consumeSSEStream(
         }
         try {
           const event = parseSSEEvent(data);
-          if (event.type === 'heartbeat') {
-            continue;
-          }
+          // NOTE: heartbeats ARE forwarded to onMessage. The stream handler
+          // resets the per-tab force-end watchdog on ANY event (its top line)
+          // and already excludes 'heartbeat' from stall/data accounting. Do NOT
+          // re-add a `continue` here: dropping heartbeats was why the 90s
+          // watchdog force-ended a live cold --resume (only heartbeats flow
+          // before the first token) — "resume 看起来根本起不来".
           try {
             onMessage(event);
           } catch (handlerError) {

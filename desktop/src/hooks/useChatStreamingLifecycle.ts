@@ -2251,16 +2251,19 @@ export function useChatStreamingLifecycle(
 
         // Mark that we've received data — used by reconnection logic AND the
         // post-stop silent-retry to distinguish connection-phase vs mid-stream
-        // failures. Control/lifecycle events (session_start, session_resuming)
-        // and error events do NOT count as "data": otherwise a connection-phase
-        // error that arrives right AFTER session_start (e.g. the backend pipe-
-        // flush from a Stop kills the freshly-spawned subprocess on the next
-        // send) would flip hasReceivedData=true and defeat the silent-retry,
-        // surfacing a spurious "Connection interrupted — send again" and forcing
-        // the user to manually resend every time after a Stop.
+        // failures. Control/lifecycle events (session_start, session_resuming),
+        // error events, AND heartbeats do NOT count as "data": otherwise a
+        // connection-phase error that arrives right AFTER session_start (e.g.
+        // the backend pipe-flush from a Stop kills the freshly-spawned
+        // subprocess on the next send) would flip hasReceivedData=true and
+        // defeat the silent-retry, surfacing a spurious "Connection interrupted
+        // — send again" and forcing a manual resend after every Stop. Heartbeat
+        // is excluded for the same reason: it now reaches this handler (to reset
+        // the watchdog) but it is liveness, not real stream content.
         const isDataEvent = event.type !== 'session_start'
           && event.type !== 'session_resuming'
-          && event.type !== 'error';
+          && event.type !== 'error'
+          && event.type !== 'heartbeat';
         if (tabState && !tabState.hasReceivedData && isDataEvent) {
           tabState.hasReceivedData = true;
 
