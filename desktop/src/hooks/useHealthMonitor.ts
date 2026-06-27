@@ -39,6 +39,21 @@ const INITIAL_HEALTH_STATE: HealthState = {
   consecutiveFailures: 0,
 };
 
+/** Why the last disconnected→connected recovery happened.
+ *  - 'restarted': a NEW backend process (Rust watchdog saw boot_id change)
+ *  - 'resumed':   the SAME process resumed after a transient stall (boot_id unchanged)
+ *  - null:        a plain JS-poller recovery with no Tauri event — we don't know which */
+type RecoveryKind = 'restarted' | 'resumed' | null;
+
+/** Map a recovery kind to an honest success toast. Pure + exported for tests.
+ *  Only claims "restarted" when the watchdog PROVED a new process; a resume
+ *  says "responding again" (no restart happened); unknown → generic reconnect. */
+export function recoveryToastMessage(kind: RecoveryKind): string {
+  if (kind === 'restarted') return 'Backend restarted and reconnected';
+  if (kind === 'resumed') return 'Backend responding again';
+  return 'Backend reconnected';
+}
+
 interface UseHealthMonitorOptions {
   /** Polling interval in ms. Default: 30_000 (30 seconds). */
   intervalMs?: number;
@@ -77,6 +92,11 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   const failureCountRef = useRef(0);
   const currentStatusRef = useRef<BackendStatus>('initializing');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Why the last disconnected→connected recovery happened, set by the Tauri
+  // event handlers just before they trigger a re-check. handleSuccess reads it
+  // to pick an honest toast: a real restart (new process) vs a resume (same
+  // process that was merely blocked) vs a plain JS-poller recovery (null).
+  const recoveryKindRef = useRef<RecoveryKind>(null);
   // Guard against state updates after unmount.
   const mountedRef = useRef(true);
 
@@ -104,9 +124,13 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       if (previousStatus === 'disconnected' && backendStatus !== 'disconnected') {
         removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
         if (backendStatus === 'connected') {
+          // Pick an honest recovery message based on what actually happened.
+          // Default (JS-poller-only recovery, no Tauri event) → generic reconnect.
+          const kind = recoveryKindRef.current;
+          recoveryKindRef.current = null;
           addToastRef.current({
             severity: 'success',
-            message: 'Backend reconnected',
+            message: recoveryToastMessage(kind),
             autoDismiss: true,
           });
           // Notify chat layer so active tabs can recover SSE streams.
@@ -137,6 +161,10 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
         // Transition: connected/initializing → disconnected — fire warning.
         if (previousStatus !== 'disconnected') {
+          // Start each disconnect episode with a clean recovery kind so a
+          // value set by a prior, never-consumed event can't mislabel this
+          // episode's recovery toast.
+          recoveryKindRef.current = null;
           addToastRef.current({
             severity: 'warning',
             message: 'Backend is unavailable',
@@ -229,17 +257,24 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
     const unlisteners: Array<Promise<() => void>> = [];
 
-    // Backend died unexpectedly — immediately mark disconnected
+    // Health probe failed once — mark disconnected. This fires on a SINGLE
+    // missed /health (Rust watchdog, 3s timeout), which cannot distinguish a
+    // real process death from a transient stall (e.g. the event loop blocked
+    // by heavy synchronous work for >3s). Most fires self-heal on the next
+    // probe (boot_id unchanged → never actually restarted), so the wording
+    // must NOT assert "crashed" or "restarting" — both overclaim what a single
+    // timeout proves. A truly-dead daemon escalates to onBackendTerminated.
     unlisteners.push(
       tauriService.onBackendTerminatedRestarting(() => {
         if (!mountedRef.current) return;
 
         failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
         currentStatusRef.current = 'disconnected';
+        recoveryKindRef.current = null; // clean episode; resumed/restarted sets it next
 
         addToastRef.current({
           severity: 'warning',
-          message: 'Backend crashed — restarting automatically…',
+          message: 'Backend not responding — reconnecting…',
           id: HEALTH_DISCONNECTED_TOAST_ID,
         });
 
@@ -251,13 +286,15 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       }),
     );
 
-    // Backend auto-restarted on new port — update port + trigger health check
+    // Backend RESTARTED on new port (a NEW process — boot_id changed, or a
+    // subprocess re-spawn) — update port + trigger health check.
     unlisteners.push(
       tauriService.onBackendRestarted((newPort: number) => {
         if (!mountedRef.current) return;
 
         console.log(`[HealthMonitor] Backend restarted on port ${newPort}`);
         setBackendPort(newPort);
+        recoveryKindRef.current = 'restarted';
 
         // Give the new backend a moment to become healthy, then check
         setTimeout(() => {
@@ -265,6 +302,26 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
             performHealthCheckRef.current();
           }
         }, 2_000);
+      }),
+    );
+
+    // Backend RESUMED after a transient stall — SAME process (boot_id unchanged),
+    // never actually died. It is already responsive (the recovery poll read its
+    // boot_id), so re-check almost immediately and report "responding again"
+    // rather than claiming a restart.
+    unlisteners.push(
+      tauriService.onBackendResumed((port: number) => {
+        if (!mountedRef.current) return;
+
+        console.log(`[HealthMonitor] Backend resumed (stall, no restart) on port ${port}`);
+        setBackendPort(port);
+        recoveryKindRef.current = 'resumed';
+
+        setTimeout(() => {
+          if (mountedRef.current) {
+            performHealthCheckRef.current();
+          }
+        }, 250);
       }),
     );
 
@@ -277,6 +334,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
         failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
         currentStatusRef.current = 'disconnected';
+        recoveryKindRef.current = null;
 
         addToastRef.current({
           severity: 'warning',

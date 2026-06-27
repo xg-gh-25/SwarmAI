@@ -112,7 +112,10 @@ export const tauriService = {
     return listen<number | null>('backend-terminated', (event) => callback(event.payload));
   },
 
-  /** Backend died unexpectedly — auto-restart in progress. */
+  /** Health probe missed once — daemon unreachable for >3s. May be a real
+   *  death (launchd will restart) OR a transient stall; a single miss can't
+   *  tell. UI shows a soft "not responding — reconnecting…" notice; a real
+   *  death escalates to `backend-terminated`. */
   async onBackendTerminatedRestarting(callback: (code: number | null) => void): Promise<UnlistenFn> {
     return listen<number | null>('backend-terminated-restarting', (event) => callback(event.payload));
   },
@@ -120,6 +123,13 @@ export const tauriService = {
   /** Backend auto-restarted on a new port. */
   async onBackendRestarted(callback: (newPort: number) => void): Promise<UnlistenFn> {
     return listen<number>('backend-restarted', (event) => callback(event.payload));
+  },
+
+  /** Backend RESUMED after a transient stall — same process (boot_id unchanged),
+   *  no restart happened. Distinct from onBackendRestarted so the UI can say
+   *  "responding again" instead of falsely claiming a restart. */
+  async onBackendResumed(callback: (port: number) => void): Promise<UnlistenFn> {
+    return listen<number>('backend-resumed', (event) => callback(event.payload));
   },
 
   /** Backend mode notification: always "daemon" in production. */

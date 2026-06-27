@@ -1365,7 +1365,9 @@ async fn spawn_subprocess(_app: &tauri::AppHandle, _state: &SharedBackendState) 
 /// there's no process monitor. This task polls the daemon health endpoint
 /// every `interval_secs` and emits frontend events on state changes:
 ///   - `backend-terminated-restarting` when daemon becomes unreachable (launchd will restart)
-///   - `backend-restarted` when daemon recovers
+///   - `backend-restarted` when the daemon recovers as a NEW process (boot_id changed)
+///   - `backend-resumed` when the daemon recovers as the SAME process (boot_id
+///     unchanged — it was just blocked >3s, never actually died)
 ///   - `backend-terminated` only after MAX_RECOVERY_ATTEMPTS failed (permanent death)
 ///
 /// **boot_id detection:** The daemon returns a `boot_id` in `/health` that
@@ -1523,10 +1525,36 @@ fn spawn_daemon_health_watchdog(
                     }
                 }
             } else if !was_healthy && healthy {
-                // Backend recovered (launchd restarted it, or our re-spawn succeeded on probe)
-                println!("[Tauri] Watchdog: backend recovered after {} attempts", recovery_attempts);
-                known_boot_id = current_boot_id;
-                let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                // Backend is reachable again after a down/stall window.
+                // Distinguish a REAL restart (a new process — boot_id changed)
+                // from a transient stall (same process that was just blocked >3s
+                // by heavy synchronous work — boot_id unchanged). Only claim
+                // "restarted" when boot_id PROVES a new process; otherwise the
+                // daemon merely RESUMED and never actually died.
+                let real_restart = match (&known_boot_id, &current_boot_id) {
+                    (Some(old), Some(new)) => old != new,
+                    _ => false, // can't prove a new process → don't overclaim a restart
+                };
+                if real_restart {
+                    println!(
+                        "[Tauri] Watchdog: backend RESTARTED (boot_id changed) after {} attempts",
+                        recovery_attempts
+                    );
+                    let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                } else {
+                    println!(
+                        "[Tauri] Watchdog: backend RESUMED (same process, boot_id unchanged) after {} attempts",
+                        recovery_attempts
+                    );
+                    let _ = app_handle.emit("backend-resumed", DAEMON_PORT);
+                }
+                known_boot_id = match current_boot_id {
+                    // Preserve the last known good baseline if this recovery
+                    // probe couldn't read a boot_id — clobbering it with None
+                    // would make the NEXT real restart undetectable.
+                    Some(b) => Some(b),
+                    None => known_boot_id,
+                };
                 recovery_attempts = 0;
             }
 
