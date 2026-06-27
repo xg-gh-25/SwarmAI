@@ -599,8 +599,10 @@ class StreamingOrchestrator:
                     delta = event_data.get("delta", {})
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         self._parent._content_emitted = True
+                        self._parent._last_progress_time = time.time()  # real content
                         yield {"type": "text_delta", "text": delta["text"], "index": event_data.get("index", 0)}
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                        self._parent._last_progress_time = time.time()  # real thinking
                         yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
@@ -618,12 +620,14 @@ class StreamingOrchestrator:
             # count/timer/label don't freeze. No yield, no rendering —
             # the parent's own tool_results render via AssistantMessage.
             if isinstance(message, UserMessage):
+                self._parent._last_progress_time = time.time()  # sub-agent progress
                 self._clear_completed_sub_agents(message)
                 continue
 
             # ── AssistantMessage: full content blocks ─────────────
             if isinstance(message, AssistantMessage):
                 saw_assistant_message = True
+                self._parent._last_progress_time = time.time()  # real content blocks
                 content_blocks = []
                 # ── Third leak signal: does this message have a REAL tool_use? ─
                 # If the model emitted an actual ToolUseBlock, any <invoke> text
@@ -791,14 +795,7 @@ class StreamingOrchestrator:
                                     "session_id=%s action=%s",
                                     self._parent.session_id, level.value,
                                 )
-                                # recycle_after=True: compaction ENDS the turn and
-                                # `return`s immediately (no warm continuation), and
-                                # a compaction interrupt genuinely poisons the
-                                # subprocess (instant error_during_execution on
-                                # reuse). So unlike a user Stop — which must stay
-                                # WARM (see SessionUnit.interrupt CRITICAL block) —
-                                # compaction is a legitimate recycle-to-COLD source.
-                                await self._parent.interrupt(recycle_after=True)
+                                await self._parent.interrupt()
                                 return
                     elif isinstance(block, ToolResultBlock):
                         # ── Clear sub-agent progress when Agent tool completes ──
