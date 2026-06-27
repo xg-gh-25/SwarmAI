@@ -47,20 +47,44 @@ logger = logging.getLogger(__name__)
 _SDK_SUPPORTS_MULTIMODAL: bool = False
 
 # ── Pre-response recall (G3: post-first-message injection) ────────
-# Activates RecallEngine L2/L3 using the user's actual query instead
-# of generic proactive keywords.  Runs once per session, 150ms timeout.
-
-_RECALL_TIMEOUT_S = 0.4  # 400ms budget — fits the keyword(FTS5) floor (measured
-# 150-265ms, 4/4 reliable). The OLD 150ms wall lost a race with the real FTS5 path
-# (145-153ms) → every first-message recall TimeoutError'd → ZERO knowledge injected
-# in prod. The synchronous first-token path is keyword-ONLY (embed disabled, see
-# _recall_for_query allow_embed): a Bedrock embed is 430ms warm / 2343ms cold and
-# MUST NOT block the first token (recall is "enhancement, not critical path"). The
-# vector leg runs opportunistically off the critical path. (run_bbd79e84)
+# Activates RecallEngine L2/L3 using the user's actual query.  Runs once per
+# session, on the first user message.
+#
+# CORRECTNESS-FIRST (run_4d06640b): recall runs BOTH legs (keyword + vector) to
+# COMPLETION synchronously before generating — the answer is built on the FULL
+# brain, not a latency-trimmed subset. Priority is accurate + capable, NOT
+# first-token speed (user directive). Measured full both-legs ~1.1s warm / ~2-3s
+# cold (Bedrock embed cold). That latency is accepted; correctness > the seconds.
+#
+# The OLD 400ms daily timeout (run_bbd79e84/e9b15722) SILENTLY dropped recall when
+# cold/slow/corpus-grown — a recurring time-bomb. It is replaced by a DISASTER
+# timeout that ONLY bounds a recall code-HANG (bug / pathological query), never a
+# daily latency judge. For the cap to be a REAL bound (not theater — asyncio
+# wait_for cannot cancel a to_thread C-hang), the recall DB connection uses a
+# SHORTER busy_timeout (_RECALL_DB_BUSY_TIMEOUT_MS) than the cap, so a sqlite lock
+# wait cannot out-hang the cap. On trigger → LOUD (logger.error + metric), because
+# silent degradation is exactly why recall was dead for months unnoticed.
+_RECALL_DISASTER_TIMEOUT_S = 8.0       # hang-guard only; normal recall ~1-3s
+_RECALL_DB_BUSY_TIMEOUT_MS = 5000      # < disaster cap → sqlite lock can't out-hang it
 # Recall budget is intentionally lower than the 15K default in recall_engine.py.
 # This injection is additive to an already-assembled system prompt (~30-50K),
 # so we cap at 8K to avoid pushing context over budget on large sessions.
 _RECALL_MAX_TOKENS = 8_000
+
+# Recall-degradation counter (run_4d06640b W5): increments whenever recall returns
+# empty due to a failure/timeout rather than a genuine no-match. Surfaces silent
+# degradation that the old logger.debug+return"" pattern hid for months. Read for
+# observability (e.g. a health probe); the LOG is the primary signal, this is the
+# aggregate. Reasons: "vec_db_unavailable", "exception:<Type>", "disaster_timeout".
+_recall_degraded_count: dict[str, int] = {}
+
+
+def _record_recall_degraded(reason: str) -> None:
+    """Count a recall degradation by reason (loud-on-degradation observability)."""
+    try:
+        _recall_degraded_count[reason] = _recall_degraded_count.get(reason, 0) + 1
+    except Exception:  # noqa: BLE001 — metric must never break recall
+        pass
 
 _STOP_WORDS: frozenset[str] = frozenset({
     "the", "this", "that", "with", "from", "what", "when", "where",
@@ -153,12 +177,11 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
     Uses ``open_vec_db()`` context manager for thread-safe connection
     (this runs in ``asyncio.to_thread``).
 
-    ``allow_embed`` (default False): when False, the VECTOR leg is disabled
-    (``embed_fn=None``) so NO Bedrock embed runs. This is the synchronous
-    first-token path — a Bedrock embed (430ms warm / 2343ms cold) must not block
-    the response. The keyword(FTS5) leg is the guaranteed floor and is local
-    sqlite. Pass True only from an OFF-critical-path caller that can afford the
-    embed latency (run_bbd79e84).
+    ``allow_embed`` (default False): when True, the VECTOR (semantic) leg runs
+    (Bedrock embed). Correctness-first recall (run_4d06640b) passes True so BOTH
+    legs run to completion. The connection uses a SHORT busy_timeout
+    (_RECALL_DB_BUSY_TIMEOUT_MS) so a sqlite write-lock wait cannot exceed the
+    caller's disaster cap.
 
     Graph enrichment: extracts entities from query, queries knowledge graph
     for related entry IDs/titles, appends them to enrich the recall context.
@@ -166,14 +189,24 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
     match is weak.
 
     Returns formatted recalled content or empty string.
+
+    LOUD-ON-DEGRADATION (run_4d06640b W5): a failure here used to be swallowed by
+    ``logger.debug + return ""`` — silent empty recall, the EXACT dead-path class
+    that left recall dead for months unnoticed. Now an internal failure logs at
+    WARNING with a metric, so a degraded recall (Bedrock auth, sqlite error) is
+    VISIBLE, not silent.
     """
     try:
         from .vec_db import open_vec_db
         from .knowledge_store import KnowledgeStore
         from .recall_engine import RecallEngine
 
-        with open_vec_db() as conn:
+        # Short busy_timeout so a write-lock wait cannot out-hang the caller's
+        # disaster cap (run_4d06640b B3 — makes the cap a real bound).
+        with open_vec_db(busy_timeout_ms=_RECALL_DB_BUSY_TIMEOUT_MS) as conn:
             if conn is None:
+                _record_recall_degraded("vec_db_unavailable")
+                logger.warning("_recall_for_query: vec_db unavailable (sqlite-vec not loaded) — recall empty")
                 return ""
 
             store = KnowledgeStore(conn)
@@ -199,10 +232,24 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             engine = RecallEngine(store, additional_stores=additional_stores)
 
-            # Keyword-only on the critical path (allow_embed=False) — no Bedrock.
+            # Correctness-first: run the VECTOR (semantic) leg too when allowed.
             embed_fn = _get_cached_embed_fn() if allow_embed else None
 
             recalled = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+
+            # LOUD one layer down (run_4d06640b Gate-2 HIGH-2): RecallEngine.search
+            # swallows per-leg failures to []. An empty result from a LEG FAILURE is
+            # indistinguishable from a genuine no-match unless we inspect the engine's
+            # error trail — otherwise a fully-degraded recall is silent (the W5 bug,
+            # one frame deeper). Surface it: if legs errored, log + metric even when
+            # we still return (partial) content.
+            leg_errors = getattr(engine, "last_search_errors", None) or []
+            if leg_errors:
+                _record_recall_degraded("leg_failure")
+                logger.warning(
+                    "recall leg(s) failed (recall may be degraded): %s",
+                    ", ".join(leg_errors[:6]),
+                )
 
             # Graph enrichment: append related entry context
             graph_context = _graph_enrich_recall(query)
@@ -213,7 +260,10 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             return recalled
     except Exception as exc:
-        logger.debug("_recall_for_query failed: %s", exc)
+        # LOUD, not silent (W5): a swallowed failure here is the dead-path class.
+        _record_recall_degraded(f"exception:{type(exc).__name__}")
+        logger.warning("_recall_for_query failed (recall degraded to empty): %s: %s",
+                        type(exc).__name__, exc)
         return ""
 
 
@@ -269,33 +319,28 @@ async def _maybe_inject_recall(
     options: Any,
     unit: SessionUnit,
 ) -> None:
-    """Augment system prompt with recalled knowledge from user's actual query.
+    """Augment the system prompt with recalled knowledge from the user's query.
 
-    Runs ONCE per session on the first user message.  Subsequent messages
-    skip (the agent already has context from the first injection).
+    CORRECTNESS-FIRST (run_4d06640b): runs BOTH legs (keyword FTS5 + vector
+    semantic) to COMPLETION synchronously before generating, so the answer is
+    built on the FULL brain — not a latency-trimmed subset. Priority is accurate +
+    capable, NOT first-token speed (user directive). Measured ~1.1s warm / ~2-3s
+    cold (Bedrock embed cold) — that latency is ACCEPTED; correctness > the seconds.
+
+    Runs ONCE per session on the first user message (``_recall_injected`` guard).
 
     Guard rails:
-      - Once-per-session flag on unit._recall_injected
+      - Once-per-session flag on ``unit._recall_injected``
       - Channel sessions excluded (quick exchanges don't need deep recall)
-      - 400ms hard timeout on the keyword leg — recall is enhancement, not critical path
-      - Any exception → skip silently, set flag to prevent retry
-
-    VECTOR leg (run_e9b15722): the keyword leg above is synchronous + keyword-only
-    (no Bedrock on the first-token path — run_bbd79e84). The slower SEMANTIC leg
-    runs as a tracked background task whose result is injected on the NEXT turn via
-    ``_inject_pending_vector_recall``, called at the TOP of THIS function (below),
-    BEFORE the _recall_injected early-return. run_conversation invokes
-    _maybe_inject_recall every turn, so the top-of-function call is reached on turn
-    2 even though the guard then returns. (Putting the injection AFTER the guard
-    made it unreachable on turn 2 — Gate-1 BLOCK-1, the exact dead-path class.)
+      - DISASTER timeout (``_RECALL_DISASTER_TIMEOUT_S``): bounds a recall code-HANG
+        only (bug / pathological query) — NOT a daily latency judge. The recall DB
+        connection uses a SHORTER busy_timeout so a sqlite lock can't out-hang the
+        cap (asyncio wait_for cannot cancel a to_thread C-hang — the cap would be
+        theater otherwise; run_4d06640b B3).
+      - LOUD on degradation (W5): timeout → logger.error + metric; an internal
+        failure inside _recall_for_query → logger.warning + metric. NEVER silent —
+        silent empty recall is the exact dead-path class that hid for months.
     """
-    # FIRST: inject any vector recall that completed since the last turn. This MUST
-    # run before the _recall_injected early-return below (Gate-1 BLOCK-1: after the
-    # guard it was unreachable on turn 2). run_conversation calls _maybe_inject_recall
-    # every turn, so this top-of-function call fires each turn. (Sole caller — NOT
-    # build_options.)
-    _inject_pending_vector_recall(options, unit)
-
     if unit._recall_injected:
         return
 
@@ -311,104 +356,39 @@ async def _maybe_inject_recall(
         return
 
     try:
+        # BOTH legs (allow_embed=True), synchronous, to completion. The disaster
+        # cap only fires on a code hang; normal recall (~1-3s) never reaches it.
         recalled = await asyncio.wait_for(
             asyncio.to_thread(
                 _recall_for_query,
                 keywords,
                 _RECALL_MAX_TOKENS,
+                True,  # allow_embed — run the vector/semantic leg too
             ),
-            timeout=_RECALL_TIMEOUT_S,
+            timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         if recalled:
-            # Append to this options instance only — safe even if options
-            # object is rebuilt on retry (system_prompt is a plain str,
-            # so += creates a new str object rather than mutating in place).
+            # Append to this options instance only — safe even if options is
+            # rebuilt on retry (system_prompt is a plain str, so += makes a new str).
             options.system_prompt = (
                 options.system_prompt + f"\n\n## Recalled Knowledge\n{recalled}"
             )
-            # Remember the keyword result so the background vector leg can dedupe
-            # against it (avoid double-injecting the same entries next turn).
-            unit._keyword_recall_text = recalled
     except asyncio.TimeoutError:
-        logger.debug("Recall timed out (>%sms) for keywords: %s",
-                      int(_RECALL_TIMEOUT_S * 1000), keywords[:80])
+        # DISASTER: recall hung past the cap. This should NEVER happen in normal
+        # operation (recall is ~1-3s, cap is 8s) — if it fires, recall code has a
+        # bug. LOUD so it is caught immediately, not silently dead for months.
+        _record_recall_degraded("disaster_timeout")
+        logger.error(
+            "RECALL DISASTER TIMEOUT (>%.0fs) — recall code likely hung; "
+            "answer proceeds WITHOUT recall. keywords=%s",
+            _RECALL_DISASTER_TIMEOUT_S, keywords[:80],
+        )
     except Exception as exc:
-        logger.debug("Recall injection failed: %s", exc)
+        _record_recall_degraded(f"inject_exception:{type(exc).__name__}")
+        logger.warning("Recall injection failed (proceeding without recall): %s: %s",
+                        type(exc).__name__, exc)
     finally:
         unit._recall_injected = True
-        # Fire the background SEMANTIC (vector) recall ONCE per session. It runs
-        # OFF the critical path (no one awaits it before the first token) and
-        # stores its result on unit._pending_vector_recall for next-turn injection.
-        _maybe_start_vector_recall(user_message, unit)
-
-
-def _inject_pending_vector_recall(options: Any, unit: SessionUnit) -> None:
-    """Inject the background vector-recall result (if ready) into the prompt.
-
-    Called at the top of _maybe_inject_recall (which run_conversation invokes
-    every turn), BEFORE its _recall_injected guard. Idempotent: injects at most once per session via
-    ``_vector_recall_injected``. Reads the result only when the background task
-    has completed (no race on the in-flight store).
-    """
-    if getattr(unit, "_vector_recall_injected", False):
-        return
-    pending = getattr(unit, "_pending_vector_recall", None)
-    if not pending:
-        return
-    try:
-        options.system_prompt = (
-            options.system_prompt + f"\n\n## Recalled Knowledge (semantic)\n{pending}"
-        )
-        unit._vector_recall_injected = True
-        unit._pending_vector_recall = None
-    except Exception as exc:  # noqa: BLE001 — injection is best-effort
-        logger.debug("Pending vector recall injection failed: %s", exc)
-
-
-def _maybe_start_vector_recall(user_message: str, unit: SessionUnit) -> None:
-    """Start the background semantic-recall task once per session (off critical path)."""
-    if getattr(unit, "_vector_recall_started", False):
-        return
-    if unit.is_channel_session:
-        return
-    keywords = _extract_query_keywords(user_message)
-    if not keywords:
-        return
-    unit._vector_recall_started = True
-
-    async def _bg() -> None:
-        try:
-            # allow_embed=True: the SEMANTIC leg. Runs in a thread, off the
-            # first-token path (nothing awaits this before the response streams).
-            recalled = await asyncio.to_thread(
-                _recall_for_query, keywords, _RECALL_MAX_TOKENS, True,
-            )
-            if recalled:
-                # Dedupe against the keyword result already injected this session
-                # so we don't double-inject the same entries (Gate-1 MEDIUM).
-                prior = getattr(unit, "_keyword_recall_text", "") or ""
-                deduped = _dedupe_recall(recalled, prior)
-                if deduped:
-                    unit._pending_vector_recall = deduped
-        except Exception as exc:  # noqa: BLE001 — background, best-effort
-            logger.debug("Background vector recall failed: %s", exc)
-
-    try:
-        unit._vector_recall_task = asyncio.create_task(_bg())
-    except RuntimeError:
-        # No running loop (shouldn't happen in the daemon) — skip silently.
-        pass
-
-
-def _dedupe_recall(new_text: str, prior_text: str) -> str:
-    """Drop lines from new_text already present in prior_text (block-level dedupe)."""
-    if not prior_text:
-        return new_text
-    prior_lines = {ln.strip() for ln in prior_text.splitlines() if ln.strip()}
-    kept = [ln for ln in new_text.splitlines()
-            if not ln.strip() or ln.strip() not in prior_lines]
-    result = "\n".join(kept).strip()
-    return result
 
 
 def _get_access_hint(ext: str, filename: str) -> str:

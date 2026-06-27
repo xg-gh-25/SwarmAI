@@ -307,22 +307,19 @@ def _codeintel_live(negative: bool = False) -> int:
 
 
 def _recall_budget(negative: bool = False) -> int:
-    """RECALL WIRE (architectural invariant, deterministic — no wall-clock race):
-    the REAL session_router._maybe_inject_recall must inject the keyword(FTS5)
-    recall floor into options.system_prompt while invoking the Bedrock embed
-    ZERO times on the synchronous first-token path. That embed-free guarantee is
-    the fix for the dead path: prod left this injecting NOTHING for months because
-    the embed (430ms warm / 2343ms cold) sat on a 150ms-budgeted critical path.
-    The other probes + test_recall_injection's mocks bypass this by mocking
-    _recall_for_query or using an instant embed. run_bbd79e84.
+    """RECALL WIRE (correctness-first, run_4d06640b — deterministic, no timer race):
+    the REAL session_router._maybe_inject_recall must run BOTH legs to completion
+    synchronously and inject recall into options.system_prompt. This REVERSES the
+    run_bbd79e84 keyword-only invariant: the answer is built on the FULL brain
+    (keyword + vector), not a latency-trimmed subset. The OK marker requires
+    BOTH: recall landed AND the vector embed was called (≥1) on the sync path.
 
     Drives the REAL _maybe_inject_recall + _recall_for_query against a real seeded
-    sqlite DB. The embed stub COUNTS calls + would block 0.5s if ever reached →
-    a deterministic assertion (count==0 AND floor landed), not a flaky timer race.
+    sqlite DB, counting embed calls — a deterministic assertion, not a timer race.
 
-    negative=True (teeth): assert the OPPOSITE invariant (embed_calls > 0) — which
-    is false on the fixed code → OK marker must NOT print → exit 1. Deterministic
-    (a call-count assertion), not a wall-clock race that DB size would mask."""
+    negative=True (teeth): demand the OLD broken invariant (embed NEVER called =
+    keyword-only). That is false on the correctness-first code (embed DOES run), so
+    the OK marker is withheld → exit 1, proving the assertion bites."""
     import asyncio
     import contextlib
     import sqlite3 as _sq
@@ -336,9 +333,8 @@ def _recall_budget(negative: bool = False) -> int:
 
     embed_calls = {"n": 0}
 
-    def _slow_counting_embed(_text):
+    def _counting_embed(_text):
         embed_calls["n"] += 1
-        time.sleep(0.5)  # Bedrock latency; on the sync path this MUST never run
         return [0.0] * 1024
 
     with _tf.TemporaryDirectory() as d:
@@ -355,7 +351,7 @@ def _recall_budget(negative: bool = False) -> int:
                 title="exit code -9 cascading SIGKILL failure",
                 full_text="exit code -9 cascading SIGKILL OOM crash recovery resume",
                 keywords=["sigkill", "oom", "crash", "recovery", "resume"],
-                embedding=None,  # un-embedded → exercises the KEYWORD floor
+                embedding=None,
             )
         finally:
             conn.close()
@@ -370,25 +366,24 @@ def _recall_budget(negative: bool = False) -> int:
             stack.enter_context(patch("jobs.paths.DB_PATH", db))
             stack.enter_context(patch("core.vec_db._DEFAULT_DB_PATH", db))
             stack.enter_context(
-                patch.object(sr, "_get_cached_embed_fn", lambda: _slow_counting_embed))
+                patch.object(sr, "_get_cached_embed_fn", lambda: _counting_embed))
             asyncio.run(sr._maybe_inject_recall(
                 user_message="sigkill oom crash recovery resume",
                 options=opts, unit=unit))
 
     landed = "Recalled Knowledge" in opts.system_prompt
-    no_bedrock = embed_calls["n"] == 0
+    both_legs = embed_calls["n"] > 0  # vector leg ran on the sync path
 
-    # The wire is intact iff the keyword floor landed AND Bedrock was never called
-    # on the synchronous path. The OK marker prints ONLY then.
-    # negative (teeth): demand the BROKEN invariant (embed WAS called) — which is
-    # false on fixed code, so OK is withheld → exit 1, proving the assertion bites.
+    # Wire intact iff recall landed AND both legs ran (correctness-first).
+    # negative (teeth): demand the OLD keyword-only invariant (embed never ran) —
+    # false on the new code, so OK is withheld → exit 1, proving the teeth bite.
     if negative:
-        if not no_bedrock:  # embed was called → would be the bug
+        if not both_legs:  # embed never called → the OLD keyword-only regression
             print("RECALL_BUDGET_OK")
             return 0
-        print("RECALL_BUDGET_TEETH (sync path correctly embed-free; teeth withhold OK)")
+        print("RECALL_BUDGET_TEETH (both legs ran as required; teeth withhold OK)")
         return 1
-    if landed and no_bedrock:
+    if landed and both_legs:
         print("RECALL_BUDGET_OK")
         return 0
     print(f"RECALL_BUDGET_FAIL (landed={landed}, embed_calls={embed_calls['n']})")

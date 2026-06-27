@@ -99,6 +99,7 @@ def get_vec_conn(db_path: Optional[Path] = None) -> Optional[sqlite3.Connection]
 @contextmanager
 def open_vec_db(
     db_path: Optional[Path] = None,
+    busy_timeout_ms: int = 30000,
 ) -> Generator[Optional[sqlite3.Connection], None, None]:
     """Open a sqlite3 connection with sqlite-vec extension loaded.
 
@@ -113,6 +114,11 @@ def open_vec_db(
 
     Args:
         db_path: Override database path (default: ~/.swarm-ai/data.db).
+        busy_timeout_ms: SQLite busy_timeout (default 30000). A LATENCY-BOUNDED
+            caller (e.g. synchronous recall under a wait_for disaster cap) MUST
+            pass a value SHORTER than its cap, so a sqlite write-lock wait cannot
+            out-hang the cap — otherwise the cap is theater (asyncio wait_for
+            cannot cancel a to_thread C-level sqlite block). (run_4d06640b B3)
 
     Yields:
         A sqlite3.Connection with sqlite-vec loaded, or None if the
@@ -134,9 +140,10 @@ def open_vec_db(
         # busy_timeout: WAL allows concurrent readers but a SINGLE writer. The
         # memory-embedding recovery drain (context_health_hook) and other writers
         # can overlap on memory_vec; without a timeout the loser gets an immediate
-        # SQLITE_BUSY → OperationalError, aborting a batch mid-drain. 30s waits the
-        # lock out like every production connection already does. (run_e9b15722)
-        conn.execute("PRAGMA busy_timeout=30000")
+        # SQLITE_BUSY → OperationalError, aborting a batch mid-drain. Default 30s
+        # waits the lock out; a latency-bounded caller passes a shorter value so a
+        # lock wait cannot exceed its disaster cap (run_4d06640b). (run_e9b15722)
+        conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
         conn.enable_load_extension(True)
         _sqlite_vec.load(conn)
         conn.enable_load_extension(False)

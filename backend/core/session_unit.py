@@ -474,14 +474,9 @@ class SessionUnit:
         # Set True after first-message recall runs (or is skipped).
         # Prevents re-running on subsequent messages in the same session.
         self._recall_injected: bool = False
-
-        # ── Vector (semantic) recall — runs as a background task off the
-        # first-token critical path; injected on the NEXT turn (run_e9b15722).
-        self._vector_recall_started: bool = False       # task fired once/session
-        self._vector_recall_injected: bool = False      # result injected once
-        self._pending_vector_recall: Optional[str] = None  # ready-to-inject text
-        self._keyword_recall_text: str = ""             # turn-1 keyword text (dedupe)
-        self._vector_recall_task: Optional[asyncio.Task] = None  # tracked for cancel
+        # NOTE: the M2 background-vector-task fields (run_e9b15722) were removed in
+        # run_4d06640b — recall now runs both legs synchronously to completion, so
+        # there is no background task / pending-result / teardown-cancel to track.
 
         # ── Hook tracking ─────────────────────────────────────────
         # True after hooks enqueued for current IDLE period.
@@ -3351,12 +3346,6 @@ class SessionUnit:
                 if self.state == SessionState.DEAD:
                     self._cleanup_internal()
                     self._transition(SessionState.COLD)
-                # Defensive (run_e9b15722, Gate-1 HIGH-4): even on the already-COLD
-                # fast-return, cancel any lingering background vector-recall task so
-                # it cannot outlive the unit. Idempotent — None after _cleanup_internal.
-                if self._vector_recall_task is not None:
-                    self._vector_recall_task.cancel()
-                    self._vector_recall_task = None
                 return
 
             self._transition(SessionState.DEAD)
@@ -3530,23 +3519,13 @@ class SessionUnit:
         if self._pipe_flush_task is not None:
             self._pipe_flush_task.cancel()
             self._pipe_flush_task = None
-        # Cancel any in-flight background vector-recall task so a slow Bedrock
-        # embed (2.3s cold) doesn't outlive the unit / leak a DB connection
-        # (run_e9b15722, Gate-1 HIGH-4). Reached on kill/crash/eviction teardown.
-        if self._vector_recall_task is not None:
-            self._vector_recall_task.cancel()
-            self._vector_recall_task = None
         # Don't reset _lifecycle_response_count — it tracks across the
         # full unit lifetime (resume awareness persists through kill/restart).
         # Reset channel history injection flag — the new subprocess
         # won't have any conversation history, so it needs re-injection.
         self._channel_history_injected = False
-        # Reset recall injection flags — new subprocess needs fresh recall.
+        # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
-        self._vector_recall_started = False
-        self._vector_recall_injected = False
-        self._pending_vector_recall = None
-        self._keyword_recall_text = ""
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
 

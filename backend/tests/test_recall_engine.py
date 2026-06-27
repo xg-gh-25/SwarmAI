@@ -276,3 +276,62 @@ def test_fts_score_floor_keeps_weakest_keyword_hit():
     assert "B" in keys, (
         "weakest keyword match was silently dropped — FTS_SCORE_FLOOR regression"
     )
+
+
+# ── Gate-2 HIGH fixes (run_4d06640b) ──
+
+def test_embed_called_once_across_stores():
+    """HIGH-1: the query is embedded ONCE before the per-store loop, not once per
+    store. On the synchronous critical path, 3× embed tripled the Bedrock latency
+    the disaster cap must bound (worst case ~29s ≫ 8s = theater)."""
+    from core.memory_embeddings import MemoryEmbeddingStore
+    from core.memory_recall_store import MemoryRecallStore
+    from core.transcript_indexer import TranscriptStore
+    from core.recall_engine import RecallEngine
+
+    from core.knowledge_store import KnowledgeStore
+    conn = _make_conn()
+    ks = KnowledgeStore(conn)
+    ts = TranscriptStore(conn); ts.ensure_tables()
+    ms = MemoryEmbeddingStore(conn); ms.ensure_tables()
+    ms.upsert_entry(key="K1", section="COE Registry", title="sigkill",
+                    full_text="sigkill oom crash", keywords=["sigkill"], embedding=None)
+
+    calls = {"n": 0}
+    def embed(_q):
+        calls["n"] += 1
+        return [0.0] * 1024
+
+    engine = RecallEngine(ks, additional_stores=[ts, MemoryRecallStore(conn)])  # 3 stores
+    engine.search("sigkill oom crash", embed_fn=embed)
+    assert calls["n"] == 1, f"embed must be called ONCE across stores, got {calls['n']} (HIGH-1)"
+
+
+def test_leg_failure_is_surfaced_not_silent():
+    """HIGH-2: a per-leg failure must be surfaced via last_search_errors, not
+    swallowed to an empty list indistinguishable from a genuine no-match (W5 one
+    frame deeper)."""
+    from core.recall_engine import RecallEngine
+
+    from core.knowledge_store import KnowledgeStore
+    conn = _make_conn()
+    ks = KnowledgeStore(conn)
+    engine = RecallEngine(ks)
+
+    def boom_embed(_q):
+        raise RuntimeError("bedrock down")
+
+    engine.search("anything", embed_fn=boom_embed)
+    assert engine.last_search_errors, "embed failure was NOT surfaced — silent dead-path (HIGH-2)"
+    assert any("embed" in e for e in engine.last_search_errors)
+
+
+def test_clean_search_has_no_errors():
+    """Non-vacuous: a clean search leaves last_search_errors empty (so the
+    surfaced-error signal genuinely means degradation, not noise)."""
+    from core.recall_engine import RecallEngine
+    from core.knowledge_store import KnowledgeStore
+    conn = _make_conn()
+    engine = RecallEngine(KnowledgeStore(conn))
+    engine.search("anything", embed_fn=None)  # keyword-only, no failure
+    assert engine.last_search_errors == []

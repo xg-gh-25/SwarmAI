@@ -88,14 +88,40 @@ class RecallEngine:
         fts_scored: dict[str, dict] = {}  # keyed by "storeidx:rowid"
         vec_scored: dict[str, dict] = {}
 
+        # Per-leg failure tracking (run_4d06640b Gate-2 HIGH-2): RecallEngine used
+        # to swallow per-leg errors to []/None and return an empty list that was
+        # INDISTINGUISHABLE from a genuine no-match → the caller logged nothing →
+        # silent dead recall, one frame below the loud-on-degradation guard. Now
+        # we count leg failures + expose them via ``last_search_errors`` so the
+        # caller can tell "degraded" (errored) apart from "no match" (clean empty).
+        self.last_search_errors: list[str] = []
+        fts_leg_failures = 0
+        vec_leg_failures = 0
+
+        # Embed the query ONCE, before the per-store loop (run_4d06640b Gate-2
+        # HIGH-1): embed_fn was called once PER STORE (3×) → on a synchronous
+        # critical path that tripled the Bedrock latency the disaster cap must
+        # bound (worst case ~29s ≫ 8s cap = theater). One embed, reused across all
+        # stores' vector_search.
+        query_embedding: Optional[list[float]] = None
+        if embed_fn is not None:
+            try:
+                query_embedding = embed_fn(query)
+            except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
+                query_embedding = None
+                vec_leg_failures += 1
+                self.last_search_errors.append(f"embed:{type(exc).__name__}")
+
         for store_idx, store in enumerate(all_stores):
             prefix = f"s{store_idx}:"
 
             # 1. FTS5 keyword search
             try:
                 fts_results = store.fts5_search(query, limit=top_k)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
                 fts_results = []
+                fts_leg_failures += 1
+                self.last_search_errors.append(f"fts[{store_idx}]:{type(exc).__name__}")
 
             if fts_results:
                 min_rank = min(r["fts_rank"] for r in fts_results)
@@ -116,16 +142,14 @@ class RecallEngine:
                     fts_scored[key] = {**r, "fts_score": score}
 
             # 2. Vector search (graceful fallback — Bedrock down = FTS5-only)
-            if embed_fn is not None:
+            if query_embedding is not None:
                 try:
-                    query_embedding = embed_fn(query)
-                except Exception:
-                    query_embedding = None
-                if query_embedding is not None:
-                    try:
-                        vec_results = store.vector_search(query_embedding, top_k=top_k)
-                    except Exception:
-                        vec_results = []
+                    vec_results = store.vector_search(query_embedding, top_k=top_k)
+                except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
+                    vec_results = []
+                    vec_leg_failures += 1
+                    self.last_search_errors.append(f"vec[{store_idx}]:{type(exc).__name__}")
+                else:
                     for r in vec_results:
                         key = f"{prefix}{r['id']}"
                         vec_scored[key] = {**r}

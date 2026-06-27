@@ -159,24 +159,32 @@ class TestMaybeInjectRecall:
         assert mock_unit._recall_injected is True
 
     @pytest.mark.asyncio
-    async def test_recall_timeout_does_not_block(self, mock_unit, mock_options):
-        from core.session_router import _maybe_inject_recall
+    async def test_recall_disaster_timeout_bounds_a_hang(self, mock_unit, mock_options, monkeypatch):
+        """CORRECTNESS-FIRST (run_4d06640b): the DISASTER cap bounds a recall HANG
+        (not a daily latency judge). A recall that hangs past the cap must NOT block
+        the turn forever — it returns within ~cap, injects nothing, sets the guard.
+        (The OLD 400ms daily-timeout assertion was deleted — it encoded the
+        speed-first objective this pipeline reversed.)"""
+        from core import session_router as sr
 
-        def slow_recall(*args, **kwargs):
-            time.sleep(2)  # Way over 150ms timeout
+        # Tiny cap for the test; real cap is 8s.
+        monkeypatch.setattr(sr, "_RECALL_DISASTER_TIMEOUT_S", 0.1)
+
+        def hang(*args, **kwargs):
+            time.sleep(2)  # way past the 0.1s test cap
             return "This should never be injected"
 
-        with patch("core.session_router._recall_for_query", side_effect=slow_recall):
+        with patch("core.session_router._recall_for_query", side_effect=hang):
             start = time.monotonic()
-            await _maybe_inject_recall(
+            await sr._maybe_inject_recall(
                 user_message="Tell me about the architecture",
                 options=mock_options,
                 unit=mock_unit,
             )
             elapsed = time.monotonic() - start
 
-        # 150ms timeout + thread overhead — must complete well under 500ms
-        assert elapsed < 0.5, f"Timeout should have fired at 150ms, but took {elapsed:.1f}s"
+        # Bounded by the disaster cap (+ thread overhead), not the 2s hang.
+        assert elapsed < 1.0, f"Disaster cap should have bounded the hang, took {elapsed:.1f}s"
         assert "never be injected" not in mock_options.system_prompt
         assert mock_unit._recall_injected is True
 
@@ -289,47 +297,13 @@ class TestRealRecallPathBudget:
         return options
 
     @pytest.mark.asyncio
-    async def test_sync_path_never_calls_bedrock_embed(self, mock_unit, mock_options):
-        """THE load-bearing invariant: the synchronous first-token recall path
-        must NEVER invoke the Bedrock embed (430ms warm / 2343ms cold). The bug
-        was that the embed WAS on this path, blowing the timeout → zero recall.
-
-        Asserting embed-call-count == 0 is non-vacuous regardless of DB size: it
-        proves the architectural guarantee (keyword-only floor, no Bedrock block)
-        directly, not via a latency race that a small test DB would mask.
+    async def test_sync_path_runs_both_legs_to_completion(self, mock_unit, mock_options):
+        """CORRECTNESS-FIRST (run_4d06640b): the synchronous recall path now runs
+        BOTH legs — including the Bedrock VECTOR leg — to completion before
+        generating. This REVERSES the run_bbd79e84 keyword-only invariant: the
+        embed MUST be called on the sync path (objective: full brain > first-token
+        speed). The disaster cap (8s) far exceeds the embed cost so it never trims.
         """
-        from core import session_router as sr
-
-        embed_calls = {"n": 0}
-
-        def _counting_slow_embed(_text):
-            embed_calls["n"] += 1
-            time.sleep(0.5)  # simulate Bedrock; if ever reached on sync path, RED
-            return [0.0] * 1024
-
-        with _seeded_db():
-            with patch("core.session_router._get_cached_embed_fn",
-                       return_value=_counting_slow_embed):
-                await sr._maybe_inject_recall(
-                    user_message="sigkill oom crash recovery resume",
-                    options=mock_options,
-                    unit=mock_unit,
-                )
-
-        # Keyword floor landed AND Bedrock was never called on the critical path.
-        assert mock_unit._recall_injected is True
-        assert "Recalled Knowledge" in mock_options.system_prompt
-        assert embed_calls["n"] == 0, (
-            f"Synchronous recall path called Bedrock embed {embed_calls['n']}x — "
-            "it MUST be keyword-only (the original dead-path bug). "
-            "_recall_for_query default allow_embed must be False."
-        )
-
-    @pytest.mark.asyncio
-    async def test_recall_for_query_allow_embed_gates_bedrock(self):
-        """Direct contract test: allow_embed=False → 0 embed calls;
-        allow_embed=True → embed reachable. Proves the gate is the real switch,
-        non-vacuous on any DB size (asserts the call count, not a latency race)."""
         from core import session_router as sr
 
         embed_calls = {"n": 0}
@@ -341,15 +315,19 @@ class TestRealRecallPathBudget:
         with _seeded_db():
             with patch("core.session_router._get_cached_embed_fn",
                        return_value=_counting_embed):
-                # Default (sync path) must not embed.
-                sr._recall_for_query("sigkill oom crash recovery resume", 8000)
-                assert embed_calls["n"] == 0, "allow_embed defaults False but embed was called"
+                await sr._maybe_inject_recall(
+                    user_message="sigkill oom crash recovery resume",
+                    options=mock_options,
+                    unit=mock_unit,
+                )
 
-                # Explicit off-path caller may embed.
-                embed_calls["n"] = 0
-                sr._recall_for_query("sigkill oom crash recovery resume", 8000,
-                                     allow_embed=True)
-                assert embed_calls["n"] > 0, "allow_embed=True but embed was never reached"
+        assert mock_unit._recall_injected is True
+        assert "Recalled Knowledge" in mock_options.system_prompt
+        # The vector leg MUST run on the sync path now (the reversed objective).
+        assert embed_calls["n"] > 0, (
+            "Sync recall path did NOT call the vector embed — correctness-first "
+            "requires BOTH legs run to completion (run_4d06640b reversal)."
+        )
 
     @pytest.mark.asyncio
     async def test_memory_entry_recallable_by_keyword(self, mock_unit, mock_options):
@@ -370,97 +348,97 @@ class TestRealRecallPathBudget:
         assert "SIGKILL" in mock_options.system_prompt or "sigkill" in mock_options.system_prompt.lower()
 
 
-# ── M2: vector inject-on-next-turn (run_e9b15722) ──
+# ── Correctness-first recall: loud-on-degradation + disaster cap (run_4d06640b) ──
 #
-# The vector (semantic) leg runs as a background task off the first-token path;
-# its result is injected on the NEXT turn. Gate-1 BLOCK-1: a naive design put the
-# injection AFTER `if unit._recall_injected: return` → unreachable on turn 2. These
-# tests prove the injection is reachable on turn 2 (called twice on the same unit),
-# the background task is tracked + cancellable, and dedupe works.
+# The recall path runs BOTH legs synchronously to completion. The old 400ms daily
+# timeout (which silently dropped recall) is gone; a DISASTER cap only bounds a
+# code HANG, and ANY degradation (timeout OR internal failure) is LOUD, never
+# silent — silent empty recall is the exact dead-path class that hid for months.
 
-class TestVectorInjectOnNextTurn:
+class TestRecallLoudOnDegradation:
     @pytest.fixture
-    def real_unit(self):
-        """A lightweight stand-in with the real unit's vector-recall attrs."""
-        class U:
-            is_channel_session = False
-            _recall_injected = False
-            _vector_recall_started = False
-            _vector_recall_injected = False
-            _pending_vector_recall = None
-            _keyword_recall_text = ""
-            _vector_recall_task = None
-        return U()
+    def mock_unit(self):
+        unit = MagicMock()
+        unit._recall_injected = False
+        unit.is_channel_session = False
+        return unit
 
     @pytest.fixture
-    def opts(self):
+    def mock_options(self):
         o = MagicMock()
         o.system_prompt = "## Base"
         return o
 
     @pytest.mark.asyncio
-    async def test_pending_vector_injected_on_turn_2(self, real_unit, opts):
-        """The BLOCK-1 regression guard: vector recall stored after turn 1 must be
-        injected on turn 2 — even though _recall_injected is already True (which
-        early-returns the rest of _maybe_inject_recall)."""
+    async def test_disaster_timeout_is_loud_not_silent(self, mock_unit, mock_options, monkeypatch):
+        """W5/AC3: if recall HANGS past the disaster cap, it must log at ERROR +
+        record a metric — NEVER silent. (The old path logged at debug and silently
+        returned empty — why recall was dead for months unnoticed.)"""
         from core import session_router as sr
 
-        # Simulate: turn 1 already happened (recall injected), and the background
-        # vector task has since completed and stored a pending result.
-        real_unit._recall_injected = True
-        real_unit._pending_vector_recall = "VECTOR-ONLY-ENTRY: semantic hit XYZ"
+        # Force a hang: _recall_for_query sleeps far past a tiny test cap.
+        monkeypatch.setattr(sr, "_RECALL_DISASTER_TIMEOUT_S", 0.05)
+        sr._recall_degraded_count.clear()
 
-        # Turn 2: _maybe_inject_recall is called again. Even though it early-returns
-        # on _recall_injected, the pending vector MUST be injected first.
-        await sr._maybe_inject_recall(
-            user_message="follow up question", options=opts, unit=real_unit,
-        )
+        def _hang(*a, **k):
+            time.sleep(0.5)  # > 0.05s cap → triggers the disaster path
+            return "should not arrive"
 
-        assert "VECTOR-ONLY-ENTRY: semantic hit XYZ" in opts.system_prompt, (
-            "pending vector recall was NOT injected on turn 2 — BLOCK-1 regression "
-            "(injection unreachable behind the _recall_injected early-return)"
-        )
-        assert real_unit._vector_recall_injected is True
-        assert real_unit._pending_vector_recall is None  # consumed
+        errors = []
+        monkeypatch.setattr(sr.logger, "error", lambda *a, **k: errors.append((a, k)))
 
-    @pytest.mark.asyncio
-    async def test_pending_vector_injected_once_only(self, real_unit, opts):
-        """Idempotent: a second injection attempt must not double-inject."""
-        from core import session_router as sr
-        real_unit._recall_injected = True
-        real_unit._pending_vector_recall = "semantic hit ABC"
-
-        await sr._maybe_inject_recall(user_message="q1", options=opts, unit=real_unit)
-        first = opts.system_prompt.count("semantic hit ABC")
-        await sr._maybe_inject_recall(user_message="q2", options=opts, unit=real_unit)
-        second = opts.system_prompt.count("semantic hit ABC")
-
-        assert first == 1 and second == 1, "vector recall double-injected"
-
-    def test_dedupe_drops_keyword_overlap(self):
-        """The vector result must drop lines already in the keyword injection."""
-        from core.session_router import _dedupe_recall
-        prior = "- entry A: foo\n- entry B: bar"
-        new = "- entry A: foo\n- entry C: baz"  # A overlaps, C is vector-only
-        out = _dedupe_recall(new, prior)
-        assert "entry C: baz" in out
-        assert "entry A: foo" not in out  # deduped
-
-    @pytest.mark.asyncio
-    async def test_vector_task_started_off_critical_path(self, real_unit, opts):
-        """Turn 1 fires the background task; the synchronous path must NOT block
-        on it (the task is created, not awaited)."""
-        from core import session_router as sr
-
-        # Stub _recall_for_query so the synchronous keyword leg returns fast and
-        # the background task is created (we assert it exists, not its result).
-        with patch("core.session_router._recall_for_query", return_value="kw hit"):
+        with patch("core.session_router._recall_for_query", side_effect=_hang):
             await sr._maybe_inject_recall(
                 user_message="session lifecycle crash recovery resume",
-                options=opts, unit=real_unit,
+                options=mock_options, unit=mock_unit,
             )
 
-        assert real_unit._vector_recall_started is True
-        assert real_unit._vector_recall_task is not None
-        # cleanup the task we started
-        real_unit._vector_recall_task.cancel()
+        # LOUD: error logged + metric incremented; recall NOT injected (it hung).
+        assert errors, "disaster timeout did NOT log at ERROR — silent degradation regression"
+        assert sr._recall_degraded_count.get("disaster_timeout", 0) == 1
+        assert "should not arrive" not in mock_options.system_prompt
+        assert mock_unit._recall_injected is True  # guard set, no retry-storm
+
+    @pytest.mark.asyncio
+    async def test_internal_failure_is_loud_not_silent(self, monkeypatch):
+        """W5: a failure INSIDE _recall_for_query (Bedrock auth, sqlite error) must
+        log at WARNING + metric, not the old silent logger.debug + return ''."""
+        from core import session_router as sr
+        sr._recall_degraded_count.clear()
+        warnings = []
+        monkeypatch.setattr(sr.logger, "warning", lambda *a, **k: warnings.append((a, k)))
+
+        # Force open_vec_db to raise inside _recall_for_query.
+        with patch("core.vec_db.open_vec_db", side_effect=RuntimeError("sqlite boom")):
+            out = sr._recall_for_query("sigkill oom crash", 8000, allow_embed=True)
+
+        assert out == ""  # degrades to empty...
+        assert warnings, "internal recall failure was SILENT — the dead-path class (W5)"
+        assert any("exception" in k for k in sr._recall_degraded_count)
+
+
+class TestBothLegsOneTurn:
+    """AC6: both legs land in ONE synchronous turn — no next-turn dependency."""
+
+    @pytest.mark.asyncio
+    async def test_both_legs_land_one_turn(self, monkeypatch):
+        from core import session_router as sr
+
+        unit = MagicMock(); unit._recall_injected = False; unit.is_channel_session = False
+        opts = MagicMock(); opts.system_prompt = "## Base"
+
+        embed_calls = {"n": 0}
+        def _embed(_t):
+            embed_calls["n"] += 1
+            return [0.0] * 1024
+
+        with _seeded_db():
+            with patch("core.session_router._get_cached_embed_fn", return_value=_embed):
+                await sr._maybe_inject_recall(
+                    user_message="sigkill oom crash recovery resume",
+                    options=opts, unit=unit,
+                )
+
+        # Single turn: recall injected AND the vector leg ran (both legs complete).
+        assert "Recalled Knowledge" in opts.system_prompt
+        assert embed_calls["n"] > 0, "vector leg did not run in the same turn"
