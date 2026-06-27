@@ -521,6 +521,21 @@ class SkillManager:
                     tier_name,
                 )
                 continue
+
+            # Skip underscore-prefixed helper directories (e.g. '_shared').
+            # These hold resources shared across skills, are NOT skills
+            # themselves, and have no SKILL.md by design — so they must not be
+            # treated as malformed skill candidates. Note: real skill folders are
+            # named 's_<name>' (start with 's', not '_'), so this never matches a
+            # skill. Previously '_shared' logged a WARNING ("has no SKILL.md —
+            # skipping") on every session start (×14/day of pure noise).
+            if folder_name.startswith("_"):
+                logger.debug(
+                    "Skipping shared-resources directory %s in tier %s",
+                    entry,
+                    tier_name,
+                )
+                continue
             skill_md = entry / "SKILL.md"
 
             if not skill_md.exists():

@@ -303,23 +303,37 @@ class TestSwarmAgentProtections:
     def user_skill_id(self, client: TestClient) -> str:
         """Create a user skill for testing.
 
-        Returns the skill folder name of the created user skill.
+        Yields the skill folder name, then removes the temp skill dir on
+        teardown so it does NOT leak into the real ~/.swarm-ai/skills tree.
+        Previously this fixture left behind a MALFORMED 'user-test-skill'
+        SKILL.md (no frontmatter) that the skill loader then logged
+        "missing 'name'/'description'" warnings for on every session start.
         """
-        import os
-        # Use a skill folder name that exists in the filesystem
-        # For testing, we'll use a known user skill folder name
+        import shutil
         skill_folder = "user-test-skill"
 
         # Create the skill directory if it doesn't exist (for testing)
         skills_dir = get_app_data_dir() / "skills"
         skill_path = skills_dir / skill_folder
         skill_path.mkdir(parents=True, exist_ok=True)
-        
-        # Create a minimal SKILL.md file
+
+        # Write a WELL-FORMED SKILL.md (valid frontmatter) so the loader emits
+        # no missing-name/description warnings even while the test runs.
         skill_md = skill_path / "SKILL.md"
-        skill_md.write_text("# User Test Skill\n\nA user skill for testing.")
-        
-        return skill_folder
+        skill_md.write_text(
+            "---\n"
+            "name: user-test-skill\n"
+            "description: A user skill for testing.\n"
+            "---\n\n"
+            "# User Test Skill\n\n"
+            "A user skill for testing.\n"
+        )
+
+        try:
+            yield skill_folder
+        finally:
+            # Clean up so the fixture never pollutes the real skills dir.
+            shutil.rmtree(skill_path, ignore_errors=True)
 
     @pytest.fixture
     def user_mcp_id(self, client: TestClient) -> str:
