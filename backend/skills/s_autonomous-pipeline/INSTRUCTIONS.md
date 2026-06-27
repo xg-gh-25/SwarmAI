@@ -256,7 +256,11 @@ Before executing, check:
 
 ```
 1. Retry exhaustion?  → if stage retry_count >= max_retries → CHECKPOINT
-2. Pending L2 BLOCK?  → if any prior escalation unresolved → CHECKPOINT
+2. Pending L2 BLOCK?  → route via Escalation Routing Protocol (do NOT bare-checkpoint
+   without checking channel=). NOTE: a pending L2 that ALREADY fell back to checkpoint
+   (recorded in run.json) stays checkpointed on resume — it is NOT re-asked in-band
+   (the human consumes the recorded decision before resuming). Only a freshly-raised
+   boundary L2 in a desktop session is in-band eligible.
 3. Pipeline cancelled? → EXIT
 ```
 
@@ -933,8 +937,22 @@ below). Two structurally different escalation locations, routed differently:
 
 | Escalation location | Examples | Routing |
 |----------------------|----------|---------|
-| **STAGE-BOUNDARY** (between stages, run state is consistent) | §3d Judgment decision, §3f, DEFER-at-evaluate ambiguity | **In-band eligible** (decision tree below) |
-| **MID-STAGE** (inside a running stage, state half-written) | build.md replan-fail (mid-BUILD/TDD), deliver.md meta-review HIGH (mid-convergence-loop) | **ALWAYS checkpoint** — see "Mid-stage rule" below |
+| **STAGE-BOUNDARY** (a stage's artifact is published + validated, NO stage mid-execution) | a §3d Judgment / §3f decision raised *after* the current stage's artifact is published | **In-band eligible** (decision tree below) |
+| **MID-STAGE** (current stage has uncommitted/half-written run state) | build.md replan-fail (mid-BUILD/TDD), deliver.md meta-review HIGH (mid-convergence-loop), OR a §3d Judgment discovered *during* a stage's execution before its artifact is published | **ALWAYS checkpoint** — see "Mid-stage rule" below |
+
+> **Decidable test (MED fix — do NOT match by name, apply the test):** an escalation
+> is **MID-STAGE** if the current stage has uncommitted state (partial
+> `replanned_acs`, an in-flight convergence iteration, a started-but-unpublished
+> artifact). It is **STAGE-BOUNDARY** only if the prior stage's artifact is
+> published + validated and no stage is mid-execution. **When in doubt → mid-stage →
+> checkpoint.** (A §3d Judgment can surface mid-BUILD — that is MID-STAGE despite
+> §3d's name, because BUILD state is half-written.)
+>
+> **DEFER/REJECT/ESCALATE at EVALUATE is NOT routed here (CRITICAL fix):** it is a
+> terminal verdict, not a continue-the-same-run handoff. It is governed by
+> `evaluate.md` Exit Routing + Rule #11 (DEFER/REJECT → pipeline ends; ESCALATE →
+> checkpoint). "Continue the same run/stage" is meaningless for a verdict that
+> decided to stop. Do NOT in-band a DEFER.
 
 ### Decision tree (STAGE-BOUNDARY escalations only)
 
