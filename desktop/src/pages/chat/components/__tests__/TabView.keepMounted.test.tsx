@@ -52,6 +52,7 @@ function props(tabId: string, isActive: boolean) {
     pendingPermissionRequestId: null,
     contextWarning: null,
     isWaitingForBusy: false,
+    onCancelBusyWait: noop,
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     onLoadOlder: noop,

@@ -71,6 +71,12 @@ export interface TabViewProps {
   isResuming?: boolean;
   /** SESSION_BUSY recovery polling flag (shows a waiting spinner). */
   isWaitingForBusy: boolean;
+  /** True when the backend health check reports disconnected. Used to make the
+   *  waiting indicator honest ("backend offline") instead of a bare spinner. */
+  isBackendOffline?: boolean;
+  /** Manually clear this tab's SESSION_BUSY recovery wait ("stop waiting").
+   *  Safe local clear — the 15s reconcile tick still surfaces the result. */
+  onCancelBusyWait?: (tabId: string) => void;
   /**
    * @deprecated Migration Step "4.1": activity is now computed per-tab inside
    * TabView via `useStreamingActivity(isStreaming, messages)`. These props are
@@ -120,6 +126,8 @@ function TabViewImpl({
   isReconnecting,
   isResuming,
   isWaitingForBusy,
+  isBackendOffline,
+  onCancelBusyWait,
   isActive,
   hasMoreMessages,
   isLoadingOlderMessages,
@@ -517,11 +525,28 @@ function TabViewImpl({
           <span className="text-sm">{t('chat.thinking')}</span>
         </div>
       )}
-      {/* SESSION_BUSY recovery indicator — polling for backend completion */}
+      {/* SESSION_BUSY recovery indicator — polling for backend completion.
+          When the backend is offline the poll cannot self-resolve, so we say so
+          and offer a manual exit (clears locally; the 15s reconcile still
+          surfaces the answer when the backend returns). */}
       {isWaitingForBusy && !isStreaming && (
         <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-2">
           <Spinner size="sm" />
-          <span className="text-sm">{t('chat.waitingForResponse', 'Waiting for response...')}</span>
+          <span className="text-sm">
+            {isBackendOffline
+              ? t('chat.waitingBackendOffline', 'Backend offline — waiting to reconnect...')
+              : t('chat.waitingForResponse', 'Waiting for response...')}
+          </span>
+          {onCancelBusyWait && tabId && (
+            <button
+              type="button"
+              onClick={() => onCancelBusyWait(tabId)}
+              className="ml-1 text-xs px-2 py-0.5 rounded border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors"
+              title={t('chat.stopWaitingTitle', 'Stop waiting and return to idle')}
+            >
+              {t('chat.stopWaiting', 'Stop waiting')}
+            </button>
+          )}
         </div>
       )}
       {/* Sticky streaming indicator — always visible when agent is working,

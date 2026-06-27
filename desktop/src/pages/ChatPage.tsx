@@ -273,6 +273,7 @@ export default function ChatPage() {
     setPromptMetadata,
     isLikelyStalled,
     isWaitingForBusy,
+    cancelBusyWait,
   } = useChatStreamingLifecycle({
     queryClient,
     getSession: (sid: string) => chatService.getSession(sid),
@@ -2811,6 +2812,8 @@ export default function ChatPage() {
                     isReconnecting={ts?.isReconnecting}
                     isResuming={ts?.isResuming}
                     isWaitingForBusy={active ? isWaitingForBusy : false}
+                    isBackendOffline={health.status === 'disconnected'}
+                    onCancelBusyWait={cancelBusyWait}
                     hasMoreMessages={active ? hasMoreMessages : false}
                     isLoadingOlderMessages={active ? isLoadingOlderMessages : false}
                     onLoadOlder={loadOlderMessages}

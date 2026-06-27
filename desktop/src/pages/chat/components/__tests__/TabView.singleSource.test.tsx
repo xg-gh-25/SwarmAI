@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 import { messageStoreRegistry } from '../../../../stores/MessageStore';
 import type { Message } from '../../../../types';
 
@@ -60,6 +60,7 @@ function props(tabId: string, isActive: boolean, messagesProp: Message[] = [], i
     pendingPermissionRequestId: null,
     contextWarning: null,
     isWaitingForBusy: false,
+    onCancelBusyWait: noop,
     hasMoreMessages: false,
     isLoadingOlderMessages: false,
     onLoadOlder: noop,
@@ -243,5 +244,50 @@ describe('TabView — render source: more-complete wins, never prop while stream
 
     expect(queryByTestId('bubble-ph')).not.toBeNull();      // live placeholder wins
     expect(queryByTestId('bubble-prev-long')).toBeNull();   // stale prop NOT used
+  });
+});
+
+describe('TabView — SESSION_BUSY wait: offline-aware + manual stop', () => {
+  beforeEach(() => {
+    (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = vi.fn();
+    messageStoreRegistry.clear();
+  });
+  afterEach(() => {
+    cleanup();
+    messageStoreRegistry.clear();
+  });
+
+  function busyProps(over: Partial<ReturnType<typeof props>>) {
+    // A rendered message so the main container (with the indicator) shows.
+    messageStoreRegistry.getOrCreate('A').replace([msg('a1', 'prior answer')]);
+    return { ...props('A', true, [msg('a1', 'prior answer')]), isWaitingForBusy: true, ...over };
+  }
+
+  it('shows a "Stop waiting" button that calls onCancelBusyWait(tabId)', () => {
+    const onCancel = vi.fn();
+    const { getByText } = render(<TabView {...busyProps({ onCancelBusyWait: onCancel })} />);
+    fireEvent.click(getByText('Stop waiting'));
+    expect(onCancel).toHaveBeenCalledWith('A');
+  });
+
+  it('says "Backend offline" when the backend is disconnected (honest indicator)', () => {
+    const { getByText, queryByText } = render(
+      <TabView {...busyProps({ isBackendOffline: true })} />,
+    );
+    expect(getByText(/Backend offline/i)).not.toBeNull();
+    expect(queryByText('Waiting for response...')).toBeNull();
+  });
+
+  it('says "Waiting for response..." when the backend is online', () => {
+    const { getByText } = render(<TabView {...busyProps({ isBackendOffline: false })} />);
+    expect(getByText('Waiting for response...')).not.toBeNull();
+  });
+
+  it('hides the wait indicator entirely while streaming (no stale spinner)', () => {
+    const { queryByText } = render(
+      <TabView {...busyProps({ isStreaming: true })} />,
+    );
+    // isWaitingForBusy && !isStreaming gate → indicator is suppressed.
+    expect(queryByText('Stop waiting')).toBeNull();
   });
 });

@@ -936,6 +936,8 @@ export interface ChatStreamingLifecycle {
   // SESSION_BUSY recovery — true when polling for backend completion
   /** True when backend returned SESSION_BUSY and we're polling for the response. */
   isWaitingForBusy: boolean;
+  /** Manually cancel a tab's SESSION_BUSY recovery wait (local clear, offline-safe). */
+  cancelBusyWait: (tabId: string) => void;
   // NOTE: Global streamState/dispatch intentionally NOT exposed here.
   // The global reducer is single-tab (tracks active tab only) — exposing it
   // would let consumers introduce cross-tab state bleed. Per-tab state lives
@@ -4006,6 +4008,38 @@ export function useChatStreamingLifecycle(
     setIsWaitingForBusy(tabState?.isWaitingForBusy ?? false);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
+  /**
+   * Manually cancel a tab's SESSION_BUSY recovery wait ("stop waiting").
+   *
+   * The busy poll (createStreamHandler, SESSION_BUSY branch) calls
+   * getStreamingState() every 3s to learn when the backend goes idle. When the
+   * backend is UNREACHABLE that call throws and is swallowed, so the poll can
+   * never self-resolve — the only exit is the 10-min safety cap, which is why
+   * the "Waiting for response..." spinner felt unstoppable and open-ended.
+   *
+   * This clears the poll locally and returns the tab to idle. It is SAFE: the
+   * in-flight backend turn (if any) keeps running and its result still surfaces
+   * via the always-on 15s reconcile tick once the backend returns — nothing is
+   * lost. No backend round-trip is attempted (it would only fail while offline).
+   */
+  const cancelBusyWait = useCallback((tabId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab) return;
+    // Defense-in-depth: the indicator is gated on `!isStreaming`, but never let a
+    // manual cancel touch a tab that is genuinely streaming. cancelBusyWait does
+    // NOT set isStreaming=false or abort, so a live stream would survive — but its
+    // status label would flicker to 'idle' until the next event. A no-op here
+    // keeps cancel strictly a busy-wait concern and can never perturb a live turn.
+    if (tab.isStreaming) return;
+    if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
+    if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
+    tab.busyPollInterval = undefined;
+    tab.busyPollTimeout = undefined;
+    tab.isWaitingForBusy = false;
+    if (tabId === activeTabIdRef.current) setIsWaitingForBusy(false);
+    updateTabStatus(tabId, 'idle');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs + stable setters
+
   // --- Return lifecycle interface ---
   return {
     messages,
@@ -4043,5 +4077,6 @@ export function useChatStreamingLifecycle(
     setCompactionGuard,
     isLikelyStalled,
     isWaitingForBusy,
+    cancelBusyWait,
   };
 }
