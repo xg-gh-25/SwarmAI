@@ -768,7 +768,20 @@ class SummarizationPipeline:
                 return content[0].get("text", "{}")
             return "{}"
         except Exception as e:
-            logger.warning("Enrichment LLM call failed: %s", e)
+            # Read/connection timeouts to Bedrock are transient and harmless
+            # here — enrichment is best-effort and the caller degrades to "{}".
+            # Log those at INFO to stop the recurring WARNING noise (×7/day);
+            # keep genuine (non-transient) failures at WARNING.
+            _name = type(e).__name__
+            if _name in (
+                "ReadTimeoutError", "ConnectTimeoutError",
+                "ConnectionError", "EndpointConnectionError",
+            ) or "timeout" in str(e).lower():
+                logger.info(
+                    "Enrichment LLM call timed out (transient — skipping enrichment): %s", e
+                )
+            else:
+                logger.warning("Enrichment LLM call failed: %s", e)
             return "{}"
 
     @staticmethod

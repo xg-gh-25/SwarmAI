@@ -11,6 +11,7 @@ Public symbols:
 
 import json
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,28 @@ logger = logging.getLogger(__name__)
 TITAN_MODEL_ID = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIM = 1024
 DEFAULT_TIMEOUT = 3.0  # seconds
+
+# Transient Bedrock errors worth a bounded retry. ModelErrorException ("The
+# system encountered an unexpected error during processing. Try your request
+# again.") is the most common (×6/day in logs) and is explicitly retryable;
+# throttling / 5xx / timeouts likewise. Non-retryable errors (validation, auth)
+# fail fast. boto-level retries stay at max_attempts=1 so this is the ONLY retry
+# layer (no hidden double-retry).
+_RETRYABLE_ERROR_CODES = frozenset({
+    "ModelErrorException",
+    "ThrottlingException",
+    "ServiceUnavailableException",
+    "ModelTimeoutException",
+    "ModelNotReadyException",
+    "InternalServerException",
+})
+_RETRYABLE_EXC_NAMES = frozenset({
+    "ReadTimeoutError",
+    "ConnectTimeoutError",
+    "ConnectionError",
+    "EndpointConnectionError",
+})
+_EMBED_MAX_RETRIES = 2  # 3 attempts total
 
 
 class EmbeddingClient:
@@ -70,8 +93,22 @@ class EmbeddingClient:
                 return None
         return self._client
 
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """True if a Bedrock embedding failure is a transient, retryable one."""
+        code = None
+        resp = getattr(exc, "response", None)
+        if isinstance(resp, dict):
+            code = resp.get("Error", {}).get("Code")
+        return code in _RETRYABLE_ERROR_CODES or type(exc).__name__ in _RETRYABLE_EXC_NAMES
+
     def embed_text(self, text: str) -> Optional[list[float]]:
         """Embed a single text string. Returns None on any failure.
+
+        Retries transient Bedrock errors (ModelErrorException / throttling /
+        5xx / timeouts) up to ``_EMBED_MAX_RETRIES`` times with short backoff,
+        then returns None (caller degrades to keyword-only; orphan vectors are
+        backfilled next session). Non-retryable errors fail fast.
 
         Args:
             text: Text to embed (will be truncated to 8192 tokens by Titan).
@@ -83,35 +120,48 @@ class EmbeddingClient:
         if client is None:
             return None
 
-        try:
-            body = json.dumps({
-                "inputText": text,
-                "dimensions": EMBEDDING_DIM,
-                "normalize": True,
-            })
+        body = json.dumps({
+            "inputText": text,
+            "dimensions": EMBEDDING_DIM,
+            "normalize": True,
+        })
 
-            response = client.invoke_model(
-                modelId=self._model_id,
-                body=body,
-                contentType="application/json",
-                accept="application/json",
-            )
+        last_exc: Exception | None = None
+        for attempt in range(_EMBED_MAX_RETRIES + 1):
+            try:
+                response = client.invoke_model(
+                    modelId=self._model_id,
+                    body=body,
+                    contentType="application/json",
+                    accept="application/json",
+                )
 
-            result = json.loads(response["body"].read())
-            embedding = result.get("embedding")
+                result = json.loads(response["body"].read())
+                embedding = result.get("embedding")
 
-            if embedding and len(embedding) == EMBEDDING_DIM:
-                return embedding
+                if embedding and len(embedding) == EMBEDDING_DIM:
+                    return embedding
 
-            logger.warning(
-                "Unexpected embedding response: dim=%s",
-                len(embedding) if embedding else "None",
-            )
-            return None
+                logger.warning(
+                    "Unexpected embedding response: dim=%s",
+                    len(embedding) if embedding else "None",
+                )
+                return None
 
-        except Exception as exc:
-            logger.warning("Bedrock embedding failed: %s", exc)
-            return None
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _EMBED_MAX_RETRIES and self._is_retryable(exc):
+                    # 0.2s, 0.4s — short bounded backoff; total worst-case adds
+                    # ~0.6s + retry round-trips, capped by the caller's budget.
+                    time.sleep(0.2 * (2 ** attempt))
+                    continue
+                break
+
+        logger.warning(
+            "Bedrock embedding failed after %d attempt(s): %s",
+            _EMBED_MAX_RETRIES + 1, last_exc,
+        )
+        return None
 
     def embed_batch(self, texts: list[str], max_concurrent: int = 5) -> list[Optional[list[float]]]:
         """Embed multiple texts with bounded concurrency.

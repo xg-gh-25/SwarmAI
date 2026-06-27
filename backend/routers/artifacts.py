@@ -261,7 +261,12 @@ async def get_recent_artifacts(
             cwd=workspace_path,
             capture_output=True,
             text=True,
-            timeout=5,
+            # 15s (was 5s): the SwarmWS workspace repo accumulates a commit
+            # per conversation turn (2400+ commits), so even this bounded query
+            # (--since=30.days, -n cap, --no-merges) walks enough history to
+            # exceed a 5s budget and time out ("git log timed out for workspace"
+            # ×2/day). The query is already capped; give it room to finish.
+            timeout=15,
         )
 
     try:
