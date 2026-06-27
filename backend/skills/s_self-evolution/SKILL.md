@@ -53,7 +53,7 @@ At cap → COMPRESS or RETIRE existing before adding.
 
 Before writing to SOUL/AGENT/STEERING:
 1. **Layer:** principle / rule / gate?
-2. **Parent:** P1-P4?
+2. **Parent:** P1-P7?
 3. **Conflict:** duplicates/contradicts existing?
 4. **Budget:** current count vs cap
 5. **Source:** user / correction / pipeline / self-detect

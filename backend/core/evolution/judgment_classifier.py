@@ -78,7 +78,7 @@ class JudgmentClassification:
     correction_ref: str
     axis: str  # "operational" | "cognitive"
     class_name: str | None  # CLASS_A/B/C, or None for operational
-    parent_principle: str | None  # P1-P5, or None
+    parent_principle: str | None  # P1-P7, or None
     skill_spread: list[str] = field(default_factory=list)
     blast_radius: int = 0
     evidence: list[str] = field(default_factory=list)

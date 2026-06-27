@@ -124,7 +124,7 @@ If count ≥ 3 for any bias class → invoke PROMOTE operation.
 5. Present to user with classification brief
 6. On approval:
    - Write rule to AGENT.md (or STEERING.md if user-scope override)
-   - Tag with parent principle (P1-P4)
+   - Tag with parent principle (P1-P7)
    - Update EVOLUTION.md: mark source corrections as `status: promoted`
    - Append JSONL changelog: `{"action":"promote","id":"C0XX→R24"}`
 

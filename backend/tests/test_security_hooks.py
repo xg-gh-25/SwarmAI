@@ -245,6 +245,25 @@ class TestGovernanceFileGate:
         assert "CONSTITUTIONAL" in result["additionalContext"]
 
     @pytest.mark.asyncio
+    async def test_gate_reminder_cites_current_principle_range_and_cap(self):
+        """The advisory must cite the CURRENT principle range (P1-P7) and cap (12),
+        not a stale range. Guards against lying-comment / legibility decay (R16b):
+        the gate text must track the SOUL/AGENT principle taxonomy as it grows."""
+        from core.security_hooks import create_governance_file_gate
+        gate = create_governance_file_gate()
+        result = await gate(
+            {"tool_name": "Edit", "tool_input": {"file_path": "backend/context/SOUL.md"}},
+            None, None
+        )
+        ctx = result.get("additionalContext", "")
+        # Parent range must be P1-P7 (7 principles after 认知防线 elevated to P7)
+        assert "P1-P7" in ctx, f"stale principle range in gate reminder: {ctx!r}"
+        assert "P1-P4" not in ctx and "P1-P5" not in ctx, "stale P-range leaked"
+        # Cap must be 12 (smoke-test ceiling), not the old 5
+        assert "≤12 principles" in ctx, f"stale principle cap in gate reminder: {ctx!r}"
+        assert "≤5 principles" not in ctx, "stale ≤5 cap leaked"
+
+    @pytest.mark.asyncio
     async def test_gate_advises_on_tier2_write(self):
         """Tier 2 Write triggers soft advisory."""
         from core.security_hooks import create_governance_file_gate

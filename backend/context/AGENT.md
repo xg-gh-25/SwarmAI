@@ -213,13 +213,13 @@ R24. **Self-Enhancement** — KNOWLEDGE.md: index don't inline. PROJECTS.md: aut
 When any change is proposed (by user directive, pipeline reflect, self-detection, or automation):
 
 1. **Classify:** Principle / Rule / Gate / Knowledge?
-2. **Parent:** Which principle (P1-P4) does this serve?
+2. **Parent:** Which principle (P1-P7) does this serve?
 3. **Conflict:** Contradicts or duplicates existing?
-4. **Budget:** Principles ≤5, Rules ≤25, STEERING ≤15. At cap → what retires?
+4. **Budget:** Principles ≤12, Rules ≤25, STEERING ≤15. At cap → run the JUDGMENT below (cap is a smoke-test, not a guillotine).
 
 Surface the classification brief to the decider. User has final authority after seeing the brief. Agent-initiated changes need 3x evidence OR user approval before promotion.
 
-**Budgets are smoke-tests, not guillotines** (SOUL principles ≤5 · AGENT rules ≤25 · STEERING ≤15).
+**Budgets are smoke-tests, not guillotines** (SOUL principles ≤12 · AGENT rules ≤25 · STEERING ≤15).
 Hitting the cap does NOT mean "retire one to make room." It triggers a JUDGMENT, one of three:
 1. New item is **same-source** as an existing one → don't add, **fold into** that one (redundancy — independent of the number).
 2. New item is a genuinely independent axis AND an existing item is **no longer load-bearing** (wallpaper) → replace it.

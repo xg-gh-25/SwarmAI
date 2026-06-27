@@ -765,9 +765,9 @@ def create_governance_file_gate() -> Callable[..., Any]:
             f"⚠️ GOVERNANCE GATE [{tier_label}]: Modifying governance file.\n"
             f"Before proceeding, ensure:\n"
             f"  1. Classify: Principle / Rule / Gate?\n"
-            f"  2. Parent: P1-P4?\n"
+            f"  2. Parent: P1-P7?\n"
             f"  3. Conflict/Duplicate check done?\n"
-            f"  4. Budget: SOUL ≤5 principles, AGENT ≤25 rules, STEERING ≤15"
+            f"  4. Budget: SOUL ≤12 principles, AGENT ≤25 rules, STEERING ≤15"
         )
 
         logger.info(
