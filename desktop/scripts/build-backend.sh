@@ -294,6 +294,19 @@ for _root, _dirs, _files in _os.walk('skills'):
         datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
+# Include MCP server scripts as LOOSE FILES on disk. These are launched as
+# subprocesses BY PATH (mcp_config_loader.py: .../mcp_servers/channel_file_sender.py),
+# not imported — so being in hiddenimports/LOCAL_PACKAGES (archive-only) is not
+# enough; the .py must exist on disk in _internal/mcp_servers/. Without this the
+# daemon logged "Channel-tools MCP script not found" and channel file-sending was
+# silently dead in the packaged build (worked in dev where the source file exists).
+for _mroot, _mdirs, _mfiles in _os.walk('mcp_servers'):
+    _mdirs[:] = [d for d in _mdirs if d != '__pycache__']
+    for _mf in _mfiles:
+        if _mf.endswith('.pyc'):
+            continue
+        _msrc = _os.path.join(_mroot, _mf)
+        datas.append((_msrc, _os.path.dirname(_msrc)))
 # Include MCP catalog and CLI tool registry at bundle root
 datas += [('mcp-catalog.json', '.')]
 datas += [('required-cli-tools.json', '.')]
