@@ -500,3 +500,64 @@ class TestDuplicateMemoryIndex:
         result = inject_index_into_memory(content_with_bare_dup)
         assert result.count(MEMORY_INDEX_START) == 1
         assert result.count("## Memory Index") == 1  # only inside the marker block
+
+
+class TestKeyToSectionLiveSchema:
+    """G2: _key_to_section must map the LIVE 7-type schema, not the stale RC/KD/LL map.
+
+    Root-cause bug: _KEY_TO_SECTION hand-maintained only RC/KD/LL/COE while the
+    live index uses GUI/PIT/DEC/OT/PRI/MOD/COR/SP/COE — so the pure-keyword leg
+    mapped 10/443 entries and returned {} for non-COE queries. The fix derives
+    the map from the single source of truth (_REF_PREFIX_TO_SECTION).
+    """
+
+    def test_live_prefixes_map_to_real_sections(self):
+        from core.memory_index import _key_to_section
+
+        cases = {
+            "GUI199": "Guidelines",
+            "PIT160": "Pitfalls",
+            "DEC39": "Decisions",
+            "OT16": "Open Threads",
+            "PRI08": "Principles",
+            "MOD06": "Models",
+            "COR04": "Corrections",
+            "SP01": "Standing Preferences",
+            "COE10": "COE Registry",
+        }
+        for key, expected in cases.items():
+            assert _key_to_section(key) == expected, f"{key} → {_key_to_section(key)!r}, expected {expected!r}"
+
+    def test_legacy_prefixes_still_map(self):
+        """Backward compat: old index entries (KD/RC/LL) must still resolve."""
+        from core.memory_index import _key_to_section
+
+        assert _key_to_section("KD01") == "Decisions"
+        assert _key_to_section("RC07") == "Guidelines"
+        assert _key_to_section("LL22") == "Pitfalls"
+
+    def test_unknown_prefix_returns_none(self):
+        from core.memory_index import _key_to_section
+
+        assert _key_to_section("ZZZ99") is None
+
+    def test_keyword_leg_maps_majority_of_live_index(self):
+        """The pure-keyword leg must map >=95% of live index entries (was 10/443)."""
+        import re
+        from core.memory_index import _key_to_section, _parse_index_entries
+
+        mem_path = "/Users/gawan/.swarm-ai/SwarmWS/.context/MEMORY.md"
+        try:
+            content = open(mem_path).read()
+        except FileNotFoundError:
+            import pytest
+            pytest.skip("live MEMORY.md not present in this environment")
+        from core.memory_index import extract_index_from_memory
+        idx = extract_index_from_memory(content)
+        entries = _parse_index_entries(idx)
+        if not entries:
+            import pytest
+            pytest.skip("no index entries parsed")
+        mappable = sum(1 for e in entries if _key_to_section(e["key"]))
+        ratio = mappable / len(entries)
+        assert ratio >= 0.95, f"only {mappable}/{len(entries)} ({ratio:.1%}) mappable — keyword leg still dead"

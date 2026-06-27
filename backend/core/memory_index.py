@@ -747,20 +747,28 @@ def _get_session_recall(db_path: Path) -> object:
 
 
 # ── Key→Section mapping ──────────────────────────────────────────────
-
-_KEY_TO_SECTION = {
-    "RC": "Recent Context",
-    "KD": "Key Decisions",
-    "LL": "Lessons Learned",
-    "COE": "COE Registry",
-}
+#
+# Derived from the SINGLE SOURCE OF TRUTH (_REF_PREFIX_TO_SECTION, which itself
+# expands ddd_entry_lifecycle.MEMORY_PREFIX_TO_SECTION + the legacy KD/RC/LL
+# aliases). The old hand-maintained _KEY_TO_SECTION literal listed only
+# RC/KD/LL/COE and drifted: the live index uses GUI/PIT/DEC/OT/PRI/MOD/COR/SP,
+# so the pure-keyword leg mapped 10/443 entries and returned {} for non-COE
+# queries (run_c1624c89 G2). Deriving from the source-of-truth fixes the root
+# cause once and cannot drift again.
+_KEY_TO_SECTION = _REF_PREFIX_TO_SECTION
 
 
 def _key_to_section(key: str) -> Optional[str]:
-    """Map an index entry key like 'RC01' or 'COE03' to a section name."""
-    for prefix, sec_name in _KEY_TO_SECTION.items():
+    """Map an index entry key like 'GUI01' / 'PIT12' / 'COE03' to a section name.
+
+    Longest-prefix match: sort prefixes by length descending so a longer prefix
+    (e.g. a hypothetical 'COE') is preferred over a shorter one that is its
+    prefix. The current schema has no such collision, but this is cheap
+    insurance against a future short prefix shadowing a longer one.
+    """
+    for prefix in sorted(_KEY_TO_SECTION, key=len, reverse=True):
         if key.startswith(prefix):
-            return sec_name
+            return _KEY_TO_SECTION[prefix]
     return None
 
 
