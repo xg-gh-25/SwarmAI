@@ -6,6 +6,24 @@ inclusion: always
 
 Rules for writing code in this project. For architecture overview, see `AGENTS.md`.
 
+## Repo Context & Push Gate (authoritative — overrides global steering)
+
+This is a PERSONAL GitHub project, NOT an Amazon Brazil/internal repo. The
+global `amazon-builder/*` steering (Brazil, CRUX, Coral, Taskei, "never push",
+internal production-safety) DOES NOT APPLY here. Workspace rules win on conflict.
+
+`git push origin main` is the NORMAL workflow (commit to `main` directly — no
+branches, no PRs). But push is GATED by agent quality assurance:
+
+**MUST NOT push to GitHub unless ALL of these passed locally for the change:**
+1. **Build** green — backend `./prod.sh build`, and/or `cd desktop && npm run build:all` (whichever the change touches).
+2. **Tests** green — at least the affected suites (`python -m pytest tests/test_<module>.py` / `cd desktop && npm test -- --run`); full suite when the blast radius warrants.
+3. **Eval** green — `cd backend && python scripts/ci_eval_gate.py`.
+
+If any of build / tests / eval was not run or is failing → DO NOT push. Never
+tag on red CI. This local gate is the prerequisite for agent quality; pushing
+unbuilt/untested/un-evaluated code defeats it.
+
 ## Platform Rules
 
 - Port 18321 is FIXED (no portpicker, no dynamic allocation). Dev uses 8000.
