@@ -10,6 +10,17 @@ Mounts:
 - locally / CI: `python backend/scripts/ci_eval_gate.py` before push
 - s_swarm-build Stage 1 (deferred — needs XG sign-off, touches deploy path)
 
+Push gate (STEERING #5 — "Push 门禁是质量不是审批"): `git push origin main` is the
+normal flow and needs no per-push user sign-off, BUT push is only allowed when the
+working tree is fully green on THREE checks — any one unrun or red blocks the push:
+  1. Build — `./prod.sh build` (backend changes) and/or
+             `cd desktop && npm run build:all` (frontend changes), per what changed.
+  2. Tests — at least the affected suites (pytest / vitest), wrapped per AGENT R9
+             (`perl -e 'alarm'` / `gtimeout`).
+  3. Eval  — THIS script: `cd backend && python scripts/ci_eval_gate.py`.
+This module is gate #3. The gate is QUALITY, not approval: it does not ask "did the
+user okay it?" but "did eval run against this exact code and pass?"
+
 Why a CHECK not a RUN: zero Bedrock cost, runs anywhere, and the report is a
 committed artifact (lock-file pattern). The freshness binding (code_digest over
 INPUTS, not HEAD) is what makes "developer ran eval against THIS code" verifiable.
@@ -66,8 +77,9 @@ def check_gate(root: Path) -> tuple[int, str]:
                    f"passed={bvt.get('passed')} failed={bvt.get('failed')} "
                    f"error={bvt.get('error')} — fix failing cases before push/build.")
 
-    return 0, (f"GATE PASS: fresh (digest={report_digest}) + green "
-               f"(bvt {bvt.get('passed')}/{bvt.get('total')}).")
+    return 0, (f"GATE PASS (eval = push-gate #3/3): fresh (digest={report_digest}) "
+               f"+ green (bvt {bvt.get('passed')}/{bvt.get('total')}). "
+               f"Confirm Build + Tests green too before `git push origin main`.")
 
 
 def main() -> int:
