@@ -393,7 +393,7 @@ DO NOT invoke sibling skills via slash commands — you ARE the pipeline.
 |---|---|---|---|
 | **Mechanical** | One correct answer, deterministic | L0 INFORM, auto-approve | "Use pytest (pyproject.toml)" |
 | **Taste** | Reasonable default, human might differ | L1 CONSULT, accumulate for delivery gate | "Monolith over microservice for solo dev" |
-| **Judgment** | Genuinely ambiguous, needs human | L2 BLOCK, checkpoint | "This changes the public API" |
+| **Judgment** | Genuinely ambiguous AND hard to reverse, needs human | L2 BLOCK → **route via Escalation Routing Protocol** (in-band ask if `channel=direct`, else checkpoint) — do NOT auto-checkpoint | "This changes the public API" |
 
 Log each decision in the pipeline run state:
 ```json
@@ -476,7 +476,7 @@ After verification:
 
 - **All mechanical decisions → advance** to next stage
 - **Taste decisions found → log them**, advance (review at delivery gate)
-- **Judgment decision → CHECKPOINT** immediately
+- **Judgment decision → route via Escalation Routing Protocol** immediately (in-band ask if `channel=direct` + header present; else fallback checkpoint — do NOT default to bare checkpoint)
 
 ---
 
@@ -916,6 +916,95 @@ automatically uses historical data (with 20% buffer) when available.
 
 ---
 
+## Escalation Routing Protocol
+
+> **Single source of truth for WHERE a human-escalation goes.** Every
+> human-escalation exit (L2 Judgment at §3d/§3f, and the mid-stage exits in
+> build.md/deliver.md) routes through THIS block. The principle (SwarmAI PRODUCT.md
+> § Design Philosophy "HITL & 心流" + AGENT.md § Escalation): **the signal lands in
+> the user's CURRENT chat tab, in-band — never a passive next-session briefing panel
+> the user has to dig a command out of.** "I 不可能去 briefing 里操作 pipeline."
+
+### When this fires
+
+A **human-escalation** is any point where the pipeline genuinely needs the user to
+decide (L2 Judgment) — NOT a Taste decision (those self-resolve, see threshold
+below). Two structurally different escalation locations, routed differently:
+
+| Escalation location | Examples | Routing |
+|----------------------|----------|---------|
+| **STAGE-BOUNDARY** (between stages, run state is consistent) | §3d Judgment decision, §3f, DEFER-at-evaluate ambiguity | **In-band eligible** (decision tree below) |
+| **MID-STAGE** (inside a running stage, state half-written) | build.md replan-fail (mid-BUILD/TDD), deliver.md meta-review HIGH (mid-convergence-loop) | **ALWAYS checkpoint** — see "Mid-stage rule" below |
+
+### Decision tree (STAGE-BOUNDARY escalations only)
+
+```
+STAGE-BOUNDARY human-escalation (L2 Judgment)
+  │
+  ├─ Read the `channel=` field in your own system-prompt runtime header.
+  │     (system_prompt.py emits `channel=direct` for a desktop chat tab;
+  │      a channel session emits `channel=slack` etc.; a background-JOB
+  │      pipeline has NO runtime header at all — the field is ABSENT.)
+  │
+  ├─ channel=direct  AND  header present  →  IN-BAND ASK
+  │     • Call the AskUserQuestion tool IN THE CURRENT TURN with the decision
+  │       framed as options (A/B/C + a short "why each").
+  │     • The existing ask_question_gate hook blocks up to 4h (WAITING_INPUT is
+  │       eviction-protected); the user answers in THIS tab (front tab directly,
+  │       background tab via the "Swarm is asking" toast → click → answer).
+  │     • On answer → CONTINUE THE SAME RUN AT THE SAME STAGE. Do NOT checkpoint,
+  │       do NOT create a new run, do NOT advance/rewind — the run stays `running`;
+  │       the answer is just a tool result you act on inline.
+  │     • On 4h TIMEOUT (gate returns TIMEOUT_SENTINEL, never a fabricated empty
+  │       answer) → fall through to FALLBACK CHECKPOINT below.
+  │
+  └─ channel≠direct  OR  header ABSENT (background job / headless / unknown)
+        →  FALLBACK CHECKPOINT  (fail-safe — the default when not provably desktop)
+        • Do NOT call AskUserQuestion. A channel session AUTO-ANSWERS it with the
+          first option (gateway.py) — which would silently fake an L2 decision; a
+          headless `claude --print` job has no human at all and would HANG to the
+          job timeout. Both are worse than pausing.
+        • Emit a one-line warning IN THE CURRENT TAB stating the decision point,
+          then run-checkpoint (status=paused, decision recorded). NEVER auto-archive
+          the run (archival requires an owner-death observation — not pipeline's call).
+        • Suggest in-tab: "resume in a desktop session to decide" — do NOT rely on
+          the briefing to carry the action.
+```
+
+**Why fail-safe defaults to checkpoint:** in-band ask is only SAFE + MEANINGFUL when
+a human is attending the tab. `channel=direct` + header-present is the ONLY state
+that proves that. Anything else (channel auto-answer, headless hang, unknown) →
+checkpoint. Omitting this guard and just saying "L2 → ask in-band" would regress the
+background-job path (Gate-1 finding, run_48bd39cb).
+
+### Mid-stage rule (build.md / deliver.md exits)
+
+A MID-STAGE escalation (replan-fail inside BUILD's TDD loop; meta-review HIGH inside
+DELIVER's convergence loop) **always checkpoints — never in-band.** Blocking a 4h
+question mid-stage would freeze a half-written stage (partial `replanned_acs`,
+in-flight convergence iteration count) that the per-stage validator was never
+designed to resume. Reach a stage boundary first; only boundary-level L2 is in-band
+eligible. The decision tree above does NOT apply mid-stage.
+
+### Taste vs L2 — do NOT over-raise (the over-ask guard)
+
+Escalation is scarce; every raise breaks the user's flow. Default to deciding.
+
+| Decision class | Handling | Raises? |
+|----------------|----------|:-------:|
+| **Mechanical** (one correct answer) | just do it | no |
+| **Taste** (a sensible default exists, a human might differ) | decide the default + disclose in ONE line in the current tab ("chose X because Y; say so to override"); accumulate for the Delivery Taste Gate | no |
+| **Judgment / L2** (genuinely ambiguous AND hard to reverse, e.g. changes a public API / a one-way data migration) | route through the decision tree above | yes |
+
+**Worked counter-example:** "I have a leaning toward retry-with-backoff but want to
+confirm" is **Taste, not L2** — there is a sensible default (your leaning), and it is
+reversible. Decide it, disclose one line, do NOT call AskUserQuestion. Raising it
+would be transferring your judgment cost onto the user (C039 mirror: 判断 ≠ 甩给人).
+Disclosure is ONE line, never a paragraph — a wall of decision notes is its own kind
+of flow-pollution.
+
+---
+
 ## Checkpoint Protocol
 
 ### ⚠️ BLOCKING: Budget Check Required Before ANY Checkpoint
@@ -945,6 +1034,8 @@ digraph checkpoint_decision {
   run_budget [label="run-budget\nshould_checkpoint?", shape=diamond];
   checkpoint_yes [label="CHECKPOINT", shape=box, style=filled, fillcolor="#ffcccc"];
   l2_block [label="L2 BLOCK\npending?", shape=diamond];
+  esc_route [label="Escalation Routing:\nstage-boundary +\nchannel=direct?", shape=diamond, style=filled, fillcolor="#e6f2ff"];
+  inband [label="IN-BAND ASK\n(AskUserQuestion,\ncontinue SAME run)", shape=box, style=filled, fillcolor="#ccffcc"];
   retries [label="Retries >=\nmax_retries?", shape=diamond];
   error [label="Unexpected\nerror?", shape=diamond];
   continue [label="CONTINUE\n(next stage)", shape=box, style=filled, fillcolor="#ccffcc"];
@@ -952,7 +1043,9 @@ digraph checkpoint_decision {
   stage_done -> run_budget;
   run_budget -> checkpoint_yes [label="true"];
   run_budget -> l2_block [label="false"];
-  l2_block -> checkpoint_yes [label="yes"];
+  l2_block -> esc_route [label="yes"];
+  esc_route -> inband [label="yes (desktop,\nboundary)"];
+  esc_route -> checkpoint_yes [label="no (channel/\nheadless/mid-stage\n/timeout → fail-safe)"];
   l2_block -> retries [label="no"];
   retries -> checkpoint_yes [label="yes"];
   retries -> error [label="no"];
@@ -962,6 +1055,9 @@ digraph checkpoint_decision {
 ```
 
 **Follow the tree sequentially.** First YES → checkpoint. All NO → continue.
+**L2 BLOCK pending → Escalation Routing Protocol** (above): in-band ask continues
+the same run (no checkpoint) when desktop+boundary; otherwise fail-safe checkpoint.
+The `retries`/`error` fall-through path is unchanged.
 
 **NOT valid reasons to checkpoint:**
 - "BUILD is a big stage" (it's ~60K tokens, you have 800K)
@@ -1122,7 +1218,10 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
 7. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
 8. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
 9. **Taste decisions batch at delivery.** Don't interrupt mid-pipeline.
-10. **Judgment decisions block immediately.** CHECKPOINT at once.
+10. **Judgment decisions route via the Escalation Routing Protocol immediately.**
+    STAGE-BOUNDARY L2 → in-band AskUserQuestion if `channel=direct` (continue the
+    SAME run on answer), else fallback checkpoint. MID-STAGE L2 (build/deliver) →
+    always checkpoint. Never default to a bare checkpoint without checking `channel=`.
 11. **DEFER/REJECT at evaluate ends the pipeline.**
 12. **Always generate REPORT.md.** at `.artifacts/runs/<RUN_ID>/REPORT.md`.
 13. **Binary push-ready gate at delivery.** No numeric score. Binary:

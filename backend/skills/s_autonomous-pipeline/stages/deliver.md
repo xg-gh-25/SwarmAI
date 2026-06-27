@@ -71,7 +71,10 @@ gradients — there is no meaningful difference between 7/10 and 8/10.
 - Any unfixed HIGH finding → block
 - Any AC without a passing test → block
 - Completion audit gap → block
-- Meta-review HIGH risk unaddressed → escalate to user
+- Meta-review HIGH risk unaddressed → escalate. **MID-STAGE exit** (inside the
+  convergence loop): always **checkpoint**, NOT in-band — see INSTRUCTIONS.md
+  § Escalation Routing Protocol "Mid-stage rule" (blocking a 4h question mid-loop
+  would freeze a half-written convergence iteration).
 
 **Output:** `{"push_ready": true/false, "blockers": [...]}` — no score, no gradient.
 

@@ -390,7 +390,10 @@ still failing — not a typo fix but a fundamental approach mismatch):
 
 **Rules:**
 - Replan is scoped to ONE AC — don't redesign the whole feature
-- Max 1 replan per AC. If replan also fails → escalate (L2 BLOCK)
+- Max 1 replan per AC. If replan also fails → escalate (L2 BLOCK). **MID-STAGE exit**
+  (inside the TDD loop): always **checkpoint**, NOT in-band — see INSTRUCTIONS.md
+  § Escalation Routing Protocol "Mid-stage rule" (a 4h in-band block mid-BUILD would
+  freeze a half-written `replanned_acs` state).
 - The replan insight should flow back to REFLECT as a lesson
 
 **Why this exists:** Without a replan trigger, the agent either retries the
