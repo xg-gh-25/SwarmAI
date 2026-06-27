@@ -215,8 +215,14 @@ class TestMaybeInjectRecall:
                 unit=mock_unit,
             )
 
+        # Pure-filesystem recall (DoD6, 2026-06-28): on a keyword no-match we now
+        # inject an AGENTIC re-search nudge (not nothing) — the keyword-only blind
+        # spot is covered by prompting the agent to re-grep with synonyms. So the
+        # prompt GROWS by the hint, and a "## Recalled Knowledge" header appears.
         original_base = "## Base system prompt content"
-        assert mock_options.system_prompt == original_base
+        assert mock_options.system_prompt != original_base
+        assert "## Recalled Knowledge" in mock_options.system_prompt
+        assert "synonyms" in mock_options.system_prompt
         assert mock_unit._recall_injected is True
 
 
@@ -297,12 +303,13 @@ class TestRealRecallPathBudget:
         return options
 
     @pytest.mark.asyncio
-    async def test_sync_path_runs_both_legs_to_completion(self, mock_unit, mock_options):
-        """CORRECTNESS-FIRST (run_4d06640b): the synchronous recall path now runs
-        BOTH legs — including the Bedrock VECTOR leg — to completion before
-        generating. This REVERSES the run_bbd79e84 keyword-only invariant: the
-        embed MUST be called on the sync path (objective: full brain > first-token
-        speed). The disaster cap (8s) far exceeds the embed cost so it never trims.
+    async def test_sync_path_is_keyword_only_no_embed(self, mock_unit, mock_options):
+        """PURE-FILESYSTEM (design §3.3/§5.2/§5.4, 2026-06-28): the recall path is
+        now KEYWORD-ONLY — the Bedrock VECTOR leg was removed. The embed MUST NOT
+        be called (no Titan on any recall path). This REVERSES the prior
+        'both-legs/correctness-first' invariant: the synonym blind spot is covered
+        by agentic re-search, not by a vector leg. Recall still LANDS (keyword
+        floor through MemoryRecallStore), just without embedding.
         """
         from core import session_router as sr
 
@@ -323,10 +330,12 @@ class TestRealRecallPathBudget:
 
         assert mock_unit._recall_injected is True
         assert "Recalled Knowledge" in mock_options.system_prompt
-        # The vector leg MUST run on the sync path now (the reversed objective).
-        assert embed_calls["n"] > 0, (
-            "Sync recall path did NOT call the vector embed — correctness-first "
-            "requires BOTH legs run to completion (run_4d06640b reversal)."
+        # The vector leg MUST NOT run — pure-filesystem removed it. This is the
+        # mutation guard: if allow_embed ever flips back to True, embed_calls > 0
+        # and this RED-s, catching a vector-leg regression.
+        assert embed_calls["n"] == 0, (
+            "Recall path called the vector embed — pure-filesystem design removed "
+            "the vector leg; recall must be keyword/FTS5 only (no Titan)."
         )
 
     @pytest.mark.asyncio
@@ -417,11 +426,12 @@ class TestRecallLoudOnDegradation:
         assert any("exception" in k for k in sr._recall_degraded_count)
 
 
-class TestBothLegsOneTurn:
-    """AC6: both legs land in ONE synchronous turn — no next-turn dependency."""
+class TestKeywordOnlyOneTurn:
+    """Pure-filesystem (design §5.4): recall lands in ONE synchronous turn via the
+    KEYWORD leg only — no vector, no next-turn dependency, no embed."""
 
     @pytest.mark.asyncio
-    async def test_both_legs_land_one_turn(self, monkeypatch):
+    async def test_keyword_leg_lands_one_turn_no_embed(self, monkeypatch):
         from core import session_router as sr
 
         unit = MagicMock(); unit._recall_injected = False; unit.is_channel_session = False
@@ -439,6 +449,6 @@ class TestBothLegsOneTurn:
                     options=opts, unit=unit,
                 )
 
-        # Single turn: recall injected AND the vector leg ran (both legs complete).
+        # Single turn: recall injected via keyword floor; vector leg NEVER runs.
         assert "Recalled Knowledge" in opts.system_prompt
-        assert embed_calls["n"] > 0, "vector leg did not run in the same turn"
+        assert embed_calls["n"] == 0, "vector leg ran — pure-filesystem removed it"

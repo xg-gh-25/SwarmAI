@@ -818,118 +818,24 @@ def _keyword_section_scores(
     return matched
 
 
-def _hybrid_section_scores(user_message: str, allow_embed: bool = True) -> dict[str, float]:
-    """Score sections using hybrid vector+keyword search.
+def _hybrid_section_scores(user_message: str, allow_embed: bool = False) -> dict[str, float]:
+    """REMOVED — vector/hybrid section scoring is gone (pure-filesystem recall
+    design §3.3/§5.4, 2026-06-28).
 
-    Queries the memory_vec SQLite table for vector similarity, combines
-    with keyword scores, and returns section-level max scores.
+    The vector leg (memory_vec + Bedrock Titan embed + hybrid_memory_search merge)
+    was deleted: NO recall path embeds anymore. This function is retained as an
+    inert stub that ALWAYS returns ``{}`` so (a) callers that still import it do
+    not ImportError during the transition, and (b) it is structurally impossible
+    for any Titan/embed call to fire from here (the body that called
+    ``embed_text`` no longer exists). All recall scoring is keyword/BM25 via
+    ``_keyword_section_scores``. ``allow_embed`` is kept only for signature
+    compatibility and has no effect.
 
-    Falls back to empty dict on any failure (caller will use keyword-only).
-
-    Args:
-        allow_embed: When False, the function short-circuits and returns ``{}``
-            WITHOUT computing a query embedding (no Bedrock call). This is the
-            READ-only / anti-scope guard (run_4358cc95): a caller that must not
-            trigger an embed (e.g. multi-domain ``recall_all``) passes False.
-            Default True preserves the existing keyword-miss → hybrid behavior.
+    The vector golden-case probes (recall_chain_probe.py synonym_guard /
+    missing_vector / stale_index / recall_budget / knowledge_live) that drove the
+    old body are retired via s_golden-case in the same change (design §7/DoD9).
     """
-    if not allow_embed:
-        return {}
-
-    import sqlite3 as _sqlite3
-    from pathlib import Path
-    from jobs.paths import DB_PATH as _db_path
-
-    db_path = _db_path
-    if not db_path.exists():
-        return {}
-
-    try:
-        import sqlite_vec
-        from .memory_embeddings import MemoryEmbeddingStore, hybrid_memory_search
-        from .embedding_client import EmbeddingClient
-
-        conn = _sqlite3.connect(str(db_path))
-        try:
-            conn.enable_load_extension(True)
-            sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
-
-            store = MemoryEmbeddingStore(conn)
-
-            # Check if tables exist and have data
-            try:
-                count = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
-            except _sqlite3.OperationalError:
-                return {}
-
-            if count == 0:
-                return {}
-
-            # Get vector scores (cached client avoids re-init on every call)
-            global _embedding_client_cache
-            if _embedding_client_cache is None:
-                _embedding_client_cache = EmbeddingClient()
-            query_embedding = _embedding_client_cache.embed_text(user_message)
-
-            vector_scores: dict[str, float] = {}
-            if query_embedding is not None:
-                raw = store.vector_search_raw(query_embedding, top_k=20)
-                # sqlite-vec cosine distance = 2*(1-cos_sim). Convert to similarity.
-                vector_scores = {key: max(0.0, 1.0 - dist / 2.0) for key, dist in raw}
-
-            # Build the BM25 candidate corpus (title + aliases) per stored entry,
-            # plus the entry→section map and the set of embedded keys.
-            entry_sections: dict[str, str] = {}
-            bm25_docs: dict[str, str] = {}
-            entry_temporal: dict[str, float] = {}
-            rows = conn.execute(
-                "SELECT key, section, title, keywords, full_text FROM memory_entries"
-            ).fetchall()
-            for row in rows:
-                key, section, title, kw_json, full_text = row
-                entry_sections[key] = section
-                aliases = json.loads(kw_json) if kw_json else []
-                bm25_docs[key] = f"{title} {' '.join(aliases)}".strip()
-                # F4: superseded entries (full_text carries `superseded_by: <key>`)
-                # are down-weighted on the BM25 leg, so a stale entry cannot
-                # out-rank its active replacement on keyword match alone.
-                entry_temporal[key] = _entry_temporal_weight(full_text or "")
-
-            embedded_keys: set[str] = {
-                r[0] for r in conn.execute("SELECT key FROM memory_vec").fetchall()
-            }
-        finally:
-            conn.close()
-
-        # Keyword leg: Okapi-BM25+IDF over the candidate set. Down-weight
-        # superseded entries on the RAW score (F4), THEN normalize — so the
-        # 0.1 multiplier survives normalization and a lone superseded candidate
-        # cannot be re-promoted to full weight by the degenerate-set branch.
-        raw_bm25 = _bm25_scores(user_message, bm25_docs)
-        raw_bm25 = {k: v * entry_temporal.get(k, 1.0) for k, v in raw_bm25.items()}
-        keyword_scores = _normalize_bm25_scores(raw_bm25)
-
-        # Hybrid merge — missing-vector renorm via embedded_keys (§3.6.1).
-        ranked = hybrid_memory_search(
-            keyword_scores=keyword_scores,
-            vector_scores=vector_scores,
-            embedded_keys=embedded_keys,
-        )
-
-        # Aggregate to section level (max score per section)
-        section_scores: dict[str, float] = {}
-        for entry in ranked:
-            sec_name = entry_sections.get(entry.key) or _key_to_section(entry.key)
-            if sec_name:
-                if sec_name not in section_scores or entry.hybrid > section_scores[sec_name]:
-                    section_scores[sec_name] = entry.hybrid
-
-        return section_scores
-
-    except Exception as exc:
-        logger.warning("Hybrid section scoring failed: %s", exc)
-        return {}
+    return {}
 
 
 # ── Full Injection Helpers ────────────────────────────────────────────

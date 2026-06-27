@@ -363,7 +363,9 @@ async def _maybe_inject_recall(
                 _recall_for_query,
                 keywords,
                 _RECALL_MAX_TOKENS,
-                True,  # allow_embed — run the vector/semantic leg too
+                False,  # allow_embed=False — pure-filesystem: NO vector/Titan leg
+                        # (design §3.3/§5.2). Recall is keyword/FTS5 only; the
+                        # synonym blind spot is covered by agentic re-search, not vector.
             ),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )

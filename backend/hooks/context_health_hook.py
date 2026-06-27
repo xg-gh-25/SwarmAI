@@ -1851,8 +1851,13 @@ class ContextHealthHook:
                 memory_file.write_text(updated, encoding="utf-8")
                 logger.info("context_health: MEMORY.md index regenerated")
 
-            # Sync memory embeddings for hybrid retrieval (delta — only changed entries)
-            self._sync_memory_embeddings(content)
+            # WRITER STOPPED (pure-filesystem recall design §5.5/DoD8, 2026-06-28):
+            # the memory_vec embedding sync is no longer called. The READ side
+            # removed all vector legs (no recall path embeds), so keeping this
+            # writer would burn Bedrock cost writing vectors nobody reads. Memory
+            # recall is now keyword/BM25/FTS5 only. (The _sync_memory_embeddings
+            # method is retained but unused — physical removal of the method +
+            # memory_vec table is a ToDo, design §5.12.)
         finally:
             flock_unlock(lock_fd)
             lock_fd.close()
@@ -1976,7 +1981,6 @@ class ContextHealthHook:
             return
 
         from core.knowledge_store import KnowledgeStore, sync_knowledge_index
-        from core.embedding_client import EmbeddingClient
         from core.vec_db import open_vec_db
 
         with open_vec_db() as conn:
@@ -2002,14 +2006,15 @@ class ContextHealthHook:
                     logger.error("context_health: knowledge_fts repair failed: %s: %s",
                                  type(exc).__name__, exc)
 
-            # Create embedding function (graceful fallback if Bedrock unavailable)
-            client = EmbeddingClient()
-
-            def _safe_embed(text: str) -> list[float] | None:
-                return client.embed_text(text)
-
+            # WRITER STOPPED (pure-filesystem recall design §5.5/§5.8/DoD8,
+            # 2026-06-28): the Knowledge Library is now FTS5-ONLY — no embedding.
+            # Library recall退到纯 knowledge_fts (Q4=A); the read side no longer
+            # consumes knowledge_vec, so embedding here would burn Bedrock cost
+            # writing vectors nobody reads. Pass embed_fn=None → sync_knowledge_index
+            # builds the FTS5 index only. This also makes Archives→FTS5 (Run-1 DoD4)
+            # cost-free (no embed on the newly-indexed long-term memory).
             stats = sync_knowledge_index(
-                store, knowledge_dir, embed_fn=_safe_embed, deadline=deadline,
+                store, knowledge_dir, embed_fn=None, deadline=deadline,
             )
             if stats.get("deferred", 0) > 0:
                 logger.info(
@@ -2017,31 +2022,8 @@ class ContextHealthHook:
                     "sync — deferring %d file(s) to next session",
                     stats["deferred"],
                 )
-
-            # R4a: heal chunks orphaned by a prior failed embed (Bedrock down at
-            # index time). Without this the delta-sync content_hash check skips
-            # them forever → permanently keyword-only. Mirrors the memory_vec
-            # orphan recovery above. Best-effort, capped per session.
-            # Budget-gated: skip when the sync above already deferred for time —
-            # this issues up to 10 more Bedrock embeds, and running them
-            # post-deadline would reintroduce the overrun the deadline prevents.
-            # Orphans self-heal next session (delta-sync is idempotent).
-            try:
-                if stats.get("deferred", 0) > 0:
-                    recovered = 0
-                else:
-                    recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
-                if recovered:
-                    remaining = conn.execute(
-                        "SELECT COUNT(*) FROM knowledge_chunks kc "
-                        "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
-                    ).fetchone()[0]
-                    logger.info(
-                        "context_health: knowledge_vec orphan-backfill — recovered=%d, remaining=%d",
-                        recovered, remaining,
-                    )
-            except Exception as exc:  # noqa: BLE001 — backfill is best-effort
-                logger.warning("context_health: knowledge_vec backfill failed: %s", exc)
+            # NOTE: knowledge_vec orphan-backfill REMOVED (writer stopped) — no
+            # vector leg to heal. FTS5 has no orphan-vector concept.
 
         if stats.get("chunks_added", 0) > 0 or stats.get("files_removed", 0) > 0:
             logger.info(
@@ -2062,7 +2044,6 @@ class ContextHealthHook:
         create store, embed, sync. Failures are silent.
         """
         from core.transcript_indexer import TranscriptStore, sync_transcript_index
-        from core.embedding_client import EmbeddingClient
         from core.vec_db import open_vec_db
 
         # Derive transcript dir from the authoritative workspace path
@@ -2136,30 +2117,12 @@ class ContextHealthHook:
                     logger.error("context_health: transcript_fts repair failed: %s: %s",
                                  type(exc).__name__, exc)
 
-            client = EmbeddingClient()
-
-            def _safe_embed(text: str) -> list[float] | None:
-                return client.embed_text(text)
-
-            stats = sync_transcript_index(store, transcripts_dir, embed_fn=_safe_embed)
-
-            # R4b: heal chunks orphaned by a prior failed embed. CRITICAL for
-            # transcripts specifically: sync skips by whole session_id, so an
-            # orphaned chunk would otherwise NEVER get re-embedded. Operating on
-            # chunk rows directly bypasses the per-file skip. Best-effort, capped.
-            try:
-                recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
-                if recovered:
-                    remaining = conn.execute(
-                        "SELECT COUNT(*) FROM transcript_chunks tc "
-                        "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
-                    ).fetchone()[0]
-                    logger.info(
-                        "context_health: transcript_vec orphan-backfill — recovered=%d, remaining=%d",
-                        recovered, remaining,
-                    )
-            except Exception as exc:  # noqa: BLE001 — best-effort
-                logger.warning("context_health: transcript_vec backfill failed: %s", exc)
+            # WRITER STOPPED (pure-filesystem recall design §5.5/DoD8, 2026-06-28):
+            # transcript recall is FTS5-only (transcript_fts via messages_fts /
+            # transcript_chunks) — no embedding. The read side dropped the vector
+            # leg, so embedding here writes vectors nobody reads. embed_fn=None →
+            # FTS5 index only; orphan-vector backfill removed (no vector leg).
+            stats = sync_transcript_index(store, transcripts_dir, embed_fn=None)
 
         if stats.get("files_indexed", 0) > 0:
             logger.info(

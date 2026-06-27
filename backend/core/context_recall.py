@@ -155,7 +155,7 @@ def recall_context(
     memory_content: str,
     policy_excluded_files: frozenset[str] = frozenset(),
     max_sections: int = 3,
-    allow_embed: bool = True,
+    allow_embed: bool = False,  # pure-filesystem: vector leg removed (§5.3); inert, kept for caller compat
 ) -> RecallResult:
     """Return the top relevant EXCLUDED sections of ``file`` for ``query``.
 
@@ -215,27 +215,15 @@ def recall_context(
 
         superseded = memory_index._extract_superseded_keys(memory_content)
 
-        # Keyword-first (no Bedrock on the hot path — the embed leg is the
-        # measured 2.65s/query cost). Reuse the EXACT selective-injection scorer.
+        # Pure keyword (pure-filesystem recall design §3.3/§5.4, 2026-06-28): the
+        # vector/hybrid-on-miss leg was REMOVED — no Bedrock/Titan on any recall
+        # path. Reuse the EXACT selective-injection BM25 scorer. The synonym blind
+        # spot (keyword-miss on a semantically-related entry) is covered by
+        # AGENTIC re-search (the caller nudges the agent to re-grep with synonyms),
+        # not by a vector leg. ``allow_embed`` is retained in the signature for
+        # caller compatibility but is now INERT (no embed path exists to gate).
         scores = memory_index._keyword_section_scores(query, index_block, superseded)
         hit_layer = "keyword" if scores else "none"
-
-        # Hybrid-on-miss: only when keyword finds nothing do we pay the embed
-        # cost. The hybrid (DB-backed) path ranks DB-stored entries → section
-        # names; those names may be STALE (MEMORY.md edited after the last embed
-        # sync), so the slice loop below verifies each ranked section exists in
-        # the LIVE passed string and silently-drops nothing (it falls through to
-        # whatever live sections matched). See design DP-v stale-index hazard.
-        if not scores:
-            try:
-                hybrid = memory_index._hybrid_section_scores(query, allow_embed=allow_embed)
-            except Exception as exc:  # noqa: BLE001 — hybrid is best-effort; keyword already empty
-                logger.debug("hybrid recall escalation failed (best-effort): %s: %s",
-                             type(exc).__name__, exc)
-                hybrid = {}
-            if hybrid:
-                scores = hybrid
-                hit_layer = "hybrid"
     except Exception as exc:  # noqa: BLE001 — fail-safe: structured result, no leak
         return RecallResult(
             allowed=True, content="",

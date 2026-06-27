@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import sys
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,220 +64,6 @@ _FIXTURE = """\
 """
 
 _DIM = 1024
-
-
-def _onehot(idx: int) -> list[float]:
-    """Deterministic 1024-d one-hot unit vector (metric-agnostic nearest-NN)."""
-    v = [0.0] * _DIM
-    v[idx % _DIM] = 1.0
-    return v
-
-
-class _FakeEmbedClient:
-    """Stands in for the Bedrock EmbeddingClient — the network boundary. Returns
-    a fixed query vector regardless of text (only the query is embedded; entry
-    vectors come from the real DB)."""
-
-    def __init__(self, query_vec: list[float]) -> None:
-        self._q = query_vec
-
-    def embed_text(self, text: str) -> list[float]:  # noqa: ARG002 — fixed by design
-        return self._q
-
-
-def _build_db(db_path: Path, entries: list[tuple]) -> None:
-    """Create a real memory_entries + memory_vec DB at db_path.
-
-    entries: list of (key, section, title, keywords, vector_or_None). A None
-    vector means the entry is un-embedded (present in memory_entries only).
-    """
-    import sqlite3
-
-    import sqlite_vec
-
-    from core.memory_embeddings import MemoryEmbeddingStore
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        store = MemoryEmbeddingStore(conn)
-        store.ensure_tables()
-        for key, section, title, keywords, vec in entries:
-            store.upsert_entry(
-                key=key, section=section, title=title,
-                full_text=f"{title} body", keywords=keywords, embedding=vec,
-            )
-    finally:
-        conn.close()
-
-
-@contextmanager
-def _real_hybrid(db_path: Path, query_vec: list[float]):
-    """Redirect the DB path + Bedrock embedder so the REAL _hybrid_section_scores
-    runs against our fixture. Nothing in the scoring path is mocked."""
-    from core import memory_index
-
-    with patch("jobs.paths.DB_PATH", db_path), \
-            patch.object(memory_index, "_embedding_client_cache",
-                         _FakeEmbedClient(query_vec)):
-        yield
-
-
-def _synonym_guard() -> int:
-    """Keyword-first misses a zero-overlap synonym query; the real hybrid VECTOR
-    leg returns the SPECIFIC COE section through the full recall_context chain."""
-    from core.context_recall import recall_context
-
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d) / "mem.db"
-        # COE embedded at e_5; LL embedded at e_10. Query embeds to e_5 → COE
-        # is the exact vector neighbour. BM25 is ~0 (zero lexical overlap), so
-        # the match is genuinely carried by the vector leg.
-        _build_db(db, [
-            ("COE01", "COE Registry", "exit code -9 cascading SIGKILL failure",
-             ["sigkill", "oom", "crash"], _onehot(5)),
-            ("LL01", "Lessons Learned", "Sync wrappers around async cleanup leak",
-             ["async", "cleanup", "leak"], _onehot(10)),
-        ])
-        with _real_hybrid(db, _onehot(5)):
-            res = recall_context(
-                "MEMORY.md", "application abruptly terminates at boot time",
-                memory_content=_FIXTURE,
-            )
-    # Non-vacuous: the EXACT section must surface AND via the hybrid layer (a
-    # broken vector leg / wrong renorm drops COE below threshold → not hybrid).
-    if (res.allowed and res.hit_layer == "hybrid"
-            and "COE Registry" in res.sections and res.drilled):
-        print("SYNONYM_GUARD_OK")
-        return 0
-    print(f"SYNONYM_GUARD_FAIL layer={res.hit_layer} sections={res.sections}")
-    return 1
-
-
-def _stale_index() -> int:
-    """Real hybrid ranks a section absent from the live string #1 (DB stale).
-    The stale-index guard must skip it and still surface the live section."""
-    from core.context_recall import recall_context
-
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d) / "mem.db"
-        # "Deleted Section" embedded at e_5 (matches the query vector, ranks
-        # #1) but does NOT exist in the live _FIXTURE → must be guarded out.
-        # "COE Registry" embedded at e_10 (ranks lower) and IS in the fixture.
-        _build_db(db, [
-            ("DEL01", "Deleted Section", "ghost entry removed from live memory",
-             ["ghost", "removed"], _onehot(5)),
-            ("COE01", "COE Registry", "exit code -9 cascading SIGKILL failure",
-             ["sigkill", "oom", "crash"], _onehot(10)),
-        ])
-        with _real_hybrid(db, _onehot(5)):
-            res = recall_context(
-                "MEMORY.md", "unrelated semantic query xyzzy qqq",
-                memory_content=_FIXTURE,
-            )
-    if ("Deleted Section" not in res.sections
-            and "COE Registry" in res.sections and res.content.strip()):
-        print("STALE_INDEX_OK")
-        return 0
-    print(f"STALE_INDEX_FAIL sections={res.sections} layer={res.hit_layer}")
-    return 1
-
-
-def _missing_vector() -> int:
-    """Un-embedded keyword-strong entry out-ranks an embedded peer through the
-    REAL _hybrid_section_scores assembly. Tuned so ONLY the §3.6.1 renorm flips
-    the ranking: with renorm U1=1.0 > E1=0.6; without it U1=0.4 < E1=0.6."""
-    from core.memory_index import _hybrid_section_scores
-
-    with tempfile.TemporaryDirectory() as d:
-        db = Path(d) / "mem.db"
-        # E1 embedded at e_5 with a weak-keyword title; U1 un-embedded with a
-        # strong unique-term title matching the query. Query embeds to e_5 so
-        # E1 gets a STRONG vector (vs≈1.0) — without renorm E1 wins (0.6 > 0.4);
-        # with renorm U1 competes on keyword alone (1.0) and wins.
-        _build_db(db, [
-            ("E1", "Embedded Sec", "alpha", ["alpha"], _onehot(5)),
-            ("U1", "Unembedded Sec", "zephyr quartz nimbus",
-             ["zephyr", "quartz", "nimbus"], None),
-        ])
-        with _real_hybrid(db, _onehot(5)):
-            section_scores = _hybrid_section_scores("zephyr quartz nimbus")
-
-    if not section_scores:
-        print("MISSING_VECTOR_FAIL empty")
-        return 1
-    top = max(section_scores.items(), key=lambda kv: kv[1])[0]
-    # Non-vacuous: the un-embedded entry's section must be rank-1. Disabling the
-    # renorm makes "Embedded Sec" win (strong vector) → FAIL.
-    if top == "Unembedded Sec":
-        print("MISSING_VECTOR_OK")
-        return 0
-    print(f"MISSING_VECTOR_FAIL top={top} scores={section_scores}")
-    return 1
-
-
-def _knowledge_live(negative: bool = False) -> int:
-    """Knowledge/Library WIRE: the REAL RecallEngine hybrid (FTS5 + sqlite-vec
-    over a real KnowledgeStore) must surface the SPECIFIC chunk a zero-lexical-
-    overlap query can only reach via the VECTOR leg. The only mocked thing is the
-    Bedrock query embedding (the network boundary); entry vectors live in a real
-    knowledge_vec table and the merge is the real 0.6·vec+0.4·bm25 in
-    recall_engine.RecallEngine.search. A broken vector leg (or embed_fn not
-    threaded through) drops the chunk → marker absent. Prints KNOWLEDGE_LIVE_OK.
-
-    negative=True (teeth): embed_fn returns None → vector leg dead (FTS5-only).
-    The zero-lexical-overlap query then cannot reach the chunk → OK condition
-    cannot hold → exits 1 with the FAIL marker, proving the case has teeth."""
-    import sqlite3
-
-    import sqlite_vec
-
-    from core.knowledge_store import KnowledgeStore
-    from core.recall_engine import RecallEngine
-
-    conn = sqlite3.connect(":memory:")
-    try:
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        store = KnowledgeStore(conn)
-        store.ensure_tables()
-        # Target chunk embedded at one-hot e_5; query embeds to e_5 → exact
-        # vector neighbour. Its TEXT shares zero lexical overlap with the query,
-        # so FTS5/BM25 ≈ 0 and the hit is genuinely vector-carried.
-        store.upsert_chunk(
-            "Designs/quokka.md", 0, "## Quokka Design",
-            "marsupial habitat rottnest island foliage", "kh1",
-            embedding=_onehot(5),
-        )
-        store.upsert_chunk(
-            "Notes/unrelated.md", 0, "## Unrelated",
-            "kubernetes ingress controller tls termination", "kh2",
-            embedding=_onehot(700),
-        )
-        engine = RecallEngine(store)
-        # embed_fn IS the Bedrock boundary — fixed query vector, real merge.
-        # negative: embed_fn=None kills the vector leg (FTS5-only fallback).
-        results = engine.search(
-            "application crash exit code sigkill",
-            embed_fn=(lambda _t: None) if negative else (lambda _t: _onehot(5)),
-            top_k=5,
-        )
-    finally:
-        conn.close()
-
-    # Non-vacuous: the exact vector-neighbour chunk must win, and its vector_score
-    # must dominate its fts_score (proves the VECTOR leg carried it, not keyword).
-    if results:
-        top = results[0]
-        if (top.get("source_file") == "Designs/quokka.md"
-                and top.get("vector_score", 0) > top.get("fts_score", 0)):
-            print("KNOWLEDGE_LIVE_OK")
-            return 0
-    print(f"KNOWLEDGE_LIVE_FAIL results={[(r.get('source_file'), r.get('vector_score'), r.get('fts_score')) for r in results[:3]]}")
-    return 1
 
 
 def _codeintel_live(negative: bool = False) -> int:
@@ -306,93 +91,9 @@ def _codeintel_live(negative: bool = False) -> int:
     return 1
 
 
-def _recall_budget(negative: bool = False) -> int:
-    """RECALL WIRE (correctness-first, run_4d06640b — deterministic, no timer race):
-    the REAL session_router._maybe_inject_recall must run BOTH legs to completion
-    synchronously and inject recall into options.system_prompt. This REVERSES the
-    run_bbd79e84 keyword-only invariant: the answer is built on the FULL brain
-    (keyword + vector), not a latency-trimmed subset. The OK marker requires
-    BOTH: recall landed AND the vector embed was called (≥1) on the sync path.
-
-    Drives the REAL _maybe_inject_recall + _recall_for_query against a real seeded
-    sqlite DB, counting embed calls — a deterministic assertion, not a timer race.
-
-    negative=True (teeth): demand the OLD broken invariant (embed NEVER called =
-    keyword-only). That is false on the correctness-first code (embed DOES run), so
-    the OK marker is withheld → exit 1, proving the assertion bites."""
-    import asyncio
-    import contextlib
-    import sqlite3 as _sq
-    import tempfile as _tf
-    from unittest.mock import MagicMock
-
-    import sqlite_vec as _sv
-
-    from core import session_router as sr
-    from core.memory_embeddings import MemoryEmbeddingStore
-
-    embed_calls = {"n": 0}
-
-    def _counting_embed(_text):
-        embed_calls["n"] += 1
-        return [0.0] * 1024
-
-    with _tf.TemporaryDirectory() as d:
-        db = Path(d) / "mem.db"
-        conn = _sq.connect(str(db))
-        try:
-            conn.enable_load_extension(True)
-            _sv.load(conn)
-            conn.enable_load_extension(False)
-            store = MemoryEmbeddingStore(conn)
-            store.ensure_tables()
-            store.upsert_entry(
-                key="COE05", section="COE Registry",
-                title="exit code -9 cascading SIGKILL failure",
-                full_text="exit code -9 cascading SIGKILL OOM crash recovery resume",
-                keywords=["sigkill", "oom", "crash", "recovery", "resume"],
-                embedding=None,
-            )
-        finally:
-            conn.close()
-
-        opts = MagicMock()
-        opts.system_prompt = "## Base"
-        unit = MagicMock()
-        unit._recall_injected = False
-        unit.is_channel_session = False
-
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(patch("jobs.paths.DB_PATH", db))
-            stack.enter_context(patch("core.vec_db._DEFAULT_DB_PATH", db))
-            stack.enter_context(
-                patch.object(sr, "_get_cached_embed_fn", lambda: _counting_embed))
-            asyncio.run(sr._maybe_inject_recall(
-                user_message="sigkill oom crash recovery resume",
-                options=opts, unit=unit))
-
-    landed = "Recalled Knowledge" in opts.system_prompt
-    both_legs = embed_calls["n"] > 0  # vector leg ran on the sync path
-
-    # Wire intact iff recall landed AND both legs ran (correctness-first).
-    # negative (teeth): demand the OLD keyword-only invariant (embed never ran) —
-    # false on the new code, so OK is withheld → exit 1, proving the teeth bite.
-    if negative:
-        if not both_legs:  # embed never called → the OLD keyword-only regression
-            print("RECALL_BUDGET_OK")
-            return 0
-        print("RECALL_BUDGET_TEETH (both legs ran as required; teeth withhold OK)")
-        return 1
-    if landed and both_legs:
-        print("RECALL_BUDGET_OK")
-        return 0
-    print(f"RECALL_BUDGET_FAIL (landed={landed}, embed_calls={embed_calls['n']})")
-    return 1
-
-
-# Distinctive token that ONLY appears in the bottom target entry — never in the
-# filler — so its presence in recall output is an unambiguous signal that the
-# entry-level slicer surfaced the matching entry past the truncation cliff.
+# A distinctive marker placed at the BOTTOM of a long fixture section, past 120
+# filler entries — so its presence in recall output is an unambiguous signal that
+# the entry-level slicer surfaced the matching entry past the truncation cliff.
 _ENTRY_MARKER = "task_budget_zephyr_marker_800K"
 
 
@@ -572,21 +273,20 @@ def _resume_fill(negative: bool = False) -> int:
     return 1
 
 
+# NOTE: the vector/semantic scenarios (synonym_guard, stale_index, missing_vector,
+# knowledge_live, recall_budget) were REMOVED with their golden cases (retired via
+# s_golden-case) when the pure-filesystem recall design (run_e9b8507e, 2026-06-28)
+# deleted the vector/Titan leg. Recall is keyword/FTS5/graph only — these remaining
+# scenarios exercise the surviving deterministic paths.
 _SCENARIOS = {
-    "synonym_guard": _synonym_guard,
-    "stale_index": _stale_index,
-    "missing_vector": _missing_vector,
-    "knowledge_live": _knowledge_live,
     "codeintel_live": _codeintel_live,
-    "recall_budget": _recall_budget,
     "resume_fill": _resume_fill,
     "entry_recall": _entry_recall,
 }
 
 # Scenarios that accept a 2nd arg "negative" (teeth mode): break the wire →
 # the OK marker must NOT appear → exit 1. Used as each case's negative_command.
-_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live", "recall_budget",
-                     "resume_fill", "entry_recall"}
+_NEGATIVE_CAPABLE = {"codeintel_live", "resume_fill", "entry_recall"}
 
 
 def main(argv: list[str] | None = None) -> int:

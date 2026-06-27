@@ -176,42 +176,44 @@ class TestRecallKeywordFirst:
             assert "COE Registry" in res.sections
             mock_hybrid.assert_not_called()  # keyword-first: no embed on hit
 
-    def test_keyword_miss_escalates_to_hybrid(self):
-        """A keyword miss escalates to the hybrid (semantic) path."""
+    def test_keyword_miss_no_longer_escalates_to_hybrid(self):
+        """RETIRED→REWRITTEN (pure-filesystem design §3.3/§5.4, 2026-06-28): the
+        hybrid-on-miss escalation was REMOVED — recall is keyword-only, no vector.
+        A keyword miss now simply returns no sections (the agent re-searches with
+        synonyms instead — agentic safety net, §3.4). The vector leg must NEVER
+        fire even on a miss."""
         from unittest.mock import patch
         from core.context_recall import recall_context
 
-        # Query with zero keyword overlap; hybrid 'finds' the COE semantically.
+        # Zero keyword overlap → keyword miss. With the vector leg gone, _hybrid
+        # is never consulted (it's an inert stub returning {} anyway).
         with patch("core.memory_index._hybrid_section_scores") as mock_hybrid:
-            mock_hybrid.return_value = {"COE Registry": 0.8}
+            mock_hybrid.return_value = {"COE Registry": 0.8}  # would-be vector hit
             res = recall_context(
                 "MEMORY.md", "application abruptly terminates at boot",
                 memory_content=_RECALL_MEMORY,
             )
-            mock_hybrid.assert_called_once()
-            assert "COE Registry" in res.sections
+            # Pure-filesystem: hybrid is NOT called on a keyword miss anymore.
+            mock_hybrid.assert_not_called()
+            assert res.allowed is True
+            # No keyword overlap → no section surfaces (agent re-greps; §3.4).
+            assert res.sections == ()
 
-    def test_stale_index_guard_never_silently_drops(self):
-        """GS_RCHAIN_STALE_INDEX core: if hybrid (DB) ranks a section that is
-        ABSENT from the live passed string (MEMORY.md edited after last embed
-        sync), recall must NOT return an empty slice for it — it falls back so
-        the live keyword result is what surfaces, never a silent drop."""
-        from unittest.mock import patch
+    def test_keyword_only_surfaces_live_sections(self):
+        """Replaces the stale-index hybrid guard: keyword scoring only ever ranks
+        sections parsed from the LIVE passed string, so a section absent from the
+        live content can never surface (no DB-ranked stale names — the whole
+        stale-index hazard is gone because there is no DB-backed vector leg)."""
         from core.context_recall import recall_context
 
-        # DB ranks a section name that no longer exists in the live string.
-        with patch("core.memory_index._hybrid_section_scores") as mock_hybrid:
-            mock_hybrid.return_value = {"Deleted Section": 0.9, "COE Registry": 0.5}
-            res = recall_context(
-                "MEMORY.md", "totally unrelated semantic query xyzzy",
-                memory_content=_RECALL_MEMORY,
-            )
-            # "Deleted Section" is absent from _RECALL_MEMORY → must be dropped
-            # from the RESULT (not returned as an empty block), and a real
-            # section must still surface.
-            assert "Deleted Section" not in res.sections
-            # COE Registry IS in the live string → it survives the guard.
-            assert "COE Registry" in res.sections
+        res = recall_context(
+            "MEMORY.md", "exit code sigkill oom",
+            memory_content=_RECALL_MEMORY,
+        )
+        assert res.allowed is True
+        # Only a section that exists in the live string can surface.
+        assert "COE Registry" in res.sections
+        assert "Deleted Section" not in res.sections
 
 
 # ===========================================================================
@@ -294,63 +296,53 @@ class _FixedEmbedder:
         return self._q
 
 
-class TestTemporalDownweightBM25:
-    """A superseded entry (full_text carries `superseded_by: <key>`) must have
-    its BM25 leg down-weighted by SUPERSEDED_WEIGHT, so an ACTIVE entry with the
-    same keyword match out-ranks it in the section scores."""
+class TestTemporalDownweightKeyword:
+    """A superseded entry must score 0.1x so an ACTIVE entry with the same keyword
+    match out-ranks it. Post-pure-filesystem (§5.4) this down-weight lives in the
+    KEYWORD scorer (_keyword_section_scores via superseded_keys) — the vector
+    _hybrid path that used to carry it is removed. This REWRITES the old F4 test
+    to drive the surviving keyword path."""
 
-    def test_superseded_entry_downweighted_vs_active(self, tmp_path, monkeypatch):
-        """F4 core: active entry beats superseded peer with identical keyword
-        match, driven through the real _hybrid_section_scores assembly."""
-        import sqlite_vec
-        from core import memory_index
-        from core.memory_embeddings import MemoryEmbeddingStore
-        from core.memory_index import format_temporal_metadata
-
-        db_path = tmp_path / "f4_memory.db"
-        conn = sqlite3.connect(str(db_path))
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        store = MemoryEmbeddingStore(conn)
-        store.ensure_tables()
-
-        # Two entries, IDENTICAL discriminative keyword "zephyr". Neither embedded
-        # (no vector) → ranking decided purely by the BM25 leg. One is superseded.
-        active_meta = format_temporal_metadata("2026-06-01", superseded_by=None)
-        superseded_meta = format_temporal_metadata("2026-01-01", superseded_by="ACT")
-        store.upsert_entry(
-            "ACT", "Active Sec", "zephyr quartz",
-            f"zephyr quartz {active_meta}", ["zephyr", "quartz"], embedding=None,
+    def test_superseded_entry_downweighted_vs_active(self):
+        """F4 (keyword path): active entry beats a superseded peer with identical
+        keyword match, via SUPERSEDED_WEIGHT in _keyword_section_scores."""
+        from core.memory_index import (
+            _keyword_section_scores, SUPERSEDED_WEIGHT,
+            MEMORY_INDEX_START, MEMORY_INDEX_END,
         )
-        store.upsert_entry(
-            "SUP", "Superseded Sec", "zephyr quartz",
-            f"zephyr quartz {superseded_meta}", ["zephyr", "quartz"], embedding=None,
-        )
-        # Decoy embedded entry: only purpose is to make memory_vec non-empty so
-        # _hybrid_section_scores doesn't early-return. Its vector (one-hot @15)
-        # is orthogonal to the query vector (one-hot @0) and its keywords don't
-        # match, so it does not interfere with the ACT-vs-SUP BM25 ranking.
-        store.upsert_entry(
-            "DEC", "Decoy Sec", "unrelated topic",
-            "unrelated topic", ["unrelated"], embedding=_onehot(15),
-        )
-        conn.commit()
-        conn.close()
 
-        monkeypatch.setattr("jobs.paths.DB_PATH", db_path)
-        monkeypatch.setattr(memory_index, "_embedding_client_cache",
-                            _FixedEmbedder(_onehot(0)))
-
-        scores = memory_index._hybrid_section_scores("zephyr quartz")
-
-        # Active must out-rank superseded. Without F4 the two have IDENTICAL raw
-        # BM25 (same keyword match) → a tie; with F4 the superseded leg is ×0.1
-        # pre-normalization, so Active strictly wins (and Superseded may floor to
-        # 0 / drop out). A floored/absent superseded section counts as 0.0.
-        assert scores.get("Active Sec", 0.0) > scores.get("Superseded Sec", 0.0), (
-            "superseded entry's BM25 leg must be down-weighted below the active peer"
+        # Index block with two entries sharing the discriminative keyword "zephyr",
+        # mapped to distinct sections. SUP is in the superseded set.
+        # Index entry format (per _parse_index_entries): "- [KEY] summary | aliases".
+        # GUI01 → "Guidelines", PIT01 → "Pitfalls" (distinct sections via prefix map);
+        # PIT01 is the superseded peer. Identical keyword "zephyr quartz".
+        index_block = (
+            f"{MEMORY_INDEX_START}\n"
+            "- [GUI01] zephyr quartz active guideline | zephyr, quartz\n"
+            "- [PIT01] zephyr quartz old superseded | zephyr, quartz\n"
+            f"{MEMORY_INDEX_END}"
         )
+        active = _keyword_section_scores("zephyr quartz", index_block, superseded_keys=set())
+        downweighted = _keyword_section_scores(
+            "zephyr quartz", index_block, superseded_keys={"PIT01"}
+        )
+        # Find PIT01's section score with vs without superseded marking.
+        from core.memory_index import _key_to_section
+        sup_sec = _key_to_section("PIT01")
+        base = active.get(sup_sec, 0.0)
+        marked = downweighted.get(sup_sec, 0.0)
+        assert base > 0.0, "precondition: PIT01 matches the keyword when active"
+        # Superseded marking shrinks the score by SUPERSEDED_WEIGHT (0.1x). If the
+        # ×0.1 result falls below KEYWORD_THRESHOLD it is filtered out entirely
+        # (0.0) — either way the superseded section is strictly suppressed vs its
+        # active value, which is the F4 guarantee.
+        assert marked < base, "superseded entry must be down-weighted vs active"
+        expected = base * SUPERSEDED_WEIGHT
+        from core.memory_index import KEYWORD_THRESHOLD
+        if expected >= KEYWORD_THRESHOLD:
+            assert marked == pytest.approx(expected, rel=0.01)
+        else:
+            assert marked == 0.0, "down-weighted below threshold → filtered out"
 
 
 class TestRecallHitLog:

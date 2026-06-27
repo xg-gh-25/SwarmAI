@@ -145,66 +145,41 @@ def prompt_budget(negative: bool) -> int:
 
 
 def _assembly_floor_holds(loader, sections, budget: int) -> tuple[bool, str]:
-    """Run the REAL _enforce_token_budget and check the three invariants.
+    """Run the REAL _enforce_token_budget and check the NO-TRUNCATE contract.
 
     Returns (ok, why). Pure check — no printing — so the negative path can
     assert this very check FAILs on a broken invariant (mirrors _check_exclude).
 
-    sections: list of (priority, name, content, truncatable, truncate_from).
-    INV1 identity floor: every non-truncatable (P0-P2) section's content is
-      byte-IDENTICAL after enforcement (never shortened/removed). THE
-      load-bearing one — if this breaks, SOUL/identity can silently drop.
-    INV2 budget converged: enforcement drove the total DOWN to within a small
-      tolerance of the budget. NOTE the real _enforce_token_budget targets
-      APPROXIMATE fit (observed ~+6 tok overshoot from word-boundary
-      truncation), so this asserts convergence (total <= budget + tolerance
-      AND total < original), NOT a strict <= the code never promised. Asserting
-      strict <= would false-RED correct code (verified: no unit test asserts it
-      either).
-    INV3 priority order: the lowest-priority truncatable section is cut before
-      a higher-priority truncatable one (here: P10 shows the [Truncated marker
-      while P4 is still untouched).
+    ⚠️ CONTRACT CHANGED (pure-filesystem recall design §3.5/DoD1, 2026-06-28):
+    the assembly line NO LONGER truncates by size. On budget overshoot it WARNs
+    and injects FULL content untruncated (size governance is the write-side
+    management line's job; the read line trusts its inputs are healthy). The old
+    INV2 "budget converged" + INV3 "priority truncation order" invariants are
+    GONE — they asserted truncation that was removed. The surviving, strengthened
+    invariants:
+
+    INV1 EVERYTHING byte-intact: after enforcement EVERY section (the P0-P2
+      identity floor AND the truncatable ones) is byte-IDENTICAL to input —
+      nothing is shortened or dropped. This is now THE load-bearing invariant:
+      if any section shrinks, truncation crept back in.
+    INV2 no truncation marker: no section carries the "[Truncated:" indicator
+      (the removed path's signature). Its presence = a regression.
     """
-    before = {name: content for _p, name, content, trunc, _tf in sections
-              if not trunc}
-    original_total = sum(loader.estimate_tokens(f"## {n}\n{c}")
-                         for _p, n, c, _t, _tf in sections)
+    before = {name: content for _p, name, content, _t, _tf in sections}
     out = loader._enforce_token_budget(list(sections), budget=budget)
     out_by_name = {name: content for _p, name, content, _t, _tf in out}
 
-    # INV1 — identity floor intact (the load-bearing one)
+    # INV1 — EVERY section byte-intact (floor AND truncatable: nothing is cut).
     for name, content in before.items():
         if out_by_name.get(name) != content:
-            return False, f"INV1 identity-floor BROKEN: '{name}' was altered"
+            return False, (f"INV1 no-truncate BROKEN: '{name}' was altered — "
+                           f"the read line must never shorten content (§3.5)")
 
-    # INV2 — enforcement converged the total toward the budget. The real fn
-    # approximates (truncates at word boundaries), so allow a small tolerance;
-    # the meaningful assertion is "drove it down AND lands near budget", not a
-    # strict <= the code never guaranteed.
-    total = sum(loader.estimate_tokens(f"## {n}\n{c}")
-                for _p, n, c, _t, _tf in out)
-    sep = loader.estimate_tokens("\n\n") if len(out) > 1 else 0
-    total += sep * max(0, len(out) - 1)
-    tolerance = max(50, budget // 50)  # ~2% slack for word-boundary overshoot
-    if total > budget + tolerance:
-        return False, f"INV2 did not converge: {total} > {budget}+{tolerance}"
-    if total >= original_total:
-        return False, f"INV2 no reduction: {total} >= original {original_total}"
-
-    # INV3 — lowest-priority cut HARDER than higher-priority, checked across
-    # THREE tiers (P10 ≤ P7 ≤ P4 residuals) so a 3-way mis-ordering can't slip
-    # through (adversarial LOW-2). Comparing markers alone is too weak (under
-    # reversed order ALL get a marker — verified); residual SIZE is the
-    # discriminating signal: correct order sacrifices the lowest priority most.
-    p10_tok = loader.estimate_tokens(out_by_name.get("LowPrio10", ""))
-    p7_tok = loader.estimate_tokens(out_by_name.get("MidPrio7", ""))
-    p4_tok = loader.estimate_tokens(out_by_name.get("MidPrio4", ""))
-    if "[Truncated:" not in out_by_name.get("LowPrio10", ""):
-        return False, "INV3 lowest-priority (P10) was NOT truncated"
-    if not (p10_tok <= p7_tok <= p4_tok):
-        return False, (f"INV3 priority order violated: residuals must be "
-                       f"monotone P10≤P7≤P4 but got P10={p10_tok} P7={p7_tok} "
-                       f"P4={p4_tok} (lowest-priority should be cut hardest)")
+    # INV2 — no truncation marker anywhere (the removed path's signature).
+    for name, content in out_by_name.items():
+        if "[Truncated:" in (content or ""):
+            return False, (f"INV2 truncation regression: '{name}' carries a "
+                           f"'[Truncated:' marker — truncation was removed (§3.5)")
     return True, "ok"
 
 
@@ -229,18 +204,20 @@ def _floor_fixture() -> list[tuple]:
 
 
 def assembly_floor(negative: bool) -> int:
-    """Under HARD over-budget, the REAL _enforce_token_budget must keep the
-    non-truncatable identity floor (P0-P2) intact, fit the budget, and cut
-    lowest-priority first."""
+    """Under HARD over-budget, the REAL _enforce_token_budget must inject ALL
+    content byte-INTACT (no truncation) and emit a warning — NOT shorten anything
+    (pure-filesystem recall design §3.5/DoD1, 2026-06-28). The read line never
+    arbitrates by size; size governance is the write-side management line's job."""
     from pathlib import Path as _P
 
     from core.context_directory_loader import ContextDirectoryLoader
     name = "ASSEMBLY_FLOOR"
     loader = ContextDirectoryLoader(_P.home() / ".swarm-ai" / "SwarmWS" / ".context")
     sections = _floor_fixture()
-    # Budget so the 4 identity sections (~2144 tok) fit intact but the THREE
-    # truncatable tiers (~4806 tok) must be cut in graded amounts: grand total
-    # ~6950, budget 4200 → P4≈1601 (lightly cut), P7≈452, P10≈9 (cut hardest).
+    # Budget deliberately FAR below the fixture total (~6950 tok) so the old code
+    # WOULD have truncated hard. The no-truncate contract requires every section
+    # survives byte-intact regardless — proving the read line ignores the budget
+    # for content purposes (warns only).
     budget = 4200
 
     if negative:

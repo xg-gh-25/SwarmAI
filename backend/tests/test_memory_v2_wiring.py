@@ -66,14 +66,20 @@ class TestW1TranscriptSyncHook:
 class TestW2TemporalWeightInScoring:
     """Verify _entry_temporal_weight is called during section scoring."""
 
-    def test_hybrid_scores_use_temporal_weight(self):
-        """_hybrid_section_scores or _keyword_section_scores must reference
-        _entry_temporal_weight."""
+    def test_keyword_scorer_applies_temporal_downweight(self):
+        """The section scorer must down-weight superseded entries. Post
+        pure-filesystem (§5.4, 2026-06-28) the vector _hybrid_section_scores is
+        removed/stubbed, so the surviving temporal weighting lives on the KEYWORD
+        path: _keyword_section_scores multiplies a superseded entry's score by
+        SUPERSEDED_WEIGHT. This asserts the BEHAVIOR (down-weight applied), not a
+        specific helper symbol — the old assertion looked for _entry_temporal_weight
+        which only ever lived in the now-removed vector path (pre-existing-stale)."""
         import inspect
         from core.memory_index import _keyword_section_scores
         source = inspect.getsource(_keyword_section_scores)
-        assert "_entry_temporal_weight" in source, \
-            "_keyword_section_scores must apply temporal weight"
+        # The keyword scorer must reference the superseded down-weight mechanism.
+        assert "SUPERSEDED_WEIGHT" in source and "superseded" in source.lower(), \
+            "_keyword_section_scores must apply the superseded temporal down-weight"
 
     def test_superseded_entry_scores_lower(self):
         """An entry with superseded_by metadata should score lower."""
