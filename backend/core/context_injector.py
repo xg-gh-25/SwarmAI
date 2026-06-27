@@ -441,24 +441,34 @@ def _count_user_turns(messages: list[dict]) -> int:
 
 
 def _extract_assistant_conclusions(
-    messages: list[dict], max_blocks: int = 5
+    messages: list[dict], max_blocks: int = 100, char_budget: int = 0,
+    block_trunc: int = 1500,
 ) -> list[str]:
     """Extract the text of the last N assistant messages (non-tool).
 
     These contain the agent's analysis, conclusions, and recommendations —
     the substance that the resumed agent needs to continue.
-    Each block capped at 1500 chars.
+    Each block capped at ``block_trunc`` chars (floor 1500).
+
+    Elastic caps (run_6d5f60dd): ``char_budget`` (when >0) governs collection —
+    stop once accumulated chars reach it. ``max_blocks`` is a high secondary
+    safety cap so it never binds before the char budget.
     """
     try:
         conclusions: list[str] = []
+        accumulated = 0
         for msg in reversed(messages):
             if msg.get("role") != "assistant":
                 continue
             text = _extract_text_from_content(msg.get("content"))
             if not text:
                 continue
-            conclusions.append(text[:1500])
+            block = text[:block_trunc]
+            conclusions.append(block)
+            accumulated += len(block)
             if len(conclusions) >= max_blocks:
+                break
+            if char_budget > 0 and accumulated >= char_budget:
                 break
         conclusions.reverse()  # chronological order
         return conclusions
@@ -480,16 +490,25 @@ _DIRECTIVE_WORDS = re.compile(
 
 
 def _extract_user_directives(
-    messages: list[dict], max_directives: int = 10
+    messages: list[dict], max_directives: int = 100, char_budget: int = 0,
 ) -> list[str]:
     """Extract short user messages that look like decisions or directives.
 
     Heuristic: user messages ≤300 chars, not questions, containing action
     words.  Captures steering decisions ("approach B+A", "commit these").
+
+    Elastic caps (run_6d5f60dd): ``char_budget`` (when >0) governs collection —
+    stop once accumulated chars reach it. ``max_directives`` is a high secondary
+    safety cap so it never binds before the char budget.
+
+    Collected NEWEST-first then reversed for chronological display, so when a
+    cap binds it keeps the most RECENT directives (a later steering decision
+    usually supersedes an earlier one) — symmetric with conclusions.
     """
     try:
         directives: list[str] = []
-        for msg in messages:
+        accumulated = 0
+        for msg in reversed(messages):
             if msg.get("role") != "user":
                 continue
             text = _extract_text_from_content(msg.get("content"))
@@ -503,9 +522,14 @@ def _extract_user_directives(
                         stripped, re.IGNORECASE):
                 continue
             if _DIRECTIVE_WORDS.search(text):
-                directives.append(text[:300])
+                entry = text[:300]
+                directives.append(entry)
+                accumulated += len(entry)
             if len(directives) >= max_directives:
                 break
+            if char_budget > 0 and accumulated >= char_budget:
+                break
+        directives.reverse()  # chronological order
         return directives
     except Exception:
         logger.debug("User directives extraction failed", exc_info=True)
@@ -607,7 +631,8 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
 
 
 def _extract_key_tool_results(
-    messages: list[dict], max_results: int = 15
+    messages: list[dict], max_results: int = 200,
+    char_budget: int = 0, item_trunc: int = 300,
 ) -> str:
     """Extract detailed tool action summaries from ``tool_use.summary``.
 
@@ -619,12 +644,19 @@ def _extract_key_tool_results(
     This gives the resumed agent a detailed action log: what was read,
     what commands were run, what was edited — richer than the checkpoint's
     compact "Tool activity: Read×9, Bash×4" stat line.
+
+    Elastic caps (run_6d5f60dd): ``char_budget`` (when >0) governs collection
+    — stop once accumulated chars reach it — so a complex session fills more
+    of the token budget instead of being clipped at a fixed count. ``item_trunc``
+    is the per-summary truncation (floor 300, scales up with budget). ``max_results``
+    is a high secondary safety cap so it never binds before the char budget.
     """
     HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent", "Edit", "Write"}
     MIN_SUMMARY_LEN = 15  # skip trivially short summaries
 
     try:
         results: list[str] = []
+        accumulated = 0  # chars collected, for char_budget early-exit
         seen_paths: set[str] = set()  # Deduplicate Read results by file path
         for msg in reversed(messages):
             content = msg.get("content")
@@ -657,14 +689,20 @@ def _extract_key_tool_results(
                     if not summary or len(summary) < MIN_SUMMARY_LEN:
                         continue
 
-                truncated = summary[:300]
-                if len(summary) > 300:
+                truncated = summary[:item_trunc]
+                if len(summary) > item_trunc:
                     truncated += "..."
-                results.append(f"  → {name}: {truncated}")
+                entry = f"  → {name}: {truncated}"
+                results.append(entry)
+                accumulated += len(entry)
 
                 if len(results) >= max_results:
                     break
+                if char_budget > 0 and accumulated >= char_budget:
+                    break
             if len(results) >= max_results:
+                break
+            if char_budget > 0 and accumulated >= char_budget:
                 break
 
         if not results:
@@ -685,7 +723,8 @@ def _trim_to_budget(
     Trim priority (first to go → last to go):
     1. tool_results
     2. recent_turns
-    3. conclusions
+    3. uncommitted
+    4. conclusions
     NEVER trim: checkpoint (files, git, directives, last request)
 
     Estimates tokens at 4 chars/token.
@@ -698,8 +737,10 @@ def _trim_to_budget(
         if total_chars <= budget_chars:
             return result
 
-        # Trim in priority order
-        trim_order = ["tool_results", "recent_turns", "conclusions"]
+        # Trim in priority order. uncommitted is included (Gate-1 finding 2) so
+        # it is governed by the budget instead of bypassing it; it trims after
+        # recent_turns (more disposable than conclusions, less than raw turns).
+        trim_order = ["tool_results", "recent_turns", "uncommitted", "conclusions"]
         for key in trim_order:
             if total_chars <= budget_chars:
                 break
@@ -729,11 +770,14 @@ def _trim_to_budget(
 
 # ─── Checkpoint assembly ─────────────────────────────────────────────
 
-def _build_checkpoint(messages: list[dict]) -> str:
+def _build_checkpoint(messages: list[dict], directives_char_budget: int = 0) -> str:
     """Build a structured task checkpoint from raw messages.
 
     Pure mechanical extraction — no LLM calls.  Each section is
     independently guarded; partial checkpoints are valid.
+
+    ``directives_char_budget`` bounds the user-directives sub-section (the
+    checkpoint is UNtrimmable, so this layer must self-limit — Gate-1 finding 2).
 
     Returns empty string only if all extractions fail.
     """
@@ -788,7 +832,9 @@ def _build_checkpoint(messages: list[dict]) -> str:
         sections.append(f"**Tool activity:** {tool_str}")
 
     # 9. User directives (short steering decisions)
-    directives = _extract_user_directives(messages)
+    directives = _extract_user_directives(
+        messages, char_budget=directives_char_budget,
+    )
     if directives:
         dir_lines = "\n".join(f"  - \"{d}\"" for d in directives)
         sections.append(f"**User directives:**\n{dir_lines}")
@@ -807,18 +853,21 @@ def _build_checkpoint(messages: list[dict]) -> str:
 # ─── Recent turns formatting ─────────────────────────────────────────
 
 def _format_recent_turns(
-    messages: list[dict], max_turns: int = 30, budget_chars: int = 0,
+    messages: list[dict], max_turns: int = 500, budget_chars: int = 0,
+    recent_chars: int = 0,
 ) -> str:
     """Format the last N user-assistant turn pairs.
 
-    30 turns covers most productive sessions.  4K per message preserves
-    detailed assistant reasoning, code snippets, and multi-paragraph
-    analyses.  First principle: the resumed agent should feel like it
-    was there.
+    4K per message preserves detailed assistant reasoning, code snippets,
+    and multi-paragraph analyses.  First principle: the resumed agent should
+    feel like it was there.
 
-    Early-exit: if ``budget_chars`` is provided, stop collecting turns
-    once accumulated size exceeds 60% of the budget.  This avoids
-    formatting 240K chars (30 turns x 4K) that will be trimmed anyway.
+    Elastic caps (run_6d5f60dd): ``recent_chars`` (when >0) is this layer's
+    explicit char budget from ``_compute_layer_caps`` — collect newest-first
+    until accumulated chars reach it. Falls back to 60% of ``budget_chars``
+    (legacy behaviour) when ``recent_chars`` is 0. ``max_turns`` is a high
+    secondary safety cap. The in-loop early-break is PRESERVED (Gate-1
+    finding 4) — we never format-all-then-trim.
     """
     try:
         filtered = _filter_tool_only_messages(messages)
@@ -829,12 +878,19 @@ def _format_recent_turns(
         # Take last max_turns * 2 messages (pairs of user + assistant)
         recent = filtered[-(max_turns * 2):]
 
-        # Early-exit threshold: 60% of budget allocated to recent_turns
-        size_limit = int(budget_chars * 0.6) if budget_chars > 0 else 0
+        # Per-layer char budget (elastic) takes precedence; else legacy 60%.
+        if recent_chars > 0:
+            size_limit = recent_chars
+        else:
+            size_limit = int(budget_chars * 0.6) if budget_chars > 0 else 0
 
+        # Collect NEWEST-first so the budget keeps the most-recent turns, then
+        # reverse for chronological display. (Iterating `recent` forward and
+        # breaking early would keep the OLDEST turns within the window — wrong
+        # direction now that max_turns is a high cap, not the recency selector.)
         formatted: list[str] = []
         accumulated = 0
-        for msg in recent:
+        for msg in reversed(recent):
             text = _format_message(msg)
             if text is not None:
                 # Cap each message at 4000 chars — preserves reasoning
@@ -849,6 +905,7 @@ def _format_recent_turns(
         if not formatted:
             return ""
 
+        formatted.reverse()  # restore chronological order for display
         return "### Recent Conversation\n" + "\n\n".join(formatted)
     except Exception:
         logger.debug("Recent turns formatting failed", exc_info=True)
@@ -933,6 +990,29 @@ def _compute_layer_caps(token_budget: int) -> dict[str, int]:
         min(_TOOL_ITEM_TRUNC_MAX, caps["tool_results_chars"] // 12),
     )
     return caps
+
+
+_CLAMP_MARKER = "\n[resume context clamped to budget]"
+
+
+def _hard_clamp(text: str, max_chars: int) -> tuple[str, bool]:
+    """Inviolable backstop: bound ``text`` to ``max_chars`` chars INCLUSIVE of
+    the clamp marker (Gate-2 finding 7 — the marker length is reserved before
+    slicing so the returned string is never longer than ``max_chars``).
+
+    Cuts on the last newline before the body limit (clean section boundary);
+    falls back to a hard cut for a single giant line. Returns
+    ``(clamped_text, did_clamp)`` — ``did_clamp`` False (text unchanged) when
+    already within budget. Guarantee: ``len(out) <= max_chars`` always, for
+    any ``max_chars >= len(_CLAMP_MARKER)``.
+    """
+    if len(text) <= max_chars:
+        return text, False
+    body_limit = max(0, max_chars - len(_CLAMP_MARKER))
+    cut = text.rfind("\n", 0, body_limit)
+    if cut <= 0:
+        cut = body_limit
+    return text[:cut] + _CLAMP_MARKER, True
 
 
 # ─── Legacy assembly (kept for backward compat + fallback) ───────────
@@ -1112,14 +1192,25 @@ async def build_resume_context(
         recent = ""
         uncommitted = ""
         try:
-            checkpoint = _build_checkpoint(raw_messages)
             budget_chars = token_budget * 4  # ~4 chars per token
+            # Elastic per-layer char budgets (run_6d5f60dd): each layer fills
+            # toward its share of the budget instead of a fixed item count, so a
+            # complex session uses the generous budget while a simple one stays
+            # lean. _trim_to_budget + the final clamp remain the hard bound.
+            layer_caps = _compute_layer_caps(token_budget)
+            checkpoint = _build_checkpoint(
+                raw_messages,
+                directives_char_budget=layer_caps["directives_chars"],
+            )
             recent = _format_recent_turns(
-                raw_messages, max_turns=30, budget_chars=budget_chars,
+                raw_messages, budget_chars=budget_chars,
+                recent_chars=layer_caps["recent_chars"],
             )
 
             # Enrichment layer: assistant conclusions
-            conclusions = _extract_assistant_conclusions(raw_messages, max_blocks=5)
+            conclusions = _extract_assistant_conclusions(
+                raw_messages, char_budget=layer_caps["conclusions_chars"],
+            )
             if conclusions:
                 conclusion_lines = "\n\n".join(
                     f"**[{i+1}]** {c}" for i, c in enumerate(conclusions)
@@ -1127,7 +1218,11 @@ async def build_resume_context(
                 conclusions_text = f"### Assistant Conclusions\n{conclusion_lines}"
 
             # Enrichment layer: key tool results
-            tool_results_text = _extract_key_tool_results(raw_messages, max_results=15)
+            tool_results_text = _extract_key_tool_results(
+                raw_messages,
+                char_budget=layer_caps["tool_results_chars"],
+                item_trunc=layer_caps["tool_item_trunc"],
+            )
 
             # Enrichment layer: uncommitted git state (async, with timeout)
             # Use caller-provided working_directory; fall back to SwarmWS default
@@ -1148,12 +1243,18 @@ async def build_resume_context(
         has_content = any([checkpoint, recent, conclusions_text,
                            tool_results_text, uncommitted])
         if has_content:
-            # Assemble sections
+            # Assemble sections. ``uncommitted`` is included in the trim view
+            # (Gate-1 finding 2) so it cannot bypass the budget — previously it
+            # was appended raw, invisible to _trim_to_budget.
+            uncommitted_section = (
+                f"### Uncommitted Changes\n{uncommitted}" if uncommitted else ""
+            )
             raw_sections = {
                 "checkpoint": checkpoint,
                 "conclusions": conclusions_text,
                 "tool_results": tool_results_text,
                 "recent_turns": recent,
+                "uncommitted": uncommitted_section,
             }
 
             # Apply budget trimming
@@ -1163,9 +1264,9 @@ async def build_resume_context(
             if trimmed.get("checkpoint"):
                 parts.append("")
                 parts.append(trimmed["checkpoint"])
-            if uncommitted:
+            if trimmed.get("uncommitted"):
                 parts.append("")
-                parts.append(f"### Uncommitted Changes\n{uncommitted}")
+                parts.append(trimmed["uncommitted"])
             if trimmed.get("conclusions"):
                 parts.append("")
                 parts.append(trimmed["conclusions"])
@@ -1177,6 +1278,19 @@ async def build_resume_context(
                 parts.append(trimmed["recent_turns"])
 
             result = "\n".join(parts)
+
+            # Final hard clamp (Gate-1 finding 2): _trim_to_budget never trims
+            # the checkpoint, so checkpoint + uncommitted alone could exceed the
+            # budget. This is the inviolable backstop.
+            clamped_result, did_clamp = _hard_clamp(result, token_budget * 4)
+            if did_clamp:
+                result = clamped_result
+                _resume_stats["clamped"] = _resume_stats.get("clamped", 0) + 1
+                logger.warning(
+                    "Resume context hit hard clamp: %d > %d chars (budget=%d tok) "
+                    "— checkpoint+uncommitted dominate",
+                    len("\n".join(parts)), token_budget * 4, token_budget,
+                )
             _resume_cache[app_session_id] = (msg_count, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest

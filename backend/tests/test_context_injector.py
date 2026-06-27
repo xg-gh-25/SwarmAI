@@ -465,6 +465,26 @@ class TestExtractUserDirectives:
         result = _extract_user_directives(msgs, max_directives=10)
         assert len(result) <= 10
 
+    def test_char_budget_keeps_newest_directives(self):
+        """Finding 1 (adversarial): when char_budget binds, keep the MOST
+        RECENT directives, not the oldest — a later decision supersedes an
+        earlier one. Mirrors _extract_assistant_conclusions' direction.
+        (Would be RED with forward iteration: it kept 'approve step 0'.)"""
+        msgs = [
+            {"role": "user",
+             "content": [{"type": "text", "text": f"approve step {i}"}]}
+            for i in range(30)
+        ]
+        # ~14 chars each; budget 50 → ~3-4 directives collected.
+        result = _extract_user_directives(msgs, char_budget=50)
+        assert result, "expected some directives"
+        assert any("step 29" in d for d in result), "newest directive dropped"
+        assert not any("step 0" in d and "step 0" == d.replace("approve ", "")
+                       for d in result), "oldest directive should be dropped"
+        # chronological order preserved (ascending step numbers)
+        steps = [int(d.rsplit(" ", 1)[1]) for d in result]
+        assert steps == sorted(steps), f"not chronological: {steps}"
+
 
 # ── _extract_uncommitted_state ───────────────────────────────────────
 
@@ -662,3 +682,168 @@ class TestTrimToBudget:
         assert len(result.get("tool_results", "")) < len(sections["tool_results"])
         # Checkpoint never trimmed
         assert result["checkpoint"] == sections["checkpoint"]
+
+    def test_trims_uncommitted_before_conclusions(self):
+        """Gate-1 finding 2: uncommitted is in the trim view and goes
+        before conclusions (more disposable), after recent_turns."""
+        sections = {
+            "checkpoint": "x " * 50,
+            "conclusions": "keep " * 2000,       # 10000 chars
+            "tool_results": "drop " * 2000,      # 10000 chars
+            "recent_turns": "turns " * 2000,     # 12000 chars
+            "uncommitted": "diff " * 2000,       # 10000 chars
+        }
+        # Budget tight enough that trimming tool_results + recent_turns is NOT
+        # enough — the trimmer must reach into uncommitted (4th in order) while
+        # leaving conclusions (5th, last) untouched.
+        result = _trim_to_budget(sections, token_budget=4_000)  # 16000 chars
+        # uncommitted shrinks (reached) before conclusions is spent
+        assert len(result.get("uncommitted", "")) < len(sections["uncommitted"])
+        # conclusions is the last trimmable to go — survives more than uncommitted
+        assert len(result.get("conclusions", "")) >= len(result.get("uncommitted", ""))
+
+
+# ── build_resume_context — END-TO-END elasticity (the seam) ──────────
+#
+# These are the load-bearing proof of run_6d5f60dd: that the elastic caps
+# actually change build_resume_context's OUTPUT (PIT08 — the bug lives
+# BETWEEN _compute_layer_caps and the extraction fns, not inside either).
+# We drive the REAL function, mocking only the DB + git boundaries.
+
+
+def _mk_session(n_turns: int, answer_chars: int = 2000) -> list[dict]:
+    """Build a synthetic session of n_turns user/assistant pairs."""
+    msgs: list[dict] = []
+    for i in range(n_turns):
+        msgs.append({
+            "role": "user",
+            "content": [{"type": "text", "text": f"please do task {i} now"}],
+        })
+        msgs.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": f"turn{i} " + ("z" * answer_chars)}],
+        })
+    return msgs
+
+
+class _FakeMessages:
+    def __init__(self, msgs):
+        self._msgs = msgs
+
+    async def count_by_session(self, _sid):
+        return len(self._msgs)
+
+    async def list_by_session_paginated(self, _sid, limit=None):
+        return self._msgs[-limit:] if limit else self._msgs
+
+
+class _FakeDB:
+    def __init__(self, msgs):
+        self.messages = _FakeMessages(msgs)
+
+
+def _run_resume(msgs, **kwargs):
+    """Invoke build_resume_context with DB + git mocked, fresh cache."""
+    import core.context_injector as ci
+    ci._resume_cache.clear()
+    fake_db = _FakeDB(msgs)
+    with patch.dict("sys.modules", {"database": type("M", (), {"db": fake_db})}), \
+         patch.object(ci, "_extract_uncommitted_state",
+                      new=AsyncMock(return_value="")):
+        return asyncio.run(ci.build_resume_context("sess-x", **kwargs))
+
+
+class TestBuildResumeContextElastic:
+    """AC1/AC2/AC4: elastic caps change the assembled output end-to-end."""
+
+    def test_large_session_fills_more_than_small_budget(self):
+        """AC1: same big session → 1M-model budget yields MORE context than
+        a 128K-model budget (the caps are budget-driven, not fixed counts)."""
+        big_session = _mk_session(60, answer_chars=2000)
+        out_1m = _run_resume(big_session, model_context_window=1_000_000)
+        out_128k = _run_resume(big_session, model_context_window=128_000)
+        assert len(out_1m) > len(out_128k), (
+            f"1M budget ({len(out_1m)}) should exceed 128K ({len(out_128k)})"
+        )
+
+    def test_short_session_stays_lean(self):
+        """AC2: a tiny session does NOT balloon to the budget — output is
+        bounded by available content, not by the generous cap."""
+        short = _mk_session(2, answer_chars=200)
+        out = _run_resume(short, model_context_window=1_000_000)
+        # 150K-token budget = 600K chars; a 2-turn session must stay far under.
+        assert len(out) < 20_000, f"short session ballooned to {len(out)} chars"
+
+    def test_never_exceeds_hard_clamp(self):
+        """AC4: output never exceeds token_budget*4 chars even when the
+        untrimmable checkpoint + content are huge (final clamp backstop)."""
+        huge = _mk_session(80, answer_chars=4000)
+        # Force a tiny budget so the clamp must engage.
+        out = _run_resume(huge, model_context_window=128_000)
+        budget, _, _ = _compute_resume_budget(128_000)
+        assert len(out) <= budget * 4, (
+            f"output {len(out)} exceeds hard clamp {budget * 4}"
+        )
+
+
+class TestHardClamp:
+    """Direct unit tests of the _hard_clamp backstop. The full-pipeline test
+    above can't reliably ENGAGE the clamp (every layer is now budget-bounded),
+    so the exact-boundary guarantee — INCLUSIVE of the marker (Gate-2 finding
+    7) — must be pinned here, where the clamp can be forced."""
+
+    def test_noop_when_within_budget(self):
+        from core.context_injector import _hard_clamp
+        text = "short text"
+        out, did = _hard_clamp(text, 1000)
+        assert did is False
+        assert out == text  # byte-identical, untouched
+
+    def test_clamps_and_stays_within_bound_inclusive_of_marker(self):
+        # The exact-bound regression Gate-2 caught: result must be <= max_chars
+        # INCLUDING the appended marker, not max_chars + len(marker).
+        from core.context_injector import _hard_clamp, _CLAMP_MARKER
+        text = "line\n" * 1000  # 5000 chars, many newlines
+        max_chars = 500
+        out, did = _hard_clamp(text, max_chars)
+        assert did is True
+        assert len(out) <= max_chars, (
+            f"clamp overshot: {len(out)} > {max_chars}"
+        )
+        assert out.endswith(_CLAMP_MARKER)
+
+    def test_single_giant_line_no_newline(self):
+        # No newline before body_limit → hard cut fallback, still in bound.
+        from core.context_injector import _hard_clamp, _CLAMP_MARKER
+        text = "x" * 5000  # one giant line, zero newlines
+        max_chars = 500
+        out, did = _hard_clamp(text, max_chars)
+        assert did is True
+        assert len(out) <= max_chars
+        assert out.endswith(_CLAMP_MARKER)
+
+    def test_cut_on_newline_boundary(self):
+        from core.context_injector import _hard_clamp
+        # Body limit lands inside "CCC..."; cut should retreat to the newline
+        # after the BBB block, so no partial line leaks past the boundary.
+        text = "A" * 100 + "\n" + "B" * 100 + "\n" + "C" * 1000
+        max_chars = 260  # body_limit = 260-35 = 225 → last \n at idx 201
+        out, did = _hard_clamp(text, max_chars)
+        assert did is True
+        assert len(out) <= max_chars
+        # The retained body ends at a newline boundary (no partial "C" line).
+        body = out[:-len("\n[resume context clamped to budget]")]
+        assert not body.endswith("C")
+
+    def test_empty_session_returns_empty(self):
+        """Fallback preserved: no messages → empty string, no crash."""
+        out = _run_resume([], model_context_window=1_000_000)
+        assert out == ""
+
+    def test_recent_turns_keeps_newest(self):
+        """The newest-first collection fix: the most recent turn must appear,
+        an ancient one must not (when budget forces selection)."""
+        session = _mk_session(40, answer_chars=2000)
+        out = _run_resume(session, model_context_window=128_000)
+        assert "task 39" in out          # newest user directive present
+        assert "turn0 " not in out       # oldest assistant turn dropped
