@@ -548,23 +548,47 @@ async def background_command_guard(
 # else (fail-safe). It is a pure deny — no HITL, no permission_mgr.
 
 # pytest as an INVOCATION (not the literal string in a filename like pytest.log):
-# at a command-word position — line start, or after a shell separator/pipe, or
-# `python -m`. This is what stops the `cat pytest.log | tail` false positive.
+# at a command-word position — line start, or after a shell separator/pipe,
+# `python -m` (any minor version), a runner wrapper, an env-assignment prefix,
+# OR a wall-clock wrapper (gtimeout/timeout N). The wall-clock-wrapper arm is
+# essential: the wrapped form is the shape we MANDATE, so the gate must still
+# SEE it as pytest (else the pipe-to-pager check is bypassed for the exact
+# commands we require — a fail-open hole). This is what stops the
+# `cat pytest.log | tail` false positive while catching `gtimeout 90 pytest`.
+# `python[\d.]*` matches python / python3 / python3.12 (Gate-2 C5).
 _PYTEST_INVOCATION_RE = re.compile(
-    r"(?:^|[;&|]|\bpython3?\s+-m"          # line start / separator / `python -m`
+    r"(?:^|[;&|]|\bpython[\d.]*\s+-m"      # line start / separator / `python -m`
     r"|\b(?:poetry|uv|pdm)\s+run\s+"       # or a poetry/uv/pdm run wrapper
+    r"|\bg?timeout\s+\d+\s+"               # or a gtimeout/timeout N wrapper
+    r"|\bexec\s+(?:@ARGV['\"]?\s+)?"       # or perl-alarm `exec @ARGV['] <cmd>`
     r"|(?:^|[;&|]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)"  # or env-assignment prefix
-    r"\s*(?:py\.test|pytest)\b",
+    r"\s*(?:python[\d.]*\s+-m\s+)?(?:py\.test|pytest)\b",  # opt. `python -m` after wrapper
     re.IGNORECASE,
 )
 # Output piped into a pager that the harness swallows (tail/head), possibly at
 # the end of a pipe chain (`pytest | grep x | tail`).
 _PIPE_TO_PAGER_RE = re.compile(r"\|\s*(?:tail|head)\b", re.IGNORECASE)
-# A per-test timeout flag OR a shell timeout wrapper (gtimeout/timeout) — either
-# bounds the run, so either satisfies AC2.
-_HAS_TIMEOUT_RE = re.compile(
-    r"--timeout[=\s]\s*\d+"  # pytest-timeout flag
-    r"|\bg?timeout\s+\d+",   # gtimeout/timeout shell wrapper
+# A wall-clock wrapper that BINDS the pytest token — the wrapper must IMMEDIATELY
+# precede pytest (optionally via `python -m`), not merely appear somewhere in the
+# string. Gate-2 (run BLOCK) proved an unbound "wrapper anywhere" check fails open:
+#   `gtimeout 90 echo && pytest`  → wrapper wraps echo, pytest runs raw (C1)
+#   `timeout 0 pytest`            → 0 means infinite, not a cap            (C2)
+#   `perl -e 'print "alarm"'; pytest` → decoy alarm mention, pytest raw    (C3)
+# Fixes: (a) wrapper adjacency to pytest; (b) duration `[1-9]\d*` rejects 0;
+# (c) perl arm requires `alarm N` AND `exec @ARGV <pytest>` in ONE command (no
+# `|`/newline crossing — `;` allowed since it's perl-script syntax). A per-test
+# `--timeout=60` NEVER counts (it bounds each test, not the command → C040).
+# On THIS machine gtimeout/timeout are NOT installed — only `/usr/bin/perl` is
+# guaranteed — so the perl-alarm form is the real, always-available cap.
+# Optional runner/interpreter prefix that may sit between the wall-clock wrapper
+# and the pytest token: `python[3.x] -m `, `uv run `, `poetry run `, `pdm run `.
+_RUNNER_PREFIX = r"(?:python[\d.]*\s+-m\s+|(?:uv|poetry|pdm)\s+run\s+)?"
+_WALLCLOCK_BOUND_PYTEST_RE = re.compile(
+    # gtimeout/timeout N (N>=1) wrapping pytest (optionally via a runner prefix):
+    r"\bg?timeout\s+[1-9]\d*\s+" + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b"
+    # OR perl-alarm: alarm N (N>=1) ... exec @ARGV <runner?> <pytest>, one command:
+    r"|\bperl\b[^|\n]*?\balarm\s+[1-9]\d*\b[^|\n]*?\bexec\s+@ARGV['\"]?\s+"
+    + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b",
     re.IGNORECASE,
 )
 
@@ -581,20 +605,35 @@ async def pytest_command_guard(
     tool_use_id: str | None,
     context: Any,
 ) -> dict[str, Any]:
-    """PreToolUse (Bash): DENY pytest piped to tail/head; WARN on no-timeout.
+    """PreToolUse (Bash): DENY pytest piped to tail/head AND DENY pytest without
+    a wall-clock wrapper.
 
-    Two pytest anti-patterns, treated asymmetrically (Gate-2, run_6af22b0d):
-      1. piped into tail/head → DENY. This is the destructive one: a slow run is
-         auto-backgrounded, the foreground returns EMPTY, and that reads as a
-         hang (the exact trap that caused 6 needless re-runs in run_241014d4).
-      2. no --timeout flag / no gtimeout wrapper → WARN only (additionalContext),
-         NOT deny. An un-timed run is already bounded by the harness foreground
-         ceiling, and a project may set timeout in pyproject.toml — denying that
-         is a false positive that blocks a correct setup. A nudge is enough.
+    Two pytest anti-patterns, BOTH now denied (upgraded XG-approved direct,
+    run after run_6af22b0d — C040 12th CLASS-B recurrence):
+      1. piped into tail/head → DENY. A slow run is auto-backgrounded, the
+         foreground returns EMPTY, and that reads as a hang (run_241014d4).
+      2. no WALL-CLOCK wrapper (`gtimeout N` / `timeout N`) → DENY. Was WARN-only;
+         the WARN was insufficient — a no-wrapper `pytest > file 2>&1` (no `|tail`)
+         still gets auto-backgrounded into the same hang. A per-test `--timeout`
+         does NOT count: it bounds each test, not the whole command. Fail-closed
+         (R9 / PIT10 allowlist): a pytest invocation MUST carry a wall-clock cap.
 
-    Fail-safe: any non-Bash, non-pytest, or compliant command is approved.
-    The pipe check runs on a quote-stripped copy so a quoted '| tail' in a -k
-    expression is not mistaken for a real pipe.
+    Fail-safe for the INVOCATION gate: any non-Bash, non-pytest command is
+    approved untouched. The pipe check runs on a quote-stripped copy so a quoted
+    '| tail' in a -k expression is not mistaken for a real pipe.
+
+    ACCEPTED RESIDUAL (Gate-2 C4/C6, NOT silently capped): pytest reached
+    INDIRECTLY — `bash -c "pytest ..."`, `make test`, `xargs pytest`, backticks,
+    a Makefile/script target — is NOT recognized, so it is approved uncapped.
+    This is a deliberate trade vs the false-positive of denying
+    `git commit -m "fix pytest"`: detecting pytest inside an arbitrary quoted
+    string would block legitimate non-runs. The gate's threat model is the
+    DIRECT shapes the agent actually types in this workspace (`python -m pytest`,
+    `gtimeout/perl ... pytest`, env-prefixed, separator-led) — those are bound
+    and capped. Indirect invocation is a known leak, documented not hidden; if it
+    recurs as a real hang, the fix is to add the specific wrapper, not to widen
+    the recognizer into the quoted-string false-positive zone (PIT10 weighed both
+    directions: fail-closed on the cap, fail-OPEN on indirection by choice).
     """
     if input_data.get("tool_name") != "Bash":
         return {"decision": "approve"}
@@ -620,18 +659,26 @@ async def pytest_command_guard(
             }
         }
 
-    # WARN (non-blocking): no timeout. Bounded by the harness ceiling anyway;
-    # may be set in config — so nudge, don't block.
-    if not _HAS_TIMEOUT_RE.search(command):
+    # DENY: no WALL-CLOCK wrapper. A pytest without `gtimeout N`/`timeout N` can
+    # run for minutes, get auto-backgrounded, return an empty foreground, and
+    # read as a hang (C040, 12th CLASS-B). A per-test `--timeout` does NOT bound
+    # the whole command, so it does not satisfy this. Fail-closed (R9 / PIT10).
+    if not _WALLCLOCK_BOUND_PYTEST_RE.search(command):
+        logger.warning("[BLOCKED] pytest without wall-clock wrapper: %s", command[:80])
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "additionalContext": (
-                    "[pytest hint, R9] No per-test timeout detected. If this run "
-                    "may be slow, add `--timeout=60` or wrap with `gtimeout 90 "
-                    "pytest ...` (macOS has no bare `timeout`) so it can't hang to "
-                    "the foreground ceiling. Ignore if timeout is set in config."
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "pytest 调用 → 必须被 gtimeout/timeout <N> 包裹,否则 DENY。 "
+                    "per-test --timeout 不算数(它不挡 wall-clock)。 (R9) A no-wrapper "
+                    "run gets auto-backgrounded → empty foreground → reads as a hang "
+                    "(C040). gtimeout/timeout aren't installed on this box — use the "
+                    "perl-alarm fallback (sanctioned shape): `perl -e 'alarm 90; exec "
+                    "@ARGV' python -m pytest <smallest scope> --timeout=60 "
+                    "-p no:cacheprovider > /tmp/t.txt 2>&1; echo exit=$?` then Read "
+                    "/tmp/t.txt. If it can't return in 90s, the answer is SMALLER "
+                    "scope, not a longer wait."
                 ),
             }
         }

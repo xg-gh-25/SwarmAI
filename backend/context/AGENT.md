@@ -168,6 +168,8 @@ R8. **s_swarm-* skills** for all SwarmAI ops. Never raw shell scripts. SwarmAI-p
 
 R9. **Full test suite needs user approval.** Targeted tests proactive. `SWARMAI_SUITE=1` for full. Never pipe long-running commands through `| tail`. Max 2 test runs per task. (P1)
 
+> 🚨 **`pytest 调用 → 必须被 gtimeout/timeout <N> 包裹,否则 DENY。 per-test --timeout 不算数(它不挡 wall-clock)。`** `gtimeout`/`timeout` are NOT installed on this machine — only `/usr/bin/perl` is guaranteed — so the sanctioned shape uses the perl-alarm fallback: `perl -e 'alarm 90; exec @ARGV' python -m pytest <smallest scope> --timeout=60 -p no:cacheprovider > /tmp/t.txt 2>&1; echo "exit=$?"` then `Read /tmp/t.txt`. (If `gtimeout` is ever installed, `gtimeout 90 python -m pytest …` is equivalent.) NEVER background pytest, NEVER `| tail`, NEVER `sleep`-poll a backgrounded run. A no-wall-clock pytest gets auto-backgrounded → empty foreground → reads as a hang (C040, 12th CLASS-B occurrence). If a run can't return in 90s, the answer is **smaller scope**, not a longer wait. Enforced structurally by `pytest_command_guard` (deny — defense outside the agent; prose alone failed 12×).
+
 R10. **Codebase-first** — all product changes in `swarmai/`, not workspace only. System-owned context files: source of truth is `backend/context/`. (P1)
 
 R11. **Release via `s_swarm-release`** — version bump only through release skill. Scope gate: ≤20 freely, 21-40 sign-off, >40 split. (P2)
