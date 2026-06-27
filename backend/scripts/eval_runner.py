@@ -440,15 +440,15 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         timeout_override: If provided, caps subprocess timeout (seconds).
             Used by context_health_hook to prevent exceeding the hook executor
             deadline. Default (None) uses the standard 20s timeout.
-        verify_teeth: If True AND the case declares verification.negative_command,
-            after the positive command passes, ALSO run the negative_command and
-            require the expected_contains marker to be ABSENT from its output
-            (wire-broken => marker gone). A canary whose marker survives the
-            negative variant is vacuous (doesn't actually discriminate) => failed.
-            OFF by default: doubles subprocess cost, so it is gate/nightly-only —
-            the per-session context_health_hook path leaves it False. Mirrors the
-            `programmatic_only` path-gate. A case with no negative_command is
-            untouched even when verify_teeth=True (back-compat for pre-teeth cases).
+        verify_teeth: If True, run the OPT-IN canary teeth check after the
+            positive passes — see _verify_canary_teeth for the full contract.
+            Teeth fire ONLY for cases that declare verification.negative_expected_contains
+            (the FAIL token the negative must affirmatively emit); a case without
+            that field is untouched. Teeth-pass requires the negative to emit its
+            FAIL token AND omit the positive marker. OFF by default (doubles
+            subprocess cost): ON for all gate-report producers (CLI/nightly/GUI)
+            so the committed bvt is deterministic; the per-session
+            context_health_hook path leaves it False (deadline-bound).
     """
     verification = case.get("verification", {})
     command = verification.get("command", "")
