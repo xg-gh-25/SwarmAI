@@ -25,6 +25,7 @@ from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
     background_command_guard,
+    pytest_command_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
@@ -196,6 +197,15 @@ async def build_hooks(
     registry.register(
         "PreToolUse", background_command_guard,
         "background_command_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: pytest anti-pattern guard (Bash-scoped) ──
+    # Deny pytest piped to tail/head (output swallowed by auto-backgrounding)
+    # and pytest without a timeout (unbounded hang). R9 in prose; this is the
+    # structural backstop (run_6af22b0d). Pure deny, fail-safe (approve all else).
+    registry.register(
+        "PreToolUse", pytest_command_guard,
+        "pytest_command_guard", matcher="Bash",
     )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────

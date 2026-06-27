@@ -538,6 +538,108 @@ async def background_command_guard(
 
 
 # ---------------------------------------------------------------------------
+# pytest command guard — block two recurring pytest anti-patterns (R9)
+# ---------------------------------------------------------------------------
+# R9 documents these in prose but prose did not stop them: in run_241014d4 the
+# agent piped a slow pytest into `tail`, the harness auto-backgrounded it, the
+# foreground returned empty, and the agent misattributed + re-ran it ~6×. This
+# guard is the structural backstop (defense outside the agent, like
+# background_command_guard): deny the narrow anti-pattern, approve everything
+# else (fail-safe). It is a pure deny — no HITL, no permission_mgr.
+
+# pytest as an INVOCATION (not the literal string in a filename like pytest.log):
+# at a command-word position — line start, or after a shell separator/pipe, or
+# `python -m`. This is what stops the `cat pytest.log | tail` false positive.
+_PYTEST_INVOCATION_RE = re.compile(
+    r"(?:^|[;&|]|\bpython3?\s+-m"          # line start / separator / `python -m`
+    r"|\b(?:poetry|uv|pdm)\s+run\s+"       # or a poetry/uv/pdm run wrapper
+    r"|(?:^|[;&|]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)"  # or env-assignment prefix
+    r"\s*(?:py\.test|pytest)\b",
+    re.IGNORECASE,
+)
+# Output piped into a pager that the harness swallows (tail/head), possibly at
+# the end of a pipe chain (`pytest | grep x | tail`).
+_PIPE_TO_PAGER_RE = re.compile(r"\|\s*(?:tail|head)\b", re.IGNORECASE)
+# A per-test timeout flag OR a shell timeout wrapper (gtimeout/timeout) — either
+# bounds the run, so either satisfies AC2.
+_HAS_TIMEOUT_RE = re.compile(
+    r"--timeout[=\s]\s*\d+"  # pytest-timeout flag
+    r"|\bg?timeout\s+\d+",   # gtimeout/timeout shell wrapper
+    re.IGNORECASE,
+)
+
+
+def _strip_quoted(command: str) -> str:
+    """Remove single/double-quoted spans so a quoted '| tail' inside a -k/-m
+    expression isn't mistaken for a real pipe (Gate-2 false-positive fix)."""
+    s = re.sub(r"'[^']*'", "", command)
+    return re.sub(r'"[^"]*"', "", s)
+
+
+async def pytest_command_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Bash): DENY pytest piped to tail/head; WARN on no-timeout.
+
+    Two pytest anti-patterns, treated asymmetrically (Gate-2, run_6af22b0d):
+      1. piped into tail/head → DENY. This is the destructive one: a slow run is
+         auto-backgrounded, the foreground returns EMPTY, and that reads as a
+         hang (the exact trap that caused 6 needless re-runs in run_241014d4).
+      2. no --timeout flag / no gtimeout wrapper → WARN only (additionalContext),
+         NOT deny. An un-timed run is already bounded by the harness foreground
+         ceiling, and a project may set timeout in pyproject.toml — denying that
+         is a false positive that blocks a correct setup. A nudge is enough.
+
+    Fail-safe: any non-Bash, non-pytest, or compliant command is approved.
+    The pipe check runs on a quote-stripped copy so a quoted '| tail' in a -k
+    expression is not mistaken for a real pipe.
+    """
+    if input_data.get("tool_name") != "Bash":
+        return {"decision": "approve"}
+    command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command:
+        return {"decision": "approve"}
+    if not _PYTEST_INVOCATION_RE.search(command):
+        return {"decision": "approve"}
+
+    # DENY: piped to a pager (check the unquoted form only).
+    if _PIPE_TO_PAGER_RE.search(_strip_quoted(command)):
+        logger.warning("[BLOCKED] pytest piped to pager: %s", command[:80])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "pytest piped into tail/head is denied (R9): a slow run gets "
+                    "auto-backgrounded and the foreground returns EMPTY output, "
+                    "which reads as a hang. Redirect to a file and Read it: "
+                    "`pytest ... --timeout=60 > /tmp/t.txt 2>&1` then Read /tmp/t.txt."
+                ),
+            }
+        }
+
+    # WARN (non-blocking): no timeout. Bounded by the harness ceiling anyway;
+    # may be set in config — so nudge, don't block.
+    if not _HAS_TIMEOUT_RE.search(command):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "additionalContext": (
+                    "[pytest hint, R9] No per-test timeout detected. If this run "
+                    "may be slow, add `--timeout=60` or wrap with `gtimeout 90 "
+                    "pytest ...` (macOS has no bare `timeout`) so it can't hang to "
+                    "the foreground ceiling. Ignore if timeout is set in config."
+                ),
+            }
+        }
+
+    return {"decision": "approve"}
+
+
+# ---------------------------------------------------------------------------
 # Governance file gate — Three-Layer Governance enforcement
 # ---------------------------------------------------------------------------
 
