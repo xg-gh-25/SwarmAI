@@ -33,6 +33,17 @@ def _ok(name: str) -> int:
     return 0
 
 
+def _teeth(name: str) -> int:
+    """Negative-mode success: the probe proved its teeth (it ran the real wire,
+    saw the invariant broken, and the positive check correctly FAILED). Emits a
+    DISTINCT ``<NAME>_TEETH`` token — never the positive ``<NAME>_OK`` marker —
+    so the runtime teeth check (eval_runner._verify_canary_teeth) can affirm
+    discrimination without colliding with the positive marker. Returns 0: from
+    the gate's view the negative ran SUCCESSFULLY (the teeth bit)."""
+    print(f"{name}_TEETH")
+    return 0
+
+
 def _fail(name: str, why: str) -> int:
     print(f"{name}_FAIL {why}")
     return 1
@@ -55,7 +66,7 @@ def _check_exclude(name: str, attr: str, required: set, negative: bool) -> int:
         finally:
             setattr(cdl, attr, saved)
         # The positive check MUST have failed (rc 1) on the broken set.
-        return _ok(name) if broke != 0 else _fail(name, "negative did not break the real invariant")
+        return _teeth(name) if broke != 0 else _fail(name, "negative did not break the real invariant")
     current = set(getattr(cdl, attr))
     return _ok(name) if required.issubset(current) else _fail(name, f"{attr} missing {required - current}")
 
@@ -92,7 +103,7 @@ def gate_freshness(negative: bool) -> int:
             empty = compute_code_digest(root, code_root=repo)
         finally:
             er._GATE_CODE_PATHS = saved
-        return _ok(name) if empty != base else _fail(name, "digest ignored its inputs")
+        return _teeth(name) if empty != base else _fail(name, "digest ignored its inputs")
     # Positive: digest is a stable non-empty 16-hex over real inputs.
     again = compute_code_digest(root, code_root=repo)
     stable = base == again and len(base) == 16 and bool(_GATE_CODE_PATHS)
@@ -124,7 +135,7 @@ def prompt_budget(negative: bool) -> int:
             broke = _within(window)
         finally:
             loader.compute_token_budget = saved
-        return _ok(name) if not broke else _fail(name, "negative did not break the real budget check")
+        return _teeth(name) if not broke else _fail(name, "negative did not break the real budget check")
     return _ok(name) if _within(window) else _fail(name, f"budget out of bounds for window {window}")
 
 
@@ -247,7 +258,7 @@ def assembly_floor(negative: bool) -> int:
         finally:
             loader._enforce_token_budget = saved
         # The check MUST have failed (floor was altered by the broken enforcer).
-        return _ok(name) if not ok else _fail(
+        return _teeth(name) if not ok else _fail(
             name, "negative did not bite: floor check passed even when the "
                   "enforcer truncated the non-truncatable identity sections")
 
