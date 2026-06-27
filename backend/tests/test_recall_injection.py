@@ -88,6 +88,8 @@ class TestMaybeInjectRecall:
         unit = MagicMock()
         unit._recall_injected = False
         unit.is_channel_session = False
+        # Real int (not an auto-Mock) so the recall#5 cap arithmetic works.
+        unit._recall_keyword_misses = 0
         return unit
 
     @pytest.fixture
@@ -144,7 +146,10 @@ class TestMaybeInjectRecall:
         assert mock_unit._recall_injected is True  # Flag still set to prevent retry
 
     @pytest.mark.asyncio
-    async def test_empty_keywords_skips_recall(self, mock_unit, mock_options):
+    async def test_empty_keywords_skips_recall_but_keeps_guard_open(self, mock_unit, mock_options):
+        """recall#5 fix (run_a16d61ad): a zero-keyword OPENER skips recall this turn
+        but does NOT burn the once-per-session guard. The flag stays False so a later
+        substantive message can still trigger recall (see the two-message test below)."""
         from core.session_router import _maybe_inject_recall
 
         original_prompt = mock_options.system_prompt
@@ -156,7 +161,64 @@ class TestMaybeInjectRecall:
         )
 
         assert mock_options.system_prompt == original_prompt
-        assert mock_unit._recall_injected is True
+        # CHANGED CONTRACT: zero-keyword opener leaves the guard OPEN (False) so the
+        # next substantive message gets a chance. (Mutation test: revert the fix —
+        # restore `unit._recall_injected = True` on this branch — and this flips RED.)
+        assert mock_unit._recall_injected is False
+
+    @pytest.mark.asyncio
+    async def test_zero_keyword_opener_then_substantive_message_recalls(self, mock_unit, mock_options):
+        """recall#5 core fix: opener 'hi' (no keywords) must NOT permanently disable
+        recall. A following substantive query in the SAME session still runs recall once.
+
+        This is the RED-on-revert guard for work-stream E: with the old code (which
+        set _recall_injected=True on the zero-keyword branch), the second call would
+        be short-circuited by the guard and inject nothing → this test goes RED."""
+        from core.session_router import _maybe_inject_recall
+
+        with patch("core.session_router._recall_for_query", return_value="Recalled X"):
+            # Turn 1: opener with no extractable keywords.
+            await _maybe_inject_recall(
+                user_message="hi",
+                options=mock_options,
+                unit=mock_unit,
+            )
+            assert mock_unit._recall_injected is False, "opener must not burn the guard"
+            assert "Recalled Knowledge" not in mock_options.system_prompt
+
+            # Turn 2: substantive query — recall MUST run now.
+            await _maybe_inject_recall(
+                user_message="How does the evolution pipeline handle corrections?",
+                options=mock_options,
+                unit=mock_unit,
+            )
+
+        assert "Recalled Knowledge" in mock_options.system_prompt
+        assert "Recalled X" in mock_options.system_prompt
+        assert mock_unit._recall_injected is True, "guard set True after a real recall"
+
+    @pytest.mark.asyncio
+    async def test_zero_keyword_retry_is_bounded_by_cap(self, mock_unit, mock_options):
+        """recall#5 CAP: a session that NEVER yields keywords must not re-run the
+        extractor forever. After _RECALL_KEYWORD_MISS_CAP keyword-less turns the
+        guard latches closed, so subsequent turns short-circuit on the guard.
+
+        Mutation guard: remove the cap (the `if ... >= _RECALL_KEYWORD_MISS_CAP`
+        block) and the guard never latches → this test goes RED on the final assert.
+        """
+        from core.session_router import _maybe_inject_recall, _RECALL_KEYWORD_MISS_CAP
+
+        # Feed CAP keyword-less openers. _extract_query_keywords("hi") → [] each time.
+        with patch("core.session_router._recall_for_query", return_value="X"):
+            for i in range(_RECALL_KEYWORD_MISS_CAP):
+                assert mock_unit._recall_injected is False, f"guard latched too early at turn {i}"
+                await _maybe_inject_recall(user_message="hi", options=mock_options, unit=mock_unit)
+
+        # After CAP misses, the guard is latched closed — recall stops retrying.
+        assert mock_unit._recall_keyword_misses == _RECALL_KEYWORD_MISS_CAP
+        assert mock_unit._recall_injected is True, (
+            "guard must latch closed after CAP keyword-less turns (bounds the regex cost)"
+        )
 
     @pytest.mark.asyncio
     async def test_recall_disaster_timeout_bounds_a_hang(self, mock_unit, mock_options, monkeypatch):
@@ -224,6 +286,27 @@ class TestMaybeInjectRecall:
         assert "## Recalled Knowledge" in mock_options.system_prompt
         assert "synonyms" in mock_options.system_prompt
         assert mock_unit._recall_injected is True
+
+    @pytest.mark.asyncio
+    async def test_empty_result_increments_degraded_counter(self, mock_unit, mock_options):
+        """recall#3 fix (run_a16d61ad): 'keyword recall ran but matched nothing' is the
+        load-bearing failure mode after the vector leg was retired (synonym miss). It must
+        be COUNTED, not just INFO-logged. Mutation test: remove the _record_recall_degraded
+        call on the empty branch and this goes RED."""
+        from core import session_router as sr
+
+        before = sr._recall_degraded_count.get("empty_with_keywords", 0)
+        with patch("core.session_router._recall_for_query", return_value=""):
+            await sr._maybe_inject_recall(
+                user_message="How does the obscure subsystem handle edge cases?",
+                options=mock_options,
+                unit=mock_unit,
+            )
+        after = sr._recall_degraded_count.get("empty_with_keywords", 0)
+        assert after == before + 1, (
+            "empty-with-keywords recall must increment the degradation counter "
+            f"(before={before}, after={after}) — silent synonym-miss is the dead-path class"
+        )
 
 
 # ── REAL-PATH integration (the test that was missing — run_bbd79e84) ──
@@ -294,6 +377,8 @@ class TestRealRecallPathBudget:
         unit = MagicMock()
         unit._recall_injected = False
         unit.is_channel_session = False
+        # Real int (not an auto-Mock) so the recall#5 cap arithmetic works.
+        unit._recall_keyword_misses = 0
         return unit
 
     @pytest.fixture
@@ -370,6 +455,8 @@ class TestRecallLoudOnDegradation:
         unit = MagicMock()
         unit._recall_injected = False
         unit.is_channel_session = False
+        # Real int (not an auto-Mock) so the recall#5 cap arithmetic works.
+        unit._recall_keyword_misses = 0
         return unit
 
     @pytest.fixture

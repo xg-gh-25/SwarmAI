@@ -71,6 +71,12 @@ _RECALL_DB_BUSY_TIMEOUT_MS = 5000      # < disaster cap → sqlite lock can't ou
 # so we cap at 8K to avoid pushing context over budget on large sessions.
 _RECALL_MAX_TOKENS = 8_000
 
+# recall#5 cap (run_a16d61ad): a zero-keyword opener no longer latches the
+# once-per-session guard (so a later substantive message can still recall), but
+# after this many keyword-less turns we latch it closed — a session that never
+# yields keywords must not re-run the regex extractor every turn forever.
+_RECALL_KEYWORD_MISS_CAP = 5
+
 # Recall-degradation counter (run_4d06640b W5): increments whenever recall returns
 # empty due to a failure/timeout rather than a genuine no-match. Surfaces silent
 # degradation that the old logger.debug+return"" pattern hid for months. Read for
@@ -356,10 +362,27 @@ async def _maybe_inject_recall(
         unit._recall_injected = True
         return
 
-    # Extract keywords — skip if message too short/generic
+    # Extract keywords — skip if message too short/generic.
+    #
+    # recall#5 fix (run_a16d61ad): a zero-keyword OPENER must NOT permanently
+    # disable recall for the whole session. Previously this branch set
+    # _recall_injected=True, so an opening "hi" / "继续" / "ok" (which yields no
+    # keywords) burned the once-per-session guard before the user ever asked a
+    # substantive question — recall was then dead for the entire session. We now
+    # leave the guard FALSE here: the NEXT message gets another chance to extract
+    # keywords and run recall once. No loop — the guard is still set True on any
+    # successful/empty MATCH branch and for channel sessions, so recall still runs
+    # at most once per session, just on the first SUBSTANTIVE message rather than
+    # the first message unconditionally.
     keywords = _extract_query_keywords(user_message)
     if not keywords:
-        unit._recall_injected = True
+        # Bounded retry (recall#5 cap): leave the guard open so a later
+        # substantive message can recall — but after _RECALL_KEYWORD_MISS_CAP
+        # keyword-less turns, latch it closed so a session that NEVER yields
+        # keywords stops re-running the regex extractor every single turn.
+        unit._recall_keyword_misses = getattr(unit, "_recall_keyword_misses", 0) + 1
+        if unit._recall_keyword_misses >= _RECALL_KEYWORD_MISS_CAP:
+            unit._recall_injected = True
         return
 
     # Instrumentation (READ-line observability, design §2 P2/P3): measure the
@@ -442,10 +465,20 @@ async def _maybe_inject_recall(
                 _base_tok, _recall_tok, _base_tok + _recall_tok, _recall_ms,
             )
         else:
-            # Genuine no-match. NOT a failure (failures are counted/logged inside
-            # _recall_for_query) — but inject an agentic re-search nudge (DoD6) so
-            # a keyword miss prompts the agent to try synonyms itself rather than
-            # silently proceeding with zero recall (the keyword-only blind spot).
+            # Keyword recall RAN successfully but matched NOTHING. This is not an
+            # exception (those are counted inside _recall_for_query), but after the
+            # vector leg was retired (pure-filesystem) it IS the load-bearing
+            # failure mode: "right idea, different words" now silently returns zero.
+            #
+            # recall#3 fix (run_a16d61ad): COUNT it. Previously this was INFO-logged
+            # only — invisible to any metric — so a recall path that systematically
+            # whiffs on synonyms would degrade silently (the exact dead-path class
+            # vector used to cover). The counter makes empty-with-keywords a tracked
+            # degradation signal, distinct from disaster_timeout / inject_exception.
+            _record_recall_degraded("empty_with_keywords")
+            # Inject an agentic re-search nudge (DoD6) so a keyword miss prompts the
+            # agent to try synonyms itself rather than silently proceeding with zero
+            # recall (the keyword-only blind spot).
             options.system_prompt = (
                 options.system_prompt
                 + "\n\n## Recalled Knowledge\n_(Keyword recall found no direct match "
