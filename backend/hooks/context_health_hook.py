@@ -27,6 +27,14 @@ from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
 
+# Max orphaned memory entries to embed per session-close cycle (run_e9b15722).
+# Drained CONCURRENTLY (embed_batch, 5 at a time) so this clears a ~425-entry
+# backlog in ~3 cycles (425/200), then stays converged on incremental drift. The OLD value
+# was an implicit LIMIT 10 drained serially → never converged (coverage frozen
+# ~5% for months). 200 @ 5-concurrent ≈ ~20s of background hook time, bounded.
+_RECOVERY_DRAIN_BUDGET = 200
+
+
 def _is_cjk_like(c: str) -> bool:
     """Check if character is CJK-like (tokenized at ~1.5 tokens by BPE).
 
@@ -1896,23 +1904,40 @@ class ContextHealthHook:
                     embed_fn=_safe_embed,
                 )
 
-                # Recovery: find entries with metadata but no vector (orphaned
-                # from prior failed embed attempts). Re-embed up to 10 per session.
-                orphaned = conn.execute("""
+                # Recovery: embed entries that have metadata but no vector
+                # (orphaned from prior failed/rate-limited embed attempts).
+                #
+                # CONVERGENCE FIX (run_e9b15722): the old code drained LIMIT 10
+                # ONE-AT-A-TIME per session. With ~425 orphans that never caught
+                # up to drift — daemon logs showed "recovered=10" EVERY run, vec
+                # coverage frozen at ~5% for months. Now we drain a much larger
+                # budget per cycle using CONCURRENT embedding (embed_batch, 5 at a
+                # time, ~45s for hundreds), so the backlog clears in 1-2 cycles and
+                # then stays converged on incremental drift. Capped at
+                # _RECOVERY_DRAIN_BUDGET to bound session-close time.
+                orphaned = conn.execute(
+                    """
                     SELECT me.key, me.full_text FROM memory_entries me
                     LEFT JOIN memory_vec mv ON me.key = mv.key
                     WHERE mv.key IS NULL
-                    LIMIT 10
-                """).fetchall()
+                    LIMIT ?
+                    """,
+                    (_RECOVERY_DRAIN_BUDGET,),
+                ).fetchall()
 
                 recovery_count = 0
-                for key, full_text in orphaned:
-                    vec = client.embed_text(full_text)
-                    if vec is not None:
-                        store._upsert_vec(key, vec)
-                        recovery_count += 1
-                if recovery_count:
-                    conn.commit()
+                if orphaned:
+                    keys = [k for k, _ in orphaned]
+                    texts = [t for _, t in orphaned]
+                    vecs = client.embed_batch(texts, max_concurrent=5)
+                    for key, vec in zip(keys, vecs):
+                        if vec is not None:
+                            store._upsert_vec(key, vec)
+                            recovery_count += 1
+                        else:
+                            embed_failures += 1
+                    if recovery_count:
+                        conn.commit()
 
             # Always log at INFO level so failures are visible in daemon logs
             total_actioned = stats["embedded"] + recovery_count

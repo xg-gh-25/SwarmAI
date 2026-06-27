@@ -232,3 +232,43 @@ async def save_session_to_memory(req: SaveSessionRequest):
         next_message_idx=result.next_message_idx,
         message=result.error,
     )
+
+
+@router.get("/recall/coverage")
+async def get_recall_coverage():
+    """Report memory_vec embedding coverage — reads the last COMMITTED WAL snapshot.
+
+    Honest WAL semantics (run_e9b15722, corrected per Gate-2): SQLite isolation is
+    per-CONNECTION, not per-process — a fresh reader (in-process OR external) sees
+    all COMMITTED rows equally. So being "inside the daemon" buys nothing by itself.
+    What this endpoint gives is a read that runs RIGHT AFTER the daemon's own
+    recovery drain commits, against a live connection — so it reflects committed
+    state without racing a separate tool's stale snapshot. The earlier "external
+    read returned entries=0" symptom was UNCOMMITTED singleton writes sitting in
+    the -wal that no reader (here or in a script) would see until commit. This
+    endpoint reads committed coverage; trust it only insofar as writers commit.
+    Verification surface for the backfill convergence (M1).
+    """
+    try:
+        from core.vec_db import open_vec_db
+
+        with open_vec_db() as conn:
+            if conn is None:
+                return {"available": False, "reason": "sqlite-vec not loaded"}
+            entries = conn.execute("SELECT COUNT(*) FROM memory_entries").fetchone()[0]
+            vec = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
+            orphan = conn.execute(
+                "SELECT COUNT(*) FROM memory_entries me "
+                "LEFT JOIN memory_vec mv ON me.key = mv.key WHERE mv.key IS NULL"
+            ).fetchone()[0]
+        coverage_pct = round(vec * 100.0 / entries, 1) if entries else 0.0
+        return {
+            "available": True,
+            "entries": entries,
+            "vec": vec,
+            "orphan": orphan,
+            "coverage_pct": coverage_pct,
+        }
+    except Exception as exc:  # noqa: BLE001 — endpoint must not 500 on a read
+        logger.warning("recall coverage read failed: %s", exc)
+        return {"available": False, "reason": f"{type(exc).__name__}: {exc}"}

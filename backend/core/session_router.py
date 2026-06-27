@@ -277,9 +277,25 @@ async def _maybe_inject_recall(
     Guard rails:
       - Once-per-session flag on unit._recall_injected
       - Channel sessions excluded (quick exchanges don't need deep recall)
-      - 150ms hard timeout — recall is enhancement, not critical path
+      - 400ms hard timeout on the keyword leg — recall is enhancement, not critical path
       - Any exception → skip silently, set flag to prevent retry
+
+    VECTOR leg (run_e9b15722): the keyword leg above is synchronous + keyword-only
+    (no Bedrock on the first-token path — run_bbd79e84). The slower SEMANTIC leg
+    runs as a tracked background task whose result is injected on the NEXT turn via
+    ``_inject_pending_vector_recall``, called at the TOP of THIS function (below),
+    BEFORE the _recall_injected early-return. run_conversation invokes
+    _maybe_inject_recall every turn, so the top-of-function call is reached on turn
+    2 even though the guard then returns. (Putting the injection AFTER the guard
+    made it unreachable on turn 2 — Gate-1 BLOCK-1, the exact dead-path class.)
     """
+    # FIRST: inject any vector recall that completed since the last turn. This MUST
+    # run before the _recall_injected early-return below (Gate-1 BLOCK-1: after the
+    # guard it was unreachable on turn 2). run_conversation calls _maybe_inject_recall
+    # every turn, so this top-of-function call fires each turn. (Sole caller — NOT
+    # build_options.)
+    _inject_pending_vector_recall(options, unit)
+
     if unit._recall_injected:
         return
 
@@ -310,6 +326,9 @@ async def _maybe_inject_recall(
             options.system_prompt = (
                 options.system_prompt + f"\n\n## Recalled Knowledge\n{recalled}"
             )
+            # Remember the keyword result so the background vector leg can dedupe
+            # against it (avoid double-injecting the same entries next turn).
+            unit._keyword_recall_text = recalled
     except asyncio.TimeoutError:
         logger.debug("Recall timed out (>%sms) for keywords: %s",
                       int(_RECALL_TIMEOUT_S * 1000), keywords[:80])
@@ -317,6 +336,79 @@ async def _maybe_inject_recall(
         logger.debug("Recall injection failed: %s", exc)
     finally:
         unit._recall_injected = True
+        # Fire the background SEMANTIC (vector) recall ONCE per session. It runs
+        # OFF the critical path (no one awaits it before the first token) and
+        # stores its result on unit._pending_vector_recall for next-turn injection.
+        _maybe_start_vector_recall(user_message, unit)
+
+
+def _inject_pending_vector_recall(options: Any, unit: SessionUnit) -> None:
+    """Inject the background vector-recall result (if ready) into the prompt.
+
+    Called at the top of _maybe_inject_recall (which run_conversation invokes
+    every turn), BEFORE its _recall_injected guard. Idempotent: injects at most once per session via
+    ``_vector_recall_injected``. Reads the result only when the background task
+    has completed (no race on the in-flight store).
+    """
+    if getattr(unit, "_vector_recall_injected", False):
+        return
+    pending = getattr(unit, "_pending_vector_recall", None)
+    if not pending:
+        return
+    try:
+        options.system_prompt = (
+            options.system_prompt + f"\n\n## Recalled Knowledge (semantic)\n{pending}"
+        )
+        unit._vector_recall_injected = True
+        unit._pending_vector_recall = None
+    except Exception as exc:  # noqa: BLE001 — injection is best-effort
+        logger.debug("Pending vector recall injection failed: %s", exc)
+
+
+def _maybe_start_vector_recall(user_message: str, unit: SessionUnit) -> None:
+    """Start the background semantic-recall task once per session (off critical path)."""
+    if getattr(unit, "_vector_recall_started", False):
+        return
+    if unit.is_channel_session:
+        return
+    keywords = _extract_query_keywords(user_message)
+    if not keywords:
+        return
+    unit._vector_recall_started = True
+
+    async def _bg() -> None:
+        try:
+            # allow_embed=True: the SEMANTIC leg. Runs in a thread, off the
+            # first-token path (nothing awaits this before the response streams).
+            recalled = await asyncio.to_thread(
+                _recall_for_query, keywords, _RECALL_MAX_TOKENS, True,
+            )
+            if recalled:
+                # Dedupe against the keyword result already injected this session
+                # so we don't double-inject the same entries (Gate-1 MEDIUM).
+                prior = getattr(unit, "_keyword_recall_text", "") or ""
+                deduped = _dedupe_recall(recalled, prior)
+                if deduped:
+                    unit._pending_vector_recall = deduped
+        except Exception as exc:  # noqa: BLE001 — background, best-effort
+            logger.debug("Background vector recall failed: %s", exc)
+
+    try:
+        unit._vector_recall_task = asyncio.create_task(_bg())
+    except RuntimeError:
+        # No running loop (shouldn't happen in the daemon) — skip silently.
+        pass
+
+
+def _dedupe_recall(new_text: str, prior_text: str) -> str:
+    """Drop lines from new_text already present in prior_text (block-level dedupe)."""
+    if not prior_text:
+        return new_text
+    prior_lines = {ln.strip() for ln in prior_text.splitlines() if ln.strip()}
+    kept = [ln for ln in new_text.splitlines()
+            if not ln.strip() or ln.strip() not in prior_lines]
+    result = "\n".join(kept).strip()
+    return result
 
 
 def _get_access_hint(ext: str, filename: str) -> str:

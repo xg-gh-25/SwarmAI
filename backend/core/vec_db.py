@@ -131,6 +131,12 @@ def open_vec_db(
     conn = sqlite3.connect(str(path))
     try:
         conn.execute("PRAGMA journal_mode=WAL")
+        # busy_timeout: WAL allows concurrent readers but a SINGLE writer. The
+        # memory-embedding recovery drain (context_health_hook) and other writers
+        # can overlap on memory_vec; without a timeout the loser gets an immediate
+        # SQLITE_BUSY → OperationalError, aborting a batch mid-drain. 30s waits the
+        # lock out like every production connection already does. (run_e9b15722)
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.enable_load_extension(True)
         _sqlite_vec.load(conn)
         conn.enable_load_extension(False)

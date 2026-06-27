@@ -368,3 +368,99 @@ class TestRealRecallPathBudget:
         # The seeded MEMORY entry's content must appear — proves Memory domain
         # contributed via its real keyword leg (not silently swallowed).
         assert "SIGKILL" in mock_options.system_prompt or "sigkill" in mock_options.system_prompt.lower()
+
+
+# ── M2: vector inject-on-next-turn (run_e9b15722) ──
+#
+# The vector (semantic) leg runs as a background task off the first-token path;
+# its result is injected on the NEXT turn. Gate-1 BLOCK-1: a naive design put the
+# injection AFTER `if unit._recall_injected: return` → unreachable on turn 2. These
+# tests prove the injection is reachable on turn 2 (called twice on the same unit),
+# the background task is tracked + cancellable, and dedupe works.
+
+class TestVectorInjectOnNextTurn:
+    @pytest.fixture
+    def real_unit(self):
+        """A lightweight stand-in with the real unit's vector-recall attrs."""
+        class U:
+            is_channel_session = False
+            _recall_injected = False
+            _vector_recall_started = False
+            _vector_recall_injected = False
+            _pending_vector_recall = None
+            _keyword_recall_text = ""
+            _vector_recall_task = None
+        return U()
+
+    @pytest.fixture
+    def opts(self):
+        o = MagicMock()
+        o.system_prompt = "## Base"
+        return o
+
+    @pytest.mark.asyncio
+    async def test_pending_vector_injected_on_turn_2(self, real_unit, opts):
+        """The BLOCK-1 regression guard: vector recall stored after turn 1 must be
+        injected on turn 2 — even though _recall_injected is already True (which
+        early-returns the rest of _maybe_inject_recall)."""
+        from core import session_router as sr
+
+        # Simulate: turn 1 already happened (recall injected), and the background
+        # vector task has since completed and stored a pending result.
+        real_unit._recall_injected = True
+        real_unit._pending_vector_recall = "VECTOR-ONLY-ENTRY: semantic hit XYZ"
+
+        # Turn 2: _maybe_inject_recall is called again. Even though it early-returns
+        # on _recall_injected, the pending vector MUST be injected first.
+        await sr._maybe_inject_recall(
+            user_message="follow up question", options=opts, unit=real_unit,
+        )
+
+        assert "VECTOR-ONLY-ENTRY: semantic hit XYZ" in opts.system_prompt, (
+            "pending vector recall was NOT injected on turn 2 — BLOCK-1 regression "
+            "(injection unreachable behind the _recall_injected early-return)"
+        )
+        assert real_unit._vector_recall_injected is True
+        assert real_unit._pending_vector_recall is None  # consumed
+
+    @pytest.mark.asyncio
+    async def test_pending_vector_injected_once_only(self, real_unit, opts):
+        """Idempotent: a second injection attempt must not double-inject."""
+        from core import session_router as sr
+        real_unit._recall_injected = True
+        real_unit._pending_vector_recall = "semantic hit ABC"
+
+        await sr._maybe_inject_recall(user_message="q1", options=opts, unit=real_unit)
+        first = opts.system_prompt.count("semantic hit ABC")
+        await sr._maybe_inject_recall(user_message="q2", options=opts, unit=real_unit)
+        second = opts.system_prompt.count("semantic hit ABC")
+
+        assert first == 1 and second == 1, "vector recall double-injected"
+
+    def test_dedupe_drops_keyword_overlap(self):
+        """The vector result must drop lines already in the keyword injection."""
+        from core.session_router import _dedupe_recall
+        prior = "- entry A: foo\n- entry B: bar"
+        new = "- entry A: foo\n- entry C: baz"  # A overlaps, C is vector-only
+        out = _dedupe_recall(new, prior)
+        assert "entry C: baz" in out
+        assert "entry A: foo" not in out  # deduped
+
+    @pytest.mark.asyncio
+    async def test_vector_task_started_off_critical_path(self, real_unit, opts):
+        """Turn 1 fires the background task; the synchronous path must NOT block
+        on it (the task is created, not awaited)."""
+        from core import session_router as sr
+
+        # Stub _recall_for_query so the synchronous keyword leg returns fast and
+        # the background task is created (we assert it exists, not its result).
+        with patch("core.session_router._recall_for_query", return_value="kw hit"):
+            await sr._maybe_inject_recall(
+                user_message="session lifecycle crash recovery resume",
+                options=opts, unit=real_unit,
+            )
+
+        assert real_unit._vector_recall_started is True
+        assert real_unit._vector_recall_task is not None
+        # cleanup the task we started
+        real_unit._vector_recall_task.cancel()
