@@ -51,11 +51,15 @@ def _build_bare_unit():
     u._last_error_type = None
     # Parent attrs read by the retry loop (retry_manager.py). __new__ bypasses
     # __init__, so each must be self-provisioned or the loop raises AttributeError.
-    # Kept in sync with `grep 'self._parent\.' retry_manager.py`:
+    # Kept in sync with `grep -oE 'self\._parent\.[a-zA-Z_]+' retry_manager.py`
+    # (23 distinct real attrs; MAX_RETRY_ATTEMPTS/RETRY_BACKOFF_SECONDS are class
+    # attrs inherited via __new__, so only instance attrs need provisioning here):
     #   _recycle_kill_pending — read on EVERY retry iteration (the ZOMBIE path this
     #     harness drives); __init__ defaults it False (session_unit.py:652).
-    #   _recovery_coordinator — read only on the OOM branch (retry_manager.py:250);
-    #     provisioned so an OOM-injection variant of this harness won't AttributeError.
+    #   _recovery_coordinator — read ONLY on the OOM branch (retry_manager.py:250,
+    #     gated by FailureType.OOM at :224). The ZOMBIE injection never reaches it,
+    #     so None is safe HERE. ⚠️ If an OOM-injection variant is added to this
+    #     harness, replace None with a real/mock RecoveryCoordinator or :250 crashes.
     #   _buffer_overflow_recovery — write-only on the buffer-overflow branch (:88);
     #     set for parity with the sibling recovery-paths test builder.
     u._recycle_kill_pending = False
