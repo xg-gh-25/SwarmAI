@@ -764,6 +764,10 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
     """
     import fcntl
     from datetime import datetime, timezone
+    # Deliberate-pause guard discriminant — single-source, word-boundary matcher
+    # (reused, not re-implemented; Gate-1 Item-3). Imported once at function entry,
+    # not per-run-iteration (Gate-2 LOW style nit).
+    from scripts.artifact_cli import _checkpoint_reason_has_true_trigger
 
     lines: list[str] = []
     try:
@@ -879,7 +883,6 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 # (verified: '_crash_' is mid-word, no \\b match), so it is gated by
                 # resume-budget instead. Empty reason → neither deliberate nor crash →
                 # supersede-eligible (no leak; :856 is the ONLY paused→abandoned writer).
-                from scripts.artifact_cli import _checkpoint_reason_has_true_trigger
                 _reason = (run_data.get("checkpoint", {}) or {}).get("reason") or ""
                 _is_deliberate = _checkpoint_reason_has_true_trigger(_reason)
                 _is_crash = _reason == "session_crash_auto_detected"

@@ -1521,6 +1521,12 @@ _CHECKPOINT_TRUE_TRIGGERS = (
     "judgment", "retry", "gate_spawn_blocked", "exhaust",
     "git revert", "external", "mutation", "re-baseline",  # event-triggers (GC11 kept half)
 )
+# Prefix-stems: triggers meant to match a word-START + any inflection
+# ("escalat" → escalate/escalated/escalation). Without this they were matched as
+# whole words (\bescalat\b), which never hit a real inflection → the stem was dead
+# (Gate-2 informational finding, run_17e3399c). Listed explicitly so the default
+# stays strict whole-word for everything else (no substring leaks).
+_CHECKPOINT_TRUE_TRIGGER_STEMS = frozenset({"escalat"})
 # Confabulation denylist: self-state narratives that are NOT measurable signals.
 # A reason matching these is force-blocked (overridable ONLY by --force-checkpoint),
 # even if it ALSO contains a true-trigger word — fake caution must never ride in
@@ -1548,9 +1554,21 @@ def _checkpoint_reason_has_true_trigger(reason: str) -> bool:
     """
     r = reason.lower()
     for t in _CHECKPOINT_TRUE_TRIGGERS:
-        # multi-word/event triggers (e.g. "git revert", "re-baseline") match as phrase;
-        # single tokens must match on a word boundary.
-        pat = re.escape(t) if " " in t or "-" in t or "_" in t else rf"\b{re.escape(t)}\b"
+        if " " in t or "-" in t or "_" in t:
+            # multi-word/event triggers (e.g. "git revert", "re-baseline") match as phrase
+            pat = re.escape(t)
+        elif t in _CHECKPOINT_TRUE_TRIGGER_STEMS:
+            # prefix-stems (e.g. "escalat" → escalat/escalate/escalation/escalated):
+            # word-START boundary + allow trailing word chars. A bare \bescalat\b
+            # never matched any real inflection (the trailing letters are word chars),
+            # so the stem was DEAD — this revives it without reopening substring leaks
+            # ('escalat' still can't match mid-word like 'deescalation' would need a
+            # leading boundary, which \b provides).
+            pat = rf"\b{re.escape(t)}\w*"
+        else:
+            # single whole-word tokens must match on both boundaries (so 'block'
+            # does NOT match 'roadblock'/'blocked' — run_a822b3e8).
+            pat = rf"\b{re.escape(t)}\b"
         if re.search(pat, r):
             return True
     return False
