@@ -126,6 +126,21 @@ class HookRegistry:
                     if result.get("decision") == "block":
                         return result
 
+                    # Short-circuit on a TERMINAL permissionDecision (run_7da67105).
+                    # deny/ask/defer are terminal — the CLI resolves the tool right
+                    # there — so they must NOT be merged-then-overwritten by a later
+                    # hook. Without this, the .update() below lets any later
+                    # allow-emitting hook silently clobber an earlier guard's deny
+                    # (the CRITICAL found by Gate-2 in run_6af22b0d). Only "allow"
+                    # is non-terminal (it carries updatedInput / additionalContext),
+                    # so allow keeps merging below. No hook emits ask/defer today,
+                    # but including them closes the same clobber gap pre-emptively.
+                    hso = result.get("hookSpecificOutput")
+                    if isinstance(hso, dict) and hso.get("permissionDecision") in (
+                        "deny", "ask", "defer",
+                    ):
+                        return result
+
                     # Merge hookSpecificOutput — later hooks override earlier
                     if "hookSpecificOutput" in result:
                         combined.setdefault("hookSpecificOutput", {})

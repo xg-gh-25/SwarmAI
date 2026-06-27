@@ -149,6 +149,124 @@ class TestHookRegistry:
         assert result["decision"] == "block"
 
     @pytest.mark.asyncio
+    async def test_deny_short_circuits_chain(self):
+        """A hook returning permissionDecision==deny stops the chain (run_7da67105).
+
+        Mirrors the block short-circuit: deny is terminal. Without this, a later
+        hook in the chain keeps running and can clobber the deny.
+        """
+        from core.hook_builder import HookRegistry
+
+        call_order = []
+
+        async def denier(input_data, tool_use_id, context):
+            call_order.append("denier")
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "blocked by guard",
+            }}
+
+        async def never_reached(input_data, tool_use_id, context):
+            call_order.append("never")
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "allow",
+            }}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", denier, "denier")
+        registry.register("PreToolUse", never_reached, "never")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+        result = await chained({"tool_name": "Bash"}, None, MagicMock())
+
+        assert call_order == ["denier"]  # later hook never ran
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_later_allow_cannot_clobber_earlier_deny(self):
+        """The CRITICAL bug: a deny must survive a later allow-emitting hook."""
+        from core.hook_builder import HookRegistry
+
+        async def denier(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "guard says no",
+            }}
+
+        async def allower(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "allow",
+            }}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", denier, "denier")
+        registry.register("PreToolUse", allower, "allower")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+        result = await chained({"tool_name": "Bash"}, None, MagicMock())
+
+        # The deny must NOT be overwritten by the later allow.
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_allow_payloads_still_merge_when_no_deny(self):
+        """AC3: allow-emitting hooks (carrying additionalContext / updatedInput)
+        must still merge normally when NO deny precedes them — the deny
+        short-circuit must not break the legitimate allow path."""
+        from core.hook_builder import HookRegistry
+
+        async def warner(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "additionalContext": "hint-A",
+            }}
+
+        async def answerer(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {"answered": True},
+            }}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", warner, "warner")
+        registry.register("PreToolUse", answerer, "answerer")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+        result = await chained({"tool_name": "AskUserQuestion"}, None, MagicMock())
+
+        hso = result["hookSpecificOutput"]
+        # Both allow-hooks ran and merged (no short-circuit on allow).
+        assert hso["permissionDecision"] == "allow"
+        assert hso.get("updatedInput") == {"answered": True}
+        assert hso.get("additionalContext") == "hint-A"
+
+    @pytest.mark.asyncio
+    async def test_ask_and_defer_also_short_circuit(self):
+        """Gate-2 hardening (run_7da67105): ask/defer are terminal too — a later
+        allow must not clobber them (same class as the deny clobber). No hook
+        emits these today; the guard closes the gap pre-emptively."""
+        from core.hook_builder import HookRegistry
+
+        for terminal in ("ask", "defer"):
+            async def asker(input_data, tool_use_id, context, _t=terminal):
+                return {"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "permissionDecision": _t,
+                }}
+
+            async def allower(input_data, tool_use_id, context):
+                return {"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "permissionDecision": "allow",
+                }}
+
+            registry = HookRegistry()
+            registry.register("PreToolUse", asker, "asker")
+            registry.register("PreToolUse", allower, "allower")
+            chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+            result = await chained({"tool_name": "Bash"}, None, MagicMock())
+            assert result["hookSpecificOutput"]["permissionDecision"] == terminal
+
+    @pytest.mark.asyncio
     async def test_hook_timeout_5s(self):
         """Hooks that exceed 5s are killed, chain continues."""
         from core.hook_builder import HookRegistry
