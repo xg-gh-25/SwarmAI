@@ -48,6 +48,81 @@ def _basename_key(name: str) -> str:
     return base.casefold()
 
 
+def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
+    """Return the top query-relevant ENTRIES of a section body, within budget.
+
+    The section body is a list of ``- [type] **title** — …`` entries (each may
+    span lines: an entry owns its trailing indented ``<!-- ref … -->`` metadata).
+    The old behavior returned the whole body front-truncated at the token ceiling,
+    which silently dropped a matching entry that sat below the cliff in a large
+    section (Guidelines 12K / Pitfalls 14K tok). This ranks the entries against
+    the query with the SAME Okapi-BM25 scorer the hybrid leg uses and emits them
+    highest-first until the budget is hit — so the matching entry surfaces
+    regardless of its position. Works purely on the live string (no DB / embed),
+    which is why it also revives the ``allow_embed=False`` path.
+
+    Returns the joined top entries (no trailing truncation marker needed — we add
+    whole entries only). If the body has no parseable entries, returns the body
+    front-truncated to budget (degrade to old behavior, never crash).
+    """
+    import re as _re
+
+    from core import memory_index
+
+    # Split on line-anchored entry starts ('- [' at column 0). The lookahead
+    # keeps the delimiter, so each chunk is a full entry incl. its metadata line.
+    chunks = _re.split(r"(?m)^(?=- \[)", body)
+    entries = [c.strip() for c in chunks if c.strip().startswith("- [")]
+
+    if not entries:
+        # No discrete entries (free-form section) — degrade to front-truncation.
+        words = body.split()
+        keep = max(0, int(budget_tokens * 3 / 4))
+        while keep > 0:
+            cand = " ".join(words[:keep])
+            if ContextDirectoryLoader.estimate_tokens(cand) < budget_tokens:
+                return cand
+            keep -= max(1, keep // 10)
+        return ""
+
+    # Rank entries by BM25 against the query (same scorer as the hybrid leg).
+    docs = {str(i): e for i, e in enumerate(entries)}
+    scores = memory_index._bm25_scores(query, docs)
+    if scores:
+        order = sorted(docs, key=lambda k: scores.get(k, 0.0), reverse=True)
+    else:
+        # No lexical overlap (e.g. a pure-vector synonym query): preserve the
+        # original on-disk order so the section still surfaces its head entries.
+        order = list(docs)
+
+    # Walk entries highest-rank-first, accumulating whole entries until budget.
+    # Measure the ACTUAL joined-output token count each step (estimate_tokens is
+    # not additive across the '\n' joins, so a per-entry sum undershoots).
+    chosen_keys: list[str] = []
+    for k in order:
+        candidate_keys = chosen_keys + [k]
+        cand_set = set(candidate_keys)
+        cand_text = "\n".join(docs[ck] for ck in docs if ck in cand_set)
+        if ContextDirectoryLoader.estimate_tokens(cand_text) >= budget_tokens:
+            if not chosen_keys:
+                # The single top entry alone exceeds budget — front-truncate it
+                # so the most-relevant entry still partially surfaces.
+                words = docs[k].split()
+                keep = max(0, int(budget_tokens * 3 / 4))
+                while keep > 0:
+                    cand = " ".join(words[:keep]) + " […entry truncated]"
+                    if ContextDirectoryLoader.estimate_tokens(cand) <= budget_tokens:
+                        return cand
+                    keep -= max(1, keep // 10)
+                return ""
+            break
+        chosen_keys.append(k)
+
+    # Display in original on-disk order (ranking chose WHICH entries, not order).
+    chosen = set(chosen_keys)
+    return "\n".join(docs[k] for k in docs if k in chosen)
+
+
 @dataclass
 class RecallResult:
     """Outcome of a recall_context call.
@@ -175,28 +250,30 @@ def recall_context(
             # is skipped (never returned as an empty slice) — the loop continues
             # to the next live section, so a real match still surfaces.
             continue
-        block = f"## {sec_name}\n{body.strip()}"
-        block_tokens = ContextDirectoryLoader.estimate_tokens(block)
-        if used + block_tokens > RECALL_MAX_TOKENS:
-            # Truncate this one block to fit the scoping ceiling, then stop.
-            suffix = " […recall truncated]"
-            suffix_tokens = ContextDirectoryLoader.estimate_tokens(suffix)
-            remaining = RECALL_MAX_TOKENS - used - suffix_tokens
-            if remaining > 50:  # only if a useful slice remains
-                words = block.split()
-                # Conservative word budget; verify against estimate and trim to fit.
-                keep = max(0, int(remaining * 3 / 4))
-                while keep > 0:
-                    candidate = " ".join(words[:keep]) + suffix
-                    if used + ContextDirectoryLoader.estimate_tokens(candidate) < RECALL_MAX_TOKENS:
-                        parts.append(candidate)
-                        chosen.append(sec_name)
-                        break
-                    keep -= max(1, keep // 10)
+
+        remaining = RECALL_MAX_TOKENS - used
+        if remaining <= 50:
             break
+
+        # ── G1 (run_c1624c89): ENTRY-level slice, not whole-body-then-truncate.
+        # The old path returned the section body front-truncated at the ceiling,
+        # which dropped a matching entry sitting below the cliff in a large
+        # section (Guidelines 12K / Pitfalls 14K tok). Rank the section's entries
+        # against the query and emit the top entries within the remaining budget,
+        # so the matching entry surfaces regardless of its on-disk position. The
+        # "## <section>" header costs a few tokens; reserve them from the budget.
+        header = f"## {sec_name}\n"
+        header_tokens = ContextDirectoryLoader.estimate_tokens(header)
+        entry_budget = remaining - header_tokens
+        if entry_budget <= 50:
+            break
+        sliced = _slice_section_entries(body.strip(), query, entry_budget)
+        if not sliced.strip():
+            continue
+        block = header + sliced
         parts.append(block)
         chosen.append(sec_name)
-        used += block_tokens
+        used += ContextDirectoryLoader.estimate_tokens(block)
 
     return RecallResult(
         allowed=True,

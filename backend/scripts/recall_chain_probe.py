@@ -390,6 +390,93 @@ def _recall_budget(negative: bool = False) -> int:
     return 1
 
 
+# Distinctive token that ONLY appears in the bottom target entry — never in the
+# filler — so its presence in recall output is an unambiguous signal that the
+# entry-level slicer surfaced the matching entry past the truncation cliff.
+_ENTRY_MARKER = "task_budget_zephyr_marker_800K"
+
+
+def _entry_recall_fixture() -> str:
+    """A MEMORY.md whose Decisions section has 120 filler entries followed by ONE
+    target entry carrying _ENTRY_MARKER at the very BOTTOM — well past the
+    RECALL_MAX_TOKENS=2000 front-truncation cliff. The old whole-section-then-
+    front-truncate path returns only the filler head (marker absent); the
+    entry-level slicer ranks the marker entry #1 and surfaces it."""
+    pad = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod"
+    filler = [
+        f"- [decision] **Filler decision {i} about unrelated plumbing** — {pad} {pad} (2026-01-{(i % 28) + 1:02d})"
+        for i in range(120)
+    ]
+    target = (
+        f"- [decision] **{_ENTRY_MARKER}: desktop 800K, channels 400K** — the CLI "
+        f"default is 128K; we override to avoid premature PreCompact (2026-06-17)"
+    )
+    body = "\n".join(filler + [target])
+    index = (
+        "## Memory Index\n"
+        "<!-- MEMORY_INDEX_START -->\n"
+        f"- [DEC32] {_ENTRY_MARKER} desktop channel token limit | 2026-06-17, "
+        f"{_ENTRY_MARKER}, precompact\n"
+        "<!-- MEMORY_INDEX_END -->\n"
+    )
+    return f"{index}\n## Decisions\n{body}\n\n## Open Threads\n- none\n"
+
+
+def _entry_recall(negative: bool = False) -> int:
+    """ENTRY-LEVEL RECALL WIRE (run_c1624c89 G1): the REAL recall_context must
+    surface a query-matching entry sitting at the BOTTOM of a large section,
+    instead of returning the section body front-truncated at RECALL_MAX_TOKENS
+    (which drops the matching entry). Drives the REAL recall_context +
+    _slice_section_entries on a live string with allow_embed=False — so it also
+    proves the no-embed / keyword-only path is no longer dead. Nothing under test
+    is mocked (GUI26 prompt-source = answer-source).
+
+    POSITIVE: the bottom entry's unique marker MUST appear in content, the result
+    stays within RECALL_MAX_TOKENS, sections still carries the SECTION NAME
+    ("Decisions") — not an entry id (Gate-1 condition C). Prints ENTRY_RECALL_OK.
+
+    negative=True (teeth): demand the OLD whole-section behavior — assert the
+    marker is ABSENT (i.e. front-truncation dropped it). That is FALSE on the
+    entry-level code (marker IS present), so the OK marker is withheld → exit 1,
+    proving the assertion bites. A no-op / reverted build makes the marker absent
+    again → teeth fire."""
+    from core.context_recall import recall_context, RECALL_MAX_TOKENS
+    from core.context_directory_loader import ContextDirectoryLoader
+
+    mem = _entry_recall_fixture()
+    res = recall_context(
+        "MEMORY.md", f"{_ENTRY_MARKER} desktop channel 800K token limit",
+        memory_content=mem, allow_embed=False,
+    )
+    marker_present = _ENTRY_MARKER in res.content
+    within_budget = (
+        ContextDirectoryLoader.estimate_tokens(res.content) <= RECALL_MAX_TOKENS
+    )
+    section_name_kept = "Decisions" in res.sections
+
+    if negative:
+        # Teeth: demand the OLD invariant — "the bottom entry is DROPPED, marker
+        # ABSENT". On the fixed code the marker IS present, so the old invariant
+        # is false → withhold OK → exit 1 (proves the assertion discriminates).
+        # A reverted/no-op build drops the marker → old invariant holds → the
+        # teeth would wrongly pass, which is exactly the regression we want a
+        # mutation test to catch when run against HEAD.
+        if marker_present:
+            print("ENTRY_RECALL_TEETH (marker present = entry-level fix is live; old 'dropped' invariant false)")
+            return 1
+        print("ENTRY_RECALL_OK")  # only reached on a reverted build (marker dropped)
+        return 0
+
+    if marker_present and within_budget and section_name_kept and res.drilled:
+        print("ENTRY_RECALL_OK")
+        return 0
+    print(
+        f"ENTRY_RECALL_FAIL marker={marker_present} budget_ok={within_budget} "
+        f"section_kept={section_name_kept} layer={res.hit_layer} sections={res.sections}"
+    )
+    return 1
+
+
 def _resume_fill(negative: bool = False) -> int:
     """RESUME-EXTRACTION WIRE (READ-path "alive != correct", run_674f32ef):
     the REAL build_resume_context must fill ELASTICALLY — a generous token
@@ -493,12 +580,13 @@ _SCENARIOS = {
     "codeintel_live": _codeintel_live,
     "recall_budget": _recall_budget,
     "resume_fill": _resume_fill,
+    "entry_recall": _entry_recall,
 }
 
 # Scenarios that accept a 2nd arg "negative" (teeth mode): break the wire →
 # the OK marker must NOT appear → exit 1. Used as each case's negative_command.
 _NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live", "recall_budget",
-                     "resume_fill"}
+                     "resume_fill", "entry_recall"}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -286,3 +286,89 @@ def test_recall_helper_failure_is_structured_not_crash(monkeypatch):
     assert res.allowed is True
     assert res.content == ""
     assert "recall failed" in res.reason
+
+
+# ── G1: entry-level recall (run_c1624c89) ──────────────────────────────────
+#
+# The bug: recall scored SECTIONS, returned the whole section body, then
+# front-truncated at RECALL_MAX_TOKENS=2000. A matched entry in the bottom of a
+# large section (Guidelines 12K, Pitfalls 14K tok) was dropped by truncation
+# even though the section "matched". Fix: rank ENTRIES within the matched
+# sections and return the top entries, so the matching entry always surfaces.
+
+def _memory_with_bottom_entry() -> str:
+    """A MEMORY.md whose Decisions section has many entries, with the entry that
+    matches the query at the BOTTOM (beyond the 2000-tok front-truncation cliff).
+    Forces selective mode (>30K) so recall/section-scoring is the live path.
+    """
+    filler_entries = []
+    pad = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod"
+    for i in range(120):
+        filler_entries.append(
+            f"- [decision] **Filler decision {i} about unrelated plumbing** — "
+            f"{pad} {pad} (2026-01-{(i % 28) + 1:02d})"
+        )
+    # The TARGET entry sits at the very bottom of the section body.
+    target = (
+        "- [decision] **task_budget=800K for desktop, 400K for channels** — "
+        "the CLI default is 128K; we override task_budget to 800K on desktop and "
+        "400K on channels to avoid premature PreCompact (2026-06-17)"
+    )
+    decisions_body = "\n".join(filler_entries + [target])
+    index = (
+        "## Memory Index\n"
+        "<!-- MEMORY_INDEX_START -->\n"
+        "- [DEC32] task_budget desktop channel token limit | 2026-06-17, task_budget, 800k, 400k, precompact\n"
+        "<!-- MEMORY_INDEX_END -->\n"
+    )
+    return f"{index}\n## Decisions\n{decisions_body}\n\n## Open Threads\n- none\n"
+
+
+def test_g1_entry_level_surfaces_bottom_matching_entry():
+    """A query matching an entry at the BOTTOM of a large section must surface
+    that entry — not be dropped by front-truncation of the whole section body."""
+    from core import context_recall
+
+    mem = _memory_with_bottom_entry()
+    res = context_recall.recall_context(
+        "MEMORY.md", "task_budget desktop channel 800K token limit",
+        memory_content=mem, allow_embed=False,
+    )
+    assert res.allowed is True
+    assert res.content, "recall returned empty content"
+    # The matching entry's distinctive token MUST be present.
+    assert "task_budget" in res.content, (
+        "matching bottom entry was dropped by truncation — "
+        f"content head: {res.content[:200]!r}"
+    )
+    # And we must NOT have blown the token ceiling to achieve it.
+    assert ContextDirectoryLoader.estimate_tokens(res.content) <= context_recall.RECALL_MAX_TOKENS
+
+
+def test_g1_sections_field_still_carries_section_names():
+    """Gate-1 condition C: entry-level slicing changes CONTENT only — the
+    `sections` field must still carry SECTION NAMES (callers + probes depend on it)."""
+    from core import context_recall
+
+    mem = _memory_with_bottom_entry()
+    res = context_recall.recall_context(
+        "MEMORY.md", "task_budget desktop channel 800K",
+        memory_content=mem, allow_embed=False,
+    )
+    assert "Decisions" in res.sections, f"sections lost section-name semantics: {res.sections}"
+    assert res.drilled is True
+
+
+def test_g1_no_embed_non_coe_query_not_dead():
+    """AC3: allow_embed=False (recall_all anti-scope / Bedrock-down path) for a
+    non-COE query must still surface the matching entry — was structurally dead
+    because the pure-keyword leg mapped only COE."""
+    from core import context_recall
+
+    mem = _memory_with_bottom_entry()
+    res = context_recall.recall_context(
+        "MEMORY.md", "task_budget desktop channel 800K",
+        memory_content=mem, allow_embed=False,
+    )
+    assert res.hit_layer != "none", "no-embed recall is dead for non-COE query"
+    assert "task_budget" in res.content
