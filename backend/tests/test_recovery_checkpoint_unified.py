@@ -67,6 +67,11 @@ def _make_unit(state: SessionState = SessionState.STREAMING) -> SessionUnit:
     unit._wrapper = None  # pid property -> None
     unit._last_event_time = None
     unit._streaming_start_time = None
+    # force_unstick_streaming() reads streaming_stall_seconds → _last_progress_time
+    # (set by __init__:541, which __new__ bypasses). Stub it to the __init__ default
+    # so the bare unit mirrors prod (GUI15: __new__ harness drift is invisible until
+    # the real path reads an __init__-only attr — here force_unstick_streaming does).
+    unit._last_progress_time = None
     unit._consecutive_unstick_timeouts = 0
     unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 3
     # R3d/R4: recovery decisions now route through the RecoveryCoordinator, and
