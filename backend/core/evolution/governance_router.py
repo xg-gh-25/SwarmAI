@@ -43,13 +43,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Budget reality (verified against SOUL/AGENT/STEERING 2026-06-22): the router's
-# Intake brief surfaces what must retire if a slot is full. SOUL principles 5/5,
-# STEERING 15/15 are full; AGENT rules have room. So cognitive proposals almost
-# always land as an L1 rule (AGENT) or a gate — rarely a new principle.
+# Budget reality (verified against SOUL/AGENT/STEERING 2026-06-27): caps are
+# smoke-tests, not guillotines (P6 + AGENT Intake Gate). SOUL principles 7/12
+# (room), AGENT rules <=25, STEERING 15/15 (full). A cognitive proposal still
+# usually lands as an L1 rule (AGENT) or a gate — but a genuinely new axis MAY
+# be promoted to a principle, and hitting a cap triggers the Intake Gate
+# JUDGMENT (fold / replace-wallpaper / raise-cap), never a reflexive retire-one.
 _BUDGET_NOTE = (
-    "Principles 5/5 (full), AGENT rules <=25, STEERING 15/15 (full). "
-    "Full slot -> propose retire-one before promote."
+    "Principles 7/12, AGENT rules <=25, STEERING 15/15 (full). "
+    "Caps are smoke-tests, not quotas: at a cap, run the Intake Gate JUDGMENT "
+    "(fold same-source / replace wallpaper / raise cap) — never cut a "
+    "load-bearing item just to hit a number."
 )
 
 # Confidence floor for autonomous cognitive recording (run_448a4f7f). A cognitive

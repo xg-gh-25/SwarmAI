@@ -43,7 +43,7 @@ Read INSTRUCTIONS.md for the full protocol.
 
 ## Governance Budget (enforced on PROMOTE/REFINE)
 
-- SOUL.md principles: ≤5
+- SOUL.md principles: ≤12
 - AGENT.md rules: ≤25
 - STEERING.md standing rules: ≤15
 

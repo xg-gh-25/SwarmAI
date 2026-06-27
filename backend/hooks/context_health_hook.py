@@ -2542,7 +2542,7 @@ class ContextHealthHook:
         in STEERING.md. Warns if any exceed their hard cap.
 
         Budget caps (from design):
-          - SOUL.md principles: ≤5
+          - SOUL.md principles: ≤12
           - AGENT.md rules: ≤25
           - STEERING.md standing rules: ≤15
         """
@@ -2554,10 +2554,10 @@ class ContextHealthHook:
             try:
                 content = soul_path.read_text(encoding="utf-8")
                 principles = len(re.findall(r"^### P\d+:", content, re.MULTILINE))
-                if principles > 5:
+                if principles > 12:
                     findings.append(
                         f"[governance/budget] SOUL.md principles OVER BUDGET: "
-                        f"{principles}/5"
+                        f"{principles}/12"
                     )
             except OSError:
                 pass

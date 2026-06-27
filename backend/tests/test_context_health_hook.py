@@ -220,6 +220,43 @@ class TestHotColdKnowledgeIndex:
 # Deep check
 # --------------------------------------------------------------------------
 
+class TestGovernanceBudgets:
+    """Guards the LIVE principle-count enforcement gate against the cap drifting
+    out of sync with the SOUL/AGENT taxonomy (run_dc0f3c56 Gate-2 finding: the
+    advisory string was synced to cap=12 but this enforcing gate still said 5,
+    which would emit a false OVER BUDGET on every health run)."""
+
+    def _ctx_with_principles(self, workspace, n: int):
+        soul = workspace / ".context" / "SOUL.md"
+        body = "# SOUL\n\n" + "".join(
+            f"### P{i}: Principle {i}\n\nbody\n\n" for i in range(1, n + 1)
+        )
+        soul.write_text(body)
+        return workspace / ".context"
+
+    def test_seven_principles_within_budget(self, hook, workspace):
+        """7 principles (current taxonomy) must NOT be flagged — cap is 12."""
+        ctx = self._ctx_with_principles(workspace, 7)
+        findings = hook._check_governance_budgets(workspace, ctx)
+        assert not any("SOUL.md principles OVER BUDGET" in f for f in findings), \
+            f"7 principles wrongly flagged over budget: {findings}"
+
+    def test_twelve_principles_within_budget(self, hook, workspace):
+        """12 principles = exactly at cap, still within budget (>12 flags)."""
+        ctx = self._ctx_with_principles(workspace, 12)
+        findings = hook._check_governance_budgets(workspace, ctx)
+        assert not any("SOUL.md principles OVER BUDGET" in f for f in findings), \
+            f"12 principles (at cap) wrongly flagged: {findings}"
+
+    def test_thirteen_principles_over_budget(self, hook, workspace):
+        """13 principles exceeds cap=12 — gate MUST fire, citing /12 not /5."""
+        ctx = self._ctx_with_principles(workspace, 13)
+        findings = hook._check_governance_budgets(workspace, ctx)
+        over = [f for f in findings if "SOUL.md principles OVER BUDGET" in f]
+        assert over, "13 principles should be flagged over budget"
+        assert "13/12" in over[0], f"gate must cite the current cap /12: {over[0]}"
+
+
 class TestDeepCheck:
     def test_detects_empty_context_file(self, hook, workspace, caplog):
         """Deep check flags empty context files."""

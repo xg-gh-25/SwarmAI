@@ -3,7 +3,7 @@
 Classifies raw correction records (from corrections.jsonl) into:
   - axis: operational (skill bug) vs cognitive (judgment failure)
   - class_name: CLASS_A / CLASS_B / CLASS_C (cognitive only)
-  - parent_principle: P1-P5 (which SOUL principle violated)
+  - parent_principle: P1-P7 (which SOUL principle violated)
 
 Tier-1 (mechanical): tool_failure records -> operational, no LLM.
 Tier-2 (LLM, Sonnet): user_correction records -> cognitive class + principle.
