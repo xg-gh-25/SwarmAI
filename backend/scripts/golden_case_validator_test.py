@@ -101,3 +101,48 @@ def test_validate_promote_blocks_instance_case():
     """PROMOTE to public RUNS privacy gate — instance case blocked."""
     ok, report = validate_case(_ok_case(affected_by=["STEERING.R1"]), existing=[], for_public=True)
     assert not ok
+
+
+def test_clean_pass_report_carries_stamp_not_a_gate_tuple():
+    """run_674f32ef regression: on a clean pass validate_case adds
+    report['stamp'] = <str>, NOT a (ok, errs) tuple. The CLI summary loop
+    must NOT blind-unpack every report value or it crashes (exit 1) on every
+    successful validation. Asserts the shape the CLI loop relies on."""
+    ok, report = validate_case(_ok_case(), existing=[], for_public=False)
+    assert ok, report
+    assert "stamp" in report and isinstance(report["stamp"], str)
+    # every NON-stamp entry is a (bool, list) gate tuple — the CLI skips 'stamp'
+    for gate, result in report.items():
+        if gate == "stamp":
+            continue
+        assert isinstance(result, tuple) and len(result) == 2, gate
+
+
+def test_cli_main_exits_zero_on_clean_public_pass(tmp_path):
+    """The actual bug: `python golden_case_validator.py --for-public` crashed
+    (exit 1, ValueError unpacking report['stamp']) AFTER printing all gates ✓.
+    Drive main() end-to-end and assert exit 0 + PASS on a code-only case."""
+    import json
+    import subprocess
+    case = {
+        "id": "GS_CLI_SMOKE", "category": "recall", "dimension": "capability",
+        "eval_method": "programmatic",
+        "affected_by": ["backend/core/context_injector.py"],
+        "evaluators": ["canary_pass"],
+        "verification": {
+            "command": "python backend/scripts/recall_chain_probe.py resume_fill",
+            "expected_contains": "RESUME_FILL_OK",
+            "negative_command": "python backend/scripts/recall_chain_probe.py resume_fill negative",
+        },
+    }
+    cf = tmp_path / "case.json"
+    cf.write_text(json.dumps(case))
+    backend = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, "scripts/golden_case_validator.py",
+         "--case-file", str(cf), "--for-public"],
+        cwd=str(backend), capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
+    assert "PASS" in r.stdout
+    assert "Traceback" not in r.stderr

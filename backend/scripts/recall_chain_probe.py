@@ -390,6 +390,101 @@ def _recall_budget(negative: bool = False) -> int:
     return 1
 
 
+def _resume_fill(negative: bool = False) -> int:
+    """RESUME-EXTRACTION WIRE (READ-path "alive != correct", run_674f32ef):
+    the REAL build_resume_context must fill ELASTICALLY — a generous token
+    budget yields MORE enriched context than a small one for the SAME complex
+    session — instead of the months-long ~4% under-fill where fixed item-caps
+    (conclusions 5, directives 10, tool_results 15, turns 30) made budget
+    irrelevant. This is the behavior contract that the old GS_LOP005 import-OK
+    canary was structurally blind to.
+
+    Drives the REAL build_resume_context against synthetic message fixtures,
+    mocking ONLY the database boundary (count/list) + a non-git working_directory
+    (so _extract_uncommitted_state returns "" deterministically). NO mock of the
+    extraction/cap logic under test — GUI26 prompt-source = answer-source.
+
+    POSITIVE asserts three things:
+      1. ELASTIC: same 40-msg complex session fills MORE at 1M budget than at
+         128K budget (the delta is the enriched layers; the untrimmable
+         checkpoint is constant in both, so a real difference proves the caps
+         scale with budget).
+      2. LEAN: a trivial 2-msg session stays small at 1M budget (does not
+         balloon to the generous cap).
+      3. CLAMP: output never exceeds token_budget*4 chars (the hard backstop).
+
+    negative=True (teeth, mirrors _recall_budget): demand the OLD hard-coded-caps
+    invariant — "a 10x-larger budget does NOT grow the fill." That is TRUE on a
+    reverted fixed-caps build and FALSE on the elastic code (fill DOES grow), so
+    the OK marker is withheld -> exit 1, proving the assertion bites. (Pinning
+    caps to a fixed value was rejected at Gate-0: it would test the mock and pass
+    a reverted build.)"""
+    import asyncio
+    import tempfile as _tf
+    from unittest.mock import AsyncMock, MagicMock
+
+    from core import context_injector as ci
+
+    def _session(n_turns: int, answer_chars: int) -> list[dict]:
+        msgs: list[dict] = []
+        for i in range(n_turns):
+            msgs.append({"role": "user",
+                         "content": [{"type": "text",
+                                      "text": f"please do task {i} now"}]})
+            msgs.append({"role": "assistant",
+                         "content": [{"type": "text",
+                                      "text": f"turn{i} " + ("z" * answer_chars)}]})
+        return msgs
+
+    def _fill(msgs: list[dict], model_window: int, workdir: str) -> int:
+        ci._resume_cache.clear()
+        fake_db = MagicMock()
+        fake_db.messages.count_by_session = AsyncMock(return_value=len(msgs))
+        fake_db.messages.list_by_session_paginated = AsyncMock(return_value=msgs)
+        fake_database = MagicMock()
+        fake_database.db = fake_db
+        # Hermeticity: _merge_crash_checkpoint reads jobs.paths.STATE_DIR/
+        # session_checkpoint.json — real machine state. Point STATE_DIR at the
+        # empty tempdir so the checkpoint read is deterministic (returns None),
+        # not bleeding the live daemon's crash checkpoint into the fill size.
+        import jobs.paths as _jp
+        with patch.dict(sys.modules, {"database": fake_database}), \
+                patch.object(_jp, "STATE_DIR", Path(workdir)):
+            out = asyncio.run(ci.build_resume_context(
+                "probe-sess", model_context_window=model_window,
+                working_directory=workdir))
+        return len(out)
+
+    with _tf.TemporaryDirectory() as workdir:  # non-git → uncommitted = ""
+        complex_session = _session(40, answer_chars=2000)
+        big = _fill(complex_session, 1_000_000, workdir)     # 150K token budget
+        small = _fill(complex_session, 128_000, workdir)     # 20K token budget
+        trivial = _fill(_session(2, 200), 1_000_000, workdir)
+
+    # The elastic delta must be meaningful, not a rounding sliver.
+    grew = big > small + 1000
+    lean = trivial < 20_000
+    # Hard clamp: 128K model → 20K token budget → 80K char ceiling.
+    clamp_budget, _, _ = ci._compute_resume_budget(128_000)
+    clamped_ok = small <= clamp_budget * 4
+
+    if negative:
+        # Teeth: demand the OLD no-growth invariant. On elastic code big>small,
+        # so `grew` is True → the old invariant is violated → withhold OK.
+        if not grew:  # budget made no difference → the fixed-caps regression
+            print("RESUME_FILL_OK")
+            return 0
+        print("RESUME_FILL_TEETH (budget scaled the fill as required; "
+              "teeth withhold OK)")
+        return 1
+    if grew and lean and clamped_ok:
+        print("RESUME_FILL_OK")
+        return 0
+    print(f"RESUME_FILL_FAIL (big={big}, small={small}, grew={grew}, "
+          f"trivial={trivial}, lean={lean}, clamped_ok={clamped_ok})")
+    return 1
+
+
 _SCENARIOS = {
     "synonym_guard": _synonym_guard,
     "stale_index": _stale_index,
@@ -397,11 +492,13 @@ _SCENARIOS = {
     "knowledge_live": _knowledge_live,
     "codeintel_live": _codeintel_live,
     "recall_budget": _recall_budget,
+    "resume_fill": _resume_fill,
 }
 
 # Scenarios that accept a 2nd arg "negative" (teeth mode): break the wire →
 # the OK marker must NOT appear → exit 1. Used as each case's negative_command.
-_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live", "recall_budget"}
+_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live", "recall_budget",
+                     "resume_fill"}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -185,7 +185,13 @@ def main() -> int:
     args = ap.parse_args()
     case = json.loads(Path(args.case_file).read_text())
     ok, report = validate_case(case, existing=[], for_public=args.for_public)
-    for gate, (g_ok, errs) in report.items():
+    for gate, result in report.items():
+        # report["stamp"] (clean-pass only) is a str, not a (ok, errs) gate
+        # tuple — skip it in the gate summary or the unpack crashes (exit 1
+        # on every successful validation).
+        if gate == "stamp":
+            continue
+        g_ok, errs = result
         mark = "✓" if g_ok else "✗"
         print(f"  {mark} {gate}" + ("" if g_ok else f": {'; '.join(errs)}"))
     print("PASS" if ok else "FAIL")
