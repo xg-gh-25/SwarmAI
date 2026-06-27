@@ -200,12 +200,19 @@ class TestRunUpdate:
         return result["pipeline_id"]
 
     def test_update_status(self, workspace, run_id):
+        # Smoke-test that run-update WRITES a CHANGED status to disk. We use
+        # `cancelled` deliberately: it is (a) NOT the create-time default
+        # ("running", artifact_cli.py:843) so the assertion proves an actual
+        # change — not a no-op self-write — and (b) NOT behind the confabulation
+        # pause-guard (only `--status paused` is refused; artifact_cli.py:882,
+        # commit 5a9522d0 / run_a822b3e8). The paused-door is covered exhaustively
+        # by test_runupdate_paused_blocked_without_force + _allowed_with_force.
         _run_cli(workspace, "run-update",
                  "--project", "TestProject", "--run-id", run_id,
-                 "--status", "paused")
+                 "--status", "cancelled")
         state = _run_cli(workspace, "run-get",
                          "--project", "TestProject", "--run-id", run_id)
-        assert state["status"] == "paused"
+        assert state["status"] == "cancelled"
 
     def test_update_completed_sets_timestamp(self, workspace, run_id):
         # Completion gate: ALL profile stages must be done
@@ -878,8 +885,15 @@ class TestRunStatus:
                        "--requirement", "R1")
         r2 = _run_cli(workspace, "run-create", "--project", "TestProject",
                        "--requirement", "R2")
-        _run_cli(workspace, "run-update", "--project", "TestProject",
-                 "--run-id", r2["pipeline_id"], "--status", "paused")
+        # Pause r2 via the SANCTIONED path (run-checkpoint --force-checkpoint),
+        # not a bare `run-update --status paused` — the latter is refused by the
+        # confabulation guard on a fresh 0-stage run (should_checkpoint=false),
+        # which would silently leave r2 running and mask the paused-count check.
+        # This keeps real coverage of the running-vs-paused summary split.
+        _run_cli(workspace, "run-checkpoint", "--project", "TestProject",
+                 "--run-id", r2["pipeline_id"], "--stage", "think",
+                 "--reason", "pause for summary-count coverage",
+                 "--force-checkpoint")
 
         result = _run_cli(workspace, "run-status")
         assert result["summary"]["running"] == 1

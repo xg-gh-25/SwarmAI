@@ -187,7 +187,11 @@ class TestPipelinesEndpoint:
         _create_run(workspace, "Proj", "run_trivial", profile="trivial")
 
         resp = client.get("/api/pipelines")
-        assert resp.json()["pipelines"][0]["stages_total"] == 6  # trivial has 6 stages
+        # trivial has 7 stages: evaluate,think,build,review,test,deliver,reflect.
+        # THINK was added to bugfix/trivial in commit 15ce90e2 ("Not thinking
+        # before coding = patching"); that commit updated test_pipeline_run.py +
+        # test_pipeline_profiles.py but missed this sibling file (6 was stale).
+        assert resp.json()["pipelines"][0]["stages_total"] == 7
 
     def test_abandoned_surfaced_in_http_dashboard(self, client, workspace):
         """AC2 parity: the HTTP dashboard (consumed by the Radar sidebar) must
