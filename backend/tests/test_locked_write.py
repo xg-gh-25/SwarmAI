@@ -160,6 +160,24 @@ class TestExtractorWritePathDedup:
         assert body.count("alpha decision") == 1   # dup filtered by dedup=True
         assert "gamma decision" in body
 
+    def test_write_entries_collapses_multiline_entry(self, tmp_path):
+        # Gate-2 LOW: an LLM entry with an embedded newline must NOT be split
+        # into independent physical lines (which dedup/_modify_content would
+        # treat separately, orphaning half). It is collapsed to one line.
+        from core import memory_extractor
+        mem = tmp_path / "MEMORY.md"
+        mem.write_text("## Decisions\n", encoding="utf-8")
+        ok = memory_extractor._write_entries(
+            ["- 2026-06-28: header part\n  continued detail part"],
+            "Decisions", mem,
+        )
+        assert ok is True
+        body = mem.read_text(encoding="utf-8")
+        # the entry survives as ONE physical line containing both parts
+        lines = [ln for ln in body.splitlines() if "header part" in ln]
+        assert len(lines) == 1
+        assert "continued detail part" in lines[0]
+
     def test_write_entries_mutation_dedup_off_reappends(self, tmp_path):
         # Mutation proof (non-vacuous): if dedup were OFF, the dup WOULD reappear.
         from scripts.locked_write import locked_read_modify_write
@@ -208,3 +226,14 @@ class TestDistillationDedupParity:
         existing = "## Guidelines\n- 2026-06-01: only line\n"
         out = self._write(tmp_path, existing, "- 2026-06-01: only line")
         assert out == existing  # no-op, no blank line
+
+    def test_whitespace_candidate_is_noop_not_blankline(self, tmp_path):
+        # Gate-2 LOW (documented divergence): the OLD inline dedup gated on
+        # `if not new_lines` (list emptiness) and would WRITE a bare blank line
+        # when the candidate was whitespace-only. The shared helper + empty-guard
+        # gate on `if not text.strip()` — strictly SAFER: a whitespace-only
+        # candidate is a no-op, never injects a blank line. This asserts the
+        # improved behavior (not byte-identical to OLD, deliberately).
+        existing = "## Guidelines\n- 2026-06-01: real line\n"
+        out = self._write(tmp_path, existing, "   \n\n")
+        assert out == existing  # no-op — OLD would have injected a blank line

@@ -334,7 +334,12 @@ def _write_entries(
     if not entries:
         return True
 
-    text = "\n".join(entries)
+    # Collapse any embedded newlines per entry BEFORE joining (R3-C Gate-2 LOW):
+    # dedup (and _modify_content) operate line-by-line via splitlines(); an LLM
+    # entry containing an escaped "\n" would otherwise be split into independent
+    # physical lines, letting dedup drop half and orphan the rest. Each extracted
+    # entry must be exactly one physical line.
+    text = "\n".join(" ".join(e.splitlines()) for e in entries)
 
     try:
         # dedup=True (R3-C): apply the SAME mechanical dedup distillation uses
