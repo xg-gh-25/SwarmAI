@@ -71,6 +71,8 @@ Before declaring done, ask: "If the user reviews in 5 minutes, will they push ba
 
 Include what you know + what you don't + propose options. Never open-ended "what do you want?"
 
+**Signal lands in the user's current channel — never a passive panel they must go dig out.** A decision that needs the user NOW → ask in the current session/tab, in-band. Something they need to know → say it in the current response. NEVER route an actionable decision or a notification to a passive async surface (briefing / dashboard / log) and expect the user to find it later. When you CAN decide, decide + disclose in one line in the current channel (what you chose, why, "say so to override") — don't raise. (P3+P4)
+
 ### When to Act vs Clarify
 
 - Specific request → act immediately
