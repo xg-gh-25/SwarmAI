@@ -1,0 +1,111 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * MessageStore — rapid-reconcile-CHURN guard (#1 recurring "答到一半/白屏" class).
+ *
+ * THE GAP THIS CLOSES: MessageStore.test.ts covers a SINGLE queued reconcile and
+ * the single in-flight-fetch-race drain. It does NOT cover the persist-lag guard
+ * (`_mergePreservingInteractive` "MORE-COMPLETE CONTENT WINS", MessageStore.ts:647)
+ * firing under MULTIPLE rapidly-arriving reconciles — which is the real shape of
+ * the reconcile race: the 200ms turn-end reconcile, a tab-switch reconcile, and a
+ * result-path reconcile can all fire within a few ms, several carrying a STALE,
+ * shorter (or empty) DB row because the backend persist hasn't caught up.
+ *
+ * The invariant under test: no matter how many stale-shorter reconciles churn
+ * through, the complete streamed answer already in the store is NEVER truncated/
+ * blanked. The merge keeps the DB's canonical id/metadata but the longer (local)
+ * content. This is the structural defense (94b87db8) that ended a 33-patch class.
+ *
+ * Drives the REAL merge: every reconcile goes through the real reconcile() →
+ * _applyMerge → _mergePreservingInteractive. The ONLY seam is the fetchMessages
+ * function (the DB boundary). No mock of the merge logic itself (GUI32/PIT13).
+ */
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { MessageStore } from '../MessageStore';
+import type { Message, ChatMessage } from '../../types';
+
+function makeMsg(id: string, role: 'user' | 'assistant' | 'system' = 'assistant', text = 'hello'): Message {
+  return { id, role, content: [{ type: 'text', text }], timestamp: new Date().toISOString() };
+}
+function makeChatMsg(id: string, role: 'user' | 'assistant' | 'system' = 'assistant', text = 'hello'): ChatMessage {
+  return { id, sessionId: 'sess-1', role, content: [{ type: 'text', text }] as any, createdAt: new Date().toISOString() };
+}
+function asstText(store: MessageStore, id: string): string {
+  const m = store.messages.find((x) => x.id === id)!;
+  return m.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+}
+
+describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wins)', () => {
+  let store: MessageStore;
+  afterEach(() => store?.destroy());
+
+  it('a stale shorter DB row does NOT clobber the complete streamed answer (single reconcile, at idle)', () => {
+    const COMPLETE = 'COMPLETE streamed answer with the full tail intact';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg('a1', 'assistant', COMPLETE)); // store holds the full reply
+    // phase is idle → reconcile applies synchronously via _applyMerge
+    store.reconcile([makeChatMsg('a1', 'assistant', 'COMPLETE str')]); // stale, shorter
+    // more-complete-wins: local content survives, DB id/metadata kept
+    expect(asstText(store, 'a1')).toBe(COMPLETE);
+  });
+
+  it('an EMPTY (not-yet-persisted) DB row does NOT blank the streamed answer', () => {
+    const COMPLETE = 'the answer the user already sees on screen';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg('a1', 'assistant', COMPLETE));
+    store.reconcile([makeChatMsg('a1', 'assistant', '')]); // persist lag → empty row
+    expect(asstText(store, 'a1')).toBe(COMPLETE); // not blanked
+  });
+
+  it('MANY rapid stale reconciles in a row never truncate — only a genuinely-longer row wins', () => {
+    const COMPLETE = 'rapid churn answer body that is the complete streamed content';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg('a1', 'assistant', COMPLETE));
+
+    // 6 reconciles fire back-to-back (turn-end + tab-switch + result-path + retries),
+    // each carrying a progressively-different STALE shorter/empty row.
+    const staleRows = ['rapid churn', '', 'rapid churn answer', 'r', 'rapid churn answer body that is', ''];
+    for (const t of staleRows) {
+      store.reconcile([makeChatMsg('a1', 'assistant', t)]);
+      // invariant holds after EVERY single churn step, not just at the end
+      expect(asstText(store, 'a1')).toBe(COMPLETE);
+    }
+
+    // A legitimate server-side edit that ADDS content (strictly longer) DOES win —
+    // proves the guard is "more-complete-wins", not "local-always-wins" (would be a
+    // different, wrong invariant that ignores real DB edits).
+    const LONGER = COMPLETE + ' — plus a server-appended correction.';
+    store.reconcile([makeChatMsg('a1', 'assistant', LONGER)]);
+    expect(asstText(store, 'a1')).toBe(LONGER);
+  });
+
+  it('churn across an async in-flight fetch: stale read loses, drained re-run with full DB lands (drive real _fetchAndReconcile)', async () => {
+    // Couples the churn with the async fetch path: the first (in-flight) fetch
+    // returns a STALE shorter row; a reconcile re-queues behind it; the drained
+    // re-run sees the FULL DB content. The complete local content must survive the
+    // whole sequence regardless of resolution order.
+    const COMPLETE = 'FULL streamed reply that must never truncate mid-churn';
+    let call = 0;
+    let firstResolve!: (m: ChatMessage[]) => void;
+    const firstFetch = new Promise<ChatMessage[]>((r) => { firstResolve = r; });
+    const fetchMessages = () => {
+      call += 1;
+      if (call === 1) return firstFetch;                       // in-flight: stale
+      return Promise.resolve([makeChatMsg('a1', 'assistant', COMPLETE + ' [db-final]')]);
+    };
+    store = new MessageStore({ sessionId: 'sess-1', fetchMessages });
+    store.append(makeMsg('a1', 'assistant', COMPLETE));
+    store.startStreaming('a1');
+    store.reconcile([makeChatMsg('a1', 'assistant', 'queued')]); // queued thunk
+    store.endStreaming();                                         // flush → inFlight=1
+    store.reconcile([makeChatMsg('a1', 'assistant', COMPLETE + ' [db-final]')]); // inFlight>0 → re-queue
+    firstResolve([makeChatMsg('a1', 'assistant', 'trunc')]);      // stale in-flight resolves
+
+    await vi.waitFor(() => {
+      // drained re-run lands the strictly-longer DB content
+      expect(asstText(store, 'a1')).toBe(COMPLETE + ' [db-final]');
+    });
+    // at no point did the truncated 'trunc' row win
+    expect(asstText(store, 'a1')).not.toBe('trunc');
+    expect(call).toBeGreaterThanOrEqual(2); // proves the re-queued thunk drained
+  });
+});
