@@ -49,6 +49,18 @@ def _build_bare_unit():
     u.is_channel_session = False
     u.last_used = time.time()
     u._last_error_type = None
+    # Parent attrs read by the retry loop (retry_manager.py). __new__ bypasses
+    # __init__, so each must be self-provisioned or the loop raises AttributeError.
+    # Kept in sync with `grep 'self._parent\.' retry_manager.py`:
+    #   _recycle_kill_pending — read on EVERY retry iteration (the ZOMBIE path this
+    #     harness drives); __init__ defaults it False (session_unit.py:652).
+    #   _recovery_coordinator — read only on the OOM branch (retry_manager.py:250);
+    #     provisioned so an OOM-injection variant of this harness won't AttributeError.
+    #   _buffer_overflow_recovery — write-only on the buffer-overflow branch (:88);
+    #     set for parity with the sibling recovery-paths test builder.
+    u._recycle_kill_pending = False
+    u._recovery_coordinator = None
+    u._buffer_overflow_recovery = False
     from core.streaming_orchestrator import StreamingOrchestrator
     u._streaming_orchestrator = StreamingOrchestrator(parent=u)
     u._retry_manager = RetryManager(parent=u)
