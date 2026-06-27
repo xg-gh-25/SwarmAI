@@ -82,6 +82,13 @@ _RECALL_KEYWORD_MISS_CAP = 5
 # degradation that the old logger.debug+return"" pattern hid for months. Read for
 # observability (e.g. a health probe); the LOG is the primary signal, this is the
 # aggregate. Reasons: "vec_db_unavailable", "exception:<Type>", "disaster_timeout".
+#
+# ⚠️ NOT ALL KEYS ARE FAILURES. "empty_with_keywords" (recall ran fine but matched
+# nothing — a genuine no-match, expected for novel queries) is INFORMATIONAL, not a
+# failure. A health probe / alarm MUST NOT sum this dict as a failure rate — it would
+# false-alarm on every legitimate empty recall. Aggregate ONLY the true-failure keys
+# (vec_db_unavailable / exception:* / disaster_timeout / leg_failure / inject_exception:*),
+# and treat "empty_with_keywords" as a separate signal-quality metric (synonym-miss rate).
 _recall_degraded_count: dict[str, int] = {}
 
 

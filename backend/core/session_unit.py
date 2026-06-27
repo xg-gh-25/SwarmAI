@@ -493,6 +493,12 @@ class SessionUnit:
         # Set True after first-message recall runs (or is skipped).
         # Prevents re-running on subsequent messages in the same session.
         self._recall_injected: bool = False
+        # recall#5 cap (run_a16d61ad): a zero-keyword opener no longer burns the
+        # guard (so a later substantive message can still recall), but we bound the
+        # number of keyword-less turns that re-run _extract_query_keywords, so a
+        # session that NEVER produces keywords doesn't pay the regex cost every turn
+        # forever. After this many keyword-less turns, latch the guard closed.
+        self._recall_keyword_misses: int = 0
         # NOTE: the M2 background-vector-task fields (run_e9b15722) were removed in
         # run_4d06640b — recall now runs both legs synchronously to completion, so
         # there is no background task / pending-result / teardown-cancel to track.
@@ -3567,6 +3573,7 @@ class SessionUnit:
         self._channel_history_injected = False
         # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
+        self._recall_keyword_misses = 0
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
 
