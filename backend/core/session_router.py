@@ -373,6 +373,19 @@ async def _maybe_inject_recall(
             options.system_prompt = (
                 options.system_prompt + f"\n\n## Recalled Knowledge\n{recalled}"
             )
+            # Observability (loud-on-success counterpart to loud-on-degradation):
+            # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
+            # was ambiguous between "working" and "never ran". This makes a live
+            # injection visible. INFO (not DEBUG) — the daemon file handler drops
+            # DEBUG. ~chars/4 is a rough token estimate (cap is _RECALL_MAX_TOKENS).
+            logger.info(
+                "recall injected: +%d chars (~%d tok) into system prompt | keywords=%s",
+                len(recalled), len(recalled) // 4, keywords[:80],
+            )
+        else:
+            # Genuine no-match (not a failure — failures are counted/logged inside
+            # _recall_for_query). Visible so a persistently empty recall is noticed.
+            logger.info("recall ran but matched nothing | keywords=%s", keywords[:80])
     except asyncio.TimeoutError:
         # DISASTER: recall hung past the cap. This should NEVER happen in normal
         # operation (recall is ~1-3s, cap is 8s) — if it fires, recall code has a
