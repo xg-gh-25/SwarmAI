@@ -57,7 +57,7 @@ def _default_runner(root: Path) -> dict:
     gs = load_golden_set(_golden_set_path(root))
     history = load_history(root)  # prior runs, newest last
     baseline = history[-1] if history else None
-    result = run_eval(gs, "nightly", None, root)  # full run incl LLM
+    result = run_eval(gs, "nightly", None, root, verify_teeth=True)  # full run incl LLM + canary teeth
     write_run(result, root)
     return {"this": result, "baseline": baseline}
 

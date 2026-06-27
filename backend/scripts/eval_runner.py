@@ -171,8 +171,14 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
             continue
         if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
             continue
-        # G2: draft cases are not yet trustworthy — never in the gate set.
-        if c.get("tier") == "draft":
+        # Not-active tiers never gate: draft = not yet trustworthy (compute_bvt's
+        # own G2 rule); archived = soft-deleted (delete_case sets tier='archived').
+        # eval_service's archived-excluding readers (get_golden_set:386,
+        # active_cases:560) already drop archived from active use — but compute_bvt
+        # was the lone gate path that DIDN'T, so a soft-deleted gate-eligible+stamped
+        # case leaked into the BVT (empirically counted; run_5edf2cc0 fix). (Draft
+        # exclusion is compute_bvt's alone — get_golden_set still returns drafts.)
+        if c.get("tier") in ("draft", "archived"):
             continue
         # G1/G8: only cases carrying a CURRENT validated_by_4gate stamp (matching
         # the canonical body hash) count. A case edited outside the sanctioned
@@ -413,7 +419,8 @@ def _validate_canary_command(command: str) -> str | None:
     return None
 
 
-def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = None) -> dict:
+def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = None,
+                     verify_teeth: bool = False) -> dict:
     """Run a command and check output contains expected string.
 
     Args:
@@ -422,6 +429,15 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         timeout_override: If provided, caps subprocess timeout (seconds).
             Used by context_health_hook to prevent exceeding the hook executor
             deadline. Default (None) uses the standard 20s timeout.
+        verify_teeth: If True AND the case declares verification.negative_command,
+            after the positive command passes, ALSO run the negative_command and
+            require the expected_contains marker to be ABSENT from its output
+            (wire-broken => marker gone). A canary whose marker survives the
+            negative variant is vacuous (doesn't actually discriminate) => failed.
+            OFF by default: doubles subprocess cost, so it is gate/nightly-only —
+            the per-session context_health_hook path leaves it False. Mirrors the
+            `programmatic_only` path-gate. A case with no negative_command is
+            untouched even when verify_teeth=True (back-compat for pre-teeth cases).
     """
     verification = case.get("verification", {})
     command = verification.get("command", "")
@@ -445,19 +461,72 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         )
         output = result.stdout + result.stderr
 
-        if expected and expected in output:
-            return {"status": "passed", "notes": f"Output contains '{expected}'"}
-        elif result.returncode == 0 and not expected:
-            return {"status": "passed", "notes": "Command exited 0"}
-        else:
+        positive_passed = (expected and expected in output) or (result.returncode == 0 and not expected)
+        if not positive_passed:
             return {
                 "status": "failed",
                 "notes": f"Expected '{expected}' not found in output. Exit code: {result.returncode}. Output: {output[:200]}"
             }
+
+        # Teeth: the positive passed. If asked, prove the probe actually
+        # discriminates by running the negative variant — the marker MUST vanish.
+        teeth_result = _verify_canary_teeth(verification, expected, repo_root, cmd_timeout) if verify_teeth else None
+        if teeth_result is not None:
+            return teeth_result
+
+        note = f"Output contains '{expected}'" if expected else "Command exited 0"
+        return {"status": "passed", "notes": note}
     except subprocess.TimeoutExpired:
         return {"status": "failed", "notes": f"Command timed out ({cmd_timeout}s)"}
     except Exception as e:
         return {"status": "failed", "notes": f"Error: {str(e)[:200]}"}
+
+
+def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
+                         cmd_timeout: int) -> dict | None:
+    """Execute a canary's negative_command and verify it does NOT print the
+    expected marker — the proof that the probe discriminates (has teeth).
+
+    Returns None when there are no teeth to check (no negative_command, or no
+    expected marker to look for) — the caller then treats the positive pass as
+    the verdict. Returns a {"status": "failed"} dict only when the marker
+    SURVIVES the negative variant (vacuous probe). A teeth-pass falls through to
+    None so the positive verdict stands.
+
+    Teeth-pass condition (pre-mortem refinement): the negative must have RAN
+    (no TimeoutExpired/exception) AND the marker must be ABSENT. A negative that
+    errors before printing (e.g. `false`) and omits the marker is a valid pass —
+    it proved the wire can fail. Marker-absence is the invariant, NOT the return
+    code (pytest -k <none> exits 5, a probe negative exits 1 — both make the
+    marker vanish).
+    """
+    negative_command = (verification.get("negative_command") or "").strip()
+    if not negative_command or not expected:
+        return None  # nothing to verify — positive verdict stands
+
+    safety_error = _validate_canary_command(negative_command)
+    if safety_error:
+        return {"status": "failed", "notes": f"negative_command blocked by safety filter: {safety_error}"}
+
+    try:
+        neg = subprocess.run(
+            negative_command, shell=True, capture_output=True, text=True,
+            timeout=cmd_timeout, cwd=str(repo_root)
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "notes": f"negative_command timed out ({cmd_timeout}s) — teeth inconclusive"}
+    except Exception as e:
+        return {"status": "failed", "notes": f"negative_command errored: {str(e)[:150]} — teeth inconclusive"}
+
+    neg_output = neg.stdout + neg.stderr
+    if expected in neg_output:
+        return {
+            "status": "failed",
+            "notes": (f"VACUOUS (no teeth): negative_command still produced marker "
+                      f"'{expected}' — the probe does not discriminate a broken wire. "
+                      f"neg exit={neg.returncode}.")
+        }
+    return None  # teeth held — marker absent — positive verdict stands
 
 
 def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None = None) -> dict:
@@ -1221,7 +1290,8 @@ def evaluate_case(case: dict, root: Path, *,
                    simulated_response: str | None = None,
                    actual_trajectory: list[str] | None = None,
                    canary_timeout: int | None = None,
-                   programmatic_only: bool = False) -> dict:
+                   programmatic_only: bool = False,
+                   verify_teeth: bool = False) -> dict:
     """Dispatch case to appropriate evaluator. Programmatic-first cascade.
 
     Strategy: Try ALL programmatic evaluators first. If any returns a
@@ -1250,7 +1320,8 @@ def evaluate_case(case: dict, root: Path, *,
     # Phase 1: Try programmatic evaluators (instant, free, deterministic)
     for ev in evaluators:
         if ev == "canary_pass":
-            result = eval_canary_pass(case, root, timeout_override=canary_timeout)
+            result = eval_canary_pass(case, root, timeout_override=canary_timeout,
+                                      verify_teeth=verify_teeth)
             if result["status"] != "skipped":
                 result["evaluator"] = "canary_pass"
                 result["duration_ms"] = int((time.time() - start) * 1000)
@@ -1359,7 +1430,8 @@ def compute_scores(cases: list, results: list[dict]) -> dict:
 def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root: Path,
              *, tags: list[str] | None = None,
              canary_timeout: int | None = None,
-             programmatic_only: bool = False) -> dict:
+             programmatic_only: bool = False,
+             verify_teeth: bool = False) -> dict:
     """Execute eval run. Returns full run result dict.
 
     Evaluator cascade: programmatic first (keyword_match, trajectory, canary_pass,
@@ -1410,7 +1482,8 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     results = []
     for case in cases:
         result = evaluate_case(case, root, canary_timeout=canary_timeout,
-                               programmatic_only=programmatic_only)
+                               programmatic_only=programmatic_only,
+                               verify_teeth=verify_teeth)
         result["id"] = case["id"]
         results.append(result)
 
@@ -1999,7 +2072,8 @@ def cmd_run(args):
     case_filter = args.cases.split(",") if args.cases else None
     tags = args.tags.split(",") if args.tags else None
     run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags,
-                          programmatic_only=getattr(args, "programmatic_only", False))
+                          programmatic_only=getattr(args, "programmatic_only", False),
+                          verify_teeth=getattr(args, "verify_teeth", False))
 
     out_path = write_run(run_result, root)
 
@@ -2055,6 +2129,11 @@ def main():
     run_p.add_argument("--programmatic-only", action="store_true",
                        help="Skip LLM-judge cases — run only fast deterministic evaluators "
                             "(the BVT gate set). Zero Bedrock cost; refreshes the gate report.")
+    run_p.add_argument("--verify-teeth", action="store_true",
+                       help="For each canary with a negative_command, ALSO run the negative "
+                            "variant and require the marker to vanish (proves the probe "
+                            "discriminates). Doubles subprocess cost — gate/nightly/local-gate-report "
+                            "only, NOT the per-session health hook.")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate golden_set.yaml schema")

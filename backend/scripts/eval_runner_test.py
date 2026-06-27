@@ -21,6 +21,7 @@ from backend.scripts.eval_runner import (
     eval_keyword_match,
     eval_trajectory,
     eval_llm_judge,
+    eval_canary_pass,
     evaluate_case,
     filter_cases_by_tags,
     _find_workspace_root,
@@ -338,6 +339,81 @@ class TestProgrammaticFirstCascade:
         result = evaluate_case(case, repo_root)
         assert result["evaluator"] == "goal_success"
         assert result["status"] == "skipped"  # LLM not implemented yet
+
+
+class TestCanaryTeeth:
+    """verify_teeth: after a canary's positive command passes, execute its
+    negative_command and require the OK-marker to be ABSENT (wire-broken =>
+    marker gone). A canary whose marker survives the negative variant is
+    vacuous => FAIL. Teeth are OFF by default (gate/nightly only)."""
+
+    def _case(self, command, expected, negative=None):
+        c = {
+            "id": "GS_TEETH_TEST",
+            "category": "compliance",
+            "dimension": "compliance",
+            "evaluators": ["canary_pass"],
+            "affected_by": ["backend/scripts/eval_runner.py"],
+            "verification": {"command": command, "expected_contains": expected},
+        }
+        if negative is not None:
+            c["verification"]["negative_command"] = negative
+        return c
+
+    def test_teeth_off_by_default_ignores_negative(self):
+        """AC3/AC4 back-compat: verify_teeth defaults False — the negative is
+        never run, even if present. Behaves exactly as today."""
+        repo = _find_swarmai_repo()
+        # negative would FAIL teeth (marker present), but teeth are off → passed
+        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")
+        result = eval_canary_pass(case, repo)
+        assert result["status"] == "passed"
+
+    def test_vacuous_negative_still_prints_marker_is_RED(self):
+        """AC1 (the teeth): positive passes, but the negative variant STILL
+        prints the marker => the probe doesn't actually discriminate => FAIL."""
+        repo = _find_swarmai_repo()
+        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")
+        result = eval_canary_pass(case, repo, verify_teeth=True)
+        assert result["status"] == "failed", result
+        assert "teeth" in result["notes"].lower() or "vacuous" in result["notes"].lower()
+
+    def test_real_negative_omits_marker_is_GREEN(self):
+        """AC2: positive passes AND the negative variant omits the marker
+        (it discriminates) => passed."""
+        repo = _find_swarmai_repo()
+        case = self._case("echo MARKER_OK", "MARKER_OK", negative="echo DIFFERENT")
+        result = eval_canary_pass(case, repo, verify_teeth=True)
+        assert result["status"] == "passed", result
+
+    def test_negative_that_errors_without_marker_is_GREEN(self):
+        """AC5: a negative that exits non-zero (e.g. `false`) and prints no
+        marker is a valid teeth-pass — it proved the wire can fail."""
+        repo = _find_swarmai_repo()
+        case = self._case("echo MARKER_OK", "MARKER_OK", negative="false")
+        result = eval_canary_pass(case, repo, verify_teeth=True)
+        assert result["status"] == "passed", result
+
+    def test_no_negative_command_passes_under_teeth(self):
+        """AC4: a canary with NO negative_command is untouched even when
+        verify_teeth=True (back-compat for pre-teeth cases)."""
+        repo = _find_swarmai_repo()
+        case = self._case("echo MARKER_OK", "MARKER_OK")  # no negative
+        result = eval_canary_pass(case, repo, verify_teeth=True)
+        assert result["status"] == "passed", result
+
+    def test_teeth_threaded_through_run_eval(self):
+        """AC3: verify_teeth threads run_eval -> evaluate_case -> eval_canary_pass.
+        A vacuous case fails ONLY when run_eval is called with verify_teeth=True."""
+        from backend.scripts.eval_runner import run_eval
+        repo = _find_swarmai_repo()
+        gs = {"cases": [self._case("echo MARKER_OK", "MARKER_OK", negative="echo MARKER_OK")]}
+        # teeth off → passes
+        r_off = run_eval(gs, "manual", None, repo)
+        assert r_off["cases"][0]["status"] == "passed"
+        # teeth on → the vacuous negative is caught
+        r_on = run_eval(gs, "manual", None, repo, verify_teeth=True)
+        assert r_on["cases"][0]["status"] == "failed", r_on["cases"][0]
 
 
 class TestGoldenSetNewFields:

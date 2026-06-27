@@ -1034,7 +1034,10 @@ class EvalService:
             from scripts.eval_runner import run_eval, generate_html_report, load_golden_set
 
             cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
-            result = run_eval(cases_data, trigger, case_ids, self._workspace_root)
+            # Manual/GUI full run → verify canary teeth (the per-session canary
+            # path at run_canary() stays verify_teeth=False — it is deadline-bound).
+            result = run_eval(cases_data, trigger, case_ids, self._workspace_root,
+                              verify_teeth=True)
             result["run_id"] = run_id
 
             self._write_run_result(result)
