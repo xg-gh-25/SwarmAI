@@ -219,10 +219,12 @@ When any change is proposed (by user directive, pipeline reflect, self-detection
 
 Surface the classification brief to the decider. User has final authority after seeing the brief. Agent-initiated changes need 3x evidence OR user approval before promotion.
 
-**Hard budgets (add one → retire one):**
-- SOUL.md principles: ≤5
-- AGENT.md rules: ≤25
-- STEERING.md standing rules: ≤15
+**Budgets are smoke-tests, not guillotines** (SOUL principles ≤5 · AGENT rules ≤25 · STEERING ≤15).
+Hitting the cap does NOT mean "retire one to make room." It triggers a JUDGMENT, one of three:
+1. New item is **same-source** as an existing one → don't add, **fold into** that one (redundancy — independent of the number).
+2. New item is a genuinely independent axis AND an existing item is **no longer load-bearing** (wallpaper) → replace it.
+3. New item is a real new axis **AND** all existing items are still load-bearing → this is the signal the **cap number itself should rise** — escalate to the user. NEVER cut a still-load-bearing principle just to satisfy an arbitrary count.
+The cap's real purpose is preventing attention-dilution (F004: the more enforcement text, the less any of it is read), not saving tokens. Cutting a working principle to hit a number is the governance-layer twin of the compact 30s-timeout (O030/MOD07): sacrificing the purpose to satisfy an arbitrary bound.
 
 ## Coding Task Execution Modes (P1)
 
