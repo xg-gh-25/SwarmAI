@@ -733,7 +733,6 @@ class DddCultivationOrchestrator:
         from core.ddd_entry_lifecycle import (
             archive_entries,
             assess_decay,
-            bump_references,
             inject_entry_metadata,
             parse_entries,
             reclaim_noise_entries,
@@ -779,36 +778,16 @@ class DddCultivationOrchestrator:
                     # C2 fix: don't use continue — fall through to finally
                     pass
                 else:
-                    # F1: Bump references from recent DailyActivity text
-                    # This makes ref counts non-zero for actively-discussed knowledge,
-                    # preventing the decay engine from archiving useful entries.
-                    daily_dir = Path(ws_path) / "Knowledge" / "DailyActivity"
-                    if daily_dir.is_dir():
-                        today_str = today.isoformat()
-                        yesterday_str = (today - _timedelta(days=1)).isoformat()
-                        signal_texts: list[str] = []
-                        try:
-                            for da_file in sorted(daily_dir.iterdir(), reverse=True)[:10]:
-                                if da_file.suffix != ".md":
-                                    continue
-                                if da_file.stem.startswith(today_str) or da_file.stem.startswith(yesterday_str):
-                                    signal_texts.append(da_file.read_text(errors="ignore")[:8000])
-                        except OSError:
-                            pass  # DailyActivity unreadable — skip bumping, still decay
-
-                        if signal_texts:
-                            combined_text = "\n".join(signal_texts)
-                            graph_path = Path(ws_path) / ".context" / ".knowledge-graph.yaml"
-                            bumped = bump_references(
-                                entries, combined_text, today,
-                                graph_path=graph_path if graph_path.exists() else None,
-                            )
-                            if bumped:
-                                findings.append(
-                                    f"ENTRY_BUMP: {bumped} entries referenced in "
-                                    f"{project_dir.name} (from DailyActivity)"
-                                )
-
+                    # F1 prose-bump REMOVED (R2-prime, run_e50621b6). Bumping ref
+                    # from DailyActivity prose-substring matches was a TOXIC fake
+                    # signal (generic-titled entries gamed it → undeserved decay
+                    # protection). The honest ref producer is
+                    # memory_decay.bump_entry_references (real entry-IDs cited in
+                    # session messages). ref_count + the decay HIGH_REF branch are
+                    # KEPT — only this prose producer is removed. NOTE: this call
+                    # site passed graph_path but NOT context_files, so it never
+                    # triggered the G1 graph auto-extraction (which is gated on
+                    # context_files) — removing it loses no graph behavior.
                     transitions = assess_decay(entries, today)
                     if transitions:
                         # Separate archival transitions from dormant transitions

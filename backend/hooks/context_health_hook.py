@@ -1487,7 +1487,6 @@ class ContextHealthHook:
         """
         from core.ddd_entry_lifecycle import (
             assess_decay,
-            bump_references,
             collapse_stacked_metadata,
             inject_entry_metadata,
             parse_entries,
@@ -1542,22 +1541,18 @@ class ContextHealthHook:
 
             today = date.today()
 
-            # ── Ref bump: scan recent DailyActivity for entry title mentions ──
-            daily_dir = root / "Knowledge" / "DailyActivity"
-            bump_text = ""
-            if daily_dir.is_dir():
-                cutoff = (today - timedelta(days=3)).isoformat()
-                for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
-                    if f.stem < cutoff:
-                        break
-                    try:
-                        bump_text += f.read_text(encoding="utf-8", errors="ignore")
-                    except OSError:
-                        continue
-
+            # ── Ref bump: REMOVED (R2-prime, run_e50621b6). The DailyActivity
+            # prose-substring scan was a TOXIC fake signal: generic-titled entries
+            # ("DISCUSSION" ref:1009, "Correction" ref:965) got bumped by mere
+            # word coincidence in prose → fake HIGH_REF 2x decay protection, while
+            # 382/392 real entries starved at ref:0. The HONEST ref producer is
+            # memory_decay.bump_entry_references (distillation_hook.py:1828), which
+            # matches real entry-IDs cited in actual session messages. ref_count,
+            # assess_decay's HIGH_REF branch, and is_keep_class's ref leg are all
+            # KEPT — they correctly consume that honest signal. Only this prose
+            # producer is removed. (Gate-1 verified: ref is a live honest signal,
+            # not dead — do NOT rip out its consumers.)
             bumped = 0
-            if bump_text:
-                bumped = bump_references(entries, bump_text, today)
 
             # ── Decay: assess state transitions ──
             transitions = assess_decay(entries, today, evergreen_sections=evergreen)
@@ -1604,7 +1599,6 @@ class ContextHealthHook:
         """
         from core.ddd_entry_lifecycle import (
             assess_decay,
-            bump_references,
             inject_entry_metadata,
             parse_entries,
         )
@@ -1620,22 +1614,10 @@ class ContextHealthHook:
 
         today = date.today()
 
-        # Ref bump: scan recent DailyActivity for entry title mentions
-        daily_dir = root / "Knowledge" / "DailyActivity"
-        bump_text = ""
-        if daily_dir.is_dir():
-            cutoff = (today - timedelta(days=3)).isoformat()
-            for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
-                if f.stem < cutoff:
-                    break
-                try:
-                    bump_text += f.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-
+        # Ref bump: REMOVED (R2-prime, run_e50621b6) — same toxic prose-substring
+        # signal as MEMORY.md (see _run_memory_lifecycle). Honest ref comes from
+        # the id-based producer, not DailyActivity prose coincidence.
         bumped = 0
-        if bump_text:
-            bumped = bump_references(entries, bump_text, today)
 
         # Decay: assess state transitions (no evergreen sections for KNOWLEDGE)
         transitions = assess_decay(entries, today)

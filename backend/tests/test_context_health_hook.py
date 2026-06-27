@@ -819,3 +819,38 @@ class TestExtractLessonsNoOrphan:
         assert stacked == 0, f"lifecycle did not auto-heal the orphan:\n{content}"
         assert "last:2026-06-20" in content, "must keep the real-date meta"
         assert "last:none" not in content, "must drop the orphan default"
+
+
+class TestNoProseBump:
+    """R2-prime: the toxic prose-substring ref bump is removed. An entry whose
+    title coincidentally appears in DailyActivity prose must NOT get its
+    ref_count bumped — that fake signal protected generic-titled entries
+    (DISCUSSION ref:1009) while real entries starved at ref:0. The honest
+    id-based signal (memory_decay, via distillation) is the only ref producer."""
+
+    def test_prose_mention_does_not_bump_ref(self, hook, tmp_path):
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        # Entry titled "Correction" — a word that appears all over prose.
+        (ctx / "MEMORY.md").write_text(
+            "## Pitfalls\n"
+            "_Operational lessons._\n\n"
+            "- [pitfall] **Correction** — a specific lesson (2026-06-01)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )
+        # DailyActivity prose that mentions the word "Correction" many times.
+        da = ws / "Knowledge" / "DailyActivity"
+        da.mkdir(parents=True)
+        (da / f"{date.today().isoformat()}-x.md").write_text(
+            "# Activity\n\nCorrection here. Another Correction. Correction again.\n" * 5
+        )
+        hook._run_memory_lifecycle(ws)
+        content = (ctx / "MEMORY.md").read_text()
+        import re
+        m = re.search(r"<!-- ref:(\d+)", content)
+        assert m is not None, f"metadata missing:\n{content}"
+        assert int(m.group(1)) == 0, (
+            f"prose-bump still active — 'Correction' got bumped to ref:{m.group(1)} "
+            f"from DailyActivity prose coincidence:\n{content}"
+        )
