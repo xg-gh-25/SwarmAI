@@ -1148,47 +1148,11 @@ def _get_todo_highlights(max_items: int = 5) -> list[str]:
     return lines
 
 
-def _get_ddd_trust_summary(workspace: Path) -> list[str]:
-    """F3: Surface DDD sections with low trust in session briefing.
-
-    Reads maturity annotations from DDD docs directly (not a separate
-    health file). Sections with trust=low or trust=very_low are surfaced
-    so the agent knows to verify before relying on them.
-
-    Returns max 5 lines to avoid briefing bloat (~50 tokens).
-    """
-    lines: list[str] = []
-    projects_dir = workspace / "Projects"
-    if not projects_dir.is_dir():
-        return lines
-
-    for project_dir in sorted(projects_dir.iterdir()):
-        if not project_dir.is_dir():
-            continue
-        # Read maturity annotations from DDD docs
-        for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
-            doc_path = project_dir / doc_name
-            if not doc_path.exists():
-                continue
-            try:
-                content = doc_path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            # Parse maturity comments: <!-- maturity: X | ... | trust: Y | ... -->
-            for match in re.finditer(
-                r"^##\s+(.+)\n<!-- maturity: (\w+) .+trust: (\w+)",
-                content, re.MULTILINE
-            ):
-                section_name = match.group(1).strip()
-                _level = match.group(2)
-                trust = match.group(3)
-                if trust in ("low", "very_low"):
-                    lines.append(
-                        f"{project_dir.name}/{doc_name} §{section_name} "
-                        f"[trust:{trust}]"
-                    )
-
-    return lines[:5]
+# _get_ddd_trust_summary DELETED (run_a16d61ad, §4.2.1 #11): the DDD-trust
+# briefing section was falsified by live data (1273 `trust: high` : 2 `trust: low`,
+# both empty doc placeholders → zero discrimination). Trust value is PULL-only now
+# (recall's ddd leg attaches trust metadata when a doc is actually queried), so this
+# Projects/*-traversal helper had 0 callers and is removed.
 
 
 def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
@@ -1654,110 +1618,14 @@ def _detect_active_project(workspace: Path) -> str | None:
     return None
 
 
-# TTL cache for _detect_active_coding_project (avoids repeated FS traversal)
-_coding_project_cache: dict[str, tuple[float, str | None]] = {}
-_CODING_PROJECT_TTL = 60.0  # 60 seconds
-
-
-def _detect_active_coding_project(workspace: Path) -> str | None:
-    """Detect if the current session context suggests coding work.
-
-    Cached for 60s to avoid repeated filesystem traversal during prompt assembly.
-
-    Only returns a project name if there's evidence this session involves code:
-    1. Recent DailyActivity (today/yesterday) mentions code files (.py, .ts, .rs, etc.)
-    2. There's an active pipeline run (status=running) for a project with code_intel.db
-    3. The most recent session's git activity shows uncommitted changes
-
-    Returns None for non-coding sessions — saves ~300 tokens of route/risk briefing.
-    """
-    import time
-
-    # TTL cache check — avoid repeated FS traversal within same prompt assembly
-    cache_key = str(workspace)
-    cached = _coding_project_cache.get(cache_key)
-    if cached:
-        ts, result = cached
-        if time.time() - ts < _CODING_PROJECT_TTL:
-            return result
-
-    result = _detect_active_coding_project_impl(workspace)
-    _coding_project_cache[cache_key] = (time.time(), result)
-    return result
-
-
-def _detect_active_coding_project_impl(workspace: Path) -> str | None:
-    """Inner implementation without cache."""
-    import time
-
-    projects_dir = workspace / "Projects"
-    if not projects_dir.is_dir():
-        return None
-
-    # Signal 1: Active pipeline run → definitely coding
-    for proj_dir in projects_dir.iterdir():
-        if not proj_dir.is_dir():
-            continue
-        runs_dir = proj_dir / ".artifacts" / "runs"
-        if not runs_dir.is_dir():
-            continue
-        # Check for any running pipeline (recently modified run.json)
-        for run_dir in sorted(runs_dir.iterdir(), reverse=True)[:3]:
-            run_json = run_dir / "run.json"
-            if run_json.exists():
-                try:
-                    import json
-                    data = json.loads(run_json.read_text())
-                    if data.get("status") == "running":
-                        if (proj_dir / "code_intel.db").exists():
-                            return proj_dir.name
-                except Exception:
-                    continue
-
-    # Signal 2: Today's DailyActivity mentions code-related files
-    daily_dir = workspace / "Knowledge" / "DailyActivity"
-    if daily_dir.is_dir():
-        today = time.strftime("%Y-%m-%d")
-        code_extensions = {".py", ".ts", ".tsx", ".js", ".rs", ".go", ".java"}
-        da_files = [f for f in daily_dir.iterdir() if f.suffix == ".md" and f.stem[:4].isdigit()]
-        for da_file in sorted(da_files, reverse=True)[:2]:
-            if today in da_file.name:
-                try:
-                    content = da_file.read_text(errors="replace")[:5000]
-                    # Check for code file mentions or git activity
-                    if any(ext in content for ext in code_extensions) or "git" in content.lower():
-                        return _detect_active_project(workspace)
-                except Exception:
-                    continue
-
-    # Signal 3: Uncommitted changes in any indexed project
-    for name in ["SwarmAI"] + sorted(
-        d.name for d in projects_dir.iterdir()
-        if d.is_dir() and d.name != "SwarmAI"
-    ):
-        if not (projects_dir / name / "code_intel.db").exists():
-            continue
-        # Read repo_root from code_intel.db meta (cheap — single row query)
-        try:
-            import sqlite3
-            db_path = projects_dir / name / "code_intel.db"
-            conn = sqlite3.connect(str(db_path), timeout=1)
-            row = conn.execute("SELECT value FROM graph_meta WHERE key='repo_root'").fetchone()
-            conn.close()
-            if row:
-                repo_root = Path(row[0])
-                git_dir = repo_root / ".git"
-                if git_dir.is_dir():
-                    # Check for any staged/modified files (cheap: just check index mtime)
-                    index_file = git_dir / "index"
-                    if index_file.exists():
-                        age = time.time() - index_file.stat().st_mtime
-                        if age < 14400:  # git index touched in last 4 hours → active coding
-                            return name
-        except Exception:
-            continue
-
-    return None
+# _detect_active_coding_project (+ _impl + TTL cache) DELETED (run_a16d61ad,
+# §4.2.1 #15): its sole caller was the Codebase-intelligence briefing section,
+# which is now CUT (PUSH→PULL). "Guess from a Projects/* + DailyActivity + git
+# traversal whether this session is coding" was the most expensive briefing
+# signal and the least load-bearing — at session start there is no query, so the
+# guess can't know what code context the turn needs. Code context now surfaces
+# only on a real coding query via recall's codeintel leg. (Note: _detect_active_project
+# — no "coding" — is a DIFFERENT, still-live helper used by DDD escalations.)
 
 
 # ---------------------------------------------------------------------------
@@ -1820,17 +1688,18 @@ def _render_self_eval_lines(
         if lines:
             return lines
 
-        line = f"**Self-Eval:** {case_count} cases | Score: {score} | Last: {last_date}"
-        # M5 Part 2 breadcrumb: auto-seeded DRAFT skeletons are excluded from the
-        # score (behavior cases). They are a refine-me to-do — the machine found
-        # WHAT to test (a recurring CLASS), the human designs HOW (a real pressure
-        # scenario). Surface the backlog so it doesn't rot silently.
-        if draft_skeletons > 0:
-            line += (
-                f"\n  - ⚗️ {draft_skeletons} auto-seeded draft skeleton(s) await "
-                f"refinement into pressure cases (run pipeline / edit golden_set)"
-            )
-        return [line]
+        # COGNITION-ADMISSION (run_a16d61ad, §4.2.1 #13): the clean "Score: X"
+        # line is DROPPED from the system-prompt briefing. The score is near-
+        # constant (100/100/95.6) → zero discrimination → it occupies cognition
+        # without informing. ONLY the 🧬 red signals above (divergence / judge-
+        # infra error) earn the headline — a green score next to a recurring
+        # failure class is the "100/100 on a dead loop" lie the loop exists to
+        # expose. With no red signal, self-eval contributes nothing to the prompt.
+        #
+        # The draft-skeleton refine-me backlog is a to-do, not self-state
+        # cognition — surfaced via Radar todos / build_session_briefing_data, not
+        # here. (Kept computable for the data twin; simply not emitted to markdown.)
+        return []
     except Exception:
         # Briefing helpers must never raise.
         return []
@@ -1904,37 +1773,26 @@ def build_session_briefing(
         if not ranked and not signals:
             return None
 
-        focus_section, background_section = _format_suggestions(ranked)
+        # background_section ("Also in...") is CUT from the markdown briefing
+        # (§4.2.1) — discard it here. _format_suggestions still computes it for
+        # build_session_briefing_data (the Welcome Screen data twin).
+        focus_section, _background_section = _format_suggestions(ranked)
 
         sections: list[str] = []
 
         if focus_section:
             sections.append(focus_section)
 
-        # Include temporal/pattern signals that aren't about specific threads
-        # (e.g. "First session today", "2 days since last session")
-        non_thread_signals = [
-            s for s in signals
-            if not (s.startswith('"') or s.startswith("P0 "))
-            and "reported" not in s.lower()
-            and "pending rebuild" not in s.lower()
-        ]
-        if non_thread_signals:
-            items = [f"  - {s}" for s in non_thread_signals]
-            sections.append("**Signals:**\n" + "\n".join(items))
-
-        if background_section:
-            sections.append(background_section)
-
-        # L4: External signal highlights from signal_digest.json
-        signal_lines = _get_signal_highlights(str(workspace))
-        if signal_lines:
-            sections.append("**External signals since last session:**\n" + "\n".join(signal_lines))
-
-        # L4: Recent job results from .job-results.jsonl
-        job_lines = _get_job_result_highlights(str(workspace))
-        if job_lines:
-            sections.append("**Recent job results (last 24h):**\n" + "\n".join(job_lines))
+        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
+        # The following feed/status-board sections were REMOVED from the
+        # system-prompt briefing: temporal Signals, background-suggestions
+        # ("Also in..."), External-signals, Job-results. They are dashboard
+        # data, not self-state cognition — they competed with the 11 context
+        # files for attention (F004) without changing first-response correctness.
+        # They remain in build_session_briefing_data() (the frontend Welcome
+        # Screen), which is the correct home for feed data. (background_section
+        # and the temporal-signals list are still computed by _format_suggestions
+        # for the data twin; they are simply no longer appended to the markdown.)
 
         # L4: Paused pipelines — auto-resume directives (max 3 attempts) or informational
         pipeline_lines = _get_paused_pipeline_highlights(workspace)
@@ -2009,27 +1867,13 @@ def build_session_briefing(
         except Exception as exc:
             logger.debug("DDD escalations read failed: %s", exc)
 
-        # L3b (F3): DDD low-trust sections — surface knowledge the agent should verify
-        try:
-            trust_lines = _get_ddd_trust_summary(workspace)
-            if trust_lines:
-                sections.append(
-                    "**DDD low-trust sections** (verify before relying):\n"
-                    + "\n".join(f"  - {line}" for line in trust_lines)
-                )
-        except Exception as exc:
-            logger.debug("DDD trust summary failed: %s", exc)
-
-        # Gap #21: L2 review window — show recent auto-applies with revert countdown
-        try:
-            review_lines = _get_auto_apply_review_window(workspace)
-            if review_lines:
-                sections.append(
-                    "**DDD auto-applies (72h review window):**\n"
-                    + "\n".join(f"  - {line}" for line in review_lines)
-                )
-        except Exception as exc:
-            logger.debug("DDD review window failed: %s", exc)
+        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
+        # DDD low-trust + DDD auto-applies-review-window REMOVED. DDD-trust was
+        # falsified by live data (1273 `trust: high` : 2 `trust: low`, both empty
+        # doc placeholders → zero discrimination; #11). The "verify before relying"
+        # value is PULL: recall's ddd leg attaches trust metadata when a doc is
+        # actually queried. The 72h auto-apply countdown is a dashboard timer, not
+        # cognition. (_get_ddd_trust_summary is now deleted — 0 callers.)
 
         # L4: Self-Eval awareness (golden set health — lightweight, ~1 line)
         try:
@@ -2084,38 +1928,25 @@ def build_session_briefing(
         if skill_health_lines:
             sections.append("**Skill health:**\n" + "\n".join(f"  - {line}" for line in skill_health_lines))
 
-        # L5: Codebase intelligence from code_intel.db
-        # Only inject when the session is likely code-related:
-        # - Session has a bound project with code_intel.db, OR
-        # - Recent DailyActivity mentions code files
-        # Skip for non-coding sessions (chat, research, reports) to save ~300 tokens.
-        try:
-            from core.code_intel.codebase_map import generate_codebase_map
-            active_project = _detect_active_coding_project(workspace)
-            if active_project:
-                codebase_ctx = generate_codebase_map(active_project)
-                if codebase_ctx:
-                    sections.append(f"**Codebase intelligence ({active_project}):**\n{codebase_ctx}")
-        except ImportError:
-            pass  # code_intel not available
-        except Exception as exc:
-            logger.debug("Codebase map generation failed: %s", exc)
-
-        # L3: Surface learning insight
-        learning_insight = learning_state.learning_summary()
-        if learning_insight:
-            sections.append(f"**Learning:** {learning_insight}")
+        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
+        # Codebase-intelligence MOVED from PUSH (session-start graph load) to
+        # PULL-only: it is no longer injected at session start (#15). Loading the
+        # AST graph for every coding session — guessed via a Projects/* traversal
+        # in _detect_active_coding_project — was the most expensive briefing
+        # section AND the least load-bearing (no query yet → can't know what code
+        # context the turn needs). Code context now surfaces only when a real
+        # coding query arrives, via recall's codeintel leg. (_detect_active_coding_project
+        # is now deleted — 0 callers.)
+        #
+        # Learning insight CUT (#16): a statistical self-portrait ("investigation
+        # work preferred 36%"), not cognition; the learning loop's follow_rate is
+        # 0 (uncovered). The portrait stays in learning_state / build_session_briefing_data,
+        # not the system prompt.
 
         if not sections:
             return None
 
         briefing = "## Session Briefing\n" + "\n".join(sections)
-
-        # Token estimate sanity check
-        token_est = len(briefing) // 4
-        if token_est > 500 and len(sections) > 2:
-            sections = [s for s in sections if not s.startswith("**Also in")]
-            briefing = "## Session Briefing\n" + "\n".join(sections)
 
         # L3: Save current suggestions for next session's comparison
         learning_state.last_briefing_date = datetime.now().strftime("%Y-%m-%d")
@@ -2124,11 +1955,19 @@ def build_session_briefing(
         ]
         _save_learning_state(workspace, learning_state)
 
+        # Token estimate uses the SINGLE CJK-aware estimator (estimate_tokens),
+        # NOT the old `len//4` — consistent with the assembly + recall logs
+        # (design §1: dual-estimator divergence killed). The CUT (run_a16d61ad)
+        # removed the External-signals/Job-results/Learning sections, so the
+        # `signal_lines`/`learning_insight` locals this log used to reference no
+        # longer exist — they are dropped here too (their dangling refs were a
+        # silent NameError that made the whole briefing return None).
+        from core.context_directory_loader import ContextDirectoryLoader
+        _brief_tok = ContextDirectoryLoader.estimate_tokens(briefing)
         logger.info(
-            "Proactive briefing (L4): %d chars, ~%d tokens, %d ranked, %d signals, "
-            "ext_signals=%d, learning=%s, effectiveness=%s",
-            len(briefing), len(briefing) // 4, len(ranked), len(signals),
-            len(signal_lines), "active" if learning_insight else "gathering",
+            "Proactive briefing (L4): %d chars, ~%d tok, %d ranked, %d sections, "
+            "effectiveness=%s",
+            len(briefing), _brief_tok, len(ranked), len(sections),
             learning_state.effectiveness.get("trend", "gathering"),
         )
         return briefing

@@ -12,15 +12,20 @@ from core.proactive_intelligence import _render_self_eval_lines
 
 
 class TestSelfEvalRendering:
-    def test_clean_high_score_no_divergence(self):
+    def test_clean_high_score_emits_nothing(self):
+        # COGNITION-ADMISSION (run_a16d61ad, §4.2.1 #13): a clean, non-diverged
+        # score is NO LONGER shown in the system-prompt briefing. The score is
+        # near-constant (100/100/95.6) → zero discrimination → it occupied
+        # cognition without informing. Only 🧬 red signals (divergence / judge
+        # infra error) earn the headline. So a clean high score → empty render.
         health = {
             "overall_score": 100.0,
             "last_run": {"triggered_at": "2026-06-25T00:00:00", "cases_error": 0},
         }
         lines = _render_self_eval_lines(health, tracker_red=False, case_count=128)
         text = "\n".join(lines)
-        assert "Score: 100.0" in text
-        assert "DIVERG" not in text.upper()
+        assert lines == [], f"clean score must emit nothing to the prompt, got {lines!r}"
+        assert "Score:" not in text
         assert "🔴" not in text
 
     def test_cases_error_redlight_still_fires(self):

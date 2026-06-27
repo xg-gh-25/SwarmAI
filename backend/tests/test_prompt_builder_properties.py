@@ -300,26 +300,23 @@ class TestEvolutionUnconditionalLoad:
         meta = agent_config.get("_system_prompt_metadata", {})
         return meta.get("full_text", "")
 
-    def _run_build(self, workspace, *, coding: bool, channel_context=None) -> dict:
-        """Build the system prompt, forcing the coding-detection result, and
-        return the agent_config. `generate_codebase_map` is mocked to None so the
-        build stays confined to `workspace` (Gate-2: the real "SwarmAI" name would
-        otherwise pull this repo's on-disk code_intel.db into the prompt — a
-        non-hermetic leak)."""
+    def _run_build(self, workspace, *, coding: bool = False, channel_context=None) -> dict:
+        """Build the system prompt and return the agent_config.
+
+        Note (run_a16d61ad, §4.2.1 #15): the Codebase-intelligence briefing section
+        and its `_detect_active_coding_project` gate were REMOVED (PUSH→PULL). The
+        `coding` param is retained for caller compatibility but no longer changes the
+        briefing — code context is now PULL-only via recall's codeintel leg, never
+        injected at session start. `get_focus_keywords` is still mocked empty to keep
+        the build hermetic to `workspace`."""
         import asyncio
         import unittest.mock as mock
 
         builder = _make_builder()
         agent_config: dict = {}
         with mock.patch(
-            "core.proactive_intelligence._detect_active_coding_project",
-            return_value=("SwarmAI" if coding else None),
-        ), mock.patch(
             "core.proactive_intelligence.get_focus_keywords",
             return_value="",
-        ), mock.patch(
-            "core.code_intel.codebase_map.generate_codebase_map",
-            return_value=None,
         ):
             asyncio.run(builder.build_system_prompt(
                 agent_config=agent_config,
