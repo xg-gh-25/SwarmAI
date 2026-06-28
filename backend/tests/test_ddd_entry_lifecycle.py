@@ -296,6 +296,14 @@ class TestAssessDecay:
         none_t = assess_decay([old], today, dormant_days=None)
         assert len(none_t) == 1 and none_t[0].new_state == "dormant"
 
+    def test_dormant_days_rejects_below_one(self):
+        """A2 footgun guard (Gate-2 LOW): dormant_days<1 would mark everything
+        past grace dormant. Reject it rather than silently nuke a section."""
+        today = date(2026, 6, 28)
+        for bad in (0, -5):
+            with pytest.raises(ValueError, match="dormant_days must be >= 1"):
+                assess_decay([], today, dormant_days=bad)
+
 
 # ── AC7: evaluate_demotion ───────────────────────────────────────────────────
 

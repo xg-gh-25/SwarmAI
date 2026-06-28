@@ -569,6 +569,12 @@ def assess_decay(
             the dormant threshold is tunable; dormant→archived stays at the
             global 180d so a faster-dormant entry still gets a full archive buffer.
     """
+    # dormant_days<1 would make `days_since_ref >= threshold` always true →
+    # mark everything past grace dormant. No live caller passes <1 (only 45),
+    # but guard the footgun rather than trust future callers (Gate-2 LOW).
+    if dormant_days is not None and dormant_days < 1:
+        raise ValueError(f"dormant_days must be >= 1, got {dormant_days}")
+
     transitions: list[DecayTransition] = []
     _evergreen = evergreen_sections or set()
 
