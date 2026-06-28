@@ -26,6 +26,7 @@ from .security_hooks import (
     create_dangerous_command_gate,
     background_command_guard,
     pytest_command_guard,
+    eval_command_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
@@ -221,6 +222,17 @@ async def build_hooks(
     registry.register(
         "PreToolUse", pytest_command_guard,
         "pytest_command_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: eval-in-pipeline guard (Bash-scoped) ─────
+    # Deny running eval (eval_runner / ci_eval_gate / eval_service run) from the
+    # agent's Bash path. Eval is a system-level decoupled subsystem (DEC05/PIT179)
+    # that scores the DEPLOYED system via CI/deploy/scheduled — running it on
+    # un-deployed changes tests the OLD binary and hung the judge's Bedrock call
+    # (2026-06-28). R6/R9/STEERING #5 in prose; this is the structural backstop.
+    registry.register(
+        "PreToolUse", eval_command_guard,
+        "eval_command_guard", matcher="Bash",
     )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────

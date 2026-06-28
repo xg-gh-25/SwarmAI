@@ -824,6 +824,22 @@ def _strip_quoted(command: str) -> str:
     return re.sub(r'"[^"]*"', "", s)
 
 
+# Eval invocation — `eval_runner.py run`, `ci_eval_gate.py`, or `eval_service`
+# CLI run. Eval is a SYSTEM-LEVEL decoupled subsystem (DEC05/PIT179) that runs
+# against the DEPLOYED system via CI (post-push) / deploy / scheduled — NEVER by
+# the agent inside a coding pipeline (running it on un-deployed changes tests the
+# OLD binary, proves nothing, wastes tokens, and hung the judge's Bedrock call,
+# 2026-06-28). Matched against the unquoted form so `git commit -m "fix eval"` is
+# not a false hit. Word-anchored on the script filenames the agent actually types.
+_EVAL_INVOCATION_RE = re.compile(
+    r"\b(?:eval_runner\.py\s+run\b"          # eval_runner.py run ...
+    r"|ci_eval_gate\.py\b"                    # ci_eval_gate.py
+    r"|eval_runner\s+run\b"                   # bare `eval_runner run` (entrypoint)
+    r"|eval_service\b[^|\n]*\brun\b)",        # eval_service ... run
+    re.IGNORECASE,
+)
+
+
 async def pytest_command_guard(
     input_data: dict[str, Any],
     tool_use_id: str | None,
@@ -908,6 +924,56 @@ async def pytest_command_guard(
         }
 
     return {"decision": "approve"}
+
+
+async def eval_command_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Bash): DENY running eval (`eval_runner.py run`, `ci_eval_gate.py`,
+    `eval_service ... run`) from inside the agent's Bash path.
+
+    Eval is a SYSTEM-LEVEL decoupled subsystem (DEC05/PIT179): it scores the
+    DEPLOYED system across the golden set. Running it on UN-deployed changes (the
+    daemon still runs the old binary mid-pipeline) tests the OLD code — it proves
+    nothing about the change in flight, burns tokens, and on 2026-06-28 hung the
+    LLM-judge's Bedrock call (a network HANG that froze the session spinner).
+
+    Eval's correct triggers are CI (post-push), deploy, and scheduled jobs — all
+    OUTSIDE the agent's interactive Bash. So denying eval in the agent Bash path
+    has no legitimate-use cost: the agent never needs to run eval by hand. Prose
+    (R6/R9/STEERING #5) said this and was violated anyway (CLASS A/B, 12 prior
+    skip-process occurrences) — this gate is the structural backstop (P7: defense
+    outside the agent), the twin of pytest_command_guard / background_command_guard.
+
+    Fail-safe: any non-Bash, non-eval command is approved untouched. Matched on the
+    unquoted form so `git commit -m "fix eval_runner.py"` is not a false hit.
+    """
+    if input_data.get("tool_name") != "Bash":
+        return {"decision": "approve"}
+    command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command:
+        return {"decision": "approve"}
+    if not _EVAL_INVOCATION_RE.search(_strip_quoted(command)):
+        return {"decision": "approve"}
+
+    logger.warning("[BLOCKED] eval invocation in agent Bash path: %s", command[:80])
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "运行 eval(eval_runner / ci_eval_gate / eval_service run)→ DENY。 "
+                "Eval 是系统层解耦子系统(DEC05/PIT179),针对**已部署**系统跑,由 "
+                "CI(push 后)/ deploy / scheduled 触发 —— 绝不在 coding pipeline 内、"
+                "也不由 agent 手动跑。改动还没上线时跑 eval 测的是旧 binary,证明不了本轮改动、"
+                "纯浪费,并曾把 judge 的 Bedrock 调用挂死(2026-06-28)。 "
+                "`ci_eval_gate` 报 stale 是预期的 —— 它在改动上线后由 eval 作为系统关注点跑过时自然清掉,"
+                "不是靠你现在对旧 binary 重跑 eval。 (R6 / R9 / STEERING #5)"
+            ),
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
