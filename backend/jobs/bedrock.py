@@ -33,6 +33,14 @@ _client_region: str | None = None
 _client_created_at: float = 0.0  # monotonic timestamp
 _CLIENT_TTL: float = 1800.0  # 30 minutes — STS temporary creds have 1-12h TTL
 
+# Substrings (lowercased) that mark a bedrock error as a transient credential/auth
+# failure worth ONE evict-and-retry. Single source of truth — used by both invoke()
+# and converse_with_retry() so the retry predicate can never drift between them.
+_RETRIABLE_AUTH_KEYWORDS: tuple[str, ...] = (
+    "credential", "expired", "token", "unauthorized",
+    "accessdenied", "security",
+)
+
 
 def _load_config() -> tuple[str, dict]:
     """Read region and model map from AppConfigManager (same as app).
@@ -150,7 +158,7 @@ def _resolve_credentials() -> dict[str, str]:
     return {}
 
 
-def get_client(*, force_new: bool = False) -> Any:
+def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
     """Return a cached bedrock-runtime client with pre-resolved credentials.
 
     Pre-resolves credentials in-process (where PATH is correct), then
@@ -160,11 +168,18 @@ def get_client(*, force_new: bool = False) -> Any:
     Args:
         force_new: Bypass cache and create a fresh client (useful after
             credential eviction on auth errors).
+        region: Optional explicit region override. When None, resolves region
+            from AppConfigManager (the job default). Callers that have their own
+            region precedence (e.g. the eval judge honors AWS_REGION env first)
+            pass it explicitly so this client uses the SAME region the caller
+            would have used — no silent region-source switch. The region is part
+            of the cache key, so an override participates in cache invalidation.
     """
     global _client, _client_region, _client_created_at
     import time
 
-    region, _ = _load_config()
+    if region is None:
+        region, _ = _load_config()
 
     # TTL check — recreate client periodically to pick up refreshed credentials.
     # STS temporary credentials have 1-12h TTL; 30min refresh is conservative.
@@ -317,10 +332,7 @@ def invoke(
 
         except Exception as e:
             err_str = str(e).lower()
-            retriable = any(kw in err_str for kw in (
-                "credential", "expired", "token", "unauthorized",
-                "accessdenied", "security",
-            ))
+            retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
             if retriable and attempt == 0:
                 logger.warning(
                     "Bedrock auth error (attempt %d), evicting client: %s",
@@ -329,3 +341,65 @@ def invoke(
                 evict_client()
                 continue
             raise
+
+
+def converse_with_retry(
+    *,
+    messages: list,
+    system: list,
+    inference_config: dict,
+    model_id: str,
+    region: str | None = None,
+) -> dict:
+    """client.converse() with credential eviction + a single auth-error retry.
+
+    The converse-API sibling of invoke() (which uses the older invoke_model API
+    and cannot carry a separate system prompt). Used by the OS-Eval LLM judge so
+    a transient stale-credential moment self-heals instead of zeroing out every
+    LLM-judged golden case (90/147 errored in the 2026-06-28 nightly, all the
+    same "unable to assume credentials" failure with no recovery).
+
+    Same evict-and-retry-ONCE discipline as invoke(): retry only on the first
+    attempt, only for a credential/auth error (`_RETRIABLE_AUTH_KEYWORDS` — the
+    single shared predicate), with a freshly-resolved client. A non-auth error
+    raises immediately (never masks a real bug, never loops). Bounded at 2 total
+    attempts — never a loop (STEERING #1 + PIT03: looping on a poisoned/stale
+    client is harmful; the only safe additional retry crosses a process boundary).
+
+    Args:
+        messages / system / inference_config: passed verbatim to converse() as
+            messages= / system= / inferenceConfig= (boto3 camelCase mapped here).
+        model_id: the resolved Bedrock model id (caller pins the judge model).
+        region: optional region override forwarded to get_client so the caller's
+            own region precedence is preserved (the judge honors AWS_REGION env
+            first). None → get_client resolves region from AppConfigManager.
+
+    Returns:
+        The raw converse() response dict (caller extracts output/message/content).
+
+    Raises:
+        Exception: if both attempts fail, or on the first non-auth error.
+    """
+    for attempt in range(2):
+        try:
+            client = get_client(force_new=(attempt > 0), region=region)
+            return client.converse(
+                modelId=model_id,
+                messages=messages,
+                system=system,
+                inferenceConfig=inference_config,
+            )
+        except Exception as e:
+            err_str = str(e).lower()
+            retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
+            if retriable and attempt == 0:
+                logger.warning(
+                    "Bedrock judge auth error (attempt %d), evicting client: %s",
+                    attempt + 1, e,
+                )
+                evict_client()
+                continue
+            raise
+    # Unreachable: range(2) either returns or raises on attempt 1. Guards against
+    # a future loop-bound edit silently returning None.
+    raise RuntimeError("converse_with_retry exhausted retries without returning")

@@ -33,6 +33,7 @@ LLM judge evaluators (uses pinned judge model from config):
 import argparse
 import html as html_mod
 import json
+import os
 import subprocess
 import sys
 import time
@@ -980,17 +981,24 @@ Respond in this exact JSON format:
     try:
         judge_model = _get_judge_model()
 
-        # Import Bedrock client from the existing module
+        # Credential-resilient judge call: converse_with_retry evicts the cached
+        # client + retries once on a transient credential/auth error, so a stale
+        # cred moment self-heals instead of zeroing every LLM-judged case (the
+        # 2026-06-28 nightly errored 90/147, all "unable to assume credentials").
+        # Region: preserve the judge's prior env-first precedence (AWS_REGION /
+        # AWS_DEFAULT_REGION else us-east-1) — do NOT silently switch to the
+        # AppConfigManager region get_client defaults to (Gate-1 mitigation).
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from core.llm_optimizer import _get_bedrock_client
+        from jobs.bedrock import converse_with_retry
 
-        client = _get_bedrock_client()
+        _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
-        response = client.converse(
-            modelId=judge_model,
+        response = converse_with_retry(
             messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
             system=[{"text": "You are a precise eval judge. Respond only with the requested JSON."}],
-            inferenceConfig={"maxTokens": 1000, "temperature": 0.0},
+            inference_config={"maxTokens": 1000, "temperature": 0.0},
+            model_id=judge_model,
+            region=_judge_region,
         )
 
         # Extract text response
@@ -1092,14 +1100,17 @@ Respond in this exact JSON format:
 
     try:
         judge_model = _get_judge_model()
+        # Credential-resilient judge call (see eval_llm_judge for rationale):
+        # evict+retry-once on transient auth error; env-first region preserved.
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from core.llm_optimizer import _get_bedrock_client
-        client = _get_bedrock_client()
-        response = client.converse(
-            modelId=judge_model,
+        from jobs.bedrock import converse_with_retry
+        _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+        response = converse_with_retry(
             messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
             system=[{"text": "You are a precise eval judge. Respond only with the requested JSON."}],
-            inferenceConfig={"maxTokens": 400, "temperature": 0.0},
+            inference_config={"maxTokens": 400, "temperature": 0.0},
+            model_id=judge_model,
+            region=_judge_region,
         )
         blocks = response.get("output", {}).get("message", {}).get("content", [])
         response_text = next((b["text"] for b in blocks if "text" in b), "")
