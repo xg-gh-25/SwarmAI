@@ -46,6 +46,21 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────
 
+# Token-estimation coefficients — CALIBRATED against the real opus-4-8
+# tokenizer (run_3f25a73a, 2026-06-28; bedrock invoke_model usage.input_tokens,
+# baseline-subtracted). These are the SINGLE SOURCE OF TRUTH: both the forward
+# estimate (estimate_tokens) AND the inverse truncation paths
+# (_truncate_section here, prompt_builder DailyActivity truncation) derive from
+# them, so the forward/inverse relationship can never drift (Gate-1 finding A).
+#
+# Measured: CJK ~1.06-1.11 tok/char, Latin ~2.0-2.5 tok/word (markdown/technical).
+# The OLD values (CJK 0.667, Latin 1.333) under-counted real content ~40-65%.
+CJK_TOKENS_PER_CHAR = 1.1
+"""Estimated tokens per CJK character (calibrated to real opus-4-8 tokenizer)."""
+
+LATIN_TOKENS_PER_WORD = 2.2
+"""Estimated tokens per space-separated Latin word (calibrated; markdown/technical)."""
+
 DEFAULT_TOKEN_BUDGET = 30_000
 """Maximum tokens for assembled context output (default)."""
 
@@ -264,9 +279,17 @@ class ContextDirectoryLoader:
     # Regex matching CJK Unified Ideographs, CJK Extension A, Hangul,
     # Hiragana, Katakana, and fullwidth forms — characters that are NOT
     # space-separated and need per-character token estimation.
+    #
+    # UNIFIED RANGE (run_3f25a73a, Gate-1 finding C): the SINGLE source of
+    # truth for "is this char CJK-like for token estimation". It is the
+    # SUPERSET of the two formerly-divergent detectors:
+    #   - this regex historically had Kana (\u3040-\u30ff) but NOT Hangul
+    #   - context_health_hook._is_cjk_like had Hangul (\uac00-\ud7af) but NOT Kana
+    # Both Hangul AND Kana now classify as CJK. context_health_hook imports
+    # estimate_tokens (no second detector) so the ranges can never re-diverge.
     _CJK_RE = re.compile(
         r"[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf"
-        r"\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef"
+        r"\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef"
         r"\U00020000-\U0002a6df\U0002a700-\U0002b73f]"
     )
 
@@ -274,13 +297,24 @@ class ContextDirectoryLoader:
     def estimate_tokens(text: str) -> int:
         """Estimate token count with CJK awareness.
 
-        Uses a two-pass heuristic:
+        Uses a two-pass heuristic with coefficients CALIBRATED against the
+        real opus-4-8 tokenizer (run_3f25a73a, 2026-06-28; measured via
+        bedrock invoke_model usage.input_tokens, baseline-subtracted):
 
-        1. Count CJK characters (Chinese/Japanese/Korean ideographs) and
-           estimate at **1.5 characters per token** (~0.67 tokens/char).
-        2. Remove CJK characters, then count remaining space-separated
-           words at **4/3 tokens per word** (~0.75 words/token).
+        1. Count CJK characters (Chinese/Japanese/Korean) and estimate at
+           ``CJK_TOKENS_PER_CHAR`` (1.1 tok/char — measured 1.06-1.11).
+        2. Remove CJK characters, count remaining space-separated words at
+           ``LATIN_TOKENS_PER_WORD`` (2.2 tok/word — measured 2.0-2.5 for
+           markdown/technical English).
         3. Sum both estimates.
+
+        ⚠️ The OLD coefficients (CJK 0.667, Latin 1.333) UNDER-counted real
+        content by ~40-65% — they made the system mis-report its own context
+        size (self-reported ~44K when real was ~154K). The coefficients now
+        live in the module-level constants below so the FORWARD estimate and
+        the INVERSE truncation paths (``_truncate_section`` here,
+        ``prompt_builder._truncate_section_by_tokens``) derive from ONE source
+        and can never drift (Gate-1 finding A).
 
         This avoids the major underestimation that occurs with pure
         word-split on CJK text (a Chinese paragraph may be 1 "word"
@@ -301,18 +335,16 @@ class ContextDirectoryLoader:
         cjk_count = len(cjk_chars)
 
         if cjk_count == 0:
-            # Fast path: pure Latin/ASCII text — original heuristic
+            # Fast path: pure Latin/ASCII text — calibrated coefficient
             word_count = len(text.split())
-            return max(1, int(word_count * 4 / 3))
+            return max(1, int(word_count * LATIN_TOKENS_PER_WORD))
 
-        # CJK tokens: ~1.5 chars per token (empirical average for
-        # Chinese/Japanese with cl100k_base / Claude tokenizers)
-        cjk_tokens = int(cjk_count / 1.5)
+        cjk_tokens = int(cjk_count * CJK_TOKENS_PER_CHAR)
 
         # Remove CJK chars, estimate remaining words
         latin_text = ContextDirectoryLoader._CJK_RE.sub("", text)
         latin_words = len(latin_text.split())
-        latin_tokens = int(latin_words * 4 / 3)
+        latin_tokens = int(latin_words * LATIN_TOKENS_PER_WORD)
 
         return max(1, cjk_tokens + latin_tokens)
 
@@ -858,7 +890,11 @@ class ContextDirectoryLoader:
         target_content_tokens = max(0, target_section_tokens - header_tokens)
 
         words = content.split()
-        words_to_keep = max(0, int(target_content_tokens * 3 / 4))
+        # Inverse of the Latin token coefficient: tokens = words * LATIN_TOKENS_PER_WORD,
+        # so words = tokens / LATIN_TOKENS_PER_WORD. Derived from the SAME constant as
+        # the forward estimate (Gate-1 finding A) — never hardcode the inverse, or it
+        # drifts when the coefficient is recalibrated.
+        words_to_keep = max(0, int(target_content_tokens / LATIN_TOKENS_PER_WORD))
 
         if truncate_from == "head":
             truncated = " ".join(words[-words_to_keep:]) if words_to_keep else ""

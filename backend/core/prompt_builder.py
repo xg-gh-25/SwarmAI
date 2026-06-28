@@ -54,8 +54,12 @@ def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -
 
     Uses word-based truncation, keeping the *tail* (newest entries) since
     DailyActivity files are append-only.  The number of words to keep is
-    ``cap * 3 / 4`` — the inverse of the 4/3 token-estimation heuristic
-    used by ``ContextDirectoryLoader.estimate_tokens``.
+    ``cap / LATIN_TOKENS_PER_WORD`` — the inverse of the calibrated
+    token-estimation coefficient used by
+    ``ContextDirectoryLoader.estimate_tokens``.  Derived from the SAME
+    constant as the forward estimate (Gate-1 finding A, run_3f25a73a): a
+    hardcoded inverse (the old ``* 3 / 4``) silently broke when the
+    coefficient was recalibrated, leaving the truncated file ~65% over cap.
 
     When truncation occurs the ``TRUNCATION_MARKER`` is prepended so the
     agent (and the user, via the TSCC viewer) can see that content was
@@ -69,13 +73,16 @@ def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -
         The original *content* unchanged when it fits within *cap*,
         otherwise the truncated tail prefixed with the marker.
     """
-    from .context_directory_loader import ContextDirectoryLoader
+    from .context_directory_loader import (
+        ContextDirectoryLoader,
+        LATIN_TOKENS_PER_WORD,
+    )
 
     token_count = ContextDirectoryLoader.estimate_tokens(content)
     if token_count <= cap:
         return content
     words = content.split()
-    words_to_keep = max(1, int(cap * 3 / 4))
+    words_to_keep = max(1, int(cap / LATIN_TOKENS_PER_WORD))
     truncated = " ".join(words[-words_to_keep:])
     return f"{TRUNCATION_MARKER}\n\n{truncated}"
 
@@ -173,34 +180,77 @@ class PromptBuilder:
     # resolve_allowed_tools
     # ------------------------------------------------------------------
 
-    def resolve_allowed_tools(self, agent_config: dict) -> list[str]:
-        """Resolve the list of allowed tool names from agent configuration.
+    # Tool-name groups gated by the legacy enable_* flags. Restriction now
+    # expressed as a BLACKLIST (resolve_disallowed_tools) rather than rebuilt
+    # into an implicit whitelist (see resolve_allowed_tools docstring).
+    _BASH_TOOLS = ("Bash",)
+    # NotebookEdit is a file-MUTATING built-in — it MUST be denied when file
+    # tools are off, else enable_file_tools=False leaks notebook writes
+    # (Gate-2 adversarial finding, run_9cfdb08d). Audit new file/exec built-ins
+    # into these groups whenever the SDK adds tools.
+    _FILE_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
+    _WEB_TOOLS = ("WebFetch", "WebSearch")
 
-        Uses ``allowed_tools`` from config directly when present.  Otherwise
-        falls back to the individual enable flags (``enable_bash_tool``,
-        ``enable_file_tools``, ``enable_web_tools``) for backwards compat.
+    def resolve_allowed_tools(self, agent_config: dict) -> list[str]:
+        """Resolve the EXPLICIT allowed-tool whitelist from agent configuration.
+
+        Returns ``agent_config["allowed_tools"]`` verbatim when set (an opt-in
+        whitelist for deliberately-restricted agents), else ``[]``.
+
+        **Blacklist model (run_9cfdb08d, 2026-06-28 — whitelist→blacklist flip):**
+        An empty result makes ``build_agent_options`` pass ``allowed_tools=None``
+        to the SDK, which means *default-allow all built-ins*. The previous code
+        rebuilt an implicit 8-tool whitelist from the ``enable_*`` flags here; that
+        whitelist silently DISABLED every unlisted built-in (AskUserQuestion — which
+        broke the pipeline's in-band HITL — plus NotebookEdit and any future tool).
+        Capability default is now allow; restriction is carried by
+        ``resolve_disallowed_tools`` (the ``enable_*=False`` → deny mapping).
+
+        **Scope note (why this is NOT a regression of the "allowlist > denylist"
+        DDD decision, 2026-05-10):** that lesson governs SECURITY-ADMISSION gates
+        (data redaction, channel file access), which remain fail-closed allowlists
+        and are UNTOUCHED — ``file_access_handler`` (channel file sandbox),
+        MCP-strip, and ``dangerous_command_gate``/``_is_irreversible_external_op``
+        (C041 star-zeroing protection). This change is scoped to *capability
+        surface* (which built-in tools an agent may call), where default-allow +
+        a small blacklist is the intended model (XG, run_9cfdb08d: agent autonomy,
+        refine the blacklist in use). Residual accepted: a NEW built-in Anthropic
+        ships is default-allowed until explicitly blacklisted — the symmetric cost
+        of default-allow, deemed acceptable for an owner-trusted agent.
 
         Args:
             agent_config: Agent configuration dictionary.
 
         Returns:
-            List of allowed tool name strings.
+            Explicit allowed-tool list, or ``[]`` for default-allow.
         """
-        allowed_tools = list(agent_config.get("allowed_tools", []))
+        return list(agent_config.get("allowed_tools", []))
 
-        if not allowed_tools:
-            if agent_config.get("enable_bash_tool", True):
-                allowed_tools.append("Bash")
+    def resolve_disallowed_tools(self, agent_config: dict) -> list[str]:
+        """Map the legacy ``enable_*`` flags to a tool BLACKLIST.
 
-            if agent_config.get("enable_file_tools", True):
-                for tool_name in ["Read", "Write", "Edit", "Glob", "Grep"]:
-                    allowed_tools.append(tool_name)
+        Preserves the restriction the implicit whitelist used to enforce, without
+        the whitelist's silent-disable-everything-unlisted side effect:
 
-            if agent_config.get("enable_web_tools", True):
-                for tool_name in ["WebFetch", "WebSearch"]:
-                    allowed_tools.append(tool_name)
+        - ``enable_bash_tool=False``  → deny ``Bash``
+        - ``enable_file_tools=False`` → deny ``Read/Write/Edit/Glob/Grep``
+        - ``enable_web_tools=False``  → deny ``WebFetch/WebSearch``
 
-        return allowed_tools
+        Default (each flag ``True`` or absent) contributes nothing → ``[]``.
+        Note: for the DEFAULT/system agent every flag is ``True``
+        (``agent_defaults.py`` + ``default-agent.json``), so this returns ``[]``
+        and web/bash/file stay allowed — the move only restricts custom DB agents
+        that explicitly set a flag ``False`` (where ``enable_web_tools`` schema
+        default is ``False``). Merged into ``disallowed_tools`` at build time.
+        """
+        disallowed: list[str] = []
+        if not agent_config.get("enable_bash_tool", True):
+            disallowed.extend(self._BASH_TOOLS)
+        if not agent_config.get("enable_file_tools", True):
+            disallowed.extend(self._FILE_TOOLS)
+        if not agent_config.get("enable_web_tools", True):
+            disallowed.extend(self._WEB_TOOLS)
+        return disallowed
 
     # ------------------------------------------------------------------
     # build_mcp_config
@@ -1453,12 +1503,18 @@ class PromptBuilder:
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
+            # Empty list → None → SDK default-allow (the intended default-agent
+            # behavior). NOTE (run_9cfdb08d Gate-2): an EXPLICIT allowed_tools=[]
+            # is therefore treated as "unset → allow-all", NOT "deny-all". [] is
+            # reserved/unused; deliberate lock-down uses disallowed_tools, never [].
             allowed_tools=allowed_tools if allowed_tools else None,
             # Disallow Task* tools — we don't use them and their presence
             # triggers periodic "task tools haven't been used" system-reminder
             # noise (~100 tokens × 10+ per session = 1K+ wasted tokens).
             disallowed_tools=[
                 *(mcp_disallowed_tools or []),
+                # enable_*=False restriction, carried as a blacklist (run_9cfdb08d).
+                *self.resolve_disallowed_tools(agent_config),
                 "TaskCreate", "TaskGet", "TaskList",
                 "TaskOutput", "TaskStop", "TaskUpdate",
             ],

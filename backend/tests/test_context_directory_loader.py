@@ -778,3 +778,115 @@ class TestCleanContent:
         raw = "Just plain content\nwith multiple lines."
         result = ContextDirectoryLoader._clean_content(raw, "Test")
         assert result == raw
+
+
+class TestTokenCalibration:
+    """Calibrated token estimation (run_3f25a73a).
+
+    estimate_tokens must reflect the REAL opus-4-8 tokenizer, measured via
+    invoke_model usage.input_tokens (baseline-subtracted) on 2026-06-28:
+      - CJK ~1.07-1.11 tok/char  → CJK_TOKENS_PER_CHAR = 1.1
+      - Latin ~2.0-2.5 tok/word (markdown/technical) → LATIN_TOKENS_PER_WORD = 2.2
+
+    The OLD coefficients (CJK 0.667, Latin 1.333) under-counted real content
+    by ~40-65% — these tests lock the calibration so it can't silently drift.
+    """
+
+    def test_constants_exist_and_calibrated(self):
+        from core.context_directory_loader import (
+            CJK_TOKENS_PER_CHAR,
+            LATIN_TOKENS_PER_WORD,
+        )
+        # Calibrated to real tokenizer (NOT old 0.667 / 1.333)
+        assert 1.0 <= CJK_TOKENS_PER_CHAR <= 1.2
+        assert 2.0 <= LATIN_TOKENS_PER_WORD <= 2.6
+
+    def test_cjk_within_15pct_of_real(self):
+        """Recorded real: 63 CJK chars = 70 tokens (opus-4-8)."""
+        from core.context_directory_loader import ContextDirectoryLoader
+        # 63-char pure-CJK sample (no spaces)
+        sample = "认知是操作系统知识硬盘数据充足但系统有问题输出仍错误真实分词器校准系数凭经验猜测数字测量中文每字符真实令牌数量统计学习记忆进化深度"[:63]
+        real = 70
+        est = ContextDirectoryLoader.estimate_tokens(sample)
+        assert abs(est - real) / real <= 0.15, f"est={est} real={real}"
+
+    def test_latin_within_20pct_of_real(self):
+        """Recorded real: a 27-word latin sentence ~ 49-55 tokens (markdown/technical)."""
+        from core.context_directory_loader import ContextDirectoryLoader
+        sample = ("the quick brown fox jumps over lazy dog runs across field "
+                  "calibrate latin coefficient against real tokenizer output "
+                  "precisely without any punctuation here today now")
+        nwords = len(sample.split())
+        est = ContextDirectoryLoader.estimate_tokens(sample)
+        # real ~ 2.0 tok/word; allow 20% band
+        assert 1.6 * nwords <= est <= 2.6 * nwords, f"est={est} words={nwords}"
+
+    def test_calibrated_higher_than_old_undercounting(self):
+        """The whole point: new estimate must be HIGHER than the old under-count."""
+        from core.context_directory_loader import ContextDirectoryLoader
+        text = "SwarmAI 是一个自进化的 Agent OS。The READ path is THE differentiator."
+        old_cjk = text  # simulate old: cjk/1.5 + words*4/3
+        import re
+        cjk_re = ContextDirectoryLoader._CJK_RE
+        cjk = len(cjk_re.findall(text))
+        words = len(cjk_re.sub("", text).split())
+        old_est = int(cjk / 1.5) + int(words * 4 / 3)
+        new_est = ContextDirectoryLoader.estimate_tokens(text)
+        assert new_est > old_est, f"new={new_est} not > old={old_est}"
+
+
+class TestCJKRangeUnification:
+    """The two CJK detectors (loader _CJK_RE, health _is_cjk_like) covered
+    DIFFERENT ranges (Gate-1 finding C): loader had Kana but not Hangul;
+    health had Hangul but not Kana. After unification, BOTH Hangul AND Kana
+    must classify as CJK through the canonical path."""
+
+    def test_hangul_counted_as_cjk(self):
+        from core.context_directory_loader import ContextDirectoryLoader
+        # Pure Hangul, no spaces — must be per-char counted, not 1 "word"
+        hangul = "안녕하세요반갑습니다오늘날씨가좋네요"  # 18 Hangul syllables
+        est = ContextDirectoryLoader.estimate_tokens(hangul)
+        # If Hangul were treated as Latin: 1 word -> ~2 tokens. As CJK: ~18*1.1
+        assert est >= 12, f"Hangul not counted as CJK: est={est}"
+
+    def test_kana_counted_as_cjk(self):
+        from core.context_directory_loader import ContextDirectoryLoader
+        kana = "こんにちはみなさんおげんきですかきょうはいいてんきですね"  # Hiragana, no spaces
+        est = ContextDirectoryLoader.estimate_tokens(kana)
+        assert est >= 12, f"Kana not counted as CJK: est={est}"
+
+
+class TestInverseTruncationCoherence:
+    """Gate-1 finding A: the inverse-truncation must derive words_to_keep from
+    LATIN_TOKENS_PER_WORD, so a truncated section actually fits its token cap.
+    A hardcoded inverse (old `* 3 / 4`) over-shot by ~65% after recalibration."""
+
+    def test_daily_truncation_fits_cap(self):
+        from core.prompt_builder import _truncate_daily_content, TOKEN_CAP_PER_DAILY_FILE
+        from core.context_directory_loader import ContextDirectoryLoader
+        # Build content well over the cap (pure latin, ~5000 words)
+        big = " ".join(f"word{i}" for i in range(5000))
+        assert ContextDirectoryLoader.estimate_tokens(big) > TOKEN_CAP_PER_DAILY_FILE
+        out = _truncate_daily_content(big)
+        # Strip the marker line before re-estimating the kept content
+        kept = out.split("\n\n", 1)[1]
+        est = ContextDirectoryLoader.estimate_tokens(kept)
+        # Must fit under cap (with small headroom for the inverse rounding)
+        assert est <= TOKEN_CAP_PER_DAILY_FILE, f"truncated content {est} > cap {TOKEN_CAP_PER_DAILY_FILE}"
+
+    def test_section_truncation_fits_target(self):
+        """_truncate_section keeps <= target tokens (inverse coherent with forward)."""
+        from core.context_directory_loader import ContextDirectoryLoader
+        loader = ContextDirectoryLoader.__new__(ContextDirectoryLoader)
+        content = " ".join(f"w{i}" for i in range(3000))
+        original = ContextDirectoryLoader.estimate_tokens(content)
+        overshoot = original - 500  # target ~500 tokens
+        truncated = loader._truncate_section(
+            content, "TestSec", original, overshoot,
+            "tail",
+            lambda n, c: ContextDirectoryLoader.estimate_tokens(c),
+        )
+        # the kept body (after the indicator line) must re-estimate <= target+headroom
+        body = truncated.split("]\n\n", 1)[-1]
+        est = ContextDirectoryLoader.estimate_tokens(body)
+        assert est <= 600, f"section truncation {est} exceeds ~500 target"
