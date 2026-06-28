@@ -28,7 +28,25 @@ from unittest.mock import patch
 
 import pytest
 
-from core.security_hooks import bash_syntax_guard
+import os
+
+from core.security_hooks import (
+    _SYNTAX_CHECK_SHELL,
+    _resolve_syntax_check_shell,
+    bash_syntax_guard,
+)
+
+# The two zsh-short-form cases below (`foo() { echo hi }`, `for i (1 2 3) { … }`)
+# are VALID zsh but INVALID bash. The guard parse-checks with the EXEC shell
+# (`_SYNTAX_CHECK_SHELL`, resolved from $SHELL → /bin/zsh → …). The guard's
+# behavior on these is therefore CORRECT-FOR-THE-RESOLVED-SHELL, not a fixed
+# approve: under zsh it must APPROVE (valid syntax), under bash it must DENY
+# (bash -n rejects zsh-only syntax → would-hang set for bash). Rather than SKIP
+# off-zsh (which would silence the false-kill regression lock on exactly the CI
+# Linux/bash env where the original hardcoded-bash bug manifests), we assert the
+# shell-correct decision in BOTH environments. Match on basename (not substring)
+# so a path like `/usr/local/zsh-tools/bash` is not misread as zsh.
+_RESOLVED_SHELL_IS_ZSH = os.path.basename(_SYNTAX_CHECK_SHELL or "") == "zsh"
 
 
 def _run(command, tool_name="Bash", run_in_background=False):
@@ -123,21 +141,46 @@ class TestNoFalseKill:
             _run("python backend/scripts/x.py \\\n  --project SwarmAI \\\n  --flag")
         )
 
-    def test_zsh_brace_function_approved(self):
+    def test_zsh_brace_function_shell_correct(self):
         # GATE-2 HIGH (run_07fd1d8f): the Bash tool runs zsh on macOS. A one-line
         # zsh brace function `foo() { echo hi }` (no semicolon before `}`) is
-        # VALID zsh and runs fine, but `/bin/bash -n` REJECTS it (exit 2). The
-        # guard MUST check with the exec shell (zsh), not hardcoded bash, or it
-        # false-kills this extremely common shape. This is the regression lock.
-        assert not _is_deny(_run("foo() { echo hi }"))
+        # VALID zsh but `/bin/bash -n` REJECTS it (exit 2). The guard MUST check
+        # with the EXEC shell, so its decision is shell-dependent: APPROVE under
+        # zsh (no false-kill — the regression lock), DENY under bash (the syntax
+        # genuinely would-hang bash). Assert the shell-correct decision in BOTH
+        # environments so CI (bash) still exercises the guard rather than skipping.
+        result = _run("foo() { echo hi }")
+        if _RESOLVED_SHELL_IS_ZSH:
+            assert not _is_deny(result)  # zsh: valid → must not false-kill
+        else:
+            assert _is_deny(result)  # bash: invalid syntax → correctly denied
 
-    def test_zsh_brace_loop_approved(self):
+    def test_zsh_brace_loop_shell_correct(self):
         # zsh short-form loop `for x (list) { ... }` is valid zsh (exit 0) but
         # `/bin/bash -n` rejects it — same root cause (shell mismatch). NOTE:
         # `for i in 1 2 3 { ... }` is NOT valid zsh either (verified: zsh -n
-        # exit 1) — the guard correctly denies that; only the paren short-form
-        # is the real zsh-valid/bash-invalid case worth locking.
-        assert not _is_deny(_run("for i (1 2 3) { echo $i }"))
+        # exit 1). Shell-correct: approve under zsh, deny under bash.
+        result = _run("for i (1 2 3) { echo $i }")
+        if _RESOLVED_SHELL_IS_ZSH:
+            assert not _is_deny(result)
+        else:
+            assert _is_deny(result)
+
+    def test_syntax_check_shell_prefers_zsh_when_available(self):
+        # Finding-5 regression lock (platform-independent): the WHOLE point of the
+        # guard is to check with the exec shell. If a future change hardcodes bash
+        # or drops the $SHELL/zsh preference, this fails on EVERY platform that has
+        # zsh — closing the CI coverage hole that skipping would leave. We assert
+        # the resolution PREFERENCE, not the host's actual shell: when /bin/zsh
+        # exists and $SHELL is unset, the resolver must pick zsh over bash.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SHELL", None)
+            if os.path.exists("/bin/zsh"):
+                assert os.path.basename(_resolve_syntax_check_shell()) == "zsh"
+            else:
+                # No zsh on this host (e.g. CI Linux): resolver must still return a
+                # usable shell and never crash — falls back to bash.
+                assert _resolve_syntax_check_shell() in ("/bin/bash", "bash")
 
 
 class TestFailOpen:
