@@ -1103,7 +1103,7 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
     return lines
 
 
-def _get_todo_highlights(max_items: int = 5) -> list[str]:
+def _get_todo_highlights(max_items: int = 3) -> list[str]:
     """Read pending/overdue Radar todos from SQLite for system prompt injection.
 
     Direct SQLite read (sync, WAL mode safe). Returns formatted lines
@@ -1391,8 +1391,23 @@ def _get_health_highlights(working_directory: str) -> list[str]:
     # the agent shapes its own root, and every such write surfaces here as a
     # flagged headline (run_448a4f7f, D3) — report-after, not approve-before.
     try:
-        from core.eval_service import EvalService
-        gr = EvalService().growth_report(since_days=7)
+        from core.eval_service import get_eval_service, EvalService
+        # Use the cached singleton, NOT a bare EvalService() — bare construction
+        # re-runs _load() (parses every Eval/EvalHistory/*.json) on every briefing
+        # = ~516ms wasted per session-start (run_b0ca1196). SAFE because
+        # growth_report reads NO singleton-loaded state (_cases/_runs/_golden_set):
+        # its records come from a fresh CorrectionClassTracker(), proposals from a
+        # hardcoded global path, commits from git — only the workspace_root passed
+        # below matters. If growth_report ever starts reading self._runs/_cases,
+        # revisit this (the singleton is load-once until reload).
+        # Thread THIS briefing's working_directory as workspace_root so the git
+        # gather is scoped to the workspace being built for — not the singleton's
+        # globally-resolved one. Keeps _get_health_highlights honest when pointed
+        # at a different workspace (test isolation), and the git cache keys on this
+        # workspace_root so a tmp-dir caller never collides with prod.
+        gr = get_eval_service().growth_report(
+            since_days=7, workspace_root=Path(working_directory)
+        )
         for gl in EvalService._growth_briefing_lines(gr):
             lines.append(gl)
     except Exception:

@@ -15,8 +15,10 @@ Cache invalidated on: eval run completion, manual reload.
 
 import json
 import logging
+import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -801,7 +803,8 @@ class EvalService:
         # Only governance (structural) proposals — skip skill-opt rows.
         return [r for r in rows if r.get("target") == "governance" or r.get("kind") in ("rule", "gate")]
 
-    def _constitution_commits(self, since_days: int, workspace_root=None) -> list:
+    def _constitution_commits(self, since_days: int, workspace_root=None,
+                              use_cache: bool = True) -> list:
         """git log of SOUL/AGENT/STEERING commits in the workspace, last N days.
 
         The workspace .context/ copies ARE git-tracked here and ARE the edit+
@@ -813,11 +816,62 @@ class EvalService:
         ONE subprocess (Gate-2 L1): `--name-status` carries the touched files in
         the same log output, so per-commit file attribution needs no N+1 `git
         show` spawns on the session-start hot path.
+
+        Cached (TTL ``_CONSTITUTION_CACHE_TTL``) keyed by (since_days, str(ws)) —
+        the git spawn is the briefing hot-path bottleneck and contends on the
+        repo lock when N tabs spawn it concurrently. ``use_cache=False`` bypasses
+        the cache (hermetic escape hatch for tests that must hit real git every
+        call). See the module-level cache block for the staleness rationale.
         """
-        import subprocess
         # EvalService already holds the workspace Path as self._workspace_root
         # (set in __init__). Use it directly — do NOT shadow it with a method.
         ws = workspace_root or self._workspace_root
+        cache_key = (since_days, str(ws))
+        if use_cache:
+            now = time.monotonic()
+            with _CONSTITUTION_CACHE_LOCK:
+                hit = _CONSTITUTION_CACHE.get(cache_key)
+                if hit is not None and (now - hit[0]) < _CONSTITUTION_CACHE_TTL:
+                    # Return a COPY — the cached list is shared across all
+                    # concurrent callers (4 tabs get the same object); handing out
+                    # the live list would let any caller corrupt every future hit
+                    # (Gate-2 adversarial #1/#8). list() is enough: the only
+                    # consumer (_growth_briefing_lines) reads element dicts, never
+                    # mutates them.
+                    return list(hit[1])
+        result = self._constitution_commits_uncached(since_days, ws)
+        # Gate-2 adversarial #3: NEVER cache a transient git FAILURE. _uncached
+        # returns None on error (git unavailable / non-zero exit / timeout) vs []
+        # on a genuine empty window (git ran, zero matching commits). Caching []
+        # for 300s is correct (no commits = no commits); caching a failure would
+        # serve empty for 5min even after a real commit lands right after a git-lock
+        # blip — the exact contention scenario this cache targets. On failure we
+        # return [] to the caller (same shape as before) but do NOT store it.
+        if use_cache and result is not None:
+            with _CONSTITUTION_CACHE_LOCK:
+                # Bound the cache — evict the oldest entry if at capacity (one
+                # workspace per daemon in practice, so this rarely fires).
+                if (len(_CONSTITUTION_CACHE) >= _CONSTITUTION_CACHE_MAX
+                        and cache_key not in _CONSTITUTION_CACHE):
+                    oldest = min(_CONSTITUTION_CACHE,
+                                 key=lambda k: _CONSTITUTION_CACHE[k][0])
+                    _CONSTITUTION_CACHE.pop(oldest, None)
+                _CONSTITUTION_CACHE[cache_key] = (time.monotonic(), result)
+            # Return a COPY even on the miss path — `result` is now the SAME object
+            # stored in the cache, so handing it back raw would let the caller
+            # corrupt the cached entry (Gate-2 adversarial #1: the miss-return is
+            # the first caller of a freshly-cached list).
+            return list(result)
+        return result if result is not None else []
+
+    def _constitution_commits_uncached(self, since_days: int, ws):
+        """The raw git-log gather (no cache). Split out so the cache wrapper in
+        _constitution_commits can be the sole caching layer.
+
+        Returns ``list`` on success (possibly empty = git ran, zero matching
+        commits — a cacheable result) or ``None`` on FAILURE (git unavailable,
+        non-zero exit, or timeout) so the wrapper can refuse to cache a transient
+        failure (Gate-2 adversarial #3)."""
         paths = [f".context/{f}" for f in self._CONSTITUTION_FILES]
         try:
             out = subprocess.run(
@@ -827,9 +881,11 @@ class EvalService:
                 capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.SubprocessError):
-            return []
-        if out.returncode != 0 or not out.stdout.strip():
-            return []
+            return None  # transient failure — do NOT cache
+        if out.returncode != 0:
+            return None  # git error (e.g. not a repo, lock contention) — do NOT cache
+        if not out.stdout.strip():
+            return []  # git ran cleanly, zero matching commits — genuine empty, cacheable
         # Records are \x1e-delimited; each = header line (%h\x1f%ad\x1f%s) then
         # name-status lines ("M\t.context/AGENT.md"). Parse files from the same output.
         commits: list = []
@@ -1228,6 +1284,29 @@ def _class_to_affected_by(class_name: str) -> str:
 # Module-level singleton (initialized lazily, thread-safe)
 _eval_service: Optional[EvalService] = None
 _eval_service_lock = threading.Lock()
+
+# ── Constitution-commits TTL cache ───────────────────────────────────────────
+# The git-log subprocess in _constitution_commits is the session-briefing
+# hot-path bottleneck (~215ms warm / ~940ms cold) AND spikes to seconds under
+# cross-tab git-lock contention (4 parallel desktop tabs each spawning git while
+# the auto-commit hook holds the repo lock). A process-level TTL cache makes all
+# tabs in the one daemon share ONE git spawn per (since_days, workspace_root) per
+# window. Bounded (drops the oldest entry past _CONSTITUTION_CACHE_MAX) so a
+# long-lived daemon can't leak. Keyed by workspace_root → git's only real
+# dependency → so a test pointing at its own tmp repo never collides (hermetic).
+# Staleness tradeoff: a constitution commit is invisible for <=TTL — acceptable,
+# the 🧬 headline is a report-after-the-fact week-scale signal (run_b0ca1196).
+_CONSTITUTION_CACHE: dict[tuple, tuple[float, list]] = {}
+_CONSTITUTION_CACHE_LOCK = threading.Lock()
+_CONSTITUTION_CACHE_TTL = 300.0  # seconds
+_CONSTITUTION_CACHE_MAX = 16     # bounded — one workspace per daemon in practice
+
+
+def _clear_constitution_cache() -> None:
+    """Drop all cached constitution-commit results. Test isolation + a manual
+    invalidation hook (e.g. after a known constitution write)."""
+    with _CONSTITUTION_CACHE_LOCK:
+        _CONSTITUTION_CACHE.clear()
 
 
 def get_eval_service() -> EvalService:
