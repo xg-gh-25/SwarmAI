@@ -293,6 +293,13 @@ export class MessageStore {
       this._pendingReconcileThunk = null;
       thunk();
     }
+
+    // run_1a264fd1: notify subscribers of the streaming→idle transition. Without
+    // this, a watchdog-fire (or any silent endStreaming) flipped _phase to idle
+    // but no listener fired, so the hook's subscription never observed it and
+    // tabState.isStreaming stayed true → frozen tab with no indicator. _notify
+    // is rAF-gated + _destroyed-guarded, so this is safe even mid-teardown.
+    this._notify();
   }
 
   /**

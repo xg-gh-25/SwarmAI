@@ -1175,6 +1175,28 @@ export function useChatStreamingLifecycle(
 
         // Check ALL tabs, not just active — background tabs can hang too
         for (const [tabId, tabState] of tabMapRef.current.entries()) {
+          // ── STORE↔REACT DESYNC GUARD (run_1a264fd1) ──────────────────────────
+          // The frozen-tab bug: the MessageStore watchdog (or any silent
+          // endStreaming) flips the store to phase='idle', but tabState.isStreaming
+          // stayed true — the spinner is driven solely by isStreaming (TabView),
+          // and nothing bridged the store phase back to it. Result: a tab frozen
+          // mid-response with NO indicator until the 120min cap. endStreaming now
+          // _notify()s, but the authoritative cross-check is here: if the store
+          // is idle yet React still thinks streaming, the turn is OVER — converge
+          // the flag. Convergent + cause-agnostic (heals ANY desync source), fires
+          // ONLY on the actual divergence edge (no churn when in sync), and covers
+          // background tabs. Turns a 120min freeze into ≤15s.
+          if (tabState.isStreaming) {
+            const dsStore = messageStoreRegistry.get(tabId);
+            if (dsStore && dsStore.phase === 'idle') {
+              setIsStreaming(false, tabId);
+              const dsSid = tabState.sessionId;
+              if (dsSid) scheduleTurnEndReconcile(dsSid, tabId);
+              anyCleared = true;
+              continue; // desync resolved this tick; other branches re-eval next poll
+            }
+          }
+
           // POST-DISCONNECT RECOVERY: a tab whose SSE dropped on a long turn is
           // NOT streaming (heal-grace expiry cleared isStreaming) but is pinned
           // into queue-only mode via _postDisconnectUncertain. The backend

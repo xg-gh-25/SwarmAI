@@ -200,6 +200,37 @@ describe('MessageStore phase gate', () => {
     expect(store.messages[0].id).toBe('1');
     expect(store.messages).toHaveLength(1);
   });
+
+  it('endStreaming notifies subscribers (phase->idle is observable)', async () => {
+    // run_1a264fd1: the frozen-tab desync — endStreaming flipped _phase to idle
+    // but never _notify()'d, so the React subscription never observed the phase
+    // change and the isStreaming flag could not be bridged off it. The terminal
+    // phase transition MUST fire the listener so a subscriber can react to it.
+    // (_notify is rAF-gated, so the fire is async — waitFor flushes the frame.)
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+    const listener = vi.fn();
+    store.subscribe(listener);
+    listener.mockClear(); // subscribe() syncs once on attach — ignore that
+    store.endStreaming();
+    expect(store.phase).toBe('idle');
+    await vi.waitFor(() => expect(listener).toHaveBeenCalled());
+  });
+
+  it('watchdog fire notifies subscribers (the frozen-tab path)', () => {
+    vi.useFakeTimers();
+    const s = new MessageStore({ watchdogTimeoutMs: 100 });
+    s.append(makeMsg('1', 'assistant'));
+    s.startStreaming('1');
+    const listener = vi.fn();
+    s.subscribe(listener);
+    listener.mockClear();
+    vi.advanceTimersByTime(101); // watchdog fires → endStreaming → must notify
+    expect(s.phase).toBe('idle');
+    expect(listener).toHaveBeenCalled();
+    s.destroy();
+    vi.useRealTimers();
+  });
 });
 
 // ─── Watchdog ───
