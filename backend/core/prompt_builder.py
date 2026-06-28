@@ -1503,11 +1503,17 @@ class PromptBuilder:
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
-            # Empty list → None → SDK default-allow (the intended default-agent
-            # behavior). NOTE (run_9cfdb08d Gate-2): an EXPLICIT allowed_tools=[]
-            # is therefore treated as "unset → allow-all", NOT "deny-all". [] is
-            # reserved/unused; deliberate lock-down uses disallowed_tools, never [].
-            allowed_tools=allowed_tools if allowed_tools else None,
+            # Empty list → SDK default-allow (the intended default-agent behavior).
+            # MUST pass [] (not None): claude-agent-sdk 0.2.109
+            # _apply_skills_defaults() does `list(self._options.allowed_tools)`
+            # UNCONDITIONALLY (no None guard) → `list(None)` raises
+            # "'NoneType' object is not iterable" at spawn, breaking EVERY session
+            # (new + resume). With []: list([])==[] is falsy → the --allowedTools
+            # flag is omitted → CLI default-allows all built-ins. Same intent as the
+            # old `else None`, minus the crash. NOTE (run_9cfdb08d Gate-2): an
+            # EXPLICIT allowed_tools=[] is treated as "unset → allow-all", NOT
+            # "deny-all". [] is reserved/unused; lock-down uses disallowed_tools.
+            allowed_tools=allowed_tools or [],
             # Disallow Task* tools — we don't use them and their presence
             # triggers periodic "task tools haven't been used" system-reminder
             # noise (~100 tokens × 10+ per session = 1K+ wasted tokens).
