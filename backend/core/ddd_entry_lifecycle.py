@@ -547,16 +547,27 @@ def assess_decay(
     entries: list[EntryMetadata],
     today: date,
     evergreen_sections: set[str] | None = None,
+    dormant_days: int | None = None,
 ) -> list[DecayTransition]:
     """Assess decay state for all entries. Returns transitions to apply.
 
     Decay rules:
     - Evergreen sections: entries within are immune (never decay)
     - Grace period: entries < 30 days old are immune
-    - active → dormant: 90 days since last_referenced (180 if ref >= 10)
-    - dormant → archived: 90 more days (180 total / 360 for high-ref)
+    - active → dormant: `dormant_days` days since last_referenced
+      (defaults to the global DORMANT_THRESHOLD_DAYS=90 when None)
+    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (180) — NOT parameterized
     - Entries already archived are skipped
     - Entries with no date info are treated as infinitely old (decay immediately)
+
+    Args:
+        dormant_days: per-call active→dormant threshold (A2, run_55cb38d6).
+            None → use the global DORMANT_THRESHOLD_DAYS (backward-compatible —
+            all existing callers pass nothing and keep 90d). The MEMORY.md decay
+            path passes 45 so volatile operational memory ages faster than the
+            hard-won failure-lessons in IMPROVEMENT.md (which stay at 90d). Only
+            the dormant threshold is tunable; dormant→archived stays at the
+            global 180d so a faster-dormant entry still gets a full archive buffer.
     """
     transitions: list[DecayTransition] = []
     _evergreen = evergreen_sections or set()
@@ -585,7 +596,9 @@ def assess_decay(
         # as undeserved 2x decay grace. Decay now on age + evergreen + grace only,
         # all honestly observable. (If a real body-ref producer is wired later,
         # re-introduce a multiplier THEN — not on a dead signal now.)
-        dormant_threshold = DORMANT_THRESHOLD_DAYS
+        dormant_threshold = (
+            dormant_days if dormant_days is not None else DORMANT_THRESHOLD_DAYS
+        )
         archived_threshold = ARCHIVED_THRESHOLD_DAYS
 
         # Calculate days since last reference

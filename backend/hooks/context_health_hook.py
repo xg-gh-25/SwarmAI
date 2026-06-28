@@ -1686,7 +1686,15 @@ class ContextHealthHook:
                 logger.warning("context_health: usage→ref bridge failed: %s", exc)
 
             # ── Decay: assess state transitions ──
-            transitions = assess_decay(entries, today, evergreen_sections=evergreen)
+            # A2 (run_55cb38d6): MEMORY.md uses a FASTER 45d dormant threshold.
+            # Operational memory (GUI/PIT) is written faster than the 90d global
+            # decay can reclaim it (254 entries were <30d at one point). KNOWLEDGE.md
+            # (the other call below) and IMPROVEMENT/DDD (ddd_orchestrator) keep the
+            # 90d global — hard-won failure lessons must decay SLOWLY. dormant→archived
+            # stays 180d for all (a faster-dormant entry still gets the full buffer).
+            transitions = assess_decay(
+                entries, today, evergreen_sections=evergreen, dormant_days=45
+            )
 
             # Only write if something changed
             if bumped > 0 or transitions:

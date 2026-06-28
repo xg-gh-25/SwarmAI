@@ -244,6 +244,58 @@ class TestAssessDecay:
         assert len(high_ref_transitions) == 1
         assert high_ref_transitions[0].new_state == "dormant"
 
+    def test_dormant_days_override_ages_faster(self):
+        """A2 (run_55cb38d6): the optional dormant_days param lets a caller age
+        a section faster than the global 90d. An entry 50 days idle:
+          - default (None → 90d): stays active
+          - dormant_days=45: transitions to dormant
+        Both directions proven so the param is non-vacuous (mutation: if the body
+        ignored dormant_days and used the global, the 45 case would stay active)."""
+        from core.ddd_entry_lifecycle import EntryMetadata
+
+        today = date(2026, 6, 28)
+        # 50 days old, past the 30d grace, ref:0, operational type, no last_ref
+        e = EntryMetadata(
+            title="Fifty-day idle operational entry",
+            entry_type="guideline",
+            ref_count=0,
+            last_referenced=None,
+            decay_state="active",
+            created_date=date(2026, 5, 9),  # 50 days before today
+            section="Guidelines",
+        )
+
+        # Default (None → global 90): 50d < 90d → stays active
+        default_t = assess_decay([e], today)
+        assert default_t == [], "50d entry should stay active under the default 90d threshold"
+
+        # Fresh instance (assess_decay mutates decay_state in place)
+        e2 = EntryMetadata(
+            title="Fifty-day idle operational entry",
+            entry_type="guideline", ref_count=0, last_referenced=None,
+            decay_state="active", created_date=date(2026, 5, 9), section="Guidelines",
+        )
+        # dormant_days=45: 50d >= 45d → transitions to dormant
+        faster_t = assess_decay([e2], today, dormant_days=45)
+        assert len(faster_t) == 1, "50d entry should go dormant at dormant_days=45"
+        assert faster_t[0].new_state == "dormant"
+
+    def test_dormant_days_none_identical_to_global(self):
+        """A2: dormant_days=None must be behavior-identical to passing nothing —
+        the backward-compat guarantee (AC1). Both leave a 50d entry active and
+        transition a 100d entry, matching the global-90 path exactly."""
+        from core.ddd_entry_lifecycle import EntryMetadata, DORMANT_THRESHOLD_DAYS
+
+        assert DORMANT_THRESHOLD_DAYS == 90  # the default this test pins to
+        today = date(2026, 6, 28)
+        old = EntryMetadata(
+            title="Hundred-day idle", entry_type="guideline", ref_count=0,
+            last_referenced=None, decay_state="active",
+            created_date=date(2026, 3, 20), section="Guidelines",  # 100d
+        )
+        none_t = assess_decay([old], today, dormant_days=None)
+        assert len(none_t) == 1 and none_t[0].new_state == "dormant"
+
 
 # ── AC7: evaluate_demotion ───────────────────────────────────────────────────
 
