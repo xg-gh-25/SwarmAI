@@ -1011,13 +1011,32 @@ async def eval_command_guard(
 # not wait on a TTY), so approving it is correct. The hang set and the bash -n
 # exit!=0 set coincide; heredoc-unterminated is in neither.
 
-# Path to the system bash used for the parse check. /bin/bash is guaranteed on
-# macOS + Linux; the daemon runs the same binary, so `bash -n` behavior matches
-# what the Bash tool would do. Resolved once at import (cheap, stable).
-_BASH_FOR_SYNTAX_CHECK = "/bin/bash" if os.path.exists("/bin/bash") else "bash"
-# The parse check is ~milliseconds; this cap is pure defense-in-depth so the guard
-# itself can never hang. On timeout we KILL the subprocess and fail-OPEN.
-_BASH_SYNTAX_CHECK_TIMEOUT_S = 3.0
+# Shell used for the parse check. CRITICAL: it MUST be the SAME shell the Bash
+# tool actually executes commands in, or we false-kill valid syntax. On macOS the
+# Claude Code Bash tool runs **zsh** ($SHELL=/bin/zsh, ZSH_VERSION set) — and a
+# bare `/bin/bash -n` REJECTS valid zsh syntax (e.g. a one-line brace function
+# `foo() { echo hi }`, zsh `for x { }` loops), which would DENY legitimate
+# commands (Gate-2 adversarial HIGH, run_07fd1d8f — the builder hardcoded
+# /bin/bash and never verified the exec shell). zsh -n catches the SAME real-hang
+# set (unterminated quote/backtick/if/brace → exit!=0, verified) AND approves
+# zsh-valid syntax, so checking with the exec shell is both safer (no false-kill)
+# and complete (still catches the hang set). Resolve $SHELL first, then fall back
+# to zsh then bash. Resolved once at import (cheap, stable).
+def _resolve_syntax_check_shell() -> str:
+    for cand in (os.environ.get("SHELL"), "/bin/zsh", "/bin/bash", "bash"):
+        if cand and (cand in ("bash",) or os.path.exists(cand)):
+            return cand
+    return "bash"
+
+
+_SYNTAX_CHECK_SHELL = _resolve_syntax_check_shell()
+# A pathological command (e.g. ~1M-deep `$()` nesting) can make the parse check
+# spin a core; cap input size so it never reaches the shell. Real commands are
+# tiny; 256KB is orders of magnitude above any legit command. (Gate-2 LOW.)
+_SYNTAX_CHECK_MAX_CMD_BYTES = 256 * 1024
+# The parse check is sub-millisecond; this cap is pure defense-in-depth so the
+# guard itself can never hang. On timeout we KILL the subprocess and fail-OPEN.
+_BASH_SYNTAX_CHECK_TIMEOUT_S = 1.0
 
 
 async def bash_syntax_guard(
@@ -1025,28 +1044,46 @@ async def bash_syntax_guard(
     tool_use_id: str | None,
     context: Any,
 ) -> dict[str, Any]:
-    """PreToolUse (Bash): DENY a command that `bash -n` rejects as syntactically
-    incomplete (the headless-hang set); APPROVE everything else, fail-OPEN.
+    """PreToolUse (Bash): DENY a command the EXEC-SHELL's `-n` parse rejects as
+    syntactically incomplete (the headless-hang set); APPROVE everything else,
+    fail-OPEN.
 
-    Prevents the unterminated-quote / unclosed-block hang (a bad command blocks
-    forever waiting on stdin that never comes — run-real 12-minute hang). The
-    DENY set == `bash -n` exit!=0 == the PS2-continuation set; valid commands
-    (including multiline/heredoc/$()/quoted/long) exit 0 and are approved.
+    Prevents the unterminated-quote / unclosed-block hang (a PARSE-incomplete
+    command blocks forever waiting on stdin that never comes — run-real 12-minute
+    hang). The check uses the SAME shell the Bash tool runs (`_SYNTAX_CHECK_SHELL`,
+    zsh on macOS) so it never false-kills valid exec-shell syntax. The DENY set ==
+    `<shell> -n` exit!=0 == the parse-continuation set; valid commands (incl.
+    multiline/heredoc/$()/quoted/long, and zsh brace functions) exit 0, approved.
+
+    SCOPE (honest): this catches PARSE-incomplete hangs only. A syntactically
+    VALID command that blocks on stdin at RUNTIME (`cat`, `read`, `grep` w/o a
+    file) parses fine (exit 0) and is approved — that is a different hang class,
+    not the incident this guard targets, and not claimed to be covered.
 
     Fail-OPEN on EVERYTHING that is not a clean, reproduced syntax error:
-    non-Bash, empty command, valid syntax, bash binary missing, check timeout,
-    or any unexpected exception. The guard must never block a legitimate command
-    because of its OWN infrastructure failure — that would be worse than the hang.
+    non-Bash, empty command, oversized command, valid syntax, shell missing,
+    check timeout, or any unexpected exception. The guard must never block a
+    legitimate command because of its OWN infra failure — worse than the hang.
     """
     if input_data.get("tool_name") != "Bash":
         return {"decision": "approve"}
     command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
     if not command:
         return {"decision": "approve"}
+    # Oversized command → fail-open without invoking the shell (a pathological
+    # deeply-nested command could otherwise pin a core for the whole cap). Real
+    # commands are KB at most; 256KB is far above any legit command. (Gate-2 LOW.)
+    cmd_bytes = command.encode("utf-8", errors="replace")
+    if len(cmd_bytes) > _SYNTAX_CHECK_MAX_CMD_BYTES:
+        logger.warning(
+            "[bash_syntax_guard] command %d bytes > %d cap — failing open",
+            len(cmd_bytes), _SYNTAX_CHECK_MAX_CMD_BYTES,
+        )
+        return {"decision": "approve"}
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            _BASH_FOR_SYNTAX_CHECK,
+            _SYNTAX_CHECK_SHELL,
             "-n",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -1054,7 +1091,7 @@ async def bash_syntax_guard(
         )
         try:
             _, stderr = await asyncio.wait_for(
-                proc.communicate(input=command.encode("utf-8", errors="replace")),
+                proc.communicate(input=cmd_bytes),
                 timeout=_BASH_SYNTAX_CHECK_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
@@ -1065,12 +1102,12 @@ async def bash_syntax_guard(
             except Exception:  # noqa: BLE001 — best-effort reap; never block on it
                 pass
             logger.warning(
-                "[bash_syntax_guard] bash -n exceeded %.0fs — failing open",
-                _BASH_SYNTAX_CHECK_TIMEOUT_S,
+                "[bash_syntax_guard] %s -n exceeded %.1fs — failing open",
+                _SYNTAX_CHECK_SHELL, _BASH_SYNTAX_CHECK_TIMEOUT_S,
             )
             return {"decision": "approve"}
     except Exception as e:  # noqa: BLE001
-        # bash missing / spawn failure / anything unexpected → FAIL-OPEN. Never
+        # shell missing / spawn failure / anything unexpected → FAIL-OPEN. Never
         # block a real command on the guard's own infra failure. (GC19: log the
         # exception type, don't swallow silently.)
         logger.warning(
@@ -1084,27 +1121,27 @@ async def bash_syntax_guard(
     if proc.returncode == 0:
         return {"decision": "approve"}
 
-    # exit!=0 → syntax error == the headless-hang set → DENY, echo bash's own
+    # exit!=0 → syntax error == the headless-hang set → DENY, echo the shell's own
     # diagnostic so the agent rewrites the command instead of hanging on it.
     diagnostic = (stderr or b"").decode("utf-8", errors="replace").strip()
     # Keep the reason bounded — the first lines carry the unexpected-EOF message.
     if len(diagnostic) > 400:
         diagnostic = diagnostic[:400] + " …"
     logger.warning(
-        "[BLOCKED] bash syntax error (would hang on stdin): %s", command[:80]
+        "[BLOCKED] shell syntax error (would hang on stdin): %s", command[:80]
     )
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "This Bash command has a SYNTAX ERROR — `bash -n` rejected it. "
-                "In headless mode an unterminated quote/backtick or unclosed "
-                "block makes bash wait on stdin that never arrives, so the "
-                "command would HANG indefinitely (not error fast). Rewrite it: "
-                "close every quote/backtick, balance if/then/fi and braces, put "
-                "ONE command per line, and move multi-line logic into a script "
-                "file you then execute. bash -n said:\n"
+                "This Bash command has a SYNTAX ERROR — the shell's `-n` parse "
+                "rejected it. In headless mode an unterminated quote/backtick or "
+                "unclosed block makes the shell wait on stdin that never arrives, "
+                "so the command would HANG indefinitely (not error fast). Rewrite "
+                "it: close every quote/backtick, balance if/then/fi and braces, "
+                "put ONE command per line, and move multi-line logic into a script "
+                "file you then execute. The parse check said:\n"
                 f"{diagnostic or '(no stderr captured)'}"
             ),
         }

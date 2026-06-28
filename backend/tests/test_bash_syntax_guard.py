@@ -123,6 +123,22 @@ class TestNoFalseKill:
             _run("python backend/scripts/x.py \\\n  --project SwarmAI \\\n  --flag")
         )
 
+    def test_zsh_brace_function_approved(self):
+        # GATE-2 HIGH (run_07fd1d8f): the Bash tool runs zsh on macOS. A one-line
+        # zsh brace function `foo() { echo hi }` (no semicolon before `}`) is
+        # VALID zsh and runs fine, but `/bin/bash -n` REJECTS it (exit 2). The
+        # guard MUST check with the exec shell (zsh), not hardcoded bash, or it
+        # false-kills this extremely common shape. This is the regression lock.
+        assert not _is_deny(_run("foo() { echo hi }"))
+
+    def test_zsh_brace_loop_approved(self):
+        # zsh short-form loop `for x (list) { ... }` is valid zsh (exit 0) but
+        # `/bin/bash -n` rejects it — same root cause (shell mismatch). NOTE:
+        # `for i in 1 2 3 { ... }` is NOT valid zsh either (verified: zsh -n
+        # exit 1) — the guard correctly denies that; only the paren short-form
+        # is the real zsh-valid/bash-invalid case worth locking.
+        assert not _is_deny(_run("for i (1 2 3) { echo $i }"))
+
 
 class TestFailOpen:
     """AC4: the guard NEVER blocks because of its OWN failure (fail-open)."""
@@ -178,3 +194,14 @@ class TestFailOpen:
             side_effect=RuntimeError("boom"),
         ):
             assert not _is_deny(_run('echo "unterminated'))
+
+    def test_oversized_command_fails_open_without_shell(self):
+        # GATE-2 LOW: a pathological huge/deeply-nested command could pin a core
+        # in the parse check. Oversized input must fail-open WITHOUT invoking the
+        # shell at all. Patch create_subprocess_exec to assert it is NOT called.
+        big = "echo " + ("$(" * 200_000)  # > 256KB, also unbalanced
+        with patch(
+            "core.security_hooks.asyncio.create_subprocess_exec",
+            side_effect=AssertionError("shell must NOT be invoked for oversized cmd"),
+        ):
+            assert not _is_deny(_run(big))
