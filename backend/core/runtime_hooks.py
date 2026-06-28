@@ -930,61 +930,149 @@ def read_correction_stats(
 # PostToolUse: memory edit guard — validates Edit calls on MEMORY.md/EVOLUTION.md
 # ---------------------------------------------------------------------------
 
-_MEMORY_FILE_SUFFIXES = ("MEMORY.md", "EVOLUTION.md")
+# Agent-owned context files that should be written via s_persist / s_self-evolution,
+# not hand-edited. KNOWLEDGE.md added 2026-06-28 (run_3f3be114) — the always-injected
+# index is a routing target too.
+_MEMORY_FILE_SUFFIXES = ("MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md")
+
+# Skills whose invocation "covers" a memory-file write this turn (routing satisfied).
+_PERSIST_SKILLS = frozenset({"s_persist", "s_self-evolution"})
+
+# session_context key holding the set of persist-class skills invoked THIS turn.
+# Populated by create_persist_skill_tracker (PreToolUse), cleared by
+# create_persist_skill_tracker_reset (UserPromptSubmit = new turn).
+_PERSIST_SKILLS_KEY = "_persist_skills_this_turn"
 
 
-def create_memory_edit_guard():
-    """Factory: creates a PostToolUse hook that validates Edit calls on memory files.
+def create_memory_edit_guard(session_context: Optional[dict] = None):
+    """Factory: PostToolUse hook guarding Edit/Write on agent-owned context files.
 
-    Runs MemoryGuard on ``new_string`` when Edit targets a file ending in
-    MEMORY.md or EVOLUTION.md.  Observe-only — the edit has already happened,
-    but the hook injects a warning into additionalContext so the agent knows
-    to self-correct.
+    Two independent signals (both WARN-only — observe-after-the-fact, never deny):
+
+    1. **Content scan** (always): runs MemoryGuard on the written content when the
+       target ends in MEMORY.md / EVOLUTION.md / KNOWLEDGE.md, warning on dangerous
+       patterns now sitting in the system prompt.
+    2. **Persist-skill routing** (only when ``session_context`` is provided): if the
+       file was hand-Edited/Written WITHOUT invoking s_persist / s_self-evolution this
+       turn, warns the agent to route through the skill. This is the defense-outside-
+       the-agent for the recurring O028/C035 adherence failure ("I hand-wrote it
+       instead of using s_persist"). When ``session_context`` is None (backward-compat
+       for the 28 existing callers), the routing check is INERT — only the content
+       scan runs, exactly as before.
     """
+    ctx = session_context  # None for legacy callers → routing check skipped
+
     async def _hook(tool_use: dict, tool_use_id: str, session: Any) -> dict:
         tool_name = tool_use.get("tool_name", "")
-        if tool_name != "Edit":
+        if tool_name not in ("Edit", "Write"):
             return {}
 
         tool_input = tool_use.get("tool_input", {})
         file_path = tool_input.get("file_path", "")
 
-        # Only check files that end with MEMORY.md or EVOLUTION.md
+        # Only check the agent-owned context files
         if not any(file_path.endswith(suffix) for suffix in _MEMORY_FILE_SUFFIXES):
             return {}
 
-        new_string = tool_input.get("new_string", "")
-        if not new_string:
-            return {}
+        # Write uses "content"; Edit uses "new_string"
+        new_content = tool_input.get("new_string") or tool_input.get("content") or ""
 
-        # Run MemoryGuard on the new content
-        try:
-            from core.memory_guard import MemoryGuard
-            guard = MemoryGuard()
-            result = guard.scan(new_string)
-            if result.rejected:
-                categories = {f.category for f in result.findings if f.action == "reject"}
-                warning = (
-                    f"⚠️ MemoryGuard WARNING: Edit to {file_path.split('/')[-1]} "
-                    f"contains dangerous patterns: {', '.join(categories)}. "
-                    f"This content is now in the system prompt. "
-                    f"Consider reverting the edit immediately."
-                )
-                logger.warning(
-                    "MemoryGuard: Edit to %s rejected — %s",
-                    file_path, categories,
-                )
-                return {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PostToolUse",
-                        "additionalContext": warning,
-                    }
+        warnings: list[str] = []
+
+        # Signal 1 — content scan (always, mirrors prior behavior)
+        if new_content:
+            try:
+                from core.memory_guard import MemoryGuard
+                result = MemoryGuard().scan(new_content)
+                if result.rejected:
+                    categories = {f.category for f in result.findings if f.action == "reject"}
+                    warnings.append(
+                        f"⚠️ MemoryGuard WARNING: {tool_name} to {file_path.split('/')[-1]} "
+                        f"contains dangerous patterns: {', '.join(categories)}. "
+                        f"This content is now in the system prompt. "
+                        f"Consider reverting the edit immediately."
+                    )
+                    logger.warning(
+                        "MemoryGuard: %s to %s rejected — %s",
+                        tool_name, file_path, categories,
+                    )
+            except ImportError:
+                pass  # memory_guard not available
+            except Exception as exc:
+                logger.debug("MemoryGuard %s check failed: %s", tool_name, exc)
+
+        # Signal 2 — persist-skill routing (only with session_context)
+        if ctx is not None:
+            try:
+                skills_this_turn = ctx.get(_PERSIST_SKILLS_KEY) or set()
+                if not (_PERSIST_SKILLS & set(skills_this_turn)):
+                    warnings.append(
+                        f"⚠️ Persist-routing WARNING: {tool_name} to "
+                        f"{file_path.split('/')[-1]} was hand-written without invoking "
+                        f"s_persist (or s_self-evolution) this turn. These agent-owned "
+                        f"context files should be persisted via the skill, which routes "
+                        f"to the correct file/section, dedups against existing entries, "
+                        f"and stamps source:manual metadata. Recurring O028/C035 pattern: "
+                        f"hand-editing bypasses the skill's dedup + routing. Re-run via "
+                        f"s_persist if this was a knowledge/memory update."
+                    )
+                    logger.info(
+                        "persist-routing: %s to %s without persist skill this turn",
+                        tool_name, file_path,
+                    )
+            except Exception as exc:
+                logger.debug("persist-routing check failed: %s", exc)
+
+        if warnings:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "\n".join(warnings),
                 }
-        except ImportError:
-            pass  # memory_guard not available
-        except Exception as exc:
-            logger.debug("MemoryGuard Edit check failed: %s", exc)
+            }
+        return {}
 
+    return _hook
+
+
+def create_persist_skill_tracker(session_context: Optional[dict] = None):
+    """Factory: PreToolUse hook (matcher=Skill) recording persist-class skill
+    invocations into ``session_context[_PERSIST_SKILLS_KEY]`` (a set) for THIS turn.
+
+    The set is consumed by create_memory_edit_guard (to suppress the routing WARN
+    when a persist skill WAS invoked) and cleared by create_persist_skill_tracker_reset
+    on each new user turn. Approve-only — never blocks (skill_access_checker owns
+    skill authorization; this hook only observes)."""
+    ctx = session_context if session_context is not None else {}
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        try:
+            # _extract_field (not raw .get) — SDK hook inputs may be dict OR object;
+            # this is the module's established convention (see file_tracker, line ~361).
+            if _extract_field(input_data, "tool_name", "") == "Skill":
+                tool_input = _extract_field(input_data, "tool_input", {})
+                skill = tool_input.get("skill", "") if isinstance(tool_input, dict) else ""
+                if skill in _PERSIST_SKILLS:
+                    ctx.setdefault(_PERSIST_SKILLS_KEY, set()).add(skill)
+        except Exception as exc:
+            logger.debug("persist_skill_tracker failed: %s", exc)
+        return {}
+
+    return _hook
+
+
+def create_persist_skill_tracker_reset(session_context: Optional[dict] = None):
+    """Factory: UserPromptSubmit hook that clears the per-turn persist-skill set.
+
+    A new user prompt = a new turn, so the skill marker must reset (mirrors the
+    create_failure_tracker_reset paired-hook pattern)."""
+    ctx = session_context if session_context is not None else {}
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        try:
+            ctx[_PERSIST_SKILLS_KEY] = set()
+        except Exception as exc:
+            logger.debug("persist_skill_tracker_reset failed: %s", exc)
         return {}
 
     return _hook
@@ -1034,10 +1122,19 @@ def register_runtime_hooks(
         "session_checkpoint",
     )
 
-    # Phase 2: PostToolUse memory edit guard (validates Edit on MEMORY.md/EVOLUTION.md)
+    # PreToolUse: persist-skill tracker (records s_persist/s_self-evolution this turn)
+    registry.register(
+        "PreToolUse",
+        create_persist_skill_tracker(session_context),
+        "persist_skill_tracker",
+        matcher="Skill",
+    )
+
+    # Phase 2: PostToolUse memory edit guard (content scan + persist-routing WARN on
+    # Edit/Write to MEMORY/EVOLUTION/KNOWLEDGE.md). session_context enables the routing check.
     registry.register(
         "PostToolUse",
-        create_memory_edit_guard(),
+        create_memory_edit_guard(session_context),
         "memory_edit_guard",
     )
 
@@ -1085,6 +1182,13 @@ def register_runtime_hooks(
         "UserPromptSubmit",
         create_high_signal_capture(session_context),
         "high_signal_capture",
+    )
+
+    # UserPromptSubmit: reset per-turn persist-skill tracker (new turn = clean slate)
+    registry.register(
+        "UserPromptSubmit",
+        create_persist_skill_tracker_reset(session_context),
+        "persist_skill_tracker_reset",
     )
 
     # Observation hooks (LAST in chain — after all other hooks)

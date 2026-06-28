@@ -636,6 +636,256 @@ class TestMemoryEditGuard:
 
 
 # ---------------------------------------------------------------------------
+# PostToolUse: persist-skill routing guard (O028/C035 defense-outside-the-agent)
+# ---------------------------------------------------------------------------
+
+class TestPersistSkillRoutingGuard:
+    """When a memory/knowledge/evolution file is hand-Edited/Written without
+    invoking s_persist or s_self-evolution this turn, the guard WARNs the agent
+    to route through the skill. WARN-only, never deny. Per-turn skill tracking
+    lives in session_context['_persist_skills_this_turn'] (set), populated by
+    the PreToolUse skill tracker and cleared on UserPromptSubmit."""
+
+    # --- AC1: PreToolUse skill tracker records invoked skill into session_context
+
+    @pytest.mark.asyncio
+    async def test_skill_tracker_records_persist_skill(self):
+        from core.runtime_hooks import create_persist_skill_tracker
+        ctx = {}
+        hook = create_persist_skill_tracker(ctx)
+        input_data = {"tool_name": "Skill", "tool_input": {"skill": "s_persist"}}
+        await hook(input_data, "tu_1", MagicMock())
+        assert "s_persist" in ctx.get("_persist_skills_this_turn", set())
+
+    @pytest.mark.asyncio
+    async def test_skill_tracker_ignores_non_skill_tools(self):
+        from core.runtime_hooks import create_persist_skill_tracker
+        ctx = {}
+        hook = create_persist_skill_tracker(ctx)
+        await hook({"tool_name": "Edit", "tool_input": {"file_path": "x"}}, "tu_1", MagicMock())
+        assert not ctx.get("_persist_skills_this_turn")
+
+    # --- AC2: memory_edit_guard covers KNOWLEDGE.md
+
+    @pytest.mark.asyncio
+    async def test_guard_covers_knowledge_md(self):
+        """An Edit to KNOWLEDGE.md with no persist skill this turn → routing WARN."""
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {}  # no persist skill invoked
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/path/.context/KNOWLEDGE.md",
+                "old_string": "old",
+                "new_string": "- 2026-06-28: clean factual update",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
+        assert "s_persist" in hso["additionalContext"]
+
+    # --- AC3: WARN fires when no persist skill invoked this turn
+
+    @pytest.mark.asyncio
+    async def test_warns_when_no_persist_skill_this_turn(self):
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": set()}
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/path/.context/MEMORY.md",
+                "old_string": "old",
+                "new_string": "- clean entry",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        assert "s_persist" in result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_write_tool_also_guarded(self):
+        """Write (not just Edit) to a memory file triggers the routing WARN."""
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": set()}
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "/path/.context/EVOLUTION.md",
+                "content": "- clean entry",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        assert "s_persist" in result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    # --- AC4: NO false-positive when persist skill WAS invoked (non-vacuity proof)
+
+    @pytest.mark.asyncio
+    async def test_no_warn_when_persist_skill_invoked(self):
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": {"s_persist"}}
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/path/.context/MEMORY.md",
+                "old_string": "old",
+                "new_string": "- clean entry",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        assert "s_persist" not in result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_no_warn_when_self_evolution_invoked(self):
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": {"s_self-evolution"}}
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/path/.context/EVOLUTION.md",
+                "old_string": "old",
+                "new_string": "- clean entry",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        assert "s_persist" not in result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    # --- AC5: fail-open, WARN-only — never denies, never raises
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_no_session_context(self):
+        """Old callers pass no session_context → routing check is INERT (no false WARN)."""
+        from core.runtime_hooks import create_memory_edit_guard
+        hook = create_memory_edit_guard()  # no ctx — backward-compatible
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/path/.context/MEMORY.md",
+                "old_string": "old",
+                "new_string": "- clean entry",
+            },
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        # No persist-routing warning (the only signal that could fire is MemoryGuard content)
+        assert "s_persist" not in result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_never_denies(self):
+        """Guard never returns a deny/permissionDecision — PostToolUse WARN-only."""
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": set()}
+        hook = create_memory_edit_guard(ctx)
+        tool_use = {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/path/.context/MEMORY.md", "new_string": "x"},
+        }
+        result = await hook(tool_use, "tu_1", MagicMock())
+        assert "permissionDecision" not in str(result)
+        assert result.get("hookSpecificOutput", {}).get("hookEventName") == "PostToolUse"
+
+    @pytest.mark.asyncio
+    async def test_fail_open_on_empty_input(self):
+        """Empty/garbage tool_input must not raise."""
+        from core.runtime_hooks import create_memory_edit_guard
+        ctx = {"_persist_skills_this_turn": set()}
+        hook = create_memory_edit_guard(ctx)
+        result = await hook({"tool_name": "Edit", "tool_input": {}}, "tu_1", MagicMock())
+        assert isinstance(result, dict)
+
+    @pytest.mark.asyncio
+    async def test_reset_clears_skill_set(self):
+        """UserPromptSubmit reset clears the per-turn skill set (new turn = clean slate)."""
+        from core.runtime_hooks import create_persist_skill_tracker_reset
+        ctx = {"_persist_skills_this_turn": {"s_persist"}}
+        reset = create_persist_skill_tracker_reset(ctx)
+        await reset({"prompt": "next turn"}, "tu_1", MagicMock())
+        assert not ctx.get("_persist_skills_this_turn")
+
+    # --- adversarial follow-ups (run_3f3be114 Gate-2) ---
+
+    @pytest.mark.asyncio
+    async def test_cross_turn_reset_then_hand_edit_warns(self):
+        """HIGH (adversarial): turn N invokes s_persist; turn N+1 reset fires;
+        a hand-edit in N+1 (no persist skill) MUST warn — the stale marker from
+        turn N must NOT suppress it. Locks the turn-boundary reset contract."""
+        from core.runtime_hooks import (
+            create_persist_skill_tracker,
+            create_persist_skill_tracker_reset,
+            create_memory_edit_guard,
+        )
+        ctx = {}
+        tracker = create_persist_skill_tracker(ctx)
+        reset = create_persist_skill_tracker_reset(ctx)
+        guard = create_memory_edit_guard(ctx)
+        # Turn N: persist invoked → MEMORY edit suppressed
+        await tracker({"tool_name": "Skill", "tool_input": {"skill": "s_persist"}}, "t", MagicMock())
+        r_n = await guard({"tool_name": "Edit", "tool_input": {"file_path": "/x/.context/MEMORY.md", "new_string": "- e"}}, "t", MagicMock())
+        assert "s_persist" not in str(r_n)
+        # Turn N+1 boundary: reset clears the marker
+        await reset({"prompt": "do something else"}, "t", MagicMock())
+        # Turn N+1: hand-edit with NO persist skill → MUST warn
+        r_n1 = await guard({"tool_name": "Edit", "tool_input": {"file_path": "/x/.context/MEMORY.md", "new_string": "- e2"}}, "t", MagicMock())
+        assert "s_persist" in r_n1.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    @pytest.mark.asyncio
+    async def test_tracker_handles_object_style_input(self):
+        """MED (adversarial): SDK hook input may be an object, not a dict. The tracker
+        must use _extract_field (not raw .get) so an object input doesn't AttributeError
+        into a swallowed failure → silent non-recording → false-positive WARN."""
+        from core.runtime_hooks import create_persist_skill_tracker
+
+        class ObjInput:
+            tool_name = "Skill"
+            tool_input = {"skill": "s_persist"}
+
+        ctx = {}
+        tracker = create_persist_skill_tracker(ctx)
+        await tracker(ObjInput(), "t", MagicMock())
+        assert "s_persist" in ctx.get("_persist_skills_this_turn", set())
+
+    @pytest.mark.asyncio
+    async def test_multifile_persist_suppresses_all_three(self):
+        """One s_persist invocation covers MEMORY + KNOWLEDGE + EVOLUTION writes in
+        the same turn (non-consuming intersection, not consume-on-check)."""
+        from core.runtime_hooks import create_persist_skill_tracker, create_memory_edit_guard
+        ctx = {}
+        tracker = create_persist_skill_tracker(ctx)
+        guard = create_memory_edit_guard(ctx)
+        await tracker({"tool_name": "Skill", "tool_input": {"skill": "s_persist"}}, "t", MagicMock())
+        for fname in ("MEMORY.md", "KNOWLEDGE.md", "EVOLUTION.md"):
+            r = await guard({"tool_name": "Edit", "tool_input": {"file_path": f"/x/.context/{fname}", "new_string": "- e"}}, "t", MagicMock())
+            assert "s_persist" not in str(r), f"WARN wrongly fired on {fname}"
+
+    @pytest.mark.asyncio
+    async def test_tracker_coexists_with_other_skill_matcher_hook(self):
+        """LOW (adversarial): the tracker shares the ('PreToolUse','Skill') registry key
+        with skill_access_checker. When both are chained, an allowed s_persill must still
+        be recorded (the chain runs both; neither shadows the other)."""
+        from core.hook_builder import HookRegistry
+        from core.runtime_hooks import create_persist_skill_tracker
+
+        ctx = {}
+        reg = HookRegistry()
+        # A benign first Skill hook (approve), then the tracker — same (event,matcher) key
+        async def approver(input_data, tuid, c):
+            return {"decision": "approve"}
+        reg.register("PreToolUse", approver, "approver", matcher="Skill")
+        reg.register("PreToolUse", create_persist_skill_tracker(ctx), "persist_skill_tracker", matcher="Skill")
+
+        built = reg.build_sdk_hooks()
+        # find the Skill matcher chain and invoke it
+        skill_hms = [hm for hm in built["PreToolUse"] if getattr(hm, "matcher", None) == "Skill"]
+        assert skill_hms, "no Skill-matcher hook registered"
+        chained = skill_hms[0].hooks[0]
+        await chained({"tool_name": "Skill", "tool_input": {"skill": "s_persist"}}, "t", MagicMock())
+        assert "s_persist" in ctx.get("_persist_skills_this_turn", set())
+
+
+# ---------------------------------------------------------------------------
 # HookRegistry chain: merge semantics
 # ---------------------------------------------------------------------------
 
