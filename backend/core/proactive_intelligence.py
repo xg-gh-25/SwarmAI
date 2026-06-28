@@ -724,9 +724,21 @@ def _newest_completed_run(runs_dir: Path) -> "tuple[float, str | None]":
     newest_ts, newest_id = 0.0, None
     if not runs_dir.exists():
         return newest_ts, newest_id
+    # IO pre-filter: only the NEWEST completed run matters as a supersede signal,
+    # and a paused run is only superseded if a completed run is MORE recent than
+    # it. Since we only surface paused runs <24h old (caller pre-filters at 48h),
+    # any completed run that could supersede one is also <48h. A completed run
+    # untouched on disk >48h cannot be newer than a surfaced paused run → skip
+    # its read. Equivalent because we take the max: pre-skipping older entries
+    # never changes the maximum. Same 48h cutoff as the caller (recomputed here
+    # from its own time.time() — differs by microseconds, immaterial to the gate).
+    mtime_skip_cutoff = time.time() - 2 * 24 * 3600
     for rd in runs_dir.iterdir():
         rf = rd / "run.json"
-        if not rf.exists():
+        try:
+            if rf.stat().st_mtime < mtime_skip_cutoff:
+                continue
+        except OSError:
             continue
         try:
             data = json.loads(rf.read_text(encoding="utf-8"))
@@ -777,6 +789,15 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
 
         now = time.time()
         max_age_seconds = 24 * 3600  # Only surface runs from last 24h
+        # IO pre-filter: skip json.loads for runs untouched on disk beyond a 2×
+        # buffer. run.json is rewritten (mtime bumped) on EVERY status mutation,
+        # so st_mtime >= the content updated_at always. A 48h-cold file therefore
+        # has updated_at >24h (already skipped by the content check below) OR no
+        # parseable updated_at (a 48h-dead orphan — correctly not surfaced). The
+        # 2× buffer keeps the real 24h window byte-identical: anything that could
+        # be <24h is always let through to the exact content check. Prod has 343
+        # run.json (1.5MB); this avoids reading the ~95% that are long-dead.
+        mtime_skip_cutoff = now - 2 * max_age_seconds
 
         # Directives (auto-resume) are rate-limited via [:max_items] (STEERING #1).
         # Exhausted runs are NOT — they collapse into one summary line so no stale
@@ -802,8 +823,15 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
 
             for run_dir in runs_dir.iterdir():
                 run_file = run_dir / "run.json"
-                if not run_file.exists():
-                    continue
+                # IO pre-filter (cheap stat before expensive read+parse): a file
+                # untouched beyond the 2× buffer cannot be a <24h run — skip it
+                # without reading. See mtime_skip_cutoff rationale above.
+                try:
+                    _file_mtime = run_file.stat().st_mtime
+                    if _file_mtime < mtime_skip_cutoff:
+                        continue
+                except OSError:
+                    continue  # missing/unstattable — nothing to surface
                 try:
                     run_data = json.loads(run_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
@@ -1035,8 +1063,10 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                         f"then invoke `s_autonomous-pipeline` with "
                         f"`--resume --run-id {run_id} --project {project_name}`."
                     )
-                    mtime = run_file.stat().st_mtime
-                    candidates.append((mtime, line))
+                    # Reuse the mtime from the pre-filter stat (above) — the
+                    # candidate sort only needs a coarse recency key, and re-stat'ing
+                    # would be a redundant syscall (adversarial LOW, run_885eb466).
+                    candidates.append((_file_mtime, line))
                 else:
                     # EXHAUSTED: collapse into one summary line below (NOT capped by
                     # max_items — every stale run must stay visible). Carry the

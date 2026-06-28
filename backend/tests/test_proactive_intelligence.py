@@ -1390,6 +1390,67 @@ class TestPipelineSupersedeAndActiveSkip:
         assert data["status"] != "abandoned", \
             "malformed-date run must not be archived (no supersede ordering)"
 
+    # --- mtime pre-filter (IO optimization, run_885eb466) ---
+    # The function only cares about runs updated in the last 24h, but used to
+    # json.loads EVERY run.json first (343 files / 1.5MB in prod = 569ms warm).
+    # A coarse st_mtime gate (2× max_age = 48h buffer) skips the read entirely
+    # for long-dead runs. The 48h buffer guarantees the 24h-window semantics are
+    # byte-identical: any run whose updated_at COULD be <24h is always let through
+    # to the exact content-level check; only runs untouched on disk for >48h are
+    # pre-skipped (their updated_at, if present, is necessarily >24h → already
+    # skipped; if absent, a 48h-cold orphan is correctly not surfaced).
+
+    def _set_mtime(self, run_file, *, hours_ago):
+        import os
+        import time as _time
+        ts = _time.time() - hours_ago * 3600
+        os.utime(run_file, (ts, ts))
+
+    def test_mtime_old_run_skipped_without_read(self, tmp_path, monkeypatch):
+        """A run whose file mtime is >48h old is pre-filtered: json.loads is
+        never called on it (the whole point of the optimization)."""
+        import core.proactive_intelligence as _pmod
+        # A run with a FRESH updated_at in CONTENT, but an OLD file mtime.
+        # Pre-filter must skip it on mtime alone, before reading content.
+        from datetime import datetime, timezone, timedelta
+        fresh = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        rf = self._make_run(tmp_path, run_id="run_coldfile", updated_at=fresh)
+        self._set_mtime(rf, hours_ago=50)
+
+        real_loads = json.loads
+        read_paths = []
+        orig_read_text = Path.read_text
+
+        def _tracking_read_text(self, *a, **k):
+            if self.name == "run.json":
+                read_paths.append(str(self))
+            return orig_read_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", _tracking_read_text)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        # The cold-mtime run.json must NOT have been read at all.
+        assert not any("run_coldfile" in p for p in read_paths), \
+            "run with >48h mtime must be skipped before json.loads"
+        assert result == [], "cold-mtime run must not surface"
+
+    def test_mtime_buffer_keeps_24h_to_48h_window_intact(self, tmp_path):
+        """A run with mtime in the 24-48h buffer band but a FRESH updated_at is
+        still surfaced — the coarse gate must not narrow the real 24h window."""
+        from datetime import datetime, timezone, timedelta
+        fresh = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        rf = self._make_run(tmp_path, run_id="run_buffer", updated_at=fresh,
+                            resume_attempts=0)
+        self._set_mtime(rf, hours_ago=36)  # inside 48h buffer, file looks old
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 1 and "AUTO-RESUME" in result[0], \
+            "fresh-content run within 48h buffer must still surface"
+
+    def test_mtime_fresh_file_still_surfaces(self, tmp_path):
+        """Sanity: a normal fresh run (mtime=now) is unaffected by the gate."""
+        self._make_run(tmp_path, run_id="run_fresh", resume_attempts=0)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 1 and "AUTO-RESUME" in result[0]
+
 
 # --- M3b: Recurrence Radar (zone-gated) (run_123a6530) ---
 
