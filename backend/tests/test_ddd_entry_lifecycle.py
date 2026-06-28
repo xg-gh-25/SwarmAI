@@ -345,6 +345,91 @@ class TestArchiveEntries:
         assert "New archived entry" in content  # New appended
 
 
+class TestReclaimNoiseEndToEnd:
+    """E2E proof that the decay→archive mechanism actually SHRINKS the source
+    file by moving a stale entry OUT to the archive (not just relabeling it
+    in place). Closes the PIT60 doubt with evidence: the mechanism works; it
+    only fires when an entry genuinely qualifies (non-keep type, ref==0,
+    dormant/archived, real created_date, past grace)."""
+
+    def _stale_memory(self, today):
+        old = (today - timedelta(days=400)).isoformat()
+        recent = (today - timedelta(days=2)).isoformat()
+        # One reclaimable pitfall (dormant, ref:0, 400d old, real created_date)
+        # + one active guideline that MUST be preserved.
+        return f"""\
+## Guidelines
+
+- [guideline] **Keep me — active and used** — recent. ({recent}, run_keep)
+  <!-- ref:5 | last:{recent} | decay:active -->
+
+## Pitfalls
+
+- [pitfall] **Reclaim me — ancient dormant noise** — long dead. ({old}, run_old)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+
+    def test_reclaim_moves_entry_out_and_shrinks_file(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+
+        today = date(2026, 6, 28)
+        src = tmp_path / "MEMORY.md"
+        original = self._stale_memory(today)
+        src.write_text(original)
+
+        report = reclaim_noise_entries(
+            original,
+            today,
+            tmp_path,
+            archive_name="MEMORY-archive.md",
+            source_path=src,
+            dry_run=False,
+        )
+
+        # 1. Exactly the stale entry was archived (not the active one)
+        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
+
+        # 2. The stale entry is MOVED OUT of the source (physically stripped)
+        new_content = src.read_text()
+        assert "Reclaim me" not in new_content, "stale entry still in source — not stripped"
+
+        # 3. The active entry is PRESERVED
+        assert "Keep me" in new_content, "active entry wrongly removed"
+
+        # 4. The source file actually SHRANK (the whole point)
+        assert len(new_content) < len(original), (
+            f"file did not shrink: {len(original)} → {len(new_content)}"
+        )
+
+        # 5. The stale entry landed in the archive FILE
+        archive_path = tmp_path / "MEMORY-archive.md"
+        assert archive_path.exists(), "archive file not created"
+        assert "Reclaim me" in archive_path.read_text(), "entry not in archive"
+
+    def test_reclaim_is_noop_when_nothing_qualifies(self, tmp_path):
+        """A file of only recent/active entries must NOT shrink — proves the
+        mechanism is selective, not destructive (the 'archive works but
+        nothing qualifies' state from the live MEMORY.md dry-run)."""
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+
+        today = date(2026, 6, 28)
+        recent = (today - timedelta(days=2)).isoformat()
+        content = f"""\
+## Guidelines
+
+- [guideline] **Fresh and active** — recent. ({recent}, run_a)
+  <!-- ref:5 | last:{recent} | decay:active -->
+"""
+        src = tmp_path / "MEMORY.md"
+        src.write_text(content)
+        report = reclaim_noise_entries(
+            content, today, tmp_path, archive_name="MEMORY-archive.md",
+            source_path=src, dry_run=False,
+        )
+        assert report.archived == 0
+        assert src.read_text() == content, "non-qualifying file was modified"
+
+
 # ── AC3/AC4/AC5: get_stage_knowledge ─────────────────────────────────────────
 
 class TestGetStageKnowledge:
