@@ -171,6 +171,15 @@ TEMPLATES: dict[str, str] = {
 
         _No failed evolutions recorded yet._
     """),
+    "SELF.md": textwrap.dedent("""\
+        <!-- SYSTEM DEFAULT -->
+
+        # SELF -- One-Page Self-Portrait
+
+        ## What I Am
+
+        SwarmAI: a self-evolving Agent OS.
+    """),
 }
 
 
@@ -226,10 +235,14 @@ def _simulate_build(
             if daily_content:
                 token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
                 if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                    # Simple truncation: keep tail
-                    words = daily_content.split()
-                    keep = int(TOKEN_CAP_PER_DAILY_FILE * 3 / 4)
-                    daily_content = "[Truncated]\n" + " ".join(words[-keep:])
+                    # Drive the REAL production truncation (run_3f25a73a): a local
+                    # copy of the cap*3/4 inverse drifted from the calibrated
+                    # coefficient (Gate-1 finding A). Import the real function so
+                    # this e2e exercises the production path, not a stale copy.
+                    from core.prompt_builder import _truncate_daily_content
+                    daily_content = _truncate_daily_content(
+                        daily_content, TOKEN_CAP_PER_DAILY_FILE
+                    )
                 context_text += f"\n\n## Daily Activity ({daily_file.stem})\n{daily_content}"
 
         # Distillation flag
@@ -377,10 +390,10 @@ def workspace_with_cjk(workspace: Path) -> Path:
 class TestE2EDirectChannel:
     """Full pipeline for a normal direct (1:1) channel session."""
 
-    def test_all_10_context_files_present(self, workspace):
-        """All 11 context files appear in the assembled prompt."""
+    def test_all_context_files_present(self, workspace):
+        """All 12 context files (incl. SELF.md) appear in the assembled prompt."""
         prompt, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 11
+        assert len(meta["files"]) == 12
         filenames = {f["filename"] for f in meta["files"]}
         expected = {spec.filename for spec in CONTEXT_FILES}
         assert filenames == expected
@@ -647,35 +660,33 @@ class TestE2ETruncationDetection:
         truncated = [f for f in meta["files"] if f["truncated"]]
         assert len(truncated) == 0, f"Unexpected truncation: {truncated}"
 
-    def test_truncation_detected_when_over_budget(self, tmp_path):
-        """When context exceeds budget, truncated sections are detected."""
+    def test_over_budget_injects_full_content_not_truncated(self, tmp_path):
+        """Over-budget assembly injects FULL content untruncated (XG directive
+        2026-06-28, pure-filesystem recall design §3.5): the read/assembly line
+        does NOT arbitrate by size — size governance is the write-side management
+        line's job. This replaces the old 'truncate when over budget' contract.
+        The token-size WARNING is surfaced by context_health_hook, not here."""
         ws = tmp_path / "ws"
         ctx = ws / ".context"
         ctx.mkdir(parents=True)
 
-        # Create a minimal SWARMAI.md (non-truncatable, P0)
         (ctx / "SWARMAI.md").write_text("Core principles here.")
-
-        # Create a massive PROJECTS.md (P9, truncatable) that will force truncation
-        huge_content = "Project details. " * 5000  # ~10K words → ~13K tokens
+        # A massive PROJECTS.md that vastly exceeds the tight budget below.
+        huge_content = "Project details. " * 5000  # ~10K words
         (ctx / "PROJECTS.md").write_text(f"# Projects\n\n{huge_content}")
-
-        # Create minimal other files so they exist
         (ctx / "IDENTITY.md").write_text("Identity info.")
         (ctx / "SOUL.md").write_text("Personality.")
 
-        # Use a very tight budget to force truncation.
-        # _assemble_from_sources uses the token_budget directly when called
-        # with an explicit budget, bypassing compute_token_budget.
         loader = ContextDirectoryLoader(context_dir=ctx, token_budget=500)
         assembled = loader._assemble_from_sources(
             model_context_window=200_000,
             token_budget=500,
         )
 
-        # Check for truncation marker in output
-        assert "[Truncated:" in assembled
-        assert "tokens]" in assembled
+        # Assembly must NOT truncate — full content present, no truncation marker.
+        assert "[Truncated:" not in assembled
+        # The full huge body survives (sample the repeated phrase many times).
+        assert assembled.count("Project details.") > 4000
 
 
 class TestE2EDailyActivityTokenCap:
@@ -797,9 +808,9 @@ class TestE2EMetadataAccuracy:
     """Prompt metadata is accurate and complete."""
 
     def test_metadata_file_count(self, workspace):
-        """Metadata reports all 11 context files."""
+        """Metadata reports all 12 context files (incl. SELF.md)."""
         _, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 11
+        assert len(meta["files"]) == 12
 
     def test_metadata_total_tokens_positive(self, workspace):
         """Total tokens is a positive number."""

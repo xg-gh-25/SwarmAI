@@ -578,26 +578,26 @@ class TestEstimateTokensCJK:
     """Tests for CJK-aware token estimation."""
 
     def test_pure_ascii_unchanged(self):
-        """Pure ASCII text uses the original word-based heuristic."""
+        """Pure ASCII text uses the calibrated word-based coefficient."""
         text = "Hello world this is a test"
         result = ContextDirectoryLoader.estimate_tokens(text)
-        # 6 words * 4/3 = 8
-        assert result == 8
+        # 6 words * 2.2 (LATIN_TOKENS_PER_WORD) = 13
+        assert result == 13
 
     def test_pure_chinese_text(self):
         """Pure Chinese text should count characters, not words."""
-        # 12 Chinese characters — should be ~8 tokens (12 / 1.5)
+        # 13 Chinese characters * 1.1 (CJK_TOKENS_PER_CHAR) = 14
         text = "你好世界这是一个测试用例吧"
         result = ContextDirectoryLoader.estimate_tokens(text)
-        assert result == 8  # 12 / 1.5 = 8
+        assert result == 14  # int(13 * 1.1) = 14
 
     def test_mixed_cjk_and_latin(self):
         """Mixed CJK + Latin text sums both estimates."""
-        # 4 Chinese chars → 4/1.5 ≈ 2 CJK tokens
-        # "hello world" → 2 words * 4/3 ≈ 2 Latin tokens
+        # 4 Chinese chars * 1.1 ≈ 4 CJK tokens
+        # "hello world" → 2 words * 2.2 ≈ 4 Latin tokens
         text = "你好世界 hello world"
         result = ContextDirectoryLoader.estimate_tokens(text)
-        assert result >= 4  # At least 2 CJK + 2 Latin
+        assert result >= 8  # ~4 CJK + ~4 Latin
 
     def test_chinese_much_higher_than_naive(self):
         """A Chinese paragraph should estimate far more than 1 token."""
@@ -612,7 +612,7 @@ class TestEstimateTokensCJK:
         """Japanese hiragana characters should be CJK-counted."""
         text = "おはようございます"  # 9 hiragana chars
         result = ContextDirectoryLoader.estimate_tokens(text)
-        assert result == 6  # 9 / 1.5 = 6
+        assert result == 9  # int(9 * 1.1) = 9
 
     def test_empty_returns_zero(self):
         """Empty/whitespace returns 0 (unchanged behavior)."""
