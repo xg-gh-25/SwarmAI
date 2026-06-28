@@ -21,9 +21,25 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
+import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
 
 /** Character threshold below which results are shown inline without toggle. */
 export const INLINE_RESULT_LIMIT = 200;
+
+/**
+ * Seconds a tool must be pending before its elapsed badge appears on the card.
+ * Short tools (the common case) stay clean — the badge only surfaces once a tool
+ * runs long enough that the user would otherwise wonder if it hung (run_02e658d0).
+ */
+export const ELAPSED_BADGE_THRESHOLD_S = 3;
+
+/** Format pending-tool elapsed seconds: "5s", "1m 03s". Exported for testing. */
+export function formatToolElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
 
 /** Map tool category to a Material Symbols icon name. */
 const CATEGORY_ICONS: Record<string, string> = {
@@ -100,7 +116,7 @@ interface MergedToolBlockProps {
 export function MergedToolBlock({
   name,
   summary,
-  toolUseId: _toolUseId,
+  toolUseId,
   category,
   resultContent,
   resultTruncated,
@@ -109,6 +125,11 @@ export function MergedToolBlock({
 }: MergedToolBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Live elapsed for THIS card while it is the pending tool. Component-local,
+  // anchored on toolUseId, gated on isPending, self-cleaning — see hook doc.
+  // null when not pending (completed cards render no timer).
+  const pendingElapsed = usePendingToolElapsed(toolUseId, isPending);
 
   const hasResult = resultContent !== undefined;
   const isError = !!resultIsError;
@@ -208,6 +229,14 @@ export function MergedToolBlock({
             summary || name || 'Unknown tool'
           )}
         </span>
+        {pendingElapsed !== null && pendingElapsed >= ELAPSED_BADGE_THRESHOLD_S && (
+          <span
+            className="text-xs font-mono text-[var(--color-text-muted)] tabular-nums shrink-0"
+            title="Elapsed time this tool has been running"
+          >
+            {formatToolElapsed(pendingElapsed)}
+          </span>
+        )}
         <span className={`material-symbols-outlined text-sm ${statusColor}`}>
           {statusIcon}
         </span>
