@@ -209,6 +209,10 @@ describe('MessageStore phase gate', () => {
     // (_notify is rAF-gated, so the fire is async — waitFor flushes the frame.)
     store.append(makeMsg('1', 'assistant'));
     store.startStreaming('1');
+    store.flush(); // drain the pending append-notify so the fire below is
+                   // attributable ONLY to endStreaming (mutation-sensitivity:
+                   // without this a leaked append-notify makes the test pass
+                   // even if endStreaming's _notify is removed — Gate-2 LOW).
     const listener = vi.fn();
     store.subscribe(listener);
     listener.mockClear(); // subscribe() syncs once on attach — ignore that
@@ -222,10 +226,15 @@ describe('MessageStore phase gate', () => {
     const s = new MessageStore({ watchdogTimeoutMs: 100 });
     s.append(makeMsg('1', 'assistant'));
     s.startStreaming('1');
+    s.flush(); // drain the append-notify (else its leaked fallback timer fires
+               // the listener independent of the watchdog → vacuous). After
+               // flush, only the watchdog's endStreaming→_notify can fire it.
     const listener = vi.fn();
     s.subscribe(listener);
     listener.mockClear();
     vi.advanceTimersByTime(101); // watchdog fires → endStreaming → must notify
+    // _notify is rAF-gated; advance the 100ms fallback timer to flush the frame.
+    vi.advanceTimersByTime(101);
     expect(s.phase).toBe('idle');
     expect(listener).toHaveBeenCalled();
     s.destroy();

@@ -1186,9 +1186,18 @@ export function useChatStreamingLifecycle(
           // the flag. Convergent + cause-agnostic (heals ANY desync source), fires
           // ONLY on the actual divergence edge (no churn when in sync), and covers
           // background tabs. Turns a 120min freeze into ≤15s.
+          // GRACE (Gate-2 HIGH): a send sets isStreaming=true and stamps
+          // _reconcileStreamStart, THEN `await buildContentArray` (attachment
+          // file/network I/O, ChatPage.tsx:1876) runs BEFORE store.startStreaming
+          // sets phase='streaming'. In that window isStreaming=true && phase=idle
+          // is LEGITIMATE (turn starting), not a desync. Reuse the same ≥10s grace
+          // the force-clear path uses (line ~1158) so a just-started turn is never
+          // cleared. A real watchdog-fire desync is always ≥45s old (the watchdog
+          // timeout), so the grace excludes ONLY the start window, not the fix.
           if (tabState.isStreaming) {
             const dsStore = messageStoreRegistry.get(tabId);
-            if (dsStore && dsStore.phase === 'idle') {
+            const dsStartAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
+            if (dsStore && dsStore.phase === 'idle' && dsStartAge >= 10_000) {
               setIsStreaming(false, tabId);
               const dsSid = tabState.sessionId;
               if (dsSid) scheduleTurnEndReconcile(dsSid, tabId);
