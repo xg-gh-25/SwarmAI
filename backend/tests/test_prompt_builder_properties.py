@@ -81,6 +81,67 @@ class TestPromptBuilderDeterminism:
 
 
 # ---------------------------------------------------------------------------
+# Tool-access blacklist model (run_9cfdb08d) — whitelist→blacklist flip
+# ---------------------------------------------------------------------------
+
+class TestToolAccessBlacklistModel:
+    """resolve_allowed_tools no longer builds an implicit whitelist; restriction
+    moves to resolve_disallowed_tools (enable_*=False → deny). Default = allow-all
+    (allowed_tools=None) so built-ins like AskUserQuestion are not silently disabled."""
+
+    def test_no_explicit_config_returns_empty(self):
+        """AC1: config without allowed_tools → [] (NOT the 8-tool implicit whitelist)."""
+        builder = _make_builder()
+        assert builder.resolve_allowed_tools({}) == []
+        # enable_* flags must NOT resurrect an implicit whitelist
+        assert builder.resolve_allowed_tools(
+            {"enable_bash_tool": True, "enable_file_tools": True, "enable_web_tools": True}
+        ) == []
+
+    def test_explicit_allowed_tools_respected(self):
+        """AC2: explicit non-empty allowed_tools returned verbatim (opt-in whitelist)."""
+        builder = _make_builder()
+        assert builder.resolve_allowed_tools({"allowed_tools": ["Read", "Grep"]}) == ["Read", "Grep"]
+
+    def test_askuserquestion_not_disabled_by_default(self):
+        """AC3: default config → AskUserQuestion neither whitelisted-out nor in disallowed."""
+        builder = _make_builder()
+        assert builder.resolve_allowed_tools({}) == []  # → SDK allowed_tools=None → allow-all
+        assert "AskUserQuestion" not in builder.resolve_disallowed_tools({})
+
+    def test_enable_web_false_blacklists_web(self):
+        """AC6: enable_web_tools=False → WebFetch+WebSearch in disallowed (restriction preserved)."""
+        builder = _make_builder()
+        d = builder.resolve_disallowed_tools({"enable_web_tools": False})
+        assert "WebFetch" in d and "WebSearch" in d
+
+    def test_enable_bash_false_blacklists_bash(self):
+        """AC6: enable_bash_tool=False → Bash in disallowed."""
+        builder = _make_builder()
+        assert "Bash" in builder.resolve_disallowed_tools({"enable_bash_tool": False})
+
+    def test_enable_file_false_blacklists_file_tools(self):
+        """AC6: enable_file_tools=False → Read/Write/Edit/Glob/Grep in disallowed."""
+        builder = _make_builder()
+        d = builder.resolve_disallowed_tools({"enable_file_tools": False})
+        assert {"Read", "Write", "Edit", "Glob", "Grep"} <= set(d)
+
+    def test_enable_file_false_blacklists_notebookedit(self):
+        """Gate-2 adversarial: NotebookEdit is a file-mutating built-in — enable_file_tools=False
+        MUST deny it, else a 'no file tools' agent leaks notebook writes under default-allow."""
+        builder = _make_builder()
+        assert "NotebookEdit" in builder.resolve_disallowed_tools({"enable_file_tools": False})
+
+    def test_default_config_disallows_nothing_extra(self):
+        """Default (all flags True/absent) → resolve_disallowed_tools returns []."""
+        builder = _make_builder()
+        assert builder.resolve_disallowed_tools({}) == []
+        assert builder.resolve_disallowed_tools(
+            {"enable_bash_tool": True, "enable_file_tools": True, "enable_web_tools": True}
+        ) == []
+
+
+# ---------------------------------------------------------------------------
 # Property 10: Watchdog timeout formula
 # ---------------------------------------------------------------------------
 

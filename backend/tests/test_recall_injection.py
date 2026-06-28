@@ -114,6 +114,28 @@ class TestMaybeInjectRecall:
         assert mock_unit._recall_injected is True
 
     @pytest.mark.asyncio
+    async def test_recalled_provenance_header(self, mock_unit, mock_options):
+        """run_a16d61ad: injected recall MUST carry the [RECALLED] provenance header
+        so the model treats keyword-retrieved history as a lead-to-verify, NOT its
+        own reasoning (confabulation boundary). Mutation: strip the prefix → RED."""
+        from core.session_router import _maybe_inject_recall
+
+        with patch("core.session_router._recall_for_query", return_value="Some recalled knowledge"):
+            await _maybe_inject_recall(
+                user_message="How does the evolution pipeline work?",
+                options=mock_options,
+                unit=mock_unit,
+            )
+
+        sp = mock_options.system_prompt
+        # The provenance header must prefix the recalled block (not just exist somewhere).
+        assert "**[RECALLED]**" in sp
+        assert "NOT this turn's reasoning" in sp
+        assert "lead to verify" in sp
+        # Ordering: header appears BEFORE the recalled content (it's a prefix).
+        assert sp.index("**[RECALLED]**") < sp.index("Some recalled knowledge")
+
+    @pytest.mark.asyncio
     async def test_second_message_skips_recall(self, mock_unit, mock_options):
         from core.session_router import _maybe_inject_recall
 
