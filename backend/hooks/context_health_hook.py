@@ -28,21 +28,12 @@ from core.session_hooks import HookContext
 logger = logging.getLogger(__name__)
 
 
-def _is_cjk_like(c: str) -> bool:
-    """Check if character is CJK-like (tokenized at ~1.5 tokens by BPE).
-
-    Covers: CJK Unified Ideographs, Extension A, Compatibility, Fullwidth
-    forms, CJK Symbols/Punctuation, and Hangul Syllables.
-    """
-    cp = ord(c)
-    return (
-        0x3400 <= cp <= 0x9FFF       # CJK Unified + Extension A
-        or 0xF900 <= cp <= 0xFAFF    # Compatibility Ideographs
-        or 0x20000 <= cp <= 0x323AF  # Extensions B-I (rare but valid)
-        or 0x3000 <= cp <= 0x303F    # CJK Symbols and Punctuation
-        or 0xFF00 <= cp <= 0xFFEF    # Fullwidth Forms
-        or 0xAC00 <= cp <= 0xD7AF    # Hangul Syllables
-    )
+# NOTE: the former module-level `_is_cjk_like` CJK detector was REMOVED in
+# run_3f25a73a. It re-implemented CJK detection with a range that DIVERGED from
+# ContextDirectoryLoader._CJK_RE (it had Hangul but not Kana; the loader had Kana
+# but not Hangul — Gate-1 finding C). _check_token_budget now calls the canonical
+# estimate_tokens, which owns the single unified CJK range. Do NOT reintroduce a
+# second detector here — it WILL drift.
 
 
 # Pipeline-internal decision prefixes to filter before DDD cultivation.
@@ -2161,6 +2152,12 @@ class ContextHealthHook:
         if context_dir.is_dir():
             findings += self._check_token_budget(context_dir)
 
+        # 11b. Self-report drift: a context file that states its own token size
+        #      in prose ("~44K tokens") and has since grown misleads the agent
+        #      about its own context. WARN-only (run_3f25a73a).
+        if context_dir.is_dir():
+            findings += self._check_self_report_drift(context_dir)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -2351,16 +2348,32 @@ class ContextHealthHook:
         "SOUL.md", "AGENT.md", "USER.md", "STEERING.md", "TOOLS.md",
         "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md",
     )
-    _WARNING_THRESHOLD = 75_000
-    _EMERGENCY_THRESHOLD = 85_000
+    # OBSERVABILITY thresholds (run_3f25a73a). These are NOT gates — the
+    # assembly line does NOT truncate (XG directive 2026-06-28, pure-filesystem
+    # recall design §3.5: "the read+assembly line DEFAULTS to trusting that the
+    # files it loads are healthy and within spec"). These thresholds only emit a
+    # WARNING/EMERGENCY finding to the deep-check report so the SEPARATE write-side
+    # management line (decay/archive/trim — deferred #3) has a signal. WARNING is
+    # anchored to the 91K effective assembly budget; EMERGENCY is a clear-over.
+    # Measured with the calibrated estimate_tokens — the same estimator the
+    # assembly uses, so this number matches what actually enters the prompt.
+    _WARNING_THRESHOLD = 91_000
+    _EMERGENCY_THRESHOLD = 130_000
 
     def _check_token_budget(self, context_dir: Path) -> list[str]:
         """Measure total token consumption across all 9 context files.
 
-        Uses a CJK-aware heuristic: CJK chars ≈ 1.5 tokens, ASCII ≈ 1/3.5 tokens.
-        Emits WARNING/EMERGENCY finding when over threshold.
-        Persists measurement to self._token_measurement for session briefing.
+        Uses the CANONICAL ``ContextDirectoryLoader.estimate_tokens`` (the SAME
+        estimator the prompt assembly uses) — NOT a local re-implementation.
+        Before run_3f25a73a this method had its own ``cjk*1.5 + ascii/3.5``
+        formula that diverged ~2.2x from the canonical on CJK (Gate-1 finding);
+        adopting the canonical kills the divergence and means this number equals
+        what actually enters the prompt. Emits WARNING/EMERGENCY (observability,
+        not a gate — see threshold note above). Persists to
+        self._token_measurement for the session briefing.
         """
+        from core.context_directory_loader import ContextDirectoryLoader
+
         findings: list[str] = []
         total_tokens = 0
         file_tokens: dict[str, int] = {}
@@ -2370,11 +2383,7 @@ class ContextHealthHook:
             if not path.exists():
                 continue
             content = path.read_text(encoding="utf-8")
-            # CJK-aware estimation (covers CJK Unified + Extension A +
-            # Compatibility + Fullwidth + CJK Symbols + Hangul)
-            cjk_chars = sum(1 for c in content if _is_cjk_like(c))
-            ascii_chars = len(content) - cjk_chars
-            tokens = int(cjk_chars * 1.5 + ascii_chars / 3.5)
+            tokens = ContextDirectoryLoader.estimate_tokens(content)
             file_tokens[fname] = tokens
             total_tokens += tokens
 
@@ -2392,16 +2401,82 @@ class ContextHealthHook:
             top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
             findings.append(
                 f"[context/budget] EMERGENCY: {total_tokens}/{self._EMERGENCY_THRESHOLD} "
-                f"tokens. Top: {top3}. Auto-triggering Phase 1 compression."
+                f"tokens (real calibrated estimate). Top: {top3}. Write-side trim "
+                f"(decay/archive) needed — assembly does NOT truncate."
             )
         elif total_tokens > self._WARNING_THRESHOLD:
             sorted_files = sorted(file_tokens.items(), key=lambda x: -x[1])
             top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
             findings.append(
                 f"[context/budget] WARNING: {total_tokens}/{self._WARNING_THRESHOLD} "
-                f"tokens. Top: {top3}. Plan compression before next weekly run."
+                f"tokens (real calibrated estimate). Top: {top3}. Over assembly budget — "
+                f"plan write-side trim (assembly injects full, does not truncate)."
             )
 
+        return findings
+
+    # Matches embedded token self-claims like "~47K tokens", "~44K tokens",
+    # "≈ 30,000 tokens", "152K tok" — a NUMBER (with optional K/k suffix) near
+    # the word token(s). Used by _check_self_report_drift.
+    _SELF_REPORT_TOKEN_RE = re.compile(
+        r"[~≈]?\s*([0-9][0-9,\.]*)\s*([KkMm])?\s*(?:tok\b|tokens?\b)",
+        re.IGNORECASE,
+    )
+
+    def _check_self_report_drift(self, context_dir: Path) -> list[str]:
+        """Catch context files that self-report a token size diverging from reality.
+
+        A context file sometimes states its own size in prose (e.g. KNOWLEDGE.md:
+        "Context files: ~44K tokens"). When the file actually grows, that claim
+        goes stale and the agent then *believes* a wrong number about its own
+        context (the exact drift that motivated run_3f25a73a — the system
+        self-reported ~44K when the real calibrated size was ~152K).
+
+        This scans each context file for embedded "~N[K] tokens" claims, compares
+        each to the file's live calibrated estimate, and emits a WARNING finding
+        when a claim diverges > DRIFT_PCT. OBSERVABILITY ONLY — never auto-edits a
+        file (R3-8: the write/management line owns mutations, not this read-side
+        health check).
+        """
+        from core.context_directory_loader import ContextDirectoryLoader
+
+        DRIFT_PCT = 0.25
+        findings: list[str] = []
+
+        for fname in self._CONTEXT_FILES:
+            path = context_dir / fname
+            if not path.exists():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            live = ContextDirectoryLoader.estimate_tokens(content)
+            if live <= 0:
+                continue
+            for m in self._SELF_REPORT_TOKEN_RE.finditer(content):
+                num_s, suffix = m.group(1), m.group(2)
+                try:
+                    claimed = float(num_s.replace(",", ""))
+                except ValueError:
+                    continue
+                if suffix and suffix.lower() == "k":
+                    claimed *= 1_000
+                elif suffix and suffix.lower() == "m":
+                    claimed *= 1_000_000
+                # Only meaningful for file-scale claims (skip tiny inline numbers
+                # like "5 tokens" that aren't self-size claims).
+                if claimed < 5_000:
+                    continue
+                divergence = abs(live - claimed) / max(live, 1)
+                if divergence > DRIFT_PCT:
+                    findings.append(
+                        f"[context/self-report-drift] {fname}: claims "
+                        f"~{int(claimed):,} tokens but live calibrated estimate is "
+                        f"{live:,} ({int(divergence*100)}% off). Update the self-claim "
+                        f"or trim the file — a stale self-size misleads the agent."
+                    )
+                    break  # one finding per file is enough signal
         return findings
 
     def _check_write_governance(self, context_dir: Path) -> list[str]:

@@ -3,6 +3,13 @@
 Tests the two new capabilities:
 1. Token budget measurement in context_health_hook (_check_token_budget)
 2. EVOLUTION auto-compression in memory_health (Phase 1 Rule 1)
+
+run_3f25a73a: _check_token_budget now delegates to the CANONICAL
+ContextDirectoryLoader.estimate_tokens (calibrated CJK 1.1 tok/char,
+Latin 2.2 tok/word). The old local `cjk*1.5 + ascii/3.5` formula and the
+75K/85K thresholds were calibrated against an empirically-wrong coefficient;
+these tests were updated to the calibrated estimator + observability
+thresholds (WARNING 91K = assembly budget, EMERGENCY 130K).
 """
 
 import re
@@ -32,31 +39,32 @@ class TestTokenBudgetMeasurement:
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
-        # ~200 ASCII chars ≈ 50 tokens. 9 files × 50 = 450 tokens (well under 75K)
+        # ~200 ASCII chars (no spaces) ≈ 1 word ≈ 2 tokens. Tiny — well under 91K.
         ctx = self._make_context_dir(tmp_path, {
-            "SOUL.md": "x" * 200,
-            "AGENT.md": "x" * 200,
-            "STEERING.md": "x" * 200,
-            "MEMORY.md": "x" * 200,
-            "EVOLUTION.md": "x" * 200,
-            "KNOWLEDGE.md": "x" * 200,
-            "PROJECTS.md": "x" * 200,
-            "USER.md": "x" * 200,
-            "TOOLS.md": "x" * 200,
+            "SOUL.md": "x " * 50,
+            "AGENT.md": "x " * 50,
+            "STEERING.md": "x " * 50,
+            "MEMORY.md": "x " * 50,
+            "EVOLUTION.md": "x " * 50,
+            "KNOWLEDGE.md": "x " * 50,
+            "PROJECTS.md": "x " * 50,
+            "USER.md": "x " * 50,
+            "TOOLS.md": "x " * 50,
         })
         findings = hook._check_token_budget(ctx)
         assert findings == []
-        assert hook._token_measurement["total_tokens"] < 75_000
+        assert hook._token_measurement["total_tokens"] < 91_000
         assert hook._token_measurement["over_budget"] is False
 
     def test_warning_threshold_emits_finding(self, tmp_path):
-        """Over 75K tokens but under 85K → WARNING finding."""
+        """Over 91K tokens but under 130K → WARNING finding (observability)."""
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
-        # 280K ASCII chars ÷ 3.5 = 80K tokens → over WARNING (75K) but under EMERGENCY (85K)
+        # Latin 2.2 tok/word: ~45K space-separated words ≈ 99K tokens
+        # → over WARNING (91K) but under EMERGENCY (130K)
         ctx = self._make_context_dir(tmp_path, {
-            "MEMORY.md": "x" * 280_000,
+            "MEMORY.md": "word " * 45_000,
         })
         findings = hook._check_token_budget(ctx)
         assert len(findings) == 1
@@ -64,49 +72,55 @@ class TestTokenBudgetMeasurement:
         assert hook._token_measurement["over_budget"] is True
 
     def test_emergency_threshold_emits_finding(self, tmp_path):
-        """Over 85K tokens → EMERGENCY finding."""
+        """Over 130K tokens → EMERGENCY finding."""
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
-        # 350K ASCII chars ÷ 3.5 ≈ 100K tokens → over EMERGENCY (85K)
+        # Latin 2.2 tok/word: ~70K words ≈ 154K tokens → over EMERGENCY (130K)
         ctx = self._make_context_dir(tmp_path, {
-            "MEMORY.md": "x" * 350_000,
+            "MEMORY.md": "word " * 70_000,
         })
         findings = hook._check_token_budget(ctx)
         assert len(findings) == 1
         assert "EMERGENCY" in findings[0]
 
+    def test_matches_canonical_estimator(self, tmp_path):
+        """_check_token_budget must equal ContextDirectoryLoader.estimate_tokens
+        (Gate-1: no second formula — health delegates to the canonical)."""
+        from hooks.context_health_hook import ContextHealthHook
+        from core.context_directory_loader import ContextDirectoryLoader
+
+        hook = ContextHealthHook()
+        content = "SwarmAI 是自进化 Agent OS. The READ path is the differentiator " * 50
+        ctx = self._make_context_dir(tmp_path, {"MEMORY.md": content})
+        hook._check_token_budget(ctx)
+        assert (
+            hook._token_measurement["per_file"]["MEMORY.md"]
+            == ContextDirectoryLoader.estimate_tokens(content)
+        )
+
     def test_cjk_aware_token_counting(self, tmp_path):
-        """CJK characters count as ~1.5 tokens each (widened range)."""
+        """CJK counted via canonical (1.1 tok/char): 1000 中 ≈ 1100 tokens."""
         from hooks.context_health_hook import ContextHealthHook
+        from core.context_directory_loader import ContextDirectoryLoader
 
         hook = ContextHealthHook()
-        # 1000 CJK chars (U+4E00 block) × 1.5 = 1500 tokens
-        # 1000 ASCII chars × (1/3.5) ≈ 286 tokens
-        ctx = self._make_context_dir(tmp_path, {
-            "MEMORY.md": "中" * 1000 + "x" * 1000,
-        })
-        findings = hook._check_token_budget(ctx)
-        measurement = hook._token_measurement
-        # CJK: 1000 × 1.5 = 1500, ASCII: 1000 / 3.5 ≈ 286 → total ~1786
-        assert 1700 < measurement["per_file"]["MEMORY.md"] < 1900
+        content = "中" * 1000 + " " + "word " * 100
+        ctx = self._make_context_dir(tmp_path, {"MEMORY.md": content})
+        hook._check_token_budget(ctx)
+        # equals canonical by construction; sanity: CJK dominates ~1100
+        assert hook._token_measurement["per_file"]["MEMORY.md"] == \
+            ContextDirectoryLoader.estimate_tokens(content)
+        assert hook._token_measurement["per_file"]["MEMORY.md"] > 1000
 
-    def test_cjk_fullwidth_counted(self, tmp_path):
-        """Fullwidth punctuation and CJK Symbols also count as CJK-like."""
+    def test_no_local_cjk_formula_remains(self):
+        """The divergent local cjk*1.5 formula must be GONE (grep-style guard)."""
+        import inspect
         from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        # 100 fullwidth chars (U+FF01-U+FF64, within 0xFF00-0xFFEF)
-        # 50 CJK symbols (U+3001-U+3032, within 0x3000-0x303F)
-        fullwidth = "".join(chr(c) for c in range(0xFF01, 0xFF01 + 100))
-        cjk_symbols = "".join(chr(c) for c in range(0x3001, 0x3001 + 50))
-        ctx = self._make_context_dir(tmp_path, {
-            "MEMORY.md": fullwidth + cjk_symbols,
-        })
-        findings = hook._check_token_budget(ctx)
-        measurement = hook._token_measurement
-        # 150 CJK-like chars × 1.5 = 225 tokens
-        assert 220 < measurement["per_file"]["MEMORY.md"] < 230
+        src = inspect.getsource(ContextHealthHook._check_token_budget)
+        assert "cjk_chars * 1.5" not in src
+        assert "_is_cjk_like" not in src
+        assert "estimate_tokens" in src
 
     def test_ignores_non_context_files(self, tmp_path):
         """Files not in the 9 context file list are ignored."""
@@ -114,13 +128,65 @@ class TestTokenBudgetMeasurement:
 
         hook = ContextHealthHook()
         ctx = self._make_context_dir(tmp_path, {
-            "SOUL.md": "x" * 100,
-            "L1_SYSTEM_PROMPTS.md": "x" * 500_000,  # cache file, ignored
-            ".memory-usage.json": "x" * 100_000,  # metadata, ignored
+            "SOUL.md": "x " * 30,
+            "L1_SYSTEM_PROMPTS.md": "x " * 500_000,  # cache file, ignored
+            ".memory-usage.json": "x " * 100_000,  # metadata, ignored
         })
         findings = hook._check_token_budget(ctx)
-        # Only SOUL.md counted
+        # Only SOUL.md counted (~30 words ≈ 66 tokens)
         assert hook._token_measurement["total_tokens"] < 100
+
+
+class TestSelfReportDrift:
+    """run_3f25a73a: catch context files that self-report a token size diverging
+    from their real calibrated size (the drift that made the system claim ~44K
+    when it was really ~152K). WARN-only — never mutates."""
+
+    def _make_ctx(self, tmp_path, files):
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        for n, c in files.items():
+            (ctx / n).write_text(c, encoding="utf-8")
+        return ctx
+
+    def test_stale_self_claim_triggers_warning(self, tmp_path):
+        from hooks.context_health_hook import ContextHealthHook
+        hook = ContextHealthHook()
+        # A file that CLAIMS "~10K tokens" but is really ~50K+ (25K words × 2.2)
+        body = "Context files: ~10K tokens total.\n\n" + ("word " * 25_000)
+        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        findings = hook._check_self_report_drift(ctx)
+        assert any("self-report-drift" in f and "KNOWLEDGE.md" in f for f in findings)
+
+    def test_accurate_self_claim_no_warning(self, tmp_path):
+        from hooks.context_health_hook import ContextHealthHook
+        from core.context_directory_loader import ContextDirectoryLoader
+        hook = ContextHealthHook()
+        body_words = "word " * 25_000
+        real = ContextDirectoryLoader.estimate_tokens(body_words)
+        # Claim the REAL size (within 25%)
+        body = f"Context files: ~{real // 1000}K tokens total.\n\n" + body_words
+        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        findings = hook._check_self_report_drift(ctx)
+        assert findings == []
+
+    def test_small_inline_numbers_ignored(self, tmp_path):
+        """'5 tokens' inline (not a file-size claim) must not false-fire."""
+        from hooks.context_health_hook import ContextHealthHook
+        hook = ContextHealthHook()
+        body = "The function returns 5 tokens per call.\n\n" + ("word " * 25_000)
+        ctx = self._make_ctx(tmp_path, {"MEMORY.md": body})
+        findings = hook._check_self_report_drift(ctx)
+        assert findings == []  # 5 < 5000 floor, skipped
+
+    def test_never_mutates_file(self, tmp_path):
+        from hooks.context_health_hook import ContextHealthHook
+        hook = ContextHealthHook()
+        body = "Context: ~10K tokens.\n\n" + ("word " * 25_000)
+        ctx = self._make_ctx(tmp_path, {"MEMORY.md": body})
+        before = (ctx / "MEMORY.md").read_text()
+        hook._check_self_report_drift(ctx)
+        assert (ctx / "MEMORY.md").read_text() == before
 
 
 # ── EVOLUTION Auto-Compression Tests ─────────────────────────────────
