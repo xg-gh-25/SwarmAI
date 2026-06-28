@@ -137,6 +137,42 @@ class TestGenerateMemoryIndex:
         index = generate_memory_index(SAMPLE_MEMORY)
         assert "Signal fetcher" in index or "[OT" in index
 
+    def test_open_threads_indexed_exactly_once(self):
+        """Each OTxx must appear exactly ONCE in the index.
+
+        Regression for the double-list bug: Open Threads is in
+        MEMORY_ACTIVE_SECTIONS, so the general active_lines loop emitted every
+        OT entry AND the dedicated ot_lines block emitted it again — every
+        OTxx appeared twice. The dedicated ot_lines block is the canonical one
+        (it filters ✅-resolved entries, which the active loop does not), so
+        Open Threads must be excluded from the active_lines scan.
+
+        Mutation check: re-add "Open Threads" to _active_scan in
+        generate_memory_index and this test goes RED (each OT id == 2).
+        """
+        import re
+        from collections import Counter
+        from core.memory_index import generate_memory_index
+
+        index = generate_memory_index(SAMPLE_MEMORY)
+        ot_ids = re.findall(r"^- \[(OT\d+)\]", index, re.M)
+        assert ot_ids, "expected at least one [OTxx] entry in the index"
+        dupes = {k: v for k, v in Counter(ot_ids).items() if v > 1}
+        assert not dupes, f"Open Threads double-listed in index: {dupes}"
+
+    def test_non_ot_sections_still_indexed_after_ot_dedup(self):
+        """Excluding Open Threads from active scan must NOT drop other Active
+        sections (Guidelines/Pitfalls/Decisions). Guards the blast radius of
+        the OT-dedup fix."""
+        from core.memory_index import generate_memory_index
+
+        index = generate_memory_index(SAMPLE_MEMORY)
+        # Active-tier non-OT entries must survive
+        assert "[GUI" in index, "Guidelines dropped from index by OT-dedup fix"
+        assert "[DEC" in index, "Decisions dropped from index by OT-dedup fix"
+        # And OT entries are still present (just once — via the dedicated block)
+        assert "[OT" in index, "Open Threads entirely missing after dedup fix"
+
     def test_counts_header(self):
         """Index should have a summary count line."""
         from core.memory_index import generate_memory_index

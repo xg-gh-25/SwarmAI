@@ -381,8 +381,16 @@ def generate_memory_index(content: str) -> str:
             permanent_lines.append(line)
 
     # ── Build Active tier (operational + cognitive — decay-managed) ──
+    # Open Threads is in ACTIVE_SECTIONS (layer="operational") but is emitted
+    # by its OWN dedicated ot_lines block below — which is canonical because it
+    # filters ✅-resolved entries (this generic loop does not). Excluding it
+    # here prevents every OTxx being double-listed (once rich here, once bare
+    # below). Mirrors the same OT-exclusion already done at
+    # context_health_hook.py _staleness_scan (s != "Open Threads").
     active_lines: list[str] = []
-    _active_scan = [s for s in ACTIVE_SECTIONS if sections.get(s)]
+    _active_scan = [
+        s for s in ACTIVE_SECTIONS if sections.get(s) and s != "Open Threads"
+    ]
     for sec_name in _active_scan:
         prefix = SECTION_KEY_PREFIX.get(sec_name, "ACT")
         entries = _parse_entries(sections.get(sec_name, ""))
