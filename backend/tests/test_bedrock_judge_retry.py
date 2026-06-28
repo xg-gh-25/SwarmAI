@@ -86,6 +86,28 @@ def test_converse_with_retry_does_not_retry_non_auth_error():
     mock_evict.assert_not_called()
 
 
+# ─── AC1b: second attempt ALSO fails → raises, no third attempt ─────────────
+def test_converse_with_retry_raises_when_retry_also_auth_fails():
+    """Bound proof: a persistent auth failure retries ONCE then raises (no loop)."""
+    from jobs import bedrock
+
+    client = MagicMock()
+    client.converse.side_effect = [_auth_error(), _auth_error()]  # both attempts fail
+
+    with patch.object(bedrock, "get_client", return_value=client), \
+         patch.object(bedrock, "evict_client") as mock_evict:
+        with pytest.raises(Exception):
+            bedrock.converse_with_retry(
+                messages=[{"role": "user", "content": [{"text": "hi"}]}],
+                system=[{"text": "judge"}],
+                inference_config={"maxTokens": 100, "temperature": 0.0},
+                model_id="m",
+            )
+
+    assert client.converse.call_count == 2, "retries exactly once then raises — never a 3rd attempt"
+    mock_evict.assert_called_once(), "evicts once (on the first failure) before the single retry"
+
+
 # ─── AC4: happy path unchanged ──────────────────────────────────────────────
 def test_converse_with_retry_happy_path_single_call():
     from jobs import bedrock
