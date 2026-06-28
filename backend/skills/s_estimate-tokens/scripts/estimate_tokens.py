@@ -39,12 +39,26 @@ def _load_canonical_estimator():
 
     Returns the estimate_tokens callable, or raises RuntimeError (fail loud).
     """
+    import os
+
     marker = Path("backend") / "core" / "context_directory_loader.py"
     candidates = []
+    # 1. Explicit override — survives invocation from ANY cwd / a projected copy
+    #    that has no backend/ alongside it (Gate-2 finding E: the projected
+    #    .claude/skills/ copy and the agent workspace ~/.swarm-ai/SwarmWS have no
+    #    backend/, so __file__/cwd discovery alone fails when run from there).
+    env_root = os.environ.get("SWARM_REPO_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).resolve())
+    # 2. Walk up from the script location and the cwd (works in the dev checkout).
     here = Path(__file__).resolve()
     candidates.extend(here.parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
+    # 3. Known source-repo install path (last-resort default for this machine's
+    #    deployment topology — the daemon bundle is frozen and ships no .py source,
+    #    so a subprocess estimator must reach the source checkout).
+    candidates.append(Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"))
 
     seen = set()
     for base in candidates:

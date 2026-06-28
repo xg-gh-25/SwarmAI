@@ -72,3 +72,30 @@ class TestSkillParity:
         assert "wc -w" not in code
         assert "1.8" not in code
         assert "200000" not in code  # no hardcoded window in executable shell
+
+    def test_discovery_works_from_outside_repo(self, tmp_path):
+        """Gate-2 finding E: invoked from a cwd with NO backend/ (projected-copy /
+        agent-workspace scenario), the entry must still find the canonical via the
+        env override or known-path fallback — and FAIL LOUD, never wrong numbers."""
+        f = tmp_path / "x.md"
+        f.write_text("hello world test content here", encoding="utf-8")
+        # Run with cwd = tmp_path (no backend/ anywhere up the tree)
+        out = subprocess.run(
+            [sys.executable, str(PY_ENTRY), str(f)],
+            capture_output=True, text=True, timeout=30, cwd=str(tmp_path),
+        )
+        assert out.returncode == 0, f"discovery failed from outside repo: {out.stderr}"
+        assert _parse_tokens(out.stdout) == _canonical(f.read_text())
+
+    def test_env_var_discovery(self, tmp_path):
+        """SWARM_REPO_ROOT override resolves the canonical even from an alien cwd."""
+        import os
+        f = tmp_path / "y.md"
+        f.write_text("word " * 100, encoding="utf-8")
+        env = {**os.environ, "SWARM_REPO_ROOT": str(REPO)}
+        out = subprocess.run(
+            [sys.executable, str(PY_ENTRY), str(f)],
+            capture_output=True, text=True, timeout=30, cwd=str(tmp_path), env=env,
+        )
+        assert out.returncode == 0, out.stderr
+        assert _parse_tokens(out.stdout) == _canonical(f.read_text())
