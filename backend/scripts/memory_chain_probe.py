@@ -246,8 +246,12 @@ def _archive_recall(negative: bool = False) -> int:
             _sqlite_vec.load(conn)
             conn.enable_load_extension(False)
         except Exception as exc:  # noqa: BLE001
+            # SKIP is neither pass nor fail: the marker-based harness already
+            # reports non-pass (the _OK/_TEETH marker is absent), but return a
+            # DISTINCT exit code (2) so exit-code consumers also see non-pass —
+            # never a false-green (Gate-2 LOW, run_2a5ff539).
             print(f"ARCHIVE_RECALL_SKIP (sqlite-vec unavailable: {exc})")
-            return 0 if not negative else 1
+            return 2
         store = KnowledgeStore(conn)
         store.ensure_tables()
         content = (
