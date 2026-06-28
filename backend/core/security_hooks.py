@@ -17,6 +17,7 @@ Public symbols
 - ``GOVERNANCE_TIER2_PATTERNS``              — Tier 2 (Statutory) file patterns
 """
 
+import asyncio
 import fnmatch
 import json
 import logging
@@ -971,6 +972,140 @@ async def eval_command_guard(
                 "纯浪费,并曾把 judge 的 Bedrock 调用挂死(2026-06-28)。 "
                 "`ci_eval_gate` 报 stale 是预期的 —— 它在改动上线后由 eval 作为系统关注点跑过时自然清掉,"
                 "不是靠你现在对旧 binary 重跑 eval。 (R6 / R9 / STEERING #5)"
+            ),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# bash-syntax guard — hang prevention via parse-check (PreToolUse, Bash)
+# ---------------------------------------------------------------------------
+# A syntactically INCOMPLETE bash command (unterminated quote/backtick, unclosed
+# if/brace/paren) makes bash enter PS2 continuation mode WAITING ON STDIN. In a
+# headless session no stdin arrives, so the command BLOCKS FOREVER — run-real, an
+# unterminated `echo "=== jobs/bedro` ran 12 minutes (it escaped the 120s
+# foreground timeout via harness auto-backgrounding) inside a pipeline step.
+#
+# None of the existing layers catches this: the 120s foreground timeout is
+# wall-clock disaster-recovery (O030 — it can't tell HANG from SLOW, and is
+# escaped by auto-backgrounding); background_command_guard only matches EXPLICIT
+# backgrounding; dangerous_command_gate pattern-MATCHES, it does not PARSE.
+#
+# Fix (P7: defense outside the agent — prose "close your quotes" cannot hold):
+# run `bash -n` (parse-only, NO execution, ~ms) before the command runs. The set
+# of commands `bash -n` rejects (exit!=0) is EXACTLY the PS2-continuation set ==
+# the hang set (verified live: unterminated "/'/`/if/{ → exit 2; valid
+# multiline/heredoc/$()/quoted/long → exit 0). So denying exit!=0 prevents the
+# hang at ZERO false-kill cost for valid commands.
+#
+# FAIL-OPEN is the cardinal rule: the guard must NEVER block a command because of
+# its OWN failure (bash missing, the check timing out, any unexpected error). A
+# guard that false-kills legitimate work is worse than the hang it prevents — so
+# every non-"clean syntax error" path APPROVES. The bash -n subprocess is itself
+# wrapped in a short wait_for cap + killed-on-timeout so the guard cannot become a
+# new hang source (the exact irony this guard exists to prevent).
+#
+# NOTE on the one KNOWN gap (documented, not hidden): an UNTERMINATED HEREDOC
+# (`cat <<EOF` with no closing EOF) passes `bash -n` (exit 0) — but it also does
+# NOT hang in headless mode (bash reads the heredoc body to end-of-string, it does
+# not wait on a TTY), so approving it is correct. The hang set and the bash -n
+# exit!=0 set coincide; heredoc-unterminated is in neither.
+
+# Path to the system bash used for the parse check. /bin/bash is guaranteed on
+# macOS + Linux; the daemon runs the same binary, so `bash -n` behavior matches
+# what the Bash tool would do. Resolved once at import (cheap, stable).
+_BASH_FOR_SYNTAX_CHECK = "/bin/bash" if os.path.exists("/bin/bash") else "bash"
+# The parse check is ~milliseconds; this cap is pure defense-in-depth so the guard
+# itself can never hang. On timeout we KILL the subprocess and fail-OPEN.
+_BASH_SYNTAX_CHECK_TIMEOUT_S = 3.0
+
+
+async def bash_syntax_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Bash): DENY a command that `bash -n` rejects as syntactically
+    incomplete (the headless-hang set); APPROVE everything else, fail-OPEN.
+
+    Prevents the unterminated-quote / unclosed-block hang (a bad command blocks
+    forever waiting on stdin that never comes — run-real 12-minute hang). The
+    DENY set == `bash -n` exit!=0 == the PS2-continuation set; valid commands
+    (including multiline/heredoc/$()/quoted/long) exit 0 and are approved.
+
+    Fail-OPEN on EVERYTHING that is not a clean, reproduced syntax error:
+    non-Bash, empty command, valid syntax, bash binary missing, check timeout,
+    or any unexpected exception. The guard must never block a legitimate command
+    because of its OWN infrastructure failure — that would be worse than the hang.
+    """
+    if input_data.get("tool_name") != "Bash":
+        return {"decision": "approve"}
+    command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command:
+        return {"decision": "approve"}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _BASH_FOR_SYNTAX_CHECK,
+            "-n",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(input=command.encode("utf-8", errors="replace")),
+                timeout=_BASH_SYNTAX_CHECK_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            # Cancellable cap fired — kill the subprocess (no zombie) and fail-open.
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:  # noqa: BLE001 — best-effort reap; never block on it
+                pass
+            logger.warning(
+                "[bash_syntax_guard] bash -n exceeded %.0fs — failing open",
+                _BASH_SYNTAX_CHECK_TIMEOUT_S,
+            )
+            return {"decision": "approve"}
+    except Exception as e:  # noqa: BLE001
+        # bash missing / spawn failure / anything unexpected → FAIL-OPEN. Never
+        # block a real command on the guard's own infra failure. (GC19: log the
+        # exception type, don't swallow silently.)
+        logger.warning(
+            "[bash_syntax_guard] parse check failed (%s: %s) — failing open",
+            type(e).__name__,
+            e,
+        )
+        return {"decision": "approve"}
+
+    # exit 0 → parseable (incl. valid multiline/heredoc/$()/quoted) → APPROVE.
+    if proc.returncode == 0:
+        return {"decision": "approve"}
+
+    # exit!=0 → syntax error == the headless-hang set → DENY, echo bash's own
+    # diagnostic so the agent rewrites the command instead of hanging on it.
+    diagnostic = (stderr or b"").decode("utf-8", errors="replace").strip()
+    # Keep the reason bounded — the first lines carry the unexpected-EOF message.
+    if len(diagnostic) > 400:
+        diagnostic = diagnostic[:400] + " …"
+    logger.warning(
+        "[BLOCKED] bash syntax error (would hang on stdin): %s", command[:80]
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "This Bash command has a SYNTAX ERROR — `bash -n` rejected it. "
+                "In headless mode an unterminated quote/backtick or unclosed "
+                "block makes bash wait on stdin that never arrives, so the "
+                "command would HANG indefinitely (not error fast). Rewrite it: "
+                "close every quote/backtick, balance if/then/fi and braces, put "
+                "ONE command per line, and move multi-line logic into a script "
+                "file you then execute. bash -n said:\n"
+                f"{diagnostic or '(no stderr captured)'}"
             ),
         }
     }

@@ -27,6 +27,7 @@ from .security_hooks import (
     background_command_guard,
     pytest_command_guard,
     eval_command_guard,
+    bash_syntax_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
@@ -233,6 +234,19 @@ async def build_hooks(
     registry.register(
         "PreToolUse", eval_command_guard,
         "eval_command_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: bash-syntax guard (Bash-scoped) ──────────
+    # Run `bash -n` (parse-only, no execution) before each command. A
+    # syntactically incomplete command (unterminated quote/backtick, unclosed
+    # block) makes bash wait on stdin that never arrives in headless mode →
+    # hangs forever (run-real 12-min hang escaping the 120s foreground timeout).
+    # bash -n exit!=0 == the hang set; DENY those, fail-OPEN on everything else
+    # (incl. guard infra failure). Structural prevention the 120s timeout can't
+    # give (O030: wall-clock can't tell HANG from SLOW, escaped by auto-bg).
+    registry.register(
+        "PreToolUse", bash_syntax_guard,
+        "bash_syntax_guard", matcher="Bash",
     )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────
