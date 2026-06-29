@@ -102,7 +102,7 @@ If you're also using AI to write code, make content, or run operations — these
 | 10 | **Job System** | Background intelligence: 13 signal feeds, cron, budget-gated | [code](./backend/jobs/scheduler.py) |
 | 11 | **4-Platform Backend** | macOS daemon · Hive (EC2) · Windows · Linux. Compile-time isolation | [code](./backend/main.py) |
 | 12 | **Skills + Channels** | 88 skills (lazy/always), Slack gateway, 3-tier permission | [code](./backend/core/skill_registry.py) |
-| 13 | **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate. Proves convergence, not vibes | [docs](./docs/OS-Eval-Function-Design.md) |
+| 13 | **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate. Proves convergence, not vibes | [docs](./docs/OS-Eval-Function-Design.md) · [diagram](./assets/eval-architecture.svg) |
 
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
 
