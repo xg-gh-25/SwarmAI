@@ -125,14 +125,28 @@ class TestInstallDaemonEndpoint:
 
 @pytest.fixture
 def client():
-    """FastAPI test client with startup complete."""
+    """FastAPI test client WITHOUT lifespan startup.
+
+    These tests only POST /api/system/install-daemon (with the daemon-install
+    internals mocked) — they do NOT need the real FastAPI lifespan. Constructing
+    ``TestClient(main.app)`` *without* the ``with`` context manager skips lifespan
+    enter/exit (Starlette runs startup/shutdown only when TestClient is a context
+    manager).
+
+    Why this matters (run_b9ecb07a): the previous ``with TestClient(main.app)``
+    form ran the real lifespan (DB init + migrations + workspace ensure —
+    main.py:693+), pushing an R7 regression pytest past the 120s foreground
+    timeout → Bash auto-backgrounds → stranded UI spinner. This file carried the
+    identical trap as test_daemon_sidecar_fixes.py; both are fixed the same way.
+    """
     from fastapi.testclient import TestClient
     import main
 
     original = main._startup_complete
     main._startup_complete = True
     try:
-        with TestClient(main.app) as c:
-            yield c
+        # NOTE: deliberately NOT `with TestClient(...)` — the context-manager form
+        # triggers lifespan startup. A bare TestClient serves routes without it.
+        yield TestClient(main.app)
     finally:
         main._startup_complete = original

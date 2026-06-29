@@ -49,9 +49,9 @@ class TestBootId:
         r2 = client.get("/health")
         assert r1.json()["boot_id"] == r2.json()["boot_id"]
 
-    def test_client_fixture_does_not_run_lifespan(self):
-        """REGRESSION GUARD (run_b9ecb07a): the `client` fixture must NOT trigger
-        FastAPI lifespan startup.
+    def test_client_fixture_does_not_run_lifespan(self, request, monkeypatch):
+        """REGRESSION GUARD (run_b9ecb07a): the REAL `client` fixture must NOT
+        trigger FastAPI lifespan startup.
 
         The lifespan (main.py:693+) does heavy work — DB init, migrations, workspace
         ensure. If the fixture runs it, an R7 regression pytest exceeds the 120s
@@ -59,16 +59,16 @@ class TestBootId:
         Starlette runs lifespan ONLY when TestClient is used as a context manager,
         so the fixture must construct a bare ``TestClient(main.app)`` (no ``with``).
 
-        We assert this structurally: serving /health works WITHOUT entering the
-        lifespan, which is exactly what a bare TestClient guarantees. A future edit
-        re-introducing ``with TestClient(...)`` would still pass /health, so we also
-        pin the guarantee by patching the lifespan to a tripwire and confirming the
-        fixture-style construction never trips it.
+        This asserts against the ACTUAL fixture (not a throwaway probe app): it
+        replaces ``main.app``'s lifespan with a tripwire, then instantiates the real
+        ``client`` fixture via ``request.getfixturevalue`` and hits /health. If a
+        future edit reintroduces ``with TestClient(main.app)``, Starlette enters the
+        lifespan → the tripwire fires → this test FAILS. Mutation-proven: reverting
+        the fixture to the ``with`` form makes this test red.
         """
         from contextlib import asynccontextmanager
 
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+        import main
 
         tripped = {"lifespan_ran": False}
 
@@ -77,20 +77,18 @@ class TestBootId:
             tripped["lifespan_ran"] = True
             yield
 
-        # Build a throwaway app wired exactly like main.app (lifespan attached),
-        # then construct the client the SAME way the fixture does (no `with`).
-        probe_app = FastAPI(lifespan=_tripwire_lifespan)
+        # Swap the lifespan that main.app would run on TestClient.__enter__.
+        # Starlette stores it at app.router.lifespan_context.
+        monkeypatch.setattr(main.app.router, "lifespan_context", _tripwire_lifespan)
 
-        @probe_app.get("/health")
-        def _health():
-            return {"ok": True}
-
-        c = TestClient(probe_app)  # bare — the fixture's pattern
-        resp = c.get("/health")
+        # Instantiate the REAL `client` fixture — this is the thing under test.
+        client = request.getfixturevalue("client")
+        resp = client.get("/health")
         assert resp.status_code == 200
         assert tripped["lifespan_ran"] is False, (
-            "Bare TestClient must NOT run lifespan — if this fails, the fixture "
-            "pattern changed and the R7-timeout/stranded-spinner bug can recur."
+            "The `client` fixture ran main.app's lifespan — it must use a bare "
+            "TestClient (no `with`). Reintroducing `with TestClient(...)` revives "
+            "the R7-timeout / stranded-spinner bug (run_b9ecb07a)."
         )
 
     def test_boot_id_in_backend_json(self, tmp_path):
