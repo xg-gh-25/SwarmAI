@@ -21,6 +21,26 @@ Your AI team, one human directing.
 
 ---
 
+## Why SwarmAI
+
+Most AI tools are **flat**: every session starts from zero, every mistake is made again, and "memory" is a transcript nobody learns from. SwarmAI is **compound** — it treats every interaction as a chance to upgrade the system itself.
+
+It doesn't just *remember* what happened; it **distills** experience into durable knowledge, **prunes** what stops being useful, and **rewrites its own operating rules** when a mistake repeats — changes you can read in a `git diff`. The coding pipeline doesn't iterate toward "good enough"; it **converges** on a definition of done and refuses to ship until adversarial gates pass. Error classes that used to recur monotonically decrease — because carefulness doesn't scale, gates do.
+
+The thesis we're testing, live and in public: **can one builder + AI operate at the scale of a whole team?** Not by making the model bigger, but by building the *operating system* around it — context, memory, evolution, and measurement wired into a single compounding loop. The loop itself is the product; you can't extract one engine and get the same effect.
+
+> **This isn't a product demo — it's a living experiment, documented as it happens.** Below are 60+ deep-dive discussions: the architecture decisions, the failures, the post-mortems, and the design philosophy behind every engine.
+
+### 📚 Start Here — The Thinking Behind the Code
+
+| | |
+|---|---|
+| 🗺️ **[Reading Matrix — 3 Curated Paths](https://github.com/xg-gh-25/SwarmAI/discussions/35)** | **Builder** (~45 min) · **Architect** (~60 min) · **Leader** (~30 min) — don't read everything, pick your path |
+| 💬 **[All Discussions (68)](https://github.com/xg-gh-25/SwarmAI/discussions)** | Thought leadership, architecture deep-dives, and post-mortems — also mirrored in [`docs/discussions/`](./docs/discussions/) |
+| 🧭 **[Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38)** | The beliefs that became enforcement — why each one earned its place from a failure |
+
+---
+
 ## Quick Start
 
 ```bash
@@ -55,7 +75,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 ## Core Engines
 
-12 interconnected engines. Each independently valuable; together they compound.
+13 interconnected engines. Each independently valuable; together they compound.
 
 | # | Engine | What It Does | Deep Dive |
 |---|--------|-------------|-----------|
@@ -71,6 +91,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 | 10 | **Job System** | Background intelligence: 13 signal feeds, cron, budget-gated | — |
 | 11 | **4-Platform Backend** | macOS daemon · Hive (EC2) · Windows · Linux. Compile-time isolation | — |
 | 12 | **Skills + Channels** | 86 skills (lazy/always), Slack gateway, 3-tier permission | — |
+| 13 | **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate. Proves convergence, not vibes | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
 
@@ -96,7 +117,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 > 📖 **Full thesis + CLASS A case study + convergence evidence:** [docs/THESIS.md](./docs/THESIS.md)
 >
-> 📖 **Discussion #39:** [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/39)
+> 📖 **Discussion #38:** [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38)
 
 ---
 
@@ -118,7 +139,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 | What | Link |
 |------|------|
-| **Discussions (45+)** | [Reading Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min |
+| **Discussions (68)** | [Reading Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [all](https://github.com/xg-gh-25/SwarmAI/discussions) |
 | **AI Agent Pitfall Guide** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **Design Docs** | [Platform](./docs/DDD-Platform-Overview.md) · [Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Memory](./docs/Memory-Management-Design.md) · [Evolution](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
 | **Contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md) |

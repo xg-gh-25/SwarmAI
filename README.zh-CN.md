@@ -21,6 +21,26 @@
 
 ---
 
+## 为什么是 SwarmAI
+
+大多数 AI 工具是**扁平**的：每次会话从零开始，每个错误重犯一遍，所谓"记忆"不过是一份没人从中学习的对话记录。SwarmAI 是**复利**的——它把每一次交互都当成升级系统自身的机会。
+
+它不只是*记住*发生了什么，而是把经验**蒸馏**成持久知识，**淘汰**不再有用的部分，并在错误重复出现时**改写自己的操作规则**——这些改动你能在 `git diff` 里读到。编码流水线不会迭代到"差不多就行"，而是**收敛**到一个明确的完成定义，不通过对抗性门控就拒绝交付。曾经反复出现的错误类别单调递减——因为细心不可规模化，门控才可以。
+
+我们正在公开验证的命题：**一个人 + AI 能否达到一整个团队的产出规模？** 不是靠把模型做得更大，而是靠在它周围构建**操作系统**——把上下文、记忆、进化、测量接进同一条复利闭环。闭环本身就是产品；你无法抽出单个引擎还得到同样的效果。
+
+> **这不是产品 Demo——这是一个边发生边记录的活实验。** 下面是 60+ 篇深度讨论：架构决策、踩过的坑、复盘报告，以及每个引擎背后的设计哲学。
+
+### 📚 从这里开始 —— 代码背后的思考
+
+| | |
+|---|---|
+| 🗺️ **[阅读矩阵 — 3 条精选路径](https://github.com/xg-gh-25/SwarmAI/discussions/35)** | **Builder**（~45 分钟）· **Architect**（~60 分钟）· **Leader**（~30 分钟）—— 别全读，挑你的路径 |
+| 💬 **[全部讨论（68 篇）](https://github.com/xg-gh-25/SwarmAI/discussions)** | 思想领导力、架构深潜、复盘报告 —— 同时镜像在 [`docs/discussions/`](./docs/discussions/) |
+| 🧭 **[设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39)** | 信念如何变成强制 —— 每一条都是从一次失败里挣来的 |
+
+---
+
 ## 快速开始
 
 ```bash
@@ -55,7 +75,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 ## 核心引擎
 
-12 个互联引擎。每个独立有价值；组合在一起产生复利。
+13 个互联引擎。每个独立有价值；组合在一起产生复利。
 
 | # | 引擎 | 做什么 | 详情 |
 |---|------|--------|------|
@@ -71,6 +91,7 @@ cd ../desktop && npm install && npm run tauri:dev
 | 10 | **任务系统** | 后台智能：13 信号源，定时任务，预算门控 | — |
 | 11 | **4 平台后端** | macOS daemon · Hive (EC2) · Windows · Linux。编译时隔离 | — |
 | 12 | **技能 + 通道** | 86 技能（lazy/always），Slack 网关，三层权限 | — |
+| 13 | **Eval（本体感觉）** | 解耦、系统级：Golden Set + git 绑定回归门控。证明收敛，而非凭感觉 | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **复利闭环：** 记忆 → Pipeline 判断 → DDD → 进化 → 门控 → 记忆。去掉一个，其余变弱。
 
@@ -118,7 +139,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 | 内容 | 链接 |
 |------|------|
-| **讨论（45+）** | [阅读矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min |
+| **讨论（68 篇）** | [阅读矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [全部](https://github.com/xg-gh-25/SwarmAI/discussions) |
 | **AI Agent 避坑指南** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **设计文档** | [平台](./docs/DDD-Platform-Overview.md) · [流水线](./docs/Autonomous-Pipeline-Design.md) · [记忆](./docs/Memory-Management-Design.md) · [进化](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
 | **贡献** | [CONTRIBUTING.md](./CONTRIBUTING.md) |
