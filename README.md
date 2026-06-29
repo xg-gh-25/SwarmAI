@@ -11,6 +11,13 @@ English | [中文](./README.zh-CN.md)
 
 </div>
 
+<!-- TEMPORARY: re-star notice — remove once star count has recovered -->
+> ⭐ **Our stars were reset by mistake.** On 2026-06-27 the repo's visibility was
+> accidentally toggled for a few minutes, which clears GitHub's stargazer list —
+> our ~200 stars dropped to near-zero. The code and history are intact; only the
+> count was wiped. **If you starred SwarmAI before, a re-star would genuinely help
+> 🙏** — it's how new builders find the project.
+
 ---
 
 **SwarmAI is a self-evolving Agent OS** — every interaction upgrades the system's cognition, not just its templates.
