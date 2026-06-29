@@ -281,3 +281,127 @@ async def test_region_passed_to_sts(validator: CredentialValidator):
         await validator.is_valid("eu-west-1")
 
     mock_sts.assert_called_once_with("eu-west-1")
+
+
+# ---------------------------------------------------------------------------
+# check() tri-state tests (Gate-1 BLOCKER 1 fix: distinguish expired vs unknown)
+# ---------------------------------------------------------------------------
+
+from botocore.exceptions import (  # noqa: E402
+    ClientError,
+    EndpointConnectionError,
+    NoCredentialsError,
+)
+
+
+def _client_error(code: str) -> ClientError:
+    return ClientError(
+        {"Error": {"Code": code, "Message": "x"}}, "GetCallerIdentity"
+    )
+
+
+async def test_check_returns_valid_on_success(validator: CredentialValidator):
+    """Successful STS GetCallerIdentity → 'valid'."""
+    with patch.object(validator, "_call_sts_typed", return_value=FAKE_IDENTITY):
+        assert await validator.check("us-east-1") == "valid"
+
+
+async def test_check_returns_expired_on_no_credentials(validator: CredentialValidator):
+    """NoCredentialsError → 'expired' (definitive: re-auth needed).
+
+    NOTE: NoCredentialsError is a BotoCoreError subclass — this test guards
+    the catch-ORDER constraint (NoCredentialsError before BotoCoreError).
+    """
+    with patch.object(
+        validator, "_call_sts_typed", side_effect=NoCredentialsError()
+    ):
+        assert await validator.check("us-east-1") == "expired"
+
+
+async def test_check_returns_expired_on_auth_class_client_error(
+    validator: CredentialValidator,
+):
+    """Auth-class ClientError codes → 'expired'."""
+    for code in (
+        "ExpiredToken",
+        "ExpiredTokenException",
+        "InvalidClientTokenId",
+        "UnrecognizedClientException",
+        "InvalidToken",
+        "InvalidAccessKeyId",
+        "SignatureDoesNotMatch",
+    ):
+        v = CredentialValidator()
+        with patch.object(v, "_call_sts_typed", side_effect=_client_error(code)):
+            assert await v.check("us-east-1") == "expired", code
+
+
+async def test_check_access_denied_is_unknown_not_expired(
+    validator: CredentialValidator,
+):
+    """AccessDenied → 'unknown' (Gate-2 H1): STS may deny GetCallerIdentity via
+    an SCP / IAM boundary / VPC-endpoint policy while Bedrock access is still
+    valid. Must NOT falsely block a valid user with CREDENTIALS_EXPIRED."""
+    for code in ("AccessDenied", "AccessDeniedException"):
+        v = CredentialValidator()
+        with patch.object(v, "_call_sts_typed", side_effect=_client_error(code)):
+            assert await v.check("us-east-1") == "unknown", code
+
+
+async def test_check_returns_unknown_on_network_error(validator: CredentialValidator):
+    """EndpointConnectionError (BotoCoreError subclass) → 'unknown' (fail-open).
+
+    This is the BLOCKER-1 core: a transient network blip must NOT read as
+    'expired' (which would falsely block a valid session).
+    """
+    with patch.object(
+        validator,
+        "_call_sts_typed",
+        side_effect=EndpointConnectionError(endpoint_url="https://sts"),
+    ):
+        assert await validator.check("us-east-1") == "unknown"
+
+
+async def test_check_returns_unknown_on_throttling_client_error(
+    validator: CredentialValidator,
+):
+    """Non-auth ClientError (throttling/5xx) → 'unknown', not 'expired'."""
+    with patch.object(
+        validator, "_call_sts_typed", side_effect=_client_error("ThrottlingException")
+    ):
+        assert await validator.check("us-east-1") == "unknown"
+
+
+async def test_check_caches_only_valid(validator: CredentialValidator):
+    """'valid' is cached (60s) — second call skips STS."""
+    mock = MagicMock(return_value=FAKE_IDENTITY)
+    with patch.object(validator, "_call_sts_typed", mock):
+        assert await validator.check("us-east-1") == "valid"
+        assert await validator.check("us-east-1") == "valid"
+    mock.assert_called_once()
+
+
+async def test_check_does_not_cache_expired(validator: CredentialValidator):
+    """'expired' is NOT cached — re-checks every call so post-mwinit recovery is immediate."""
+    mock = MagicMock(side_effect=NoCredentialsError())
+    with patch.object(validator, "_call_sts_typed", mock):
+        assert await validator.check("us-east-1") == "expired"
+        assert await validator.check("us-east-1") == "expired"
+    assert mock.call_count == 2
+
+
+async def test_check_does_not_cache_unknown(validator: CredentialValidator):
+    """'unknown' is NOT cached — re-checks every call."""
+    mock = MagicMock(side_effect=EndpointConnectionError(endpoint_url="https://sts"))
+    with patch.object(validator, "_call_sts_typed", mock):
+        assert await validator.check("us-east-1") == "unknown"
+        assert await validator.check("us-east-1") == "unknown"
+    assert mock.call_count == 2
+
+
+async def test_check_recovers_after_valid(validator: CredentialValidator):
+    """expired → (mwinit) → valid on the very next call (no stale-expired stick)."""
+    mock = MagicMock(side_effect=[NoCredentialsError(), FAKE_IDENTITY])
+    with patch.object(validator, "_call_sts_typed", mock):
+        assert await validator.check("us-east-1") == "expired"
+        assert await validator.check("us-east-1") == "valid"

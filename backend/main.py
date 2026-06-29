@@ -1275,6 +1275,8 @@ async def health_check():
             "sdk": "claude-agent-sdk",
             "sdk_version": _sdk_version,
             "cli_version": _cli_version,
+            # boto3 is not pre-warmed yet during startup — never call STS here.
+            "auth": "unknown",
         }
     
     # PE Review Finding #5: Use property directly, not hasattr
@@ -1289,15 +1291,42 @@ async def health_check():
     # blocking health endpoint indefinitely (aiosqlite uses run_in_executor).
     # If DB check can't complete in 2s, return healthy with degraded DB
     # rather than hanging → Tauri "not responding" cascade.
-    db_healthy = True
-    try:
+    # Run the DB check and the credential auth check CONCURRENTLY so total
+    # latency is max(2s, 1s) ≈ 2s, never 3s — the Rust watchdog probes /health
+    # with a 2s timeout, so the auth probe must NEVER extend the budget.
+    async def _check_db():
         from database import db
-        db_healthy = await asyncio.wait_for(db.health_check(), timeout=2.0)
-    except asyncio.TimeoutError:
+        return await asyncio.wait_for(db.health_check(), timeout=2.0)
+
+    async def _check_auth() -> str:
+        # Shared CredentialValidator (same instance + cache as spawn pre-flight).
+        # 1s hard cap; any timeout / error / non-definitive result → "unknown"
+        # so a slow or flaky STS call can never degrade /health.
+        from core import session_registry
+        from core.app_config_manager import AppConfigManager
+        region = AppConfigManager.instance().get("aws_region", "us-east-1")
+        return await asyncio.wait_for(
+            session_registry.get_credential_validator().check(region),
+            timeout=1.0,
+        )
+
+    db_result, auth_result = await asyncio.gather(
+        _check_db(), _check_auth(), return_exceptions=True
+    )
+
+    if isinstance(db_result, asyncio.TimeoutError):
         db_healthy = "timeout"
         logger.warning("health_check: DB check timed out (thread pool pressure)")
-    except Exception:
+    elif isinstance(db_result, BaseException):
         db_healthy = False
+    else:
+        db_healthy = db_result
+
+    if isinstance(auth_result, str) and auth_result in ("valid", "expired", "unknown"):
+        auth_status = auth_result
+    else:
+        # TimeoutError / any exception / unexpected value → unknown (fail-open).
+        auth_status = "unknown"
 
     # Keep status="healthy" even on DB timeout — the process is alive and
     # serving requests. Frontend startup overlay only checks status field;
@@ -1319,6 +1348,7 @@ async def health_check():
         "boot_id": _boot_id,
         "db_healthy": db_healthy,
         "channel_gateway": gw_state,
+        "auth": auth_status,
     }
 
 

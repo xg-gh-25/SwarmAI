@@ -1978,6 +1978,45 @@ class SessionUnit:
             compute_backoff,
         )
 
+        # ── Credential pre-flight (Gate-1 fix) ───────────────────────────
+        # Before spawning the CLI subprocess, check credentials. An EXPIRED
+        # token makes the SDK stall retrying the failing credential_process
+        # (the "spinner spins forever" bug). Fail FAST with an actionable
+        # error instead. FAIL-OPEN on "unknown" (network blip / non-auth STS
+        # error) — only a DEFINITIVE "expired" blocks, so a transient blip
+        # never falsely blocks a valid session. "valid" also falls through.
+        try:
+            from . import session_registry
+            from .app_config_manager import AppConfigManager
+
+            _region = AppConfigManager.instance().get("aws_region", "us-east-1")
+            _auth = await session_registry.get_credential_validator().check(_region)
+            if _auth == "expired":
+                logger.warning(
+                    "session_unit.preflight session_id=%s creds expired — "
+                    "aborting spawn (avoids invoke stall)",
+                    self.session_id,
+                )
+                yield _build_error_event(
+                    code="CREDENTIALS_EXPIRED",
+                    message="AWS credentials have expired.",
+                    suggested_action=(
+                        "Run `mwinit -f` in a terminal to refresh your "
+                        "credentials, then send your message again."
+                    ),
+                )
+                yield {"_abort": True}
+                return
+        except Exception as exc:  # noqa: BLE001 — pre-flight must never block spawn on its own bug
+            # A bug in the pre-flight itself must not become a self-inflicted
+            # outage. Log and fall through to the normal spawn path.
+            logger.warning(
+                "session_unit.preflight session_id=%s check raised %s — "
+                "proceeding to spawn (fail-open)",
+                self.session_id,
+                type(exc).__name__,
+            )
+
         # ── Resume injection: COLD + _sdk_session_id → spawn with --resume
         # Covers ALL kill-then-respawn paths (proactive restart, eviction,
         # OOM crash, streaming timeout) — not just the retry path.

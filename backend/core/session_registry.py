@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from .lifecycle_manager import LifecycleManager
     from .session_hooks import BackgroundHookExecutor, SessionLifecycleHookManager
     from .app_config_manager import AppConfigManager
+    from .credential_validator import CredentialValidator
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,25 @@ hook_manager: Optional[SessionLifecycleHookManager] = None
 system_prompt_metadata: dict[str, dict] = {}
 
 _initialized = False
+
+# Shared CredentialValidator — ONE instance for both the spawn pre-flight
+# (session_unit) and the /health auth probe (main), so they share the same
+# check() cache. Lazily created so /health can use it before initialize().
+_credential_validator: Optional["CredentialValidator"] = None
+
+
+def get_credential_validator() -> "CredentialValidator":
+    """Return the process-wide CredentialValidator singleton (lazy-created).
+
+    Both the cold-spawn credential pre-flight and the ``/health`` auth field
+    consume this so they share one ``check()`` cache. Lazy so it is available
+    on the very first ``/health`` poll, before ``initialize()`` runs.
+    """
+    global _credential_validator
+    if _credential_validator is None:
+        from .credential_validator import CredentialValidator
+        _credential_validator = CredentialValidator()
+    return _credential_validator
 
 
 # ── Initialization ────────────────────────────────────────────────
