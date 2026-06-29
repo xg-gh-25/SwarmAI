@@ -53,7 +53,7 @@
 | 43 | [Why We Chose Single-Agent (And Multi-Agent Frameworks Are Proving Us Right)](43-why-we-chose-single-agent.md) | General | 2026-05-23 |
 | 44 | [The Three Cracks in Multi-Agent: Why More Agents = Worse Judgment](44-the-three-cracks-in-multi-agent-why-more-agents-=-worse-ju.md) | Ideas | 2026-05-23 |
 | 45 | ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](45-dreaming-is-just-note-taking.md) | General | 2026-05-23 |
-| 46 | [Stop Selling, Start Showing: Why "Live Demo of Yourself" Beats Every Pitch Deck](46-ai-ready-repo-standard.md) | Ideas | 2026-05-23 |
+| 46 | [Stop Selling, Start Showing: Why "Live Demo of Yourself" Beats Every Pitch Deck](46-stop-selling-start-showing-why-live-demo-of-yourself-beats.md) | Ideas | 2026-05-23 |
 | 47 | [One Builder + AI = One Team. Here's the Proof.](47-one-builder-ai-=-one-team-heres-the-proof.md) | Ideas | 2026-05-23 |
 | 49 | [Your AI Agent Can't "Just Read" a 500K-Line Codebase — Here's What Actually Works](49-your-ai-agent-cant-just-read-a-500k-line-codebase-heres-wh.md) | Ideas | 2026-05-27 |
 | 50 | [你的 AI Agent 读不懂 50 万行代码——真正有效的方案是什么](50-你的-ai-agent-读不懂-50-万行代码-真正有效的方案是什么.md) | Ideas | 2026-05-27 |
