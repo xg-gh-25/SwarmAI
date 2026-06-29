@@ -1261,8 +1261,8 @@ export function ReportsTab() {
 const guideContent = {
   title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
   subtitle: {
-    en: 'SwarmAI has a built-in self-evaluation system. Not external testing — proprioception. 115 behavioral cases define "in this scenario I must do X." Every session runs 31 mechanical checks (0.07s). Bi-weekly runs 84 LLM-judged behavioral tests. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh.',
-    zh: 'SwarmAI 有一个 built-in 的自我评估系统。不是外部测试 — 是 proprioception。115 个 behavioral cases 定义了"在这个场景下我必须怎样做"。每次 session 结束跑 31 个机械检查（0.07s），双周跑 84 个 LLM judge 判断力测试。核心 insight: eval 和 agent 在同一个环境，所以 judge 直接读 agent 的真实 rules 文件 — 零维护，永远新鲜。',
+    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. Proprioception: a living golden set (~185 cases as of 2026-06) defines "in this scenario I must do X." Programmatic checks run deterministically (zero-LLM BVT spine probes); LLM-judged behavioral cases run on the lunchtime schedule + as a git-bound release gate. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
+    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。Proprioception：一个活的 golden set（截至 2026-06 约 185 个 cases）定义了"在这个场景下我必须怎样做"。程序化检查确定性运行（零-LLM BVT spine probe）；LLM judge 行为用例按午间 schedule + 作为 git-bound 发版门跑。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
   },
   overview: {
     en: ['What it evaluates', 'Why it matters', 'How it works'],
@@ -1281,44 +1281,60 @@ const guideContent = {
     ],
   },
   dimensions: {
-    en: 'The Five Eval Dimensions',
-    zh: '五个评估维度',
+    en: 'The Seven Eval Dimensions',
+    zh: '七个评估维度',
   },
+  // Dimensions ordered by live case-count (as of 2026-06). The `share` label is a
+  // relative-size snapshot, not a live count — exact numbers live on the Golden Set tab.
   dimensionItems: [
     {
-      key: 'factual_accuracy',
-      icon: '🧠',
-      en: { name: 'Factual Accuracy', question: 'Is what I remember still true?', method: 'Source verification — check referenced files/systems still support stored claims. Evaluators: canary_pass, file_contains.' },
-      zh: { name: '事实准确性', question: '我记得的东西还对吗？', method: '源头验证 — 检查被引用的文件/系统是否仍支持存储的断言。评估器：canary_pass, file_contains。' },
-      cases: 3,
+      key: 'capability',
+      icon: '⚡',
+      en: { name: 'Capability', question: 'Are my abilities still intact?', method: 'End-to-end feature probes — verify critical capabilities (DDD cultivation, pipeline loops, self-healing) still execute correctly. Evaluators: file_contains, canary_pass, runtime_health.' },
+      zh: { name: '能力完整性', question: '我的能力还完整吗？', method: '端到端能力探测 — 验证关键能力（DDD 培育、Pipeline 循环、自愈）仍正确执行。评估器：file_contains, canary_pass, runtime_health。' },
+      share: 'largest',
     },
     {
       key: 'judgment_quality',
       icon: '⚖️',
       en: { name: 'Judgment Quality', question: 'Would I give the same answer to the same question?', method: 'Consistency testing — re-present known decisions and verify alignment with historical answers. Evaluator: goal_success.' },
       zh: { name: '判断质量', question: '同一问题我会给同样答案吗？', method: '一致性测试 — 重新呈现已知决策并验证与历史答案的一致性。评估器：goal_success。' },
-      cases: 5,
-    },
-    {
-      key: 'context_utility',
-      icon: '📐',
-      en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
-      zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
-      cases: 2,
+      share: 'large',
     },
     {
       key: 'compliance',
       icon: '🛡️',
       en: { name: 'Compliance', question: 'Do I follow my own rules?', method: 'Constraint testing — present scenarios designed to trigger known rule violations (CLASS A patterns). Evaluators: trajectory_in_order, goal_success.' },
       zh: { name: '规则合规', question: '我遵守自己的规则吗？', method: '约束测试 — 呈现设计用来触发已知规则违反的场景（CLASS A 模式）。评估器：trajectory_in_order, goal_success。' },
-      cases: 10,
+      share: 'large',
     },
     {
-      key: 'capability',
-      icon: '⚡',
-      en: { name: 'Capability', question: 'Are my abilities still intact?', method: 'End-to-end feature probes — verify critical capabilities (DDD cultivation, pipeline loops, self-healing) still execute correctly. Evaluators: file_contains, canary_pass.' },
-      zh: { name: '能力完整性', question: '我的能力还完整吗？', method: '端到端能力探测 — 验证关键能力（DDD 培育、Pipeline 循环、自愈）仍正确执行。评估器：file_contains, canary_pass。' },
-      cases: 7,
+      key: 'factual_accuracy',
+      icon: '🧠',
+      en: { name: 'Factual Accuracy', question: 'Is what I remember still true?', method: 'Source verification — check referenced files/systems still support stored claims. Evaluators: canary_pass, file_contains.' },
+      zh: { name: '事实准确性', question: '我记得的东西还对吗？', method: '源头验证 — 检查被引用的文件/系统是否仍支持存储的断言。评估器：canary_pass, file_contains。' },
+      share: 'medium',
+    },
+    {
+      key: 'context_utility',
+      icon: '📐',
+      en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
+      zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
+      share: 'medium',
+    },
+    {
+      key: 'utility',
+      icon: '🔧',
+      en: { name: 'Utility', question: 'Does the tool actually do its job?', method: 'Functional spot-checks on utility skills/scripts — does the operation produce the expected artifact. Evaluators: file_contains, keyword_match.' },
+      zh: { name: '实用性', question: '工具真的完成了它的活吗？', method: '对 utility skill/脚本做功能抽查 — 操作是否产出预期产物。评估器：file_contains, keyword_match。' },
+      share: 'small',
+    },
+    {
+      key: 'recovery',
+      icon: '🔄',
+      en: { name: 'Recovery', question: 'Do I recover correctly from a crash/interrupt?', method: 'Recovery-path probes — resume, self-heal, and crash-to-cold paths reach a correct state. Evaluators: trajectory_in_order, goal_success.' },
+      zh: { name: '恢复能力', question: '崩溃/中断后我能正确恢复吗？', method: '恢复路径探测 — resume、自愈、crash-to-cold 路径达到正确状态。评估器：trajectory_in_order, goal_success。' },
+      share: 'small',
     },
   ],
   evaluators: {
@@ -1340,7 +1356,10 @@ const guideContent = {
     { name: 'trajectory_exact', en: 'Tool call sequence matches exactly', zh: '工具调用序列精确匹配' },
     { name: 'trajectory_in_order', en: 'Required tools appear in correct order (extra allowed)', zh: '必需工具按正确顺序出现（允许额外调用）' },
     { name: 'trajectory_any_order', en: 'Required tools all present regardless of order', zh: '必需工具全部出现（不限顺序）' },
+    { name: 'runtime_health', en: 'Live daemon/session liveness probe — deployed, progressing, under RSS budget', zh: '实时 daemon/session 存活探测 — 已部署、在推进、RSS 在预算内' },
   ],
+  // A third method, "behavior", spawns a REAL headless agent and captures its tool
+  // trajectory (eval_trajectory_capture) — used by behavior-tier cases, not a programmatic evaluator.
   llmJudge: {
     en: 'LLM-Judge (Semantic, ~5s, ~$0.02/case)',
     zh: 'LLM-Judge（语义, ~5s, ~$0.02/case）',
@@ -1366,8 +1385,8 @@ const guideContent = {
     zh: '覆盖分布',
   },
   coverageDesc: {
-    en: '27 active cases across 5 dimensions × 6 categories. Gaps indicate areas needing new golden set cases.',
-    zh: '27 个活跃案例分布在 5 个维度 × 6 个类别中。空白处表示需要新增 golden set 案例的领域。',
+    en: 'Cases are tagged on 4 orthogonal axes — Category (~19 values: compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (7), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
+    zh: '每个 case 沿 4 个正交轴打标签 —— Category（约 19 个值：compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（7 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
   },
   lifecycle: {
     en: 'Case Lifecycle',
@@ -1385,11 +1404,9 @@ const guideContent = {
     zh: '触发条件与节奏',
   },
   triggerItems: [
-    { en: { trigger: 'Context File Change', cadence: 'Immediate', desc: 'Any edit to SOUL.md, AGENT.md, STEERING.md, MEMORY.md → run all affected_by cases' }, zh: { trigger: '上下文文件变更', cadence: '即时', desc: '任何对 SOUL/AGENT/STEERING/MEMORY 的编辑 → 运行所有 affected_by 案例' } },
-    { en: { trigger: 'Model Version Bump', cadence: 'Immediate', desc: 'default_model changed → full eval suite (all 27 cases)' }, zh: { trigger: '模型版本更新', cadence: '即时', desc: 'default_model 变更 → 完整 eval 套件（全部 27 案例）' } },
-    { en: { trigger: 'Golden Set Edit', cadence: 'On save', desc: 'Case added/modified → validate schema + run the single case' }, zh: { trigger: 'Golden Set 编辑', cadence: '保存时', desc: '案例新增/修改 → 验证 schema + 运行单个案例' } },
-    { en: { trigger: 'Scheduled', cadence: 'Weekly (Thu 04:00 UTC)', desc: 'Full suite run — catches slow drift undetectable by change triggers' }, zh: { trigger: '定时调度', cadence: '每周四 04:00 UTC', desc: '完整套件运行 — 捕获变更触发器无法检测的缓慢漂移' } },
-    { en: { trigger: 'Manual', cadence: 'On demand', desc: 'User clicks "Run Eval" → selected cases or full suite' }, zh: { trigger: '手动', cadence: '按需', desc: '用户点击 "Run Eval" → 选定案例或完整套件' } },
+    { en: { trigger: 'Scheduled (lunchtime)', cadence: 'Weekdays 12:30 ICT', desc: 'Full suite — never gates; continuous drift watch. Lunch window = machine on, creds fresh. BVT-red / score-drop → Slack alert.' }, zh: { trigger: '定时（午间）', cadence: '工作日 12:30 ICT', desc: '完整套件 — 永不当门；持续漂移监控。午间窗口 = 机器在线、creds 新鲜。BVT-red / 分数下降 → Slack 告警。' } },
+    { en: { trigger: 'Deploy / CI gate', cadence: 'On release / post-push', desc: 'Git-bound gate (code_digest + BVT) — HARD stop, blocks a release that regresses. The only eval that GATES.' }, zh: { trigger: '发版 / CI 门', cadence: '发版时 / push 后', desc: 'Git-bound 门（code_digest + BVT）— 硬停，拦截会回归的发版。唯一会"当门"的 eval。' } },
+    { en: { trigger: 'Manual', cadence: 'On demand', desc: 'POST /api/eval/run (non-blocking, returns run_id) — selected cases or full suite' }, zh: { trigger: '手动', cadence: '按需', desc: 'POST /api/eval/run（非阻塞，返回 run_id）— 选定案例或完整套件' } },
   ],
   comparison: {
     en: 'vs Enterprise Agent Eval',
@@ -1459,15 +1476,18 @@ const guideContent = {
 };
 
 // Coverage data from golden_set.yaml (verified via grep)
+// Illustrative dimension×category slice (NOT live counts — the Golden Set tab is the
+// live, filterable source). Shows the SHAPE: capability/judgment/compliance dominate;
+// the dot grid conveys where cases cluster, not exact totals (which grow every run).
 const coverageGrid: Record<string, Record<string, number>> = {
-  compliance: { compliance: 10, decision: 0, recall: 0, loop_active: 0, quality: 0, ddd_informed: 0 },
-  judgment_quality: { compliance: 0, decision: 5, recall: 0, loop_active: 0, quality: 0, ddd_informed: 0 },
-  capability: { compliance: 0, decision: 0, recall: 0, loop_active: 5, quality: 2, ddd_informed: 0 },
-  factual_accuracy: { compliance: 0, decision: 0, recall: 3, loop_active: 0, quality: 0, ddd_informed: 0 },
-  context_utility: { compliance: 0, decision: 0, recall: 0, loop_active: 0, quality: 0, ddd_informed: 2 },
+  capability:       { compliance: 0, decision: 0, recall: 0, code_aware: 5, loop_active: 4, ddd_informed: 2 },
+  judgment_quality: { compliance: 0, decision: 4, recall: 0, code_aware: 0, loop_active: 0, ddd_informed: 1 },
+  compliance:       { compliance: 4, decision: 1, recall: 0, code_aware: 0, loop_active: 0, ddd_informed: 0 },
+  factual_accuracy: { compliance: 0, decision: 0, recall: 3, code_aware: 0, loop_active: 0, ddd_informed: 0 },
+  context_utility:  { compliance: 0, decision: 0, recall: 1, code_aware: 0, loop_active: 0, ddd_informed: 1 },
 };
 
-function GuideTab() {
+export function GuideTab() {
   const [lang, setLang] = useState<'en' | 'zh'>('en');
   const t = lang; // shorthand
 
@@ -1500,7 +1520,16 @@ function GuideTab() {
         ))}
       </div>
 
-      {/* Section 1: Five Dimensions */}
+      {/* Architecture diagram (official eval-architecture.svg) */}
+      <div className="mb-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+        <img
+          src="/eval-architecture.svg"
+          alt="SwarmAI Eval architecture — decoupled system-level subsystem"
+          className="w-full h-auto rounded"
+        />
+      </div>
+
+      {/* Section 1: The Eval Dimensions */}
       <div className="mb-8">
         <h2 className="text-[15px] font-semibold mb-3">{guideContent.dimensions[t]}</h2>
         <div className="space-y-2">
@@ -1511,7 +1540,7 @@ function GuideTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-semibold">{dim[t].name}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-mono">{dim.cases} {t === 'en' ? 'cases' : '个案例'}</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-mono">{dim.share}</span>
                   </div>
                   <div className="text-[11px] text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
                   <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
@@ -1626,7 +1655,7 @@ function GuideTab() {
                 <th className="text-left px-2 py-1.5 font-medium text-[var(--color-text-muted)]">
                   {t === 'en' ? 'Dimension \\ Category' : '维度 \\ 类别'}
                 </th>
-                {['compliance', 'decision', 'recall', 'loop_active', 'quality', 'ddd_informed'].map(cat => (
+                {['compliance', 'decision', 'recall', 'code_aware', 'loop_active', 'ddd_informed'].map(cat => (
                   <th key={cat} className="text-center px-1.5 py-1.5 font-medium text-[var(--color-text-muted)] font-mono">{cat}</th>
                 ))}
               </tr>
@@ -1635,7 +1664,7 @@ function GuideTab() {
               {Object.entries(coverageGrid).map(([dim, cats]) => (
                 <tr key={dim} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="px-2 py-1.5 font-medium font-mono text-[var(--color-text-secondary)]">{dim}</td>
-                  {['compliance', 'decision', 'recall', 'loop_active', 'quality', 'ddd_informed'].map(cat => (
+                  {['compliance', 'decision', 'recall', 'code_aware', 'loop_active', 'ddd_informed'].map(cat => (
                     <td key={cat} className="text-center px-1.5 py-1.5">
                       {cats[cat] > 0 ? (
                         <span className={`inline-block w-5 h-5 leading-5 rounded text-[9px] font-bold ${cats[cat] >= 4 ? 'bg-green-500/20 text-green-600' : cats[cat] >= 2 ? 'bg-yellow-500/20 text-yellow-600' : 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'}`}>{cats[cat]}</span>
