@@ -185,6 +185,20 @@ The pipeline spawns fresh-context sub-agents at two points:
 
 Sub-agents use **review-agents/** (4 domain agents) and **stages/specialists/** (9 specialist profiles).
 
+### The Three Gates — Three Moments of Truth
+
+The 9 stages produce a delivery candidate; **3 gates** decide whether it advances. Each guards a *different kind* of truth, and the earlier a gate fires the cheaper the failure it catches. A framing error caught at Gate 0 costs one EVALUATE pass; the same error caught at Gate 2 has already paid for PLAN, BUILD, REVIEW, and TEST.
+
+| Gate | Guards the truth of… | Fires | Mechanism | Catches |
+|------|----------------------|-------|-----------|---------|
+| **Gate 0** | *the framing* — is the problem itself understood? | inside EVALUATE → THINK | Understanding Gate (diagnose-before-build) + a skeptic sub-agent | wrong problem, solution-first thinking, unstated ambiguity |
+| **Gate 1** | *the plan* — is the approach sound, root not symptom? | after PLAN, before BUILD | Skeptic + Same-System-Awareness (SSA) sub-agent | wrong direction, missed constraints, wrong layer, API hallucination |
+| **Gate 2** | *the build* — is the code actually correct? | inside DELIVER (blocking) | fresh-context Adversarial sub-agent(s) + 6-layer convergence loop | runtime bugs, security holes, untested paths, self-authored-code blind spots |
+
+Why gates and not just careful prompting: **carefulness doesn't scale, gates do.** A gate is a structural checkpoint a confident model cannot rationalize past — the same reason the architecture refuses to ship on "looks done." Gate 2 is mechanically enforced (it cannot be skipped by downgrading the profile — see §10 *Profile Immutability*); Gate 0 was added in v6 (2026-06-26) after framing errors were observed sailing untouched all the way to Gate 2.
+
+> **Stages vs gates vs modes — the canonical shape:** **9 stages · 3 gates · 2 modes.** Stages are *what the pipeline does* (EVALUATE…REFLECT); gates are *the 3 go/no-go checkpoints* riding inside EVALUATE, after PLAN, and inside DELIVER; modes are *how execution runs* — **Full** (one pass + convergence) or **Goal** (iterate to a measurable DoD). Both modes run all stages and all gates.
+
 ---
 
 ## 3. The Stages
