@@ -53,7 +53,10 @@ STALENESS_CHECKS = [
         "description": "SSE Streaming Events section lists event types",
         "prose_file": "AGENTS.md",
         "prose_pattern": r'"type": "session_start"',
-        "code_file": "backend/core/session_unit.py",
+        # SSE events are emitted by the streaming orchestrator, not session_unit
+        # (the state machine). Pointing at session_unit produced a false-positive
+        # STALE warning since 2026-06 (the literal lives in streaming_orchestrator).
+        "code_file": "backend/core/streaming_orchestrator.py",
         "code_pattern": r'"type": "session_start"',
     },
     {
@@ -61,7 +64,7 @@ STALENESS_CHECKS = [
         "description": "SSE section documents 'result' event",
         "prose_file": "AGENTS.md",
         "prose_pattern": r'"type": "result"',
-        "code_file": "backend/core/session_unit.py",
+        "code_file": "backend/core/streaming_orchestrator.py",
         "code_pattern": r'"type": "result"',
     },
     {
