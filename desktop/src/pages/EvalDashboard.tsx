@@ -9,6 +9,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
+import { getApiBaseUrl } from '../services/tauri';
+import { openExternal } from '../utils/openExternal';
 import { computeBreakdowns, type Breakdowns, type BreakdownEntry } from './eval-breakdowns';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1143,21 +1145,15 @@ function useEvalReports() {
 
 export function ReportsTab() {
   const { data: reports, isLoading } = useEvalReports();
-  const [selectedReport, setSelectedReport] = useState<string | null>(null);
-  const [reportHtml, setReportHtml] = useState<string | null>(null);
-  const [loadingReport, setLoadingReport] = useState(false);
 
-  const loadReport = async (filename: string) => {
-    setSelectedReport(filename);
-    setLoadingReport(true);
-    try {
-      const res = await api.get(`/eval/reports/${filename}`, { responseType: 'text' });
-      setReportHtml(typeof res.data === 'string' ? res.data : String(res.data));
-    } catch {
-      setReportHtml('<p style="color:red;padding:20px;">Failed to load report.</p>');
-    } finally {
-      setLoadingReport(false);
-    }
+  // Reports open in the SYSTEM BROWSER, not an in-app iframe. srcDoc rendering in
+  // the Tauri WebKit webview proved unreliable, and rendering arbitrary report HTML
+  // in-app is a needless security/complexity surface. The browser renders it natively
+  // (get_report returns Content-Type: text/html), fully process-isolated from the app.
+  // Reuse the dynamic api base (getApiBaseUrl) — never hardcode host/port (dev=8000,
+  // desktop=dynamic, Hive=same-origin) — and encode the filename (names contain spaces).
+  const openReport = (filename: string) => {
+    void openExternal(`${getApiBaseUrl()}/api/eval/reports/${encodeURIComponent(filename)}`);
   };
 
   if (isLoading) return <Loading />;
@@ -1167,44 +1163,6 @@ export function ReportsTab() {
         <p className="text-sm text-[var(--color-text-muted)]">
           No HTML eval reports found. Run a full eval sweep to generate reports.
         </p>
-      </div>
-    );
-  }
-
-  // If viewing a report, show it full-screen in iframe
-  if (selectedReport && reportHtml !== null) {
-    return (
-      <div className="flex flex-col h-full">
-        <div className="shrink-0 flex items-center gap-3 px-6 py-3 border-b border-[var(--color-border)]">
-          <button
-            onClick={() => { setSelectedReport(null); setReportHtml(null); }}
-            className="flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">arrow_back</span>
-            Back to list
-          </button>
-          <span className="text-xs font-mono text-[var(--color-text)]">{selectedReport}</span>
-        </div>
-        <div className="flex-1 min-h-0">
-          {loadingReport ? (
-            <Loading />
-          ) : (
-            // sandbox="allow-same-origin" (NOT allow-scripts): the srcDoc doc
-            // needs a real origin to paint inline-styled HTML in the Tauri
-            // WebKit webview — allow-scripts-without-same-origin gives it a
-            // null origin and renders blank. SAFE because eval reports are
-            // locally generated (eval_runner.py) with html.escape on every
-            // interpolated field and ZERO <script> — never user/network HTML.
-            // Matches the proven-working HtmlRenderer/FilePreviewModal iframes.
-            // Dark backdrop (not bg-white) matches the report's own dark theme.
-            <iframe
-              srcDoc={reportHtml}
-              className="w-full h-full border-0 bg-[var(--color-bg)]"
-              sandbox="allow-same-origin"
-              title={selectedReport}
-            />
-          )}
-        </div>
       </div>
     );
   }
@@ -1233,7 +1191,7 @@ export function ReportsTab() {
               return (
                 <tr
                   key={r.filename}
-                  onClick={() => loadReport(r.filename)}
+                  onClick={() => openReport(r.filename)}
                   className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer transition-colors"
                 >
                   <td className="px-4 py-2.5">
