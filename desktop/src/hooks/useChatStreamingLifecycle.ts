@@ -4009,24 +4009,102 @@ export function useChatStreamingLifecycle(
           // messages immediately during streaming (crash-safe), so any content
           // generated after disconnect is in DB — we just need to fetch it.
           const disconnectTimeoutId = setTimeout(async () => {
-            const currentTabState = tabMapRef.current.get(capturedTabId);
-            if (!currentTabState?.isReconnecting) return; // Already recovered or tab closed
+            const preTabState = tabMapRef.current.get(capturedTabId);
+            if (!preTabState?.isReconnecting) return; // Already recovered or tab closed
 
-            console.warn('[DisconnectHandler] Timeout — clearing reconnecting state and recovering from DB', { capturedTabId });
+            // Consult the authoritative backend mirror ONCE — SYMMETRIC with the
+            // heal-grace expiry path. Before this fix the timeout UNCONDITIONALLY
+            // cleared the spinner + did a ONE-SHOT DB pull; if the backend was
+            // still flushing/streaming, that pull grabbed INCOMPLETE content and
+            // nothing re-pulled the finished answer until the user's NEXT send
+            // (the reported bug). Fail-safe try/catch: a failed query -> show-error,
+            // never strand on an eternal spinner.
+            const sid = preTabState.sessionId;
+            let verdict: HealGraceVerdict;
+            try {
+              const states = await chatService.getStreamingState();
+              const auth = sid ? states[sid] : undefined;
+              verdict = healGraceExpiryVerdict({
+                backendIsStreaming: auth?.streaming ?? false,
+                backendWaitingInput: auth?.waitingInput ?? false,
+                postDisconnectFlushing: auth?.postDisconnectFlushing ?? false,
+                queryFailed: false,
+              });
+            } catch {
+              verdict = healGraceExpiryVerdict({
+                backendIsStreaming: false, backendWaitingInput: false,
+                postDisconnectFlushing: false, queryFailed: true,
+              });
+            }
+
+            // Re-read AFTER the await (MUST-FIX, Gate-1): the pre-await
+            // isReconnecting check is now stale — the tab may have closed /
+            // reconnected / a NEW stream may have started during the round-trip.
+            // Guard on the same (present + streamGen unchanged + still
+            // reconnecting) triad the stale-disconnect guard uses.
+            const currentTabState = tabMapRef.current.get(capturedTabId);
+            if (
+              !currentTabState ||
+              currentTabState.streamGen !== capturedStreamGen ||
+              !currentTabState.isReconnecting
+            ) {
+              return; // tab gone / superseded / already recovered -> discard
+            }
+
+            if (verdict === 'still-working') {
+              // Backend alive (streaming / waiting_input / flushing). KEEP the
+              // spinner; hand ongoing recovery to the 15s reconcile loop. Do NOT
+              // endStreaming() here (would flip the store idle immediately).
+              //
+              // The 2-stage handoff (verified Gate-2): (1) the MessageStore 90s
+              // watchdog flips store phase -> idle; the next reconcile tick's
+              // desyncConvergeVerdict block (the PRIMARY stage-1 owner — it
+              // `continue`s before control reaches the force-clear block) sees
+              // storeIdle + backend-terminal-idle and calls setIsStreaming(false).
+              // (2) the FOLLOWING tick's _postDisconnectUncertain block (needs
+              // !isStreaming) re-pulls DB + drains. So content surfaces with NO
+              // user send. forceClearStreamVerdict is only the fallback for when
+              // the store never goes idle.
+              //
+              // BLOCKER (Gate-1): stamp _reconcileStreamStart so BOTH the desync
+              // (capMs/graceMs) and force-clear (activeGuardAge) caps anchor to
+              // NOW — without it the age is ~Date.now() (every cap pre-blown) and
+              // the spinner is force-cleared in the backend dead->cold gap.
+              // KNOWN SOFT-LIMIT (Gate-2 HIGH-2, accepted): if the backend's
+              // postDisconnectFlushing flag gets stuck true, stage-1 defers up to
+              // the shared 120-min long-turn cap. A tighter post-disconnect cap
+              // would thread a new signal into desyncConvergeVerdict (OT01 hot
+              // zone) — deferred over expanding blast radius for a backend-leak
+              // edge the _postDisconnectUncertain block's own 120-min cap (:1243)
+              // already backstops.
+              console.log('[DisconnectHandler] Timeout — backend still working; handing recovery to reconcile loop', { capturedTabId });
+              currentTabState._postDisconnectUncertain = true;
+              currentTabState._postDisconnectAt = Date.now();
+              currentTabState._reconcileStreamStart = Date.now();
+              currentTabState._disconnectTimeoutId = undefined;
+              // Leave isReconnecting + isStreaming TRUE (spinner stays).
+              return;
+            }
+
+            // verdict === 'show-error': backend genuinely done/dead (or query
+            // failed). Original behavior — clear + one-shot DB pull. Also set
+            // _postDisconnectUncertain so a follow-up send QUEUES (not escapes ->
+            // SESSION_BUSY) and the reconcile loop does the final drain/pull.
+            console.warn('[DisconnectHandler] Timeout — backend done; clearing reconnecting state and recovering from DB', { capturedTabId });
             currentTabState.isReconnecting = false;
             currentTabState._disconnectTimeoutId = undefined;
+            currentTabState._postDisconnectUncertain = true;
+            currentTabState._postDisconnectAt = Date.now();
             // End store streaming phase — unblocks reconcile/replace
             const dcStore = messageStoreRegistry.get(capturedTabId);
             if (!dcStore) return; // Tab was closed — don't re-create store
             dcStore.endStreaming();
-            // Clear via the atomic setIsStreaming(false) primitive for ALL
-            // tabs — not just the active one.
+            // Clear via the atomic setIsStreaming(false) primitive for ALL tabs.
             setIsStreaming(false, capturedTabId);
 
             // Recover content from DB: backend persists messages immediately
-            // during streaming, so content generated after SSE disconnect is
-            // available in DB.  Fetch and reconcile to display it.
-            const sid = currentTabState.sessionId;
+            // during streaming, so content generated before the disconnect is
+            // in DB. Fetch and reconcile to display it.
             if (sid) {
               try {
                 chatService.invalidateMessageCache(sid);

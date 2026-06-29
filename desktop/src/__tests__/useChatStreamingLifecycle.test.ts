@@ -3370,4 +3370,128 @@ describe('TabStatusIndicator component', () => {
       expect(el!.getAttribute('role')).toBe('img');
     });
   });
+
+  // ── Mid-stream disconnect timeout: symmetric handoff (run_27485b25) ────────
+  // BUG: the disconnect 30s timeout unconditionally cleared the spinner + did a
+  // ONE-SHOT DB pull. If the backend was still flushing/streaming the answer,
+  // it pulled INCOMPLETE content and never re-pulled the finished answer until
+  // the user's NEXT send. Fix: consult the backend mirror once at timeout; if
+  // still-working → keep spinner + set _postDisconnectUncertain (hand off to the
+  // reconcile loop) + stamp _reconcileStreamStart; if done → original clear+pull.
+  describe('disconnect timeout backend-state-gated handoff', () => {
+    it('still-working: keeps spinner, sets _postDisconnectUncertain, stamps _reconcileStreamStart, does NOT clear isStreaming', async () => {
+      vi.useFakeTimers();
+      const stateSpy = vi
+        .spyOn(chatService, 'getStreamingState')
+        .mockResolvedValue({
+          'sess-dc1': { streaming: true, state: 'streaming', waitingInput: false, postDisconnectFlushing: false },
+        } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
+      try {
+        const tabId = 'tab-dc-working';
+        initTestTab(tabId);
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-dc1';
+        testActiveTabIdRef.current = tabId;
+
+        const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+        // arm a stream so streamGen matches what the handler captures
+        act(() => { result.current.setIsStreaming(true, tabId); });
+        const handler = result.current.createDisconnectHandler(tabId);
+        act(() => { handler(); }); // premature disconnect → keeps isStreaming, arms 30s timer
+
+        // fast-forward to the 30s timeout; flush the await getStreamingState
+        await act(async () => {
+          vi.advanceTimersByTime(30_000);
+          await Promise.resolve(); await Promise.resolve();
+        });
+
+        const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
+        expect(stateSpy).toHaveBeenCalled();
+        expect(t._postDisconnectUncertain).toBe(true);          // handed to reconcile loop
+        expect(typeof t._reconcileStreamStart).toBe('number');  // BLOCKER: cap anchor stamped
+        expect(t._reconcileStreamStart).toBeGreaterThan(0);
+        expect(t.isReconnecting).toBe(true);                    // spinner kept (NOT cleared)
+        expect(t._disconnectTimeoutId).toBeUndefined();
+      } finally {
+        stateSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it('backend-done: clears reconnecting + isStreaming and sets _postDisconnectUncertain for queue-on-next-send', async () => {
+      vi.useFakeTimers();
+      const stateSpy = vi
+        .spyOn(chatService, 'getStreamingState')
+        .mockResolvedValue({
+          'sess-dc2': { streaming: false, state: 'idle', waitingInput: false, postDisconnectFlushing: false },
+        } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
+      const msgsSpy = vi
+        .spyOn(chatService, 'getSessionMessages')
+        .mockResolvedValue([] as unknown as Awaited<ReturnType<typeof chatService.getSessionMessages>>);
+      vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+      try {
+        const tabId = 'tab-dc-done';
+        initTestTab(tabId);
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-dc2';
+        testActiveTabIdRef.current = tabId;
+        // show-error branch does the DB pull only when a MessageStore exists for
+        // the tab (else it returns early — tab-closed guard). Create one so the
+        // real recovery path is exercised.
+        messageStoreRegistry.getOrCreate(tabId, { sessionId: 'sess-dc2' });
+
+        const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+        act(() => { result.current.setIsStreaming(true, tabId); });
+        const handler = result.current.createDisconnectHandler(tabId);
+        act(() => { handler(); });
+
+        await act(async () => {
+          vi.advanceTimersByTime(30_000);
+          await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+        });
+
+        const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
+        expect(t.isReconnecting).toBe(false);             // cleared (backend done)
+        expect(t._postDisconnectUncertain).toBe(true);    // follow-up send queues
+        expect(msgsSpy).toHaveBeenCalledWith('sess-dc2'); // one-shot DB pull ran
+      } finally {
+        stateSpy.mockRestore();
+        msgsSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it('query failure at timeout → fail-safe show-error (clears, never strands spinner)', async () => {
+      vi.useFakeTimers();
+      const stateSpy = vi
+        .spyOn(chatService, 'getStreamingState')
+        .mockRejectedValue(new Error('network'));
+      vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([] as never);
+      vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+      try {
+        const tabId = 'tab-dc-fail';
+        initTestTab(tabId);
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-dc3';
+        testActiveTabIdRef.current = tabId;
+
+        const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+        act(() => { result.current.setIsStreaming(true, tabId); });
+        const handler = result.current.createDisconnectHandler(tabId);
+        act(() => { handler(); });
+
+        await act(async () => {
+          vi.advanceTimersByTime(30_000);
+          await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+        });
+
+        const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
+        expect(stateSpy).toHaveBeenCalled();
+        expect(t.isReconnecting).toBe(false); // fail-safe: did NOT keep spinner forever
+      } finally {
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+      }
+    });
+  });
 });
