@@ -1141,7 +1141,7 @@ function useEvalReports() {
   });
 }
 
-function ReportsTab() {
+export function ReportsTab() {
   const { data: reports, isLoading } = useEvalReports();
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
   const [reportHtml, setReportHtml] = useState<string | null>(null);
@@ -1191,8 +1191,8 @@ function ReportsTab() {
           ) : (
             <iframe
               srcDoc={reportHtml}
-              className="w-full h-full border-0"
-              sandbox="allow-scripts"
+              className="w-full h-full border-0 bg-white"
+              sandbox="allow-same-origin"
               title={selectedReport}
             />
           )}
