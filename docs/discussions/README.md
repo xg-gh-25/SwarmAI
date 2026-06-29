@@ -42,7 +42,7 @@
 | 32 | [人格陷阱：为什么 "有主见的 AI Agent" 会破坏指令遵从](32-人格陷阱为什么-有主见的-ai-agent-会破坏指令遵从.md) | Show and tell | 2026-05-20 |
 | 33 | [What Is an Agent Harness? The Self-Driving Car Analogy for AI Autonomy Levels](33-what-is-an-agent-harness-the-self-driving-car-analogy-for-ai.md) | General | 2026-05-21 |
 | 34 | [Agent Harness 是什么？用自动驾驶的思路理解 AI Agent 自治五级](34-agent-harness-是什么用自动驾驶的思路理解-ai-agent-自治五级.md) | General | 2026-05-21 |
-| 35 | [Reading Matrix — 3 Paths Through 34 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-34-discussions-builder-archit.md) | General | 2026-05-21 |
+| 35 | [Reading Matrix — 3 Paths Through 55 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-55-discussions.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
@@ -51,9 +51,35 @@
 | 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
 | 42 | [100 ⭐ — Thank You (and What's Next)](42-100-star-thank-you-and-whats-next.md) | Announcements | 2026-05-22 |
 | 43 | [Why We Chose Single-Agent (And Multi-Agent Frameworks Are Proving Us Right)](43-why-we-chose-single-agent.md) | General | 2026-05-23 |
+| 44 | [The Three Cracks in Multi-Agent: Why More Agents = Worse Judgment](44-the-three-cracks-in-multi-agent-why-more-agents-=-worse-ju.md) | Ideas | 2026-05-23 |
 | 45 | ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](45-dreaming-is-just-note-taking.md) | General | 2026-05-23 |
-| 46 | [Your AI Agent Can't "Just Read" Your Codebase — Here's What It Actually Needs](46-ai-ready-repo-standard.md) | General | 2026-06-01 |
+| 46 | [Stop Selling, Start Showing: Why "Live Demo of Yourself" Beats Every Pitch Deck](46-ai-ready-repo-standard.md) | Ideas | 2026-05-23 |
+| 47 | [One Builder + AI = One Team. Here's the Proof.](47-one-builder-ai-=-one-team-heres-the-proof.md) | Ideas | 2026-05-23 |
+| 49 | [Your AI Agent Can't "Just Read" a 500K-Line Codebase — Here's What Actually Works](49-your-ai-agent-cant-just-read-a-500k-line-codebase-heres-wh.md) | Ideas | 2026-05-27 |
+| 50 | [你的 AI Agent 读不懂 50 万行代码——真正有效的方案是什么](50-你的-ai-agent-读不懂-50-万行代码-真正有效的方案是什么.md) | Ideas | 2026-05-27 |
+| 51 | [AI-Ready Repo Standard — Why CLAUDE.md + System Specs Is Not Enough](51-ai-ready-repo-standard-why-claude-md-system-specs-is-not-e.md) | Ideas | 2026-05-27 |
+| 52 | [AI-Ready Repo 标准 — 为什么 CLAUDE.md + System Specs 不够用](52-ai-ready-repo-标准-为什么-claude-md-system-specs-不够用.md) | Ideas | 2026-05-27 |
+| 53 | [Karpathy's LLM Wiki Is a Manifesto for What We Already Built — And the One Gap We Just Closed](53-karpathys-llm-wiki-is-a-manifesto-for-what-we-already-buil.md) | General | 2026-05-29 |
+| 54 | [Agent Harness 避坑指南](54-agent-harness-避坑指南.md) | Show and tell | 2026-05-29 |
+| 55 | [From Zero to Ship in One Session — Building an AI-Ready Engine That Actually Works](55-from-zero-to-ship-in-one-session-building-an-ai-ready-engi.md) | Show and tell | 2026-06-01 |
 | 56 | [The Hidden Defaults That Break Your AI Agent — Claude Code CLI's Undocumented Limits](56-the-hidden-defaults-that-break-your-ai-agent.md) | General | 2026-06-01 |
+| 59 | [DDD Knowledge Governance — Practical Ontology for AI Agents (with code samples)](59-ddd-knowledge-governance-practical-ontology.md) | Show and tell | 2026-06-03 |
+| 61 | [Skill Portability is a Distribution Problem, Not a Packaging Problem](61-skill-portability-is-a-distribution-problem-not-a-packagin.md) | Ideas | 2026-06-06 |
+| 68 | [Autonomous Pipeline v3 — Dual-Mode Execution Architecture](68-autonomous-pipeline-v3-dual-mode-execution-architecture.md) | Show and tell | 2026-06-11 |
+| 74 | [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic Imaging for AI Agents](74-os-eval-vs-agentcore-eval.md) | Show and tell | 2026-06-20 |
+| 75 | [Mechanical Gate vs Ceremonial Gate — Why Your Agent's Approval Step Is Probably Theater](75-mechanical-gate-vs-ceremonial-gate-why-your-agents-approva.md) | Ideas | 2026-06-21 |
+| 78 | [当 assert 失效之后:SwarmAI 的 Eval 架构全景与方法论](78-当-assert-失效之后-swarmai-的-eval-架构全景与方法论.md) | Show and tell | 2026-06-26 |
+| 79 | [SwarmAI Recall Architecture — The READ Path of a Self-Evolving Agent OS](79-swarmai-recall-architecture-the-read-path-of-a-self-evolvi.md) | Show and tell | 2026-06-26 |
+| 80 | [SwarmAI Recall 架构全景 —— 一个自进化 Agent OS 的 READ 路径](80-swarmai-recall-架构全景-一个自进化-agent-os-的-read-路径.md) | Show and tell | 2026-06-26 |
+| 83 | [After `assert` Breaks Down — SwarmAI's Eval Architecture and Methodology](83-after-assert-breaks-down-swarmais-eval-architecture-and-me.md) | Show and tell | 2026-06-28 |
+| 84 | [Context as a Living System — The WRITE Path: Ingestion, Decay, Archive](84-context-as-a-living-system-the-write-path-ingestion-decay.md) | Show and tell | 2026-06-29 |
+| 85 | [上下文是一个活系统:WRITE 路径 —— 摄取、衰减、归档](85-上下文是一个活系统-write-路径-摄取、衰减、归档.md) | Show and tell | 2026-06-29 |
+| 86 | [Quality Convergence — How an Autonomous Coding Pipeline Knows When It's Done](86-quality-convergence-how-an-autonomous-coding-pipeline-know.md) | Show and tell | 2026-06-29 |
+| 87 | [质量收敛:自主编码 Pipeline 怎么知道自己"做完了"](87-质量收敛-自主编码-pipeline-怎么知道自己做完了.md) | Show and tell | 2026-06-29 |
+| 88 | [Cognitive Evolution, Not Skill Tuning — Why We Stopped Optimizing the Wrong Layer](88-cognitive-evolution-not-skill-tuning-why-we-stopped-optimi.md) | Ideas | 2026-06-29 |
+| 89 | [认知进化,而非技能调优 —— 为什么我们不再优化错误的层](89-认知进化-而非技能调优-为什么我们不再优化错误的层.md) | Ideas | 2026-06-29 |
+| 90 | [AgentCore's Eval-First Workshop vs Our Decoupled Eval Subsystem — Where Two Designs Agree, and Diverge](90-agentcores-eval-first-workshop-vs-our-decoupled-eval-subsy.md) | Show and tell | 2026-06-29 |
+| 91 | [AgentCore Eval-First Workshop vs 我们解耦的 Eval 子系统 —— 两个独立设计的殊途同归](91-agentcore-eval-first-workshop-vs-我们解耦的-eval-子系统-两个独立设计的殊途同.md) | Show and tell | 2026-06-29 |
 
 ---
 
