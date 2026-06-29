@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, type HealGraceVerdict } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -1197,7 +1197,26 @@ export function useChatStreamingLifecycle(
           if (tabState.isStreaming) {
             const dsStore = messageStoreRegistry.get(tabId);
             const dsStartAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
-            if (dsStore && dsStore.phase === 'idle' && dsStartAge >= 10_000) {
+            // OT01 sibling-path guard: the MessageStore watchdog flips phase→idle
+            // at 90s, but a long turn whose SSE dropped is STILL flushing the
+            // answer into the DB (backend alive, unit clean-idle). Converging the
+            // spinner here would drop it mid-flush — the exact truncated-content
+            // bug, just surfacing on THIS branch instead of the force-clear branch.
+            // The desync decision is now backend-state-gated (same alive signal as
+            // forceClearStreamVerdict): converge only when the store is idle AND
+            // the backend is NOT alive (streaming/waiting_input/flushing), bounded
+            // by the same 120-min cap so a stuck flag still converges.
+            const dsBackend = tabState.sessionId ? states[tabState.sessionId] : undefined;
+            const dsConverge = dsStore
+              ? desyncConvergeVerdict({
+                  storeIdle: dsStore.phase === 'idle',
+                  streamStartAge: dsStartAge,
+                  backendIsStreaming: dsBackend?.streaming ?? false,
+                  backendWaitingInput: dsBackend?.state === 'waiting_input',
+                  postDisconnectFlushing: dsBackend?.postDisconnectFlushing ?? false,
+                })
+              : false;
+            if (dsConverge) {
               setIsStreaming(false, tabId);
               const dsSid = tabState.sessionId;
               if (dsSid) scheduleTurnEndReconcile(dsSid, tabId);
@@ -1227,8 +1246,15 @@ export function useChatStreamingLifecycle(
             const pdBackend = pdSid ? states[pdSid] : undefined;
             const pdStreaming = pdBackend?.streaming ?? false;
             const pdActive = pdBackend?.state === 'waiting_input' || pdBackend?.state === 'streaming';
+            // Honest-signal (OT01): the unit is CLEAN-IDLE (streaming=false) but its
+            // subprocess is still finishing a long turn post-disconnect. Treat that
+            // as "still alive" so we keep waiting (re-pulling DB each tick) instead
+            // of resolving — resolving here is what surfaced the false "Connection
+            // lost" error while the answer was still being produced. Fail-safe:
+            // undefined (older backend) → false → behavior identical to before.
+            const pdFlushing = pdBackend?.postDisconnectFlushing ?? false;
 
-            if ((!pdStreaming && !pdActive) || pdCapExceeded) {
+            if ((!pdStreaming && !pdActive && !pdFlushing) || pdCapExceeded) {
               // Backend idle (or evicted, or cap exceeded) — uncertainty resolved.
               // CRITICAL: only clear _postDisconnectUncertain when there is NO
               // queued message to drain. When a message IS queued, leave the flag
@@ -1481,6 +1507,9 @@ export function useChatStreamingLifecycle(
             backendIsStreaming: backendState?.streaming ?? false,
             reportedState: backendState?.state,
             resumeInProgress: !!tabState.isResuming,
+            // OT01: backend clean-idle but still flushing a long turn post-disconnect
+            // (heal-grace kept the spinner; do not force-clear mid-flush).
+            postDisconnectFlushing: backendState?.postDisconnectFlushing ?? false,
             activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
             idleStreamingSince: tabState._idleStreamingSince,
             now: Date.now(),
@@ -3535,39 +3564,78 @@ export function useChatStreamingLifecycle(
           );
           // Keep isStreaming = true (spinner stays, looks like thinking)
           // Don't show error toast yet
-          // Set a timeout — if backend doesn't reconnect, THEN show error
-          setTimeout(() => {
+          // Set a timeout — if backend doesn't reconnect, consult authoritative
+          // state and only THEN decide error-vs-still-working (OT01 honest signal).
+          setTimeout(async () => {
             const currentTab = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
-            if (currentTab && currentTab._healGraceActive) {
-              // Grace period expired without recovery — show the error now
-              currentTab._healGraceActive = false;
-              console.warn(`[HealGrace] Tab ${capturedTabId}: grace period expired — showing error`);
-              // Clear streaming state
-              setIsStreaming(false, capturedTabId ?? undefined);
-              incrementStreamGen();
-              if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
-              // ROOT-CAUSE FIX (SSE-disconnect message loss): the SSE connection
-              // is gone but the backend subprocess may still be STREAMING — a
-              // long agent turn can outlive the connection. Mark the tab as
-              // post-disconnect-uncertain so a follow-up send is QUEUED
-              // (shouldQueueSend) instead of escaping to a normal send →
-              // SESSION_BUSY → orphan delete → silent message loss. Cleared on
-              // next send (handleSendMessage).
-              currentTab._postDisconnectUncertain = true;
-              currentTab._postDisconnectAt = Date.now(); // for reconcile time-cap
-              // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
-              // (Same fix as the terminal mid-stream-failure branch below.)
-              // /stop → interrupt_session → kill-on-timeout POISONS the
-              // subprocess → next send zombie_via_error → manual-Continue loop.
-              // The backend's _recover_streaming_on_disconnect already
-              // transitions STREAMING → IDLE and soft-interrupts (leaves the
-              // subprocess alive so a long tool-loop finishes → output persists
-              // to DB). The 15s reconcile loop then drains any queued message.
-              // Toast is fine here (30s elapsed = real problem)
-              addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
+            if (!currentTab || !currentTab._healGraceActive) {
+              // _healGraceActive was cleared (successful reconnection / data
+              // arrived during grace) — the heal worked, user saw nothing.
+              return;
             }
-            // If _healGraceActive was cleared (by a successful reconnection),
-            // do nothing — the heal worked, user saw nothing.
+            // ── Honest-signal decision (OT01) ──────────────────────────────
+            // The SSE connection is gone, but the backend subprocess may still be
+            // producing the answer (a long agent turn can outlive the connection:
+            // it is left ALIVE post-disconnect and finishes into the DB). Showing
+            // a hard "Connection lost" error here while the turn is still alive was
+            // the recurring false-error bug. Consult the authoritative backend
+            // mirror ONCE; if alive (streaming / waiting_input / flushing) keep the
+            // spinner and hand ongoing recovery to the 15s reconcile owner. Only
+            // surface the error when the backend is genuinely done — or when the
+            // liveness query fails (fail-safe: never strand on an eternal spinner).
+            let verdict: HealGraceVerdict;
+            try {
+              const states = await chatService.getStreamingState();
+              const sid = currentTab.sessionId;
+              const auth = sid ? states[sid] : undefined;
+              verdict = healGraceExpiryVerdict({
+                backendIsStreaming: auth?.streaming ?? false,
+                backendWaitingInput: auth?.waitingInput ?? false,
+                postDisconnectFlushing: auth?.postDisconnectFlushing ?? false,
+                queryFailed: false,
+              });
+            } catch {
+              verdict = healGraceExpiryVerdict({
+                backendIsStreaming: false, backendWaitingInput: false,
+                postDisconnectFlushing: false, queryFailed: true,
+              });
+            }
+            // Re-read AFTER the await — the tab may have closed / reconnected /
+            // switched during the network round-trip (cross-tab capturedTabId
+            // guard preserved, same pattern as the busy poll).
+            const tab2 = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+            if (!tab2 || !tab2._healGraceActive) return;
+
+            if (verdict === 'still-working') {
+              // Backend is alive — DO NOT show an error, KEEP the spinner. Hand
+              // ongoing recovery to the 15s reconcile loop (the SOLE owner of
+              // _postDisconnectUncertain). The reconcile loop's existing 120-min
+              // cap is the long-turn ceiling — we add no competing timer/cap.
+              console.log(`[HealGrace] Tab ${capturedTabId}: grace expired but backend still working — keeping spinner, reconcile owns recovery`);
+              tab2._postDisconnectUncertain = true;
+              tab2._postDisconnectAt = Date.now();
+              // Leave _healGraceActive + isStreaming true (spinner stays).
+              return;
+            }
+
+            // verdict === 'show-error': backend genuinely done/dead (or query
+            // failed). Run the original error path.
+            tab2._healGraceActive = false;
+            console.warn(`[HealGrace] Tab ${capturedTabId}: grace expired, backend genuinely done — showing error`);
+            setIsStreaming(false, capturedTabId ?? undefined);
+            incrementStreamGen();
+            if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+            // Mark post-disconnect-uncertain so a follow-up send is QUEUED
+            // (shouldQueueSend) instead of escaping → SESSION_BUSY → orphan delete.
+            tab2._postDisconnectUncertain = true;
+            tab2._postDisconnectAt = Date.now();
+            // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
+            // /stop → interrupt_session → kill-on-timeout POISONS the subprocess
+            // → next send zombie_via_error → manual-Continue loop. The backend's
+            // _recover_streaming_on_disconnect already transitions STREAMING→IDLE
+            // and leaves the subprocess alive; the 15s reconcile loop drains any
+            // queued message.
+            addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
           }, HEAL_GRACE_PERIOD_MS);
           return; // Don't show error — heal grace in progress
         }

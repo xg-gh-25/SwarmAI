@@ -156,6 +156,57 @@ class TestStreamingStateEndpoint:
         assert sessions["session-ghi"]["streaming"] is True
 
     @pytest.mark.asyncio
+    async def test_reports_post_disconnect_flushing_true_when_flush_task_live(self, mock_router):
+        """Honest-signal fix (OT01): a CLEAN-IDLE unit whose subprocess is still
+        finishing a long turn post-disconnect (live _pipe_flush_task) must expose
+        post_disconnect_flushing=True so the frontend reconcile keeps waiting
+        instead of surfacing a false 'Connection lost' error."""
+        from core.session_unit import SessionState, SessionUnit
+
+        unit = MagicMock()
+        unit.session_id = "session-flush"
+        unit.state = SessionState.IDLE  # clean IDLE post-disconnect
+        unit._pending_question = None
+        unit._last_drained_seqs = []
+        # Live (not-done) pipe-flush task → still flushing.
+        task = MagicMock()
+        task.done.return_value = False
+        unit._pipe_flush_task = task
+        type(unit).is_post_disconnect_flushing = SessionUnit.is_post_disconnect_flushing
+
+        mock_router.list_units.return_value = [unit]
+
+        with patch("routers.chat._get_router", return_value=mock_router):
+            from routers.chat import get_streaming_state_endpoint
+            result = await get_streaming_state_endpoint()
+
+        entry = result["sessions"]["session-flush"]
+        assert entry["streaming"] is False        # clean IDLE — not streaming
+        assert entry["post_disconnect_flushing"] is True   # but subprocess alive
+
+    @pytest.mark.asyncio
+    async def test_reports_post_disconnect_flushing_false_when_no_task(self, mock_router):
+        """A genuinely-done IDLE session reports post_disconnect_flushing=False so
+        the reconcile loop can resolve (surface error / clear) when appropriate."""
+        from core.session_unit import SessionState, SessionUnit
+
+        unit = MagicMock()
+        unit.session_id = "session-done"
+        unit.state = SessionState.IDLE
+        unit._pending_question = None
+        unit._last_drained_seqs = []
+        unit._pipe_flush_task = None  # no flush task → done
+        type(unit).is_post_disconnect_flushing = SessionUnit.is_post_disconnect_flushing
+
+        mock_router.list_units.return_value = [unit]
+
+        with patch("routers.chat._get_router", return_value=mock_router):
+            from routers.chat import get_streaming_state_endpoint
+            result = await get_streaming_state_endpoint()
+
+        assert result["sessions"]["session-done"]["post_disconnect_flushing"] is False
+
+    @pytest.mark.asyncio
     async def test_prewarm_sessions_excluded(self, mock_router):
         """Prewarm sessions are still filtered out."""
         from core.session_unit import SessionState

@@ -817,12 +817,16 @@ async def get_streaming_state_endpoint():
     stale isStreaming state when SSE events are lost. Returns all non-prewarm
     sessions — frontend iterates its own tab map and indexes by session ID.
 
-    **State desync fix (2026-06-20):** After SSE disconnect, unit transitions
-    STREAMING→IDLE immediately (so next send() works), but subprocess may still
-    be generating (pipe_flush_task active). We report streaming=true in this
-    case to prevent frontend reconcile from force-clearing an active stream.
-    The subprocess output persists to DB; when pipe_flush_task completes,
-    we report idle and frontend reconciles from DB.
+    **State desync (Root-1 SSOT Phase 2, Option B):** After an SSE disconnect the
+    unit transitions to a CLEAN IDLE immediately (so the next send() works) — there
+    is NO generating-limbo flag, so `streaming` is simply `state == STREAMING` and a
+    disconnected-but-still-flushing turn reports `streaming=false, state='idle'`.
+    The subprocess is left alive (1A) to finish a long turn; its output persists to
+    DB and loads on the next reconcile. To let the frontend distinguish
+    "alive-but-flushing" from "genuinely done" (else it surfaces a false
+    'Connection lost' error at heal-grace expiry — OT01), we ALSO emit
+    `post_disconnect_flushing` (true iff `is_post_disconnect_flushing`, derived from
+    the live `_pipe_flush_task`). The reconcile loop keeps waiting while it is true.
 
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
@@ -887,9 +891,21 @@ async def get_streaming_state_endpoint():
             except Exception:
                 pending_question = None
 
+        # Honest-signal (OT01): expose whether the subprocess is still finishing a
+        # long turn post-disconnect. The unit is CLEAN-IDLE (streaming=false) but
+        # alive; without this the frontend's heal-grace expiry surfaces a false
+        # "Connection lost" error while the answer is still being produced. getattr
+        # fail-safe to False so an older/mocked unit lacking the property never
+        # falsely claims flushing.
+        try:
+            post_disconnect_flushing = bool(unit.is_post_disconnect_flushing)
+        except Exception:
+            post_disconnect_flushing = False
+
         result[unit.session_id] = {
             "streaming": is_streaming,
             "state": unit.state.value,
+            "post_disconnect_flushing": post_disconnect_flushing,
             # waiting_input must also reflect a re-surfaced durable request, else
             # the frontend won't render the prompt it was just handed.
             "waiting_input": unit.state.value == "waiting_input" or pending_question is not None,

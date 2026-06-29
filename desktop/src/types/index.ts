@@ -1140,6 +1140,13 @@ export interface StreamingStateEntry {
   pendingQuestion: { toolUseId: string; questions: AskUserQuestion[] } | null;
   /** Pending-message seqs the server drained in its last drain pass. */
   lastDrainedSeqs: number[];
+  /**
+   * True iff the unit is CLEAN-IDLE but its subprocess is still finishing a long
+   * turn post-SSE-disconnect (live pipe-flush task). Lets the reconcile loop keep
+   * waiting instead of surfacing a false 'Connection lost' error (OT01). Defaults
+   * false when an older backend omits the field (fail-safe — never worse than before).
+   */
+  postDisconnectFlushing: boolean;
 }
 
 // ============== Health Monitor Types ==============

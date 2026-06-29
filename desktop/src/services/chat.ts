@@ -24,6 +24,7 @@ interface RawStreamingStateEntry {
     options?: string[];
   } | null;
   last_drained_seqs?: number[];
+  post_disconnect_flushing?: boolean;
 }
 import api from './api';
 import { getApiBaseUrl } from './tauri';
@@ -496,6 +497,9 @@ export const chatService = {
           ? { toolUseId: rawPq!.tool_use_id, questions: rawPq!.questions! }
           : null,
         lastDrainedSeqs: raw.last_drained_seqs ?? [],
+        // Fail-safe: an older backend omits this → false → behavior never worse
+        // than before the honest-signal fix (OT01).
+        postDisconnectFlushing: raw.post_disconnect_flushing ?? false,
       };
     }
     return out;
