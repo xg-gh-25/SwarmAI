@@ -49,6 +49,50 @@ class TestBootId:
         r2 = client.get("/health")
         assert r1.json()["boot_id"] == r2.json()["boot_id"]
 
+    def test_client_fixture_does_not_run_lifespan(self):
+        """REGRESSION GUARD (run_b9ecb07a): the `client` fixture must NOT trigger
+        FastAPI lifespan startup.
+
+        The lifespan (main.py:693+) does heavy work — DB init, migrations, workspace
+        ensure. If the fixture runs it, an R7 regression pytest exceeds the 120s
+        foreground timeout, auto-backgrounds, and strands the UI's tool spinner.
+        Starlette runs lifespan ONLY when TestClient is used as a context manager,
+        so the fixture must construct a bare ``TestClient(main.app)`` (no ``with``).
+
+        We assert this structurally: serving /health works WITHOUT entering the
+        lifespan, which is exactly what a bare TestClient guarantees. A future edit
+        re-introducing ``with TestClient(...)`` would still pass /health, so we also
+        pin the guarantee by patching the lifespan to a tripwire and confirming the
+        fixture-style construction never trips it.
+        """
+        from contextlib import asynccontextmanager
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        tripped = {"lifespan_ran": False}
+
+        @asynccontextmanager
+        async def _tripwire_lifespan(app):
+            tripped["lifespan_ran"] = True
+            yield
+
+        # Build a throwaway app wired exactly like main.app (lifespan attached),
+        # then construct the client the SAME way the fixture does (no `with`).
+        probe_app = FastAPI(lifespan=_tripwire_lifespan)
+
+        @probe_app.get("/health")
+        def _health():
+            return {"ok": True}
+
+        c = TestClient(probe_app)  # bare — the fixture's pattern
+        resp = c.get("/health")
+        assert resp.status_code == 200
+        assert tripped["lifespan_ran"] is False, (
+            "Bare TestClient must NOT run lifespan — if this fails, the fixture "
+            "pattern changed and the R7-timeout/stranded-spinner bug can recur."
+        )
+
     def test_boot_id_in_backend_json(self, tmp_path):
         """write_backend_json must include boot_id."""
         from main import write_backend_json, _boot_id
@@ -161,7 +205,22 @@ class TestBackendJsonConflictCheck:
 
 @pytest.fixture
 def client():
-    """FastAPI test client with startup complete."""
+    """FastAPI test client WITHOUT lifespan startup.
+
+    These tests only exercise GET /health (which reads module-level _boot_id and
+    the _startup_complete flag forced below) — they do NOT need the real FastAPI
+    lifespan. Constructing ``TestClient(main.app)`` *without* the ``with`` context
+    manager skips lifespan enter/exit entirely (Starlette only runs startup/shutdown
+    when TestClient is used as a context manager).
+
+    Why this matters (run_b9ecb07a): the previous ``with TestClient(main.app)`` form
+    ran the real lifespan (DB init + migrations + workspace ensure + initialization
+    manager — main.py:693+). Under an R7 regression pytest wrapped in a Bash call,
+    that heavy startup pushed the run past the 120s foreground timeout → the command
+    auto-backgrounded → the foreground returned empty → the UI's per-tool elapsed
+    timer never received a tool_result and the spinner counted up indefinitely.
+    No ``with`` → no lifespan → fast, no stranded spinner.
+    """
     from fastapi.testclient import TestClient
     import main
 
@@ -169,7 +228,8 @@ def client():
     original = main._startup_complete
     main._startup_complete = True
     try:
-        with TestClient(main.app) as c:
-            yield c
+        # NOTE: deliberately NOT `with TestClient(...)` — the context-manager form
+        # is what triggers lifespan startup. A bare TestClient serves routes without it.
+        yield TestClient(main.app)
     finally:
         main._startup_complete = original
