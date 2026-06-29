@@ -39,7 +39,7 @@ Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/))
 git clone https://github.com/xg-gh-25/SwarmAI.git
 cd SwarmAI/desktop
 npm install
-cp backend.env.example ../backend/.env
+cp ../backend/.env.example ../backend/.env
 # Edit ../backend/.env — configure your API provider
 
 npm run build:all

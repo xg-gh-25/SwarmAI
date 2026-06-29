@@ -112,7 +112,7 @@ cd desktop
 npm install
 
 # Set up backend environment
-cp backend.env.example ../backend/.env
+cp ../backend/.env.example ../backend/.env
 # Edit ../backend/.env if needed (see AI Provider Setup below)
 
 # Run in development mode (recommended — picks up code changes instantly)
