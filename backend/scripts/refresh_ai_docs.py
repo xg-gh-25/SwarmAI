@@ -194,9 +194,24 @@ def collect_metrics() -> dict:
     m["core_loc"] = _run(
         "find backend/core -name '*.py' -exec cat {} + | wc -l"
     ).strip()
-    m["total_backend_loc"] = _run(
-        "find backend -name '*.py' -not -path '*/.*' -not -path '*/__pycache__/*' | xargs cat | wc -l"
+    # git-tracked, non-test caliber: reproducible + auto-excludes .venv
+    # site-packages and gitignored skills (e.g. private CMHK). The old
+    # `find … | xargs cat | wc -l` (a) cat'd ~313K lines and timed out under
+    # the accumulated _run deadline -> blank, and (b) counted venv + gitignored
+    # code -> a non-reproducible inflated number. `wc -l` (not cat) is also far
+    # cheaper. Consistent with commit_count, which already uses git.
+    # `awk` sums each file's line count itself (skipping wc's own 'total' line)
+    # -> portable across BSD/GNU xargs AND robust to the empty-list case (GNU
+    # xargs would run `wc -l` on empty stdin and print a bogus 0; here awk on an
+    # empty stream prints nothing -> caught by the empty/0 guard below).
+    _loc = _run(
+        "git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' "
+        "| xargs wc -l | awk '$2!=\"total\"{n+=$1} END{if(n>0) print n}'"
     ).strip()
+    # Empty or 0 = git unavailable / wrong prefix / shallow clone — a known
+    # failure signal, not a real count. Leave the prior value's slot empty so
+    # the WARN surfaces rather than rendering a confident-but-wrong 0.
+    m["total_backend_loc"] = _loc if (_loc.isdigit() and int(_loc) > 0) else ""
     m["test_files"] = _run("find backend/tests -name '*.py' | wc -l").strip()
     m["hooks_count"] = _run("ls backend/hooks/*.py | wc -l").strip()
 
@@ -252,7 +267,7 @@ def _generate_metrics_block(metrics: dict) -> str:
 | Total commits | {metrics['commit_count']}+ | `git log --oneline | wc -l` |
 | Duration | ~{metrics['duration_days']} days | First commit to latest (1 human contributor) |
 | Backend core modules | {metrics['core_modules']} Python files, {metrics['core_loc']} LOC | `find backend/core -name "*.py" -exec cat {{}} + | wc -l` |
-| Total backend LOC | {metrics['total_backend_loc']} | `find backend -name "*.py" -not -path "*/.*" -not -path "*/__pycache__/*" | xargs cat | wc -l` |
+| Total backend LOC | {metrics['total_backend_loc']} | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{{n+=$1}} END{{print n}}'` |
 | Test files | {metrics['test_files']} | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | {metrics['skill_count']} | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | {metrics['hooks_count']} | `ls backend/hooks/*.py | wc -l` |

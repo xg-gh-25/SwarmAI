@@ -195,10 +195,10 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 2546+ | `git log --oneline | wc -l` |
+| Total commits | 2551+ | `git log --oneline | wc -l` |
 | Duration | ~127 days | First commit to latest (1 human contributor) |
 | Backend core modules | 143 Python files, 72582 LOC | `find backend/core -name "*.py" -exec cat {} + | wc -l` |
-| Total backend LOC |  | `find backend -name "*.py" -not -path "*/.*" -not -path "*/__pycache__/*" | xargs cat | wc -l` |
+| Total backend LOC | 165090 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
 | Test files | 340 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 88 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 14 | `ls backend/hooks/*.py | wc -l` |

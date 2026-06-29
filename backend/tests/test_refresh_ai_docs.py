@@ -126,10 +126,16 @@ class TestMetricsConsistency:
         """How to Verify column uses the same command logic as the script."""
         metrics = collect_metrics()
         output = _generate_metrics_block(metrics)
-        # Verify the LOC command includes exclusion flags (matches what script runs)
-        assert '-not -path "*/.*"' in output
-        assert '-not -path "*/__pycache__/*"' in output
-        # Verify core LOC uses -exec cat (matching script behavior)
+        # total_backend_loc uses the git-tracked caliber (reproducible, excludes
+        # .venv + gitignored CMHK skills). The verify-string must match the
+        # command the script actually runs (git ls-files + awk-sum), NOT the old
+        # `find … | xargs cat` that timed out and counted venv-polluted code.
+        assert "git ls-files '*.py'" in output
+        assert "grep -v '/tests/'" in output
+        # The awk-sum tail is the portable, empty-safe summation the script runs
+        # (skips wc's own 'total' line) — verify-string must show it, not `tail -1`.
+        assert 'awk \'$2!="total"' in output
+        # core_loc still uses -exec cat (backend/core has no venv/CMHK pollution).
         assert "-exec cat" in output
 
 

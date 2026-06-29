@@ -460,3 +460,71 @@ class TestE2ERefreshLoop:
             assert "layer" in entry
             assert "evidence" in entry
             assert "confidence" in entry
+
+
+def _import_refresh_ai_docs():
+    """Import the refresh_ai_docs script (lives in backend/scripts, not a package)."""
+    import sys
+
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import refresh_ai_docs
+
+    return refresh_ai_docs
+
+
+# ── collect_metrics() — the scale-indicators block (drives the REAL repo) ────
+#
+# These tests run collect_metrics() against the actual swarmai repo (the script
+# shells out to find/git in REPO_ROOT). They guard the bug where
+# total_backend_loc rendered BLANK (cat-the-world command timed out under the
+# script's accumulated _run deadline) and, even when non-empty, used the wrong
+# caliber (filesystem cat counts .venv site-packages + gitignored CMHK skills,
+# producing a non-reproducible inflated number). The correct caliber is
+# git-tracked, non-test — reproducible, venv/CMHK-free, matches the README.
+class TestCollectMetrics:
+    def test_total_backend_loc_is_nonempty_numeric(self):
+        """total_backend_loc must render a real number, never blank.
+
+        RED on the old `find backend | xargs cat | wc -l` command: it either
+        timed out under the accumulated _run deadline (-> "") or counted the
+        venv/CMHK-polluted filesystem.
+        """
+        r = _import_refresh_ai_docs()
+
+        # Reproduce the real entry-point deadline (was the trigger for blank).
+        r._SCRIPT_DEADLINE = __import__("time").monotonic() + r._SCRIPT_TIMEOUT
+        try:
+            m = r.collect_metrics()
+        finally:
+            r._SCRIPT_DEADLINE = 0.0
+
+        val = m.get("total_backend_loc", "")
+        assert val != "", "total_backend_loc rendered BLANK (command timed out)"
+        assert val.isdigit(), f"total_backend_loc not numeric: {val!r}"
+
+    def test_total_backend_loc_uses_git_tracked_caliber(self):
+        """The value must be the reproducible git-tracked non-test caliber.
+
+        Lower bound proves it counts the real backend (not blank/0); upper
+        bound proves it EXCLUDES the .venv site-packages (~150K+) and the
+        gitignored CMHK skills (~30K) that the old filesystem command swept in.
+        """
+        r = _import_refresh_ai_docs()
+
+        r._SCRIPT_DEADLINE = __import__("time").monotonic() + r._SCRIPT_TIMEOUT
+        try:
+            m = r.collect_metrics()
+        finally:
+            r._SCRIPT_DEADLINE = 0.0
+
+        loc = int(m["total_backend_loc"])
+        # Lower bound proves it counts the real backend (not blank/0). Upper
+        # bound stays well below the venv/CMHK-polluted ~313K the OLD command
+        # produced (so a revert is still caught) but is loose enough (250K) to
+        # not false-positive on legitimate growth from the current ~165K.
+        assert 100_000 < loc < 250_000, (
+            f"total_backend_loc={loc} outside git-tracked caliber band "
+            f"(blank/0 = timeout/empty bug; ~313K = venv/CMHK pollution regression)"
+        )
