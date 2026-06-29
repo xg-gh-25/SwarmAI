@@ -38,6 +38,7 @@ TIER2_REPOS = [
     "santifer/career-ops",
     "danielmiessler/Personal_AI_Infrastructure",
     "aws-samples/sample-ai-plc",
+    "aws-samples/sample-eval-first-building-enterprise-agents-with-agentcore",
 ]
 
 # Topic keywords for signal matching
