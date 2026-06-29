@@ -11,12 +11,6 @@
 
 </div>
 
-<!-- TEMPORARY: re-star notice — remove once star count has recovered -->
-> ⭐ **我们的 star 被误清零了。** 2026-06-27 仓库可见性被误操作切换了几分钟，
-> 而任何这种切换都会清空 GitHub 的 stargazer 列表——我们 ~200 个 star 一夜归零。
-> 代码与历史完好，只有星数被清掉。**如果你之前 star 过 SwarmAI，麻烦再点一次 🙏**
-> ——star 是新人发现这个项目的主要途径。
-
 ---
 
 **SwarmAI 是一个自进化的 Agent OS** —— 每次交互升级的不是模板，是系统的认知本身。
