@@ -1335,7 +1335,14 @@ All commands use: `python backend/scripts/artifact_cli.py <command> [args]`
 ```bash
 # Artifacts
 discover --project <P> --types <types> --full    # find upstream artifacts
-publish  --project <P> --type <T> --producer s_autonomous-pipeline --summary "<S>" --stage <stg> --data '<json>'
+publish  --project <P> --run-id <RUN_ID> --type <T> --producer s_autonomous-pipeline --summary "<S>" --stage <stg> --data '<json>'
+#   🚨 ALWAYS pass --run-id <RUN_ID> on a --stage publish. Without it, the auto-record
+#   target is resolved by "newest active run project-wide" — and with 2+ concurrent
+#   pipelines in the same project it would record into a SIBLING session's run
+#   (run_3caef1d3 contamination). As of that fix, a --run-id-less publish with 2+
+#   active runs FAILS CLOSED (stderr error + exit 3) rather than guess — so omitting
+#   --run-id will HALT your publish in a multi-run workspace. The RUN_ID is the one
+#   run-create returned; it's already in scope (you use it for run-update/run-budget).
 #   ⚡ publish --stage AUTO-RECORDS the stage into run.json (status="recorded" +
 #   artifact_id), so you do NOT need a separate run-update just to CREATE the stage
 #   record. BUT you STILL MUST run-update to FINALIZE each stage: set

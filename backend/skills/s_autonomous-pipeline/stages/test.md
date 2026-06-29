@@ -190,7 +190,7 @@ Confirm each before publishing:
 ### Artifact Publish
 
 ```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
+python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
   --type test_report --producer s_autonomous-pipeline \
   --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed, layers: AC/dep/smoke" --stage test \
   --data '{"passed":true,"failed":M,"fixed":K,"skipped":J,"tests_new":N,"tests_total":T,"regressions":0,"layers":{"ac_driven":{"run":true,"pass":A},"dependency_scoped":{"run":true,"tests":B,"pass":C},"import_smoke":{"run":true,"modules":D,"pass":E}}}'

@@ -876,7 +876,7 @@ platforms — the information was available, but BUILD didn't cross-reference it
 ## Artifact Publish
 
 ```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
+python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
   --type review --producer s_autonomous-pipeline \
   --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>" --stage review \
   --data '{"approved":true,"findings_count":N,"findings":[...],"litmus_gate":{"verdict":"PASS","hf_checked":[true,true,true,true],"soft_signal_count":0,"weak_areas":[],"evidence":"..."},"spec_compliance":{"verdict":"PASS|BLOCK|WARNING","coverage_matrix":[{"ac_number":1,"ac_description":"...","status":"IMPLEMENTED|MISSING|MISUNDERSTOOD","evidence":"..."}],"extra_work":[],"findings":[]},"security_findings":[],"integration_trace":{"checked":N,"clean":true,"details":"..."},"runtime_patterns":{"checked":N,"violations":0,"patterns":[{"pattern":"name","status":"pass|N/A","detail":"what was checked (>10 chars)"}]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'

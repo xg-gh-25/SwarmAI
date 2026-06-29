@@ -234,7 +234,7 @@ The design_doc artifact MUST include `boundaries`, `success_criteria`, `file_dis
 `change_spec`, and `test_strategy` fields. Pipeline validator will check for their presence.
 
 ```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
+python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
   --type design_doc --producer s_autonomous-pipeline \
   --summary "Design: <approach> for <requirement>" --stage plan \
   --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"file_discovery":[{"file":"...","category":"MODIFY|TEST|VERIFY","finding":"..."}],"change_spec":[{"order":1,"file":"...","change":"...","depends_on":[],"ac":"AC1"}],"test_strategy":[{"ac":"...","how":"...","mock_boundary":"...","input":"..."}],"data_model":"...","api_contract":"...","files_to_change":[...]}'

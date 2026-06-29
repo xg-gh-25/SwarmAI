@@ -153,7 +153,7 @@ python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id 
 ### Artifact Publish
 
 ```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
+python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN_ID> \
   --type research --producer s_autonomous-pipeline \
   --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
   --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"ambiguity_scan":{"scanned_fields":["recommendation","risk_probe.verification"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"sources":[...]}'

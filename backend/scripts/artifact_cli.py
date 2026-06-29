@@ -101,16 +101,21 @@ def cmd_discover(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"artifacts": result, "count": len(result)}, indent=2))
 
 
-def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
-    """Find the most recent active (running/paused) pipeline run for a project.
+def _find_active_runs(project: str, reg: ArtifactRegistry) -> list[dict]:
+    """Find ALL active (running/paused) pipeline runs for a project, newest-first.
 
     Sorts by created_at (ISO timestamp in run.json), not by directory name —
     directory names are run_<8-char-uuid> which have no chronological order.
+
+    Returns the full list so callers can DETECT ambiguity: a `publish --stage`
+    that omits `--run-id` must NOT blindly auto-record into the newest run when
+    2+ runs are active — that run may belong to a sibling session (run_3caef1d3
+    cross-run contamination). The singular `_find_active_run` below preserves the
+    old "newest" contract for the unambiguous single-run case.
     """
     runs_dir = Path(reg.workspace_root) / "Projects" / project / ".artifacts" / "runs"
     if not runs_dir.is_dir():
-        return None
-    # Collect all active runs with their timestamps
+        return []
     active_runs: list[tuple[str, dict]] = []
     for run_dir in runs_dir.iterdir():
         if not run_dir.is_dir():
@@ -123,11 +128,22 @@ def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
                     active_runs.append((data.get("created_at", ""), data))
             except (json.JSONDecodeError, OSError):
                 continue
-    if not active_runs:
-        return None
     # Sort by created_at descending — most recent first
     active_runs.sort(key=lambda x: x[0], reverse=True)
-    return active_runs[0][1]
+    return [d for _, d in active_runs]
+
+
+def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
+    """Most recent active (running/paused) run for a project, or None.
+
+    Thin wrapper over `_find_active_runs` — preserves the existing singular
+    contract for callers that legitimately want "the newest" in the
+    single-active-run case. Callers that must guard against cross-run
+    contamination (cmd_publish auto-record / profile-detection) use the plural
+    helper directly to detect the 2+-active ambiguity.
+    """
+    runs = _find_active_runs(project, reg)
+    return runs[0] if runs else None
 
 
 def _as_list(v) -> list:
@@ -196,13 +212,39 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     stage = getattr(args, "stage", None)
     if stage:
         from pipeline_validator import validate_artifact_data, get_stage_schema
-        # Determine profile from most recent active run in THIS project
-        # Uses _find_active_run (sorts by created_at, not directory name)
+        # Determine the profile to validate against. Prefer the EXPLICIT --run-id's
+        # profile; otherwise fall back to the active run — but ONLY if unambiguous.
+        # With 2+ active runs and no --run-id, guessing "newest" could validate this
+        # artifact against a SIBLING run's profile (run_3caef1d3). Default to "full"
+        # (the strictest tier — also the existing failure default) rather than a
+        # wrong guess. Validation re-runs at completion against the true run's
+        # profile, so a strict-here pass is always re-checked correctly.
         _pub_profile = "full"
+        _explicit_run_id = getattr(args, "run_id", None)
         try:
-            active_run = _find_active_run(args.project, reg)
-            if active_run:
-                _pub_profile = active_run.get("profile", "full") or "full"
+            if _explicit_run_id:
+                # The caller NAMED the run — read ITS profile directly from disk
+                # regardless of status (running/paused/completed/abandoned). A run
+                # that completed between publish calls (resume path) must still
+                # validate against its OWN profile, not a default — else a trivial
+                # run gets spuriously BLOCKed by full-tier depth checks (Gate-2 #2).
+                # Build the path from reg.workspace_root (same root the rest of this
+                # function uses) — NOT _resolve_run_file, which keys off the global
+                # _get_workspace() and sys.exit(1)s on a miss (would kill the publish).
+                _own_file = (
+                    Path(reg.workspace_root) / "Projects" / args.project
+                    / ".artifacts" / "runs" / _explicit_run_id / "run.json"
+                )
+                try:
+                    _own = json.loads(_own_file.read_text(encoding="utf-8"))
+                    _pub_profile = _own.get("profile", "full") or "full"
+                except (FileNotFoundError, json.JSONDecodeError, OSError):
+                    pass  # unknown/typo'd run id → "full" (strict, safe)
+            else:
+                _active = _find_active_runs(args.project, reg)
+                if len(_active) == 1:
+                    _pub_profile = _active[0].get("profile", "full") or "full"
+                # 0 active → "full"; 2+ active → "full" (refuse to guess a sibling's)
         except Exception:
             pass  # Default to "full" if can't determine profile
         errors = validate_artifact_data(stage, data, profile=_pub_profile)
@@ -293,9 +335,42 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             try:
                 target_run_id = run_id  # Explicit --run-id from caller
                 if not target_run_id:
-                    active_run = _find_active_run(args.project, reg)
-                    if active_run:
-                        target_run_id = active_run.get("id", "")
+                    # No explicit --run-id: fall back to the active run, but ONLY
+                    # if it's unambiguous. With 2+ active runs in this project the
+                    # "newest" guess may belong to a SIBLING session — auto-recording
+                    # there silently contaminates an unrelated run (run_3caef1d3).
+                    # FAIL CLOSED on ambiguity: the artifact is already published
+                    # (above) and is NOT lost — but we refuse to guess a target.
+                    # The agent gets an actionable error on STDOUT (the channel the
+                    # orchestrator parses — IMPROVEMENT.md silent-signal lesson) and
+                    # retries with an explicit --run-id. We do NOT silently skip:
+                    # skipping would strand the stage record for the 6/8 stage docs
+                    # that publish without --run-id (Gate-1 finding).
+                    active_runs = _find_active_runs(args.project, reg)
+                    if len(active_runs) > 1:
+                        ambiguous = {
+                            "error": (
+                                f"auto-record AMBIGUOUS: {len(active_runs)} active runs in "
+                                f"'{args.project}'. Cannot safely guess the target run — "
+                                f"the newest may belong to a sibling session. "
+                                f"Re-run this publish with an explicit --run-id."
+                            ),
+                            "artifact_id": artifact_id,
+                            "active_run_ids": [r.get("id", "") for r in active_runs],
+                            "stage": stage,
+                        }
+                        # Fail closed: surface on STDERR (matching the
+                        # validation_failed path above), non-zero exit. The
+                        # documented orchestrator guard (INSTRUCTIONS.md) does
+                        # `OUT=$(publish … 2>/tmp/pub.err) || { cat /tmp/pub.err; }`
+                        # — it reads STDERR on failure and feeds STDOUT to
+                        # json.load(...)['artifact_id']. Printing to STDOUT here
+                        # would hide the error AND crash that json.load (Gate-2 #1).
+                        # The artifact persists; only the GUESS is refused.
+                        print(json.dumps(ambiguous), file=sys.stderr)
+                        sys.exit(3)
+                    if active_runs:
+                        target_run_id = active_runs[0].get("id", "")
                 if target_run_id:
                     # Auto-record is a SAFETY NET, not a substitute for run-update.
                     # It captures the artifact_id so a forgotten run-update never
@@ -402,32 +477,29 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
     """
     import subprocess
 
-    # Find active run (use _find_active_run for correct chronological ordering)
-    # Note: reg not available here — inline the same logic with timestamp sort
     artifacts_dir = _get_workspace() / "Projects" / project / ".artifacts" / "runs"
     if not artifacts_dir.exists():
         return
 
-    # Find the most recent running run (sorted by created_at, not dir name)
-    run_id = None
-    stages = []
-    active_candidates: list[tuple[str, dict]] = []
-    for run_dir in artifacts_dir.iterdir():
-        if not run_dir.is_dir():
-            continue
-        run_file = run_dir / "run.json"
-        if run_file.exists():
-            try:
-                run_data = json.loads(run_file.read_text(encoding="utf-8"))
-                if run_data.get("status") == "running":
-                    active_candidates.append((run_data.get("created_at", ""), run_data))
-            except (json.JSONDecodeError, OSError):
-                continue
-    if active_candidates:
-        active_candidates.sort(key=lambda x: x[0], reverse=True)
-        run_data = active_candidates[0][1]
-        run_id = run_data["id"]
-        stages = run_data.get("stages", [])
+    # Use the SHARED active-run helper (run_3caef1d3) instead of a 4th inlined
+    # copy that diverged: the old inline scan filtered status=="running" ONLY,
+    # dropping "paused" runs — and, like cmd_publish, blindly took the newest
+    # project-wide, so with 2+ active runs it would validate/advance a SIBLING
+    # session's run. Now: (1) (running, paused) parity via _find_active_runs;
+    # (2) refuse-to-guess on ambiguity — if 2+ active runs and we can't tell which
+    # is ours, SKIP the auto-validate (the explicit run-update/publish path with
+    # --run-id still validates correctly at completion). Skipping a best-effort
+    # pre-advance check is safe; advancing the WRONG run is not.
+    class _Shim:
+        workspace_root = str(_get_workspace())
+
+    active = _find_active_runs(project, _Shim())
+    if len(active) != 1:
+        # 0 active → nothing to validate; 2+ active → ambiguous, refuse to guess.
+        return
+    run_data = active[0]
+    run_id = run_data["id"]
+    stages = run_data.get("stages", [])
 
     if not run_id or not stages:
         return
