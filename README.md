@@ -17,19 +17,28 @@ English | [中文](./README.zh-CN.md)
 
 Your AI team, one human directing.
 
-![SwarmAI](./assets/swarm-2.png)
-
 ---
 
 ## Why SwarmAI
 
-Most AI tools are **flat**: every session starts from zero, every mistake is made again, and "memory" is a transcript nobody learns from. SwarmAI is **compound** — it treats every interaction as a chance to upgrade the system itself.
+We finally have software smart enough to reason, write code, and make judgment calls — and it **wakes up with amnesia every morning.** Every session starts from zero. The context you gave it, the mistake it made yesterday, the correction you taught it — gone. Most "AI tools" are **flat**: a brilliant model trapped in Groundhog Day.
 
-It doesn't just *remember* what happened; it **distills** experience into durable knowledge, **prunes** what stops being useful, and **rewrites its own operating rules** when a mistake repeats — changes you can read in a `git diff`. The coding pipeline doesn't iterate toward "good enough"; it **converges** on a definition of done and refuses to ship until adversarial gates pass. Error classes that used to recur monotonically decrease — because carefulness doesn't scale, gates do.
+SwarmAI is built on the opposite bet — that the value should **compound.** Every interaction should leave the system a little sharper than before, permanently.
 
-The thesis we're testing, live and in public: **can one builder + AI operate at the scale of a whole team?** Not by making the model bigger, but by building the *operating system* around it — context, memory, evolution, and measurement wired into a single compounding loop. The loop itself is the product; you can't extract one engine and get the same effect.
+Which reframes the obvious question. Ask *"why does a desktop app need 170K lines and 13 engines?"* and you've mismeasured it: **this isn't application complexity — it's the complexity of an agent's cognition.** Four things separate a mind from a model: it stays **continuous** across time, it **corrects itself**, it **forgets** what stopped mattering, and its **judgment compounds** with use. Conventional software has no analog for any of them — a program doesn't get wiser between runs, and it never rewrites its own rules. SwarmAI is an attempt to build that missing layer: not a bigger model, but the **cognitive operating system around one.**
 
-> **This isn't a product demo — it's a living experiment, documented as it happens.** Below are 60+ deep-dive discussions: the architecture decisions, the failures, the post-mortems, and the design philosophy behind every engine.
+The design choices only make sense through that lens:
+
+- **Evolution is an OS patch, not stored data.** Most agent-memory projects pile up entries. We separate *cognition* (the OS) from *knowledge* (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`.
+- **Recurring mistakes are made structurally impossible.** When an error class repeats, we don't add another lesson — we add a gate, then a path where the wrong move physically cannot happen. Humans rely on carefulness; an agent should rely on structure.
+- **Knowledge must be able to die.** Unreferenced for 90 days → retired. Accumulation without elimination is how every memory system rots. Decay is natural selection for what an agent knows.
+- **Sessions are discontinuous. Intelligence shouldn't be.** Hooks fire *between* sessions, so the next one starts warm. Most frameworks accept the cold start; we refuse it.
+
+The thesis, tested live and in public: **can one builder + AI operate at the scale of a whole team?** Not by scaling the model — by building the compounding loop around it. The loop *is* the product; you can't extract one engine and keep the effect.
+
+As of **v1.22.0**, that loop is running healthy end-to-end — sessions self-heal, knowledge cultivates and decays on its own, and the evolution engine has logged **42 corrections**, converting recurring failure classes into structural gates rather than repeated lessons.
+
+> **This isn't a product demo — it's a living experiment, documented as it happens.** Below are 60+ deep-dive discussions: every architecture decision, failure, and post-mortem behind the engines.
 
 ### 📚 Start Here — The Thinking Behind the Code
 
@@ -38,6 +47,8 @@ The thesis we're testing, live and in public: **can one builder + AI operate at 
 | 🗺️ **[Reading Matrix — 3 Curated Paths](https://github.com/xg-gh-25/SwarmAI/discussions/35)** | **Builder** (~45 min) · **Architect** (~60 min) · **Leader** (~30 min) — don't read everything, pick your path |
 | 💬 **[All Discussions (68)](https://github.com/xg-gh-25/SwarmAI/discussions)** | Thought leadership, architecture deep-dives, and post-mortems — also mirrored in [`docs/discussions/`](./docs/discussions/) |
 | 🧭 **[Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38)** | The beliefs that became enforcement — why each one earned its place from a failure |
+
+![SwarmAI](./assets/swarm-2.png)
 
 ---
 
@@ -84,13 +95,13 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 | 3 | **DDD Cultivation** | Self-growing domain knowledge, 7-type ontology, Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
 | 4 | **Autonomous Pipeline** | One requirement → push-ready code. Dual-mode: Full + Goal Loop | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | 5 | **Pollinate Engine** | One message → multi-format brand content | [docs](./docs/Pollinate-Content-Engine.md) |
-| 6 | **Self-Evolution** | Cognitive L0→L3 patching. 37 corrections, zero class repetition | [docs](./docs/Self-Evolution-Harness-Design.md) |
+| 6 | **Self-Evolution** | Cognitive L0→L3 patching. 42 corrections → recurring classes become structural gates | [docs](./docs/Self-Evolution-Harness-Design.md) |
 | 7 | **Self-Healing** | Invisible recovery: 5 sensors, auto-respawn, user sees nothing | — |
 | 8 | **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | — |
 | 9 | **Hook System** | 21 hooks (17 runtime + 4 lifecycle). Sessions never cold-start | — |
 | 10 | **Job System** | Background intelligence: 13 signal feeds, cron, budget-gated | — |
 | 11 | **4-Platform Backend** | macOS daemon · Hive (EC2) · Windows · Linux. Compile-time isolation | — |
-| 12 | **Skills + Channels** | 86 skills (lazy/always), Slack gateway, 3-tier permission | — |
+| 12 | **Skills + Channels** | 88 skills (lazy/always), Slack gateway, 3-tier permission | — |
 | 13 | **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate. Proves convergence, not vibes | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
