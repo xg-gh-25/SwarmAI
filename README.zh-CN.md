@@ -93,7 +93,7 @@ cd ../desktop && npm install && npm run tauri:dev
 | 1 | **上下文管理** | 11 文件 Prompt 架构，100K 预算，三层所有权 | [docs](./docs/DDD-Platform-Overview.md) |
 | 2 | **记忆流水线** | 4 层持久化：DailyActivity → 蒸馏 → 复利召回 | [docs](./docs/Memory-Management-Design.md) |
 | 3 | **DDD 知识引擎** | 自生长领域知识，7 类本体，达尔文式淘汰 | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
-| 4 | **自主流水线** | 一句需求 → 可推送代码。双模式：Full + Goal Loop | [docs](./docs/Autonomous-Pipeline-Design.md) |
+| 4 | **自主流水线** | 一句需求 → 可推送代码。9 stages · 3 gates（framing/plan/build）· 2 modes（Full + Goal Loop） | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | 5 | **Pollinate 引擎** | 一条消息 → 多格式品牌内容 | [docs](./docs/Pollinate-Content-Engine.md) |
 | 6 | **自进化** | 认知 L0→L3 补丁。42 条纠正 → 复发类别转化为结构性门控 | [docs](./docs/Self-Evolution-Harness-Design.md) |
 | 7 | **自愈合** | 不可见恢复：5 传感器，自动重生，用户无感知 | — |
