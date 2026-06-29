@@ -528,3 +528,41 @@ class TestCollectMetrics:
             f"total_backend_loc={loc} outside git-tracked caliber band "
             f"(blank/0 = timeout/empty bug; ~313K = venv/CMHK pollution regression)"
         )
+
+    def test_core_metrics_use_git_tracked_caliber(self):
+        """core_loc + core_modules must use the SAME git-tracked, tests-OUT
+        caliber as total_backend_loc — the REVIEW LOW finding from run_7c8453a2.
+
+        RED on the old filesystem commands (`find backend/core -exec cat` /
+        `find backend/core | wc -l`): they INCLUDE the 10 core-internal test
+        files under backend/core/code_intel/tests/ (2178 LOC), so core_loc was
+        72582 / core_modules 143 — inconsistent with total_backend_loc which
+        already excludes /tests/. GREEN: 70404 / 133 (tests excluded).
+        """
+        r = _import_refresh_ai_docs()
+
+        r._SCRIPT_DEADLINE = __import__("time").monotonic() + r._SCRIPT_TIMEOUT
+        try:
+            m = r.collect_metrics()
+        finally:
+            r._SCRIPT_DEADLINE = 0.0
+
+        core_loc = int(m["core_loc"])
+        core_modules = int(m["core_modules"])
+
+        # tests-OUT caliber: backend/core production code only. The 10
+        # core_intel test files (2178 LOC) must NOT be counted here — they
+        # are test code, counted (if anywhere) by the test_files metric.
+        # Upper bound 72_000 is BELOW the 72582 the tests-IN command produced,
+        # so a revert to filesystem-cat (which re-includes tests) is caught.
+        assert 60_000 < core_loc < 72_000, (
+            f"core_loc={core_loc} outside tests-OUT caliber band "
+            f"(>=72582 = filesystem cat re-including core-internal tests)"
+        )
+        # core_modules must be the tests-OUT file count (133), NOT 143 — they
+        # MUST move in lockstep or the rendered '143 modules / 70404 LOC' is a
+        # self-contradiction (143 counts tests, 70404 does not).
+        assert 120 < core_modules < 143, (
+            f"core_modules={core_modules} still includes core-internal tests "
+            f"(143 = filesystem find counting backend/core/.../tests/)"
+        )

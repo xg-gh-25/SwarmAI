@@ -192,11 +192,28 @@ def collect_metrics() -> dict:
         "echo $(( ($(date +%s) - $(git log --reverse --format='%at' | head -1)) / 86400 ))"
     )
 
-    # Backend metrics
-    m["core_modules"] = _run("find backend/core -name '*.py' | wc -l").strip()
-    m["core_loc"] = _run(
-        "find backend/core -name '*.py' -exec cat {} + | wc -l"
+    # Backend metrics — git-tracked, tests-OUT caliber (same as
+    # total_backend_loc below). The old `find backend/core …` filesystem
+    # commands counted the 10 core-internal test files under
+    # backend/core/code_intel/tests/ (2178 LOC) as production code, leaving
+    # core_loc inconsistent with total_backend_loc (which excludes /tests/).
+    # `grep '^backend/core/'` covers BOTH top-level core/*.py AND nested
+    # core/**/*.py (a single git glob '**/*.py' misses the top level).
+    # core_loc + core_modules MUST move in lockstep or '143 modules / 70404
+    # LOC' would self-contradict (one counts tests, the other doesn't).
+    # `awk 'END{if(NR>0) print NR}'` (not `wc -l`) so an empty/degraded
+    # git ls-files emits "" not a confident-but-wrong 0 — symmetric with the
+    # core_loc + total_backend_loc empty-guards below (Gate-2 LOW, run_e92f91dc).
+    _core_mods = _run(
+        "git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' "
+        "| awk 'END{if(NR>0) print NR}'"
     ).strip()
+    m["core_modules"] = _core_mods if _core_mods.isdigit() else ""
+    _core_loc = _run(
+        "git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' "
+        "| xargs wc -l | awk '$2!=\"total\"{n+=$1} END{if(n>0) print n}'"
+    ).strip()
+    m["core_loc"] = _core_loc if (_core_loc.isdigit() and int(_core_loc) > 0) else ""
     # git-tracked, non-test caliber: reproducible + auto-excludes .venv
     # site-packages and gitignored skills (e.g. private CMHK). The old
     # `find … | xargs cat | wc -l` (a) cat'd ~313K lines and timed out under
@@ -269,7 +286,7 @@ def _generate_metrics_block(metrics: dict) -> str:
 |--------|-------|---------------|
 | Total commits | {metrics['commit_count']}+ | `git log --oneline | wc -l` |
 | Duration | ~{metrics['duration_days']} days | First commit to latest (1 human contributor) |
-| Backend core modules | {metrics['core_modules']} Python files, {metrics['core_loc']} LOC | `find backend/core -name "*.py" -exec cat {{}} + | wc -l` |
+| Backend core modules | {metrics['core_modules']} Python files, {metrics['core_loc']} LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{{n+=$1}} END{{if(n>0) print n}}'` |
 | Total backend LOC | {metrics['total_backend_loc']} | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{{n+=$1}} END{{print n}}'` |
 | Test files | {metrics['test_files']} | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | {metrics['skill_count']} | `ls -d backend/skills/s_* | wc -l` |

@@ -135,8 +135,11 @@ class TestMetricsConsistency:
         # The awk-sum tail is the portable, empty-safe summation the script runs
         # (skips wc's own 'total' line) — verify-string must show it, not `tail -1`.
         assert 'awk \'$2!="total"' in output
-        # core_loc still uses -exec cat (backend/core has no venv/CMHK pollution).
-        assert "-exec cat" in output
+        # core_loc + core_modules now use the SAME git-tracked tests-OUT caliber
+        # as total_backend_loc (run_e92f91dc — REVIEW LOW from run_7c8453a2). The
+        # verify-string must show the git ls-files prefix command, NOT -exec cat.
+        assert "grep '^backend/core/'" in output
+        assert "-exec cat" not in output
 
 
 class TestStalenessDetection:
