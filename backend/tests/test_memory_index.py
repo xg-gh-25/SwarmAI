@@ -205,6 +205,96 @@ class TestGenerateMemoryIndex:
         index2 = generate_memory_index(memory_with_index)
         assert index1 == index2
 
+    # ── D1 (run_4341fc50): index summary is a POINTER, not a 162-char copy ──
+    # Cold-start cost: the whole index block is injected verbatim (select_memory
+    # _sections L0). Long-prose entry titles duplicated the body. Cap the SUMMARY
+    # segment; KEEP the alias tail (keyword_relevance scores on it at 1.5x).
+
+    _LONG_PROSE_MEMORY = textwrap.dedent("""\
+        # Memory
+
+        ## Pitfalls
+
+        - 2026-06-28: **Gate-2 cross-tab attack found a real but BOUNDED risk in the background-tab one-second timer and the right structural call was R25 threading isActive through five files** — the bounded leak-free tick removes less regression surface than the fix adds, so we kept the tick.
+
+        ## Guidelines
+
+        - 2026-06-27: **short one** — tiny.
+    """)
+
+    def test_summary_capped_at_title_cap(self):
+        """A long-prose entry's index SUMMARY segment is capped (pointer, not
+        full copy). RED before the cap exists: the summary is ~200+ chars.
+
+        Mutation check: remove the cap in generate_memory_index and the longest
+        index line's summary exceeds MEMORY_INDEX_TITLE_CAP → this goes RED.
+        """
+        from core.memory_index import (
+            generate_memory_index,
+            MEMORY_INDEX_TITLE_CAP,
+        )
+
+        index = generate_memory_index(self._LONG_PROSE_MEMORY)
+        for line in index.splitlines():
+            if not line.startswith("- ["):
+                continue
+            # summary = the segment between '] ' and the first ' | ' (or EOL)
+            after_key = line.split("] ", 1)[1]
+            summary = after_key.split(" | ", 1)[0]
+            # strip an optional leading 'YYYY-MM-DD ' date prefix
+            import re as _re
+            summary = _re.sub(r"^\d{4}-\d{2}-\d{2}\s+", "", summary)
+            assert len(summary) <= MEMORY_INDEX_TITLE_CAP, (
+                f"index summary not capped: {len(summary)} chars > "
+                f"{MEMORY_INDEX_TITLE_CAP}: {summary!r}"
+            )
+        # Fixed-bound backstop: the cap must stay a real pointer length, not be
+        # silently raised to defeat its purpose. Independent of the constant so a
+        # constant-inflation regression is also caught.
+        assert MEMORY_INDEX_TITLE_CAP <= 90, (
+            f"MEMORY_INDEX_TITLE_CAP inflated to {MEMORY_INDEX_TITLE_CAP} — "
+            "the index is no longer a pointer"
+        )
+
+    def test_capped_summary_preserves_aliases_for_parse_back(self):
+        """Capping the summary must NOT drop the '| aliases' tail — recall's
+        _parse_index_entries must still recover the same aliases (the 1.5x
+        keyword_relevance signal). RED-proof: if the cap eats the tail, aliases
+        come back empty."""
+        from core.memory_index import (
+            generate_memory_index,
+            _parse_index_entries,
+            MEMORY_INDEX_START,
+            MEMORY_INDEX_END,
+        )
+
+        raw = generate_memory_index(self._LONG_PROSE_MEMORY)
+        block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
+        entries = _parse_index_entries(block)
+        assert entries, "no index entries parsed back"
+        # The long-prose pitfall entry must still yield >=1 alias keyword
+        # (aliases are extracted from the full entry text, not the capped title).
+        long_entry = max(entries, key=lambda e: len(e["summary"]))
+        assert long_entry["aliases"], (
+            "aliases lost after summary cap — keyword section-selection broken"
+        )
+
+    def test_cap_does_not_split_cjk_codepoint(self):
+        """Capping operates on str codepoints (not bytes) so a CJK char is never
+        cut mid-sequence. Guards the heavy-CJK MEMORY.md."""
+        from core.memory_index import generate_memory_index
+
+        cjk = textwrap.dedent("""\
+            # Memory
+
+            ## Guidelines
+
+            - 2026-06-28: **这是一条很长的中文经验条目用来测试截断逻辑是否会把一个多字节的中文字符从中间切断导致乱码必须保证按码点截断而不是按字节截断这一点非常重要** — desc.
+        """)
+        index = generate_memory_index(cjk)  # must not raise / produce mojibake
+        # round-trips as valid utf-8 (no surrogate / partial codepoint)
+        index.encode("utf-8").decode("utf-8")
+
 
 # ── L1: Keyword Relevance Scoring ────────────────────────────────────
 

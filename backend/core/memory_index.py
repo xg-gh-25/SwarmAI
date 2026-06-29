@@ -42,6 +42,69 @@ logger = logging.getLogger(__name__)
 MEMORY_INDEX_START = "<!-- MEMORY_INDEX_START -->"
 MEMORY_INDEX_END = "<!-- MEMORY_INDEX_END -->"
 
+# D1 (run_4341fc50): the index block is injected verbatim on every cold start
+# (select_memory_sections L0). Long-prose entry titles duplicated the body
+# entry they point to (avg 159, max 478 chars/line). The index is a NAVIGATION
+# layer — a pointer ([ID] + short title + keyword aliases) is all section
+# selection needs; the full prose lives in the body. Cap the title SUMMARY to a
+# word boundary at/under this length; the '| aliases' tail is ALWAYS kept (it is
+# the 1.5x-weighted keyword_relevance recall signal — see _keyword_section_scores).
+MEMORY_INDEX_TITLE_CAP = 70
+
+
+def _cap_index_title(title: str, cap: int = MEMORY_INDEX_TITLE_CAP) -> str:
+    """Cap an index title to <= `cap` chars at a word boundary.
+
+    Operates on str codepoints (never bytes) so a CJK char is never split
+    mid-sequence. Trims at the last whitespace within the cap; if there is no
+    whitespace (one long token / CJK run), hard-slices at `cap` codepoints.
+    Appends an ellipsis only when content was dropped, so callers/tests can see
+    the title was truncated without inflating it past the cap meaningfully.
+    """
+    if len(title) <= cap:
+        return title
+    # Reserve 1 codepoint for the ellipsis so the result is ALWAYS <= cap.
+    budget = cap - 1
+    head = title[:budget]
+    cut = head.rsplit(" ", 1)[0]
+    # Guard the over-aggressive rsplit (Gate-2 F2): only trim at the last space
+    # if it RETAINS at least half the budget; otherwise the single early space
+    # (e.g. "Note: <200 chars>") would collapse the title to almost nothing.
+    # Fall back to the hard codepoint slice (still CJK-safe — str, not bytes).
+    if len(cut) < budget // 2:
+        cut = head
+    return cut.rstrip() + "…"
+
+
+def _recall_safe_aliases(full_title: str, capped_title: str,
+                         aliases: list[str]) -> list[str]:
+    """Preserve section-selection recall when a title is capped (Gate-2 F1).
+
+    `_keyword_section_scores` scores a query against the index line's
+    summary + aliases. The FULL prose title used to be the match surface;
+    capping it would silently drop the matchable tokens beyond the cap (e.g.
+    generic words like "subprocess"/"linux" that `_extract_keywords` does not
+    rank into the top-6 distinctive aliases). To keep selection lossless, append
+    those LOST content tokens (stopword/short-filtered, deduped) to the aliases.
+
+    Content tokens are far fewer bytes than the dropped prose (filler/stopwords
+    are excluded), so the index still shrinks — it just keeps the keyword
+    surface. No-op when the title was not capped.
+    """
+    if full_title == capped_title:
+        return aliases
+    full_tokens = _tokenize_lower(full_title)
+    kept_tokens = set(_tokenize_lower(capped_title))
+    have = {a.lower() for a in aliases}
+    lost: list[str] = []
+    seen: set[str] = set()
+    for tok in full_tokens:
+        if tok in kept_tokens or tok in have or tok in seen:
+            continue
+        seen.add(tok)
+        lost.append(tok)
+    return aliases + lost
+
 # ── Section definitions: imported from single source of truth ─────────
 from .ddd_entry_lifecycle import (
     MEMORY_PERMANENT_SECTIONS,
@@ -369,9 +432,13 @@ def generate_memory_index(content: str) -> str:
         for i, entry in enumerate(entries, 1):
             key = f"{prefix}{i:02d}"
             aliases = _extract_keywords(entry["full_text"])
-            alias_str = ", ".join(aliases) if aliases else ""
             date_prefix = f"{entry['date_str']} " if entry.get("date_str") else ""
-            title = entry["title"]
+            # D1: cap the title to a pointer (full prose stays in the body).
+            title = _cap_index_title(entry["title"])
+            # Gate-2 F1: keep section-selection lossless — recover keyword tokens
+            # the cap dropped from the title into the aliases tail.
+            aliases = _recall_safe_aliases(entry["title"], title, aliases)
+            alias_str = ", ".join(aliases) if aliases else ""
             refs = _extract_refs(entry["full_text"], key)
             line = f"- [{key}] {date_prefix}{title}"
             if refs:
@@ -397,9 +464,13 @@ def generate_memory_index(content: str) -> str:
         for i, entry in enumerate(entries, 1):
             key = f"{prefix}{i:02d}"
             aliases = _extract_keywords(entry["full_text"])
-            alias_str = ", ".join(aliases) if aliases else ""
             date_prefix = f"{entry['date_str']} " if entry.get("date_str") else ""
-            title = entry["title"]
+            # D1: cap the title to a pointer (full prose stays in the body).
+            title = _cap_index_title(entry["title"])
+            # Gate-2 F1: keep section-selection lossless — recover keyword tokens
+            # the cap dropped from the title into the aliases tail.
+            aliases = _recall_safe_aliases(entry["title"], title, aliases)
+            alias_str = ", ".join(aliases) if aliases else ""
             refs = _extract_refs(entry["full_text"], key)
 
             line = f"- [{key}] {date_prefix}{title}"
@@ -418,8 +489,14 @@ def generate_memory_index(content: str) -> str:
     active_ot = [e for e in ot_entries if "\u2705" not in e["full_text"]]
     for i, entry in enumerate(active_ot, 1):
         key = f"OT{i:02d}"
-        title = entry["title"]
-        ot_lines.append(f"- [{key}] {title}")
+        # D1: cap OT titles too (third title-emitter — same pointer rule).
+        title = _cap_index_title(entry["title"])
+        # Gate-2 F1: recover dropped keyword tokens into an alias tail so a capped
+        # OT title keeps the same match surface. (OT is always-loaded, so this is
+        # belt-and-suspenders, but keeps all 3 emitters consistent.)
+        lost = _recall_safe_aliases(entry["title"], title, [])
+        tail = f" | {', '.join(lost)}" if lost else ""
+        ot_lines.append(f"- [{key}] {title}{tail}")
 
     # ── Assemble index ──
     count_parts = []
