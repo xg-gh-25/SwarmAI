@@ -86,7 +86,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 ## Core Engines
 
-13 interconnected engines. Each independently valuable; together they compound.
+If you're also using AI to write code, make content, or run operations — these 13 engines are that compounding bet, broken down. Each is independently useful; together they form the loop that makes the system sharper with use. (Click `code` to read the engine itself — the implementation is the documentation.)
 
 | # | Engine | What It Does | Deep Dive |
 |---|--------|-------------|-----------|
@@ -96,12 +96,12 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 | 4 | **Autonomous Pipeline** | One requirement → push-ready code. 9 stages · 3 gates (framing/plan/build) · 2 modes (Full + Goal Loop) | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | 5 | **Pollinate Engine** | One message → multi-format brand content | [docs](./docs/Pollinate-Content-Engine.md) |
 | 6 | **Self-Evolution** | Cognitive L0→L3 patching. 42 corrections → recurring classes become structural gates | [docs](./docs/Self-Evolution-Harness-Design.md) |
-| 7 | **Self-Healing** | Invisible recovery: 5 sensors, auto-respawn, user sees nothing | — |
-| 8 | **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | — |
-| 9 | **Hook System** | 21 hooks (17 runtime + 4 lifecycle). Sessions never cold-start | — |
-| 10 | **Job System** | Background intelligence: 13 signal feeds, cron, budget-gated | — |
-| 11 | **4-Platform Backend** | macOS daemon · Hive (EC2) · Windows · Linux. Compile-time isolation | — |
-| 12 | **Skills + Channels** | 88 skills (lazy/always), Slack gateway, 3-tier permission | — |
+| 7 | **Self-Healing** | Invisible recovery: 5 sensors, auto-respawn, user sees nothing | [code](./backend/core/session_healing.py) |
+| 8 | **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | [code](./desktop/src/stores/MessageStore.ts) |
+| 9 | **Hook System** | Runtime + lifecycle hooks. Sessions never cold-start | [code](./backend/core/hook_builder.py) |
+| 10 | **Job System** | Background intelligence: 13 signal feeds, cron, budget-gated | [code](./backend/jobs/scheduler.py) |
+| 11 | **4-Platform Backend** | macOS daemon · Hive (EC2) · Windows · Linux. Compile-time isolation | [code](./backend/main.py) |
+| 12 | **Skills + Channels** | 88 skills (lazy/always), Slack gateway, 3-tier permission | [code](./backend/core/skill_registry.py) |
 | 13 | **Eval (Proprioception)** | Decoupled, system-level: golden set + git-bound regression gate. Proves convergence, not vibes | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
@@ -160,6 +160,8 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 ---
 
 ## Contributors
+
+**2,550 commits · 1 human directing · 1 AI delivering.** This repo is the thesis's own minimal verifiable evidence — the human sets direction and makes every judgment call; the AI does the building. See for yourself: `git log`.
 
 <table>
   <tr>

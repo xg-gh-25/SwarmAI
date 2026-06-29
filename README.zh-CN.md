@@ -86,7 +86,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 ## 核心引擎
 
-13 个互联引擎。每个独立有价值；组合在一起产生复利。
+如果你也在用 AI 写代码、做内容、跑运营 —— 下面 13 个引擎就是这套"复利押注"的拆解。每个独立有用,组合起来才是那条让系统越用越聪明的闭环。(点 `code` 直接读引擎本身 —— 实现即文档。)
 
 | # | 引擎 | 做什么 | 详情 |
 |---|------|--------|------|
@@ -96,12 +96,12 @@ cd ../desktop && npm install && npm run tauri:dev
 | 4 | **自主流水线** | 一句需求 → 可推送代码。9 stages · 3 gates（framing/plan/build）· 2 modes（Full + Goal Loop） | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | 5 | **Pollinate 引擎** | 一条消息 → 多格式品牌内容 | [docs](./docs/Pollinate-Content-Engine.md) |
 | 6 | **自进化** | 认知 L0→L3 补丁。42 条纠正 → 复发类别转化为结构性门控 | [docs](./docs/Self-Evolution-Harness-Design.md) |
-| 7 | **自愈合** | 不可见恢复：5 传感器，自动重生，用户无感知 | — |
-| 8 | **多标签页 + MessageStore** | 并发会话，阶段门控单写者，跨标签页隔离 | — |
-| 9 | **Hook 系统** | 21 hooks（17 运行时 + 4 生命周期）。会话永不冷启动 | — |
-| 10 | **任务系统** | 后台智能：13 信号源，定时任务，预算门控 | — |
-| 11 | **4 平台后端** | macOS daemon · Hive (EC2) · Windows · Linux。编译时隔离 | — |
-| 12 | **技能 + 通道** | 88 技能（lazy/always），Slack 网关，三层权限 | — |
+| 7 | **自愈合** | 不可见恢复：5 传感器，自动重生，用户无感知 | [code](./backend/core/session_healing.py) |
+| 8 | **多标签页 + MessageStore** | 并发会话，阶段门控单写者，跨标签页隔离 | [code](./desktop/src/stores/MessageStore.ts) |
+| 9 | **Hook 系统** | 运行时 + 生命周期 hooks。会话永不冷启动 | [code](./backend/core/hook_builder.py) |
+| 10 | **任务系统** | 后台智能：13 信号源，定时任务，预算门控 | [code](./backend/jobs/scheduler.py) |
+| 11 | **4 平台后端** | macOS daemon · Hive (EC2) · Windows · Linux。编译时隔离 | [code](./backend/main.py) |
+| 12 | **技能 + 通道** | 88 技能（lazy/always），Slack 网关，三层权限 | [code](./backend/core/skill_registry.py) |
 | 13 | **Eval（本体感觉）** | 解耦、系统级：Golden Set + git 绑定回归门控。证明收敛，而非凭感觉 | [docs](./docs/OS-Eval-Function-Design.md) |
 
 **复利闭环：** 记忆 → Pipeline 判断 → DDD → 进化 → 门控 → 记忆。去掉一个，其余变弱。
@@ -160,6 +160,8 @@ cd ../desktop && npm install && npm run tauri:dev
 ---
 
 ## 贡献者
+
+**2,550 commits · 1 个人指挥 · 1 个 AI 交付。** 这个 repo 本身就是论点的最小可验证证据 —— 人定方向、做每一个判断决策,AI 负责构建。自己看:`git log`。
 
 <table>
   <tr>
