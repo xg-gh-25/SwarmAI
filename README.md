@@ -106,7 +106,7 @@ If you're also using AI to write code, make content, or run operations — these
 
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
 
-<img src="./assets/pipeline-architecture.svg" alt="Pipeline — Dual Mode (Full + Goal)" width="100%"/>
+<img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="Autonomous Pipeline — 9 Stages · 3 Gates · 2 Modes" width="100%"/>
 
 > 📊 More diagrams: [Flywheel](./assets/platform-flywheel.svg) · [Context](./assets/context-engineering.svg) · [Memory](./assets/memory-pipeline.svg) · [DDD](./assets/ddd-three-layer-stack.svg) · [Sessions](./assets/multi-tab-sessions.svg) · [Jobs](./assets/job-system.svg) · [Evolution](./assets/self-evolution.svg)
 

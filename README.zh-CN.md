@@ -106,7 +106,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 **复利闭环：** 记忆 → Pipeline 判断 → DDD → 进化 → 门控 → 记忆。去掉一个，其余变弱。
 
-<img src="./assets/pipeline-architecture.svg" alt="流水线 — 双模式 (Full + Goal)" width="100%"/>
+<img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="自主流水线 — 9 阶段 · 3 道门 · 2 模式" width="100%"/>
 
 > 📊 更多架构图：[复利飞轮](./assets/platform-flywheel.svg) · [上下文](./assets/context-engineering.svg) · [记忆](./assets/memory-pipeline.svg) · [DDD](./assets/ddd-three-layer-stack.svg) · [会话](./assets/multi-tab-sessions.svg) · [任务](./assets/job-system.svg) · [进化](./assets/self-evolution.svg)
 
