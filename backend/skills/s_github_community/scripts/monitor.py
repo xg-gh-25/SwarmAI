@@ -22,6 +22,7 @@ TIER1_REPOS = [
     "MemPalace/mempalace",
     "garrytan/gstack",
     "obra/superpowers",
+    "awslabs/aidlc-workflows",
 ]
 
 # Tier 2 — scan daily but lower priority
@@ -36,6 +37,7 @@ TIER2_REPOS = [
     "Panniantong/Agent-Reach",
     "santifer/career-ops",
     "danielmiessler/Personal_AI_Infrastructure",
+    "aws-samples/sample-ai-plc",
 ]
 
 # Topic keywords for signal matching
