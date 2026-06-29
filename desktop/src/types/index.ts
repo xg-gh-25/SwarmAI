@@ -1153,8 +1153,17 @@ export interface StreamingStateEntry {
 
 export type BackendStatus = 'connected' | 'disconnected' | 'initializing';
 
+/** AWS credential status reported by GET /health (`auth` field).
+ *  - 'valid':   STS GetCallerIdentity succeeded
+ *  - 'expired': definitive — user must re-auth (mwinit -f)
+ *  - 'unknown': non-definitive (network/timeout/startup) — never blocks, no banner */
+export type AuthStatus = 'valid' | 'expired' | 'unknown';
+
 export interface HealthState {
   status: BackendStatus;
+  /** Credential status from /health. Undefined until the first poll that
+   *  carried an auth field; treated as 'unknown' (no banner) when absent. */
+  auth?: AuthStatus;
   lastCheckedAt: number | null;
   consecutiveFailures: number;
 }

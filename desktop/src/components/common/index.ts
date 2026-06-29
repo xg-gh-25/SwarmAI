@@ -29,6 +29,7 @@ export {
 export { ResizableTable, ResizableTableCell } from './ResizableTable';
 export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as BackendUpgradeBanner } from './BackendUpgradeBanner';
+export { default as CredentialBanner } from './CredentialBanner';
 export { default as UpdateNotification } from './UpdateNotification';
 export { default as ShutdownOverlay } from './ShutdownOverlay';
 // DaemonNudgeBanner removed — daemon is now auto-installed on first launch (no opt-in needed)

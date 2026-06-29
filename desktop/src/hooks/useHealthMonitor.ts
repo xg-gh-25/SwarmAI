@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { HealthState, BackendStatus } from '../types';
+import type { HealthState, BackendStatus, AuthStatus } from '../types';
 import { getApiBaseUrl, setBackendPort, tauriService } from '../services/tauri';
 import { useToast } from '../contexts/ToastContext';
 
@@ -111,7 +111,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   // ------------------------------------------------------------------
 
   const handleSuccess = useCallback(
-    (now: number, backendStatus: BackendStatus) => {
+    (now: number, backendStatus: BackendStatus, auth?: AuthStatus) => {
       if (!mountedRef.current) return;
 
       const previousStatus = currentStatusRef.current;
@@ -141,6 +141,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
       setHealthState({
         status: backendStatus,
+        auth,
         lastCheckedAt: now,
         consecutiveFailures: 0,
       });
@@ -173,11 +174,17 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         }
       }
 
-      setHealthState({
+      setHealthState((prev) => ({
+        ...prev,
         status: currentStatusRef.current,
+        // When we lose the backend we no longer have a fresh auth signal —
+        // clear it so the credential banner doesn't assert a state we can't
+        // currently confirm (Gate-2 M2). The next successful poll re-supplies
+        // it. Preserve auth while still 'connected'/'initializing'.
+        auth: currentStatusRef.current === 'disconnected' ? undefined : prev.auth,
         lastCheckedAt: now,
         consecutiveFailures: failures,
-      });
+      }));
     },
     [failureThreshold], // only re-creates if threshold option changes
   );
@@ -202,18 +209,22 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         return;
       }
 
-      // Parse the response body to detect "initializing" status.
+      // Parse the response body to detect "initializing" status + auth state.
       let backendStatus: BackendStatus = 'connected';
+      let auth: AuthStatus | undefined;
       try {
-        const body = (await response.json()) as { status?: string };
+        const body = (await response.json()) as { status?: string; auth?: string };
         if (body?.status === 'initializing') {
           backendStatus = 'initializing';
+        }
+        if (body?.auth === 'valid' || body?.auth === 'expired' || body?.auth === 'unknown') {
+          auth = body.auth;
         }
       } catch {
         // If JSON parsing fails, treat as connected (response was 2xx).
       }
 
-      handleSuccess(now, backendStatus);
+      handleSuccess(now, backendStatus, auth);
     } catch {
       // Network error, timeout, or any other fetch failure.
       handleFailure(now);
@@ -278,11 +289,14 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
           id: HEALTH_DISCONNECTED_TOAST_ID,
         });
 
-        setHealthState({
+        setHealthState((prev) => ({
+          ...prev,
           status: 'disconnected',
+          // Lost backend → no fresh auth signal; clear it (Gate-2 M2).
+          auth: undefined,
           lastCheckedAt: Date.now(),
           consecutiveFailures: DEFAULT_FAILURE_THRESHOLD,
-        });
+        }));
       }),
     );
 
@@ -342,11 +356,14 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
           id: HEALTH_DISCONNECTED_TOAST_ID,
         });
 
-        setHealthState({
+        setHealthState((prev) => ({
+          ...prev,
           status: 'disconnected',
+          // Lost backend → no fresh auth signal; clear it (Gate-2 M2).
+          auth: undefined,
           lastCheckedAt: Date.now(),
           consecutiveFailures: DEFAULT_FAILURE_THRESHOLD,
-        });
+        }));
       }),
     );
 
