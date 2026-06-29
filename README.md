@@ -25,7 +25,7 @@ We finally have software smart enough to reason, write code, and make judgment c
 
 SwarmAI is built on the opposite bet — that the value should **compound.** Every interaction should leave the system a little sharper than before, permanently.
 
-Which reframes the obvious question. Ask *"why does a desktop app need 170K lines and 13 engines?"* and you've mismeasured it: **this isn't application complexity — it's the complexity of an agent's cognition.** Four things separate a mind from a model: it stays **continuous** across time, it **corrects itself**, it **forgets** what stopped mattering, and its **judgment compounds** with use. Conventional software has no analog for any of them — a program doesn't get wiser between runs, and it never rewrites its own rules. SwarmAI is an attempt to build that missing layer: not a bigger model, but the **cognitive operating system around one.**
+Which reframes the obvious question. Ask *"why does a desktop app need 220K lines and 13 engines?"* and you've mismeasured it: **this isn't application complexity — it's the complexity of an agent's cognition.** Four things separate a mind from a model: it stays **continuous** across time, it **corrects itself**, it **forgets** what stopped mattering, and its **judgment compounds** with use. Conventional software has no analog for any of them — a program doesn't get wiser between runs, and it never rewrites its own rules. SwarmAI is an attempt to build that missing layer: not a bigger model, but the **cognitive operating system around one.**
 
 The design choices only make sense through that lens:
 
@@ -132,15 +132,17 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 ---
 
-## Codebase (~170K LOC)
+## Codebase (~220K LOC, excl. tests)
 
 | Layer | LOC | Entry Points |
 |-------|-----|--------------|
-| **Core (spine)** | ~10K | `session_unit.py`, `prompt_builder.py` |
-| **Core (extensions)** | ~41K | `core/` — DDD, evolution, proactive, code intel |
-| **Skills** | ~50K | `backend/skills/s_*/` (86 modules) |
-| **Frontend** | ~68K | `desktop/src/` — React 19, Tailwind, TanStack Query |
-| **Tests** | ~76K | pytest + Vitest |
+| **Core (spine)** | ~13K | `session_unit.py`, `prompt_builder.py`, `session_router.py` |
+| **Core (extensions)** | ~60K | `core/` — DDD, evolution, proactive, code intel |
+| **Backend (other)** | ~64K | routers, hooks, jobs, channels, main |
+| **Skills** | ~28K | `backend/skills/s_*/` (88 modules) |
+| **Frontend** | ~54K | `desktop/src/` — React 19, Tailwind, TanStack Query |
+| **Rust (Tauri)** | ~2K | `desktop/src-tauri/` |
+| **Tests** | ~150K | pytest + Vitest (backend 117K + frontend 33K) |
 
 **Stack:** Tauri 2.0 (Rust) · React 19 · FastAPI · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5)
 

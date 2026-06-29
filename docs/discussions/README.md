@@ -4,7 +4,7 @@
 >
 > **Live discussions:** [github.com/xg-gh-25/SwarmAI/discussions](https://github.com/xg-gh-25/SwarmAI/discussions)
 >
-> **Reading Guide:** See [Reading Matrix](35-reading-matrix-3-paths-through-34-discussions-builder-archit.md) for curated learning paths.
+> **Reading Guide:** See [Reading Matrix](35-reading-matrix-3-paths-through-55-discussions.md) for curated learning paths.
 
 ---
 
@@ -42,7 +42,7 @@
 | 32 | [人格陷阱：为什么 "有主见的 AI Agent" 会破坏指令遵从](32-人格陷阱为什么-有主见的-ai-agent-会破坏指令遵从.md) | Show and tell | 2026-05-20 |
 | 33 | [What Is an Agent Harness? The Self-Driving Car Analogy for AI Autonomy Levels](33-what-is-an-agent-harness-the-self-driving-car-analogy-for-ai.md) | General | 2026-05-21 |
 | 34 | [Agent Harness 是什么？用自动驾驶的思路理解 AI Agent 自治五级](34-agent-harness-是什么用自动驾驶的思路理解-ai-agent-自治五级.md) | General | 2026-05-21 |
-| 35 | [Reading Matrix — 3 Paths Through 55 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-55-discussions.md) | General | 2026-05-21 |
+| 35 | [Reading Matrix — 3 Paths Through 68 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-55-discussions.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |

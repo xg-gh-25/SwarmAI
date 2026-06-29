@@ -25,7 +25,7 @@
 
 SwarmAI 押的是相反的赌注——价值应该**复利**。每一次交互都该让系统比之前更敏锐一点，且是永久的。
 
-这就重新框定了那个显而易见的问题。当你问*"一个桌面 app 凭什么要 17 万行代码、13 个引擎？"*——你就量错了维度：**这不是应用的复杂度，是一个 agent 认知的复杂度。** 四件事把"心智"和"模型"区分开：它跨时间**连续**、它**自我纠错**、它**遗忘**掉不再重要的东西、它的**判断力随使用复利**。传统软件对这四样没有任何对应物——程序不会在两次运行之间变聪明，更不会改写自己的规则。SwarmAI 就是要建那个缺失的层：不是更大的模型，而是**它周围的认知操作系统。**
+这就重新框定了那个显而易见的问题。当你问*"一个桌面 app 凭什么要 22 万行代码、13 个引擎？"*——你就量错了维度：**这不是应用的复杂度，是一个 agent 认知的复杂度。** 四件事把"心智"和"模型"区分开：它跨时间**连续**、它**自我纠错**、它**遗忘**掉不再重要的东西、它的**判断力随使用复利**。传统软件对这四样没有任何对应物——程序不会在两次运行之间变聪明，更不会改写自己的规则。SwarmAI 就是要建那个缺失的层：不是更大的模型，而是**它周围的认知操作系统。**
 
 这些设计决策，只有透过这个视角才讲得通：
 
@@ -132,15 +132,17 @@ cd ../desktop && npm install && npm run tauri:dev
 
 ---
 
-## 代码库（~170K 行）
+## 代码库（~220K 行，不含测试）
 
 | 层 | 行数 | 入口文件 |
 |----|------|---------|
-| **Core（脊椎）** | ~10K | `session_unit.py`, `prompt_builder.py` |
-| **Core（扩展）** | ~41K | `core/` — DDD、进化、主动、代码智能 |
-| **Skills** | ~50K | `backend/skills/s_*/`（86 模块） |
-| **Frontend** | ~68K | `desktop/src/` — React 19, Tailwind, TanStack Query |
-| **Tests** | ~76K | pytest + Vitest |
+| **Core（脊椎）** | ~13K | `session_unit.py`, `prompt_builder.py`, `session_router.py` |
+| **Core（扩展）** | ~60K | `core/` — DDD、进化、主动、代码智能 |
+| **Backend（其他）** | ~64K | routers、hooks、jobs、channels、main |
+| **Skills** | ~28K | `backend/skills/s_*/`（88 模块） |
+| **Frontend** | ~54K | `desktop/src/` — React 19, Tailwind, TanStack Query |
+| **Rust (Tauri)** | ~2K | `desktop/src-tauri/` |
+| **Tests** | ~150K | pytest + Vitest（后端 117K + 前端 33K） |
 
 **技术栈：** Tauri 2.0 (Rust) · React 19 · FastAPI · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5)
 
