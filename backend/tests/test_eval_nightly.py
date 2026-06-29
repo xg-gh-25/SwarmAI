@@ -99,6 +99,64 @@ def test_no_baseline_no_drift_alert(tmp_path):
     assert spy.calls == []
 
 
+def test_judge_infra_collapse_alerts(tmp_path):
+    """REPRO of 2026-06-28 silent judge-infra collapse: 90/146 LLM-judge cases
+    errored on AWS creds, but the 56 deterministic cases still scored 100 and BVT
+    canaries (deterministic) stayed green → no drift (score went UP vs baseline 95),
+    no bvt_red → fingerprint stayed "" → Slack was NEVER alerted. Coverage collapse
+    is the ONLY signal that distinguishes infra-failure from a healthy run.
+    This test REDs without the coverage-collapse alert (it produces no reason)."""
+    spy = _Spy()
+    r = run_eval_nightly(
+        runner=_runner({"overall_score": 100, "scored_count": 56, "cases_error": 90,
+                        "bvt": {"green": True, "total": 55, "passed": 55}},
+                       {"overall_score": 95}),  # score UP, not down → no drift
+        notifier=spy, root=tmp_path)
+    assert r["status"] == "regression"
+    assert any("coverage" in r2.lower() or "infra" in r2.lower() for r2 in r["reasons"])
+    assert len(spy.calls) == 1 and spy.calls[0]["channels"] == ["slack"]
+
+
+def test_coverage_above_threshold_no_alert(tmp_path):
+    """A few偶发 errors (below threshold) must NOT false-alarm. 2/146 errored =
+    1.4% error ratio, far below the 20% trigger → coverage healthy, silent."""
+    spy = _Spy()
+    r = run_eval_nightly(
+        runner=_runner({"overall_score": 96, "scored_count": 144, "cases_error": 2,
+                        "bvt": {"green": True, "total": 55, "passed": 55}},
+                       {"overall_score": 95}),
+        notifier=spy, root=tmp_path)
+    assert r["status"] == "healthy"
+    assert spy.calls == []
+
+
+def test_coverage_reason_separate_from_drift(tmp_path):
+    """A night that is BOTH drifted AND low-coverage must produce TWO distinct
+    reasons (P6: infra-failure ≠ agent-quality-regression, never conflated)."""
+    spy = _Spy()
+    r = run_eval_nightly(
+        runner=_runner({"overall_score": 70, "scored_count": 56, "cases_error": 90,
+                        "bvt": {"green": True, "total": 55, "passed": 55}},
+                       {"overall_score": 95}),  # 25-pt drop = drift AND low coverage
+        notifier=spy, root=tmp_path)
+    assert r["status"] == "regression"
+    assert any("drift" in r2 for r2 in r["reasons"])
+    assert any("coverage" in r2.lower() or "infra" in r2.lower() for r2 in r["reasons"])
+    assert len(spy.calls) == 1  # combined into ONE notify (no double-send)
+
+
+def test_fully_skipped_run_no_crash(tmp_path):
+    """Gate-1 finding: a run with scored_count=0 AND cases_error=0 (fully skipped)
+    must NOT ZeroDivisionError — coverage guards intended>0 (eval_service parity)."""
+    spy = _Spy()
+    r = run_eval_nightly(
+        runner=_runner({"overall_score": 0, "scored_count": 0, "cases_error": 0,
+                        "bvt": {"green": True, "total": 55, "passed": 55}},
+                       {"overall_score": 0}),
+        notifier=spy, root=tmp_path)
+    assert r["status"] == "healthy"  # no division crash, no false coverage alarm
+
+
 def test_runner_crash_returns_error(tmp_path):
     def boom(root):
         raise RuntimeError("eval blew up")

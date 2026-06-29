@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 # Score may dip this much run-to-run without alerting (LLM-judge noise band).
 _DRIFT_TOLERANCE = 5.0
 
+# Coverage-collapse alarm: fraction of intended-scorable cases that errored.
+# When error/(scored+error) >= this, the judge infra (Bedrock/creds) is degraded
+# — distinct from a quality regression (low pass_rate) or a spine break (BVT).
+# 2026-06-28: 90/146 errored (0.62) was SILENT because the 56 deterministic
+# survivors scored 100 → no drift, no bvt_red. 0.20 ignores 偶发 single-case
+# Bedrock blips (1/146 = 0.7%) while catching a real cohort collapse.
+_COVERAGE_ALERT_THRESHOLD = 0.20
+
 _ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-nightly-alert.json"
 
 
@@ -98,6 +106,20 @@ def run_eval_nightly(
                        f"(failed={bvt.get('failed')}, error={bvt.get('error')})")
     if drift:
         reasons.append(f"score drift: {base_score}% → {score}% (>{_DRIFT_TOLERANCE} drop)")
+
+    # Coverage collapse — judge infra (Bedrock/creds) degraded. SEPARATE axis from
+    # drift/bvt (P6: infra-failure ≠ agent-quality-regression). Formula mirrors
+    # eval_service.py:583-587 verbatim (scored-None fallback + intended>0 guard) so
+    # a fully-skipped run can't ZeroDivisionError. (run_f7a3acd7, gap from 2026-06-28)
+    scored = this.get("scored_count")
+    n_error = this.get("cases_error", 0) or 0
+    if scored is None:  # legacy run without scored_count — derive from pass+fail
+        scored = (this.get("cases_passed", 0) or 0) + (this.get("cases_failed", 0) or 0)
+    intended = scored + n_error
+    if intended > 0 and (n_error / intended) >= _COVERAGE_ALERT_THRESHOLD:
+        coverage = scored / intended
+        reasons.append(f"🔴 judge infra degraded: {n_error}/{intended} cases errored "
+                       f"(coverage {coverage:.0%})")
 
     fingerprint = "|".join(reasons)  # "" when clean
     notified = False

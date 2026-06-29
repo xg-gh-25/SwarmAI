@@ -134,7 +134,7 @@ SYSTEM_JOBS: list[Job] = [
         id="eval-nightly",
         name="Nightly Full Eval + Drift Alert",
         type="eval_nightly",
-        schedule="0 6 * * *",           # daily 06:00 UTC = 14:00 ICT
+        schedule="30 4 * * 1-5",        # 04:30 UTC = 12:30 ICT, weekdays (lunch — machine on, creds fresh)
         enabled=True,
         category="system",
         config={},
