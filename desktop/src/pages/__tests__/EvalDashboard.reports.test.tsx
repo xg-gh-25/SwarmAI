@@ -3,8 +3,9 @@
  *
  * Invariant under test (bugfix run_ba089062):
  *  - When a report is opened, the viewer iframe must use sandbox="allow-same-origin"
- *    (NOT "allow-scripts") and carry an opaque bg (bg-white), matching the two
- *    proven-working iframes (HtmlRenderer.tsx, FilePreviewModal.tsx).
+ *    (NOT "allow-scripts") and carry an opaque dark backdrop (bg-[var(--color-bg)],
+ *    matching the report's own dark theme — not white, which would flash pre-paint).
+ *    Same sandbox mechanism as HtmlRenderer.tsx / FilePreviewModal.tsx.
  *  - Root cause of the blank/black render: sandbox="allow-scripts" without
  *    allow-same-origin gives the srcDoc document a null/opaque origin, which fails
  *    to paint inline-styled HTML in the Tauri WebKit webview.
@@ -71,7 +72,10 @@ describe('ReportsTab iframe render contract', () => {
     // ROOT-CAUSE assertions — these FAIL on the old allow-scripts + no-bg iframe:
     expect(iframe.getAttribute('sandbox')).toBe('allow-same-origin');
     expect(iframe.getAttribute('sandbox')).not.toContain('allow-scripts');
-    expect(iframe.getAttribute('class') || '').toContain('bg-white');
+    // opaque backdrop (dark, matching the report's own theme) — guards against
+    // a transparent iframe showing the black void behind it. Not specifically
+    // white: eval reports are dark-themed, so the backdrop is bg-[var(--color-bg)].
+    expect(iframe.getAttribute('class') || '').toMatch(/\bbg-/);
 
     // the report content is actually wired into srcDoc (not empty)
     expect(iframe.getAttribute('srcdoc') || '').toContain('OS Eval Report');

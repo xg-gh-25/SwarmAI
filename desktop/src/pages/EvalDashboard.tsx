@@ -1189,9 +1189,17 @@ export function ReportsTab() {
           {loadingReport ? (
             <Loading />
           ) : (
+            // sandbox="allow-same-origin" (NOT allow-scripts): the srcDoc doc
+            // needs a real origin to paint inline-styled HTML in the Tauri
+            // WebKit webview — allow-scripts-without-same-origin gives it a
+            // null origin and renders blank. SAFE because eval reports are
+            // locally generated (eval_runner.py) with html.escape on every
+            // interpolated field and ZERO <script> — never user/network HTML.
+            // Matches the proven-working HtmlRenderer/FilePreviewModal iframes.
+            // Dark backdrop (not bg-white) matches the report's own dark theme.
             <iframe
               srcDoc={reportHtml}
-              className="w-full h-full border-0 bg-white"
+              className="w-full h-full border-0 bg-[var(--color-bg)]"
               sandbox="allow-same-origin"
               title={selectedReport}
             />
