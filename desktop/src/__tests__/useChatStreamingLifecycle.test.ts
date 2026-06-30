@@ -670,6 +670,60 @@ describe('useChatStreamingLifecycle', () => {
         vi.useRealTimers();
       }
     });
+
+    it('heal-grace still-working: stamps _reconcileStreamStart so the reconcile loop does NOT force-clear the spinner mid-flush', async () => {
+      // GAP THIS CLOSES: the disconnect-handler still-working test (~:3382)
+      // asserts the _reconcileStreamStart stamp, but that is a DIFFERENT branch
+      // (createDisconnectHandler). The heal-grace expiry still-working branch
+      // (createErrorHandler path) hands recovery to the SAME 15s reconcile loop
+      // and MUST stamp the same cap anchor — without it the loop computes a huge
+      // age, the ≥10s start-grace + flushing exemption are pre-blown, and the
+      // spinner is force-cleared in the backend dead→cold gap (OT01 truncation).
+      // MUTATION-PROVEN: deleting `tab2._reconcileStreamStart = Date.now()` in
+      // the heal-grace still-working branch turns this RED.
+      vi.useFakeTimers();
+      const stateSpy = vi
+        .spyOn(chatService, 'getStreamingState')
+        .mockResolvedValue({
+          'sess-heal-sw': { streaming: true, state: 'streaming', waitingInput: false, postDisconnectFlushing: false },
+        } as unknown as Awaited<ReturnType<typeof chatService.getStreamingState>>);
+      try {
+        const msgId = 'msg-heal-sw';
+        const tabId = 'tab-heal-sw';
+        initTestTab(tabId, [
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-heal-sw';
+        tab.hasReceivedData = true; // mid-stream → heal-grace arms
+        tab.reconnectionAttempt = 0; // NOT exhausted → enters heal-grace
+        // _healGraceActive left false → heal-grace branch arms on disconnect.
+
+        const { result } = renderHook(() =>
+          useChatStreamingLifecycle(createMockDeps()),
+        );
+        const errorHandler = result.current.createErrorHandler(msgId, tabId);
+        act(() => { errorHandler(new Error('Premature SSE disconnect')); });
+
+        // Advance past grace; flush the await getStreamingState round-trip.
+        await act(async () => {
+          vi.advanceTimersByTime(HEAL_GRACE_PERIOD_MS + 100);
+          await Promise.resolve(); await Promise.resolve();
+        });
+
+        const t = testTabMap.get(tabId)! as unknown as Record<string, unknown>;
+        expect(stateSpy).toHaveBeenCalled();
+        // backend reported streaming:true → still-working verdict
+        expect(t._postDisconnectUncertain).toBe(true);          // handed to reconcile loop
+        expect(typeof t._reconcileStreamStart).toBe('number');  // the fix: cap anchor stamped
+        expect(t._reconcileStreamStart).toBeGreaterThan(0);
+        // anchored to ~now (not a stale ~0) → reconcile grace applies
+        expect(Date.now() - (t._reconcileStreamStart as number)).toBeLessThan(1000);
+      } finally {
+        stateSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
   });
 });
 

@@ -3614,6 +3614,16 @@ export function useChatStreamingLifecycle(
               console.log(`[HealGrace] Tab ${capturedTabId}: grace expired but backend still working — keeping spinner, reconcile owns recovery`);
               tab2._postDisconnectUncertain = true;
               tab2._postDisconnectAt = Date.now();
+              // Stamp _reconcileStreamStart so the desync (capMs/graceMs) and
+              // force-clear (activeGuardAge) caps in the 15s reconcile loop
+              // anchor to NOW — identical to the disconnect-handler still-working
+              // branch (~:4083). WITHOUT it, this branch hands recovery to the
+              // reconcile loop while _reconcileStreamStart stays stale (~0), so
+              // the next tick computes a huge dsStartAge → the ≥10s start-grace
+              // does NOT apply → the spinner is force-cleared in the backend
+              // dead→cold gap while the answer is still flushing = the exact
+              // OT01 truncated-render bug, just surfacing on the heal-grace path.
+              tab2._reconcileStreamStart = Date.now();
               // Leave _healGraceActive + isStreaming true (spinner stays).
               return;
             }
