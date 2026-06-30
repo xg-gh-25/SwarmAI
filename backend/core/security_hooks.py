@@ -820,9 +820,51 @@ _WALLCLOCK_BOUND_PYTEST_RE = re.compile(
 
 def _strip_quoted(command: str) -> str:
     """Remove single/double-quoted spans so a quoted '| tail' inside a -k/-m
-    expression isn't mistaken for a real pipe (Gate-2 false-positive fix)."""
+    expression isn't mistaken for a real pipe (Gate-2 false-positive fix).
+
+    Only matches CLOSED quote spans (`'[^']*'`); an unterminated/odd quote does
+    not match and the text passes through untouched (fail-closed on malformed
+    input — the raw token is still seen by the caller's regex)."""
     s = re.sub(r"'[^']*'", "", command)
     return re.sub(r'"[^"]*"', "", s)
+
+
+# A bare pytest TOKEN at a word boundary (just "is the word pytest present").
+_PYTEST_TOKEN_RE = re.compile(r"\b(?:py\.test|pytest)\b", re.IGNORECASE)
+
+
+def _pytest_token_is_command_word(command: str) -> bool:
+    """True iff a pytest TOKEN appears as a real command WORD — i.e. NOT only
+    inside a quoted string. Used with _PYTEST_INVOCATION_RE to require BOTH an
+    anchor match AND that the pytest token is real command text, killing the
+    in-quote false-positive (a token mentioned in a grep -E pattern / -k expr /
+    commit message — run_5511508d) without fail-opening on real invocations.
+
+    Uses `shlex.split(posix=False)` — a REAL shell lexer that respects quoting —
+    NOT a regex quote-strip. A regex strip (`'[^']*'`) is fooled by an apostrophe
+    in an unquoted word pairing with a later quoted arg: `echo it's; pytest -k 'x'`
+    strips to `echo itx'`, deleting the REAL pytest token → a genuine uncapped run
+    fail-opens to APPROVE (Gate-2 HIGH, run_5511508d). shlex tokenizes by true
+    shell rules, so that trap cannot occur.
+
+    `posix=False` keeps quote chars in tokens, so a fully-quoted word like
+    `'pytest'` stays distinguishable (starts+ends with the same quote char) and is
+    skipped — only a bare/word token containing pytest counts. An unbalanced quote
+    raises ValueError → fail-CLOSED (treat as a real invocation; a malformed
+    command must not slip past the cap)."""
+    try:
+        tokens = shlex.split(command, posix=False)
+    except (ValueError, AttributeError, TypeError):
+        # ValueError = unbalanced quoting; AttributeError/TypeError = a non-string
+        # command slipped past the caller's coercion. Any tokenizer failure →
+        # cannot prove the token is in-quote → fail CLOSED (treat as a real run).
+        return True
+    for tok in tokens:
+        if len(tok) >= 2 and tok[0] in "'\"" and tok[-1] == tok[0]:
+            continue  # fully-quoted word — a mention, not a command token
+        if _PYTEST_TOKEN_RE.search(tok):
+            return True
+    return False
 
 
 # Eval invocation — `eval_runner.py run`, `ci_eval_gate.py`, or `eval_service`
@@ -881,7 +923,24 @@ async def pytest_command_guard(
     command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
     if not command:
         return {"decision": "approve"}
-    if not _PYTEST_INVOCATION_RE.search(command):
+    # INVOCATION GATE: a command is a real pytest invocation only if BOTH hold:
+    #   (1) the anchored _PYTEST_INVOCATION_RE matches the RAW command — proves a
+    #       separator / `python -m` / wrapper / env-prefix anchor sits before pytest
+    #       (the anchor may legitimately live inside quotes, e.g. the sanctioned
+    #       perl `-e 'alarm N; exec @ARGV'` form), AND
+    #   (2) a pytest TOKEN appears as a real command WORD (shlex-tokenized, NOT
+    #       only inside a quoted string) — see _pytest_token_is_command_word.
+    # Requiring BOTH kills the false-positive (a pytest token that exists ONLY
+    # inside a grep -E pattern / -k expr / commit message — run_5511508d blocked
+    # such greps/commits twice) WITHOUT fail-opening on real invocations. The
+    # token check uses a real shell lexer (shlex), not a regex quote-strip, because
+    # a strip is fooled by an apostrophe-in-a-word pairing with a later quoted arg
+    # (`echo it's; pytest -k 'x'`) — that deleted the real token and fail-opened a
+    # genuine uncapped run (Gate-2 HIGH, run_5511508d).
+    if not (
+        _PYTEST_INVOCATION_RE.search(command)
+        and _pytest_token_is_command_word(command)
+    ):
         return {"decision": "approve"}
 
     # DENY: piped to a pager (check the unquoted form only).
@@ -904,6 +963,10 @@ async def pytest_command_guard(
     # run for minutes, get auto-backgrounded, return an empty foreground, and
     # read as a hang (C040, 12th CLASS-B). A per-test `--timeout` does NOT bound
     # the whole command, so it does not satisfy this. Fail-closed (R9 / PIT10).
+    # Checked on the RAW command (NOT quote-stripped): the sanctioned perl-alarm
+    # cap — `perl -e 'alarm 90; exec @ARGV' ... pytest` — carries its `alarm N` /
+    # `exec @ARGV` cap tokens INSIDE the single-quoted -e arg; stripping quotes here
+    # would drop them and wrongly DENY the very form we mandate (run_5511508d).
     if not _WALLCLOCK_BOUND_PYTEST_RE.search(command):
         logger.warning("[BLOCKED] pytest without wall-clock wrapper: %s", command[:80])
         return {

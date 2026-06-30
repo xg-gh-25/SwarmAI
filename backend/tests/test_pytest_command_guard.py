@@ -260,3 +260,89 @@ class TestHardening:
 
     def test_uv_run_pytest_with_wallclock_approved(self):
         assert not _is_deny(_run("gtimeout 90 uv run pytest tests/"))
+
+
+def _is_approve(result):
+    """Approve = the guard returned the bare {'decision': 'approve'} shape
+    (no hookSpecificOutput deny block)."""
+    return result.get("decision") == "approve" and "hookSpecificOutput" not in result
+
+
+# The test token is assembled at runtime so this test FILE itself does not trip
+# the very guard it tests (the guard scans the literal command of each Bash call;
+# a source line containing "...|pytest|..." in a string would false-positive a
+# Bash `grep` over this file). PYT == "pytest".
+PYT = "py" + "test"
+
+
+class TestInQuoteFalsePositive:
+    """Regression for the in-quote false-positive (run_5511508d).
+
+    The invocation gate must NOT treat a pytest-runner token that appears ONLY
+    inside a quoted span (a grep -E pattern, a -k expression, a commit message)
+    as a real invocation. Fixed by requiring BOTH: the anchored
+    _PYTEST_INVOCATION_RE matches the raw command AND a pytest TOKEN appears as a
+    real command WORD (shlex-tokenized — _pytest_token_is_command_word). See the
+    invocation gate in security_hooks.pytest_command_guard.
+
+    Mutation contract (proves the test is not vacuous):
+      - drop the token-is-command-word half (scan only the raw anchored regex)
+        -> the in-quote APPROVE cases below go RED (the original bug: harmless
+        greps/commits get DENIED).
+      - swap shlex for a regex quote-strip (`_PYTEST_TOKEN_RE.search(_strip_quoted)`)
+        -> test_apostrophe_word_with_real_run_still_denied goes RED (the Gate-2
+        HIGH: an apostrophe-in-a-word pairs with a later quoted arg, the strip
+        deletes the real pytest token, and a genuine uncapped run fail-opens).
+    """
+
+    def test_session_grep_with_separator_token_in_quotes_approved(self):
+        # AC1 — the EXACT grep that was DENIED twice this session. The '|' before
+        # the token lives INSIDE the quoted -E pattern, so it is not a real pipe
+        # into a pytest invocation.
+        cmd = (
+            "grep -iE 'screencapture|screenshot|peekaboo|swarmai|artifact_cli|"
+            + PYT
+            + "|alarm' /tmp/x.txt"
+        )
+        assert _is_approve(_run(cmd))
+
+    def test_commit_message_with_separator_token_in_quotes_approved(self):
+        # AC1 — a ';' separator before the token, inside a quoted commit message.
+        assert _is_approve(_run("git commit -m 'refactor cfg; " + PYT + " now capped'"))
+
+    def test_bare_pytest_still_denied(self):
+        # AC2 — a REAL bare invocation with no wall-clock wrapper must still DENY.
+        # The fix must not fail-open on genuine invocations.
+        assert _is_deny(_run("python -m " + PYT + " backend/tests/foo.py --timeout=60"))
+
+    def test_env_prefix_quoted_value_still_denied(self):
+        # AC3 — the skeptic-found fail-open guard. An env-assignment prefix whose
+        # VALUE is single-quoted is a REAL uncapped invocation: the anchor matches
+        # the raw command AND the pytest token is outside quotes (survives
+        # _strip_quoted), so the AND-rule still DENIES. (The earlier delete-based
+        # "scan the stripped command for the anchor" approach fail-opened here.)
+        assert _is_deny(_run("VAR='x' " + PYT + " a.py"))
+
+    def test_perl_alarm_sanctioned_form_still_approved(self):
+        # AC4 — the sanctioned wall-clock form. The alarm/exec tokens live INSIDE
+        # the single-quoted -e arg; the wall-clock check runs on the RAW command,
+        # so the cap stays detectable and the command APPROVES.
+        cmd = (
+            "perl -e 'alarm 90; exec @ARGV' python -m "
+            + PYT
+            + " backend/tests/foo.py --timeout=60 > /tmp/t.txt 2>&1"
+        )
+        assert _is_approve(_run(cmd))
+
+    def test_apostrophe_word_with_real_run_still_denied(self):
+        # Gate-2 HIGH guard: an apostrophe in an UNQUOTED word (it's) pairs with a
+        # LATER legitimate single-quoted arg ('x'). A regex quote-strip would
+        # delete everything between them — including the REAL pytest token — and
+        # fail-open this genuine uncapped run to APPROVE. The shlex tokenizer is
+        # immune (it lexes by true shell rules), so this still DENIES.
+        assert _is_deny(_run("echo it's; " + PYT + " tests/ -k 'x'"))
+
+    def test_unbalanced_quote_with_real_run_fails_closed(self):
+        # An unterminated quote can't be proven in-quote → fail CLOSED (DENY a
+        # real invocation rather than risk a hang slipping past the cap).
+        assert _is_deny(_run("echo 'oops; " + PYT + " tests/"))
