@@ -269,11 +269,80 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
     return ok, report
 
 
+def _load_corpus_cases(root: Path) -> list[dict]:
+    """Load every case the runner sees — REUSE eval_runner.load_golden_set so the
+    sweep shares ONE loader with the runner (no divergent second view). That loader
+    merges public + sibling private, FAILS LOUD on an id present in BOTH files
+    (migration error), raises FileNotFoundError if the public set is absent (so a
+    typo'd --root can't false-green to "CLEAN"), and validates basic structure
+    (version/cases/required fields) — closing the malformed-corpus crash surface.
+
+    The import is lazy + path-shimmed because eval_runner itself lazily imports
+    THIS module (compute_case_stamp) — top-level import would risk a cycle; a
+    function-local import is the same pattern eval_runner uses in reverse."""
+    import sys as _sys
+    _here = str(Path(__file__).resolve().parent.parent)  # …/backend
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from scripts.eval_runner import load_golden_set
+    gs = load_golden_set(root / "Eval" / "golden_set.yaml")
+    return gs.get("cases", []) or []
+
+
+def validate_corpus(root: Path) -> list[tuple[str, list[str]]]:
+    """Sweep gate_refs over EVERY case in the corpus. gate_refs normally fires
+    only on the ADD/UPDATE write path (eval_service), so a ref that drifted to
+    EMPTY after a doc reorg sits green in the resting corpus forever (the
+    load/run hole, run_51d897f6). This sweep closes it for REPORTING.
+
+    Returns [(case_id, [ref-error, ...]), ...] for every case with ≥1 stale ref.
+
+    NOTE (Gate-1 BLOCKER2, verified): _ref_resolves for MEMORY refs only checks
+    the id EXISTS ('[DEC15]' in txt), NOT that it points at the intended content.
+    So this sweep catches EMPTY/absent refs (STEERING.R* post-reorg) but is
+    structurally BLIND to renumber-drift (DEC15→DEC38 content moved but id still
+    present). Those re-anchors are manual-only with no automated backstop."""
+    rows: list[tuple[str, list[str]]] = []
+    for case in _load_corpus_cases(root):
+        ok, errs = gate_refs(case, root)
+        if not ok:
+            rows.append((case.get("id", "<no-id>"), errs))
+    return rows
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Validate a golden case (4-gate).")
-    ap.add_argument("--case-file", required=True, help="JSON file with one case")
+    ap = argparse.ArgumentParser(description="Validate golden case(s) — 4-gate or corpus sweep.")
+    ap.add_argument("--case-file", help="JSON file with one case (single-case 4-gate mode)")
     ap.add_argument("--for-public", action="store_true", help="run privacy gate (PROMOTE)")
+    ap.add_argument("--validate-corpus", action="store_true",
+                    help="sweep gate_refs over ALL cases in the corpus (drift report)")
+    ap.add_argument("--root", help="SwarmWS root for --validate-corpus (default: ~/.swarm-ai/SwarmWS)")
+    ap.add_argument("--exit-nonzero", action="store_true",
+                    help="with --validate-corpus: exit 1 if any stale ref found "
+                         "(default: report-only, exit 0 — so CI adoption doesn't red "
+                         "pre-existing drift on day 1)")
     args = ap.parse_args()
+
+    if args.validate_corpus:
+        root = Path(args.root) if args.root else (Path.home() / ".swarm-ai" / "SwarmWS")
+        try:
+            rows = validate_corpus(root)
+        except (FileNotFoundError, AssertionError) as e:
+            # wrong --root (no golden set), dup-id collision, or a malformed/
+            # under-spec corpus — a drift gate must fail LOUD + ACTIONABLE on a
+            # corpus it cannot trust, never silently report "CLEAN" (Gate-2 F2/F4/F5).
+            print(f"CORPUS UNVERIFIABLE — {type(e).__name__}: {e}")
+            return 2
+        if not rows:
+            print("CORPUS CLEAN — 0 stale refs")
+            return 0
+        print(f"STALE REFS — {len(rows)} case(s):")
+        for cid, errs in rows:
+            print(f"  ✗ {cid}: {'; '.join(errs)}")
+        return 1 if args.exit_nonzero else 0
+
+    if not args.case_file:
+        ap.error("--case-file is required unless --validate-corpus is given")
     case = json.loads(Path(args.case_file).read_text())
     ok, report = validate_case(case, existing=[], for_public=args.for_public)
     for gate, result in report.items():

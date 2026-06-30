@@ -153,3 +153,124 @@ def test_cli_main_exits_zero_on_clean_public_pass(tmp_path):
     assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert "PASS" in r.stdout
     assert "Traceback" not in r.stderr
+
+
+# ── validate-corpus sweep mode (run_51d897f6 WS-B) ──────────────────────────
+# Closes the load/run hole: gate_refs fires only on the ADD/UPDATE write path
+# (eval_service), never on the resting corpus. A drifted ref (STEERING.R5 →
+# resolves EMPTY post-reorg) sits green forever. The sweep runs gate_refs over
+# every case in BOTH golden sets and surfaces the stale inventory.
+def _write_corpus(tmp_path, cases, private_cases=None):
+    """Build a minimal SwarmWS-shaped workspace: Eval/ + .context/ with a
+    STEERING.md that has NO 'R5' rule (so STEERING.R5 resolves EMPTY) but DOES
+    have AGENT.R1 (so that ref resolves). The golden set carries `version: 2`
+    because validate_corpus reuses eval_runner.load_golden_set, which asserts it."""
+    import yaml
+    (tmp_path / "Eval").mkdir()
+    (tmp_path / ".context").mkdir()
+    (tmp_path / "Eval" / "golden_set.yaml").write_text(
+        yaml.safe_dump({"version": 2, "cases": cases}))
+    if private_cases is not None:
+        (tmp_path / "Eval" / "golden_set.private.yaml").write_text(
+            yaml.safe_dump({"version": 2, "cases": private_cases}))
+    (tmp_path / ".context" / "STEERING.md").write_text("### 1. Prevention\nsome text\n")
+    (tmp_path / ".context" / "AGENT.md").write_text("R1. **Pipeline mandatory**\nfull text\n\n")
+    (tmp_path / ".context" / "MEMORY.md").write_text("- [DEC38] real entry\n")
+    return tmp_path
+
+
+def test_validate_corpus_flags_drifted_ref_and_exits_nonzero(tmp_path):
+    """RED until validate-corpus exists: a case with a STEERING.R5 ref that
+    resolves EMPTY must be reported and drive exit 1."""
+    import subprocess
+    drifted = {
+        "id": "GS_DRIFT", "category": "compliance", "dimension": "capability",
+        "eval_method": "llm", "affected_by": ["STEERING.R5"],
+        "evaluators": ["goal_success"],
+        "assertions": ["agent does the right thing"],
+        "scenario": {"turns": [{"input": "x"}]},
+    }
+    clean = {
+        "id": "GS_CLEAN", "category": "compliance", "dimension": "capability",
+        "eval_method": "llm", "affected_by": ["AGENT.R1"],
+        "evaluators": ["goal_success"],
+        "assertions": ["agent runs the pipeline"],
+        "scenario": {"turns": [{"input": "y"}]},
+    }
+    ws = _write_corpus(tmp_path, [drifted, clean])
+    backend = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, "scripts/golden_case_validator.py",
+         "--validate-corpus", "--root", str(ws), "--exit-nonzero"],
+        cwd=str(backend), capture_output=True, text=True, timeout=60,
+    )
+    assert "GS_DRIFT" in r.stdout, f"drifted case not reported:\n{r.stdout}\n{r.stderr}"
+    assert "STEERING.R5" in r.stdout
+    # GS_CLEAN (the AGENT.R1 case) must NOT appear in the stale inventory.
+    # Parenthesized so the assert binds the whole conditional, not just the lhs.
+    assert ("GS_CLEAN" not in r.stdout.split("STALE")[-1]) if "STALE" in r.stdout else True
+    assert r.returncode == 1, f"exit should be 1 with --exit-nonzero; got {r.returncode}"
+    assert "Traceback" not in r.stderr
+
+
+def test_validate_corpus_report_only_exits_zero(tmp_path):
+    """Without --exit-nonzero, the sweep REPORTS drift but exits 0 (report-only
+    default — so adding it to CI doesn't red 27 pre-existing cases on day 1)."""
+    import subprocess
+    drifted = {
+        "id": "GS_DRIFT2", "category": "compliance", "dimension": "capability",
+        "eval_method": "llm", "affected_by": ["STEERING.R5"],
+        "evaluators": ["goal_success"], "assertions": ["x"],
+        "scenario": {"turns": [{"input": "x"}]},
+    }
+    ws = _write_corpus(tmp_path, [drifted])
+    backend = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, "scripts/golden_case_validator.py",
+         "--validate-corpus", "--root", str(ws)],
+        cwd=str(backend), capture_output=True, text=True, timeout=60,
+    )
+    assert "GS_DRIFT2" in r.stdout
+    assert r.returncode == 0, f"report-only must exit 0; got {r.returncode}"
+
+
+def test_validate_corpus_wrong_root_fails_loud_not_clean(tmp_path):
+    """Gate-2 F5: a typo'd --root (no Eval/golden_set.yaml) must NOT false-green
+    to 'CORPUS CLEAN'. load_golden_set raises FileNotFoundError → exit 2 +
+    'UNVERIFIABLE', never a silent clean report."""
+    import subprocess
+    bad = tmp_path / "definitely_nonexistent"
+    backend = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, "scripts/golden_case_validator.py",
+         "--validate-corpus", "--root", str(bad)],
+        cwd=str(backend), capture_output=True, text=True, timeout=60,
+    )
+    assert "CORPUS CLEAN" not in r.stdout, f"wrong root false-greened:\n{r.stdout}"
+    assert "UNVERIFIABLE" in r.stdout
+    assert r.returncode == 2, f"wrong root must exit 2; got {r.returncode}"
+    assert "Traceback" not in r.stderr
+
+
+def test_validate_corpus_dup_id_fails_loud(tmp_path):
+    """Gate-2 F2: an id present in BOTH public + private is a migration error.
+    Reusing load_golden_set makes the sweep fail LOUD (exit 2) instead of
+    silently double-counting (the bug in the first self-rolled loader)."""
+    import subprocess
+    case = {
+        "id": "GS_DUP", "category": "compliance", "dimension": "capability",
+        "eval_method": "llm", "affected_by": ["AGENT.R1"],
+        "evaluators": ["goal_success"], "assertions": ["x"],
+        "scenario": {"turns": [{"input": "x"}]},
+    }
+    ws = _write_corpus(tmp_path, [case], private_cases=[dict(case)])
+    backend = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, "scripts/golden_case_validator.py",
+         "--validate-corpus", "--root", str(ws), "--exit-nonzero"],
+        cwd=str(backend), capture_output=True, text=True, timeout=60,
+    )
+    assert "UNVERIFIABLE" in r.stdout, f"dup-id not caught:\n{r.stdout}\n{r.stderr}"
+    assert "GS_DUP" in r.stdout
+    assert r.returncode == 2, f"dup-id must exit 2; got {r.returncode}"
+    assert "Traceback" not in r.stderr
