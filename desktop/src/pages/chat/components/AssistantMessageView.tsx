@@ -34,6 +34,7 @@ import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
 import { ActivityFeed } from './ActivityFeed';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { isOt01DiagEnabled } from '../../../utils/diagFlags';
 import { useSubAgentProgress } from '../../../hooks/useSubAgentProgress';
 import { SubAgentProgressBanner } from '../../../components/chat/SubAgentProgressBanner';
 
@@ -185,7 +186,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     && contextWarning
     && (contextWarning.level === 'warn' || contextWarning.level === 'critical');
 
-  // ── OT01 render-loss diagnostic (DEV-gated, run_56f9a04d) — RENDER side ─
+  // ── OT01 render-loss diagnostic (opt-in via isOt01DiagEnabled; run_3451bbd1) — RENDER side ─
+  // Gated on isOt01DiagEnabled() (DEV, or localStorage SWARM_OT01_DIAG=1 in
+  // prod) — NOT import.meta.env.DEV, which is tree-shaken dead in the prod .app
+  // where the bug actually happens (run_3451bbd1).
   // The RENDER half of the store-vs-render pair (store half: [OT01-diag]
   // store→React sync in useChatStreamingLifecycle). Logs the block-count this
   // view ACTUALLY renders for this msgId. In the live console, line up the two
@@ -193,7 +197,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // but the view rendered fewer ⇒ loss is in the React prop/render path (the
   // single-tab layer headless tests can't expose). Equal counts ⇒ the loss is
   // NOT here (look at MarkdownRenderer/CSS/viewport). Removed once located.
-  if (import.meta.env.DEV) {
+  if (isOt01DiagEnabled()) {
     console.debug('[OT01-diag] render', {
       msgId: message.id,
       renderedBlocks: message.content.length,

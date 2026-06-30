@@ -51,6 +51,7 @@ import type { PendingQuestion } from '../pages/chat/types';
 import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, type HealGraceVerdict } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
+import { isOt01DiagEnabled } from '../utils/diagFlags';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { useToast } from '../contexts/ToastContext';
@@ -1110,7 +1111,10 @@ export function useChatStreamingLifecycle(
       // which calls setMessages(store.getSnapshot()) on subscribe (line above).
       if (currentActiveTabId !== tabId) return;
 
-      // ── OT01 render-loss diagnostic (DEV-gated, run_56f9a04d) — STORE side ─
+      // ── OT01 render-loss diagnostic (opt-in via isOt01DiagEnabled; run_3451bbd1) — STORE side ─
+      // Gated on isOt01DiagEnabled() (DEV, or localStorage SWARM_OT01_DIAG=1 in
+      // prod) — NOT import.meta.env.DEV, which is tree-shaken dead in the prod
+      // .app where the bug actually happens (run_3451bbd1).
       // The STORE half of a store-vs-render pair. The render half lives in
       // AssistantMessageView ([OT01-diag] render). Compare the two in the live
       // console for the SAME msgId: if `storeTextBlocks` here ever exceeds the
@@ -1121,7 +1125,7 @@ export function useChatStreamingLifecycle(
       // in the single-tab repro). getSnapshot() is a shallow copy so a
       // store-vs-snapshot content compare is vacuous (PIT37) — hence comparing
       // against the RENDER, not the snapshot. Removed once the layer is found.
-      if (import.meta.env.DEV) {
+      if (isOt01DiagEnabled()) {
         const sLast = store.messages[store.messages.length - 1];
         if (sLast?.role === 'assistant') {
           const sText = sLast.content.filter((b) => b.type === 'text').length;
