@@ -185,8 +185,17 @@ async def _check_disconnect_recovery(
                             event = json.loads(data_str)
                         except json.JSONDecodeError:
                             continue
-                        if not session_id and event.get("session_id"):
-                            session_id = event["session_id"]
+                        # The FIRST event carrying the id is `session_start`
+                        # with key `sessionId` (camelCase, emitted at SDK init
+                        # BEFORE any assistant content — streaming_orchestrator
+                        # :588). `session_id` (snake_case) only appears on the
+                        # `result` event AFTER the stream, which we never reach
+                        # because we break mid-stream. Without capturing the
+                        # camelCase key here, session_id stays None → teeth #1
+                        # SKIPs forever even when content streamed (the bug that
+                        # made this check never execute live).
+                        if not session_id:
+                            session_id = event.get("sessionId") or event.get("session_id")
                         if event.get("type") == "assistant":
                             txt = _extract_event_text(event)
                             if txt.strip():
