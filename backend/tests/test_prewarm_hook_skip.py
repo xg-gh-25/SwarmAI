@@ -72,20 +72,45 @@ def test_real_session_fires_hooks():
     )
 
 
-def test_adopted_session_resumes_hooks():
-    """AC3: after adoption re-keys the id to a real id, hooks fire normally.
+async def test_adopted_session_resumes_hooks():
+    """AC3: after the REAL adopt_prewarmed_unit re-keys the id, hooks fire.
 
-    Adoption (adopt_prewarmed_unit) sets unit.session_id = real_session_id, and
-    _build_hook_context reads unit.session_id live — so the very same unit, once
-    adopted, produces a HookContext with a real id and is NOT skipped.
+    Drives the genuine end-to-end chain (no simulation): a prewarm unit is
+    registered IDLE → enqueue_hooks(prewarm id) is skipped → the real
+    SessionRouter.adopt_prewarmed_unit re-keys unit.session_id to a real id →
+    a HookContext built from the (now real) unit.session_id is NOT skipped and
+    fires. Proves the re-key at session_router.py:1002 actually flips the guard.
     """
+    from core.session_router import SessionRouter, PREWARM_SESSION_PREFIX
+    from core.session_unit import SessionState
+
     ex = _RecordingExecutor()
     lm = _make_lifecycle(ex)
+
+    # Minimal IDLE prewarm unit registered in the router (no subprocess needed).
+    class _FakeUnit:
+        def __init__(self, sid):
+            self.session_id = sid
+            self.state = SessionState.IDLE
+
+    router = SessionRouter(prompt_builder=None)
+    prewarm_id = f"{PREWARM_SESSION_PREFIX}seed"
     real_id = "11111111-2222-3333-4444-555555555555"
-    # Pre-adoption: prewarm id is skipped.
-    lm.enqueue_hooks(_ctx(f"{PREWARM_SESSION_PREFIX}seed"))
-    # Post-adoption: same unit now carries the real id → fires.
-    lm.enqueue_hooks(_ctx(real_id))
+    unit = _FakeUnit(prewarm_id)
+    router._units[prewarm_id] = unit
+
+    # Pre-adoption: the prewarm-id context is skipped.
+    lm.enqueue_hooks(_ctx(unit.session_id))
+    assert ex.fired == [], "pre-adoption prewarm must be skipped"
+
+    # Real adoption re-keys unit.session_id → real id (the behavior under test).
+    adopted = await router.adopt_prewarmed_unit(prewarm_id, real_id)
+    assert adopted is True
+    assert unit.session_id == real_id, "adoption must re-key session_id"
+    assert prewarm_id not in router._units and real_id in router._units
+
+    # Post-adoption: a context built from the re-keyed id fires hooks.
+    lm.enqueue_hooks(_ctx(unit.session_id))
     assert ex.fired == [real_id], (
         "post-adoption real id must fire hooks, got: %r" % ex.fired
     )

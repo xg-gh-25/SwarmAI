@@ -784,13 +784,15 @@ async def get_admission_state_endpoint():
     """
     from core.session_unit import _get_streaming_count, SessionUnit, AUTO_RECOVER_STALL_THRESHOLD
 
+    from core.session_router import PREWARM_SESSION_PREFIX
+
     streaming_count = _get_streaming_count()
     max_concurrent = SessionUnit.MAX_CONCURRENT_STREAMS
     sr = _get_router()
     idle_live_units = 0
     stalled_streaming = 0
     for u in sr.list_units():
-        if not u.session_id or u.session_id.startswith("prewarm"):
+        if not u.session_id or u.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
         if u.state.value == "streaming":
             # streaming_stall_seconds is None if not streaming or no events yet;
@@ -831,10 +833,12 @@ async def get_streaming_state_endpoint():
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
     """
+    from core.session_router import PREWARM_SESSION_PREFIX
+
     sr = _get_router()
     result: dict[str, dict] = {}
     for unit in sr.list_units():
-        if not unit.session_id or unit.session_id.startswith("prewarm"):
+        if not unit.session_id or unit.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
         # Root-1 SSOT Phase 2 (L6, Option B): streaming is now simply
         # state==STREAMING. A disconnect yields a CLEAN IDLE (no generating-limbo
