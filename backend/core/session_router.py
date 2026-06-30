@@ -50,11 +50,17 @@ _SDK_SUPPORTS_MULTIMODAL: bool = False
 # Activates RecallEngine L2/L3 using the user's actual query.  Runs once per
 # session, on the first user message.
 #
-# CORRECTNESS-FIRST (run_4d06640b): recall runs BOTH legs (keyword + vector) to
-# COMPLETION synchronously before generating — the answer is built on the FULL
-# brain, not a latency-trimmed subset. Priority is accurate + capable, NOT
-# first-token speed (user directive). Measured full both-legs ~1.1s warm / ~2-3s
-# cold (Bedrock embed cold). That latency is accepted; correctness > the seconds.
+# CORRECTNESS-FIRST (run_4d06640b): recall runs synchronously to COMPLETION
+# before generating — the answer is built on the FULL brain, not a latency-trimmed
+# subset. Priority is accurate + capable, NOT first-token speed (user directive).
+# Measured ~1-3s; that latency is accepted, correctness > the seconds.
+#
+# PURE-FILESYSTEM (commit 6540970e, run_e9b8507e, 2026-06-28): recall is now
+# keyword/FTS5/BM25 ONLY — the vector/Bedrock-Titan leg was torn out. _recall_for_query
+# is called with allow_embed=False (see _maybe_inject_recall). The "right idea,
+# different words" blind spot is covered by AGENTIC re-search (footer hint nudges the
+# agent to re-grep with synonyms), NOT by an embedding leg. (Prior text here said
+# "BOTH legs keyword + vector" — stale lie, the embed leg was already gone. PIT31 class.)
 #
 # The OLD 400ms daily timeout (run_bbd79e84/e9b15722) SILENTLY dropped recall when
 # cold/slow/corpus-grown — a recurring time-bomb. It is replaced by a DISASTER
@@ -184,21 +190,23 @@ def _get_cached_embed_fn():
 
 
 def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) -> str:
-    """Run hybrid FTS5+vector recall across Knowledge + Transcript + Memory.
+    """Run keyword/FTS5/BM25 recall across Knowledge + Transcript + Memory.
 
     Thin wrapper around existing RecallEngine infrastructure.
     Uses ``open_vec_db()`` context manager for thread-safe connection
     (this runs in ``asyncio.to_thread``).
 
-    ``allow_embed`` (default False): when True, the VECTOR (semantic) leg runs
-    (Bedrock embed). Correctness-first recall (run_4d06640b) passes True so BOTH
-    legs run to completion. The connection uses a SHORT busy_timeout
-    (_RECALL_DB_BUSY_TIMEOUT_MS) so a sqlite write-lock wait cannot exceed the
-    caller's disaster cap.
+    PURE-FILESYSTEM (commit 6540970e, 2026-06-28): the vector/Bedrock-Titan leg
+    was torn out. In prod ``allow_embed`` is ALWAYS False (see _maybe_inject_recall),
+    so ``embed_fn`` stays None and only the FTS5/BM25 legs run. The ``allow_embed``
+    param survives for caller-compat and is INERT in the running system — setting it
+    True would re-enable the (now-absent) context_files vector leg, which prod never
+    does. The connection uses a SHORT busy_timeout (_RECALL_DB_BUSY_TIMEOUT_MS) so a
+    sqlite write-lock wait cannot exceed the caller's disaster cap.
 
     Graph enrichment: extracts entities from query, queries knowledge graph
     for related entry IDs/titles, appends them to enrich the recall context.
-    This ensures graph-connected knowledge surfaces even when keyword/vector
+    This ensures graph-connected knowledge surfaces even when the keyword
     match is weak.
 
     Returns formatted recalled content or empty string.
@@ -245,7 +253,9 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             engine = RecallEngine(store, additional_stores=additional_stores)
 
-            # Correctness-first: run the VECTOR (semantic) leg too when allowed.
+            # Vector leg is INERT in prod: allow_embed is always False here
+            # (pure-filesystem, 6540970e) → embed_fn stays None → FTS5/BM25 only.
+            # The branch survives for caller-compat, not because prod ever embeds.
             embed_fn = _get_cached_embed_fn() if allow_embed else None
 
             recalled = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
