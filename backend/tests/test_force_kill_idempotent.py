@@ -57,10 +57,12 @@ class _FakeWrapper:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_force_kill_calls_aexit_at_most_once():
+async def test_concurrent_force_kill_calls_aexit_at_most_once(monkeypatch):
     """AC1/AC4: two concurrent _force_kill() on one unit invoke wrapper.__aexit__
     EXACTLY ONCE. RED on the old read-then-await (counter==2); GREEN with the
     synchronous null-the-ref-before-await fix (counter==1)."""
+    import os as _os
+
     u = _unit()
     gate = asyncio.Event()
     wrapper = _FakeWrapper(gate)
@@ -73,10 +75,10 @@ async def test_concurrent_force_kill_calls_aexit_at_most_once():
         return None
 
     u._await_process_exit = _noop_await_exit  # skip the 3s OS-exit poll
+
     # Force the OS-kill branch to be a no-op: pid lookup raises ProcessLookupError
     # (already-dead path), so _force_kill falls straight through to wrapper cleanup.
-    import os as _os
-
+    # Use monkeypatch (auto-undone, xdist-safe) — not a manual global save/restore.
     orig_getpgid = _os.getpgid
 
     def _fake_getpgid(pid):  # noqa: ANN001
@@ -84,20 +86,18 @@ async def test_concurrent_force_kill_calls_aexit_at_most_once():
             raise ProcessLookupError  # "already dead" → skip OS kill, reach cleanup
         return orig_getpgid(pid)
 
-    _os.getpgid = _fake_getpgid
-    try:
-        async def _release():
-            # Let both _force_kill calls reach the __aexit__ await, THEN release.
-            await asyncio.sleep(0.02)
-            gate.set()
+    monkeypatch.setattr(_os, "getpgid", _fake_getpgid)
 
-        await asyncio.gather(
-            u._force_kill(),
-            u._force_kill(),
-            _release(),
-        )
-    finally:
-        _os.getpgid = orig_getpgid
+    async def _release():
+        # Let both _force_kill calls reach the __aexit__ await, THEN release.
+        await asyncio.sleep(0.02)
+        gate.set()
+
+    await asyncio.gather(
+        u._force_kill(),
+        u._force_kill(),
+        _release(),
+    )
 
     assert wrapper.aexit_calls == 1, (
         f"wrapper.__aexit__ called {wrapper.aexit_calls}x — concurrent _force_kill "
