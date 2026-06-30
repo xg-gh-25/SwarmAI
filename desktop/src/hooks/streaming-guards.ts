@@ -387,6 +387,7 @@ export type ForceClearReason =
   | 'resuming'          // a resume is in flight — cold/idle is spawn, not stuck
   | 'too_fresh'         // stuck but within the settle window
   | 'hard_cap'          // churn-immune absolute cap exceeded (backend not alive) → force-clear
+  | 'terminal'          // backend in a terminal state (dead/evicted) → force-clear immediately, skip settle (B-2)
   | 'stuck';            // stuck past the settle window → force-clear
 
 /** Result of the force-clear decision: the verdict (drives the hook) plus the
@@ -483,6 +484,22 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
     !hasQueuedMessage
   ) {
     return { verdict: 'force-clear', reason: 'hard_cap' };
+  }
+
+  // B-2 (OT01 root-fix): a TERMINAL backend state skips the settle window.
+  // We are past all four alive guards, so the backend is provably NOT alive. The
+  // settle window below exists to absorb a transient idle BLIP (backend momentarily
+  // reads 'idle' between sub-steps, then recovers) — but a terminal state is NOT a
+  // blip: a 'dead'/'evicted' session is gone and will NEVER recover, so waiting
+  // 30s+ (churn-extended to minutes) to clear the spinner is pure latency with zero
+  // protection value — the "frontend stopped refreshing" symptom. Clear it NOW.
+  // Scope is deliberately narrow (terminal only, not all not-alive): 'idle' keeps
+  // its settle window because it CAN be a transient blip; only provably-gone states
+  // skip. Placed AFTER the resume/flushing/streaming alive guards by construction,
+  // so this never short-circuits a live or resuming turn (O030 preserved).
+  const TERMINAL_BACKEND_STATES = new Set(['dead', 'evicted']);
+  if (reportedState && TERMINAL_BACKEND_STATES.has(reportedState)) {
+    return { verdict: 'force-clear', reason: 'terminal' };
   }
 
   // Stuck condition holds (frontend streaming, backend not). Honor the settle

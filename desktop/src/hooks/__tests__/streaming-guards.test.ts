@@ -637,6 +637,57 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     ).toBe('backend_streaming');
   });
 
+  // ── B-2: TERMINAL backend state skips the settle window (OT01 root-fix) ──────
+  // The settle window (30s) exists to absorb a transient idle BLIP — a backend
+  // that momentarily reads 'idle' between sub-steps and recovers. But a TERMINAL
+  // state ('dead' / 'evicted') is NOT a blip: the session is gone and will NEVER
+  // recover, so making the user stare at a stuck spinner for 30s+ (or the
+  // churn-extended minutes) is pure latency with zero protection value. When we
+  // are PAST all four alive guards AND the backend reports a terminal state,
+  // force-clear IMMEDIATELY — the spinner reflects a session that cannot come
+  // back. This is the "frontend stopped refreshing" symptom's root-fix: the
+  // existing backend-authoritative clear path, minus the needless terminal-state
+  // settle delay. Alive guards (streaming/waiting_input/flushing/resuming) are
+  // untouched (O030 preserved) — only provably-dead terminal states skip settle.
+  it('B-2: dead backend → force-clear IMMEDIATELY, skip settle (fresh stamp)', () => {
+    // idleStreamingSince just stamped (age ~0) → would normally wait-settle.
+    // Terminal 'dead' must clear NOW regardless of the settle window.
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'dead', idleStreamingSince: base.now }),
+    ).toEqual({ verdict: 'force-clear', reason: 'terminal' });
+  });
+
+  it('B-2: evicted backend → force-clear IMMEDIATELY, skip settle', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'evicted', idleStreamingSince: base.now }).verdict,
+    ).toBe('force-clear');
+  });
+
+  it('B-2 PRESERVED: idle backend (possible blip) STILL waits settle (not terminal)', () => {
+    // The mutation guard: 'idle' is NOT terminal — it could be a transient blip
+    // between sub-steps. It must keep the settle window. If the terminal skip were
+    // written too broadly (e.g. !alive → skip), this would wrongly clear now.
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'idle', idleStreamingSince: base.now }).verdict,
+    ).toBe('wait-settle');
+  });
+
+  it('B-2 PRESERVED: terminal state never overrides a genuinely streaming backend', () => {
+    // reportedState 'dead' is impossible alongside backendIsStreaming=true in
+    // practice, but defense-in-depth: streaming guard fires first.
+    expect(
+      forceClearStreamVerdict({ ...base, backendIsStreaming: true, reportedState: 'dead' }).reason,
+    ).toBe('backend_streaming');
+  });
+
+  it('B-2 PRESERVED: terminal skip does not fire while resume is in flight', () => {
+    // A cold/dead-looking state during --resume replay must still be exempt —
+    // resumeInProgress guard (:456) is BEFORE the terminal check by construction.
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'dead', resumeInProgress: true }).verdict,
+    ).toBe('reset-and-skip');
+  });
+
   // ── HARD-CAP backstop (OT01 route-A, AC1) ─────────────────────────────────
   // The settle clock (idleStreamingSince) is reset to undefined on EVERY
   // reset-and-skip tick (useChatStreamingLifecycle.ts:1548). Under abort+recycle
