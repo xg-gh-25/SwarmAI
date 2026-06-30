@@ -589,6 +589,21 @@ class SessionUnit:
         # ── Zombie detection — set True when meaningful content emitted ──
         self._content_emitted: bool = False
 
+        # ── Resume-poison guard (fail-closed cleanliness flag) ──────────
+        # True ONLY after a turn reaches the successful ResultMessage
+        # completion (streaming_orchestrator success path). Cleared on every
+        # STREAMING entry (_transition). send() checks it before reusing a
+        # warm IDLE subprocess: NOT clean → the subprocess may be poisoned by
+        # a prior soft-interrupt / SSE-disconnect that left the CLI in corrupt
+        # turn-state (PIT01) → recycle-before-reuse instead of feeding the
+        # poisoned process a first message that returns an instant empty
+        # error_during_execution (zombie). Default False = fail-closed: a turn
+        # that did NOT reach the success transition (interrupt / disconnect /
+        # error / max_turns) is presumed poisoned, path-agnostically. This is
+        # a per-instance attribute (NEVER module/class level) so the guard
+        # never crosses sessions/tabs.
+        self._last_turn_clean: bool = False
+
         # ── Lazy MCP: per-session overrides ──────────────────────────
         # MCP names added via enable_mcp_for_session().  On next spawn,
         # these names are passed to load_mcp_config_tiered(extra_always=...)
@@ -906,6 +921,12 @@ class SessionUnit:
         # period is a fresh conversation turn that deserves its own hooks.
         if new_state == SessionState.STREAMING:
             self._hooks_enqueued = False
+            # Fail-closed: a turn is presumed poisoned until it reaches the
+            # success-result transition that re-blesses it. Clearing here (the
+            # single STREAMING-entry chokepoint, NOT in send()'s reset batch)
+            # is what keeps the warm-reuse fast path alive for clean turns
+            # while forcing a recycle for interrupted/disconnected ones.
+            self._last_turn_clean = False
             # ONE timestamp for both — the dumb-spawn watchdog discriminates
             # "no event since spawn" by `_last_event_time <= _streaming_start_time`
             # (lifecycle_manager._check_streaming_timeout). Two separate
@@ -1709,6 +1730,36 @@ class SessionUnit:
         self._pending_question = None
         self._last_drained_seqs = []
 
+        # ── Resume-poison guard (fail-closed) — recycle-before-reuse ────
+        # If we are about to REUSE a warm IDLE subprocess that did NOT end its
+        # last turn via the success-result transition, it may be poisoned by a
+        # prior soft-interrupt / SSE-disconnect (PIT01): the CLI is in corrupt
+        # turn-state and the first message would return an instant empty
+        # error_during_execution (zombie) → kill+retry → "first resume fails".
+        # The existing flush/interrupt recycle runs AFTER an `await interrupt()`
+        # and is cancel-raced by this very send() (it cancels the in-flight
+        # flush task above), so it cannot be relied on. Recycle eagerly HERE,
+        # before reuse, via the blessed kill path (clear_identity=False preserves
+        # --resume identity); the COLD branch below then spawns a clean process
+        # WITH --resume. Clean turns skip this entirely → warm fast path intact.
+        # MUST be checked here (after the reset batches, before reuse) and the
+        # flag MUST NOT be in those reset batches, or every reuse looks poisoned.
+        # _force_kill is anchored to self.pid only — it never touches a sibling
+        # session's subprocess tree (per-session isolation).
+        if (
+            self.state == SessionState.IDLE
+            and self._client is not None
+            and not self._last_turn_clean
+        ):
+            logger.info(
+                "session_unit.poison_guard_recycle session_id=%s — warm IDLE "
+                "subprocess not clean (last turn did not complete via result); "
+                "recycling to COLD before reuse to avoid zombie first-send",
+                self.session_id,
+            )
+            await self._arm_recovery_checkpoint("poison_guard_recycle")
+            await self._crash_to_cold_async(clear_identity=False)
+
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         # Also respawn if IDLE but client is gone (CLI exited after
         # error_max_turns — state stayed IDLE for hooks/slots, but
@@ -1721,6 +1772,17 @@ class SessionUnit:
                 if event.get("_abort"):
                     return  # spawn failed after retries
                 yield event
+            # A clean respawn consumed the recycle marker's only legitimate
+            # purpose (classifying THIS recycle's own SIGKILL as ZOMBIE via a
+            # failed retry). Now that we have a fresh, alive subprocess, the
+            # marker must NOT survive into the new stream — otherwise a genuine
+            # OOM (-9) on THIS turn would be misclassified ZOMBIE (skipping the
+            # 30/60/120s backoff + the _consecutive_oom_kills increment that
+            # drives the OOM circuit breaker). The send-entry clear at the top
+            # of send() runs BEFORE the poison-guard arm, so it cannot cover
+            # this intra-turn recycle→respawn→OOM path. (Gate-2 MED, run_ed9647c5)
+            if self.state == SessionState.IDLE:
+                self._recycle_kill_pending = False
 
         # R6 Step B: concurrent-streaming admission gate (peak-OOM guard).
         # A NEW user turn waits if the daemon is already at MAX_CONCURRENT_STREAMS
@@ -3983,9 +4045,12 @@ class SessionUnit:
         # classified ZOMBIE (~0.5s respawn) not OOM (30/60/120s backoff). Set
         # BEFORE the idempotency early-return so it reflects the latest kill
         # reason even when a checkpoint is already armed. ONLY the poisoned/
-        # corrupt-turn-state recycles — NOT rss_*/stuck_*/watchdog (those are
-        # real memory pressure / genuine hangs that keep their own semantics).
-        self._recycle_kill_pending = trigger in ("flush_recycle", "interrupt_recycle")
+        # corrupt-turn-state recycles (flush/interrupt/poison_guard) — NOT
+        # rss_*/stuck_*/watchdog (those are real memory pressure / genuine
+        # hangs that keep their own 30/60/120s backoff semantics).
+        self._recycle_kill_pending = trigger in (
+            "flush_recycle", "interrupt_recycle", "poison_guard_recycle",
+        )
 
         if self._heal_checkpoint is not None:
             return  # Don't clobber a richer voluntary checkpoint

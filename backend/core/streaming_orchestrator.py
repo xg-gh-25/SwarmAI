@@ -1319,6 +1319,13 @@ class StreamingOrchestrator:
                 self._parent._transition(SessionState.IDLE)
                 self._parent.last_used = time.time()
                 self._parent._retry_count = 0
+                # Resume-poison guard: this is the ONE clean-completion point —
+                # a real ResultMessage reached the user after the blank/degraded
+                # retry guards above did NOT fire. Bless the subprocess so the
+                # next send() may reuse it warm (fast path). Every other turn end
+                # (interrupt / disconnect / error / max_turns) leaves the flag
+                # False (set on STREAMING entry), forcing a recycle-before-reuse.
+                self._parent._last_turn_clean = True
 
                 # ── Proactive RSS check (Trigger B: post-turn) ────
                 # Now in IDLE — check if process tree RSS is too high.
