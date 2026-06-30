@@ -9,9 +9,13 @@
  *
  * @vitest-environment node
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { startContractServer, type ContractServer } from './server';
-import { parseSSEEvent } from '../../services/chat';
+import { parseSSEEvent, consumeSSEStream } from '../../services/chat';
+import type { StreamEvent } from '../../types';
 
 describe('Chat SSE Stream Contract', () => {
   let server: ContractServer;
@@ -141,5 +145,68 @@ describe('Chat SSE Stream Contract', () => {
     const event = parseSSEEvent(raw);
     // Should not crash — type may be undefined but parsing works
     expect(event).toBeDefined();
+  });
+
+  // ── Mid-stream disconnect: drive the REAL consumeSSEStream (run_91170d96) ──
+  // THE GAP THIS CLOSES: every prior "disconnect" test mocked the boundary or
+  // fabricated the failure (errorHandler(new Error(...))). consumeSSEStream's
+  // onDisconnect branch (chat.ts:280-285) — reader closes with NO [DONE] — had
+  // ZERO coverage. This drives the REAL fn against a real fetch stream that
+  // closes mid-flight, so the recurring OT01/spinner-hang class gets a gate.
+  const noopStall = () => {};
+
+  it('premature close (no [DONE]) → onDisconnect fires, onComplete does NOT', async () => {
+    const response = await fetch(`${server.baseUrl}/api/chat/stream-drop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: 'default', message: 'test', session_id: null }),
+    });
+    expect(response.ok).toBe(true);
+    const reader = response.body!.getReader();
+
+    const onMessage = vi.fn<(e: StreamEvent) => void>();
+    const onComplete = vi.fn();
+    const onDisconnect = vi.fn();
+
+    await consumeSSEStream(reader, noopStall, noopStall, onMessage, onComplete, onDisconnect);
+
+    // The drop branch fired — NOT clean completion.
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    // Non-vacuity (Gate-1 NIT): frames actually flowed before the drop — proves
+    // the stream was genuinely mid-flight, not an empty/instant close.
+    expect(onMessage.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('INVERSE: clean stream with [DONE] → onComplete fires, onDisconnect does NOT', async () => {
+    const response = await fetch(`${server.baseUrl}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: 'default', message: 'test', session_id: null }),
+    });
+    const reader = response.body!.getReader();
+
+    const onMessage = vi.fn<(e: StreamEvent) => void>();
+    const onComplete = vi.fn();
+    const onDisconnect = vi.fn();
+
+    await consumeSSEStream(reader, noopStall, noopStall, onMessage, onComplete, onDisconnect);
+
+    // [DONE] present → clean completion, the disconnect branch must NOT fire.
+    // This inverse guard is what catches a [DONE] accidentally added to the
+    // drop fixture (it would flip the test above to a false green).
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('ANTI-ROT: the drop fixture must contain NO [DONE] sentinel', () => {
+    // Static guard (Gate-1 NIT) — does not depend on stream timing. If someone
+    // adds [DONE] to chat-stream-drop.jsonl, the premature-close test silently
+    // becomes a clean-completion test (false green); this fails loudly first.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixture = readFileSync(join(here, 'fixtures', 'chat-stream-drop.jsonl'), 'utf-8');
+    expect(fixture).not.toContain('[DONE]');
+    // And it must have ≥1 real data: frame (so the disconnect test is non-vacuous).
+    expect(fixture.split('\n').filter((l) => l.startsWith('data: ')).length).toBeGreaterThanOrEqual(1);
   });
 });

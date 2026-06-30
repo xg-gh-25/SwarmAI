@@ -128,6 +128,151 @@ async def _check_no_stuck_streaming(base_url: str, result: "SmokeResult") -> Non
         result.record("no_stuck_streaming", False, f"probe failed: {e}")
 
 
+async def _check_disconnect_recovery(
+    base_url: str, agent_id: str, result: "SmokeResult", verbose: bool = False
+) -> None:
+    """E2E: inject a REAL mid-stream SSE drop and assert the backend recovers.
+
+    This is the post-deploy half of the disconnect-recovery verification chain
+    (the frontend half lives in chat.contract.test.ts). It exercises the exact
+    class behind ~33 OT01 recurrences: a stream that drops mid-flight while the
+    backend is genuinely STREAMING.
+
+    Method: open a real chat stream, read until the FIRST assistant content
+    arrives (proves the backend is genuinely mid-stream), then EXIT the
+    ``async with c.stream`` context — that closes the TCP connection, which the
+    backend sees as a client disconnect (``request.is_disconnected()`` →
+    ``_recover_streaming_on_disconnect``).
+
+    TEETH (Gate-1 BLOCKER fix — ``streaming==false`` ALONE is a false-green: it
+    also holds for a phantom never-streamed session AND a vanished session).
+    A PASS requires ALL of:
+      1. non-empty assistant content streamed BEFORE the drop (genuinely mid-flight),
+      2. the session was PRESENT in streaming-state (absent → FAIL, not pass),
+      3. the turn PERSISTED to /sessions/{id}/messages (recovery actually worked),
+      4. the session reports streaming==false (not stuck).
+
+    Skip-aware (PIT49): if no content arrives (daemon busy / no slot) → skip,
+    never fail. Runs only in full scope (needs a model call).
+    """
+    session_id = None
+    first_content = ""
+    try:
+        async with asyncio.timeout(TIMEOUT):
+            async with httpx.AsyncClient(base_url=base_url, timeout=TIMEOUT) as c:
+                async with c.stream(
+                    "POST",
+                    "/api/chat/stream",
+                    json={
+                        # A LONG reply (not one word) so the break reliably lands
+                        # MID-stream — a 1-word reply can complete before the TCP
+                        # close is processed, degrading this into a completion test
+                        # instead of a disconnect test (Gate-2 NIT).
+                        "agent_id": agent_id,
+                        "message": "Count slowly from 1 to 40, one number per line.",
+                        "session_id": None,
+                        "enable_skills": False,
+                        "enable_mcp": False,
+                    },
+                ) as stream:
+                    async for line in stream.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if not session_id and event.get("session_id"):
+                            session_id = event["session_id"]
+                        if event.get("type") == "assistant":
+                            txt = _extract_event_text(event)
+                            if txt.strip():
+                                first_content = txt
+                                # GENUINELY mid-stream now — DROP by exiting the
+                                # stream context (real TCP close), before result.
+                                break
+                # ← async-with exited here = client disconnect reaches backend
+    except (httpx.ReadTimeout, TimeoutError):
+        result.skip("disconnect_recovery", f"no content within {TIMEOUT}s (daemon busy?)")
+        return
+    except Exception as e:
+        result.record("disconnect_recovery", False, f"stream error: {e}")
+        return
+
+    # Teeth #1: content must have streamed before the drop (else nothing to recover).
+    if not session_id or not first_content.strip():
+        result.skip(
+            "disconnect_recovery",
+            "no mid-stream content arrived (no slot / cold) — nothing to drop",
+        )
+        return
+
+    # Recovery is two-phase: STREAMING→IDLE is synchronous, but the ASSISTANT
+    # turn is flushed to DB by a BACKGROUND subprocess-cleanup task. A fixed
+    # sleep would race that flush (Gate-2 MUST-FIX) → poll-with-retry instead.
+    def _has_assistant_turn(msg_list: list) -> bool:
+        # Teeth #3 (Gate-2 BLOCKER fix): the USER row is persisted BEFORE the
+        # model call (session_router stores it pre-spawn), so `len>0` is a
+        # FALSE GREEN — it passes even if recovery flushed ZERO assistant
+        # content. Require an ASSISTANT row with non-empty text: that is what
+        # proves recovery actually flushed the answer.
+        for m in msg_list:
+            if m.get("role") == "assistant" and _extract_event_text(m).strip():
+                return True
+        return False
+
+    present = False
+    our_streaming = True
+    persisted = False
+    try:
+        deadline = time.monotonic() + 12.0  # poll up to ~12s for the bg flush
+        async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+            while time.monotonic() < deadline:
+                # Teeth #2: session PRESENT in streaming-state. Absent reads as
+                # streaming=true (→ fail), never a vanished-session false green.
+                sr = await c.get("/api/chat/sessions/streaming-state")
+                sessions_in_state = sr.json().get("sessions", {})
+                present = session_id in sessions_in_state
+                our_streaming = (
+                    sessions_in_state.get(session_id, {}).get("streaming", True)
+                    if present else True
+                )
+                # Teeth #3: ASSISTANT turn persisted (not just the pre-written user row).
+                mr = await c.get(f"/api/chat/sessions/{session_id}/messages")
+                if mr.status_code == 200:
+                    msgs = mr.json()
+                    msg_list = msgs if isinstance(msgs, list) else msgs.get("messages", [])
+                    persisted = _has_assistant_turn(msg_list)
+                # All teeth satisfied → stop polling early.
+                if present and persisted and not our_streaming:
+                    break
+                await asyncio.sleep(1.0)
+
+            # Teeth #4: not stuck streaming. ALL four must hold.
+            passed = present and persisted and (not our_streaming)
+            result.record(
+                "disconnect_recovery",
+                passed,
+                f"recovered: present={present} assistant_persisted={persisted} "
+                f"streaming={our_streaming} (pre-drop content={len(first_content)}c)"
+                if passed else
+                f"RECOVERY GAP: present={present} assistant_persisted={persisted} "
+                f"still_streaming={our_streaming}",
+            )
+    except Exception as e:
+        result.record("disconnect_recovery", False, f"post-drop probe failed: {e}")
+    finally:
+        # Best-effort cleanup of this run's session.
+        try:
+            async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+                await c.delete(f"/api/chat/sessions/{session_id}")
+        except Exception:
+            pass
+
+
 async def cleanup_orphans(base_url: str) -> int:
     """Delete leftover smoke sessions from prior crashed runs.
 
@@ -448,6 +593,13 @@ async def run_smoke(
                 )
         except Exception as e:
             result.record("cleanup", False, str(e))
+
+    # ── 8. Mid-stream disconnect recovery (OT01/OT03 — the verification chain
+    # this gap kept open). Full scope only; reaches here only past the admission
+    # pre-flight (busy daemon already early-returned). Skip-aware. NOTE: this is
+    # a SECOND model call — it adds ~one cold-stream's wall-clock to full smoke;
+    # accepted because no other layer exercises a real transport drop.
+    await _check_disconnect_recovery(base_url, agent_id, result, verbose)
 
     return result
 

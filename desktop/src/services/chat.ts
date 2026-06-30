@@ -238,7 +238,10 @@ export const parseSSEEvent = (data: string): StreamEvent => {
  * Eliminates the 3x duplication of the buffer/flush/stall-timer logic across
  * streamChat, streamAnswerQuestion, and streamCmdPermissionContinue.
  */
-async function consumeSSEStream(
+// Exported so contract tests can drive the REAL consume loop against a real
+// fetch stream (incl. the premature-close onDisconnect branch). Mirrors the
+// already-exported applyTextDelta — pure async fn, no module state added.
+export async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   startStallTimer: (r: ReadableStreamDefaultReader<Uint8Array>) => void,
   clearStallTimer: () => void,

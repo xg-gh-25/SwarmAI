@@ -1,0 +1,4 @@
+data: {"type":"assistant","content":[{"type":"text","text":"PARTIAL"}],"session_id":"test-session-drop"}
+
+data: {"type":"assistant","content":[{"type":"text","text":"_MIDSTREAM"}],"session_id":"test-session-drop"}
+

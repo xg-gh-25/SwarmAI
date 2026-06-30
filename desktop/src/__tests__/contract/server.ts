@@ -89,6 +89,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse) {
     res.end();
   } else if (url === '/api/chat/stream' && method === 'POST') {
     sendSSE(res, 'chat-stream.jsonl');
+  } else if (url === '/api/chat/stream-drop' && method === 'POST') {
+    // Premature mid-stream close: a few real data: frames then res.end()
+    // WITHOUT a [DONE] sentinel (sendSSE always res.end()s at fixture end).
+    // Drives consumeSSEStream's onDisconnect branch (chat.ts:280-285).
+    sendSSE(res, 'chat-stream-drop.jsonl');
   } else if (url === '/api/eval/health' && method === 'GET') {
     sendJSON(res, JSON.stringify({ score: 85, dimensions: {} }));
   } else if (url === '/api/system/tokens/usage' && method === 'GET') {
