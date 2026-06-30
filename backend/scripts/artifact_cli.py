@@ -670,6 +670,72 @@ def _gen_run_id() -> str:
     return f"run_{uuid.uuid4().hex[:8]}"
 
 
+def _run_tokens(data: dict) -> int:
+    """Total tokens for a run = sum of per-stage token_cost.
+
+    There is NO stored `tokens_consumed` field on run.json — run-status COMPUTES
+    it as sum(stages[].token_cost) (see lines ~1490/1638). The abandon verdict
+    must use the SAME computation, not data.get("tokens_consumed") (always None).
+    """
+    return sum(s.get("token_cost", 0) or 0 for s in data.get("stages", []) or [])
+
+
+# Crash auto-checkpoint stamps this exact reason; an INTENTIONAL pause carries a
+# real decision reason instead (e.g. "Gate 1 BLOCK", "DELIVERED ...", "ROOT CAUSE
+# FALSIFIED"). This string is the primary zombie discriminator.
+_CRASH_ZOMBIE_REASON = "session_crash_auto_detected"
+
+
+def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
+    """Single source of truth for "should this run be auto-abandoned?".
+
+    Shared by _auto_abandon_stale_runs (new-run trigger) and cleanup_orphans
+    (batch/daily-sweep trigger) so the two can never drift (R25). Returns
+    (should_abandon, abandon_reason).
+
+    Two abandon classes, both age-gated by `threshold` (an aware datetime; a run
+    older than it is stale):
+      1. ORPHAN  — status=='running' and stale → "orphaned_no_resume"
+         (a running run only gets cleaned up because time passed / a new run
+         started; unchanged legacy behavior).
+      2. CRASH-ZOMBIE — status=='paused' AND checkpoint.reason is the crash
+         auto-checkpoint marker AND zero tokens AND stale → "crash_zombie".
+         The crash-reason marker is what distinguishes a dead crash residue from
+         an INTENTIONAL pause (Gate BLOCK / awaiting-decision), which is NEVER
+         abandoned regardless of age. The token==0 + age gates are extra guards
+         so a freshly-crashed run mid-work isn't reaped instantly.
+
+    Anything else (intentional pause, fresh run, completed/failed/cancelled,
+    paused-with-real-reason, paused-with-work-done) → (False, None).
+    """
+    status = data.get("status")
+    if status not in ("running", "paused"):
+        return (False, None)
+
+    # Age gate (shared) — a run newer than threshold is never reaped.
+    updated_str = data.get("updated_at", data.get("created_at", ""))
+    if not updated_str:
+        return (False, None)
+    try:
+        updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return (False, None)
+    if updated_at >= threshold:
+        return (False, None)
+
+    if status == "running":
+        return (True, "orphaned_no_resume")
+
+    # status == "paused": ONLY a crash-zombie qualifies. An intentional pause
+    # (real decision reason) or one with any work done (tokens>0) is preserved.
+    reason = (data.get("checkpoint") or {}).get("reason")
+    if reason == _CRASH_ZOMBIE_REASON and _run_tokens(data) == 0:
+        return (True, "crash_zombie")
+    return (False, None)
+
+
 def _auto_abandon_stale_runs(project: str, new_run_id: str, threshold_hours: float = 2.0) -> int:
     """Mark stale same-project 'running' runs as abandoned when a new run starts.
 
@@ -700,34 +766,17 @@ def _auto_abandon_stale_runs(project: str, new_run_id: str, threshold_hours: flo
         except (json.JSONDecodeError, OSError):
             continue
 
-        # Skip self and non-running
+        # Skip self — never abandon the run that triggered this scan.
         if data.get("id") == new_run_id:
             continue
-        if data.get("status") != "running":
-            continue
 
-        # Check age
-        updated_str = data.get("updated_at", data.get("created_at", ""))
-        if not updated_str:
-            continue
-        try:
-            updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
-            if updated_at.tzinfo is None:
-                updated_at = updated_at.replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            continue
-
-        if updated_at < threshold:
+        # Shared verdict (single source of truth; see _abandon_verdict): handles
+        # BOTH the running-orphan case (unchanged "orphaned_no_resume") and the
+        # crash-zombie paused case. Intentional pauses are preserved.
+        should, reason = _abandon_verdict(data, threshold)
+        if should:
             data["status"] = "abandoned"
-            # ORPHAN, not supersession: this run was 'running' (not paused) and
-            # got cleaned up only because a NEW run started. The new run has done
-            # NONE of this run's work, so 'superseded_by_<new>' would be a lie —
-            # it conflates an unrecovered crash-orphan with a real supersession
-            # (where a later COMPLETED run actually finished the work; that case
-            # is labelled 'superseded_by_<id>' in proactive_intelligence.py).
-            # Keeping the two distinct is what lets run-status show the true
-            # orphan rate vs the legitimate-replacement rate.
-            data["abandon_reason"] = "orphaned_no_resume"
+            data["abandon_reason"] = reason
             data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
             run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
             abandoned_count += 1
@@ -771,22 +820,16 @@ def cleanup_orphans(threshold_hours: float = 2.0) -> dict:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            if data.get("status") != "running":
-                continue
-
-            updated_str = data.get("updated_at", data.get("created_at", ""))
-            if not updated_str:
-                continue
-            try:
-                updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
-                if updated_at.tzinfo is None:
-                    updated_at = updated_at.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                continue
-
-            if updated_at < threshold:
+            # Shared verdict (single source of truth; see _abandon_verdict) —
+            # same logic as the new-run trigger, so running-orphans AND
+            # crash-zombie paused runs are both reaped here, while intentional
+            # pauses are preserved. This is the gap fix: the old `status !=
+            # running` skip meant crash zombies (which are PAUSED) accumulated
+            # forever (12 found 2026-06-30).
+            should, reason = _abandon_verdict(data, threshold)
+            if should:
                 data["status"] = "abandoned"
-                data["abandon_reason"] = "stale_orphan"
+                data["abandon_reason"] = reason
                 data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
                 run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 abandoned_count += 1

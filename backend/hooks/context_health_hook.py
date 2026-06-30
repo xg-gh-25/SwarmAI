@@ -2166,6 +2166,16 @@ class ContextHealthHook:
         if context_dir.is_dir():
             findings += self._check_self_report_drift(context_dir)
 
+        # 12. Pipeline crash-zombie sweep (daily) — auto-abandon stale runs.
+        #     The new-run trigger (_auto_abandon_stale_runs) only fires when a
+        #     NEW run starts; without this daily sweep, crash-zombie paused runs
+        #     (status=paused, reason=session_crash_auto_detected, 0 tokens) pile
+        #     up forever when no new pipeline runs (12 found 2026-06-30, manually
+        #     cleared). cleanup_orphans uses the SAME _abandon_verdict, so it
+        #     reaps running-orphans AND crash-zombies while PRESERVING intentional
+        #     pauses (Gate BLOCK / awaiting-decision / work-done). (run_5caa2588)
+        findings += self._sweep_pipeline_zombies()
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -2177,6 +2187,32 @@ class ContextHealthHook:
             )
         else:
             logger.info("context_health: deep check passed — all healthy")
+
+    def _sweep_pipeline_zombies(self) -> list[str]:
+        """Daily sweep: auto-abandon crash-zombie + stale-running pipeline runs.
+
+        Delegates to artifact_cli.cleanup_orphans (the SAME _abandon_verdict the
+        new-run trigger uses), so intentional pauses are preserved. Fail-open: a
+        sweep error is logged + reported, never raised — a health-check sub-item
+        must never break the whole deep check (or block session startup).
+        """
+        findings: list[str] = []
+        try:
+            from scripts.artifact_cli import cleanup_orphans
+            result = cleanup_orphans()  # default threshold 2h; verdict gates the rest
+            n = result.get("abandoned_count", 0)
+            if n:
+                findings.append(
+                    f"AUTO-ABANDONED {n} stale pipeline run(s) "
+                    f"(crash-zombie / orphan) across "
+                    f"{result.get('projects_scanned', 0)} project(s)"
+                )
+        except Exception as e:  # noqa: BLE001 — fail-open by design
+            findings.append(
+                f"pipeline zombie sweep failed (non-fatal): "
+                f"{type(e).__name__}: {e}"
+            )
+        return findings
 
     def _check_git_health(self, root: Path, ws_path: str) -> list[str]:
         """Check git state: stale locks, uncommitted context files."""
