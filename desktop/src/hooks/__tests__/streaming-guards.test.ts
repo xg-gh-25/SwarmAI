@@ -20,6 +20,7 @@ import {
   forceClearStreamVerdict,
   healGraceExpiryVerdict,
   desyncConvergeVerdict,
+  nextReconcileDelay,
   type QueueGuardState,
   type ForceClearStreamInput,
   type HealGraceExpiryInput,
@@ -805,5 +806,32 @@ describe('desyncConvergeVerdict — OT01 sibling-path protection', () => {
     expect(
       desyncConvergeVerdict({ ...base, postDisconnectFlushing: true, streamStartAge: 7_200_001 }),
     ).toBe(true);
+  });
+});
+
+describe('nextReconcileDelay (B-1: steady-state primary poll cadence)', () => {
+  // B-1 north-star: the always-on reconcile loop is the steady-state spinner
+  // driver. When any tab is streaming, it must poll FAST (so the backend alive
+  // predicate drives the spinner within a few seconds — AC5 ≤3s self-heal).
+  // When idle, it falls back to the cheap 15s safety-net cadence (AC2 power).
+  // This is a PURE function so the cadence decision is test-locked WITHOUT
+  // fake-timer integration — the loop just calls it to pick its next delay.
+
+  it('any tab streaming → fast 3s cadence', () => {
+    expect(nextReconcileDelay(true)).toBe(3_000);
+  });
+
+  it('no tab streaming → 15s safety-net cadence', () => {
+    expect(nextReconcileDelay(false)).toBe(15_000);
+  });
+
+  it('fast cadence is strictly shorter than idle cadence (AC5 self-heal bound)', () => {
+    // The whole point of B-1: streaming-period polling must be tighter than the
+    // old fixed 15s, so a lost SSE event self-heals in ≤ the fast cadence.
+    expect(nextReconcileDelay(true)).toBeLessThan(nextReconcileDelay(false));
+  });
+
+  it('fast cadence ≤ 3s (AC5: ≤3s self-heal, not 15s/45s)', () => {
+    expect(nextReconcileDelay(true)).toBeLessThanOrEqual(3_000);
   });
 });

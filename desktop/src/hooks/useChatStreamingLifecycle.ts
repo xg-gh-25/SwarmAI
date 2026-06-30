@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, type HealGraceVerdict } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict, healGraceExpiryVerdict, desyncConvergeVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { isOt01DiagEnabled } from '../utils/diagFlags';
@@ -1185,10 +1185,15 @@ export function useChatStreamingLifecycle(
   // Cost: one GET /streaming-state every 15s (~1KB). Acceptable.
   useEffect(() => {
     const RECONCILE_DELAY_MS = 5_000;
-    const RECONCILE_INTERVAL_MS = 15_000;
-
+    // B-1 (OT01 north-star): cadence is now streaming-aware via
+    // nextReconcileDelay() — 3s while any tab streams (so a lost SSE event
+    // self-heals in ≤3s, AC5), 15s when idle (cheap safety net, AC2). The loop
+    // self-reschedules with setTimeout instead of a fixed setInterval, because a
+    // running setInterval's period cannot be changed. Authority is unchanged:
+    // the per-tick arm/clear verdicts already drive the spinner from backend
+    // state — only the POLL CADENCE moved (Gate-1 finding: arm/clear already shipped).
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let interval: ReturnType<typeof setInterval> | null = null;
+    let nextTick: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
 
     const reconcile = async () => {
@@ -1633,16 +1638,32 @@ export function useChatStreamingLifecycle(
       }
     };
 
+    // Self-rescheduling poll: after each reconcile, pick the next delay from
+    // whether any tab is currently streaming. Fast (3s) under streaming so the
+    // backend alive predicate drives the spinner promptly; slow (15s) when idle.
+    const scheduleNext = () => {
+      if (cancelled) return;
+      let anyStreaming = false;
+      for (const ts of tabMapRef.current.values()) {
+        if (ts.isStreaming) { anyStreaming = true; break; }
+      }
+      nextTick = setTimeout(runReconcile, nextReconcileDelay(anyStreaming));
+    };
+    const runReconcile = async () => {
+      if (cancelled) return;
+      await reconcile();
+      scheduleNext();
+    };
+
     timer = setTimeout(() => {
       if (cancelled) return;
-      reconcile();
-      interval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
+      void runReconcile();
     }, RECONCILE_DELAY_MS);
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
-      if (interval) clearInterval(interval);
+      if (nextTick) clearTimeout(nextTick);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally always-on, no deps trigger restart
   }, []);

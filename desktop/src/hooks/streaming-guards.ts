@@ -601,3 +601,32 @@ export function desyncConvergeVerdict(input: DesyncConvergeInput): boolean {
   if (backendAlive && streamStartAge < capMs) return false;  // alive → keep spinner
   return true;                             // genuinely over (or past cap) → converge
 }
+
+/**
+ * B-1 (OT01 north-star, Run 1): the reconcile loop's next poll delay.
+ *
+ * The always-on streaming-state reconcile loop is the STEADY-STATE spinner
+ * driver — its per-tick arm (shouldArmSpinnerFromBackend) + clear
+ * (forceClearStreamVerdict / desyncConvergeVerdict) decisions are already the
+ * backend-authoritative projection of the spinner (frontend = pure projection,
+ * backend = SSOT). The only missing B-1 piece was CADENCE: the loop ran at a
+ * fixed 15s, so a lost SSE event took up to 15s to self-heal.
+ *
+ * This makes the cadence streaming-aware: poll FAST (3s) while any tab is
+ * streaming so the backend alive predicate drives the spinner within ≤3s
+ * (AC5 self-heal bound), and fall back to the cheap 15s safety-net cadence when
+ * idle (AC2 power — no need to hammer /streaming-state when nothing streams).
+ *
+ * Pure function so the cadence is test-locked WITHOUT fake-timer integration;
+ * the loop just calls it to schedule its next setTimeout. It changes ONLY poll
+ * cadence — never the arm/clear authority (that already lives in the verdict
+ * functions above). North-star-safe: no new frontend source of truth.
+ *
+ * @param anyTabStreaming  true iff at least one tab is currently streaming
+ * @returns next poll delay in ms (3s streaming, 15s idle)
+ */
+export const RECONCILE_FAST_MS = 3_000;
+export const RECONCILE_IDLE_MS = 15_000;
+export function nextReconcileDelay(anyTabStreaming: boolean): number {
+  return anyTabStreaming ? RECONCILE_FAST_MS : RECONCILE_IDLE_MS;
+}
