@@ -37,24 +37,77 @@ from scripts.eval_runner import (  # noqa: E402
     compute_code_digest,
 )
 
+# Score-drift gate band (run_95d9acbc). A push is BLOCKED when the latest report's
+# overall_score dropped MORE than this below the most-recent DIFFERENT-code baseline.
+# Strict: a drop of exactly EPSILON passes; only > EPSILON blocks.
+# NOTE the deliberate asymmetry with the scheduled job's alert band
+# (eval_scheduled.py _DRIFT_TOLERANCE = 5.0): the ALERT is a noisy-band monitor
+# (don't Slack-spam on judge noise); this GATE is the strict push-blocker (2.0).
+# Different jobs, different jobs-to-be-done — the divergence is intentional.
+SCORE_DRIFT_EPSILON = 2.0
 
-def _latest_report(root: Path) -> dict | None:
+
+def _reports_by_mtime(root: Path) -> list[dict]:
+    """All parseable reports, NEWEST FIRST by mtime — the SAME ordering key as
+    _latest_report (NOT eval_runner._load_history's filename sort, which can
+    disagree when two filename formats coexist; Gate-1 run_95d9acbc). Returns the
+    parsed dicts so latest = result[0]."""
     hist = _eval_history_dir(root)
-    # Sort by mtime, NOT filename (Gate-2 H1): two filename formats coexist
-    # ({date}_{trigger} and {date}_{time}_{trigger}) so lexical sort can rank a
-    # stale same-day report above a fresher one. mtime is format-agnostic.
-    reports = sorted(hist.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for p in reports:
+    out: list[dict] = []
+    for p in sorted(hist.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
-            return json.loads(p.read_text())
+            out.append(json.loads(p.read_text()))
         except Exception:
             continue
-    return None
+    return out
+
+
+def _latest_report(root: Path) -> dict | None:
+    reports = _reports_by_mtime(root)
+    return reports[0] if reports else None
+
+
+def _num(v) -> float | None:
+    """A score is usable only if it's a real number — a malformed report with a
+    string/None score must fail-OPEN (skip), never crash the gate (Gate-2 NIT#1)."""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _score_drift(reports: list[dict]) -> tuple[bool, str]:
+    """(blocked, message). `reports` is _reports_by_mtime() (newest-first); reports[0]
+    is the latest (the gated report — same object check_gate validated, no re-read /
+    no implicit [0]==latest coupling, Gate-2 NIT#7 + REVIEW LOW). Compare latest's
+    score against the most-recent report with a DIFFERENT code_digest (a same-code
+    re-run is judge noise, not drift — proven on real data: 100.0→91.7 on identical
+    digest). Fail-OPEN (never block) when: <2 reports, latest has no numeric score,
+    or no different-code baseline with a numeric score. Only a real, different-code
+    regression beyond EPSILON blocks."""
+    if len(reports) < 2:
+        return False, ""  # no baseline — fail-open
+    latest = reports[0]
+    latest_score = _num(latest.get("overall_score"))
+    if latest_score is None:
+        return False, ""  # pre-score / malformed latest — can't judge, fail-open
+    latest_digest = latest.get("code_digest", "")
+    for rpt in reports[1:]:
+        if rpt.get("code_digest", "") == latest_digest:
+            continue  # same-code re-run — not a drift baseline
+        base_score = _num(rpt.get("overall_score"))
+        if base_score is None:
+            continue
+        if (base_score - latest_score) > SCORE_DRIFT_EPSILON:
+            return True, (f"GATE BLOCKED (score drift): {base_score} → {latest_score} "
+                          f"(drop {base_score - latest_score:.1f} > {SCORE_DRIFT_EPSILON} "
+                          f"vs different-code baseline) — capability regressed, "
+                          f"investigate before push.")
+        return False, ""  # found a real baseline, within band → pass
+    return False, ""  # no different-code baseline → fail-open
 
 
 def check_gate(root: Path) -> tuple[int, str]:
     """Returns (exit_code, message). 0=pass, 1=blocked, 2=cannot-verify."""
-    report = _latest_report(root)
+    reports = _reports_by_mtime(root)  # read history ONCE; reports[0] = latest
+    report = reports[0] if reports else None
     if report is None:
         return 2, "GATE: no eval report found — run `eval_runner.py run` locally first."
 
@@ -76,6 +129,11 @@ def check_gate(root: Path) -> tuple[int, str]:
         return 1, (f"GATE BLOCKED (red): bvt total={bvt.get('total')} "
                    f"passed={bvt.get('passed')} failed={bvt.get('failed')} "
                    f"error={bvt.get('error')} — fix failing cases before push/build.")
+
+    # Score drift: capability regressed vs the most-recent different-code baseline.
+    drifted, drift_msg = _score_drift(reports)
+    if drifted:
+        return 1, drift_msg
 
     return 0, (f"GATE PASS (eval = push-gate #3/3): fresh (digest={report_digest}) "
                f"+ green (bvt {bvt.get('passed')}/{bvt.get('total')}). "

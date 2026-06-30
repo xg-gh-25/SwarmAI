@@ -1,4 +1,4 @@
-"""Tests for the nightly eval drift-alert handler (run_5edf2cc0 C6, gap G7)."""
+"""Tests for the scheduled eval drift-alert handler (run_5edf2cc0 C6, gap G7)."""
 import sys
 from pathlib import Path
 
@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest  # noqa: E402
 
-from jobs.handlers.eval_nightly import run_eval_nightly, _DRIFT_TOLERANCE  # noqa: E402
+from jobs.handlers.eval_scheduled import run_eval_scheduled, _DRIFT_TOLERANCE  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -14,8 +14,8 @@ def _isolate_alert_state(tmp_path, monkeypatch):
     """Each test gets its own alert-state file — the real one is a shared
     singleton path that would leak fingerprints across tests (and pollute the
     live workspace). autouse so no test can forget it."""
-    import jobs.handlers.eval_nightly as mod
-    monkeypatch.setattr(mod, "_ALERT_STATE", tmp_path / ".eval-nightly-alert.json")
+    import jobs.handlers.eval_scheduled as mod
+    monkeypatch.setattr(mod, "_ALERT_STATE", tmp_path / ".eval-scheduled-alert.json")
 
 
 def _runner(this, baseline=None):
@@ -33,7 +33,7 @@ class _Spy:
 
 def test_clean_run_no_alert(tmp_path):
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 98, "bvt": {"green": True, "total": 55, "passed": 54}},
                        {"overall_score": 97}),
         notifier=spy, root=tmp_path)
@@ -43,7 +43,7 @@ def test_clean_run_no_alert(tmp_path):
 
 def test_bvt_red_alerts(tmp_path):
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 98,
                         "bvt": {"green": False, "total": 55, "passed": 53, "failed": 2, "error": 0}},
                        {"overall_score": 98}),
@@ -55,7 +55,7 @@ def test_bvt_red_alerts(tmp_path):
 
 def test_score_drift_alerts(tmp_path):
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 80, "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 95}),  # 15-pt drop > tolerance
         notifier=spy, root=tmp_path)
@@ -66,7 +66,7 @@ def test_score_drift_alerts(tmp_path):
 
 def test_drift_within_tolerance_no_alert(tmp_path):
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 95 - _DRIFT_TOLERANCE + 0.1,
                         "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 95}),
@@ -77,21 +77,21 @@ def test_drift_within_tolerance_no_alert(tmp_path):
 
 def test_dedup_no_repeat_alert(tmp_path, monkeypatch):
     """Same regression two nights running → only ONE alert (no storm)."""
-    import jobs.handlers.eval_nightly as mod
+    import jobs.handlers.eval_scheduled as mod
     monkeypatch.setattr(mod, "_ALERT_STATE", tmp_path / ".alert.json")
     spy = _Spy()
     red = _runner({"overall_score": 98,
                    "bvt": {"green": False, "total": 55, "passed": 53, "failed": 2, "error": 0}},
                   {"overall_score": 98})
-    run_eval_nightly(runner=red, notifier=spy, root=tmp_path)
-    run_eval_nightly(runner=red, notifier=spy, root=tmp_path)
+    run_eval_scheduled(runner=red, notifier=spy, root=tmp_path)
+    run_eval_scheduled(runner=red, notifier=spy, root=tmp_path)
     assert len(spy.calls) == 1  # second run deduped
 
 
 def test_no_baseline_no_drift_alert(tmp_path):
     """First-ever run (no baseline) must not false-alert on drift."""
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 50, "bvt": {"green": True, "total": 55, "passed": 55}},
                        None),
         notifier=spy, root=tmp_path)
@@ -107,7 +107,7 @@ def test_judge_infra_collapse_alerts(tmp_path):
     is the ONLY signal that distinguishes infra-failure from a healthy run.
     This test REDs without the coverage-collapse alert (it produces no reason)."""
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 100, "scored_count": 56, "cases_error": 90,
                         "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 95}),  # score UP, not down → no drift
@@ -121,7 +121,7 @@ def test_coverage_above_threshold_no_alert(tmp_path):
     """A few偶发 errors (below threshold) must NOT false-alarm. 2/146 errored =
     1.4% error ratio, far below the 20% trigger → coverage healthy, silent."""
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 96, "scored_count": 144, "cases_error": 2,
                         "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 95}),
@@ -134,7 +134,7 @@ def test_coverage_reason_separate_from_drift(tmp_path):
     """A night that is BOTH drifted AND low-coverage must produce TWO distinct
     reasons (P6: infra-failure ≠ agent-quality-regression, never conflated)."""
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 70, "scored_count": 56, "cases_error": 90,
                         "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 95}),  # 25-pt drop = drift AND low coverage
@@ -149,7 +149,7 @@ def test_fully_skipped_run_no_crash(tmp_path):
     """Gate-1 finding: a run with scored_count=0 AND cases_error=0 (fully skipped)
     must NOT ZeroDivisionError — coverage guards intended>0 (eval_service parity)."""
     spy = _Spy()
-    r = run_eval_nightly(
+    r = run_eval_scheduled(
         runner=_runner({"overall_score": 0, "scored_count": 0, "cases_error": 0,
                         "bvt": {"green": True, "total": 55, "passed": 55}},
                        {"overall_score": 0}),
@@ -160,16 +160,16 @@ def test_fully_skipped_run_no_crash(tmp_path):
 def test_runner_crash_returns_error(tmp_path):
     def boom(root):
         raise RuntimeError("eval blew up")
-    r = run_eval_nightly(runner=boom, notifier=_Spy(), root=tmp_path)
+    r = run_eval_scheduled(runner=boom, notifier=_Spy(), root=tmp_path)
     assert r["status"] == "error" and "eval blew up" in r["reason"]
 
 
 def test_default_runner_imports_resolve():
     """REGRESSION GUARD (adversarial CRITICAL #3): the prior tests all injected a
     fake runner=, so the REAL _default_runner's imports were never exercised —
-    a `load_history` vs `_load_history` typo shipped a dead-on-arrival nightly job.
+    a `load_history` vs `_load_history` typo shipped a dead-on-arrival scheduled job.
     This forces the real import path to resolve (without running the heavy eval)."""
-    import jobs.handlers.eval_nightly as mod
+    import jobs.handlers.eval_scheduled as mod
     import inspect
     src = inspect.getsource(mod._default_runner)
     # the names _default_runner imports must all exist in eval_runner

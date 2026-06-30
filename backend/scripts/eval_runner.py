@@ -447,7 +447,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
             (the FAIL token the negative must affirmatively emit); a case without
             that field is untouched. Teeth-pass requires the negative to emit its
             FAIL token AND omit the positive marker. OFF by default (doubles
-            subprocess cost): ON for all gate-report producers (CLI/nightly/GUI)
+            subprocess cost): ON for all gate-report producers (CLI/scheduled/GUI)
             so the committed bvt is deterministic; the per-session
             context_health_hook path leaves it False (deadline-bound).
     """
@@ -2238,7 +2238,7 @@ def main():
                             "negative_expected_contains, run the negative variant and require "
                             "it to emit its FAIL token while omitting the positive marker "
                             "(proves the probe discriminates). ON for all gate-report producers "
-                            "(CLI/nightly/GUI) so the committed bvt is deterministic; the "
+                            "(CLI/scheduled/GUI) so the committed bvt is deterministic; the "
                             "per-session health hook leaves it OFF (deadline-bound).")
     run_p.add_argument("--no-verify-teeth", dest="verify_teeth", action="store_false",
                        help="Disable canary teeth (skip the negative-variant execution).")

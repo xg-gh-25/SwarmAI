@@ -33,7 +33,7 @@ class JobType(str, Enum):
     SWARMAI_MONTHLY_REPORT = "swarmai_monthly_report"
     SELF_TUNE = "self_tune"
     SESSION_HEALTH_PROBE = "session_health_probe"
-    EVAL_NIGHTLY = "eval_nightly"
+    EVAL_SCHEDULED = "eval_scheduled"
 
 
 class FeedType(str, Enum):

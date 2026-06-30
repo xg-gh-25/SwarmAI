@@ -1,13 +1,14 @@
-"""eval_nightly — nightly full eval run + drift-vs-baseline alert (run_5edf2cc0 C6, gap G7).
+"""eval_scheduled — scheduled full eval run + drift-vs-baseline alert (run_5edf2cc0 C6, gap G7; renamed run_95d9acbc).
 
-Runs the FULL golden set (programmatic + LLM judge — Bedrock cost is fine
-nightly, never gates) and compares the overall score against the previous run.
+Runs the FULL golden set (programmatic + LLM judge — Bedrock cost is fine on
+this cadence, never gates) and compares the overall score against the previous run.
+Runs 12:30 ICT weekdays (lunch), NOT nightly — the name was fixed to reflect reality.
 Alerts Slack on:
   - BVT RED (a gate-eligible regression — the spine broke), OR
   - capability DRIFT below baseline beyond a tolerance band.
 
 Mirrors session_health_probe's notify discipline: dedup via an alert-state file
-(no nightly alarm storm), test seams for the runner + notifier. The gate
+(no alarm storm), test seams for the runner + notifier. The gate
 (ci_eval_gate, local prod.sh release) is the HARD stop; this job is the
 continuous-monitoring eye that catches model/dependency drift (AWS Eval-First:
 "baseline is a drifting quantity, retest continuously").
@@ -29,7 +30,7 @@ _DRIFT_TOLERANCE = 5.0
 # Bedrock blips (1/146 = 0.7%) while catching a real cohort collapse.
 _COVERAGE_ALERT_THRESHOLD = 0.20
 
-_ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-nightly-alert.json"
+_ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-scheduled-alert.json"
 
 
 def _read_alert_state() -> str:
@@ -46,7 +47,7 @@ def _write_alert_state(fingerprint: str) -> None:
         _ALERT_STATE.parent.mkdir(parents=True, exist_ok=True)
         _ALERT_STATE.write_text(json.dumps({"fingerprint": fingerprint}))
     except Exception as e:
-        logger.warning("eval-nightly alert-state write failed: %s", e)
+        logger.warning("eval-scheduled alert-state write failed: %s", e)
 
 
 def _default_notifier(**kwargs) -> dict:
@@ -65,19 +66,19 @@ def _default_runner(root: Path) -> dict:
     gs = load_golden_set(_golden_set_path(root))
     history = load_history(root)  # prior runs, newest last
     baseline = history[-1] if history else None
-    result = run_eval(gs, "nightly", None, root, verify_teeth=True)  # full run incl LLM + canary teeth
+    result = run_eval(gs, "scheduled", None, root, verify_teeth=True)  # full run incl LLM + canary teeth
     write_run(result, root)
     return {"this": result, "baseline": baseline}
 
 
-def run_eval_nightly(
+def run_eval_scheduled(
     dry_run: bool = False,
     *,
     notifier: Optional[Callable[..., dict]] = None,
     runner: Optional[Callable[[Path], dict]] = None,
     root: Optional[Path] = None,
 ) -> dict:
-    """Run nightly eval; alert Slack on BVT-red or score-drift. Returns a result dict.
+    """Run scheduled eval; alert Slack on BVT-red or score-drift. Returns a result dict.
 
     dry_run: never send a notification (still returns the verdict).
     notifier / runner / root: injected test seams.
@@ -87,7 +88,7 @@ def run_eval_nightly(
     try:
         out = run(root)
     except Exception as e:
-        logger.error("eval-nightly run crashed: %s", e)
+        logger.error("eval-scheduled run crashed: %s", e)
         return {"status": "error", "reason": f"{type(e).__name__}: {e}"}
 
     this = out.get("this") or {}
@@ -129,19 +130,19 @@ def run_eval_nightly(
             send = notifier or _default_notifier
             try:
                 send(message="\n".join(f"- {r}" for r in reasons),
-                     title="🔴 SwarmAI nightly eval — regression/drift",
+                     title="🔴 SwarmAI scheduled eval — regression/drift",
                      channels=["slack"])
                 notified = True
             except Exception as e:
-                logger.error("eval-nightly notify failed: %s", e)
+                logger.error("eval-scheduled notify failed: %s", e)
         elif not reasons and prev:
             send = notifier or _default_notifier
             try:
-                send(message=f"✅ nightly eval recovered (score {score}%)",
-                     title="SwarmAI nightly eval", channels=["slack"])
+                send(message=f"✅ scheduled eval recovered (score {score}%)",
+                     title="SwarmAI scheduled eval", channels=["slack"])
                 notified = True
             except Exception as e:
-                logger.error("eval-nightly recovery notify failed: %s", e)
+                logger.error("eval-scheduled recovery notify failed: %s", e)
         _write_alert_state(fingerprint)
 
     return {
@@ -154,7 +155,7 @@ def run_eval_nightly(
     }
 
 
-def handle_eval_nightly(job, state) -> dict:
+def handle_eval_scheduled(job, state) -> dict:
     """Job-system entry point. `job`/`state` accepted for the executor contract."""
     dry = bool(getattr(job, "config", {}).get("dry_run", False)) if job else False
-    return run_eval_nightly(dry_run=dry)
+    return run_eval_scheduled(dry_run=dry)
