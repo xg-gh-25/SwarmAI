@@ -657,12 +657,6 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     ).toEqual({ verdict: 'force-clear', reason: 'terminal' });
   });
 
-  it('B-2: evicted backend → force-clear IMMEDIATELY, skip settle', () => {
-    expect(
-      forceClearStreamVerdict({ ...base, reportedState: 'evicted', idleStreamingSince: base.now }).verdict,
-    ).toBe('force-clear');
-  });
-
   it('B-2 PRESERVED: idle backend (possible blip) STILL waits settle (not terminal)', () => {
     // The mutation guard: 'idle' is NOT terminal — it could be a transient blip
     // between sub-steps. It must keep the settle window. If the terminal skip were

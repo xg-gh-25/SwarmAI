@@ -497,8 +497,14 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   // its settle window because it CAN be a transient blip; only provably-gone states
   // skip. Placed AFTER the resume/flushing/streaming alive guards by construction,
   // so this never short-circuits a live or resuming turn (O030 preserved).
-  const TERMINAL_BACKEND_STATES = new Set(['dead', 'evicted']);
-  if (reportedState && TERMINAL_BACKEND_STATES.has(reportedState)) {
+  // Only 'dead' — the sole TERMINAL value SessionState actually emits
+  // (session_unit.py SessionState = cold|idle|streaming|waiting_input|dead; there
+  // is NO 'evicted' state — "eviction" is the ACT of reclaiming an idle unit,
+  // which transitions it idle→dead→cold, never a reported state string). 'dead'
+  // is observable for up to ~60s after an EXTERNAL kill (OOM/jetsam): the PID
+  // watchdog parks the unit in DEAD and the 60s lifecycle sweep finishes it to
+  // COLD — that window is exactly the "session gone forever, spinner stuck" case.
+  if (reportedState === 'dead') {
     return { verdict: 'force-clear', reason: 'terminal' };
   }
 
