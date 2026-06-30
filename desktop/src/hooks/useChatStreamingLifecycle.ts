@@ -1110,6 +1110,28 @@ export function useChatStreamingLifecycle(
       // which calls setMessages(store.getSnapshot()) on subscribe (line above).
       if (currentActiveTabId !== tabId) return;
 
+      // ── OT01 render-loss diagnostic (DEV-gated, run_56f9a04d) — STORE side ─
+      // The STORE half of a store-vs-render pair. The render half lives in
+      // AssistantMessageView ([OT01-diag] render). Compare the two in the live
+      // console for the SAME msgId: if `storeTextBlocks` here ever exceeds the
+      // `renderedTextBlocks` the view logs for that msgId, the loss is
+      // DOWNSTREAM of this store→React push (React batch / throttle / memo at
+      // the view) — the single-tab layer no headless test exposes. Aimed per
+      // adversarial review (the prior active-tab-mismatch probe was unreachable
+      // in the single-tab repro). getSnapshot() is a shallow copy so a
+      // store-vs-snapshot content compare is vacuous (PIT37) — hence comparing
+      // against the RENDER, not the snapshot. Removed once the layer is found.
+      if (import.meta.env.DEV) {
+        const sLast = store.messages[store.messages.length - 1];
+        if (sLast?.role === 'assistant') {
+          const sText = sLast.content.filter((b) => b.type === 'text').length;
+          console.debug('[OT01-diag] store→React sync', {
+            msgId: sLast.id, storeBlocks: sLast.content.length,
+            storeTextBlocks: sText, isStreaming: store.phase === 'streaming',
+          });
+        }
+      }
+
       // Sync store → React state (triggers render)
       setMessages(store.getSnapshot());
     });

@@ -185,6 +185,23 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     && contextWarning
     && (contextWarning.level === 'warn' || contextWarning.level === 'critical');
 
+  // ── OT01 render-loss diagnostic (DEV-gated, run_56f9a04d) — RENDER side ─
+  // The RENDER half of the store-vs-render pair (store half: [OT01-diag]
+  // store→React sync in useChatStreamingLifecycle). Logs the block-count this
+  // view ACTUALLY renders for this msgId. In the live console, line up the two
+  // by msgId: storeTextBlocks > renderedTextBlocks ⇒ content reached the store
+  // but the view rendered fewer ⇒ loss is in the React prop/render path (the
+  // single-tab layer headless tests can't expose). Equal counts ⇒ the loss is
+  // NOT here (look at MarkdownRenderer/CSS/viewport). Removed once located.
+  if (import.meta.env.DEV) {
+    console.debug('[OT01-diag] render', {
+      msgId: message.id,
+      renderedBlocks: message.content.length,
+      renderedTextBlocks: message.content.filter((b) => b.type === 'text').length,
+      isStreaming: !!isStreaming,
+    });
+  }
+
   const contentBlocks = message.content.map((block, index) => {
     // Use block-specific IDs for stable keys to prevent state mix-ups
     // when multiple tool blocks are rendered consecutively
