@@ -377,6 +377,52 @@ class EvalService:
             self._persist_golden_set()
         return case
 
+    def hard_delete_cases(self, ids) -> dict:
+        """PHYSICALLY remove cases from the golden_set file(s) — not soft-archive.
+
+        Unlike delete_case (tier='archived', row stays on disk forever), this drops
+        the rows entirely. It is the FIRST path that shrinks self._cases, so it must
+        defeat the merge-preserve disk-only re-append (which would otherwise resurrect
+        a removed-from-memory case): it passes the removed ids as `removed_ids` to the
+        locked persist, where _merge_partition_cases skips re-appending them.
+
+        Disk-truth (Gate-2 F): we _load() fresh from disk under the lock FIRST, so the
+        delete operates on the CURRENT on-disk corpus — not a possibly-stale in-memory
+        snapshot loaded at process start. This makes deleted/not_found accurate and
+        ensures an on-disk-but-not-yet-in-memory case is actually removed, not silently
+        reported not_found and left behind.
+
+        Atomicity (Gate-2 E): self._cases is snapshotted before the destructive filter
+        and restored if persist raises, so a mid-write failure never leaves memory
+        diverged from disk.
+
+        Cross-process caveat: the flock serializes the on-disk RMW, but a DIFFERENT
+        long-lived process holding these ids in ITS own self._cases would re-append
+        them on its next flush (its removed_ids is empty). The safe caller is therefore
+        the daemon's own singleton via POST /api/eval/golden-set/hard-delete — the
+        load() here guarantees THIS process sees disk truth; other processes must
+        reload() to converge. Not a general multi-writer-safe primitive.
+
+        Returns {"deleted": [...], "not_found": [...]} — destructive-op semantics:
+        a typo'd id is reported, never a silent no-op.
+        """
+        want = list(dict.fromkeys(ids))  # dedupe, preserve order
+        with self._data_lock:
+            self._load()  # disk truth before judging present/absent (Gate-2 F)
+            present = {c.get("id") for c in self._cases}
+            deleted = [i for i in want if i in present]
+            not_found = [i for i in want if i not in present]
+            if deleted:
+                drop = set(deleted)
+                snapshot = list(self._cases)  # rollback point (Gate-2 E)
+                self._cases = [c for c in self._cases if c.get("id") not in drop]
+                try:
+                    self._persist_golden_set(removed_ids=frozenset(drop))
+                except Exception:
+                    self._cases = snapshot  # restore — never leave memory diverged
+                    raise
+        return {"deleted": deleted, "not_found": not_found}
+
     # ─── Run Triggers (P3) ────────────────────────────────────────────────
 
     def trigger_run(self, trigger: str = "manual", case_ids: list[str] | None = None) -> str:
@@ -965,7 +1011,7 @@ class EvalService:
 
     # ─── Private: Persistence ────────────────────────────────────────────
 
-    def _persist_golden_set(self) -> None:
+    def _persist_golden_set(self, removed_ids: frozenset = frozenset()) -> None:
         """Atomic write golden_set.yaml with merge-preserve pattern.
 
         Before writing, re-reads the current disk state and merges, in two parts:
@@ -1013,14 +1059,14 @@ class EvalService:
         flock_exclusive(public_lock)
         flock_exclusive(private_lock)
         try:
-            self._merge_and_write(yaml)
+            self._merge_and_write(yaml, removed_ids=removed_ids)
         finally:
             flock_unlock(private_lock)
             private_lock.close()
             flock_unlock(public_lock)
             public_lock.close()
 
-    def _merge_and_write(self, yaml) -> None:
+    def _merge_and_write(self, yaml, removed_ids: frozenset = frozenset()) -> None:
         """Read-modify-write body of _persist_golden_set. MUST be called only
         while the caller holds BOTH sidecar exclusive locks (see _persist_golden_set).
 
@@ -1029,6 +1075,9 @@ class EvalService:
         merge-preserve + atomic rename. A private case is therefore NEVER written
         into the tracked public file (Gate-1 CRITICAL). ``_origin`` is stripped
         before serialize — it is an in-memory routing tag, never persisted.
+
+        removed_ids (run_110678fb): hard-deleted ids, passed UNFILTERED to both
+        partitions (origin-agnostic) so neither file resurrects them.
         """
         # Partition memory by origin. A case missing _origin defaults to public
         # ONLY if it has no instance-coupling signal — but since all loaded cases
@@ -1038,16 +1087,26 @@ class EvalService:
         private_mem = [c for c in self._cases if c.get("_origin", "private") != "public"]
 
         public_meta = {k: v for k, v in self._golden_set.items() if k != "cases"}
-        self._write_partition(yaml, self._golden_set_path, public_mem, public_meta)
+        self._write_partition(yaml, self._golden_set_path, public_mem, public_meta, removed_ids)
         # Private file carries only cases (no shared container metadata needed).
-        self._write_partition(yaml, self._private_golden_set_path, private_mem, {"version": 2})
+        self._write_partition(yaml, self._private_golden_set_path, private_mem, {"version": 2}, removed_ids)
 
     @staticmethod
-    def _merge_partition_cases(disk_cases: dict, mem_cases: list) -> list:
+    def _merge_partition_cases(disk_cases: dict, mem_cases: list,
+                               removed_ids: frozenset = frozenset()) -> list:
         """Merge one file's in-memory cases with its own disk state: preserve
         user-owned disk fields on in-both cases, append disk-only (externally
         added) cases. Same data-loss guard as before (Radar b40b9545), but
-        scoped to a SINGLE file's disk contents — never the union."""
+        scoped to a SINGLE file's disk contents — never the union.
+
+        removed_ids (run_110678fb): ids being HARD-deleted. A hard-deleted id is
+        absent from mem_cases (the caller dropped it from self._cases) AND must NOT
+        be resurrected by the disk-only re-append below. Without this set, "disk-only"
+        means "externally-added → preserve"; WITH it, a disk-only id that is in
+        removed_ids means "just hard-deleted → drop". Default empty → every existing
+        persist caller is byte-identical (only hard_delete_cases passes a non-empty
+        set). removed_ids is origin-AGNOSTIC: pass the full set to both partitions;
+        the partition that doesn't hold the id simply skips nothing."""
         _USER_OWNED_FIELDS = frozenset({"tags", "notes", "promoted_from"})
         merged_cases: list[dict] = []
         merged_ids: set[str] = set()
@@ -1063,15 +1122,17 @@ class EvalService:
                 merged_cases.append(mem_case)
             if case_id:
                 merged_ids.add(case_id)
-        # Disk-only (externally-added) cases for THIS file — append verbatim.
+        # Disk-only cases for THIS file — append verbatim UNLESS hard-deleted.
         for case_id, disk_case in disk_cases.items():
-            if case_id not in merged_ids:
+            if case_id not in merged_ids and case_id not in removed_ids:
                 merged_cases.append(disk_case)
                 merged_ids.add(case_id)
         return merged_cases
 
-    def _write_partition(self, yaml, path: Path, mem_cases: list, meta: dict) -> None:
-        """Re-read ONE file, merge its own cases, strip _origin, atomic-write."""
+    def _write_partition(self, yaml, path: Path, mem_cases: list, meta: dict,
+                         removed_ids: frozenset = frozenset()) -> None:
+        """Re-read ONE file, merge its own cases, strip _origin, atomic-write.
+        removed_ids (run_110678fb): hard-deleted ids the disk-only re-append must skip."""
         disk_cases = {}
         if path.exists():
             try:
@@ -1082,7 +1143,7 @@ class EvalService:
             except Exception:
                 pass
 
-        merged_cases = self._merge_partition_cases(disk_cases, mem_cases)
+        merged_cases = self._merge_partition_cases(disk_cases, mem_cases, removed_ids)
         # Strip the internal routing tag — never persist _origin to disk.
         clean_cases = [{k: v for k, v in c.items() if k != "_origin"} for c in merged_cases]
         out = dict(meta)

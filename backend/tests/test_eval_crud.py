@@ -298,10 +298,13 @@ class TestPersistPreservesDiskOnlyCases:
     process loaded golden_set.yaml. Reproduces the data-loss corruption
     (13 cases incl all GS_TRAJ behavior cases gutted, 2026-06-25). Radar b40b9545.
 
-    Invariant relied upon: delete_case is a SOFT delete (tier='archived', keeps
-    the case in self._cases). There is NO hard-remove path that shrinks
-    self._cases, so "on disk but not in memory" ALWAYS means externally-added,
-    never locally-deleted — making verbatim append safe.
+    Invariant relied upon: the disk-only re-append (a case on disk but absent from
+    self._cases) means EXTERNALLY-added → preserve verbatim. The ONE exception is
+    hard_delete_cases (run_110678fb): it shrinks self._cases AND passes the removed
+    ids as `removed_ids` to the persist, so the disk-only loop SKIPS them — a
+    locally-hard-deleted id is therefore NOT resurrected. delete_case (soft) still
+    keeps the case in self._cases as archived. So: disk-only + NOT in removed_ids =
+    externally-added (preserve); disk-only + in removed_ids = just hard-deleted (drop).
     """
 
     def _external_add_case(self, eval_workspace, case):
@@ -376,6 +379,51 @@ class TestPersistPreservesDiskOnlyCases:
         gs002_entries = [c for c in gs["cases"] if c["id"] == "GS002"]
         assert len(gs002_entries) == 1, "soft-deleted case duplicated"
         assert gs002_entries[0]["tier"] == "archived", "soft-deleted case resurrected as active"
+
+    def test_hard_delete_physically_removes_and_no_resurrection(self, svc, eval_workspace):
+        """run_110678fb: hard_delete_cases PHYSICALLY removes a case (not archived)
+        AND it is NOT resurrected by the disk-only re-append on a subsequent persist.
+        Without the removed_ids skip, the case would reappear from disk (the trap)."""
+        svc.hard_delete_cases(["GS002"])
+        # immediately gone from disk (not archived, fully absent)
+        svc2 = EvalService(workspace_root=eval_workspace)
+        gs = svc2.get_golden_set()
+        assert not any(c["id"] == "GS002" for c in gs["cases"]), "GS002 not physically removed"
+        # and a LATER persist (unrelated update) must NOT resurrect it
+        svc.update_case("GS001", {"title": "touch after hard delete"})
+        svc3 = EvalService(workspace_root=eval_workspace)
+        gs3 = svc3.get_golden_set()
+        assert not any(c["id"] == "GS002" for c in gs3["cases"]), "GS002 RESURRECTED after persist"
+
+    def test_hard_delete_leaves_other_cases_intact(self, svc, eval_workspace):
+        """hard_delete drops ONLY the targets; survivors untouched."""
+        before = {c["id"] for c in svc.get_golden_set()["cases"]}
+        svc.hard_delete_cases(["GS002"])
+        after = {c["id"] for c in EvalService(workspace_root=eval_workspace).get_golden_set()["cases"]}
+        assert before - after == {"GS002"}, f"hard_delete dropped wrong set: {before - after}"
+        assert "GS001" in after
+
+    def test_hard_delete_reports_not_found(self, svc):
+        """Destructive op semantics: report which ids were deleted vs not found."""
+        result = svc.hard_delete_cases(["GS002", "GS_NOPE"])
+        assert "GS002" in result["deleted"]
+        assert "GS_NOPE" in result["not_found"]
+
+    def test_hard_delete_removes_on_disk_case_not_in_memory(self, svc, eval_workspace):
+        """Gate-2 F: a case added to DISK after svc loaded (absent from this svc's
+        memory) must still be PHYSICALLY deleted — not reported not_found and left.
+        hard_delete _load()s disk truth first, so it operates on the current corpus."""
+        self._external_add_case(eval_workspace, {
+            "id": "GS_ONDISK", "category": "compliance", "dimension": "compliance",
+            "level": "session", "title": "added to disk after load", "source": "ext",
+            "affected_by": ["STEERING.md"], "evaluators": ["file_contains"],
+            "verification": {"file": "z.py", "grep": "z"},
+        })
+        result = svc.hard_delete_cases(["GS_ONDISK"])
+        assert "GS_ONDISK" in result["deleted"], f"on-disk case not deleted: {result}"
+        svc2 = EvalService(workspace_root=eval_workspace)
+        assert not any(c["id"] == "GS_ONDISK" for c in svc2.get_golden_set()["cases"]), \
+            "on-disk case survived hard_delete"
 
     def test_disk_read_failure_preserves_in_memory(self, svc, eval_workspace):
         """AC5/edge: if the disk re-read fails, the append must no-op (disk_cases

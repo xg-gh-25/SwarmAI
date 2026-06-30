@@ -59,6 +59,11 @@ class TriggerRunRequest(BaseModel):
     case_ids: Optional[list[str]] = Field(default=None, description="Specific case IDs to run")
 
 
+class HardDeleteRequest(BaseModel):
+    case_ids: list[str] = Field(min_length=1, max_length=500,
+                                description="Case IDs to PHYSICALLY remove (not soft-archive)")
+
+
 # ─── GET Endpoints (P2) ─────────────────────────────────────────────────────
 
 
@@ -142,6 +147,16 @@ async def delete_case(case_id: str):
         return {"status": "archived", "case_id": case_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/golden-set/hard-delete")
+async def hard_delete_cases(req: HardDeleteRequest):
+    """PHYSICALLY remove cases from the golden_set file(s) — not soft-archive.
+    Runs in the daemon's EvalService singleton so its in-memory state updates in
+    the same act (no cross-process stale-memory resurrection — run_110678fb)."""
+    svc = get_eval_service()
+    result = svc.hard_delete_cases(req.case_ids)
+    return {"status": "hard_deleted", **result}
 
 
 @router.post("/run")
