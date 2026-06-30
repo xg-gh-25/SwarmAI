@@ -3735,11 +3735,20 @@ class SessionUnit:
         if pid:
             await self._await_process_exit(pid, timeout=3.0)
 
-        # Also try graceful wrapper cleanup
-        if self._wrapper is not None:
+        # Also try graceful wrapper cleanup.
+        # Concurrency-safe (run_02bc6dd1 / 簇A WS1): capture the ref and null
+        # self._wrapper in ONE await-free block BEFORE awaiting __aexit__. The
+        # null assignment is synchronous, so only the FIRST concurrent caller
+        # wins the wrapper; a racing _force_kill (the lock-free PID watchdog vs a
+        # _lock-holding _crash_to_cold_async/kill) sees None and skips. Without
+        # this, both callers passed the not-None check and both invoked
+        # __aexit__ on the same non-reentrant anyio wrapper (TOCTOU double-free).
+        wrapper_ref = self._wrapper
+        self._wrapper = None
+        if wrapper_ref is not None:
             try:
                 await asyncio.wait_for(
-                    self._wrapper.__aexit__(None, None, None),
+                    wrapper_ref.__aexit__(None, None, None),
                     timeout=10.0,
                 )
             except asyncio.TimeoutError:
