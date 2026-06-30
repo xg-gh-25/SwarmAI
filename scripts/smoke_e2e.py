@@ -576,16 +576,28 @@ async def run_smoke(
                 r = await c.get("/api/chat/sessions/streaming-state")
                 state_data = r.json()
                 sessions_in_state = state_data.get("sessions", {})
-                our_streaming = False
-                if session_id in sessions_in_state:
-                    our_streaming = sessions_in_state[session_id].get(
-                        "streaming", False
-                    )
-                result.record(
-                    "state_clean",
-                    not our_streaming,
-                    "session idle" if not our_streaming else "still streaming!",
+                # FALSE-GREEN FIX: an ABSENT session must FAIL, not pass. The old
+                # `our_streaming=False` default meant a vanished/phantom session
+                # (never registered, or dropped from the mirror) scored
+                # `not False` = PASS — a disappeared session is a FAILURE, not
+                # "idle". Same teeth as disconnect_recovery #2 (present→judge,
+                # absent→fail). We JUST streamed a real turn on this session, so
+                # it MUST be present in streaming-state; present-and-idle is the
+                # only clean result.
+                present = session_id in sessions_in_state
+                our_streaming = (
+                    sessions_in_state[session_id].get("streaming", False)
+                    if present
+                    else False
                 )
+                state_clean = present and not our_streaming
+                if not present:
+                    detail = "session ABSENT from streaming-state (vanished/phantom — FAIL, not idle)"
+                elif our_streaming:
+                    detail = "still streaming!"
+                else:
+                    detail = "session idle"
+                result.record("state_clean", state_clean, detail)
         except Exception as e:
             result.record("state_clean", False, str(e))
 
