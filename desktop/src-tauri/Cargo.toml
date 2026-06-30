@@ -25,6 +25,11 @@ tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 # portpicker removed — daemon uses fixed port 18321, no dynamic port allocation
 futures = "0.3"
+# Pin transitive `time` (pulled via cookie 0.18.1 -> tauri). time 0.3.52 changed
+# Parsable::parse to 2 args and breaks cookie 0.18.1 compile (E0061). Resolver-level
+# pin so no `cargo update` (incl. our auto-bump pipeline) can re-select 0.3.52.
+# Remove when cookie ships a 0.3.52-compatible release.
+time = "=0.3.51"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
