@@ -478,6 +478,21 @@ class SessionUnit:
         self._client: Optional[ClaudeSDKClient] = None
         self._wrapper: Optional[_ClaudeClientWrapper] = None
         self._lock: asyncio.Lock = asyncio.Lock()
+        # Subprocess-IO serialization lock (run_4b74b764). SEPARATE from
+        # ``self._lock`` (which is the kill/recovery transaction lock — see
+        # kill()). ``_client_io`` serializes the consumers of the SINGLE
+        # ``self._client.receive_response()`` anyio channel: a post-turn
+        # ``compact()`` holds it across its query+drain, and the foreground
+        # turn takes a SHORT BARRIER at send()'s IDLE-entry (acquire→release,
+        # NOT held across the streaming body — that would self-deadlock with the
+        # in-loop CompactionGuard interrupt and break user Stop). Two concurrent
+        # ``receive_response()`` drives would otherwise split the SDK stream and
+        # co-starve → double timeout → kill+respawn (the 3-5min "freeze").
+        # interrupt()/flush stay lock-FREE: they are control-channel calls, not
+        # receive_response, and acquiring here would deadlock Stop against the
+        # very turn it stops. The two background maintenance ops probe
+        # ``_client_io.locked()`` and SKIP (never block) when a turn holds it.
+        self._client_io: asyncio.Lock = asyncio.Lock()
         self._sdk_session_id: Optional[str] = None
         self._interrupted: bool = False
         # Durable "this turn was stopped by the user" flag. Unlike _interrupted
@@ -528,6 +543,18 @@ class SessionUnit:
         # processing (fetch items one-at-a-time).  Max 1 recovery per
         # message — if the second attempt also overflows, surface error.
         self._buffer_overflow_recovery: bool = False
+        # Per-message tool-call-leak recovery flag (run_37008f2d). When the model
+        # emits tool-call syntax as plain text (a "leak"), the 1st occurrence gets
+        # ONE corrective-resume attempt (_handle_tool_call_leak injects a
+        # descriptive correction into the next query, then --resume). This flag,
+        # set True by that handler BEFORE its resume stream runs, makes a re-leak
+        # DURING/AFTER recovery recognizable as the 2nd leak → routed to a clean
+        # terminal (clear_identity, leak-specific event) instead of another resume.
+        # That BOUNDS the self-reinforcing loop (a bare --resume replays the
+        # poisoned SDK transcript → deterministic re-leak; log e9d7c08d leaked 2×).
+        # Reset per-message at send() entry (NOT Layer-0), mirroring the
+        # buffer-overflow flag — a fresh user turn gets a fresh recovery budget.
+        self._tool_call_leak_recovery: bool = False
 
         # ── Streaming timeout ────────────────────────────────────────
         # Updated on every yielded event during STREAMING.  The
@@ -1382,6 +1409,26 @@ class SessionUnit:
 
         return computed
 
+    def _compute_init_timeout(self) -> float:
+        """First-message (init) timeout (run_4b74b764, Part B).
+
+        180s is right for a FRESH spawn (the subprocess just needs to emit its
+        init/system message). But a ``--resume`` first message replays the FULL
+        conversation before inference begins — at 2.4M restored tokens that
+        easily exceeds 180s, so a fixed floor guillotines a healthy resume →
+        kill → respawn (the ``init_timeout`` events in the logs). For resume
+        sessions floor the init timeout at the adaptive message timeout (already
+        resume-multiplied + capped); fresh sessions keep the fast 180s.
+
+        SINGLE SOURCE of the init-timeout policy: the streaming orchestrator
+        calls THIS (no inline re-derivation), so a regression test exercising
+        this method actually guards the shipped behavior.
+        """
+        FRESH_INIT_TIMEOUT = 180.0
+        if getattr(self, "_sdk_session_id", None):
+            return max(FRESH_INIT_TIMEOUT, self._compute_message_timeout())
+        return FRESH_INIT_TIMEOUT
+
     # ── Subprocess lifecycle ─────────────────────────────────────
 
     @staticmethod
@@ -1650,6 +1697,7 @@ class SessionUnit:
         self._retry_count = 0
         # _interrupted already cleared in Layer 0 above
         self._buffer_overflow_recovery = False
+        self._tool_call_leak_recovery = False  # per-message: fresh leak-recovery budget
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
@@ -1680,6 +1728,18 @@ class SessionUnit:
         # retry paths deliberately do NOT call this — they count toward the cap
         # but a user waiting on their own answer must never queue behind others.
         await self._await_streaming_slot()
+
+        # Subprocess-IO barrier (run_4b74b764): if a post-turn compact() is
+        # draining the SAME subprocess, wait for it to finish before this turn
+        # drives receive_response — two consumers on the single SDK channel
+        # co-starve. This is a SHORT barrier (acquire→immediately release): we do
+        # NOT hold _client_io across the streaming body, because the read loop
+        # self-interrupts via the CompactionGuard and a user Stop must be able to
+        # interrupt() (a lock-free control call) without waiting on this turn.
+        # Acquiring then releasing guarantees serialization vs compact (which
+        # holds the lock for its whole drain) without locking the long stream.
+        async with self._client_io:
+            pass
 
         # IDLE → STREAMING
         self._transition(SessionState.STREAMING)
@@ -1929,6 +1989,56 @@ class SessionUnit:
                 # _fallthrough_error sentinel from _handle_buffer_overflow.
                 # Fall through to retry/error handling below.
 
+            # ── Tool-call leak — bounded corrective-resume (run_37008f2d) ──
+            # A leak gets ONE corrective resume (1st) then a clean terminal (2nd),
+            # NEVER the bare _retry_with_resume below (which replays the poisoned
+            # transcript → deterministic re-leak loop). The dispatcher consumes the
+            # error and we return — so a leak cannot reach :retriable or :crash.
+            # Re-test the marker on a recovery fallthrough rather than delegating to
+            # _is_retriable_error, so a re-leak NEVER slips to the bare resume.
+            if "Tool-call XML leaked into text channel" in error_str:
+                # Mirror the buffer-overflow pattern above (a `recovered` boolean,
+                # NO for/else): the dispatcher's outcome is captured in flags so a
+                # NON-leak transient that surfaces during the corrective resume
+                # FALLS THROUGH to the generic retriable path below (OOM cooldown /
+                # backoff), instead of being swallowed. Gate-2 (run_37008f2d) caught
+                # a for/else footgun here: `else` with no `break` fired on every
+                # completion, silently eating non-leak recovery errors.
+                leak_handled = False  # turn is over (recovered / aborted / terminal)
+                async for event in self._dispatch_leak_recovery(
+                    error_str, query_content, options, config,
+                ):
+                    if event.get("_abort"):
+                        leak_handled = True  # spawn failed during recovery
+                        break
+                    if event.get("_recovered"):
+                        leak_handled = True  # corrective resume succeeded
+                        break
+                    if "_fallthrough_error" in event:
+                        # Recovery stream raised. Re-point error context: if it
+                        # RE-LEAKED, re-dispatch (flag now True → clean terminal);
+                        # if NOT a leak, leave leak_handled False so the error
+                        # falls through to the generic retriable/crash path below.
+                        error_str = event["_fallthrough_error"]
+                        tb_str = event.get("_fallthrough_tb", tb_str)
+                        if "Tool-call XML leaked into text channel" in error_str:
+                            async for ev2 in self._dispatch_leak_recovery(
+                                error_str, query_content, options, config,
+                            ):
+                                yield ev2
+                            leak_handled = True  # 2nd-leak terminal ended the turn
+                        break
+                    yield event
+                else:
+                    # Loop completed with NO break = the 2nd-leak terminal path
+                    # (dispatcher yielded a terminal event, no sentinel). Turn over.
+                    leak_handled = True
+                if leak_handled:
+                    return
+                # else: a non-leak error surfaced during recovery — fall through to
+                # the generic retriable/crash handling below with the updated
+                # error_str (NOT swallowed).
+
             # ── Retry loop for retriable errors ──────────────────
             if _is_retriable_error(error_str, tb_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:
                 async for event in self._retry_with_resume(
@@ -2146,6 +2256,83 @@ class SessionUnit:
         ):
             yield event
 
+    async def _handle_tool_call_leak(
+        self,
+        query_content: Any,
+        options: "ClaudeAgentOptions",
+        config: Optional[Any],
+        error_str: str,
+    ) -> AsyncIterator[dict]:
+        """One corrective-resume for a tool-call leak (run_37008f2d).
+
+        Implementation in RetryManager. Delegation stub.
+        """
+        async for event in self._retry_manager._handle_tool_call_leak(
+            query_content, options, config, error_str
+        ):
+            yield event
+
+    async def _dispatch_leak_recovery(
+        self,
+        error_str: str,
+        query_content: Any,
+        options: "ClaudeAgentOptions",
+        config: Optional[Any],
+    ) -> AsyncIterator[dict]:
+        """Route a detected tool-call leak: 1st → corrective resume, 2nd → terminal.
+
+        Called from send()'s except block when ``error_str`` carries the leak
+        marker. BOUNDS the self-reinforcing leak→bare-resume→re-leak loop:
+
+        - 1st leak (``_tool_call_leak_recovery`` False) → ``_handle_tool_call_leak``
+          (inject a descriptive correction + --resume ONCE). The handler sets the
+          flag True before its resume stream, so a re-leak during recovery is seen
+          here as the 2nd leak.
+        - 2nd consecutive leak (flag already True) → CLEAN TERMINAL: do NOT resume
+          again (it would replay the same poisoned transcript). ``clear_identity``
+          drops the poisoned --resume target so the user's NEXT turn starts fresh
+          (not re-poisoned — Gate-1 check #4), then surface a leak-specific event.
+
+        The dispatcher CONSUMES the leak error (the caller returns after it), so a
+        leak never falls through to the bare ``_retry_with_resume`` at the generic
+        retriable branch. ``_is_retriable_error`` still recognizes the leak string
+        (INV3 preserved) as a backstop — the dispatcher is the primary route.
+
+        Yields stream events; ``_abort`` / ``_recovered`` sentinels are consumed by
+        send() exactly as the buffer-overflow path does. On the 2nd-leak terminal it
+        yields a terminal error event then returns (no sentinel — turn is over).
+        """
+        from .session_utils import _build_error_event
+
+        if not self._tool_call_leak_recovery:
+            # 1st leak — one corrective-resume attempt.
+            async for event in self._handle_tool_call_leak(
+                query_content, options, config, error_str
+            ):
+                yield event
+            return
+
+        # 2nd consecutive leak — bounded. Drop the poisoned resume identity so the
+        # next user turn does not --resume back into the same poison, then surface a
+        # leak-specific terminal (NOT a generic CONVERSATION_ERROR).
+        logger.warning(
+            "session_unit.tool_call_leak_terminal session_id=%s — second "
+            "consecutive leak after corrective resume; dropping resume identity "
+            "and ending turn (bounded loop)",
+            self.session_id,
+        )
+        await self._crash_to_cold_async(clear_identity=True)
+        yield _build_error_event(
+            code="TOOL_CALL_LEAK_UNRECOVERED",
+            message=(
+                "The AI repeatedly emitted a tool call as text instead of "
+                "executing it, even after a correction. The turn was stopped to "
+                "avoid a retry loop. Please re-send your request."
+            ),
+            detail="tool_call_leak: 2nd consecutive leak after corrective resume",
+            suggested_action="Re-send the message (a fresh turn starts clean).",
+        )
+
     async def _retry_with_resume(
         self,
         query_content: Any,
@@ -2298,6 +2485,15 @@ class SessionUnit:
             Never raises — failures are silently logged.
         """
         if self._mcp_health_checked:
+            return None
+
+        # (C) non-blocking yield (run_4b74b764): get_mcp_status() drives the same
+        # subprocess. If a foreground turn holds _client_io, SKIP this round
+        # WITHOUT consuming the one-shot flag, so the check still runs after the
+        # turn releases (it is a one-time post-first-turn probe, not best-effort
+        # discardable like soft-compact). Probe BEFORE the flag-set so a skipped
+        # round is not mistaken for a completed check.
+        if self._client_io.locked():
             return None
         self._mcp_health_checked = True
 
@@ -3187,6 +3383,13 @@ class SessionUnit:
         """
         if self.state != SessionState.IDLE:
             return
+        # (C) non-blocking yield (run_4b74b764): if a foreground turn holds the
+        # subprocess (its send() barrier or a racing compact owns _client_io),
+        # SKIP this round rather than awaiting compact() — compact() would block
+        # on the same lock and stall the post-turn hook (and the generator that
+        # drives it). soft-compact is best-effort; the next IDLE hook retries.
+        if self._client_io.locked():
+            return
         tokens = getattr(self, "_last_known_context_tokens", 0) or 0
         if tokens <= 0:
             return
@@ -3359,12 +3562,20 @@ class SessionUnit:
             command = f"/compact {combined_instructions}"
 
         try:
-            await self._client.query(
-                prompt=command,
-                session_id=self._sdk_session_id or "default",
-            )
-            async for _msg in self._client.receive_response():
-                pass  # Drain response
+            # Serialize the subprocess drain (run_4b74b764). compact() stays
+            # IDLE→IDLE and does NOT _transition, so the state gate gives NO
+            # mutual exclusion against a concurrent send() reusing the same
+            # subprocess. Hold _client_io across query+receive_response so the
+            # two cannot iterate the single SDK channel simultaneously and
+            # co-starve. The foreground turn takes a short barrier on this lock
+            # at send()'s IDLE-entry, so it waits for an in-flight compact here.
+            async with self._client_io:
+                await self._client.query(
+                    prompt=command,
+                    session_id=self._sdk_session_id or "default",
+                )
+                async for _msg in self._client.receive_response():
+                    pass  # Drain response
             self.last_used = time.time()
             # Transition guard to ACTIVE — post-compaction loop detection enabled
             self._compaction_guard.activate()

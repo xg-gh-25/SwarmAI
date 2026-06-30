@@ -45,6 +45,12 @@ def _unit():
     u._last_soft_compact = float("-inf")
     # Force pct >= SOFT_COMPACT_PCT: tokens above 60% of a large window.
     u._last_known_context_tokens = 900_000
+    # Subprocess-IO lock (run_4b74b764): prod __init__ always creates it;
+    # _check_context_soft_compact probes _client_io.locked() to yield when a
+    # turn holds the client. The __new__ fixture must provide it (unlocked here
+    # so the compact path proceeds as before this lock existed).
+    import asyncio
+    u._client_io = asyncio.Lock()
     return u
 
 

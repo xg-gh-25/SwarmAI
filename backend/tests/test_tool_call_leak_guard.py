@@ -224,6 +224,9 @@ def _make_orchestrator():
     parent._last_event_time = 0.0
     parent._maybe_build_elapsed_heartbeat = lambda: None
     parent._compute_message_timeout = lambda: 300.0
+    # orchestrator's first-message timeout now calls _compute_init_timeout
+    # (run_4b74b764, Part B) — mock parent must provide it (fresh-session 180s).
+    parent._compute_init_timeout = lambda: 180.0
 
     # kill() must be awaitable + record invocation
     kill_calls = {"n": 0}

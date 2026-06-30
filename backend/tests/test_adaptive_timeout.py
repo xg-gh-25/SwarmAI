@@ -61,6 +61,50 @@ class TestAdaptiveTimeout:
         assert timeout == 300.0
 
 
+class TestInitTimeoutResumeFloor:
+    """Part B (run_4b74b764): the first-message INIT timeout must floor at the
+    adaptive message timeout for --resume sessions (heavy context replay), while
+    a fresh spawn keeps the fast 180s. Guards against reverting to a fixed
+    INIT_TIMEOUT = 180.0 that guillotines a healthy large-context resume.
+
+    Drives the REAL SessionUnit._compute_init_timeout() — the single source the
+    orchestrator calls. NO local re-derivation (Gate-2: a test that re-implements
+    the formula passes even when prod is reverted = theater). Reverting
+    _compute_init_timeout to a fixed 180.0 makes the resume tests below go RED.
+    """
+
+    def _make_unit(self, context_tokens=0, resume=False):
+        from core.session_unit import SessionUnit
+        unit = SessionUnit.__new__(SessionUnit)
+        unit._last_known_context_tokens = context_tokens
+        unit._sdk_session_id = "sdk-resume" if resume else None
+        return unit
+
+    def test_fresh_session_keeps_fast_180(self):
+        """Fresh spawn (no _sdk_session_id) → 180s regardless of context."""
+        unit = self._make_unit(context_tokens=2_000_000, resume=False)
+        assert unit._compute_init_timeout() == 180.0
+
+    def test_resume_heavy_context_floors_above_180(self):
+        """--resume with 2.4M tokens → INIT floored at the adaptive timeout
+        (the 180s fixed floor would have killed a healthy resume). RED if prod
+        reverts to a fixed 180.0."""
+        unit = self._make_unit(context_tokens=2_400_000, resume=True)
+        init = unit._compute_init_timeout()
+        assert init > 180.0
+        # equals the resume-multiplied adaptive timeout, not the fixed floor
+        assert init == unit._compute_message_timeout()
+
+    def test_resume_small_context_still_at_least_180(self):
+        """--resume with tiny context → adaptive timeout is 600s (resume-mult of
+        the 300 floor), so INIT is ≥180; never below the fresh floor. RED if
+        prod reverts to a fixed 180.0 (this would equal exactly 180, < 600)."""
+        unit = self._make_unit(context_tokens=10_000, resume=True)
+        init = unit._compute_init_timeout()
+        assert init >= 180.0
+        assert init == unit._compute_message_timeout()  # proves not the fixed floor
+
+
 class TestCircuitBreaker:
     """AC2 + AC3: Circuit breaker stops retry and emits event."""
 

@@ -87,6 +87,8 @@ def _make_thinking_orchestrator():
     parent._emit_post_stream_metadata = lambda *a, **k: iter(())
     parent._maybe_build_elapsed_heartbeat = lambda: None
     parent._compute_message_timeout = lambda: 300.0
+    # orchestrator first-message timeout calls _compute_init_timeout (run_4b74b764)
+    parent._compute_init_timeout = lambda: 180.0
     parent._health_sensor = types.SimpleNamespace(
         record_activity=lambda: None,
         record_turn=lambda **k: None,

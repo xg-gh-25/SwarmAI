@@ -155,6 +155,111 @@ class RetryManager:
                 "_fallthrough_tb": traceback.format_exc(),
             }
 
+    async def _handle_tool_call_leak(
+        self,
+        query_content: Any,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+        error_str: str,
+    ) -> AsyncIterator[dict]:
+        """Recover from a tool-call leak with ONE corrective --resume (run_37008f2d).
+
+        A "leak" = the model emitted tool-call syntax as plain text instead of a
+        real tool_use; the orchestrator detected it, dropped the block, killed the
+        subprocess, and raised a retriable RuntimeError. The OLD path sent that to
+        ``_retry_with_resume`` which did a BARE --resume — replaying the SDK's
+        poisoned transcript verbatim, so the model re-leaked from the same priming
+        (log e9d7c08d: two consecutive leaks on one resume id). This handler is the
+        bounded replacement: inject a DESCRIPTIVE correction into the next query,
+        then --resume ONCE.
+
+        HONEST framing (Gate-1 SSA): --resume restores the SDK's own conversation
+        history, which still contains the intact poisoned assistant turn; the
+        correction below is a NEW user message appended AFTER it. So this REDUCES
+        re-leak probability (gives the model an explicit nudge), it does NOT
+        PREVENT it (we cannot elide the poisoned turn — the SDK --resume exposes no
+        such hook). The hard bound is in send()'s dispatcher: a 2nd consecutive
+        leak does NOT come back here — it goes to a clean terminal.
+
+        Mirrors ``_handle_buffer_overflow``: set the recovery flag FIRST (so a
+        re-leak during this stream is recognized as the 2nd leak), crash-to-cold
+        keeping the sdk_session_id, respawn, inject, stream. Does NOT increment
+        ``_retry_count`` — this is a strategy correction, not a transient retry.
+        """
+        from .session_utils import (
+            _build_error_event,
+            _sanitize_sdk_error,
+        )
+        from .session_unit import SessionState
+
+        logger.warning(
+            "session_unit.tool_call_leak_recovery session_id=%s — "
+            "injecting one corrective-resume (model emitted tool-call as text)",
+            self._parent.session_id,
+        )
+        # Set the flag BEFORE crash/spawn/stream (mirror _handle_buffer_overflow:88).
+        # A re-leak that propagates back to send() during this recovery stream MUST
+        # see the flag True so the dispatcher routes it to the clean terminal, not
+        # back into this handler — otherwise the bound is lost (Gate-1 check #1/#3).
+        self._parent._tool_call_leak_recovery = True
+        resume_sid = self._parent._sdk_session_id
+        await self._parent._crash_to_cold_async()  # keep identity → --resume
+
+        retry_options = self._parent._build_retry_options(options, resume_sid)
+        try:
+            await self._parent._spawn(retry_options, config)
+        except Exception as spawn_exc:
+            spawn_tb = traceback.format_exc()
+            await self._parent._crash_to_cold_async(clear_identity=True)
+            friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
+            yield _build_error_event(
+                code="SPAWN_FAILED",
+                message=friendly,
+                detail=spawn_tb,
+                suggested_action=suggested,
+            )
+            yield {"_abort": True}
+            return
+
+        self._parent._transition(SessionState.STREAMING)
+
+        # Purely DESCRIPTIVE correction (AC2): it MUST NOT contain tool-call leak
+        # syntax, or it would re-pollute the very context that caused the leak (the
+        # root cause is literal tool-call syntax in-context). Describe the corrective
+        # action in prose — do not show the syntax.
+        recovery_prefix = (
+            "[System: Your previous response emitted a tool call as plain text "
+            "instead of an actual tool invocation, so it did not execute. Re-issue "
+            "that tool call as a REAL structured tool use (use the proper tool-call "
+            "mechanism, not text). Do not write tool-call markup as message text.]\n\n"
+        )
+        if isinstance(query_content, str):
+            recovered_query = recovery_prefix + query_content
+        elif isinstance(query_content, list):
+            recovered_query = [
+                {"type": "text", "text": recovery_prefix},
+                *query_content,
+            ]
+        else:
+            recovered_query = recovery_prefix + str(query_content)
+
+        try:
+            async for event in self._parent._streaming_orchestrator.stream_query(recovered_query):
+                yield event
+            yield {"_recovered": True}
+        except Exception as recovery_exc:
+            # Recovery stream raised. Propagate so send()'s except re-evaluates —
+            # if it RE-LEAKED, the dispatcher sees the flag (now True) and routes
+            # to the clean terminal; a non-leak error flows to the normal retry.
+            logger.warning(
+                "Tool-call leak recovery failed for session %s: %s",
+                self._parent.session_id, str(recovery_exc)[:200],
+            )
+            yield {
+                "_fallthrough_error": str(recovery_exc),
+                "_fallthrough_tb": traceback.format_exc(),
+            }
+
     async def _retry_with_resume(
         self,
         query_content: Any,

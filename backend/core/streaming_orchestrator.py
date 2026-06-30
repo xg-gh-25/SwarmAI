@@ -321,15 +321,19 @@ class StreamingOrchestrator:
         # should send an init/system message quickly after spawn.
         # 180s accommodates cross-region Bedrock + --resume session restore.
         # Single timeout for both fresh and resume — simpler, fewer states.
-        INIT_TIMEOUT = 180.0    # First message: 180s (cross-region Bedrock)
         MESSAGE_TIMEOUT = self._parent._compute_message_timeout()  # Adaptive: scales with context
+        # First-message timeout (run_4b74b764, Part B). Policy lives in ONE place
+        # (_compute_init_timeout): resume sessions floor at the adaptive timeout
+        # (heavy conversation replay before inference), fresh keep the fast 180s.
+        is_resume = self._parent._sdk_session_id is not None
+        INIT_TIMEOUT = self._parent._compute_init_timeout()
         # Poll interval for surfacing "still working" heartbeats during a
         # silent wait. Must be small enough to bubble a long/stuck step
         # promptly; the heartbeat itself throttles to one notice per
         # LONG_TURN_HEARTBEAT_S. Does NOT cancel the in-flight SDK read.
         HEARTBEAT_POLL_S = 30.0
 
-        is_resume = self._parent._sdk_session_id is not None
+        # (is_resume computed above for the adaptive INIT_TIMEOUT floor)
         is_first_message = True
         saw_assistant_message = False  # Track if LLM actually responded
 
