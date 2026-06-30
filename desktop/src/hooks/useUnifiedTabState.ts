@@ -180,18 +180,24 @@ export interface UnifiedTab {
    *  it — never setIsStreaming / reconnect / elapsed-timer — a daemon-restart
    *  reconnect loop cannot postpone it. This is the re-arm-immune hard deadline. */
   _idleStreamingSince?: number;
-  /** SEND-OWNED absolute hard-cap clock (OT01 route-A). Stamped ONCE per genuine
-   *  new turn on the SEND path (alongside incrementStreamGen), and NEVER touched
-   *  by the reconcile loop's reset-and-skip churn. Distinct from _idleStreamingSince
-   *  (which the poll resets to undefined every tick the stuck condition lapses):
-   *  under abort+recycle churn the backend momentarily reports streaming between
-   *  turns, so the settle clock keeps restarting and force-clear is never reached
-   *  (the "stuck 10+ min" case, frontend.log forcing-clear ×204). This clock gives
-   *  forceClearStreamVerdict an absolute upper bound (default 120s) that churn
-   *  cannot postpone. It is ONLY consulted AFTER all four alive guards
-   *  (backend_streaming/active_backend/flushing/resuming) so it can never clear a
-   *  genuinely-live turn. Cleared at every terminal point that clears
-   *  _idleStreamingSince (force-clear success + result/terminal handlers). */
+  /** Absolute hard-cap clock (OT01 route-A). Stamped SET-ONCE on the streaming
+   *  false→true edge inside setIsStreaming() (guarded by `=== undefined`, so a
+   *  churn re-entry that re-enters setIsStreaming(true) without an intervening
+   *  false does NOT postpone the deadline), and cleared on the streaming→idle edge
+   *  in setIsStreaming(false). It is NOT reset by the reconcile loop's
+   *  reset-and-skip churn — distinct from _idleStreamingSince (which the poll
+   *  resets to undefined every tick the stuck condition lapses): under abort+recycle
+   *  churn the backend momentarily reports streaming between turns, so the settle
+   *  clock keeps restarting and force-clear is never reached (the "stuck 10+ min"
+   *  case, frontend.log forcing-clear ×204). This clock gives forceClearStreamVerdict
+   *  an absolute upper bound (default 120s; effective clear latency is hardCapMs +
+   *  one ~15s reconcile poll). Consulted ONLY after all four alive guards
+   *  (backend_streaming/active_backend/flushing/resuming) AND exempted for
+   *  drain/queue holds, so it can never clear a genuinely-live or queued-draining
+   *  turn. NOTE: because every terminal handler routes through setIsStreaming(false),
+   *  the clock is cleared on all turn ends — but a queued-drain result keeps
+   *  isStreaming true (no false edge), so the clock spans a whole multi-turn drain;
+   *  the drain/queue exemption in forceClearStreamVerdict covers that span. */
   _streamingSinceHardStart?: number;
   /** True between result-event (hasQueuedMessage) and drain completion.
    *  Signals reconcile poll: "backend is IDLE but drain is intentionally

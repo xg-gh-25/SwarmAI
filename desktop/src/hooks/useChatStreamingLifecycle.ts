@@ -2316,13 +2316,25 @@ export function useChatStreamingLifecycle(
             // logForwarder persists it to frontend.log. Fields per Gate-1 Q4:
             // capturedTabId vs activeTabIdRef.current disambiguates cross-tab from
             // own-turn; tab vs global gen tells which guard layer fired.
-            console.warn('[OT01-GenGuard] discard stale stream event', {
-              eventType: event.type, capturedTabId,
-              activeTab: activeTabIdRef.current,
-              tabStreamGen: currentTabState.streamGen, capturedStreamGen,
-              globalStreamGen: streamGenRef.current,
-              sessionId: currentTabState.sessionId,
-            });
+            // FLOOD GUARD (Gate-2 operational MED): a stale stream keeps yielding
+            // buffered per-token text_delta/thinking_delta — one warn per token
+            // would emit thousands in a burst and EVICT the high-value
+            // [OT01-Complete] no-op warn from logForwarder's 500-entry queue /
+            // 200-per-request cap. Per-token deltas carry no diagnostic value
+            // beyond the first; only the TERMINAL/control event types (result,
+            // error, session_*, ask/permission) are the smoking gun for a lost
+            // [DONE]. Skip the warn for high-frequency content deltas; still
+            // discard the event itself.
+            const _diagNoiseTypes = new Set(['text_delta', 'thinking_delta', 'content_block_delta']);
+            if (!_diagNoiseTypes.has(event.type)) {
+              console.warn('[OT01-GenGuard] discard stale stream event', {
+                eventType: event.type, capturedTabId,
+                activeTab: activeTabIdRef.current,
+                tabStreamGen: currentTabState.streamGen, capturedStreamGen,
+                globalStreamGen: streamGenRef.current,
+                sessionId: currentTabState.sessionId,
+              });
+            }
             return; // stale event — discard silently
           }
         } else if (streamGenRef.current !== capturedStreamGen) {

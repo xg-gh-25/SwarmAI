@@ -460,11 +460,28 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   // The settle clock (idleStreamingSince) is reset to undefined on every
   // reset-and-skip tick, so under abort+recycle churn it never accumulates to
   // settleMs and force-clear is never reached — the "stuck 10+ min" case. The
-  // SEND-owned streamingSinceHardStart is NOT reset by that churn, so once it
-  // exceeds hardCapMs we force-clear regardless of the settle window. Opt-in:
-  // undefined (tab never stamped it) falls through to the normal settle path.
-  // Placed AFTER the alive guards by construction — it can never clear a live turn.
-  if (streamingSinceHardStart !== undefined && now - streamingSinceHardStart > hardCapMs) {
+  // streamingSinceHardStart clock is set-once per streaming span and NOT reset by
+  // that churn, so once it exceeds hardCapMs we force-clear regardless of the
+  // settle window. Opt-in: undefined (tab never stamped it) falls through to the
+  // normal settle path. Placed AFTER the alive guards by construction.
+  //
+  // DRAIN/QUEUE EXEMPTION (Gate-2 correctness MED, run_251ea3ee): the top-of-fn
+  // drain/queue immunity only covers a queued message younger than queueImmunityMs
+  // (60s). But the hard-cap clock is set-once across a WHOLE multi-turn queued
+  // drain (it is not re-stamped per drained turn — the queued-result path keeps
+  // isStreaming true, so setIsStreaming(false) never fires to clear it). A
+  // legitimate queued drain whose cumulative span exceeds hardCapMs (120s), seen
+  // during an inter-turn backend-idle blip after the 60s queue immunity lapsed,
+  // would otherwise hard_cap-truncate an actively-progressing drain. drainPending
+  // / hasQueuedMessage are INTENTIONAL streaming-hold states (a drain is queued
+  // and progressing), NOT a stuck spinner — exempt them from the hard-cap, same as
+  // the alive guards. A genuinely stuck tab has neither flag set and still clears.
+  if (
+    streamingSinceHardStart !== undefined &&
+    now - streamingSinceHardStart > hardCapMs &&
+    !drainPending &&
+    !hasQueuedMessage
+  ) {
     return { verdict: 'force-clear', reason: 'hard_cap' };
   }
 

@@ -705,6 +705,44 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
     ).toBe('resuming');
   });
 
+  it('HARD-CAP EXEMPTION: a queued multi-turn drain past the cap is NOT hard-cleared (Gate-2 MED)', () => {
+    // The hard clock spans a whole queued drain (set-once, not re-stamped per
+    // drained turn). A legit drain >120s during an inter-turn idle blip, after
+    // the 60s queue immunity lapsed, must NOT be hard-cap-truncated — drain/queue
+    // are intentional streaming-hold states, not a stuck spinner.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: base.now - 200_000, // well past 120s cap
+        hasQueuedMessage: true,
+        queueAge: 90_000, // > 60s immunity → would fall through to hard_cap
+      }).verdict,
+    ).not.toBe('force-clear');
+    // drainPending variant — same exemption
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: base.now - 200_000,
+        drainPending: true,
+      }).verdict,
+    ).not.toBe('force-clear');
+  });
+
+  it('HARD-CAP: a genuinely stuck tab (no drain/queue) past the cap STILL clears', () => {
+    // Confirms the exemption did not neuter the fix — the actual stuck case fires.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: base.now - 200_000,
+        drainPending: false,
+        hasQueuedMessage: false,
+      }),
+    ).toEqual({ verdict: 'force-clear', reason: 'hard_cap' });
+  });
+
   it('HARD-CAP: absent hard clock (undefined) never triggers hard_cap — opt-in only', () => {
     // A tab that never stamped the hard clock falls through to normal settle.
     expect(
