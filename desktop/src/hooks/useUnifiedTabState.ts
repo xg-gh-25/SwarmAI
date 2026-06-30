@@ -180,6 +180,19 @@ export interface UnifiedTab {
    *  it — never setIsStreaming / reconnect / elapsed-timer — a daemon-restart
    *  reconnect loop cannot postpone it. This is the re-arm-immune hard deadline. */
   _idleStreamingSince?: number;
+  /** SEND-OWNED absolute hard-cap clock (OT01 route-A). Stamped ONCE per genuine
+   *  new turn on the SEND path (alongside incrementStreamGen), and NEVER touched
+   *  by the reconcile loop's reset-and-skip churn. Distinct from _idleStreamingSince
+   *  (which the poll resets to undefined every tick the stuck condition lapses):
+   *  under abort+recycle churn the backend momentarily reports streaming between
+   *  turns, so the settle clock keeps restarting and force-clear is never reached
+   *  (the "stuck 10+ min" case, frontend.log forcing-clear ×204). This clock gives
+   *  forceClearStreamVerdict an absolute upper bound (default 120s) that churn
+   *  cannot postpone. It is ONLY consulted AFTER all four alive guards
+   *  (backend_streaming/active_backend/flushing/resuming) so it can never clear a
+   *  genuinely-live turn. Cleared at every terminal point that clears
+   *  _idleStreamingSince (force-clear success + result/terminal handlers). */
+  _streamingSinceHardStart?: number;
   /** True between result-event (hasQueuedMessage) and drain completion.
    *  Signals reconcile poll: "backend is IDLE but drain is intentionally
    *  holding streaming state — do NOT force-clear." */

@@ -635,6 +635,86 @@ describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
       forceClearStreamVerdict({ ...base, backendIsStreaming: true, postDisconnectFlushing: true }).reason,
     ).toBe('backend_streaming');
   });
+
+  // ── HARD-CAP backstop (OT01 route-A, AC1) ─────────────────────────────────
+  // The settle clock (idleStreamingSince) is reset to undefined on EVERY
+  // reset-and-skip tick (useChatStreamingLifecycle.ts:1548). Under abort+recycle
+  // churn the backend momentarily reports streaming/waiting_input/cold between
+  // turns, so the settle window keeps restarting and force-clear is never
+  // reached — the "stuck 10+ min" case (frontend.log: forcing clear ×204).
+  // _streamingSinceHardStart is an INDEPENDENT clock stamped once on genuine
+  // stream start and NOT reset by churn, giving an absolute upper bound.
+  // Gate-1 invariant: the hard-cap branch sits AFTER all four alive guards
+  // (backend_streaming/active_backend/flushing/resuming) so it can NEVER clear
+  // a genuinely-live turn.
+  it('HARD-CAP: churn keeps resetting the settle clock, but hard-cap forces clear past the cap', () => {
+    // idleStreamingSince=undefined (churn just reset it → settle age treated as 0
+    // → normally wait-settle forever), but the hard clock is past 120s.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: base.now - 120_001,
+      }),
+    ).toEqual({ verdict: 'force-clear', reason: 'hard_cap' });
+  });
+
+  it('HARD-CAP: within the cap → still honors the settle window (no premature hard clear)', () => {
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: base.now - 60_000, // < 120s cap
+      }).verdict,
+    ).toBe('wait-settle');
+  });
+
+  it('HARD-CAP INVARIANT: NEVER fires while backend is genuinely streaming, even past the cap', () => {
+    // The catastrophic case the Gate-1 review flagged: a long live turn whose
+    // hard clock exceeds 120s must be protected by backend_streaming FIRST.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        backendIsStreaming: true,
+        reportedState: 'streaming',
+        streamingSinceHardStart: base.now - 999_999,
+      }),
+    ).toEqual({ verdict: 'reset-and-skip', reason: 'backend_streaming' });
+  });
+
+  it('HARD-CAP INVARIANT: NEVER fires while backend is flushing a long turn, even past the cap', () => {
+    // flushing = clean-idle-but-alive; force-clearing here truncates the answer.
+    // Bounded by its OWN 120-min cap (activeGuardAge), NOT the 120s hard-cap.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        postDisconnectFlushing: true,
+        streamingSinceHardStart: base.now - 999_999,
+      }).reason,
+    ).toBe('flushing');
+  });
+
+  it('HARD-CAP INVARIANT: NEVER fires while a resume is in flight, even past the cap', () => {
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        reportedState: 'cold',
+        resumeInProgress: true,
+        streamingSinceHardStart: base.now - 999_999,
+      }).reason,
+    ).toBe('resuming');
+  });
+
+  it('HARD-CAP: absent hard clock (undefined) never triggers hard_cap — opt-in only', () => {
+    // A tab that never stamped the hard clock falls through to normal settle.
+    expect(
+      forceClearStreamVerdict({
+        ...base,
+        idleStreamingSince: undefined,
+        streamingSinceHardStart: undefined,
+      }).verdict,
+    ).toBe('wait-settle');
+  });
 });
 
 // ── Store↔React desync convergence (OT01 sibling path) ───────────────────────

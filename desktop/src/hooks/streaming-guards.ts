@@ -344,6 +344,15 @@ export interface ForceClearStreamInput {
   activeGuardAge: number;
   /** Reconcile-owned stamp of when the stuck condition was first observed. */
   idleStreamingSince: number | undefined;
+  /** SEND-owned absolute hard-cap clock (OT01 route-A): when this turn's stream
+   *  genuinely started. Distinct from idleStreamingSince — it is NOT reset by the
+   *  reconcile loop's reset-and-skip churn, so under abort+recycle churn (where the
+   *  backend momentarily reports streaming between turns and keeps restarting the
+   *  settle window) it still provides an absolute upper bound. Consulted ONLY after
+   *  all four alive guards (backend_streaming/active_backend/flushing/resuming), so
+   *  it can NEVER force-clear a genuinely-live turn. undefined → hard-cap disabled
+   *  (opt-in): a tab that never stamped it falls through to the normal settle path. */
+  streamingSinceHardStart?: number;
   /** Current time (injected for deterministic tests). */
   now: number;
   /** Queue immunity window (ms). Default 60s. */
@@ -353,6 +362,11 @@ export interface ForceClearStreamInput {
   /** Cap on the active-state guard (ms) so a lost waiting_input can't hang
    *  forever. Default 120min. */
   activeGuardMaxMs?: number;
+  /** Absolute hard-cap (ms) measured from streamingSinceHardStart. Once a
+   *  frontend-streaming tab whose backend is NOT alive (not streaming/active/
+   *  flushing/resuming) exceeds this, force-clear EVEN IF churn keeps resetting
+   *  the settle clock. Default 120s. Fires only after the four alive guards. */
+  hardCapMs?: number;
 }
 
 /** Verdict for the reconcile loop's stuck-spinner path.
@@ -372,6 +386,7 @@ export type ForceClearReason =
   | 'flushing'          // backend clean-idle but flushing a long turn post-disconnect (OT01)
   | 'resuming'          // a resume is in flight — cold/idle is spawn, not stuck
   | 'too_fresh'         // stuck but within the settle window
+  | 'hard_cap'          // churn-immune absolute cap exceeded (backend not alive) → force-clear
   | 'stuck';            // stuck past the settle window → force-clear
 
 /** Result of the force-clear decision: the verdict (drives the hook) plus the
@@ -398,8 +413,9 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
     drainPending, hasQueuedMessage, queueAge, hasSessionId,
     backendIsStreaming, reportedState, resumeInProgress, activeGuardAge,
     postDisconnectFlushing = false,
-    idleStreamingSince, now,
+    idleStreamingSince, streamingSinceHardStart, now,
     queueImmunityMs = 60_000, settleMs = 30_000, activeGuardMaxMs = 7_200_000,
+    hardCapMs = 120_000,
   } = input;
 
   // Drain gap / fresh queue / no session = intentional or unknown, never stuck.
@@ -438,6 +454,19 @@ export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClea
   // turns out genuinely stuck. A dead/evicted session has isResuming=false and
   // still force-clears below.
   if (resumeInProgress) return { verdict: 'reset-and-skip', reason: 'resuming' };
+
+  // HARD-CAP (OT01 route-A): we are PAST all four alive guards, so the backend is
+  // provably NOT alive (not streaming / not active / not flushing / not resuming).
+  // The settle clock (idleStreamingSince) is reset to undefined on every
+  // reset-and-skip tick, so under abort+recycle churn it never accumulates to
+  // settleMs and force-clear is never reached — the "stuck 10+ min" case. The
+  // SEND-owned streamingSinceHardStart is NOT reset by that churn, so once it
+  // exceeds hardCapMs we force-clear regardless of the settle window. Opt-in:
+  // undefined (tab never stamped it) falls through to the normal settle path.
+  // Placed AFTER the alive guards by construction — it can never clear a live turn.
+  if (streamingSinceHardStart !== undefined && now - streamingSinceHardStart > hardCapMs) {
+    return { verdict: 'force-clear', reason: 'hard_cap' };
+  }
 
   // Stuck condition holds (frontend streaming, backend not). Honor the settle
   // window anchored to the reconcile-owned stamp.
