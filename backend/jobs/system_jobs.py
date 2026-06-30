@@ -135,7 +135,7 @@ SYSTEM_JOBS: list[Job] = [
         id="eval-scheduled",
         name="Scheduled Full Eval + Drift Alert",
         type="eval_scheduled",
-        schedule="30 4 * * 1-5",        # 04:30 UTC = 12:30 ICT, weekdays (lunch — machine on, creds fresh)
+        schedule="30 4 * * 1",          # 04:30 UTC = 12:30 ICT, MONDAY only (lunch — machine on, creds fresh). Weekly: behavior cases spawn real agents (slow/costly), weekly cadence fits the cost.
         enabled=True,
         category="system",
         config={},

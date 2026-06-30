@@ -2,7 +2,8 @@
 
 Runs the FULL golden set (programmatic + LLM judge — Bedrock cost is fine on
 this cadence, never gates) and compares the overall score against the previous run.
-Runs 12:30 ICT weekdays (lunch), NOT nightly — the name was fixed to reflect reality.
+Runs 12:30 ICT Mondays (lunch — weekly), NOT nightly — the name was fixed to reflect reality.
+(Weekly cadence: behavior-tier cases now spawn real headless agents, slow/costly.)
 Alerts Slack on:
   - BVT RED (a gate-eligible regression — the spine broke), OR
   - capability DRIFT below baseline beyond a tolerance band.
