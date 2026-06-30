@@ -591,7 +591,7 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN
   --summary "<GO/DEFER/REJECT>: <one-line>" --stage evaluate \
   --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...],"understanding":{...},"ambiguity_scan":{"scanned_fields":["who","what","why","when","acceptance_criteria"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"pre_mortem":["..."],"working_backwards":{"target_customer":"...","current_workaround":"...","why_better":"...","must_be_true":"..."}}'
 # NOTE: working_backwards is REQUIRED only when understanding.work_type=="greenfield" (+ strict profile); omit for all other work types.
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
+python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think --run-id <RUN_ID>
 ```
 
 ### Exit Routing

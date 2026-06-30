@@ -1054,14 +1054,24 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                         continue
 
                     attempt_label = f"attempt {resume_attempts + 1}/{_MAX_PIPELINE_RESUME_ATTEMPTS}"
+                    # INFORMATIONAL awareness, NOT an imperative command (run_f3975b8b,
+                    # DoD#5). The briefing has NO session identity (build_session_briefing
+                    # receives only workspace_dir), so it CANNOT prove this paused run
+                    # belongs to the session reading it — it may be a SIBLING's. The old
+                    # text ("🚀 ... Execute: ... then invoke ...") ordered the reader to
+                    # resume it NOW, which let one session hijack/resume an unrelated run.
+                    # We KEEP the AUTO-RESUME label + run-resume command as a COPYABLE hint
+                    # (also a stable substring the briefing reader/tests key off), but
+                    # reframe to "resume IF IT IS YOURS" — the reader decides ownership;
+                    # the briefing never commands the action.
                     line = (
-                        f"  - 🚀 AUTO-RESUME ({attempt_label}): "
-                        f"[{project_name}] \"{requirement}\" — "
-                        f"resume from {resume_stage}. "
-                        f"Execute: `artifact_cli.py run-resume "
+                        f"  - AUTO-RESUME candidate ({attempt_label}): "
+                        f"[{project_name}] \"{requirement}\" paused at {resume_stage}. "
+                        f"If this run is yours, resume with `artifact_cli.py run-resume "
                         f"--project {project_name} --run-id {run_id}` "
-                        f"then invoke `s_autonomous-pipeline` with "
-                        f"`--resume --run-id {run_id} --project {project_name}`."
+                        f"then `s_autonomous-pipeline --resume "
+                        f"--run-id {run_id} --project {project_name}`. "
+                        f"If it belongs to another session, leave it for that session."
                     )
                     # Reuse the mtime from the pre-filter stat (above) — the
                     # candidate sort only needs a coarse recency key, and re-stat'ing

@@ -1046,7 +1046,7 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN
   --type delivery --producer s_autonomous-pipeline \
   --summary "Delivery: <feature title> (PUSH-READY)" --stage deliver \
   --data '{"title":"...","quality":{"tests_pass":true,"regressions":0,"smoke_pass":true},"adversarial_review":{"spawned":true,"profile_tier":"full","findings_total":N,"findings_fixed":N,"findings_remaining":0,"findings":[{"severity":"HIGH|MEDIUM","resolved":true,"finding":"path/file.py func() line N: issue. Fixed: how."}]},"completion_audit":{"all_green":true,"requirements_met":N,"requirements_total":N,"evidence":"..."},"meta_review":"...","report_path":"runs/<RUN_ID>/REPORT.md"}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
+python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect --run-id <RUN_ID>
 ```
 
 ---

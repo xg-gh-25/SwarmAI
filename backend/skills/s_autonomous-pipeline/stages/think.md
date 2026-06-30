@@ -157,7 +157,7 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> --run-id <RUN
   --type research --producer s_autonomous-pipeline \
   --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
   --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"ambiguity_scan":{"scanned_fields":["recommendation","risk_probe.verification"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"sources":[...]}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
+python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan --run-id <RUN_ID>
 ```
 
 ---

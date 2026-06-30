@@ -458,7 +458,9 @@ class TestAdvanceDriftGuard:
         monkeypatch.setattr(_sp, "run",
                             lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
 
-        cli._auto_validate_before_advance("TestProject", "test")
+        # run_f3975b8b: the drift guard now validates ONLY the explicitly-named
+        # run (no more guess-the-newest). Pass --run-id to exercise the guard.
+        cli._auto_validate_before_advance("TestProject", "test", "run_drift")
         captured = capsys.readouterr()
         assert "no artifact_id" in captured.err or "failed silently" in captured.err
 
@@ -473,7 +475,7 @@ class TestAdvanceDriftGuard:
         monkeypatch.setattr(_sp, "run",
                             lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
 
-        cli._auto_validate_before_advance("TestProject", "complete")
+        cli._auto_validate_before_advance("TestProject", "complete", "run_reflect")
         captured = capsys.readouterr()
         assert "no artifact_id" not in captured.err
 
@@ -685,7 +687,7 @@ class TestAdvanceDriftGuard:
         monkeypatch.setattr(_sp, "run",
                             lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
 
-        cli._auto_validate_before_advance("TestProject", "complete")
+        cli._auto_validate_before_advance("TestProject", "complete", "run_goal")
         captured = capsys.readouterr()
         assert "no artifact_id" not in captured.err
 

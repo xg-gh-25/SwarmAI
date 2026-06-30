@@ -1352,7 +1352,7 @@ publish  --project <P> --run-id <RUN_ID> --type <T> --producer s_autonomous-pipe
 #   completed/done/skipped). What you SAVE is the redundant EXTRA run-update that
 #   only re-states what publish already wrote — not the finalizing one.
 state    --project <P>                           # current pipeline state
-advance  --project <P> --state <stage>           # advance state machine
+advance  --project <P> --state <stage> --run-id <RUN>           # advance state machine
 
 # Pipeline runs
 run-create  --project <P> --requirement "<text>" [--profile <profile>]
