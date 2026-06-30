@@ -157,18 +157,109 @@ def privacy_scan(case: dict) -> tuple[bool, list[str]]:
     return (not hits, hits)
 
 
+# ─── gate_refs (anti-drift, run_b1efcb5b / C044) ─────────────────────────────
+# A golden case's dotted refs (MEMORY./STEERING./AGENT./SOUL./EVOLUTION.) must
+# resolve to NON-EMPTY content, or the case silently feeds the LLM judge wrong or
+# empty context (axis 1 of the 5-axis eval-usefulness policy — TECH.md). This is
+# the structural fix for the silent-drift class: STEERING.RX refs went empty after
+# the 2026-06-27 reorg, EVOLUTION. wasn't resolved at all, MEMORY ids reshuffled.
+#
+# Self-contained resolver (NOT an import of eval_runner — eval_runner imports THIS
+# module at runtime, so importing it back is a circular import). It MIRRORS
+# eval_runner._resolve_reference's prefix gate: only the dotted forms are governed;
+# bare identifiers (GC12, "Pipeline Rule 23") and slash-paths are out of scope here
+# (bare ids are never claimed to resolve; paths are checked by existence only).
+
+# Match a clean dotted ENTRY/RULE ref like MEMORY.DEC39 / AGENT.R1 / EVOLUTION.CLASS_A.
+# Trailing token allows letters/digits/underscore (CLASS_A, R16b, PIT172).
+# `(?!md$)` EXCLUDES the bare filename forms MEMORY.md / AGENT.md / EVOLUTION.md etc.
+# — those are whole-file refs (the auto-seed hook uses them), NOT entry/rule ids, and
+# must stay out of scope or gate_refs would reject a legitimate bare-filename ref
+# (Gate-2 BLOCKER, run_b1efcb5b). `.md` is a filename, not an entry to resolve.
+_DOTTED_REF = re.compile(r"^(MEMORY|STEERING|AGENT|SOUL|EVOLUTION)\.(?!md$)([A-Za-z0-9_]+)$")
+
+
+def _ctx_path(root: Path, name: str) -> Path:
+    return root / ".context" / name
+
+
+def _ref_resolves(ref: str, root: Path) -> bool:
+    """True iff a dotted ref resolves to non-empty content in the live .context files.
+    Mirrors eval_runner's resolution semantics closely enough to catch drift/empties."""
+    m = _DOTTED_REF.match(ref.strip())
+    if not m:
+        return True  # not a governed dotted ref → out of scope, never false-reject
+    kind, key = m.group(1), m.group(2)
+
+    if kind == "MEMORY":
+        txt = _read(_ctx_path(root, "MEMORY.md"))
+        return f"[{key}]" in txt
+    if kind in ("STEERING", "AGENT", "SOUL"):
+        txt = _read(_ctx_path(root, f"{kind}.md"))
+        # eval_runner._extract_rule patterns: '### R1' / '**R1**' / 'R1.' / 'R1:'
+        return any(p in txt for p in (f"### {key}", f"**{key}**", f"{key}.", f"{key}:"))
+    if kind == "EVOLUTION":
+        txt = _read(_ctx_path(root, "EVOLUTION.md"))
+        norm = key.replace("_", " ")  # mirror eval_runner._extract_evolution_entry
+        if norm.upper().startswith("CLASS "):
+            return f"### {norm}:" in txt or f"### {norm}\n" in txt
+        # correction id: eval_runner matches the NORMALIZED bold marker, not raw key
+        return f"**{norm}**" in txt
+    return True
+
+
+def _read(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+    except Exception:
+        return ""
+
+
+def _dotted_refs_in(case: dict) -> list[str]:
+    refs = list(case.get("affected_by") or [])
+    src = case.get("source")
+    if isinstance(src, str):
+        # source may be prose ("DEC40 + GUI184") — only pull clean dotted tokens
+        refs += [tok for tok in re.split(r"[\s,+]+", src) if _DOTTED_REF.match(tok)]
+    return [r for r in refs if isinstance(r, str) and _DOTTED_REF.match(r.strip())]
+
+
+def gate_refs(case: dict, root: Path | None = None) -> tuple[bool, list[str]]:
+    """Every dotted ref (affected_by + source) must resolve non-empty. Bare ids and
+    slash-paths are out of scope (mirrors eval_runner's prefix gate). Returns (ok, errors).
+
+    Fail-OPEN when the workspace has no .context/ dir: refs have nowhere to resolve
+    (channel/hive deploy, or a test tmp workspace), so the gate cannot judge drift and
+    must not false-reject. Drift validation only applies where the context files exist."""
+    if root is None:
+        root = Path.home() / ".swarm-ai" / "SwarmWS"
+    if not (root / ".context").is_dir():
+        return (True, [])  # no context to resolve against → cannot validate, fail-open
+    errs = []
+    for ref in _dotted_refs_in(case):
+        if not _ref_resolves(ref, root):
+            errs.append(f"refs: '{ref}' resolves to EMPTY/absent in .context — "
+                        "drifted or unhandled (re-anchor to the correct current id)")
+    return (not errs, errs)
+
+
 def validate_case(case: dict, existing: list[dict], for_public: bool,
                   grandfathered: bool = False) -> tuple[bool, dict]:
-    """Run all gates. privacy_scan runs ONLY for_public (PROMOTE). gate_teeth is
-    skipped for grandfathered (legacy) cases (Gate-1 BLOCK-D). Returns (ok, report)
-    where report maps gate name → (ok, errors). On a clean pass, report["stamp"]
-    carries the content-bound validated_by_4gate value for the caller to persist."""
+    """Run all gates. privacy_scan runs ONLY for_public (PROMOTE). gate_teeth +
+    gate_refs are skipped for grandfathered (legacy) cases (so the pre-existing
+    drifted corpus doesn't all fail at once — same containment as gate_teeth). New/
+    edited cases MUST pass gate_refs. Returns (ok, report) where report maps gate
+    name → (ok, errors). On a clean pass, report["stamp"] carries the content-bound
+    validated_by_4gate value for the caller to persist."""
     report = {}
     g1 = gate_schema(case); report["schema"] = g1
     g2 = gate_duplicate(case, existing); report["duplicate"] = g2
     g3 = gate_non_vacuous(case); report["non_vacuous"] = g3
     g4 = gate_teeth(case, grandfathered=grandfathered); report["teeth"] = g4
     gates = [g1, g2, g3, g4]
+    if not grandfathered:
+        g5 = gate_refs(case); report["refs"] = g5
+        gates.append(g5)
     if for_public:
         gp = privacy_scan(case); report["privacy"] = gp
         gates.append(gp)

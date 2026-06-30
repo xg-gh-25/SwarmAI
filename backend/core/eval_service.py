@@ -300,20 +300,32 @@ class EvalService:
     def add_case(self, case_data: dict) -> dict:
         """Add a new case to golden set. Raises ValueError on invalid input.
 
-        Gate enforcement (run_5edf2cc0 G2/G3/G6/G8 — code, not convention): a
-        GATE-ELIGIBLE case (fast deterministic evaluator, would enter the BVT) MUST
-        pass the teeth gate (declare a negative_command) and is auto-stamped with
-        its content-bound validated_by_4gate hash. Without this, a new gate-eligible
-        case lands unstamped → compute_bvt drops it → the gate silently shrinks
-        (adversarial HIGH #2/#6). Non-gate-eligible cases (e.g. auto-seed behavior
-        cases) are unaffected — teeth/stamp do not apply to them."""
+        Gate enforcement (code, not convention):
+        - gate_refs (C044/run_b1efcb5b): EVERY case's dotted refs (MEMORY./STEERING./
+          AGENT./SOUL./EVOLUTION.) must resolve to non-empty .context content, else
+          the case silently feeds the LLM judge empty/wrong context. Fail-open when
+          the workspace has no .context/. Bare filenames (AGENT.md) are out of scope.
+        - gate_teeth + auto-stamp (run_5edf2cc0 G2/G3/G6/G8): a GATE-ELIGIBLE case
+          (fast deterministic evaluator, would enter the BVT) MUST declare a
+          negative_command and is auto-stamped with its content-bound
+          validated_by_4gate hash. Without this it lands unstamped → compute_bvt
+          drops it → the gate silently shrinks. Non-gate-eligible cases (auto-seed
+          behavior cases) skip teeth/stamp but still pass gate_refs."""
         missing = self._REQUIRED_CASE_FIELDS - set(case_data.keys())
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
         from scripts.golden_case_validator import (
-            _is_gate_eligible, gate_teeth, compute_case_stamp,
+            _is_gate_eligible, gate_teeth, gate_refs, compute_case_stamp,
         )
+        # Anti-drift (C044 BLOCKER 2): every dotted ref (MEMORY./STEERING./AGENT./
+        # SOUL./EVOLUTION.) MUST resolve to non-empty content, else the case silently
+        # feeds the LLM judge empty/wrong context. Fail-open if this workspace has no
+        # .context/ (gate_refs handles that). Applies to ALL cases, not just
+        # gate-eligible — an LLM-judge case is exactly where a drifted ref hides.
+        ok, errs = gate_refs(case_data, root=self._workspace_root)
+        if not ok:
+            raise ValueError(f"Case rejected (refs drift): {'; '.join(errs)}")
         if _is_gate_eligible(case_data):
             ok, errs = gate_teeth(case_data, grandfathered=False)
             if not ok:
@@ -336,10 +348,19 @@ class EvalService:
         if "id" in updates and updates["id"] != case_id:
             raise ValueError("Cannot change case ID via update")
 
+        from scripts.golden_case_validator import gate_refs
         with self._data_lock:
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
+
+            # Validate the MERGED result (C044): an update that re-anchors a ref must
+            # land on a resolvable target, not just any string. This is the sanctioned
+            # path to fix drifted refs — the gate confirms the fix actually resolves.
+            merged = {**case, **updates}
+            ok, errs = gate_refs(merged, root=self._workspace_root)
+            if not ok:
+                raise ValueError(f"Update rejected (refs drift): {'; '.join(errs)}")
 
             case.update(updates)
             self._persist_golden_set()
@@ -432,6 +453,15 @@ class EvalService:
 
         Returns the new case dict, or None if a case for this id already exists
         (idempotent — safe to call repeatedly from the post-session classifier).
+
+        gate_refs invariant (C044/run_b1efcb5b): this path deliberately does NOT call
+        gate_refs and appends directly to self._cases (it must NEVER raise — it runs in
+        a post-session background thread). That is SAFE because its only ref is
+        `_class_to_affected_by(class_name)` → a bare governance FILENAME (AGENT.md /
+        STEERING.md), which is out-of-scope for gate_refs (not a dotted entry/rule id).
+        If a human later refines the draft and adds a dotted ref, that edit goes through
+        update_case → which DOES run gate_refs. So the drift gate covers the human-edit
+        path; the machine-seed path is gate-free by-construction, not by oversight.
         """
         case_id = f"GS_{correction_id}"
         governing_doc = _class_to_affected_by(class_name)

@@ -790,6 +790,12 @@ def _resolve_reference(ref: str, root: Path) -> str:
         # Already covered in _load_rules_context(), but add specific rule text
         return _extract_rule(ref, root)
 
+    # EVOLUTION references: "EVOLUTION.C012" (correction id, bold **C012** form) or
+    # "EVOLUTION.CLASS_A" (a "### CLASS A" section heading; underscore→space).
+    if ref.startswith("EVOLUTION."):
+        key = ref.replace("EVOLUTION.", "")
+        return _extract_evolution_entry(key, root)
+
     # File paths (check both workspace and repo)
     if "/" in ref:
         try:
@@ -898,6 +904,57 @@ def _extract_rule(ref: str, root: Path) -> str:
         return ""
     except Exception:
         return ""
+
+
+def _extract_evolution_entry(key: str, root: Path) -> str:
+    """Extract a correction or class entry from EVOLUTION.md.
+
+    Two ref shapes (see _resolve_reference EVOLUTION. branch):
+    - Correction id: "C012" → matches the inline-bold body form `**C012**`
+      (e.g. `- **C012** (05-12): ...`). EVOLUTION.md has no `[C012]` bracket form,
+      so we anchor on the bold marker.
+    - Class name: "CLASS_A" / "CLASS A" → matches a `### CLASS A` section heading
+      (underscore is normalized to space; we deliberately match the colon-suffixed
+      heading `### CLASS A:` to avoid colliding with the `CLASS A′` mirror heading).
+
+    Returns the entry chunk (up to the next blank line / ~800 chars) or "" if absent.
+    """
+    evo_path = root / ".context" / "EVOLUTION.md"
+    if not evo_path.exists():
+        return ""
+    try:
+        content = evo_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+    norm = key.strip().replace("_", " ")
+
+    # Class-name ref: "CLASS A" → "### CLASS A:" heading (colon disambiguates from CLASS A′)
+    if norm.upper().startswith("CLASS "):
+        heading = f"### {norm}:"
+        idx = content.find(heading)
+        if idx == -1:
+            # tolerate no-colon heading, but still require it not be the ′ mirror
+            alt = f"### {norm}"
+            idx = content.find(alt)
+            if idx != -1 and content[idx + len(alt):idx + len(alt) + 1] in ("'", "′", "´"):
+                idx = -1  # that's the CLASS A′ mirror, not CLASS A
+        if idx == -1:
+            return ""
+        chunk = content[idx:idx + 800]
+        end = chunk.find("\n\n", 10)
+        return (chunk[:end] if end > 0 else chunk[:600]).strip()
+
+    # Correction id: "C012" → inline-bold `**C012**` body marker
+    marker = f"**{norm}**"
+    idx = content.find(marker)
+    if idx == -1:
+        return ""
+    # back up to the start of the bullet line for context
+    line_start = content.rfind("\n", 0, idx) + 1
+    chunk = content[line_start:line_start + 800]
+    end = chunk.find("\n\n", 10)
+    return (chunk[:end] if end > 0 else chunk[:600]).strip()
 
 
 # ─── LLM Judge Evaluator ─────────────────────────────────────────────────────

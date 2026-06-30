@@ -133,6 +133,38 @@ class TestAddCase:
         with pytest.raises(ValueError, match="required"):
             svc.add_case(incomplete)
 
+    def test_add_case_rejects_drifted_dotted_ref(self, svc, eval_workspace):
+        """BLOCKER 2 / C044: gate_refs MUST run on the add path. A dotted ref that
+        resolves EMPTY in .context (drifted, e.g. STEERING.R1 post-2026-06-27 reorg)
+        is rejected — so a case can never silently enter the corpus feeding the judge
+        empty context. Requires a .context/ in the workspace for resolution."""
+        ctx = eval_workspace / ".context"
+        ctx.mkdir(exist_ok=True)
+        # STEERING.md WITHOUT an R1 rule → STEERING.R1 resolves empty (the drift class)
+        (ctx / "STEERING.md").write_text("### 1. Some rule\nbody\n")
+        bad = {
+            "id": "GS_DRIFT", "category": "compliance", "dimension": "compliance",
+            "title": "Drifted ref", "eval_method": "llm",
+            "evaluators": ["goal_success"], "affected_by": ["STEERING.R1"],
+            "scenario": {"turns": [{"input": "x"}]},
+        }
+        with pytest.raises(ValueError, match="(?i)ref|resolve|drift"):
+            svc.add_case(bad)
+
+    def test_add_case_accepts_resolvable_dotted_ref(self, svc, eval_workspace):
+        """Companion: a dotted ref that DOES resolve passes gate_refs on add."""
+        ctx = eval_workspace / ".context"
+        ctx.mkdir(exist_ok=True)
+        (ctx / "AGENT.md").write_text("R1. **Pipeline is mandatory** for all changes.\n")
+        good = {
+            "id": "GS_RESOLVE", "category": "compliance", "dimension": "compliance",
+            "title": "Resolvable ref", "eval_method": "llm",
+            "evaluators": ["goal_success"], "affected_by": ["AGENT.R1"],
+            "scenario": {"turns": [{"input": "x"}]},
+        }
+        result = svc.add_case(good)
+        assert result["id"] == "GS_RESOLVE"
+
     def test_add_case_persists_to_disk(self, svc, eval_workspace):
         new_case = {
             "id": "GS004",

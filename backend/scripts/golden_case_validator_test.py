@@ -93,14 +93,21 @@ def test_privacy_passes_code_only():
 
 # ── validate_case orchestrates all gates for ADD (private, no privacy gate) ──
 def test_validate_add_allows_instance_case():
-    """ADD to private does NOT run privacy gate — instance cases are allowed there."""
-    ok, report = validate_case(_ok_case(affected_by=["STEERING.R1"]), existing=[], for_public=False)
+    """ADD to private does NOT run privacy gate — instance cases are allowed there.
+    Uses AGENT.R1 (an instance ref that RESOLVES) so the new gate_refs passes; the
+    point under test is that the privacy gate is skipped, not ref-drift. (STEERING.R1
+    was the old fixture but resolves EMPTY post-2026-06-27 reorg → gate_refs rejects.)"""
+    ok, report = validate_case(_ok_case(affected_by=["AGENT.R1"]), existing=[], for_public=False)
     assert ok, report
 
 def test_validate_promote_blocks_instance_case():
-    """PROMOTE to public RUNS privacy gate — instance case blocked."""
-    ok, report = validate_case(_ok_case(affected_by=["STEERING.R1"]), existing=[], for_public=True)
+    """PROMOTE to public RUNS privacy gate — instance case blocked. Uses AGENT.R1
+    (resolves, so gate_refs passes) to prove the block comes from PRIVACY, not the
+    new refs gate — otherwise the `not ok` assertion could pass for the wrong reason."""
+    ok, report = validate_case(_ok_case(affected_by=["AGENT.R1"]), existing=[], for_public=True)
     assert not ok
+    assert report["privacy"][0] is False, "block must come from privacy gate, not refs"
+    assert report["refs"][0] is True, "AGENT.R1 should resolve (refs gate clean)"
 
 
 def test_clean_pass_report_carries_stamp_not_a_gate_tuple():
