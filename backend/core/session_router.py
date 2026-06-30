@@ -83,6 +83,15 @@ _RECALL_MAX_TOKENS = 8_000
 # yields keywords must not re-run the regex extractor every turn forever.
 _RECALL_KEYWORD_MISS_CAP = 5
 
+# Single-source prefix for pre-warmed (unadopted) session ids. A prewarm unit is
+# an empty-shell subprocess spawned ahead of a channel's first message; it carries
+# no conversation. lifecycle_manager.enqueue_hooks guards on this prefix so prewarm
+# sessions don't fire the ~11 post-session lifecycle hooks (workspace_auto_commit /
+# evolution_maintenance / context_health / …). On adoption the unit's session_id is
+# re-keyed to a real id (adopt_prewarmed_unit), so the prefix no longer matches and
+# hooks resume normally. Minted at prewarm_channel_session.
+PREWARM_SESSION_PREFIX = "prewarm-"
+
 # Recall-degradation counter (run_4d06640b W5): increments whenever recall returns
 # empty due to a failure/timeout rather than a genuine no-match. Surfaces silent
 # degradation that the old logger.debug+return"" pattern hid for months. Read for
@@ -910,7 +919,7 @@ class SessionRouter:
         """
         from .agent_defaults import build_agent_config
 
-        temp_session_id = f"prewarm-{uuid4()}"
+        temp_session_id = f"{PREWARM_SESSION_PREFIX}{uuid4()}"
         unit = SessionUnit(
             session_id=temp_session_id,
             agent_id=agent_id,

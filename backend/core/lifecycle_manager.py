@@ -191,7 +191,27 @@ class LifecycleManager:
 
         Fire-and-forget — returns immediately. The BackgroundHookExecutor
         processes hooks one at a time in its worker task.
+
+        Pre-warmed (unadopted) sessions are skipped: they are empty-shell
+        subprocesses with no conversation, so the ~11 post-session hooks
+        (auto-commit / evolution / context-health / distillation / …) are pure
+        no-op noise (~6.5s each). The single ``prewarm-`` prefix is the canonical
+        marker (minted in ``session_router.prewarm_channel_session``); on adoption
+        the unit's ``session_id`` is re-keyed to a real id, so hooks resume
+        automatically — no extra state to reset. This is the single chokepoint all
+        reap/idle/TTL/eviction call sites funnel through, so the guard here covers
+        every hook-firing path.
         """
+        from .session_router import PREWARM_SESSION_PREFIX
+
+        if context.session_id and context.session_id.startswith(
+            PREWARM_SESSION_PREFIX
+        ):
+            logger.debug(
+                "enqueue_hooks: skipping lifecycle hooks for prewarm session %s",
+                context.session_id,
+            )
+            return
         if self._hook_executor:
             self._hook_executor.fire(context)
 
