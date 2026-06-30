@@ -1538,6 +1538,10 @@ export function useChatStreamingLifecycle(
             postDisconnectFlushing: backendState?.postDisconnectFlushing ?? false,
             activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
             idleStreamingSince: tabState._idleStreamingSince,
+            // OT01 AC1: churn-immune absolute bound. Cleared on the streaming→idle
+            // edge (setIsStreaming false), so it is only non-undefined during a
+            // live span; the verdict consults it ONLY after all four alive guards.
+            streamingSinceHardStart: tabState._streamingSinceHardStart,
             now: Date.now(),
           });
 
@@ -1711,12 +1715,24 @@ export function useChatStreamingLifecycle(
           (tabState as { isStreaming: boolean }).isStreaming = streaming;
           if (streaming) {
             tabState._reconcileStreamStart = Date.now();
+            // OT01 hard-cap clock (AC1): stamp SET-ONCE per continuous streaming
+            // span. Unlike _reconcileStreamStart (re-stamped on every arm, incl.
+            // the reconcile re-arm + post-disconnect handoff — Gate-1 Q3 churn),
+            // this is set only on the FIRST true-edge and left untouched until the
+            // span ends, so abort+recycle churn that re-enters setIsStreaming(true)
+            // cannot postpone the absolute deadline. Cleared on the false-edge below.
+            if (tabState._streamingSinceHardStart === undefined) {
+              tabState._streamingSinceHardStart = Date.now();
+            }
             // Record stream start time for elapsed timer on tab switch
             if (!tabState.streamStartTime) {
               tabState.streamStartTime = Date.now();
             }
           } else {
             tabState.streamStartTime = undefined;
+            // OT01 hard-cap clock: clear on the streaming→idle edge so the NEXT
+            // genuine turn re-stamps fresh (no stale deadline carried across turns).
+            tabState._streamingSinceHardStart = undefined;
             // Flap-guard stamp: the reconcile loop's idle→streaming re-arm skips
             // a tab cleared within the settle window, so a Stop (frontend idle)
             // is not re-lit during the ~5s before the backend transitions to IDLE.
