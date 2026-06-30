@@ -489,3 +489,42 @@ StreamReconcile 救火循环（6-07）、route-A 硬上界（6-30）。作为**�
 2. **新增前必问**：这是在「让某状态权威/无害」（✅），还是在「检测坏状态并对抗它」（🚩 桶 B/C，先停下想）？
 3. **跨半改动要看对侧**：后端加重 recycle/kill 前，先确认前端能否无害承受其 churn（本案没做 → 放大成风暴）。
 4. **补丁标注保质期**：止血补丁（桶 B）落地时即写明「interim，待 B-x 替代」，不许沉淀成承重墙。
+
+---
+
+## 12. 重评估（2026-06-30，B-1/B-2 + bounded-leak 落地后）— B-3 降级
+
+落地进度（SwarmAI run_35aa06b1 / run_e80f4c9b / run_37008f2d）：
+- **B-1**（`9366c01b`）：reconcile cadence 15s→3s（streaming 期），spinner ≤3s 自愈。authority 未动。
+- **「B-2」（shipped, `13b0c9ab`+`5094f9da`）**：terminal(`dead`) 跳过 30s settle、立即 force-clear。
+  ⚠️ **注意混淆**：这与本文档原 B-2（reconcileFromDb 内容恢复）**不是一回事**——shipped 的是 force-clear
+  细化（spinner 清得快），**真正的「内容恢复」件仍未做**。
+- **bounded tool_call_leak**（`9d941eeb`，= INV-L2）：1st leak→corrective-resume（改输入）、2nd→clean terminal，
+  断掉自循环。**删掉了风暴 4 次 recycle 里的 2 次（leak 那两次）。**
+
+### 重评估结论：B-3（保 live 流过 recycle）降级，可能直接砍
+
+严重症状基本已解：「卡 10 分钟」→「≤3s blip + DB 补」；风暴最大触发源（leak 自循环）已断 → 多次 recycle 风暴
+变稀有。残余仅剩：**风暴持续期**（后端在 dead↔cold↔streaming 连续翻，alive 守卫**正确地**挡 force-clear）内容
+仍会冻到风暴结束——但这种连续风暴现在罕见。
+
+B-3 不值得作为下一步，理由三条：
+1. **撞北极星**：B-3 = 把脆弱的 live 流镜子修得更结实（让它扛过子进程死 N 次），而非靠 DB 权威。北极星说内容
+   权威是 DB、token 是可丢弃覆盖层——B-3 方向相反。
+2. **最高风险**：要动 `streamGen` + 所有 send/resend/reconnect/drain/recycle 路径，lifecycle god-file，回归密度最高。
+3. **回报递减**：严重 case 已被前几件解，B-3 只换来「风暴期内容更顺」，而风暴已稀有。
+
+### 若残余值得补 → 做「DB 投影」，不是 B-3
+
+北极星正确的残余补法（替代 B-3）：后端 `last_persisted_seq` 前进、前端 buffer 没动时，**直接从 DB 把内容投影
+出来**（哪怕还在 streaming 相位的窄通道），而非抢救 live 流。方向对（DB = 内容权威）、风险低于动 streamGen。
+这其实就是本文档**原 B-2 的内容恢复件**（至今未做），不是 supersession 的 B-3。
+
+### 门控：先观测，再决定
+
+遵循本轮纪律「别修没观测到的东西」。B-1/B-2 刚落：
+1. 重新 build + 用一阵，看 freeze 是否消失 / 仍冻几十秒；盯 `frontend.log` 的 `OT01-GenGuard` 频率与 dwell。
+2. **基本没了** → B-3 关闭，不做。
+3. **风暴期仍冻且够频繁** → 做 **DB 投影（原 B-2）**，**不做** B-3（live-stream supersession）。
+
+> 一句话：**B-3 大概率是错的投资（高风险 + 撞北极星，严重症状已解）。真要补残余，补 DB 投影。先观测再说。**
