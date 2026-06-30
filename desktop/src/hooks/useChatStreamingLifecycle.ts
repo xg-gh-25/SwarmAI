@@ -2311,9 +2311,26 @@ export function useChatStreamingLifecycle(
         if (capturedTabId) {
           const currentTabState = tabMapRef.current.get(capturedTabId);
           if (currentTabState && currentTabState.streamGen !== capturedStreamGen) {
+            // OT01 diag (AC5): a discarded event is the smoking gun for a lost
+            // terminal event (isStreaming pins true). console.warn (NOT debug) so
+            // logForwarder persists it to frontend.log. Fields per Gate-1 Q4:
+            // capturedTabId vs activeTabIdRef.current disambiguates cross-tab from
+            // own-turn; tab vs global gen tells which guard layer fired.
+            console.warn('[OT01-GenGuard] discard stale stream event', {
+              eventType: event.type, capturedTabId,
+              activeTab: activeTabIdRef.current,
+              tabStreamGen: currentTabState.streamGen, capturedStreamGen,
+              globalStreamGen: streamGenRef.current,
+              sessionId: currentTabState.sessionId,
+            });
             return; // stale event — discard silently
           }
         } else if (streamGenRef.current !== capturedStreamGen) {
+          console.warn('[OT01-GenGuard] discard stale stream event (null-tab global path)', {
+            eventType: event.type, capturedTabId: null,
+            activeTab: activeTabIdRef.current,
+            globalStreamGen: streamGenRef.current, capturedStreamGen,
+          });
           return; // stale event — discard silently
         }
 
@@ -3936,11 +3953,16 @@ export function useChatStreamingLifecycle(
         if (liveGen === undefined || capturedGen !== liveGen) {
           // Either liveness unknown, or a genuinely newer send superseded this
           // handler — correct no-op.
-          if (import.meta.env.DEV) {
-            console.warn('[StreamComplete] handler no-op (not the live completer)', {
-              tabId: capturedTabId, capturedGen, liveGen, streamGen: tabState.streamGen,
-            });
-          }
+          // OT01 diag (AC5): a complete-handler no-op means the [DONE] that would
+          // call setIsStreaming(false) was discarded → spinner can pin. ALWAYS
+          // warn (not DEV-only — DEV is tree-shaken dead in the prod .app where
+          // the bug happens, run_3451bbd1); logForwarder persists warn to
+          // frontend.log. Fields per Gate-1 Q4 (own-turn vs cross-tab).
+          console.warn('[OT01-Complete] handler no-op (not the live completer — [DONE] dropped)', {
+            capturedTabId, activeTab: activeTabIdRef.current,
+            capturedGen, liveGen, tabStreamGen: tabState.streamGen,
+            globalStreamGen: streamGenRef.current, sessionId: tabState.sessionId,
+          });
           return;
         }
 
