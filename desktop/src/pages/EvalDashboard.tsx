@@ -728,6 +728,81 @@ function useGovernanceDecision() {
   });
 }
 
+// Pure presentational card — extracted so the evidence render is unit-testable
+// without a QueryClient/API mock (Bug1, run_685db747). GovernanceTab owns fetching;
+// this owns display. Rendering evidence[] is what makes proposals distinguishable
+// (the missing render was the root cause of "clicked A but accepted B").
+export function GovernanceProposalCard({
+  proposal: p,
+  onAct,
+  pending,
+}: {
+  proposal: GovProposal;
+  onAct: (proposalId: string, decision: 'accept' | 'reject' | 'defer') => void;
+  pending: boolean;
+}) {
+  const evidence = p.evidence ?? [];
+  return (
+    <div className="border border-[var(--color-border)] rounded-lg p-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+          p.proposal_kind === 'gate'
+            ? 'bg-red-500/10 text-red-600'
+            : 'bg-blue-500/10 text-blue-600'
+        }`}>
+          {p.proposal_kind.toUpperCase()}
+        </span>
+        <span className="text-sm font-medium text-[var(--color-text)]">{p.source_class}</span>
+        <span className="text-[10px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
+      </div>
+      <p className="text-xs text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
+
+      {/* Evidence — the actual correction excerpts behind the count. Without this
+          the cards are indistinguishable and cannot be judged (Bug1 root cause). */}
+      {evidence.length > 0 ? (
+        <div className="mb-2 border-l-2 border-[var(--color-border)] pl-2 space-y-1">
+          <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+            Evidence ({evidence.length})
+          </div>
+          {evidence.map((e, i) => (
+            <p key={i} className="text-[11px] text-[var(--color-text-muted)] leading-snug">
+              • {e}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mb-2 text-[11px] italic text-[var(--color-text-muted)]">
+          No evidence recorded — judge with caution.
+        </p>
+      )}
+
+      <div className="flex gap-1.5 items-center">
+        <button
+          onClick={() => onAct(p.id, 'accept')}
+          disabled={pending}
+          className="px-2 py-1 text-xs rounded bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-50"
+        >
+          Accept
+        </button>
+        <button
+          onClick={() => onAct(p.id, 'reject')}
+          disabled={pending}
+          className="px-2 py-1 text-xs rounded bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
+        >
+          Reject
+        </button>
+        <button
+          onClick={() => onAct(p.id, 'defer')}
+          disabled={pending}
+          className="px-2 py-1 text-xs rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+        >
+          Defer
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function GovernanceTab() {
   const { data, isLoading } = useGovernancePending();
   const decide = useGovernanceDecision();
@@ -762,43 +837,7 @@ function GovernanceTab() {
 
       <div className="space-y-2">
         {proposals.map((p) => (
-          <div key={p.id} className="border border-[var(--color-border)] rounded-lg p-3">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${
-                p.proposal_kind === 'gate'
-                  ? 'bg-red-500/10 text-red-600'
-                  : 'bg-blue-500/10 text-blue-600'
-              }`}>
-                {p.proposal_kind.toUpperCase()}
-              </span>
-              <span className="text-sm font-medium text-[var(--color-text)]">{p.source_class}</span>
-              <span className="text-[10px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
-            </div>
-            <p className="text-xs text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
-            <div className="flex gap-1.5 items-center">
-              <button
-                onClick={() => act(p.id, 'accept')}
-                disabled={decide.isPending}
-                className="px-2 py-1 text-xs rounded bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-50"
-              >
-                Accept
-              </button>
-              <button
-                onClick={() => act(p.id, 'reject')}
-                disabled={decide.isPending}
-                className="px-2 py-1 text-xs rounded bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => act(p.id, 'defer')}
-                disabled={decide.isPending}
-                className="px-2 py-1 text-xs rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Defer
-              </button>
-            </div>
-          </div>
+          <GovernanceProposalCard key={p.id} proposal={p} onAct={act} pending={decide.isPending} />
         ))}
       </div>
     </div>
