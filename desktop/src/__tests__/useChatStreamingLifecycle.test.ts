@@ -468,6 +468,111 @@ describe('useChatStreamingLifecycle', () => {
     });
   });
 
+  // ── OT01 render-freeze: same-turn tail events survive the gen guard ──────
+  // ROOT CAUSE (run_f9adee1e, live-log confirmed): the turn's `result` event
+  // calls incrementStreamGen() (streamGen 50→51), but the SAME stream handler
+  // holds capturedStreamGen=50. The generation guard at :2334 discarded the
+  // turn's OWN result-following tail events (context_warning,
+  // system_prompt_metadata) as "stale" → turn-end refresh lost → UI frozen
+  // until the next send. Fix: the guard compares latestStreamGen (advanced only
+  // by a genuinely NEW send, stamped eagerly at stream-handler creation) NOT
+  // streamGen (churned mid-turn by result/reconnect/error). Mirrors the
+  // createCompleteHandler latestCompleteGen fix (run_6adee7d5).
+  describe('OT01 tail-event survives mid-turn streamGen churn', () => {
+    it('processes a context_warning that arrives AFTER result bumped streamGen', () => {
+      const msgId = 'msg-ot01';
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      act(() => {
+        initTestTab('tab-ot01');
+        result.current.setIsStreaming(true);
+        result.current.setMessages([
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+      });
+
+      const handler = result.current.createStreamHandler(msgId, 'tab-ot01');
+      const genBefore = result.current.streamGenRef.current;
+
+      // result completes the turn → bumps streamGen (the stale-event trap).
+      act(() => {
+        handler({ type: 'result', sessionId: 'sess-ot01' });
+      });
+      expect(result.current.streamGenRef.current).toBeGreaterThan(genBefore);
+
+      // context_warning arrives AFTER result, on the bumped generation.
+      // With the streamGen-based guard it is DISCARDED (contextWarning stays
+      // null → RED). With the latestStreamGen guard it is PROCESSED.
+      act(() => {
+        handler({
+          type: 'context_warning',
+          sessionId: 'sess-ot01',
+          level: 'warn',
+          pct: 72,
+          tokensEst: 144000,
+          message: 'Context 72% full',
+        });
+      });
+
+      // The tail event MUST be processed despite the mid-turn streamGen bump.
+      expect(result.current.contextWarning).not.toBeNull();
+      expect(result.current.contextWarning?.pct).toBe(72);
+    });
+
+    it('STILL discards a genuinely stale event from a superseded stream — DISCRIMINATING (only a NEW send, i.e. latestStreamGen advance, causes the discard)', () => {
+      // Gate-2 finding (run_f9adee1e): the naive bleed test was VACUOUS — it
+      // discarded under BOTH the old streamGen guard and the new latestStreamGen
+      // guard (both saw captured=0 vs a bumped 1), so it did not lock in the
+      // FIX's semantics. This version DISCRIMINATES: it first proves the stale
+      // handler's OWN mid-turn result churn (which bumps streamGen but NOT
+      // latestStreamGen) does NOT discard — then proves a genuinely NEW send
+      // (which advances latestStreamGen) DOES. Only the new guard passes both
+      // halves; the old streamGen guard would FAIL the first half (wrongly
+      // discard after the handler's own result), making this non-vacuous.
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      act(() => {
+        initTestTab('tab-bleed');
+        result.current.setIsStreaming(true);
+        result.current.setMessages([
+          makeMessage({ id: 'm1', role: 'assistant', content: [] }),
+        ]);
+      });
+
+      const staleHandler = result.current.createStreamHandler('m1', 'tab-bleed');
+
+      // Half A (discriminator): the handler's OWN result bumps streamGen but NOT
+      // latestStreamGen. A same-handler tail event MUST still be processed. The
+      // OLD streamGen guard would discard here (streamGen bumped) — the NEW guard
+      // keeps it (latestStreamGen unchanged). This is the half that fails under
+      // the buggy guard → non-vacuous.
+      act(() => { staleHandler({ type: 'result', sessionId: 'sess-bleed' }); });
+      act(() => {
+        staleHandler({
+          type: 'context_warning', sessionId: 'sess-bleed',
+          level: 'warn', pct: 55, tokensEst: 110000, message: 'own-turn tail',
+        });
+      });
+      expect(result.current.contextWarning?.pct).toBe(55); // own tail survived
+
+      // Half B (bleed still caught): a genuinely NEW send advances latestStreamGen
+      // via a new stream handler. NOW the old handler is truly superseded and its
+      // leftover event MUST be discarded.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createStreamHandler('m2', 'tab-bleed'); // stamps new latestStreamGen
+      act(() => {
+        staleHandler({
+          type: 'context_warning', sessionId: 'sess-bleed',
+          level: 'critical', pct: 99, tokensEst: 200000, message: 'stale — must not render',
+        });
+      });
+      // The stale (pct:99) event was discarded → contextWarning stays at Half A's 55.
+      expect(result.current.contextWarning?.pct).toBe(55);
+    });
+  });
+
   describe('createCompleteHandler', () => {
     it('returns a function that sets isStreaming to false', () => {
       initTestTab('tab-ch-1');

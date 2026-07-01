@@ -2229,6 +2229,31 @@ export function useChatStreamingLifecycle(
       // must be discarded to prevent cross-turn bleed.
       const capturedStreamGen = streamGenRef.current;
 
+      // OT01 (run_f9adee1e): stamp the tab's LIVE stream generation EAGERLY here,
+      // at handler creation (send time, in every send path — the stream handler
+      // is always created synchronously). The generation guard below compares
+      // against latestStreamGen (advanced ONLY by a genuinely new send that
+      // creates a new stream handler) NOT streamGen (churned mid-turn by
+      // result/reconnect/error via incrementStreamGen). Without this, the turn's
+      // own result-following tail events (context_warning, system_prompt_metadata)
+      // were discarded as stale after `result` bumped streamGen → turn-end refresh
+      // lost → UI frozen until the next send. Mirrors createCompleteHandler's
+      // latestCompleteGen fix (run_6adee7d5) for the stream-event path.
+      //
+      // KNOWN UNCOVERED SIBLING (Gate-2, run_f9adee1e — do NOT read this as "all
+      // paths covered"): the background-resend/reconnect retry path (ChatPage
+      // resendTabOnRecovery → retryStreamFn → wrappedCreateStreamHandler) creates
+      // the handler off activeTabIdRef.current, NOT the captured retry tab — so for
+      // a BACKGROUND tab's resend the stamp lands on the ACTIVE tab. That is a
+      // PRE-EXISTING wrong-tab split (its error/complete/disconnect handlers already
+      // used the captured tab); this fix neither introduces nor worsens the freeze,
+      // but the retry path is the next sibling in this half-migration (R27), tracked
+      // separately — not fixed here (R25 surgical; no reproduction for the retry path).
+      if (capturedTabId) {
+        const stampTab = tabMapRef.current.get(capturedTabId);
+        if (stampTab) stampTab.latestStreamGen = capturedStreamGen;
+      }
+
       // ── Activate store phase gate ──
       // This makes reconcile()/replace() structurally impossible during streaming.
       // The single structural protection layer — no more relying on scattered
@@ -2331,7 +2356,18 @@ export function useChatStreamingLifecycle(
         // interrupted response arrive after a new stream has started.
         if (capturedTabId) {
           const currentTabState = tabMapRef.current.get(capturedTabId);
-          if (currentTabState && currentTabState.streamGen !== capturedStreamGen) {
+          // OT01 (run_f9adee1e): compare latestStreamGen (advanced ONLY by a
+          // genuinely new send that creates a new stream handler), NOT streamGen
+          // (churned mid-turn by result/reconnect/error). This lets the turn's
+          // OWN result-following tail events (context_warning / system_prompt_
+          // metadata) survive the guard while still discarding events from a
+          // superseded stream. Fail-safe: an UNSET latestStreamGen is treated as
+          // NON-authoritative (discard), never as a wildcard match — mirrors the
+          // createCompleteHandler liveness gate (:3986). latestStreamGen is
+          // stamped eagerly at handler creation above, so on the live turn it
+          // always equals capturedStreamGen.
+          const liveStreamGen = currentTabState?.latestStreamGen;
+          if (currentTabState && (liveStreamGen === undefined || liveStreamGen !== capturedStreamGen)) {
             // OT01 diag (AC5): a discarded event is the smoking gun for a lost
             // terminal event (isStreaming pins true). console.warn (NOT debug) so
             // logForwarder persists it to frontend.log. Fields per Gate-1 Q4:

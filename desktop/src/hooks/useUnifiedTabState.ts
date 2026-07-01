@@ -111,6 +111,19 @@ export interface UnifiedTab {
    *  NEW send supersede the old handler. Fixes the stale-gen early-return that
    *  left isStreaming pinned true → spinner-hang (run_6adee7d5). */
   latestCompleteGen?: number;
+  /** Generation of the LIVE stream-event handler for this tab's current turn.
+   *  Stamped EAGERLY by createStreamHandler at creation (i.e. at send time, in
+   *  ALL send paths — main/queued/permission-continue — since the stream handler
+   *  is always created synchronously, unlike the complete handler which is lazy
+   *  in the permission path). The stream-event generation guard discards an event
+   *  iff its capturedStreamGen !== latestStreamGen — making the turn's OWN tail
+   *  events (context_warning / system_prompt_metadata, delivered AFTER `result`
+   *  bumps streamGen) immune to mid-stream streamGen churn, while a genuinely NEW
+   *  send still advances latestStreamGen and supersedes the old handler. Fixes the
+   *  OT01 render-freeze where result-following tail events were discarded as stale
+   *  → turn-end refresh lost → UI frozen until next send (run_f9adee1e). Sibling of
+   *  latestCompleteGen (run_6adee7d5) for the stream-event path. */
+  latestStreamGen?: number;
   status: TabStatus;
   /** Per-tab context warning from backend context monitor (null = no warning). */
   contextWarning: ContextWarning | null;
