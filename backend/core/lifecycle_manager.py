@@ -951,9 +951,27 @@ class LifecycleManager:
                     if ctx:
                         self.enqueue_hooks(ctx)
                         unit._hooks_enqueued = True
+                # TOCTOU re-check (run_ace705df Gate-2 HIGH): the hook-context
+                # build above is an `await` — during it a concurrent send()
+                # DEAD-recovery (session_unit send() auto_recover_dead) can drive
+                # this SAME unit DEAD→COLD→IDLE→STREAMING lock-free (spawn holds
+                # _spawn_lock, not self._lock). If we blindly ran the old
+                # _cleanup_internal()+_transition(COLD) here we would wipe a unit
+                # that send() already recovered and is actively streaming —
+                # orphaning the freshly-spawned subprocess (no kill) and
+                # corrupting _streaming_count. Re-check state AFTER the await; if
+                # it is no longer DEAD, send() owns it now — leave it alone.
+                if unit.state != SessionState.DEAD:
+                    continue
                 self._release_session_state(unit.session_id)
-                unit._cleanup_internal()
-                unit._transition(SessionState.COLD)
+                # Route through the idempotent, self._lock-holding recovery
+                # transaction instead of hand-rolling cleanup+transition. This
+                # serializes DEAD→COLD against send()'s _crash_to_cold_async so
+                # the two DEAD→COLD drivers are mutually exclusive (the old
+                # hand-rolled path was lock-free, defeating R4 atomicity). If a
+                # send() recovery is mid-flight holding the lock, this awaits it
+                # and then no-ops on the resulting COLD state.
+                await unit._crash_to_cold_async(clear_identity=False)
 
     # ── Stale COLD unit purge ──────────────────────────────────────
 

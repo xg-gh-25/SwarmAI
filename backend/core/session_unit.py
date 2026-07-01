@@ -1705,6 +1705,36 @@ class SessionUnit:
             await self.force_unstick_waiting_input()
             # After force_unstick, state is COLD — fall through to spawn
 
+        if self.state == SessionState.DEAD:
+            # DEAD is recoverable at send-time, NOT a dead-end. Two DEAD sources
+            # both strand the unit here until lifecycle_manager's 60s _cleanup_dead
+            # loop happens to run — so the FIRST resume reliably failed:
+            #   (a) a flush_recycle / interrupt_recycle whose _crash_to_cold_async
+            #       was ORPHANED mid-teardown — send() itself cancels the in-flight
+            #       _pipe_flush_task above (~:1575), and the CancelledError unwinds
+            #       out of the locked DEAD→…→COLD sequence, releasing the lock with
+            #       the unit still DEAD (COLD never reached by that path).
+            #   (b) a watchdog kill (_pid_watchdog_loop / _maybe_escape_wedged_tool)
+            #       that sets DEAD + force_kills then returns WITHOUT a lock or a
+            #       COLD transition — a legitimately STABLE DEAD whose only other
+            #       exit is the 60s loop.
+            # Drive recovery ourselves, mirroring force_unstick_streaming /
+            # force_unstick_waiting_input above. _crash_to_cold_async is idempotent
+            # (no-ops if already COLD) and acquires self._lock, so it SERIALIZES
+            # against any genuinely in-flight kill/teardown (no double-kill) rather
+            # than blindly racing it. clear_identity=False preserves _sdk_session_id,
+            # so the COLD→_ensure_spawned path below respawns WITH --resume (resume
+            # rides solely on _sdk_session_id being set). If a prior give-up already
+            # cleared the identity, the COLD path simply spawns fresh — also correct.
+            logger.warning(
+                "session_unit.auto_recover_dead session_id=%s — DEAD at send() "
+                "(orphaned recycle or watchdog kill); forcing COLD for resume "
+                "instead of waiting for the 60s lifecycle cleanup",
+                self.session_id,
+            )
+            await self._crash_to_cold_async(clear_identity=False)
+            # After recovery, state is COLD — fall through to spawn-with-resume.
+
         if self.state not in (SessionState.COLD, SessionState.IDLE):
             raise RuntimeError(
                 f"Cannot send() in state {self.state.value} "
