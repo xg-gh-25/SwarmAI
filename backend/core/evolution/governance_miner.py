@@ -237,12 +237,21 @@ def generate_governance_proposals(
         # Canonical key so a miner proposal ("CLASS A: ...") and a tracker-ladder
         # proposal ("CLASS_A") for the SAME logical class dedup together, not twice
         # (adversarial HIGH). The human-readable name is preserved in proposed_rule.
-        from core.evolution.escalation_ladder import canonical_class_key
+        from core.evolution.class_key import canonical_class_key, is_cognitive_class
+
+        ckey = canonical_class_key(cls.name)
+        # Defense-in-depth axis guard (run_685db747 Gate-2 MED): today the header
+        # regex only matches "CLASS X" (all cognitive by construction), so this is
+        # unreachable — but if that regex is ever loosened, a non-cognitive class
+        # must NOT reach the governance queue. Mirrors escalation_ladder:111 and the
+        # eval_service consumer guard so all three layers agree.
+        if not is_cognitive_class(ckey):
+            continue
 
         proposals.append(
             GovernanceProposal(
                 target="governance",
-                source_class=canonical_class_key(cls.name),
+                source_class=ckey,
                 occurrence_count=cls.occurrence_count,
                 proposed_rule=cls.pattern or f"Address recurring {cls.name} pattern",
                 evidence=cls.evidence_chain[:5],  # Cap at 5

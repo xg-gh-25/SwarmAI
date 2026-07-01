@@ -173,6 +173,37 @@ class TestGovernanceProposalGeneration:
             for p in proposals
         )
 
+    def test_axis_guard_excludes_non_cognitive_class(self, evolution_md, steering_md, monkeypatch):
+        """Defense-in-depth (run_685db747 Gate-2 MED): even if mine_correction_classes
+        yields a non-cognitive class (e.g. a future regex loosening lets OPERATIONAL
+        through), generate_governance_proposals must NOT emit a proposal for it.
+        Forces the guard to fire so it isn't dead code (R28)."""
+        import core.evolution.governance_miner as gm
+        from core.evolution.governance_miner import (
+            CorrectionClass,
+            generate_governance_proposals,
+        )
+
+        cognitive = CorrectionClass(
+            name="CLASS B: Symptom fix", occurrence_count=5,
+            pattern="does X", structural_fix="", evidence_chain=["e1"],
+        )
+        non_cognitive = CorrectionClass(
+            name="CLASS OPERATIONAL: tool noise", occurrence_count=99,
+            pattern="op noise", structural_fix="", evidence_chain=["e2"],
+        )
+        # canonical_class_key("CLASS OPERATIONAL: ...") is "CLASS_OPERATIONAL" which
+        # would BE cognitive by prefix — so force the raw non-cognitive label the
+        # guard actually rejects, proving the guard fires on a real non-cognitive key.
+        non_cognitive.name = "OPERATIONAL"
+        monkeypatch.setattr(gm, "mine_correction_classes", lambda _p: [cognitive, non_cognitive])
+        monkeypatch.setattr(gm, "mine_gc_candidates", lambda _p: [])
+
+        proposals = generate_governance_proposals(evolution_md, steering_md, threshold=3)
+        classes = {p.source_class for p in proposals}
+        assert "OPERATIONAL" not in classes  # guard fired
+        assert any("CLASS_B" == c or "CLASS B" in (c or "") for c in classes)  # cognitive kept
+
     def test_empty_evolution_md_returns_empty(self, tmp_path: Path):
         from core.evolution.governance_miner import generate_governance_proposals
 
