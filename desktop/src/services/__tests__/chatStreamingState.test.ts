@@ -103,6 +103,10 @@ describe('chatService.getStreamingState — boundary mapping', () => {
       pendingCount: 0,
       pendingQuestion: null,
       lastDrainedSeqs: [],
+      // OT01 honest-signal fix: boundary mapping always emits this field with a
+      // fail-safe default (raw.post_disconnect_flushing ?? false), so even the
+      // "missing optional fields" case carries it as false.
+      postDisconnectFlushing: false,
     });
   });
 
