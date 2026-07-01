@@ -182,3 +182,36 @@ jobs:
 
       - name: Check all version files match
         run: bash scripts/sync-version.sh check
+
+  # ── Code-security boundary gate (bandit HIGH + detect-secrets) ────────────
+  # Server-side HARD gate: fails the job on any NEW high-severity finding or
+  # secret not in the committed baselines (bandit-baseline.json / .secrets.baseline).
+  # SSOT with the local wrapper — both invoke scripts/security_scan.py.
+  # NOTE: this only BLOCKS MERGE once registered as a required status check in the
+  # repo's branch-protection settings (a GitHub setting, not a file). Until then it
+  # runs and reports but does not gate merge. See run_4b007e00 delivery notes.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Deps live in backend/pyproject.toml; install there (each job installs
+      # independently). bandit + detect-secrets are pinned in [dev].
+      - name: Install security tools
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install bandit==1.9.4 detect-secrets==1.5.0
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+
+      # Run the scan from the REPO ROOT (not ./backend): the scanner anchors its
+      # baselines to repo root and bandit/detect-secrets resolve paths relative to
+      # CWD. Running elsewhere would silently ignore the baselines (Gate-1 BLOCKER-3).
+      - name: Scan for new HIGH findings + secrets
+        run: python scripts/security_scan.py

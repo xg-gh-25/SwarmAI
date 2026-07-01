@@ -63,6 +63,12 @@ dev = [
     "pytest-timeout>=2.3.0",
     "httpx>=0.27.0",
     "hypothesis>=6.151.6",
+    # Code-security boundary gate (scripts/security_scan.py). Pinned EXACT:
+    # detect-secrets embeds a plugin set + version in .secrets.baseline; a version
+    # drift silently degrades detection (fails open), so the baseline generator and
+    # the CI checker MUST run the identical version. bandit pinned for parity.
+    "bandit==1.9.4",
+    "detect-secrets==1.5.0",
 ]
 
 [build-system]
@@ -106,4 +112,7 @@ dev = [
     "pytest-timeout>=2.3.0",
     "httpx>=0.27.0",
     "hypothesis>=6.151.6",
+    # Kept in sync with [project.optional-dependencies].dev — see note there.
+    "bandit==1.9.4",
+    "detect-secrets==1.5.0",
 ]
