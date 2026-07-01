@@ -1239,6 +1239,183 @@ class TestL2DepthValidation:
             f"got: {result['errors']}")
 
 
+class TestFindingConfidenceGate:
+    """Finding-level confidence gate (AutoSDE port, run_7583af5f).
+
+    Ports the AutoSDE 'confidence gate as a code constant' pattern: the
+    'confidence >= 7' rule that lived ONLY as prose in deliver.md:507 becomes a
+    module constant + _blocked_findings() helper enforced at BOTH gate sites
+    (validate_artifact_data publish + _check_depth completion).
+
+    Prior behavior blocked ONLY unresolved HIGH findings; MEDIUM was ungated at
+    completion. Now: HIGH blocks always (confidence-independent), MEDIUM blocks
+    when confidence >= threshold, MED with confidence < threshold is note-only,
+    and MEDIUM with NO confidence is fail-closed (P7 — can't dodge by omission).
+    Severity is matched case-insensitively across {HIGH, MEDIUM, MED} because
+    specialists emit 'MED' (deliver.md:396) while the final schema says 'MEDIUM'
+    (:397) — a real in-repo collision (Gate-1 finding, MOD04)."""
+
+    def _deliver(self, findings):
+        return {
+            "title": "X",
+            "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "spawned": True,
+                "evidence": "Agent tool invocation: correctness specialist",
+                "findings": findings,
+            },
+        }
+
+    def _finding_errors(self, errors):
+        return [e for e in errors
+                if "finding" in e.lower() and ("confidence" in e.lower()
+                                               or "MED" in e or "HIGH" in e)]
+
+    def test_constant_exists_and_is_seven(self):
+        """AC1: CONFIDENCE_GATE_THRESHOLD is a module-level int == 7."""
+        from scripts import pipeline_validator as pv
+        assert isinstance(pv.CONFIDENCE_GATE_THRESHOLD, int)
+        assert pv.CONFIDENCE_GATE_THRESHOLD == 7
+
+    def test_med_high_confidence_blocks(self):
+        """AC2: unresolved MEDIUM with confidence >= 7 → blocking error."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "MEDIUM", "confidence": 8, "resolved": False,
+             "finding": "x.py foo() line 12: bad thing"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"unresolved MED conf=8 must BLOCK, got: {errors}")
+
+    def test_med_low_confidence_passes(self):
+        """AC3: unresolved MEDIUM with confidence < 7 → NOT blocked (note-only)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "MEDIUM", "confidence": 4, "resolved": False,
+             "finding": "x.py foo() line 12: minor nit"},
+        ]), profile="bugfix")
+        assert not self._finding_errors(errors), (
+            f"unresolved MED conf=4 must NOT block (note-only), got: {errors}")
+
+    def test_high_blocks_regardless_of_confidence(self):
+        """AC4: unresolved HIGH blocks even with no/low confidence (no regression)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "HIGH", "resolved": False,
+             "finding": "x.py foo() line 12: data loss on crash"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"unresolved HIGH must BLOCK regardless of confidence, got: {errors}")
+
+    def test_med_missing_confidence_fails_closed(self):
+        """AC5: unresolved MEDIUM with NO confidence field → fail-closed (blocks)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "MEDIUM", "resolved": False,
+             "finding": "x.py foo() line 12: unclear severity"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"unresolved MED with missing confidence must fail-closed (block), "
+            f"got: {errors}")
+
+    def test_med_short_alias_high_confidence_blocks(self):
+        """AC8: specialist 'MED' (deliver.md:396) gated identically to 'MEDIUM'."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "MED", "confidence": 9, "resolved": False,
+             "finding": "x.py foo() line 12: aliased severity string"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"'MED' alias conf=9 must BLOCK like 'MEDIUM', got: {errors}")
+
+    def test_med_case_insensitive(self):
+        """AC8: lowercase 'medium' still gated (case-insensitive normalization)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "medium", "confidence": 8, "resolved": False,
+             "finding": "x.py foo() line 12: lowercase severity"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"lowercase 'medium' conf=8 must BLOCK, got: {errors}")
+
+    def test_resolved_med_does_not_block(self):
+        """Positive control: a RESOLVED high-confidence MED never blocks."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "MEDIUM", "confidence": 9, "resolved": True,
+             "finding": "x.py foo() line 12: fixed already"},
+        ]), profile="bugfix")
+        assert not self._finding_errors(errors), (
+            f"resolved MED must NOT block, got: {errors}")
+
+    def test_low_never_blocks(self):
+        """Positive control: unresolved LOW with high confidence is note-only."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "LOW", "confidence": 10, "resolved": False,
+             "finding": "x.py foo() line 12: style nit"},
+        ]), profile="bugfix")
+        assert not self._finding_errors(errors), (
+            f"unresolved LOW must NOT block regardless of confidence, got: {errors}")
+
+    def test_helper_returns_blocking_findings_directly(self):
+        """Unit-test the helper in isolation: returns exactly the blocking set."""
+        from scripts.pipeline_validator import _blocked_findings
+        findings = [
+            {"severity": "HIGH", "resolved": False, "finding": "h"},        # block
+            {"severity": "MED", "confidence": 8, "resolved": False, "finding": "m1"},  # block
+            {"severity": "MEDIUM", "confidence": 3, "resolved": False, "finding": "m2"},  # pass
+            {"severity": "MEDIUM", "resolved": False, "finding": "m3"},     # block (fail-closed)
+            {"severity": "HIGH", "resolved": True, "finding": "h2"},        # pass (resolved)
+            {"severity": "LOW", "confidence": 10, "resolved": False, "finding": "l"},  # pass
+        ]
+        blocked = _blocked_findings(findings)
+        blocked_texts = {f.get("finding") for f in blocked}
+        assert blocked_texts == {"h", "m1", "m3"}, (
+            f"expected {{h, m1, m3}} blocked, got {blocked_texts}")
+
+    def test_completion_path_blocks_high_confidence_med(self, workspace):
+        """AC2 at the COMPLETION gate (validate()->_check_depth), not just publish.
+        This is the path that guards status:completed (STEERING#11 — force it)."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered",
+                        "confidence_score": {"score": 9, "breakdown": [], "penalties": []},
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {
+                            "profile_tier": "full", "spawned": True,
+                            "evidence": "Agent tool invocation: correctness specialist",
+                            "findings": [
+                                {"severity": "MEDIUM", "confidence": 8, "resolved": False,
+                                 "finding": "x.py foo() line 12: unresolved med"}]}})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        finding_errs = [e for e in result["errors"]
+                        if "finding" in e.lower() and ("confidence" in e.lower() or "MED" in e)]
+        assert len(finding_errs) >= 1, (
+            f"COMPLETION path must BLOCK unresolved high-confidence MED, "
+            f"got: {result['errors']}")
+
+
 class TestL3ConfidenceGate:
     """Layer 3: confidence < 7 blocks delivery unless human_override."""
 

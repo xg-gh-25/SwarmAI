@@ -88,6 +88,58 @@ CHECK_ERRORED = "errored"
 SEVERITY_HARD = "hard"          # failure/crash appends to errors[] → blocks
 SEVERITY_ADVISORY = "advisory"  # failure/crash appends to warnings[] → warns
 
+# ── Finding-level confidence gate (AutoSDE port, run_7583af5f) ──
+# The "confidence >= 7" rule that lived ONLY as prose in deliver.md:507 is now a
+# CODE CONSTANT — prose gates get bypassed (12× CLASS A), hard constants hold (P7).
+# Mirrors AutoSDE's threshold-as-constant form (their value is 8; we keep 7 to
+# match the established deliver.md prose, avoiding gratuitous drift).
+CONFIDENCE_GATE_THRESHOLD = 7
+# Specialists emit "MED" (deliver.md:396) while the final schema says "MEDIUM"
+# (STAGE_TEMPLATES :397) — a real in-repo severity-string collision (MOD04). The
+# gate MUST accept both, case-insensitively, or it is dead for specialist findings.
+_MED_SEVERITIES = frozenset({"MEDIUM", "MED"})
+
+
+def _blocked_findings(
+    findings: object, threshold: int = CONFIDENCE_GATE_THRESHOLD,
+) -> list[dict]:
+    """Return the UNRESOLVED findings that must block delivery/completion.
+
+    Blocking rule (the single source of truth used by BOTH the publish-time
+    gate `validate_artifact_data` and the completion-time gate `_check_depth`,
+    replacing the two previously-duplicated inline HIGH-only filters):
+
+    - severity HIGH  → always blocks (confidence-independent).
+    - severity MEDIUM/MED → blocks when confidence >= `threshold`, OR when
+      confidence is MISSING (fail-closed, P7: a gate must not be dodgeable by
+      omitting a field).  confidence < threshold → note-only (not blocked),
+      matching the deliver.md:507 prose semantics.
+    - severity LOW (or anything else) → never blocks.
+    - resolved findings never block regardless of severity/confidence.
+
+    Severity is normalized case-insensitively across {HIGH, MEDIUM, MED}.
+    """
+    if not isinstance(findings, list):
+        return []
+    blocked: list[dict] = []
+    for f in findings:
+        if not isinstance(f, dict) or f.get("resolved"):
+            continue
+        sev = str(f.get("severity", "")).strip().upper()
+        if sev == "HIGH":
+            blocked.append(f)
+        elif sev in _MED_SEVERITIES:
+            conf = f.get("confidence")
+            if conf is None:            # fail-closed on missing confidence
+                blocked.append(f)
+            else:
+                try:
+                    if float(conf) >= threshold:
+                        blocked.append(f)
+                except (TypeError, ValueError):
+                    blocked.append(f)   # unparseable confidence → fail-closed
+    return blocked
+
 
 class _CheckGuard:
     """Context manager that isolates one check so a crash becomes an ERRORED
@@ -394,7 +446,11 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "adversarial_review": {
             "spawned": True, "profile_tier": "full|lite|skipped",
             "findings_total": 3, "findings_fixed": 3, "findings_remaining": 0,
-            "findings": [{"severity": "HIGH|MEDIUM|LOW", "resolved": True,
+            # `confidence` (1-10) gates MEDIUM findings at delivery: an unresolved
+            # MEDIUM with confidence >= CONFIDENCE_GATE_THRESHOLD (7) BLOCKS; absent
+            # confidence on an unresolved MEDIUM is fail-closed (also blocks). HIGH
+            # blocks regardless. See _blocked_findings().
+            "findings": [{"severity": "HIGH|MEDIUM|LOW", "confidence": 8, "resolved": True,
                           "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
         },
         "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5},
@@ -947,16 +1003,21 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                         f"requires sub-agent to be actually spawned (spawned=true). "
                         f"Cannot skip adversarial execution."
                     )
-            elif tier and tier != "skipped":
-                findings = ar.get("findings", [])
-                if isinstance(findings, list):
-                    unresolved = [f for f in findings if isinstance(f, dict)
-                                  and f.get("severity") == "HIGH" and not f.get("resolved")]
-                    if unresolved:
-                        errors.append(
-                            f"{len(unresolved)} unresolved HIGH finding(s) — "
-                            f"set 'resolved': true after fixing each"
-                        )
+            # Finding-level confidence gate — INDEPENDENT of the spawned/tier
+            # branches above (a genuinely-spawned review can still carry unresolved
+            # blocking findings). Shared helper = single source of truth with the
+            # completion-time gate in _check_depth (R27: no divergence).
+            if tier and tier != "skipped":
+                blocked = _blocked_findings(ar.get("findings", []))
+                if blocked:
+                    errors.append(
+                        f"{len(blocked)} unresolved blocking finding(s) — HIGH "
+                        f"(any confidence) or MEDIUM with confidence >= "
+                        f"{CONFIDENCE_GATE_THRESHOLD} (missing confidence = "
+                        f"fail-closed). Fix each and set 'resolved': true, or "
+                        f"lower a MEDIUM's confidence below {CONFIDENCE_GATE_THRESHOLD} "
+                        f"if it is genuinely note-only."
+                    )
 
         # --- Three-Layer Governance: Full deliver ceremony enforcement ---
         # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
@@ -1559,15 +1620,18 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                     "Depth: adversarial_review ran but has no 'findings' field"
                 )
             elif tier != "skipped":
-                # HIGH findings must be resolved
-                high_unresolved = [
-                    f for f in ar.get("findings", [])
-                    if isinstance(f, dict) and f.get("severity") == "HIGH" and not f.get("resolved")
-                ]
-                if high_unresolved:
+                # Blocking findings: HIGH (any confidence) + MEDIUM with
+                # confidence >= threshold, via the shared _blocked_findings
+                # helper (single source of truth with the publish-time gate —
+                # previously these two sites had duplicated HIGH-only filters
+                # that could diverge, R27).
+                blocked = _blocked_findings(ar.get("findings", []))
+                if blocked:
                     errors.append(
-                        f"Depth: adversarial_review has {len(high_unresolved)} "
-                        f"unresolved HIGH finding(s) — fix before delivery"
+                        f"Depth: adversarial_review has {len(blocked)} unresolved "
+                        f"blocking finding(s) — HIGH (any confidence) or MEDIUM "
+                        f"with confidence >= {CONFIDENCE_GATE_THRESHOLD} (missing "
+                        f"confidence = fail-closed). Fix before delivery."
                     )
 
             # Two-field (spawned + evidence) enforcement at COMPLETION time.
