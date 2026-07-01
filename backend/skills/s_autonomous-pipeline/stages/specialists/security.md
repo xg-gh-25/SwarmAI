@@ -8,7 +8,10 @@ Dispatch decision is still scope-gated; NEVER_GATE means "don't skip based on st
 
 **Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
 RP17 (unsanitized strings in HTML/JSON/SQL), RP24 (cross-language serialization),
-RP28 (schema migration without rollback). These are proven vulnerability patterns.
+RP28 (schema migration without rollback), RP44 (identity-gate keyed by a raw name —
+case/path/symlink aliasing), RP46 (enum-matched gate fails-open on an un-listed
+value), RP49 (redaction written as a denylist — fails-open on fields added later;
+invert to an allowlist-of-keep). These are proven vulnerability patterns.
 
 Output: JSON objects, one finding per line.
 
