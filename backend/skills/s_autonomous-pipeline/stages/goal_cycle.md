@@ -227,9 +227,49 @@ progress_delta = (criteria_met_after - criteria_met_before) / total_criteria
 if cycle_number % review_cadence == 0:
     git_diff = git diff <last_review_commit>..HEAD
     → Run REVIEW stage behavior on this diff
-    → If findings: add to "Blockers" section of progress file
+    → If findings: append EACH to the Findings Ledger (step 10.5 shape) with
+      a new ID, Cycle Found, severity, confidence, status=APPLICABLE, file:line.
+      (Do NOT dump into free-text Blockers — a plain-text note cannot be
+      re-judged across cycles. The ledger is the tracked home.)
     → Update last_review_commit to HEAD
 ```
+
+### 10.5 Cross-Cycle Finding Re-Judgment (AutoSDE #2, run_7583af5f)
+
+`A FINDING IS NOT DONE UNTIL RE-JUDGED AGAINST THE LATEST DIFF`
+
+**Runs every cycle that the Periodic REVIEW gate fires (same cadence), and once
+more in the Final Quality Gate.** This is the mechanism that catches
+"fixed-in-cycle-3, regressed-in-cycle-7" — the machine version of OT01's
+"looked fixed, recurred." A fresh adversarial on the total diff does NOT catch
+this: it has no memory that a finding was ever raised and marked resolved, so a
+silent regression reads as clean. Re-judgment DOES, because it re-checks each
+KNOWN finding.
+
+**Process (for each ledger finding NOT already OBSOLETE):**
+```
+current_diff = git diff <start_commit>..HEAD
+for finding in Findings Ledger where status != OBSOLETE:
+    re-judge finding against current_diff + current file state:
+      - the code it flags still exists AND still exhibits the problem
+            → status = APPLICABLE   (even if it was RESOLVED in an earlier cycle —
+                                     this is the regression catch)
+      - the problem is verifiably fixed in the current code
+            → status = RESOLVED (record cycle)
+      - the code it referenced no longer exists at all
+            → status = OBSOLETE
+    write the updated status + re-judged cycle back to the ledger row
+```
+
+**Rule — this must have TEETH (Gate-1 finding, run_7583af5f):** re-judgment that
+only updates a markdown table changes nothing. Every finding that ends this step
+as **APPLICABLE and unresolved** MUST be carried forward into the DELIVER stage's
+`adversarial_review.findings[]` — verbatim, with its `severity` + `confidence` —
+so the finding-level confidence gate (`_blocked_findings`, pipeline_validator.py)
+blocks completion on it exactly as if a fresh adversarial had just raised it.
+Writing it only to the progress file is a no-op: the progress file never reaches
+`_blocked_findings`. The ledger is the working memory; the DELIVER artifact is
+the enforcement surface.
 
 ### 11. Revert Check
 
@@ -291,11 +331,21 @@ velocity = gm.get_velocity()
 
 **Final Quality Gate (before exiting goal_cycle stage):**
 
+0. **Cross-Cycle Re-Judgment (run step 10.5 one final time on the total diff).**
+   Re-judge every ledger finding against `git diff <start_commit>..HEAD`. Carry
+   every APPLICABLE-and-unresolved finding into the DELIVER
+   `adversarial_review.findings[]` (with severity + confidence) so the
+   `_blocked_findings` confidence gate sees it. A finding that was RESOLVED in an
+   early cycle but is APPLICABLE again here = a caught cross-cycle regression;
+   it blocks exactly like a fresh one.
+
 1. Full ADVERSARIAL review on total changeset:
    ```bash
    git diff <start_commit>..HEAD
    ```
-   Spawn sub-agent with this diff + DoD criteria + requirement.
+   Spawn sub-agent with this diff + DoD criteria + requirement. MERGE its new
+   findings into the ledger (they too become APPLICABLE rows) so the ledger is
+   the complete set the DELIVER gate enforces.
 
 2. **Cross-path adversarial prompt (MANDATORY):**
    The adversarial sub-agent MUST be given this additional instruction:
@@ -458,6 +508,23 @@ no separate inline implementation needed.
 
 ## Blockers
 (none, or list of blocked items with reasons)
+
+## Findings Ledger
+<!-- Cross-cycle finding tracking (Cross-Cycle Finding Re-Judgment, step 10.5).
+     Every REVIEW/adversarial finding from ANY cycle lives here with a status
+     that is RE-JUDGED against the current diff each cadence. This is what
+     catches "fixed in cycle 3, regressed in cycle 7" — a plain-text Blockers
+     dump cannot. Severity + confidence are carried so the finding can be
+     handed to the DELIVER confidence gate verbatim. -->
+| ID | Cycle Found | Severity | Confidence | Status | File:Line | Finding |
+|----|-------------|----------|------------|--------|-----------|---------|
+| F1 | 2 | MEDIUM | 8 | RESOLVED (cycle 4) | foo.py:12 | missing null guard |
+| F2 | 3 | HIGH | - | APPLICABLE | bar.py:88 | race on shared dict |
+
+<!-- Status values: APPLICABLE (still reproduces against current diff) |
+     RESOLVED (verified fixed against current diff) | OBSOLETE (the code it
+     referenced no longer exists). Only APPLICABLE + unresolved findings are
+     carried into the DELIVER adversarial_review.findings. -->
 
 ## Cycle Log
 **Cycle 1:** <insight>
