@@ -364,6 +364,32 @@ class CorrectionClassTracker:
 
         self._locked_mutate(_mutate)
 
+    def unregister_rule(self, class_name: str) -> None:
+        """Revert register_rule for a correction class (the missing inverse).
+
+        Clears active_rule + rule_deployed and resets post_rule_count to 0 — the
+        exact fields register_rule sets — so a mis-accepted governance rule can be
+        undone without hand-editing the state JSON. count/evidence/resolved are
+        PRESERVED: unregister reverts only the rule marker, not the class history.
+        Unknown class is a no-op (never creates a phantom entry). flock-safe via
+        _locked_mutate.
+        """
+
+        ckey = canonical_class_key(class_name)
+        if not ckey:
+            logger.debug("unregister_rule() ignoring empty class name: %r", class_name)
+            return
+
+        def _mutate():
+            entry = self._state.get(ckey)
+            if entry is None:
+                return  # no-op: never fabricate a class
+            entry["active_rule"] = None
+            entry["rule_deployed"] = None
+            entry["post_rule_count"] = 0
+
+        self._locked_mutate(_mutate)
+
     def register_gate(self, class_name: str, gate_id: str, description: str = "") -> None:
         """Register a structural fix (code gate) for a correction class."""
 

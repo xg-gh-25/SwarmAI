@@ -68,6 +68,32 @@ class TestRecordCorrection:
         assert state["count"] == 12
         assert state["post_gate_count"] == 1
 
+    def test_unregister_rule_clears_active_rule(self, tracker):
+        # register then unregister must fully invert register_rule
+        tracker.register_rule("CLASS_A", "RULE_CLASS_A")
+        assert tracker.get_class("CLASS_A")["active_rule"] == "RULE_CLASS_A"
+        tracker.record("CLASS_A", evidence="post-rule recurrence")
+        count_before_unregister = tracker.get_class("CLASS_A")["count"]
+        assert tracker.get_class("CLASS_A")["post_rule_count"] == 1
+        tracker.unregister_rule("CLASS_A")
+        post = tracker.get_class("CLASS_A")
+        assert post["active_rule"] is None
+        assert post["rule_deployed"] is None
+        assert post["post_rule_count"] == 0
+        # count/evidence must be preserved — unregister reverts only the rule marker
+        assert post["count"] == count_before_unregister
+
+    def test_unregister_rule_persists_to_disk(self, tracker):
+        tracker.register_rule("CLASS_C", "RULE_CLASS_C")
+        tracker.unregister_rule("CLASS_C")
+        raw = json.loads(tracker._state_path.read_text())
+        assert raw["CLASS_C"]["active_rule"] is None
+
+    def test_unregister_rule_unknown_class_is_noop(self, tracker):
+        # must not raise or create a phantom class
+        tracker.unregister_rule("CLASS_NEVER_SEEN")
+        assert tracker.get_class("CLASS_NEVER_SEEN") is None
+
     def test_persists_to_disk(self, tracker):
         tracker.record("CLASS_B", evidence="test")
         # Read raw file
