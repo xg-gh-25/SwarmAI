@@ -2849,9 +2849,14 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
             if isinstance(ar, dict):
                 findings = ar.get("findings", [])
                 adversarial_findings = len(findings)
+                # Count HIGH+CRITICAL, case-insensitive — consistent with the
+                # confidence gate's blocking severities (_blocked_findings). A
+                # bare == "HIGH" under-counted CRITICAL/lowercase relative to what
+                # the gate actually blocks (Gate-2 finding #3, run_7583af5f).
                 adversarial_high = sum(
                     1 for f in findings
-                    if isinstance(f, dict) and f.get("severity") == "HIGH"
+                    if isinstance(f, dict)
+                    and str(f.get("severity", "")).strip().upper() in ("HIGH", "CRITICAL")
                 )
                 adversarial_resolved = sum(
                     1 for f in findings

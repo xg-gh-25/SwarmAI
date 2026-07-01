@@ -1350,6 +1350,23 @@ class TestFindingConfidenceGate:
         assert not self._finding_errors(errors), (
             f"resolved MED must NOT block, got: {errors}")
 
+    def test_critical_blocks_like_high(self):
+        """AC4b (Gate-2 finding): CRITICAL blocks confidence-independent like HIGH.
+        'critical' is a live severity in review-agent schemas + confidence_score.py
+        (:133 treats critical==high). A gate that lets the MOST severe class through
+        is fail-OPEN — the inverse of intent."""
+        from scripts.pipeline_validator import validate_artifact_data, _blocked_findings
+        # helper level (both cases + missing confidence)
+        assert _blocked_findings([{"severity": "CRITICAL", "resolved": False, "finding": "x"}])
+        assert _blocked_findings([{"severity": "critical", "confidence": 2, "resolved": False, "finding": "x"}])
+        # gate level
+        errors = validate_artifact_data("deliver", self._deliver([
+            {"severity": "CRITICAL", "resolved": False,
+             "finding": "x.py foo() line 12: RCE via unsanitized path"},
+        ]), profile="bugfix")
+        assert self._finding_errors(errors), (
+            f"unresolved CRITICAL must BLOCK (fail-closed), got: {errors}")
+
     def test_low_never_blocks(self):
         """Positive control: unresolved LOW with high confidence is note-only."""
         from scripts.pipeline_validator import validate_artifact_data

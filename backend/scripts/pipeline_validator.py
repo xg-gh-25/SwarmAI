@@ -109,7 +109,10 @@ def _blocked_findings(
     gate `validate_artifact_data` and the completion-time gate `_check_depth`,
     replacing the two previously-duplicated inline HIGH-only filters):
 
-    - severity HIGH  → always blocks (confidence-independent).
+    - severity HIGH or CRITICAL → always blocks (confidence-independent).
+      (CRITICAL is a live severity in the review-agent schemas + confidence_score.py
+      :133 which treats critical==high; omitting it would fail-OPEN on the single
+      MOST severe finding class — the inverse of intent. Gate-2 finding, run_7583af5f.)
     - severity MEDIUM/MED → blocks when confidence >= `threshold`, OR when
       confidence is MISSING (fail-closed, P7: a gate must not be dodgeable by
       omitting a field).  confidence < threshold → note-only (not blocked),
@@ -117,7 +120,7 @@ def _blocked_findings(
     - severity LOW (or anything else) → never blocks.
     - resolved findings never block regardless of severity/confidence.
 
-    Severity is normalized case-insensitively across {HIGH, MEDIUM, MED}.
+    Severity is normalized case-insensitively across {HIGH, CRITICAL, MEDIUM, MED}.
     """
     if not isinstance(findings, list):
         return []
@@ -126,7 +129,7 @@ def _blocked_findings(
         if not isinstance(f, dict) or f.get("resolved"):
             continue
         sev = str(f.get("severity", "")).strip().upper()
-        if sev == "HIGH":
+        if sev in ("HIGH", "CRITICAL"):
             blocked.append(f)
         elif sev in _MED_SEVERITIES:
             conf = f.get("confidence")
