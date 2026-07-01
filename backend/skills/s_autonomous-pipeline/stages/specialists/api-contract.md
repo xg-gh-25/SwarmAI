@@ -1,5 +1,5 @@
 # API Contract Specialist Review
-<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP37 -->
+<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP49 -->
 
 Scope: When changeset touches router files, endpoint handlers, Pydantic models,
 response schemas, or API-facing interfaces.

@@ -1,5 +1,5 @@
 # Red Team Review
-<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP37 -->
+<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP49 -->
 
 Scope: CONDITIONAL — only dispatch when EITHER:
 - Changeset > 200 lines, OR
@@ -10,7 +10,7 @@ regardless of historical hit rate (insurance policy, not stats-gated).
 
 This runs AFTER other specialists. You receive their merged findings.
 
-**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP37) that
+**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP49) that
 prior specialists missed. Your unique value: patterns that fall between domains
 (e.g., RP25 blast radius, RP35 pool contention, RP36 fix-enables-regression, RP37 process tree lifetime).
 
