@@ -47,6 +47,43 @@ def test_get_pending_filters_to_governance_with_ids(svc):
     assert ids == {"CLASS_B:rule", "CLASS_A:gate"}
 
 
+# --- Bug3a (run_685db747): accept-side axis guard against STALE non-cognitive proposals ---
+# A pre-guard (pre-2026-06-25) code version could write an OPERATIONAL/UNCLASSIFIED
+# governance proposal. Producers are now guarded (escalation_ladder:111) but the
+# CONSUMER was not — so a stale non-cognitive row stayed visible + acceptable, which
+# is how OPERATIONAL got a spurious active_rule. Fail closed at consumption.
+
+@pytest.fixture
+def svc_with_stale_operational(tmp_path):
+    ctx = tmp_path / ".context"
+    ctx.mkdir(parents=True)
+    proposals = [
+        {"target": "governance", "proposal_kind": "rule", "source_class": "CLASS_B",
+         "occurrence_count": 5, "proposed_rule": "cognitive rule", "evidence": [], "confidence": 0.6},
+        # STALE non-cognitive row (would be written only by pre-guard code)
+        {"target": "governance", "proposal_kind": "rule", "source_class": "OPERATIONAL",
+         "occurrence_count": 32, "proposed_rule": "Recurring OPERATIONAL pattern (32x)", "evidence": [], "confidence": 0.9},
+    ]
+    (ctx / ".evolution_proposals.json").write_text(json.dumps(proposals), encoding="utf-8")
+    return EvalService(workspace_root=tmp_path)
+
+
+def test_pending_excludes_stale_non_cognitive(svc_with_stale_operational):
+    res = svc_with_stale_operational.get_pending_governance()
+    ids = {p["id"] for p in res["proposals"]}
+    assert "OPERATIONAL:rule" not in ids  # non-cognitive must not be offered
+    assert "CLASS_B:rule" in ids          # cognitive still offered
+
+
+def test_accept_stale_non_cognitive_is_refused(svc_with_stale_operational):
+    with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True) as TrackerCls:
+        tracker = TrackerCls.return_value
+        res = svc_with_stale_operational.decide_governance("OPERATIONAL:rule", "accept")
+    # must NOT register a rule for a non-cognitive class
+    tracker.register_rule.assert_not_called()
+    assert res["status"] != "accepted"
+
+
 # --- AC6: accept rule -> register_rule + removed ---
 
 def test_accept_rule_calls_register_rule_and_removes(svc):

@@ -1299,9 +1299,21 @@ class EvalService:
             return []
         if not isinstance(data, list):
             return []
+        from core.evolution.class_key import canonical_class_key, is_cognitive_class
+
         out = []
         for item in data:
             if isinstance(item, dict) and item.get("target") == "governance":
+                # Axis guard (Bug3a, run_685db747): refuse non-cognitive proposals
+                # at the CONSUMER, not just the producer. Producers gained the
+                # is_cognitive_class guard (escalation_ladder:111) on 2026-06-25,
+                # but a STALE pre-guard OPERATIONAL/UNCLASSIFIED row left on disk
+                # was still visible + acceptable — which is how OPERATIONAL got a
+                # spurious active_rule. GC candidates (gc_id, no source_class) are
+                # exempt: they are table-sourced, not axis-classified.
+                src = item.get("source_class")
+                if src and not is_cognitive_class(canonical_class_key(src)):
+                    continue
                 # Defensive id backfill for any pre-id proposal on disk.
                 if not item.get("id"):
                     item["id"] = item.get("gc_id") or (
