@@ -1,5 +1,5 @@
 /**
- * Tests for AttentionSection (🔔 需要你) — Run 1 redesign.
+ * Tests for AttentionSection (🔔 Needs You).
  *
  * Focus: the click-dispatch-by-kind contract (AC4) and empty-hide (AC3).
  *   - paused / job → onItemClick (inject to input)
@@ -39,7 +39,7 @@ describe('AttentionSection', () => {
       { kind: 'waiting', id: 'tab-42', title: 'Tab · abc12345', question: 'Pick A/B/C' },
     ];
     render(<AttentionSection items={items} onItemClick={onItemClick} onSelectTab={onSelectTab} />);
-    fireEvent.click(screen.getByText(/在等你回答/));
+    fireEvent.click(screen.getByText(/is waiting for you/));
     expect(onSelectTab).toHaveBeenCalledWith('tab-42');
     expect(onItemClick).not.toHaveBeenCalled();
   });
@@ -50,7 +50,7 @@ describe('AttentionSection', () => {
       { kind: 'job', id: 'morning-inbox', title: 'Morning Inbox', failures: 2 },
     ];
     render(<AttentionSection items={items} onItemClick={onItemClick} />);
-    fireEvent.click(screen.getByText(/连续失败 2 次/));
+    fireEvent.click(screen.getByText(/failed 2x/));
     expect(onItemClick).toHaveBeenCalledTimes(1);
     expect(onItemClick.mock.calls[0][0]).toContain('Morning Inbox');
   });

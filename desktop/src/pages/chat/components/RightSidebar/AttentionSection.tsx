@@ -1,5 +1,5 @@
 /**
- * AttentionSection — the 🔔 "需要你" queue in the Radar sidebar (Run 1 redesign).
+ * AttentionSection — the 🔔 "Needs You" queue in the Radar sidebar.
  *
  * Renders the aggregated attention items (paused pipelines / failed jobs /
  * waiting tabs). Click semantics are dispatched by item kind:
@@ -45,7 +45,7 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
     <CollapsibleSection
       name="attention"
       icon="notifications"
-      label="需要你"
+      label="Needs You"
       count={items.length}
       defaultExpanded={true}
       accent="rgba(245,166,35,0.5)"
@@ -66,12 +66,12 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
                     {item.title}
                   </span>
                   {item.reason && (
-                    <span className="mt-0.5 block text-[11px] leading-snug text-[var(--color-text-muted)]">
-                      「{item.reason}」
+                    <span className="mt-0.5 block text-[11px] leading-snug text-[var(--color-text-muted)] line-clamp-2">
+                      {item.reason}
                     </span>
                   )}
                   <span className="mt-1 block text-[10.5px] font-semibold text-[var(--color-accent)]">
-                    → resume 并回答
+                    → Resume &amp; answer
                   </span>
                 </span>
               </>
@@ -81,10 +81,10 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
                 <span className="shrink-0 text-red-400 text-[13px] leading-5">⚠</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] text-[var(--color-text)]">
-                    {item.title} 连续失败 {item.failures} 次
+                    {item.title} failed {item.failures}x
                   </span>
                   <span className="mt-1 block text-[10.5px] font-semibold text-[var(--color-accent)]">
-                    → 排查
+                    → Investigate
                   </span>
                 </span>
               </>
@@ -94,13 +94,13 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
                 <span className="shrink-0 text-blue-400 text-[13px] leading-5">💬</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] text-[var(--color-text)]">
-                    后台 {item.title} 在等你回答
+                    {item.title} is waiting for you
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-muted)]">
                     {item.question}
                   </span>
                   <span className="mt-1 block text-[10.5px] font-semibold text-[var(--color-accent)]">
-                    → 去回答
+                    → Go answer
                   </span>
                 </span>
               </>

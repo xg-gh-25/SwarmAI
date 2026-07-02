@@ -1,25 +1,26 @@
 /**
- * ChangesSection — the ✍ "改动" section in the Radar sidebar (Run 2 redesign).
+ * ChangesSection — the ✍ "Changes" section in the Radar sidebar.
  *
  * Replaces ReferencedFilesSection. Shows ONLY files the agent WROTE/EDITED this
  * session (drops the read/searched noise), overlays a git-derived status badge —
- * NEW (untracked/added, 🟢) or UPD (modified, 🟡) — and drops the repeat-count.
- * The badge is authoritative git state (not tool-type), looked up from the
- * workspace tree's gitStatus. A file not present in the loaded tree (deep dir /
- * source-repo file the tree doesn't cover) shows no badge — it is NOT hidden
- * (never drop a file we can't classify).
+ * NEW (untracked, 🟢) or UPD (modified, 🟡) — and drops the repeat-count.
+ *
+ * Badge source (Run-B fix): `useChangeStatus`, which asks git directly per file
+ * (resolve → committed) so it works for SOURCE-REPO files too — the earlier
+ * tree-gitStatus lookup only covered the SwarmWS workspace, so files the agent
+ * actually edits (in the source repo) got no badge. A file git can't classify
+ * shows no badge (but is NOT hidden — never drop a file we can't classify).
+ * NEW files sort before UPD.
  *
  * Click → dispatch swarm:open-file with { autoDiff: true } so the file opens in
  * the side FileViewer panel with the diff already shown (chat is not replaced).
  *
  * @exports ChangesSection
- * @exports gitStatusForPath — pure tree-lookup helper (unit-tested)
  */
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import type { ReferencedFile, FileOperation } from '../../../../hooks/useReferencedFiles';
-import type { TreeNode, GitStatus } from '../../../../types';
 import { OPEN_FILE_EVENT } from '../../../../components/common/MarkdownRenderer';
-import { useTreeData } from '../../../../contexts/ExplorerContext';
+import { useChangeStatus, type ChangeStatus } from '../../../../hooks/useChangeStatus';
 import { copyToClipboard } from '../../../../utils/clipboard';
 
 interface ChangesSectionProps {
@@ -27,54 +28,12 @@ interface ChangesSectionProps {
   totalCount: number;
 }
 
-/** Which badge (if any) a git status maps to. */
-type Badge = 'new' | 'upd' | null;
-
-function statusToBadge(status: GitStatus | undefined): Badge {
-  if (status === 'untracked' || status === 'added') return 'new';
-  if (status === 'modified' || status === 'renamed' || status === 'conflicting') return 'upd';
-  return null; // deleted/ignored/unknown → no badge
-}
-
-/**
- * Find a file's git status by walking the workspace tree. Matches by path suffix
- * to be robust to format differences between the emitted reference path
- * (as-tool-emitted, may be relative or absolute) and TreeNode.path
- * (workspace-relative). Returns undefined if no file node matches — the caller
- * shows no badge (but still lists the file).
- */
-export function gitStatusForPath(tree: TreeNode[], filePath: string): GitStatus | undefined {
-  // Normalize to forward slashes; compare by trailing-segment overlap.
-  const norm = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
-  let match: GitStatus | undefined;
-
-  const walk = (nodes: TreeNode[]): boolean => {
-    for (const node of nodes) {
-      if (node.type === 'file') {
-        const np = node.path.replace(/\\/g, '/');
-        // Suffix match in either direction: the reference path may be a
-        // workspace-relative subset of the tree path, or vice versa.
-        if (np === norm || np.endsWith('/' + norm) || norm.endsWith('/' + np)) {
-          match = node.gitStatus;
-          return true; // first match wins
-        }
-      } else if (node.children) {
-        if (walk(node.children)) return true;
-      }
-    }
-    return false;
-  };
-
-  walk(tree);
-  return match;
-}
-
-const BADGE_STYLE: Record<'new' | 'upd', { label: string; cls: string }> = {
+const BADGE_STYLE: Record<ChangeStatus, { label: string; cls: string }> = {
   new: { label: 'NEW', cls: 'text-green-400 bg-green-400/10' },
   upd: { label: 'UPD', cls: 'text-yellow-500 bg-yellow-500/10' },
 };
 
-const FileRow = memo(function FileRow({ file, badge }: { file: ReferencedFile; badge: Badge }) {
+const FileRow = memo(function FileRow({ file, badge }: { file: ReferencedFile; badge: ChangeStatus | undefined }) {
   const handleClick = useCallback(() => {
     document.dispatchEvent(
       new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.path, autoDiff: true } }),
@@ -88,7 +47,7 @@ const FileRow = memo(function FileRow({ file, badge }: { file: ReferencedFile; b
 
   return (
     <div
-      className="group flex items-center gap-1.5 px-2 py-1 cursor-pointer hover:bg-[var(--color-hover)] rounded text-[12px] transition-colors"
+      className="group flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[var(--color-hover)] rounded text-[12px] transition-colors"
       onClick={handleClick}
       title={file.path}
     >
@@ -112,16 +71,26 @@ const FileRow = memo(function FileRow({ file, badge }: { file: ReferencedFile; b
   );
 });
 
+/** Sort order: NEW first, then UPD, then unbadged; stable within a group. */
+function badgeRank(s: ChangeStatus | undefined): number {
+  return s === 'new' ? 0 : s === 'upd' ? 1 : 2;
+}
+
 export function ChangesSection({ grouped }: ChangesSectionProps) {
-  const { treeData } = useTreeData();
   const written = grouped.written; // written = created/edited this session; read/searched dropped
+  const paths = useMemo(() => written.map((f) => f.path), [written]);
+  const statusMap = useChangeStatus(paths);
+
+  const ordered = useMemo(() => {
+    return [...written].sort((a, b) => badgeRank(statusMap.get(a.path)) - badgeRank(statusMap.get(b.path)));
+  }, [written, statusMap]);
 
   if (written.length === 0) return null;
 
   return (
     <div className="py-1">
-      {written.map((file) => (
-        <FileRow key={file.path} file={file} badge={statusToBadge(gitStatusForPath(treeData, file.path))} />
+      {ordered.map((file) => (
+        <FileRow key={file.path} file={file} badge={statusMap.get(file.path)} />
       ))}
     </div>
   );

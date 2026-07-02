@@ -414,7 +414,16 @@ export default function FileViewer({
           gitStatus={gitStatus}
           onAttachToChat={onAttachToChat}
           readonly={cached.readonly}
-          initialShowDiff={initialFile?.autoDiff && initialFile.filePath === filePath}
+          // Auto-show the diff on open ONLY when we actually have a committed
+          // (HEAD) baseline to diff against. Without one — an untracked file, or
+          // a path git couldn't resolve — forcing the diff view would render an
+          // empty/misleading "no changes" panel (originalContent === content).
+          // Fail-soft to the normal edit view instead. (#6 fix)
+          initialShowDiff={
+            !!initialFile?.autoDiff &&
+            initialFile.filePath === filePath &&
+            !!cached.committedContent
+          }
           variant={variant}
           onToggleMode={onToggleMode}
           onSaveWithDiff={onSaveWithDiff}
