@@ -30,6 +30,7 @@ class JobStatusResponse(BaseModel):
     source: str  # "system" or "user"
     last_run: str | None = None
     last_status: str = "never"
+    last_error: str | None = None
     total_runs: int = 0
     consecutive_failures: int = 0
 
@@ -67,6 +68,7 @@ async def list_jobs():
                 source="system" if job.category == "system" else "user",
                 last_run=js.last_run.isoformat() if (js and js.last_run) else None,
                 last_status=js.last_status if js else "never",
+                last_error=js.last_error if js else None,
                 total_runs=js.total_runs if js else 0,
                 consecutive_failures=js.consecutive_failures if js else 0,
             ))
@@ -147,14 +149,19 @@ async def unified_status():
         state = load_state()
         jobs = load_jobs()
 
-        ok = sum(1 for j in jobs if state.jobs.get(j.id) and state.jobs[j.id].last_status == "success")
-        err = sum(1 for j in jobs if state.jobs.get(j.id) and state.jobs[j.id].consecutive_failures > 0)
+        # Only ENABLED jobs count toward health/failing — a disabled job is
+        # inert (neither healthy nor failing). brain-push (enabled=False) must
+        # not inflate the failing count (same enabled-gap class as run_01d2fd9d).
+        active = [j for j in jobs if j.enabled]
+        ok = sum(1 for j in active if state.jobs.get(j.id) and state.jobs[j.id].last_status == "success")
+        err = sum(1 for j in active if state.jobs.get(j.id) and state.jobs[j.id].consecutive_failures > 0)
 
         result["scheduled_jobs"] = {
             "total": len(jobs),
+            "enabled": len(active),
             "healthy": ok,
             "failing": err,
-            "never_run": len(jobs) - ok - err,
+            "never_run": len(active) - ok - err,
             "monthly_spend_usd": state.monthly_spend_usd,
             "buffered_signals": len(state.raw_signals),
             "dedup_cache_size": len(state.dedup_cache),

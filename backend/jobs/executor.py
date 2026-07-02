@@ -2121,6 +2121,10 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
     if result.status == "failed":
         js.consecutive_failures += 1
+        # Persist WHY it failed so the 🔔 Needs-You queue is diagnosable
+        # (was always empty → "failed" with no reason). Prefer error, fall
+        # back to summary; truncate to keep state.json small.
+        js.last_error = (result.error or result.summary or "")[:500] or None
         # Alert on streak threshold — writes to JSONL so briefing picks it up.
         # Only fires once per streak (exactly at threshold, not every failure after).
         if js.consecutive_failures == _FAILURE_ALERT_THRESHOLD:
@@ -2129,6 +2133,7 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
         # auth_failed is transient — don't reset streak (would hide real
         # failures) but don't increment either (not a job bug).
         js.consecutive_failures = 0
+        js.last_error = None  # cleared on a real success
 
 
 def _write_failure_streak_alert(job_id: str, streak: int, last_result: JobResult) -> None:

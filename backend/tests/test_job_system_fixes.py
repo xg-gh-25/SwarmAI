@@ -146,6 +146,7 @@ class TestCircuitBreakerAutoReset:
             "broken": JobState(
                 last_run=datetime.now(timezone.utc) - timedelta(hours=25),
                 last_status="failed",
+                last_error="exit=1 boom",
                 consecutive_failures=3,
             )
         })
@@ -153,6 +154,9 @@ class TestCircuitBreakerAutoReset:
         assert check_circuit_breaker(job, state) is True
         # consecutive_failures should be reset
         assert state.jobs["broken"].consecutive_failures == 0
+        # run_14d01964 Gate-2 MED: last_error must reset IN LOCKSTEP — else a
+        # cooldown-recovered job shows 0 failures + a stale error in 🔔.
+        assert state.jobs["broken"].last_error is None
 
     def test_circuit_breaker_no_reset_without_last_run(self):
         """If last_run is None (never ran), don't crash."""
@@ -351,3 +355,94 @@ class TestAuthFailureFallback:
             # No fallback — script handler should NOT be called
             mock_script.assert_not_called()
             assert result.status == "auth_failed"
+
+
+# ── run_14d01964: last_error persistence (🔔 diagnosability) ────────
+
+class TestLastErrorPersistence:
+    """_update_job_state must persist WHY a job failed so the 🔔 queue is diagnosable."""
+
+    def test_failed_job_persists_last_error(self):
+        from jobs.models import SchedulerState, JobResult
+        from jobs.executor import _update_job_state
+
+        state = SchedulerState()
+        result = JobResult(
+            job_id="broken", timestamp=datetime.now(timezone.utc),
+            status="failed", summary="boom", error="Script timed out after 900s",
+        )
+        _update_job_state(state, "broken", result)
+        # THE fix: error must land in state (was always dropped -> empty 🔔)
+        assert state.jobs["broken"].last_error == "Script timed out after 900s"
+
+    def test_failed_job_falls_back_to_summary_when_no_error(self):
+        from jobs.models import SchedulerState, JobResult
+        from jobs.executor import _update_job_state
+
+        state = SchedulerState()
+        result = JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="failed", summary="18/20 passed, 2 failed", error=None,
+        )
+        _update_job_state(state, "j", result)
+        assert state.jobs["j"].last_error == "18/20 passed, 2 failed"
+
+    def test_success_clears_last_error(self):
+        from jobs.models import SchedulerState, JobState, JobResult
+        from jobs.executor import _update_job_state
+
+        # pre-seed a stale error from a prior failure
+        state = SchedulerState(jobs={"j": JobState(last_error="old failure", consecutive_failures=2)})
+        result = JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="success", summary="ok",
+        )
+        _update_job_state(state, "j", result)
+        # success must wipe the stale error (else 🔔 shows a fixed job's ghost)
+        assert state.jobs["j"].last_error is None
+        assert state.jobs["j"].consecutive_failures == 0
+
+    def test_last_error_truncated_to_500(self):
+        from jobs.models import SchedulerState, JobResult
+        from jobs.executor import _update_job_state
+
+        state = SchedulerState()
+        huge = "x" * 5000
+        result = JobResult(
+            job_id="j", timestamp=datetime.now(timezone.utc),
+            status="failed", error=huge,
+        )
+        _update_job_state(state, "j", result)
+        assert len(state.jobs["j"].last_error) == 500
+
+
+# ── run_14d01964: unified_status failing-count excludes disabled jobs ─
+
+class TestUnifiedStatusEnabledGap:
+    """/api/jobs/status must not count disabled jobs as failing (same class as run_01d2fd9d)."""
+
+    def test_disabled_failing_job_not_counted(self):
+        import asyncio
+        from jobs.models import Job, SchedulerState, JobState
+        from routers import jobs as jobs_router
+
+        disabled_broken = Job(id="brain-push", name="Brain Push", type="script",
+                              schedule="0 * * * *", enabled=False)
+        enabled_ok = Job(id="live", name="Live", type="script",
+                         schedule="0 * * * *", enabled=True)
+        state = SchedulerState(jobs={
+            "brain-push": JobState(last_status="failed", consecutive_failures=1),
+            "live": JobState(last_status="success"),
+        })
+
+        with patch.object(jobs_router, "load_state", return_value=state, create=True), \
+             patch("jobs.scheduler.load_state", return_value=state), \
+             patch("jobs.scheduler.load_jobs", return_value=[disabled_broken, enabled_ok]):
+            res = asyncio.run(jobs_router.unified_status())
+
+        sched = res["scheduled_jobs"]
+        # brain-push is disabled -> must NOT inflate failing
+        assert sched["failing"] == 0
+        assert sched["healthy"] == 1
+        assert sched["enabled"] == 1
+        assert sched["total"] == 2

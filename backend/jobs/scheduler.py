@@ -439,6 +439,10 @@ def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
                     f"(24h cooldown elapsed, was {job_state.consecutive_failures} failures)"
                 )
                 job_state.consecutive_failures = 0
+                # last_error must stay in lockstep with consecutive_failures
+                # everywhere (not just _update_job_state) — else a cooldown-reset
+                # job shows 0 failures but a stale error in 🔔 diagnostics.
+                job_state.last_error = None
                 return True
         logger.warning(
             f"Circuit breaker: skipping '{job.id}' "

@@ -154,6 +154,7 @@ class JobState(BaseModel):
     """Runtime state for a single job."""
     last_run: datetime | None = None
     last_status: str = "never"
+    last_error: str | None = None      # error/summary of most recent failure (🔔 diagnostics); cleared on success
     consecutive_failures: int = 0
     total_runs: int = 0
     total_tokens: int = 0
