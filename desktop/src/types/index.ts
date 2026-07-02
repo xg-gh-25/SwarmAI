@@ -1184,6 +1184,6 @@ export interface FieldErrorMap {
 
 
 
-// ============== Radar Types (Swarm Radar Redesign) ==============
+// ============== Todo Types (canonical Todo entity) ==============
 
-export * from './radar';
+export * from './todo';

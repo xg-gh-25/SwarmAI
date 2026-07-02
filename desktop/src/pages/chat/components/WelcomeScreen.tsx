@@ -20,9 +20,9 @@ import {
   type BriefingFocusItem,
 } from '../../../services/system';
 import type { ItemClickHandler } from './RightSidebar/types';
-import type { RadarTodo } from '../../../types';
+import type { ToDo } from '../../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../../types/workspace-config';
-import { radarService } from '../../../services/radar';
+import { todosService } from '../../../services/todos';
 import {
   filterActiveTodos,
   sortByPriorityThenDate,
@@ -176,7 +176,7 @@ export interface WelcomeScreenProps {
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onItemClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
-  const [radarTodos, setRadarTodos] = useState<RadarTodo[]>([]);
+  const [todos, setTodos] = useState<ToDo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const { ref: containerRef, width: containerWidth } = useContainerWidth();
 
@@ -186,12 +186,12 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
     // Todos come from the same API as Radar sidebar (single source of truth).
     Promise.all([
       systemService.getBriefing(),
-      radarService.fetchActiveTodos(DEFAULT_WORKSPACE_ID).catch(() => [] as RadarTodo[]),
+      todosService.list(DEFAULT_WORKSPACE_ID).catch(() => [] as ToDo[]),
     ])
       .then(([data, todos]) => {
         if (!cancelled) {
           setBriefing(data);
-          setRadarTodos(sortByPriorityThenDate(filterActiveTodos(todos)));
+          setTodos(sortByPriorityThenDate(filterActiveTodos(todos)));
         }
       })
       .catch(() => {})
@@ -220,7 +220,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
   const hasSignals = briefing && briefing.signals.length > 0;
   const hasHotNews = briefing && briefing.hotNews.length > 0;
   const hasStocks = briefing && briefing.stocks.length > 0;
-  const hasTodos = radarTodos.length > 0;
+  const hasTodos = todos.length > 0;
   const hasOutput = briefing && (
     briefing.output.builds.length > 0 ||
     briefing.output.content.length > 0 ||
@@ -281,9 +281,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
               </SectionCard>
             );
             if (hasTodos) leftCards.push(
-              <SectionCard key="todo" icon="☑" title="Todo" count={radarTodos.length} accent="rgba(239,68,68,0.5)">
+              <SectionCard key="todo" icon="☑" title="Todo" count={todos.length} accent="rgba(239,68,68,0.5)">
                 <div className="space-y-0.5">
-                  {radarTodos.slice(0, 10).map((todo) => {
+                  {todos.slice(0, 10).map((todo) => {
                     const dotColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
                     return (
                       <button

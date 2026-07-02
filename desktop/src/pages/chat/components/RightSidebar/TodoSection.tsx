@@ -3,7 +3,7 @@
  * ToDo section for the Radar sidebar with lifecycle actions.
  *
  * Displays active ToDo items (status ``pending`` or ``overdue``) fetched via
- * ``radarService.fetchActiveTodos``.  Items are sorted by priority (high first)
+ * ``todosService.list``.  Items are sorted by priority (high first)
  * then creation date (newest first).  A display limit of 10 items is enforced
  * by default with "See more" / "Show less" expansion controls.
  *
@@ -20,8 +20,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { RadarTodo } from '../../../../types';
-import { radarService } from '../../../../services/radar';
+import type { ToDo } from '../../../../types';
 import { todosService } from '../../../../services/todos';
 import type { DropPayload } from './types';
 
@@ -56,7 +55,7 @@ export const PRIORITY_COLORS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 /** Return only active (not handled/cancelled/deleted) ToDo items. */
-export function filterActiveTodos(todos: RadarTodo[]): RadarTodo[] {
+export function filterActiveTodos(todos: ToDo[]): ToDo[] {
   const inactive = new Set(['handled', 'cancelled', 'deleted']);
   return todos.filter((t) => !inactive.has(t.status));
 }
@@ -65,7 +64,7 @@ export function filterActiveTodos(todos: RadarTodo[]): RadarTodo[] {
  * Sort by priority descending (high=3 first), then createdAt descending
  * (newest first).  Uses id as a deterministic tiebreaker.
  */
-export function sortByPriorityThenDate(todos: RadarTodo[]): RadarTodo[] {
+export function sortByPriorityThenDate(todos: ToDo[]): ToDo[] {
   return [...todos].sort((a, b) => {
     const aPri = PRIORITY_WEIGHT[a.priority] ?? 0;
     const bPri = PRIORITY_WEIGHT[b.priority] ?? 0;
@@ -98,7 +97,7 @@ interface TodoSectionProps {
 // ---------------------------------------------------------------------------
 
 export function TodoSection({ workspaceId, onCountChange, onItemClick }: TodoSectionProps) {
-  const [todos, setTodos] = useState<RadarTodo[]>([]);
+  const [todos, setTodos] = useState<ToDo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -145,7 +144,7 @@ export function TodoSection({ workspaceId, onCountChange, onItemClick }: TodoSec
       setError(null);
 
       try {
-        const data = await radarService.fetchActiveTodos(workspaceId);
+        const data = await todosService.list(workspaceId);
         setTodos(data);
         hasLoadedRef.current = true;
       } catch (err) {

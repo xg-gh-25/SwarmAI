@@ -1,20 +1,52 @@
-export type ToDoStatus = 'pending' | 'overdue' | 'inDiscussion' | 'handled' | 'cancelled' | 'deleted';
+/**
+ * Canonical Todo entity types.
+ *
+ * Single source of truth for the ToDo domain entity across the app (Radar
+ * sidebar, Welcome screen, convert-to-task). The shape mirrors the backend
+ * `ToDoResponse` (backend/schemas/todo.py) exactly — status values are the
+ * raw backend enum (snake_case, e.g. `in_discussion`), and response fields
+ * that the backend may omit are `| null`.
+ */
 
-export type ToDoSourceType = 'manual' | 'email' | 'slack' | 'meeting' | 'integration';
+/** Lifecycle status of a ToDo — values match the backend ToDoStatus enum verbatim. */
+export type ToDoStatus =
+  | 'pending'
+  | 'overdue'
+  | 'in_discussion'
+  | 'handled'
+  | 'cancelled'
+  | 'deleted';
 
+/** Source type for a ToDo — values match the backend ToDoSourceType enum. */
+export type ToDoSourceType =
+  | 'manual'
+  | 'email'
+  | 'slack'
+  | 'meeting'
+  | 'integration'
+  | 'chat'
+  | 'ai_detected';
+
+/** Priority level of a ToDo. */
 export type Priority = 'high' | 'medium' | 'low' | 'none';
 
+/**
+ * A ToDo item as returned by the backend (GET /todos).
+ *
+ * Optional/omittable fields are `| null` (the API returns null, not absent).
+ */
 export interface ToDo {
   id: string;
   workspaceId: string;
   title: string;
-  description?: string;
-  source?: string;
+  description: string | null;
+  source: string | null;
   sourceType: ToDoSourceType;
   status: ToDoStatus;
   priority: Priority;
-  dueDate?: string;
-  taskId?: string;
+  dueDate: string | null;
+  linkedContext: string | null;
+  taskId: string | null;
   createdAt: string;
   updatedAt: string;
 }

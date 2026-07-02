@@ -52,7 +52,25 @@ describe('ToDos Service', () => {
       expect(result.updatedAt).toBe('2025-01-02T00:00:00Z');
     });
 
-    it('should handle optional fields as undefined', () => {
+    it('should map linked_context to linkedContext', () => {
+      const result = toCamelCase({
+        id: 'todo-3',
+        workspace_id: 'ws-1',
+        title: 'Linked ToDo',
+        source_type: 'chat',
+        status: 'in_discussion',
+        priority: 'medium',
+        linked_context: 'session:abc',
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:00:00Z',
+      });
+
+      expect(result.linkedContext).toBe('session:abc');
+      expect(result.status).toBe('in_discussion');
+      expect(result.sourceType).toBe('chat');
+    });
+
+    it('should map absent optional fields to null', () => {
       const backendData = {
         id: 'todo-2',
         workspace_id: 'ws-1',
@@ -66,10 +84,11 @@ describe('ToDos Service', () => {
 
       const result = toCamelCase(backendData);
 
-      expect(result.description).toBeUndefined();
-      expect(result.source).toBeUndefined();
-      expect(result.dueDate).toBeUndefined();
-      expect(result.taskId).toBeUndefined();
+      expect(result.description).toBeNull();
+      expect(result.source).toBeNull();
+      expect(result.dueDate).toBeNull();
+      expect(result.linkedContext).toBeNull();
+      expect(result.taskId).toBeNull();
     });
   });
 
