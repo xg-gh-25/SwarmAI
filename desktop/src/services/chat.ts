@@ -673,7 +673,12 @@ export const chatService = {
     });
   },
 
-  // Submit command permission decision for dangerous command approval (non-streaming)
+  // Submit command permission decision for dangerous command approval (non-streaming).
+  // NOTE: no live caller since run_ec351cc9 — both approve and deny now stream via
+  // streamCmdPermissionContinue so the agent can continue after a decision. Retained
+  // because the backend /cmd-permission-response endpoint still holds the
+  // approve-into-void recovery path (run_65f317db); removing this pair is a separate
+  // cleanup. Do not add new callers — use streamCmdPermissionContinue.
   async submitCmdPermissionDecision(
     request: PermissionResponse
   ): Promise<{ status: string; requestId: string }> {

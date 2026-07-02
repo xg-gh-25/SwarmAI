@@ -2493,18 +2493,22 @@ export default function ChatPage() {
       }
     }
 
-    if (decision === 'deny') {
-      try {
-        await chatService.submitCmdPermissionDecision({ sessionId: tabSessionId, requestId, decision: 'deny' });
-      } catch (error) {
-        console.error('Failed to submit deny decision:', error);
-      } finally {
-        if (tabId) permissionLoadingTabs.current.delete(tabId);
-        setIsStreaming(false, tabId);
-      }
-      return;
-    }
-
+    // Approve AND deny both stream through /cmd-permission-continue: the backend
+    // signals the decision to the blocked dangerous_command_gate hook, which
+    // returns permissionDecision:allow|deny to the SDK. On DENY the SDK receives
+    // the refusal as the tool_result and the model CONTINUES — acknowledging the
+    // denial and (usually) proposing an alternative — instead of the turn being
+    // hard-killed (the old deny branch called the non-streaming endpoint +
+    // interrupt(), which left the tab at "Denied" with no agent response, an
+    // ambiguous dead-looking stop). The denied command is NOT re-runnable: the
+    // hook only calls approve_command() on approve, so a model retry of the same
+    // command re-triggers a fresh approval prompt (security_hooks.py:649).
+    //
+    // Convergence (not a new deny path): the two decisions share ONE streaming
+    // path — the only difference is the `decision` value threaded at :streamCmd
+    // below. All race/cross-tab guards above (permissionLoadingTabs double-click,
+    // isStreaming re-entry return, incrementStreamGen stale-stream kill,
+    // capturedTabId closure) therefore protect deny identically to approve.
     incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true, tabId);
 

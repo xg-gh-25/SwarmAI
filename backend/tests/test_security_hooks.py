@@ -500,6 +500,21 @@ class TestDangerousCommandGateIntegration:
         assert "User denied" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
     @pytest.mark.asyncio
+    async def test_denied_command_is_NOT_cached_so_a_retry_re_prompts(self):
+        """run_ec351cc9 security invariant: after DENY (and the agent continues),
+        the denied command must NEVER be silently re-runnable. The gate only calls
+        approve_command() on APPROVE, so a model retry of the same command finds it
+        NOT approved → re-triggers a fresh prompt (never auto-runs)."""
+        gate, pm = self._make_gate(decision_to_return="deny")
+        cmd = "rm -rf ~/Documents"
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": cmd}}, None, None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # THE invariant: denied command is not in the session's approved set.
+        assert pm.is_command_approved("sess-smoke", cmd) is False
+
+    @pytest.mark.asyncio
     async def test_timeout_emits_visible_distinct_reason(self):
         """A timeout denies but with a DISTINCT 审批超时 reason, not silent."""
         gate, _pm = self._make_gate(decision_to_return="timeout")
