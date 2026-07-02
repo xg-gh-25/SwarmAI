@@ -1,11 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Shrikhand';font-weight:400;font-display:swap;src:url('../../fonts/shrikhand-400.woff2') format('woff2');}
-@font-face{font-family:'Yozai';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL KuaiLe';font-weight:400;font-display:swap;src:url('../../fonts/zcool-kuaile-400.woff2') format('woff2');}
-@font-face{font-family:'Zilla Slab';font-weight:400;font-display:swap;src:url('../../fonts/zilla-slab-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Scatterbrain
@@ -520,8 +512,8 @@ A `@media print` rule sets `page-break-after: always` on each slide with `min-he
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link href="https://chinese-fonts-cdn.deno.dev/packages/zcool-kuaile/dist/ZCOOLKuaiLe-Regular/result.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 
 Then append the CJK families to the appropriate font stacks:

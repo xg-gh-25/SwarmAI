@@ -1,14 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Bebas Neue';font-weight:400;font-display:swap;src:url('../../fonts/bebas-neue-400.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:300;font-display:swap;src:url('../../fonts/inter-300.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url('../../fonts/inter-400.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url('../../fonts/inter-500.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url('../../fonts/inter-600.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:700;font-display:swap;src:url('../../fonts/inter-700.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Coral
@@ -568,7 +557,10 @@ Use **Strategy A — single-font-stack with fallback**: declare ZCOOL XiaoWei *a
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300..700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 
 ```css

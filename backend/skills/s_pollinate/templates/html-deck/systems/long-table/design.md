@@ -1,15 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Bricolage Grotesque';font-weight:400;font-display:swap;src:url('../../fonts/bricolage-grotesque-400.woff2') format('woff2');}
-@font-face{font-family:'Fraunces';font-weight:400;font-display:swap;src:url('../../fonts/fraunces-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Long Table
@@ -548,6 +536,9 @@ When the deck content is pure Chinese, override both font stacks to lead with No
 Add to the existing Google Fonts `<link>`:
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
 ```
 
 ### Universal CJK Adjustments

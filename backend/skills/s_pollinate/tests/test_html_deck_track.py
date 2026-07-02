@@ -1,13 +1,23 @@
-"""Tests for the html_deck track wiring in s_pollinate (run_f721108a, Plan B v4).
+"""Tests for the html_deck track in s_pollinate.
 
-Covers the format_recommend producer + collision fix (D1), the font-asset
-manifest integrity (D2 / AC3-AC5a), and the ingested render infra (AC1/AC2).
+History: Plan B v4 (run_f721108a) originally bundled fonts LOCALLY (zero-network
+render). run_68176c82 REVERSED that to upstream CDN fonts — SwarmAI is online by
+default, and the CDN carries the upstream font fidelity that local bundling
+degraded (true italic serif axis + individual CJK faces, not Noto substitutes).
 
-Methodology: drives the REAL format_recommend.detect_fast_path (no mock) and
-the REAL ingested files on disk. The collision test is the load-bearing one:
-"html deck" contains the substring "deck", so a naive add double-emits the
-PPTX deck track — this asserts html_deck fires WITHOUT the PPTX deck track,
-and that a plain "deck"/"ppt" request still returns PPTX-only (no regression).
+This suite now asserts the CDN-based contract:
+  - D1: the format_recommend html_deck producer + PPTX-collision fix (unchanged).
+  - AC1/AC2: 34 upstream design.md + shared render infra present (unchanged).
+  - AC3-CDN: every design.md carries an upstream font <link> (googleapis/fontshare/
+    jsdelivr), NOT a local ../../fonts/ ref — i.e. the reversal is complete.
+  - AC4-italic: the italic-serif templates (vellum, grove, ...) preserve their
+    real italic axis via the CDN link (the fidelity local bundling lost).
+  - AC6 (gated): a vellum deck renders headless and the stage scales. Font load
+    is now a network concern (CDN), so the offline-local-font assertion is gone;
+    we assert the structural render (scale) which is what deck-stage.js owns.
+
+Methodology: drives the REAL format_recommend.detect_fast_path (no mock) and the
+REAL restored files on disk.
 """
 import importlib.util
 import re
@@ -26,8 +36,11 @@ DATA = SKILL / "templates" / "html-deck"
 sys.path.insert(0, str(SCRIPTS))
 import format_recommend as fr  # noqa: E402
 
+_CDN_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com", "fontshare",
+              "cdn.jsdelivr", "chinese-fonts-cdn")
 
-# ---------- D1: html_deck producer + collision fix ----------
+
+# ---------- D1: html_deck producer + collision fix (unchanged by the reversal) ----------
 
 def test_html_deck_signal_detected():
     """An explicit html-deck intent must produce the html_deck track."""
@@ -67,7 +80,7 @@ def test_main_returns_html_deck_json():
     assert "html_deck" in r.stdout
 
 
-# ---------- AC1/AC2: ingested design systems + shared infra ----------
+# ---------- AC1/AC2: upstream design systems + shared infra ----------
 
 def test_34_design_systems_present():
     systems = DATA / "systems"
@@ -86,155 +99,89 @@ def test_shared_infra_present():
         assert p.is_file() and p.stat().st_size > 100, f"missing/empty infra: {f}"
 
 
-# ---------- AC3: fonts fetched, valid, static ----------
+# ---------- reversal invariants: CDN fonts, no local machinery ----------
 
-def _woff2_tables(path: Path) -> set[str]:
-    """Parse woff2 header + table directory WITHOUT fonttools (dropped as a dep).
-
-    woff2: 48-byte header, then a table directory of variable-length entries.
-    We read the known-length table-tag table via the flag byte of each entry:
-    the low 6 bits are a tag index; 0x3f (63) means an arbitrary 4-byte tag
-    follows. We only need to know whether 'fvar'/'gvar' (variable-font tables)
-    are present, so decode just the tags.
-    """
-    import struct
-    KNOWN = ["cmap","head","hhea","hmtx","maxp","name","OS/2","post","cvt ","fpgm",
-             "glyf","loca","prep","CFF ","VORG","EBDT","EBLC","gasp","hdmx","kern",
-             "LTSH","PCLT","VDMX","vhea","vmtx","BASE","GDEF","GPOS","GSUB","EBSC",
-             "JSTF","MATH","CBDT","CBLC","COLR","CPAL","SVG ","sbix","acnt","avar",
-             "bdat","bloc","bsln","cvar","fdsc","feat","fmtx","fvar","gvar","hsty",
-             "just","lcar","mort","morx","opbd","prop","trak","Zapf","Silf","Glat",
-             "Gloc","Feat","Sill"]
-    data = path.read_bytes()
-    if data[:4] != b"wOF2":
-        return set()
-    num_tables = struct.unpack(">H", data[12:14])[0]
-    tags, off = set(), 48
-    for _ in range(num_tables):
-        flag = data[off]; off += 1
-        idx = flag & 0x3f
-        if idx == 0x3f:
-            tags.add(data[off:off+4].decode("latin-1")); off += 4
-        else:
-            tags.add(KNOWN[idx] if idx < len(KNOWN) else f"?{idx}")
-        # skip origLength (+ transformLength for glyf/loca) UIntBase128 — but we
-        # only need tags, and tags are all read before any length field of the
-        # NEXT entry; to keep parsing simple we bail after collecting enough.
-        # Read the UIntBase128 length(s) to advance correctly:
-        def _uintbase128(o):
-            v = 0
-            for _i in range(5):
-                b = data[o]; o += 1
-                v = (v << 7) | (b & 0x7f)
-                if not (b & 0x80):
-                    return v, o
-            return v, o
-        _, off = _uintbase128(off)
-        tag = list(tags)[-1] if tags else ""
-        if tag in ("glyf", "loca"):
-            _, off = _uintbase128(off)
-    return tags
+def test_local_font_machinery_removed():
+    """The reversal deleted the bundled fonts + manifest. Their ABSENCE is the invariant."""
+    assert not (DATA / "fonts").exists(), "local fonts/ dir should be deleted (reverted to CDN)"
+    assert not (DATA / "FONT_MANIFEST.json").exists(), "FONT_MANIFEST.json should be deleted"
 
 
-def test_fonts_present_and_static():
-    fonts = DATA / "fonts"
-    assert fonts.is_dir(), "fonts dir missing"
-    woff2 = list(fonts.glob("*.woff2"))
-    assert len(woff2) >= 80, f"expected >=80 woff2, got {len(woff2)}"
-    # spot-check a sample: valid woff2 signature + NOT a variable font (no fvar/gvar).
-    # Variable fonts are the merge-crash risk the plan avoided by using fontsource.
-    for p in sorted(woff2)[:8]:
-        assert p.stat().st_size > 500, f"{p} too small"
-        data = p.read_bytes()
-        assert data[:4] == b"wOF2", f"{p} not a valid woff2 (bad signature)"
-        tables = _woff2_tables(p)
-        assert "fvar" not in tables and "gvar" not in tables, \
-            f"{p} is a variable font (merge risk) — tables={tables}"
+def test_no_residual_local_font_refs():
+    """No design.md may point at the deleted local ../../fonts/ path (would 404 at render)."""
+    offenders = [d.parent.name for d in (DATA / "systems").glob("*/design.md")
+                 if "../../fonts/" in d.read_text(encoding="utf-8", errors="ignore")]
+    assert not offenders, f"residual local font refs in: {offenders}"
 
 
-# ---------- AC4/AC5a: transform removed CDN refs + every family has @font-face ----------
-
-def test_no_google_fonts_refs_after_transform():
-    systems = DATA / "systems"
-    offenders = []
-    for d in systems.glob("*/design.md"):
+def test_every_design_has_cdn_font_link():
+    """AC3-CDN: every design.md loads its fonts from an upstream CDN <link>.
+    (A pure-system-font template with no web font is theoretically allowed; if one
+    ever appears, list it here explicitly rather than weakening the assertion.)"""
+    missing = []
+    for d in (DATA / "systems").glob("*/design.md"):
         txt = d.read_text(encoding="utf-8", errors="ignore")
-        if "googleapis.com" in txt or "gstatic.com" in txt:
-            offenders.append(d.parent.name)
-    assert not offenders, f"CDN refs remain in: {offenders}"
+        if not any(h in txt for h in _CDN_HOSTS):
+            missing.append(d.parent.name)
+    assert not missing, f"design.md with no CDN font link (font fidelity lost): {missing}"
 
 
-def test_every_used_family_has_local_font_face():
-    """AC5-a: across ALL 34 systems, every QUOTED CSS font-family names a family that
-    has an injected @font-face — EXCEPT deliberate system/generic fonts (Segoe UI,
-    MS Sans Serif, ...), which the ingest records in FONT_MANIFEST.json. This proves
-    no *intended-local* face silently falls back to a system font at render."""
-    import json
-    manifest = json.loads((DATA / "FONT_MANIFEST.json").read_text(encoding="utf-8"))
-    generics = {g.lower() for g in manifest.get("generic_families", [])}
-    system_fb = {s.lower() for s in manifest.get("system_fallback", [])}
-    allowed = generics | system_fb
-    systems = DATA / "systems"
-    problems = {}
-    for d in systems.glob("*/design.md"):
-        txt = d.read_text(encoding="utf-8", errors="ignore")
-        faces = {f.lower() for f in re.findall(r"@font-face\{font-family:'([^']+)'", txt)}
-        used = set()
-        # QUOTED family names only (matches the ingest's Source-2 extraction)
-        for m in re.finditer(r"font-family:\s*([^;}\n]+)", txt):
-            for q in re.findall(r"'([^']+)'|\"([^\"]+)\"", m.group(1)):
-                fam = (q[0] or q[1]).strip().lower()
-                if fam and fam not in allowed:
-                    used.add(fam)
-        missing = {u for u in used if u not in faces}
-        if missing:
-            problems[d.parent.name] = sorted(missing)
-    assert not problems, f"font-family with no local @font-face (and not a known system font): {problems}"
+def test_italic_serif_templates_preserve_italic_axis():
+    """AC4-italic: templates whose personality IS the italic serif must carry a real
+    italic axis in their CDN link — the fidelity local upright-only bundling destroyed.
+    vellum's headline font is italic Cormorant Garamond ('ital,wght@...;1,400')."""
+    vellum = (DATA / "systems" / "vellum" / "design.md").read_text(encoding="utf-8")
+    assert "fonts.googleapis.com" in vellum, "vellum lost its Google Fonts link"
+    # the ital axis appears as ':ital,wght@' with at least one '1,<weight>' (italic) pair
+    assert re.search(r"ital,wght@[^\"'&]*1,\d", vellum), \
+        "vellum's Cormorant link has no italic (1,<wght>) axis — italic fidelity lost"
 
 
 def test_track_doc_and_wiring_present():
     """Track doc exists + INSTRUCTIONS.md dispatches html_deck to it."""
-    skill = SKILL
-    track_doc = skill / "tracks" / "track-e2-html-deck.md"
+    track_doc = SKILL / "tracks" / "track-e2-html-deck.md"
     assert track_doc.is_file() and track_doc.stat().st_size > 500, "track-e2-html-deck.md missing/empty"
-    instr = (skill / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+    instr = (SKILL / "INSTRUCTIONS.md").read_text(encoding="utf-8")
     assert "html_deck" in instr, "INSTRUCTIONS.md has no html_deck dispatch"
     assert "track-e2-html-deck.md" in instr, "INSTRUCTIONS.md does not point to the track doc"
+
+
+def test_track_doc_is_cdn_based_not_local():
+    """The reversal must have rewritten the recipe: no 'LOCAL FONTS'/'../../fonts/'
+    zero-network language should survive in the track doc (would mislead the agent)."""
+    doc = (SKILL / "tracks" / "track-e2-html-deck.md").read_text(encoding="utf-8")
+    assert "../../fonts/" not in doc, "track doc still references deleted local fonts/"
 
 
 @pytest.mark.skipif(
     not _HAS_PLAYWRIGHT,
     reason="playwright not in this interpreter (render is a runtime concern; see AC6 standalone probe)",
 )
-def test_ac6_render_offline_fonts_and_scale():
-    """AC6 (live E2E, gated): assemble a vellum deck, render headless over file://,
-    assert stage scales + local font loads offline. Skips if playwright absent."""
+def test_ac6_render_scale():
+    """AC6 (live E2E, gated): assemble a minimal deck using the upstream design.md's
+    own font <link> + deck-stage.js, render headless over file://, assert the stage
+    SCALES (the structural guarantee deck-stage.js owns). Font loading is now a CDN
+    (network) concern, so this does not assert offline-local-font — it asserts the
+    scale engine, which is what this track's infra actually owns."""
     import tempfile
     from playwright.sync_api import sync_playwright  # type: ignore
 
-    vellum = DATA / "systems" / "vellum" / "design.md"
-    design = vellum.read_text(encoding="utf-8")
-    m = re.search(r"<style>\s*/\* LOCAL FONTS.*?</style>", design, re.S)
-    assert m, "no injected LOCAL FONTS block in vellum"
-    faces = m.group(0).replace("../../fonts/", f"file://{DATA}/fonts/")
     deck_js = (DATA / "shared" / "deck-stage.js").read_text(encoding="utf-8")
     vp = (DATA / "shared" / "viewport-base.css").read_text(encoding="utf-8")
-    html = (f"<!DOCTYPE html><html><head><meta charset='utf-8'>{faces}<style>{vp}\n"
-            f"h1.title{{font-family:'Noto Serif SC',serif;font-weight:700;font-size:112px}}</style></head>"
+    html = (f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{vp}\n"
+            f"h1.title{{font-size:112px}}</style></head>"
             f"<body><deck-stage width='1920' height='1080'><section class='slide'>"
-            f"<h1 class='title' id='probe'>测试 Vellum</h1></section></deck-stage>"
+            f"<h1 class='title' id='probe'>Vellum 测试</h1></section></deck-stage>"
             f"<script>{deck_js}</script></body></html>")
-    out = Path(tempfile.gettempdir()) / "ac6_vellum_test.html"
+    out = Path(tempfile.gettempdir()) / "ac6_scale_test.html"
     out.write_text(html, encoding="utf-8")
     with sync_playwright() as p:
         b = p.chromium.launch()
         pg = b.new_page(viewport={"width": 1440, "height": 900})
         pg.goto(f"file://{out}")
-        pg.wait_for_timeout(300); pg.evaluate("document.fonts.ready"); pg.wait_for_timeout(300)
+        pg.wait_for_timeout(300)
         transform = pg.evaluate("""() => {const s=document.querySelector('deck-stage');
             const c=s.shadowRoot&&s.shadowRoot.querySelector('.canvas');
             return c?getComputedStyle(c).transform:'NONE';}""")
-        loaded = pg.evaluate("""() => document.fonts.check("700 112px 'Noto Serif SC'")""")
         b.close()
     assert transform not in ("none", "NONE", None), f"deck-stage did not scale: {transform}"
-    assert loaded, "local 'Noto Serif SC' failed to load offline (system fallback)"

@@ -1,14 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Noto Sans SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-sans-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-sans-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-sans-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:800;font-display:swap;src:url('../../fonts/noto-sans-sc-800.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-sans-sc-900.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Raw Grid
@@ -443,6 +432,9 @@ The system uniquely has interactive hover states baked into the design — list 
 ### Loading
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@500;700;800;900&display=swap" rel="stylesheet">
 ```
 
 Then append `'Noto Sans SC'` after the Latin stack in every font-family token:

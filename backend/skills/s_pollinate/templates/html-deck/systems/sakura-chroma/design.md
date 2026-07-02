@@ -1,14 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Albert Sans';font-weight:400;font-display:swap;src:url('../../fonts/albert-sans-400.woff2') format('woff2');}
-@font-face{font-family:'Big Shoulders Display';font-weight:400;font-display:swap;src:url('../../fonts/big-shoulders-display-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:300;font-display:swap;src:url('../../fonts/jetbrains-mono-300.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('../../fonts/jetbrains-mono-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('../../fonts/jetbrains-mono-500.woff2') format('woff2');}
-@font-face{font-family:'LXGW WenKai';font-weight:400;font-display:swap;src:url('../../fonts/lxgw-wenkai-tc-400.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Sakura Chroma
@@ -575,8 +564,8 @@ No `@media print` rule is defined.
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link href="https://chinese-fonts-cdn.deno.dev/packages/zcool-xiaowei/dist/ZCOOLXiaoWei-Regular/result.css" rel="stylesheet">
+<link href="https://chinese-fonts-cdn.deno.dev/packages/lxgwwenkai/dist/LXGWWenKai-Regular/result.css" rel="stylesheet">
 ```
 
 Then append the CJK families to the appropriate font stacks:

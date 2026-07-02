@@ -1,19 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Bebas Neue';font-weight:400;font-display:swap;src:url('../../fonts/bebas-neue-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:300;font-display:swap;src:url('../../fonts/space-grotesk-300.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:400;font-display:swap;src:url('../../fonts/space-grotesk-400.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:500;font-display:swap;src:url('../../fonts/space-grotesk-500.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:600;font-display:swap;src:url('../../fonts/space-grotesk-600.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:700;font-display:swap;src:url('../../fonts/space-grotesk-700.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Retro Zine
@@ -524,6 +508,9 @@ No `@media print` rule is defined. The deck is web/viewport-first.
 ### Loading
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&display=swap" rel="stylesheet">
 ```
 
 Then append `'Noto Serif SC'` to the appropriate font stacks:

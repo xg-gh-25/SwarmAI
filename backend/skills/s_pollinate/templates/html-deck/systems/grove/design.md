@@ -1,27 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'JetBrains Mono';font-weight:300;font-display:swap;src:url('../../fonts/jetbrains-mono-300.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('../../fonts/jetbrains-mono-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('../../fonts/jetbrains-mono-500.woff2') format('woff2');}
-@font-face{font-family:'Jost';font-weight:200;font-display:swap;src:url('../../fonts/jost-200.woff2') format('woff2');}
-@font-face{font-family:'Jost';font-weight:300;font-display:swap;src:url('../../fonts/jost-300.woff2') format('woff2');}
-@font-face{font-family:'Jost';font-weight:400;font-display:swap;src:url('../../fonts/jost-400.woff2') format('woff2');}
-@font-face{font-family:'Jost';font-weight:500;font-display:swap;src:url('../../fonts/jost-500.woff2') format('woff2');}
-@font-face{font-family:'Jost';font-weight:600;font-display:swap;src:url('../../fonts/jost-600.woff2') format('woff2');}
-@font-face{font-family:'LXGW WenKai TC';font-weight:400;font-display:swap;src:url('../../fonts/lxgw-wenkai-tc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-mono-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-mono-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Playfair Display';font-weight:400;font-display:swap;src:url('../../fonts/playfair-display-400.woff2') format('woff2');}
-@font-face{font-family:'Playfair Display';font-weight:700;font-display:swap;src:url('../../fonts/playfair-display-700.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Grove
@@ -525,6 +501,9 @@ Baseline mismatch at display sizes (5.5–10vw) is mild — LXGW WenKai and Play
 Replace the existing Noto-only fallback with an LXGW WenKai + Noto Serif SC + Noto Sans Mono CJK pair:
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@300;400;500&family=Noto+Sans+Mono+CJK+SC:wght@300;400&display=swap" rel="stylesheet">
 ```
 
 LXGW WenKai TC is the version hosted on Google Fonts (covers both traditional and simplified glyphs).

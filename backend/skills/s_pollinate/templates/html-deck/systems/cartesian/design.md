@@ -1,20 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Inter';font-weight:300;font-display:swap;src:url('../../fonts/inter-300.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url('../../fonts/inter-400.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url('../../fonts/inter-500.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url('../../fonts/inter-600.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:700;font-display:swap;src:url('../../fonts/inter-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Playfair Display';font-weight:400;font-display:swap;src:url('../../fonts/playfair-display-400.woff2') format('woff2');}
-@font-face{font-family:'Playfair Display';font-weight:700;font-display:swap;src:url('../../fonts/playfair-display-700.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Cartesian
@@ -485,6 +468,9 @@ Use **Strategy A — single-font-stack with fallback**: declare Noto Serif SC *a
 ### Loading
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..700;1,400..700&family=Inter:wght@300..600&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
 ```
 
 ```css

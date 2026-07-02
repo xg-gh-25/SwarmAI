@@ -1,29 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Bricolage Grotesque';font-weight:400;font-display:swap;src:url('../../fonts/bricolage-grotesque-400.woff2') format('woff2');}
-@font-face{font-family:'Instrument Serif';font-weight:400;font-display:swap;src:url('../../fonts/instrument-serif-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:300;font-display:swap;src:url('../../fonts/jetbrains-mono-300.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('../../fonts/jetbrains-mono-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('../../fonts/jetbrains-mono-500.woff2') format('woff2');}
-@font-face{font-family:'LXGW WenKai TC';font-weight:400;font-display:swap;src:url('../../fonts/lxgw-wenkai-tc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-mono-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-mono-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-sans-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-sans-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-sans-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:800;font-display:swap;src:url('../../fonts/noto-sans-sc-800.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-sans-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Editorial Tri-Tone
@@ -574,6 +548,9 @@ Watch for baseline mismatch at display sizes (300–540px): Bricolage Grotesque 
 Add to the existing Google Fonts `<link>` (or as a second link tag):
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;700&family=LXGW+WenKai+TC&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
 ```
 
 ZCOOL XiaoWei is the decorative-terminal serif used for the em-switch role; it's hosted on Google Fonts at weight 400 only.

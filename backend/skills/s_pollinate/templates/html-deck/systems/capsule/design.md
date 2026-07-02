@@ -1,13 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Space Grotesk';font-weight:300;font-display:swap;src:url('../../fonts/space-grotesk-300.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:400;font-display:swap;src:url('../../fonts/space-grotesk-400.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:500;font-display:swap;src:url('../../fonts/space-grotesk-500.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:600;font-display:swap;src:url('../../fonts/space-grotesk-600.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:700;font-display:swap;src:url('../../fonts/space-grotesk-700.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Capsule
@@ -524,7 +514,10 @@ Use **Strategy A — single-font-stack with fallback**: declare the CJK font *af
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&family=Space+Grotesk:wght@300..700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 
 ```css

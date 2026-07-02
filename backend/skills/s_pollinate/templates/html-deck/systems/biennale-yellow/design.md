@@ -1,21 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Noto Sans SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-sans-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-sans-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-sans-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:800;font-display:swap;src:url('../../fonts/noto-sans-sc-800.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-sans-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Smiley Sans Oblique';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Biennale Yellow
@@ -541,7 +523,10 @@ When using this template for Chinese (or other CJK) content, swap the Latin type
 Add to the template's `<head>`:
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cn-fontsource-smiley-sans-oblique/font.min.css">
 ```
 
 After loading, reference 得意黑 as `font-family: 'Smiley Sans Oblique', 'Noto Serif SC', serif` on the display tokens that should carry the strongest poster register.

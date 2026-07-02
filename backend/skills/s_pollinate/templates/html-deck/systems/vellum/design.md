@@ -1,23 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Cormorant Garamond';font-weight:400;font-display:swap;src:url('../../fonts/cormorant-garamond-400.woff2') format('woff2');}
-@font-face{font-family:'Cormorant Garamond';font-weight:500;font-display:swap;src:url('../../fonts/cormorant-garamond-500.woff2') format('woff2');}
-@font-face{font-family:'Cormorant Garamond';font-weight:600;font-display:swap;src:url('../../fonts/cormorant-garamond-600.woff2') format('woff2');}
-@font-face{font-family:'Courier Prime';font-weight:400;font-display:swap;src:url('../../fonts/courier-prime-400.woff2') format('woff2');}
-@font-face{font-family:'Courier Prime';font-weight:700;font-display:swap;src:url('../../fonts/courier-prime-700.woff2') format('woff2');}
-@font-face{font-family:'DM Sans';font-weight:400;font-display:swap;src:url('../../fonts/dm-sans-400.woff2') format('woff2');}
-@font-face{font-family:'DM Sans';font-weight:500;font-display:swap;src:url('../../fonts/dm-sans-500.woff2') format('woff2');}
-@font-face{font-family:'LXGW WenKai TC';font-weight:400;font-display:swap;src:url('../../fonts/lxgw-wenkai-tc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-mono-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-mono-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Vellum
@@ -504,6 +484,9 @@ font-family: 'Courier Prime', 'Noto Sans Mono CJK SC', 'Courier New', monospace;
 Add to `<head>` (Google Fonts hosts LXGW WenKai TC, Noto Serif SC, and Courier Prime):
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=DM+Sans:wght@400;500&family=Courier+Prime:wght@400;700&family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
 ```
 
 LXGW WenKai TC is the Traditional Chinese cut on Google Fonts; it includes the full CJK Unified Ideographs range and renders Simplified Chinese cleanly. Noto Serif SC carries body text in Simplified Chinese with proper hinting. The Cormorant italic axis stays as-is for Latin.

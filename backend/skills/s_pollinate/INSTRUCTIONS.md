@@ -1468,11 +1468,11 @@ Key principle: spoken ≠ written — short sentences, reactions, Host B challen
 
 **Read the full track instructions:** `tracks/track-e2-html-deck.md`
 
-Self-contained single-file HTML slide deck (fixed 1920×1080 stage, auto-scaled,
-CSS-only animations) drawing from 34 bundled bold design systems. **Distinct from
-Track E (PPTX):** Track L is a browser-viewable HTML deck, zero-network at render
-(fonts bundled locally under `templates/html-deck/fonts/`). Ideal for web publishing
-(swarm-content), live browser presenting, and PDF export via Playwright.
+Single-file HTML slide deck (fixed 1920×1080 stage, auto-scaled, CSS-only animations)
+drawing from 34 bundled bold design systems (upstream verbatim). **Distinct from
+Track E (PPTX):** Track L is a browser-viewable HTML deck; fonts load from Google
+Fonts / the upstream CDN at render time (real italic serifs + CJK faces). Ideal for
+web publishing (swarm-content), live browser presenting, and PDF export via Playwright.
 
 ---
 

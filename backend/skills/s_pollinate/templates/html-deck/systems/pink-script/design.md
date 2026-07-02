@@ -1,30 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'DM Serif Display';font-weight:400;font-display:swap;src:url('../../fonts/dm-serif-display-400.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:300;font-display:swap;src:url('../../fonts/inter-300.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url('../../fonts/inter-400.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url('../../fonts/inter-500.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url('../../fonts/inter-600.woff2') format('woff2');}
-@font-face{font-family:'Inter';font-weight:700;font-display:swap;src:url('../../fonts/inter-700.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:300;font-display:swap;src:url('../../fonts/jetbrains-mono-300.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:400;font-display:swap;src:url('../../fonts/jetbrains-mono-400.woff2') format('woff2');}
-@font-face{font-family:'JetBrains Mono';font-weight:500;font-display:swap;src:url('../../fonts/jetbrains-mono-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-sans-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-sans-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-sans-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:800;font-display:swap;src:url('../../fonts/noto-sans-sc-800.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-sans-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Pink Script (After Hours)
@@ -634,6 +607,9 @@ Strategy A — extend each token's `fontFamily` to include the Chinese face afte
 ### Loading
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;700;900&family=Noto+Sans+SC:wght@400;500;700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
 ```
 
 ### Universal CJK Adjustments

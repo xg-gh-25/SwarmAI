@@ -1,16 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'LXGW WenKai TC';font-weight:400;font-display:swap;src:url('../../fonts/lxgw-wenkai-tc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Source Serif 4';font-weight:400;font-display:swap;src:url('../../fonts/source-serif-4-400.woff2') format('woff2');}
-@font-face{font-family:'Source Serif Pro';font-weight:400;font-display:swap;src:url('../../fonts/source-serif-pro-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Editorial Forest
@@ -468,6 +455,9 @@ Browsers per-glyph fall back: Latin characters render in Source Serif 4 at weigh
 Add to the existing Google Fonts `<link>` (or as a second link tag):
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">
 ```
 
 LXGW WenKai TC is the version served on Google Fonts (the Simplified-Chinese build `LXGW+WenKai+SC` is not yet on the Google CDN — TC ships both traditional and simplified glyphs and works for both).

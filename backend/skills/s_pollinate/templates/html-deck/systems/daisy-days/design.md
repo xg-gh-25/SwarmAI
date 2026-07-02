@@ -1,11 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Fredoka One';font-weight:400;font-display:swap;src:url('../../fonts/fredoka-one-400.woff2') format('woff2');}
-@font-face{font-family:'Quicksand';font-weight:400;font-display:swap;src:url('../../fonts/quicksand-400.woff2') format('woff2');}
-@font-face{font-family:'Quicksand';font-weight:700;font-display:swap;src:url('../../fonts/quicksand-700.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL XiaoWei';font-weight:400;font-display:swap;src:url('../../fonts/zcool-xiaowei-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Daisy Days
@@ -463,7 +455,10 @@ Use **Strategy A — single-font-stack with fallback**: declare ZCOOL XiaoWei *a
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Quicksand:wght@400..700&family=ZCOOL+XiaoWei&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 
 ```css

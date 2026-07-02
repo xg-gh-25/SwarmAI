@@ -1,28 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Barlow';font-weight:400;font-display:swap;src:url('../../fonts/barlow-400.woff2') format('woff2');}
-@font-face{font-family:'Barlow';font-weight:500;font-display:swap;src:url('../../fonts/barlow-500.woff2') format('woff2');}
-@font-face{font-family:'Barlow';font-weight:700;font-display:swap;src:url('../../fonts/barlow-700.woff2') format('woff2');}
-@font-face{font-family:'Barlow';font-weight:900;font-display:swap;src:url('../../fonts/barlow-900.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Mono';font-weight:400;font-display:swap;src:url('../../fonts/ibm-plex-mono-400.woff2') format('woff2');}
-@font-face{font-family:'IBM Plex Mono';font-weight:500;font-display:swap;src:url('../../fonts/ibm-plex-mono-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-mono-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans Mono CJK SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-mono-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-sans-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-sans-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-sans-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-sans-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-sans-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:800;font-display:swap;src:url('../../fonts/noto-sans-sc-800.woff2') format('woff2');}
-@font-face{font-family:'Noto Sans SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-sans-sc-900.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Studio
@@ -462,6 +437,9 @@ For pure-Chinese decks, the system's "uppercase" identity drops away (Chinese ha
 Add to `<head>` (Google Fonts hosts Noto Serif SC and Noto Sans SC):
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+SC:wght@400;500;700;900&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
 ```
 
 The Barlow stack in the original design.md already wires Noto Sans SC as the CJK fallback. We're upgrading to Noto Serif SC for headlines and body because the Song-style serif at 900 weight carries graphic mass equivalent to Barlow 900, where Noto Sans SC at the same weight reads as too smooth/round and loses the "graphic block" character. Keep Noto Sans SC available for body-only decks where the cleaner sans is preferred.

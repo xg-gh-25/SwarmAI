@@ -1,18 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'DM Mono';font-weight:300;font-display:swap;src:url('../../fonts/dm-mono-300.woff2') format('woff2');}
-@font-face{font-family:'DM Mono';font-weight:400;font-display:swap;src:url('../../fonts/dm-mono-400.woff2') format('woff2');}
-@font-face{font-family:'DM Mono';font-weight:500;font-display:swap;src:url('../../fonts/dm-mono-500.woff2') format('woff2');}
-@font-face{font-family:'Hanken Grotesk';font-weight:400;font-display:swap;src:url('../../fonts/hanken-grotesk-400.woff2') format('woff2');}
-@font-face{font-family:'Hanken Grotesk';font-weight:700;font-display:swap;src:url('../../fonts/hanken-grotesk-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:300;font-display:swap;src:url('../../fonts/noto-serif-sc-300.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:400;font-display:swap;src:url('../../fonts/noto-serif-sc-400.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:500;font-display:swap;src:url('../../fonts/noto-serif-sc-500.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:600;font-display:swap;src:url('../../fonts/noto-serif-sc-600.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:700;font-display:swap;src:url('../../fonts/noto-serif-sc-700.woff2') format('woff2');}
-@font-face{font-family:'Noto Serif SC';font-weight:900;font-display:swap;src:url('../../fonts/noto-serif-sc-900.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Cobalt Grid
@@ -521,6 +506,9 @@ Use **Strategy A — single-font-stack with fallback**: declare Noto Serif SC *a
 ### Loading
 
 ```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..500;1,6..72,400..500&family=Hanken+Grotesk:wght@400..700&family=DM+Mono:wght@400..500&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
 ```
 
 ```css

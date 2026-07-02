@@ -1,15 +1,3 @@
-
-<style>
-/* LOCAL FONTS (ingested, zero-network) */
-@font-face{font-family:'Space Grotesk';font-weight:300;font-display:swap;src:url('../../fonts/space-grotesk-300.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:400;font-display:swap;src:url('../../fonts/space-grotesk-400.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:500;font-display:swap;src:url('../../fonts/space-grotesk-500.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:600;font-display:swap;src:url('../../fonts/space-grotesk-600.woff2') format('woff2');}
-@font-face{font-family:'Space Grotesk';font-weight:700;font-display:swap;src:url('../../fonts/space-grotesk-700.woff2') format('woff2');}
-@font-face{font-family:'Syne';font-weight:700;font-display:swap;src:url('../../fonts/syne-700.woff2') format('woff2');}
-@font-face{font-family:'Syne';font-weight:800;font-display:swap;src:url('../../fonts/syne-800.woff2') format('woff2');}
-@font-face{font-family:'ZCOOL KuaiLe';font-weight:400;font-display:swap;src:url('../../fonts/zcool-kuaile-400.woff2') format('woff2');}
-</style>
 ---
 version: alpha
 name: Playful
@@ -447,7 +435,10 @@ Strategy A — extend each token's `fontFamily` to include the Chinese face afte
 ### Loading
 
 ```html
-<!-- Fonts are pre-bundled LOCAL (see the /* LOCAL FONTS */ @font-face block at top of this file, ../../fonts/*.woff2). Do NOT use this CDN link — it breaks zero-network render. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@400;500;600;700&family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 
 ### Universal CJK Adjustments

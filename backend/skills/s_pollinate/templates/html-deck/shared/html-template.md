@@ -12,11 +12,10 @@ Reference architecture for generating slide presentations. Every presentation fo
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Presentation Title</title>
 
-    <!-- Fonts: INLINE the LOCAL @font-face block from the picked design.md.
-         NEVER add a <link> to fontshare / googleapis / gstatic / any CDN —
-         that reintroduces a render-time network dependency (breaks zero-network).
-         The picked systems/<id>/design.md already carries a `/* LOCAL FONTS */`
-         <style> block pointing at ../../fonts/<slug>-<weight>.woff2 — inline that. -->
+    <!-- Fonts: keep the picked systems/<id>/design.md's own Google Fonts / Fontshare
+         <link> here — it carries the correct italic + CJK faces. Fonts load from the
+         CDN at render time (SwarmAI is online by default). Do NOT strip or localize it. -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=...&display=swap">
 
     <style>
         /* ===========================================
