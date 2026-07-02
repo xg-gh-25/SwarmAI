@@ -735,6 +735,17 @@ class ContextHealthHook:
                     )
                     continue
 
+                # Only cultivate runs that have reached a TERMINAL status. An
+                # in-flight run (running/paused) may still write more reflect
+                # lessons, and consuming it now would permanently mark it
+                # cultivated=True (:768) → the MEMORY mirror would be held back
+                # as "unqualified run" (run_qualified gate) and NEVER retried
+                # after completion. Leaving it un-cultivated lets a later session
+                # re-process it once status is terminal. (Gate-2, run_f73a33e2)
+                _TERMINAL = ("completed", "abandoned", "cancelled", "blocked", "failed")
+                if run_data.get("status") not in _TERMINAL:
+                    continue
+
                 # Find reflect stage with lessons
                 reflect_stage = None
                 reflect_idx = -1
@@ -784,8 +795,14 @@ class ContextHealthHook:
                     # applied to DDD — if DDD accepted them, they're confident).
                     if result.get("applied", 0) > 0:
                         try:
+                            # Trust signal (AC2/AC3): a lesson from a run that
+                            # itself COMPLETED is trustworthy; one from an
+                            # abandoned/blocked run is held back. status is a
+                            # top-level run.json field (verified 414/414 runs).
+                            run_qualified = run_data.get("status") == "completed"
                             self._extract_lessons_to_memory(
-                                root, lessons, run_id, project_name
+                                root, lessons, run_id, project_name,
+                                run_qualified=run_qualified,
                             )
                         except Exception:
                             pass  # Best-effort — DDD cultivation is primary
@@ -820,15 +837,87 @@ class ContextHealthHook:
 
         return any_applied
 
+    def _admit_lesson_to_memory(
+        self, lesson: str, run_qualified: bool,
+    ) -> tuple[bool, str, str]:
+        """ADMIT / HOLD-BACK admission gate for a single cognitive lesson.
+
+        Returns (admit: bool, reason: str, entry_type: str). A Step-0-equivalent
+        admission gate (AGENT.md R30 in spirit) in front of the MEMORY.md write.
+        Six ordered checks; PROTECTION is checked FIRST among the classifiers so a
+        keep-class lesson can never reach ADMIT even if the run is qualified:
+
+          0. len >= 20                              (too thin)
+          1. is_quality_lesson                      (instance-log/fragment noise)
+          2. classify_content confidence > 0.3      (volatile/zero-value — classify_content
+                                                      NEVER rejects, it always routes; the
+                                                      0.3 floor mirrors ddd_cultivation.py:217)
+          3. NOT is_governance                      (a behavioral rule belongs to
+                                                      s_self-evolution, not MEMORY)
+          4. classify_entry_type NOT in _KEEP_TYPES (PROTECTION FIRST: principle/correction/
+                                                      decision/model are evergreen — decay can
+                                                      NEVER reclaim them, so a wrong auto-commit
+                                                      is permanent → never auto-write)
+          5. run_qualified                          (lesson from a run that itself completed)
+
+        Dedup (step 6) is NOT here — it needs the locked MEMORY.md snapshot, so it
+        runs at the write site inside the lock (avoids a stale-snapshot race).
+
+        classify_entry_type is a fallible keyword classifier: a principle phrased
+        without a principle-signal token can misroute to 'guideline' and slip past
+        step 4 into the reclaimable Guidelines slot. That is graceful degradation,
+        NOT a hole — the guarantee is "no PERMANENT auto-commit of protected
+        knowledge" (a misrouted principle-as-guideline is decay-reclaimable +
+        git-revertable), not "no principle is ever auto-written."
+        """
+        from core.ddd_entry_lifecycle import classify_entry_type, _KEEP_TYPES
+
+        # Step 0 — too thin
+        if len(lesson) < 20:
+            return (False, "thin (len<20)", "")
+        # Step 1 — instance-log / fragment noise
+        try:
+            from core.ddd_cultivation import is_quality_lesson
+            if not is_quality_lesson(lesson):
+                return (False, "noise (is_quality_lesson=False)", "")
+        except Exception as exc:  # fail-loud → HOLD-BACK, never silent-ADMIT
+            return (False, f"admission error (is_quality_lesson): {type(exc).__name__}: {exc}", "")
+        # Steps 2+3 — one classify_content call (confidence floor + governance)
+        try:
+            from core.persist_routing import classify_content
+            r = classify_content(lesson)
+        except Exception as exc:
+            return (False, f"admission error (classify_content): {type(exc).__name__}: {exc}", "")
+        if r.get("confidence", 0.0) <= 0.3:
+            return (False, f"volatile/zero-value (confidence={r.get('confidence')})", "")
+        if r.get("is_governance"):
+            return (False, "governance (belongs to s_self-evolution, not MEMORY)", "")
+        # Step 4 — PROTECTION FIRST: keep-class tier is never auto-written
+        entry_type = classify_entry_type(lesson)
+        if entry_type in _KEEP_TYPES:
+            return (False, f"protected tier '{entry_type}' (keep-class, decay-permanent)", entry_type)
+        # Step 5 — run-outcome trust
+        if not run_qualified:
+            return (False, "unqualified run (status != completed)", entry_type)
+        return (True, "admit", entry_type)
+
     def _extract_lessons_to_memory(
         self, root: Path, lessons: list[str], run_id: str, project: str,
+        run_qualified: bool = True,
     ) -> None:
-        """Extract confident REFLECT lessons to MEMORY.md with lifecycle metadata.
+        """Extract REFLECT lessons to MEMORY.md through an ADMIT/HOLD-BACK gate.
 
-        Only lessons that DDD cultivation accepted (confident) get promoted here.
-        Uses classify_entry_type for type assignment, then routes each lesson to
-        its current section via MEMORY_TYPE_TO_SECTION (e.g. guideline→Guidelines,
-        pitfall→Pitfalls) — not the removed "Lessons Learned" section.
+        Governs the live cognitive auto-writer (run_f73a33e2): each lesson passes
+        the ``_admit_lesson_to_memory`` Step-0-equivalent admission gate (a
+        code-side stand-in for s_persist's Step-0, AGENT.md R30 in spirit) + a
+        keep-class PROTECTION check + a run-qualification (``run_qualified``) trust
+        signal + an exact/normalized-title dedup inside the write lock. ADMIT →
+        written; every HOLD-BACK is logged with its reason and DROPPED (never
+        auto-written, never sent to the broken MEMORY proposal-queue). Uses
+        classify_entry_type for section routing (guideline→Guidelines,
+        pitfall→Pitfalls). Only ``guideline``/``pitfall`` from a qualified,
+        non-duplicate run are auto-sunk — protected tiers (principle/correction/
+        decision/model) are always HELD-BACK because decay can never reclaim them.
         """
         from core.ddd_entry_lifecycle import classify_entry_type
 
@@ -841,20 +930,38 @@ class ContextHealthHook:
         # Route each lesson to its correct section (type → section mapping)
         from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
 
-        # Group lessons by target section
+        # Group lessons by target section. Each candidate carries its title so
+        # step-6 dedup can compare against existing section entries INSIDE the
+        # lock (against the locked snapshot, not a stale pre-lock read).
         from collections import defaultdict
-        by_section: dict[str, list[str]] = defaultdict(list)
+        by_section: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
         for lesson in lessons[:3]:
-            if len(lesson) < 20:
+            # ADMIT / HOLD-BACK gate (fail-loud: any gate error → HOLD-BACK, and
+            # is caught here so a single bad lesson can't abort the batch via the
+            # caller's best-effort except:pass at the call site).
+            try:
+                admit, reason, entry_type = self._admit_lesson_to_memory(
+                    lesson, run_qualified
+                )
+            except Exception as exc:
+                logger.warning(
+                    "context_health: MEMORY admission gate crashed, HOLD-BACK "
+                    "lesson (%s: %s): %.80s", type(exc).__name__, exc, lesson,
+                )
                 continue
-            entry_type = classify_entry_type(lesson)
+            if not admit:
+                logger.info(
+                    "context_health: HOLD-BACK MEMORY lesson (%s): %.80s",
+                    reason, lesson,
+                )
+                continue
             target_section = MEMORY_TYPE_TO_SECTION.get(entry_type, "Guidelines")
             title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
             title = title.rstrip(".")
             entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})"
             meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->"
-            by_section[target_section].append(f"{entry_line}\n{meta_line}")
+            by_section[target_section].append((title, f"{entry_line}\n{meta_line}"))
 
         if not by_section:
             return
@@ -891,17 +998,52 @@ class ContextHealthHook:
 
         try:
             content = memory_path.read_text(encoding="utf-8")
-            for section_name, entries in by_section.items():
-                new_block = "\n".join(entries)
+            # Step 6 — dedup INSIDE the lock, against the locked snapshot. An
+            # exact/normalized-title match with an existing entry in the SAME
+            # target section → HOLD-BACK (benign skip). Uses parse_entries (the
+            # canonical MEMORY.md parser); no embeddings (that path is removed
+            # dead code). Normalization = casefold + strip so trivial variants
+            # collide.
+            from core.ddd_entry_lifecycle import parse_entries
+
+            def _norm(t: str) -> str:
+                return t.strip().casefold()
+
+            existing_by_section: dict[str, set[str]] = defaultdict(set)
+            for e in parse_entries(content):
+                if e.section and e.title:
+                    existing_by_section[e.section].add(_norm(e.title))
+
+            wrote = 0
+            for section_name, candidates in by_section.items():
+                seen = existing_by_section[section_name]
+                fresh_blocks = []
+                for title, block in candidates:
+                    key = _norm(title)
+                    if key in seen:
+                        logger.info(
+                            "context_health: HOLD-BACK MEMORY lesson (duplicate "
+                            "of existing '%s' in %s): %.60s",
+                            title, section_name, block,
+                        )
+                        continue
+                    seen.add(key)  # also dedups within this same batch
+                    fresh_blocks.append(block)
+                if not fresh_blocks:
+                    continue
+                new_block = "\n".join(fresh_blocks)
                 content = _modify_content(content, section_name, new_block, "prepend")
-            memory_path.write_text(content, encoding="utf-8")
+                wrote += len(fresh_blocks)
+
+            if wrote:
+                memory_path.write_text(content, encoding="utf-8")
         finally:
             flock_unlock(lock_fd)
             lock_fd.close()
 
         logger.debug(
-            "context_health: extracted %d lessons to MEMORY.md from %s/%s",
-            len(by_section), project, run_id,
+            "context_health: extracted lessons to MEMORY.md from %s/%s",
+            project, run_id,
         )
 
     # ------------------------------------------------------------------

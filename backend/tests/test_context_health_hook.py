@@ -409,7 +409,8 @@ class TestDDDStaleness:
 class TestAutoCultivation:
     """Tests for _auto_cultivate_pipeline_lessons."""
 
-    def _make_run(self, workspace, project, run_id, *, lessons=None, cultivated=False):
+    def _make_run(self, workspace, project, run_id, *, lessons=None,
+                  cultivated=False, status="completed"):
         """Create a run.json with a reflect stage."""
         runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
         runs_dir.mkdir(parents=True, exist_ok=True)
@@ -422,11 +423,33 @@ class TestAutoCultivation:
         run_data = {
             "id": run_id,
             "project": project,
-            "status": "completed",
+            "status": status,
             "stages": stages,
         }
         (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
         return runs_dir / "run.json"
+
+    def test_inflight_run_not_consumed(self, hook, workspace):
+        """Gate-2 fix: a run whose status is non-terminal (running/paused) must
+        NOT be marked cultivated — else a mid-pipeline hook event consumes it,
+        HOLD-BACKs every MEMORY lesson as 'unqualified', and never retries after
+        the run completes (silently defeats the feature for actively-worked runs).
+        The run must be left un-cultivated so a later session re-processes it.
+        """
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
+        run_file = self._make_run(
+            workspace, "TestProject", "run_inflight",
+            lessons=["Use nc -z instead of lsof for port checks on macOS"],
+            status="running",
+        )
+        hook._auto_cultivate_pipeline_lessons(workspace)
+        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
+        assert "cultivated" not in reflect_stage, (
+            "an in-flight (status=running) run was consumed (cultivated=True) — "
+            "its MEMORY lessons are now permanently held back and never retried"
+        )
 
     def test_cultivates_uncultivated_run(self, hook, workspace):
         """Cultivates a completed run with reflect.lessons and no cultivated flag."""
@@ -1063,3 +1086,151 @@ class TestUsageDecayGate:
 # (run_2f621986, design 2026-06-28 §3): _sync_memory_embeddings and the
 # memory_vec writer it drove were physically removed — recall is keyword/FTS5
 # only. There is no embedding-orphan backlog to converge anymore.
+
+
+class TestCognitiveAdmissionGate:
+    """ADMIT / HOLD-BACK gate on _extract_lessons_to_memory (run_f73a33e2).
+
+    Governs the live MEMORY.md auto-writer: auto-sink only clear operational
+    knowledge (guideline/pitfall from a qualified run, non-dup); HOLD-BACK
+    protected/risky/unqualified/noise/dup. The safety core (AC1): a keep-class
+    tier (principle/correction/decision/model) is NEVER auto-written, because
+    the decay engine protects keep-class forever — a wrong auto-principle is
+    permanent. Mutation-proof: reverting the tier-gate turns AC1 RED.
+    """
+
+    def _mk_memory(self, tmp_path, body: str = ""):
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        base = (
+            "## Principles\n_meta._\n\n"
+            "## Guidelines\n_Operational lessons._\n\n"
+            "## Pitfalls\n_Traps._\n\n"
+        )
+        (ctx / "MEMORY.md").write_text(base + body)
+        return ws, ctx / "MEMORY.md"
+
+    def test_ac1_protected_principle_held_back(self, hook, tmp_path):
+        """AC1 (safety core): a principle-classified lesson is NOT auto-written.
+
+        Mutation-proof: revert the keep-class tier-gate → this goes RED.
+        """
+        ws, mem = self._mk_memory(tmp_path)
+        # principle-signal text → classify_entry_type == 'principle' (keep-class)
+        principle = (
+            "The first principle is that confidence is a counter-signal: the more "
+            "certain I feel, the more likely I skipped verification."
+        )
+        hook._extract_lessons_to_memory(ws, [principle], "run_x", "Proj", run_qualified=True)
+        content = mem.read_text()
+        assert "confidence is a counter-signal" not in content, (
+            "protected-tier principle was auto-written to MEMORY.md — the exact "
+            f"permanent-auto-commit the gate must prevent:\n{content}"
+        )
+
+    def test_ac2_operational_qualified_admitted(self, hook, tmp_path):
+        """AC2: a guideline from a qualified run, non-dup → ADMITTED (written)."""
+        ws, mem = self._mk_memory(tmp_path)
+        g = ("When editing MEMORY.md always take the .lock before the "
+             "read-modify-write to avoid a lost-update race across writers.")
+        hook._extract_lessons_to_memory(ws, [g], "run_ok", "Proj", run_qualified=True)
+        content = mem.read_text()
+        assert "lost-update race across writers" in content, (
+            f"operational+qualified lesson was NOT written:\n{content}"
+        )
+
+    def test_ac3_unqualified_run_held_back(self, hook, tmp_path):
+        """AC3: same operational lesson from an UNQUALIFIED run → HELD-BACK."""
+        ws, mem = self._mk_memory(tmp_path)
+        g = ("When editing MEMORY.md always take the .lock before the "
+             "read-modify-write to avoid a lost-update race across writers.")
+        hook._extract_lessons_to_memory(ws, [g], "run_bad", "Proj", run_qualified=False)
+        content = mem.read_text()
+        assert "lost-update race across writers" not in content, (
+            f"lesson from an unqualified run was auto-written:\n{content}"
+        )
+
+    def test_ac4_thin_held_back(self, hook, tmp_path):
+        """AC4a: a too-thin (len<20) lesson → HELD-BACK."""
+        ws, mem = self._mk_memory(tmp_path)
+        hook._extract_lessons_to_memory(ws, ["too short"], "r", "P", run_qualified=True)
+        assert "too short" not in mem.read_text()
+
+    def test_ac4_step2_gates_on_confidence_not_falsy_return(self, hook):
+        """AC4b (Gate-1 must-fix): step 2 gates on classify_content confidence<=0.3,
+        NOT on a (never-occurring) falsy classify_content return.
+
+        classify_content NEVER rejects — it always returns a routing dict, so a
+        naive `if not classify_content(x)` would be a silent no-op admitting
+        everything. This patches classify_content to the 0.1-confidence dict real
+        noise gets and asserts the helper HOLD-BACKs citing the confidence floor —
+        mutation-visible if someone reverts the numeric check to a truthiness one.
+        """
+        from unittest.mock import patch
+        lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
+                  "to avoid a lost-update race across concurrent writers here.")
+        with patch("core.persist_routing.classify_content",
+                   return_value={"confidence": 0.1, "is_governance": False}):
+            admit, reason, _ = hook._admit_lesson_to_memory(lesson, run_qualified=True)
+        assert admit is False, "low-confidence lesson must be HELD-BACK"
+        assert "confidence" in reason.lower() or "volatile" in reason.lower(), (
+            f"HOLD-BACK reason must cite the confidence floor, got: {reason!r}"
+        )
+
+    def test_ac4_high_confidence_reaches_admit(self, hook):
+        """AC4b companion: a normal-confidence dict does NOT trip step 2 (proves
+        the floor isn't over-broad — an operational lesson passes through to ADMIT)."""
+        from unittest.mock import patch
+        lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
+                  "to avoid a lost-update race across concurrent writers here.")
+        with patch("core.persist_routing.classify_content",
+                   return_value={"confidence": 0.6, "is_governance": False}):
+            admit, reason, _ = hook._admit_lesson_to_memory(lesson, run_qualified=True)
+        assert admit is True, f"operational lesson should ADMIT, got HOLD-BACK: {reason}"
+
+    def test_ac4_governance_held_back(self, hook, tmp_path):
+        """AC4c: a governance-phrased lesson → HELD-BACK (belongs to s_self-evolution)."""
+        ws, mem = self._mk_memory(tmp_path)
+        gov = ("From now on always run the full adversarial review before every "
+               "merge to main — this is a new standing rule for the team.")
+        from core.persist_routing import classify_content
+        assert classify_content(gov).get("is_governance"), "fixture not governance"
+        hook._extract_lessons_to_memory(ws, [gov], "r", "P", run_qualified=True)
+        assert "new standing rule" not in mem.read_text()
+
+    def test_ac4_duplicate_held_back(self, hook, tmp_path):
+        """AC4d: an exact-title duplicate of an existing section entry → HELD-BACK."""
+        # Pre-seed Guidelines with an entry whose title matches what the writer
+        # will derive (title = text before the em-dash).
+        body = (
+            "- [guideline] **Always lock before write** — prior lesson (2026-06-01)\n"
+            "  <!-- ref:2 | last:2026-06-10 | decay:active -->\n"
+        )
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / "MEMORY.md").write_text(
+            "## Principles\n_meta._\n\n"
+            "## Guidelines\n_Operational lessons._\n\n" + body +
+            "\n## Pitfalls\n_Traps._\n\n"
+        )
+        mem = ctx / "MEMORY.md"
+        dup = "Always lock before write — take the .lock before read-modify-write always"
+        hook = ContextHealthHook()
+        hook._extract_lessons_to_memory(ws, [dup], "r", "P", run_qualified=True)
+        content = mem.read_text()
+        # The pre-existing entry stays; the new dup body must NOT be appended.
+        assert content.count("Always lock before write") == 1, (
+            f"duplicate title was auto-written (expected 1 occurrence):\n{content}"
+        )
+
+    def test_ac5_no_regression_default_qualified(self, hook, tmp_path):
+        """AC5: the writer still writes a legit operational lesson with the
+        DEFAULT run_qualified (back-compat — the pre-existing 4-arg call path)."""
+        ws, mem = self._mk_memory(tmp_path)
+        g = ("Verify runtime state by observation before asserting a cause — "
+             "read the live gauge, do not infer from a stale log string.")
+        # 4-arg call (no run_qualified) — exercises the default=True path
+        hook._extract_lessons_to_memory(ws, [g], "run_z", "Proj")
+        assert "read the live gauge" in mem.read_text()
