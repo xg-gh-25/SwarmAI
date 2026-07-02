@@ -265,7 +265,7 @@ def recommend(
 
 # Tracks that BUILD stage currently has instructions for.
 # format_recommend.py will move unsupported tracks to deferred_tracks automatically.
-SUPPORTED_TRACKS = {"poster", "video", "narrative", "shorts", "deck", "one_pager", "full_pdf", "data_report", "document", "ai_image", "interactive_report", "podcast"}
+SUPPORTED_TRACKS = {"poster", "video", "narrative", "shorts", "deck", "html_deck", "one_pager", "full_pdf", "data_report", "document", "ai_image", "interactive_report", "podcast"}
 
 
 def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
@@ -294,6 +294,19 @@ def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
     return False
 
 
+def _is_html_deck_context(user_lower: str, signal: str, match_pos: int) -> bool:
+    """True if a bare 'deck'-family signal is actually part of an html-deck phrase.
+
+    'html deck' / '网页deck' contain the substring 'deck', so a naive match on the
+    PPTX 'deck' token would double-emit alongside html_deck. This checks the words
+    IMMEDIATELY before the match for an html/web/网页 qualifier (narrow window, same
+    approach as _is_negated) so only the html_deck track fires for such phrases.
+    """
+    prefix = user_lower[max(0, match_pos - 8):match_pos]
+    qualifiers = ["html", "html-", "html ", "web ", "web-", "网页", "浏览器"]
+    return any(prefix.rstrip().endswith(q.rstrip()) or q in prefix for q in qualifiers)
+
+
 def detect_fast_path(user_message: str) -> list[str] | None:
     """
     Detect if user explicitly named formats in their message.
@@ -302,7 +315,16 @@ def detect_fast_path(user_message: str) -> list[str] | None:
     Handles negation: "不要海报" or "no poster" will NOT detect poster.
     Supports Chinese and English format names.
     """
+    # NOTE: html_deck is listed BEFORE deck intentionally. Its signals ("html
+    # deck", "网页ppt", ...) are the self-contained browser HTML-deck track,
+    # distinct from the PptxGenJS "deck" (PPTX) track. Because the bare "deck"
+    # signal is a SUBSTRING of "html deck", the loop below suppresses a "deck"
+    # match when it is part of an html-deck phrase (see _is_html_deck_context)
+    # so an "html deck" request does NOT double-emit the PPTX deck track.
     format_signals = {
+        "html_deck": ["html deck", "html slides", "web deck", "html-deck",
+                      "网页ppt", "网页幻灯", "网页演示", "html演示", "html幻灯",
+                      "浏览器演示", "网页deck"],
         "poster": ["海报", "poster", "长图", "图片", "card"],
         "video": ["视频", "video", "b站", "bilibili", "youtube"],
         "narrative": ["文章", "narrative", "article", "长文", "掘金", "公众号", "blog"],
@@ -324,9 +346,15 @@ def detect_fast_path(user_message: str) -> list[str] | None:
             pos = user_lower.find(signal)
             if pos != -1:
                 # Check for negation before the match
-                if not _is_negated(user_lower, signal, pos):
-                    if track not in detected:
-                        detected.append(track)
+                if _is_negated(user_lower, signal, pos):
+                    break
+                # Collision guard: a bare PPTX-"deck" signal that is actually
+                # part of an "html deck" / "网页…" phrase must NOT emit the PPTX
+                # deck track (html_deck already captured it).
+                if track == "deck" and _is_html_deck_context(user_lower, signal, pos):
+                    break
+                if track not in detected:
+                    detected.append(track)
                 break
 
     return detected if detected else None

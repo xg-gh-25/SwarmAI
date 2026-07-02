@@ -225,6 +225,7 @@ mkdir -p "$CONTENT_DIR/deliver"
 # mkdir -p "$CONTENT_DIR/tracks/poster"      # if "poster" in confirmed_tracks
 # mkdir -p "$CONTENT_DIR/tracks/shorts"      # if "shorts" in confirmed_tracks
 # mkdir -p "$CONTENT_DIR/tracks/deck"        # if "deck" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/html-deck"   # if "html_deck" in confirmed_tracks
 # mkdir -p "$CONTENT_DIR/tracks/pdf"         # if "one_pager" or "full_pdf" in confirmed_tracks
 # mkdir -p "$CONTENT_DIR/tracks/data-report" # if "data_report" in confirmed_tracks
 # mkdir -p "$CONTENT_DIR/tracks/document"    # if "document" in confirmed_tracks
@@ -1460,6 +1461,18 @@ tokens override base palette. Three modes: Dashboard, Scorecard, Comparison.
 Two-host dialogue script + optional MP3 audio via TTS. Detects edge-tts, OpenAI TTS,
 or Amazon Polly at runtime. Falls back to script.json + transcript.md if no TTS.
 Key principle: spoken ≠ written — short sentences, reactions, Host B challenges.
+
+---
+
+### Track L: HTML Deck (if "html_deck" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-e2-html-deck.md`
+
+Self-contained single-file HTML slide deck (fixed 1920×1080 stage, auto-scaled,
+CSS-only animations) drawing from 34 bundled bold design systems. **Distinct from
+Track E (PPTX):** Track L is a browser-viewable HTML deck, zero-network at render
+(fonts bundled locally under `templates/html-deck/fonts/`). Ideal for web publishing
+(swarm-content), live browser presenting, and PDF export via Playwright.
 
 ---
 
