@@ -263,7 +263,11 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 4 * * 4",          # Thursday 04:00 UTC = 12:00 ICT
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=5.0, timeout_seconds=1800),
+        # max_budget_usd=0: script jobs never consult max_budget_usd (only
+        # agent_task does), matching sibling script jobs — the Bedrock spend of
+        # the cycle is not capped by the job system on this path. timeout_seconds
+        # is the real control (see comment above).
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
         config={
             "command": "python -m backend.jobs.run_evolution",
             "cwd": _SWARMAI_ROOT,

@@ -1,12 +1,17 @@
 """Standalone entry point for the weekly evolution cycle.
 
-Called by the ``evolution-cycle`` system job as a fallback when the
-session-close hook hasn't fired (e.g. laptop closed for days).
+The SOLE trigger for the mine→score→optimize cycle (run_6ac3fc0b). It used to
+be a *fallback* for the session-close hook, but that hook trigger was removed:
+a ~5-min cycle on the 180s-budget hook timed out before advancing state and
+re-triggered every session. This script, invoked by the ``evolution-cycle``
+system job (jobs/system_jobs.py), is now the only path.
 
-Uses the same ``run_evolution_cycle()`` as the hook.  Idempotent via
-the ``.evolution_last_run`` state file (7-day minimum interval checked
-inside the hook — this script doesn't re-check, so it can force a run
-when called from the scheduled job system).
+Cadence is owned by the SCHEDULER (``job_state.last_run``, advanced on every
+run incl. failure; cron_utils.is_cron_due catches up a missed weekly slot after
+wake). This script does NOT re-check the 7-day interval — it runs the cycle
+unconditionally when the scheduler fires it, and writes ``.evolution_last_run``
+on success (that file is now consumed only by loops-health reporting, not for
+triggering).
 
 Usage::
 
