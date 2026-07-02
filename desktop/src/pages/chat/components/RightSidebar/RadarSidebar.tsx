@@ -12,9 +12,10 @@
  *   ③ Changes        — files touched this session (session context)
  *   ④ ⚡ Jobs & Runs — the INVENTORY: every scheduled job (status + schedule +
  *                      last-run) and every pipeline run (running/paused/recently-
- *                      completed). Replaces the old bottom PipelinesBar. The 🔔
- *                      queue owns only the ACTIONABLE copies; this is the full
- *                      roster. Default-expanded so running work stays glanceable.
+ *                      completed). Replaces the old bottom PipelinesBar (which was
+ *                      a pinned FYI bar); this is a default-expanded section in the
+ *                      scroll stack — the full roster, not a pinned bar. The 🔔
+ *                      queue owns only the ACTIONABLE copies; this owns the rest.
  *
  * The prior briefing feed (Working/Signals/Hot/Output/Artifacts/Stocks + the 60s
  * SessionBriefing poll) was removed from the sidebar — those feed sections still

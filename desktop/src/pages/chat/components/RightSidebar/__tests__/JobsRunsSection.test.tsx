@@ -72,6 +72,24 @@ describe('JobsRunsSection', () => {
     expect(screen.queryByText('Job 5')).not.toBeInTheDocument();
   });
 
+  it('fold-reset: expanding then a poll shrinking the group ≤5 collapses (toggle not stranded)', () => {
+    const seven = Array.from({ length: 7 }, (_, i) => jobRow({ id: `j${i}`, name: `Job ${i}` }));
+    mockUseJobsRuns.mockReturnValue({ jobs: seven, runs: [] });
+    const { rerender } = render(<JobsRunsSection />);
+    fireEvent.click(screen.getByText('See 2 more')); // showAll = true
+    expect(screen.getByText('Job 6')).toBeInTheDocument();
+    // a poll shrinks the group to 3 (toggle would vanish) — showAll must reset
+    mockUseJobsRuns.mockReturnValue({ jobs: seven.slice(0, 3), runs: [] });
+    rerender(<JobsRunsSection />);
+    expect(screen.queryByText(/See .* more/)).not.toBeInTheDocument();
+    expect(screen.queryByText('See less')).not.toBeInTheDocument();
+    // now grow back past 5 → shows collapsed (top-5 + "See more"), NOT stuck-expanded
+    mockUseJobsRuns.mockReturnValue({ jobs: seven, runs: [] });
+    rerender(<JobsRunsSection />);
+    expect(screen.getByText('See 2 more')).toBeInTheDocument();
+    expect(screen.queryByText('Job 6')).not.toBeInTheDocument();
+  });
+
   it('header count is the TOTAL of jobs + runs', () => {
     mockUseJobsRuns.mockReturnValue({
       jobs: [jobRow({ id: 'j1' }), jobRow({ id: 'j2' })],

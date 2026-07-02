@@ -30,8 +30,10 @@ import { jobsService, type JobStatus } from '../services/jobs';
 
 const POLL_MS = 30_000;
 
-/** Status-dot state for a job row (drives the coloured dot). */
-export type JobHealth = 'running' | 'failed' | 'disabled' | 'healthy';
+/** Status-dot state for a job row (drives the coloured dot). A scheduled job is
+ *  never observed mid-run by this snapshot API, so there is no 'running' state —
+ *  live execution is a PIPELINE-run concern (RunRow), not a job-status one. */
+export type JobHealth = 'failed' | 'disabled' | 'healthy';
 
 /** View model for one scheduled-job row in the Jobs & Runs section. */
 export interface JobRow {
@@ -71,7 +73,7 @@ export function jobHealth(j: JobStatus): JobHealth {
 
 /** Health sort rank: failed first (most attention), then healthy, then disabled. */
 function healthRank(h: JobHealth): number {
-  return h === 'failed' ? 0 : h === 'running' ? 1 : h === 'healthy' ? 2 : 3;
+  return h === 'failed' ? 0 : h === 'healthy' ? 1 : 2;
 }
 
 /** Run-status sort rank: running → paused → everything-else (completed/failed/…). */

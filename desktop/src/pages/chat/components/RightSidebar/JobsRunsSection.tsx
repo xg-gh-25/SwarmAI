@@ -10,7 +10,9 @@
  * Relationship to 🔔 Needs You: that queue owns only the ACTIONABLE copies
  * (failing jobs, paused runs). This section is the full roster — the same item
  * legitimately appears in both, with different intent ("act on this" vs "here's
- * everything + status"). Default-EXPANDED so running work stays glanceable.
+ * everything + status"). Default-EXPANDED so the roster is open on load; it
+ * lives INSIDE the scrollable section stack (not a pinned bottom bar), so with a
+ * long ToDo/Attention/Changes stack above it, it scrolls with them.
  *
  * Jobs and runs each fold behind a "See N more" toggle past SEE_MORE_LIMIT so a
  * long roster stays scannable; the section-header count shows the TOTAL
@@ -21,7 +23,7 @@
  *
  * @exports JobsRunsSection
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { useJobsRuns, type JobRow, type RunRow, type JobHealth } from '../../../../hooks/useJobsRuns';
 import { formatRelativeTime } from '../briefing/BriefingUtils';
@@ -31,7 +33,6 @@ const SEE_MORE_LIMIT = 5;
 
 /** Status-dot colour per job health — mirrors the old JobsBar palette. */
 const HEALTH_DOT: Record<JobHealth, string> = {
-  running: 'bg-green-400 animate-pulse',
   healthy: 'bg-green-400',
   failed: 'bg-red-400',
   disabled: 'bg-[var(--color-text-muted)]',
@@ -94,6 +95,12 @@ function FoldGroup<T>({
   keyOf: (item: T) => string;
 }) {
   const [showAll, setShowAll] = useState(false);
+  // A 30s poll can shrink the group to ≤ SEE_MORE_LIMIT while expanded; without
+  // this reset the toggle button (gated on length > limit) vanishes and strands
+  // showAll=true with no way back to collapsed (Gate-2 MED, run_06b89c00).
+  useEffect(() => {
+    if (items.length <= SEE_MORE_LIMIT && showAll) setShowAll(false);
+  }, [items.length, showAll]);
   if (items.length === 0) return null;
   const visible = showAll ? items : items.slice(0, SEE_MORE_LIMIT);
   const hidden = items.length - visible.length;
