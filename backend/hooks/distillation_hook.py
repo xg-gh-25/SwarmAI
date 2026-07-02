@@ -1229,11 +1229,18 @@ class DistillationTriggerHook:
 
     @staticmethod
     def _signal_evolution_corrections(ws_path: Path, count: int) -> None:
-        """Write signal file for evolution_maintenance_hook.
+        """Write the ≥5-pending-corrections signal file.
 
-        When ≥5 corrections are pending, evolution hook will trigger the
-        cycle early (without waiting for the 7-day timer). This closes
-        the feedback loop: corrections → skill optimization faster.
+        DORMANT since run_6ac3fc0b: the only consumer of
+        ``.evolution_corrections_pending`` was evolution_maintenance_hook's
+        early-trigger path, which was REMOVED (the evolution cycle no longer
+        runs on the per-session hook; it is triggered solely by the scheduled
+        evolution-cycle job, which uses a fixed weekly cadence with no
+        signal-reactive early trigger). This writer is retained (cheap, no
+        harm) so the accelerate-evolution feedback loop can be re-wired to the
+        scheduler later if sub-weekly evolution is wanted; today nothing reads
+        the file. See run_6ac3fc0b THINK/PLAN (early-trigger dropped, flagged
+        as a follow-up).
         """
         signal_path = ws_path / ".evolution_corrections_pending"
         try:

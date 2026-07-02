@@ -14,7 +14,6 @@ library) rather than shelling out, for atomicity and testability.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -322,8 +321,14 @@ class EvolutionMaintenanceHook:
         except Exception as exc:
             logger.debug("escalation ladder skipped: %s", exc)
 
-        # Run evolution cycle weekly (check last run date)
-        await self._maybe_run_evolution(ctx_dir)
+        # NOTE: the evolution CYCLE (mine transcripts + Bedrock, ~5 min) is NO
+        # LONGER run here. It was removed (run_6ac3fc0b) because a ~293s job on
+        # the 180s-budget session-close hook timed out before it could advance
+        # .evolution_last_run, re-triggering every session (59x/day) and spawning
+        # uncancellable zombie threads. The cycle is now triggered SOLELY by the
+        # scheduled `evolution-cycle` job (jobs/system_jobs.py). This hook keeps
+        # ONLY the cheap governance work above (quality gate, deprecation,
+        # promotion threshold, v3 classifier — all ~7ms file ops on EVOLUTION.md).
 
     # Regex: commit hash pattern (7+ hex chars at the start of description)
     _COMMIT_HASH_RE = re.compile(r"^[a-f0-9]{7}")
@@ -474,106 +479,6 @@ class EvolutionMaintenanceHook:
             logger.debug("Deprecated %s in %s", entry_id, section)
         except (ValueError, LockedWriteError) as exc:
             logger.warning("Failed to deprecate %s: %s", entry_id, exc)
-
-    async def _maybe_run_evolution(self, ctx_dir: Path) -> None:
-        """Run the evolution cycle if >7 days since last run.
-
-        Checks ``.context/.evolution_last_run`` for the last run date.
-        If >7 days ago (or file doesn't exist), runs ``run_evolution_cycle()``.
-        Writes today's date to the state file after a successful run.
-
-        The heavy work (mining transcripts + LLM calls) runs in a thread
-        pool to avoid blocking the asyncio event loop.
-
-        Evolution failure never blocks session close -- all errors are caught.
-        """
-        state_file = ctx_dir / ".evolution_last_run"
-        now = datetime.now(timezone.utc)
-        run_interval_days = 7
-
-        try:
-            if state_file.exists():
-                last_run_str = state_file.read_text(encoding="utf-8").strip()
-                try:
-                    last_run = datetime.strptime(last_run_str, "%Y-%m-%d").replace(
-                        tzinfo=timezone.utc
-                    )
-                except ValueError:
-                    last_run = datetime.min.replace(tzinfo=timezone.utc)
-
-                days_since = (now - last_run).days
-                if days_since < run_interval_days:
-                    # Cross-loop signal: check if distillation produced ≥5
-                    # pending corrections — if so, run cycle early.
-                    signal_path = ctx_dir.parent / ".evolution_corrections_pending"
-                    should_early_trigger = False
-                    if signal_path.exists():
-                        try:
-                            signal = json.loads(signal_path.read_text(encoding="utf-8"))
-                            if signal.get("count", 0) >= 5:
-                                should_early_trigger = True
-                                logger.info(
-                                    "Evolution cycle: early trigger — %d pending corrections",
-                                    signal["count"],
-                                )
-                                # Clear signal after consuming
-                                signal_path.unlink()
-                        except (OSError, ValueError):
-                            pass
-
-                    if not should_early_trigger:
-                        logger.debug(
-                            "Evolution cycle: %d days since last run (threshold %d), skipping",
-                            days_since,
-                            run_interval_days,
-                        )
-                        return
-        except OSError as exc:
-            logger.debug("Cannot read evolution state file: %s", exc)
-
-        # Time to run the evolution cycle
-        logger.info("Evolution cycle: triggering (>%d days since last run)", run_interval_days)
-        try:
-            from core.evolution_optimizer import run_evolution_cycle
-
-            # Resolve skills_dir: use the backend module's own location
-            # (Path(__file__) → hooks/ → parent → backend/)
-            backend_dir = Path(__file__).resolve().parent.parent
-            skills_dir = backend_dir / "skills"
-            if not skills_dir.is_dir():
-                logger.debug("Evolution cycle: skills_dir not found at %s, skipping", skills_dir)
-                return
-
-            # Transcripts directory: Claude Code session transcripts
-            # Pass the base projects/ dir so rglob("*.jsonl") in
-            # SessionMiner._iter_transcripts finds ALL transcripts
-            # across all project subdirectories (Gap 2 fix).
-            transcripts_dir = Path.home() / ".claude" / "projects"
-
-            evals_dir = ctx_dir / "SkillEvals"
-
-            # CRITICAL: run_evolution_cycle is CPU+I/O heavy (mines 1000+
-            # transcripts, calls Bedrock LLM). Running it synchronously
-            # inside this async hook blocks the event loop for minutes,
-            # freezing FastAPI, SSE streams, and health checks — causing
-            # "Backend crash" on the frontend. Offload to thread pool.
-            from functools import partial
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None,
-                partial(run_evolution_cycle, skills_dir, transcripts_dir, evals_dir, dry_run=False),
-            )
-            logger.info("Evolution cycle complete: %s", result.to_dict())
-
-            # Write today's date to state file ONLY if cycle actually ran
-            # (not lock-rejected or errored — prevents resetting the 7-day
-            # interval when no work was done)
-            if not result.errors:
-                state_file.write_text(
-                    now.strftime("%Y-%m-%d"), encoding="utf-8"
-                )
-        except Exception as exc:
-            logger.warning("Evolution cycle failed (non-blocking): %s", exc)
 
     # Bias class pattern: [Bias A], [Bias B], etc. in correction headers
     _BIAS_TAG_RE = re.compile(r"\[Bias ([A-D])\]")

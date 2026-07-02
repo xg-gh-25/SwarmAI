@@ -238,13 +238,24 @@ SYSTEM_JOBS: list[Job] = [
         config={"stale_days": 21, "working_stale_days": 14, "git_days": 7},
     ),
 
-    # --- Evolution Cycle (standalone fallback) ---
-    # Primary trigger is session-close hook (evolution_maintenance_hook.py),
-    # but if the user's laptop is closed for days, sessions don't end and
-    # the hook never fires. This scheduled job ensures the mine→score→optimize
-    # pipeline runs at least once per week regardless of session activity.
-    # Uses the same run_evolution_cycle() as the hook — idempotent via the
-    # .evolution_last_run state file (7-day minimum interval).
+    # --- Evolution Cycle (SOLE trigger) ---
+    # This scheduled job is the ONLY trigger for the mine→score→optimize cycle.
+    # The old per-session hook trigger (evolution_maintenance_hook._maybe_run_evolution)
+    # was REMOVED (run_6ac3fc0b): a ~5-min job (mine 3629 transcripts + Bedrock)
+    # ran synchronously on the 180s-budget session-close hook, timed out before it
+    # could advance .evolution_last_run, and re-triggered every session (59x/day)
+    # while spawning uncancellable zombie threads. Resilience for a laptop that is
+    # off at the scheduled time is provided by cron_utils.is_cron_due, which catches
+    # up a missed weekly slot on the next scheduler tick after wake (7-day window).
+    # run_evolution.py writes .evolution_last_run on success; the SCHEDULER's own
+    # job_state.last_run (advanced on every run, success or fail) owns re-fire cadence.
+    #
+    # timeout_seconds=1800 (30 min) is DELIBERATE, not a copy of the 300s default:
+    # the measured cycle is ~293s and the transcript corpus only grows. The default
+    # 300s left a 7s margin — the first slow run would time out, never write state,
+    # and after 3 consecutive Thursday timeouts the circuit breaker would disable
+    # evolution entirely (Gate-1 FLAW-1, run_6ac3fc0b). A weekly deterministic
+    # script has no reason to be capped near its own runtime.
     Job(
         id="evolution-cycle",
         name="Evolution Cycle",
@@ -252,6 +263,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 4 * * 4",          # Thursday 04:00 UTC = 12:00 ICT
         enabled=True,
         category="system",
+        safety=JobSafety(max_budget_usd=5.0, timeout_seconds=1800),
         config={
             "command": "python -m backend.jobs.run_evolution",
             "cwd": _SWARMAI_ROOT,

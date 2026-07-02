@@ -111,10 +111,13 @@ class TestGetField:
 
 
 def _write_recent_evolution_state(ctx_dir: Path) -> None:
-    """Write a recent .evolution_last_run so _maybe_run_evolution skips.
+    """Write a recent .evolution_last_run.
 
-    Without this, the hook tries to run the full evolution cycle against
-    real transcript files (~1152 JSONL), which takes minutes in CI/test.
+    NOTE (run_6ac3fc0b): the hook no longer runs the evolution cycle
+    (_maybe_run_evolution was removed — the cycle is now triggered solely by
+    the scheduled evolution-cycle job), so this is no longer required to keep
+    tests fast. Retained as a harmless no-op precondition for the governance
+    tests below; the hook ignores this file entirely now.
     """
     state_file = ctx_dir / ".evolution_last_run"
     state_file.write_text(
@@ -226,111 +229,20 @@ class TestEvolutionMaintenanceHook:
         assert changelog.read_text().strip() == ""
 
 
-class TestEvolutionWeeklyTrigger:
-    """Tests for the weekly evolution cycle trigger logic.
+class TestEvolutionWeeklyTriggerRemoved:
+    """The weekly evolution CYCLE trigger was REMOVED from this hook (run_6ac3fc0b).
 
-    These tests mock ``run_evolution_cycle`` to avoid scanning real
-    transcript files (1000+ JSONL files that hang tests for minutes).
+    The old TestEvolutionWeeklyTrigger class (test_evolution_runs_after_7_days,
+    test_evolution_skips_if_recent, test_evolution_runs_if_no_state_file,
+    test_evolution_with_valid_skills_dir) drove hook._maybe_run_evolution — a
+    method that no longer exists. A ~5-min cycle on the 180s-budget session-close
+    hook timed out before advancing .evolution_last_run and re-triggered every
+    session. The cycle is now triggered SOLELY by the scheduled `evolution-cycle`
+    job. Decoupling behavior is covered by tests/test_evolution_cycle_decoupling.py:
+      - TestHookDoesNotRunEvolutionCycle (hook no longer runs the cycle)
+      - TestScheduledJobTimeoutHeadroom (scheduled job can actually finish it)
     """
 
-    def test_evolution_runs_after_7_days(self, tmp_path, monkeypatch):
-        """Evolution cycle triggers when last run > 7 days ago."""
-        from core.evolution_optimizer import CycleReport
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        state_file = ctx_dir / ".evolution_last_run"
-        state_file.write_text(_days_ago(10), encoding="utf-8")
-
-        # Mock the actual cycle to return CycleReport
-        called = []
-        def _mock_cycle(*args, **kwargs):
-            called.append(True)
-            return CycleReport(
-                cycle_id="test",
-                skills_checked=0,
-                eligible=0,
-            )
-
-        monkeypatch.setattr(
-            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
-        )
-
-        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        asyncio.run(hook._maybe_run_evolution(ctx_dir))
-
-        assert len(called) == 1, "Evolution cycle should have been triggered"
-        # State file should be updated to today
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        assert state_file.read_text(encoding="utf-8").strip() == today
-
-    def test_evolution_skips_if_recent(self, tmp_path):
-        """Evolution cycle does NOT trigger when last run < 7 days ago."""
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        state_file = ctx_dir / ".evolution_last_run"
-        state_file.write_text(_days_ago(2), encoding="utf-8")
-
-        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        asyncio.run(hook._maybe_run_evolution(ctx_dir))
-
-        # State file should NOT be updated
-        assert state_file.read_text(encoding="utf-8") == _days_ago(2)
-
-    def test_evolution_runs_if_no_state_file(self, tmp_path, monkeypatch):
-        """Evolution cycle triggers when state file doesn't exist."""
-        from core.evolution_optimizer import CycleReport
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        state_file = ctx_dir / ".evolution_last_run"
-        assert not state_file.exists()
-
-        called = []
-        def _mock_cycle(*args, **kwargs):
-            called.append(True)
-            return CycleReport(
-                cycle_id="test",
-                skills_checked=0,
-                eligible=0,
-            )
-
-        monkeypatch.setattr(
-            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
-        )
-
-        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        asyncio.run(hook._maybe_run_evolution(ctx_dir))
-
-        assert len(called) == 1, "Should trigger when no state file exists"
-
-    def test_evolution_with_valid_skills_dir(self, tmp_path, monkeypatch):
-        """Evolution cycle runs end-to-end when skills_dir exists."""
-        from core.evolution_optimizer import CycleReport
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        state_file = ctx_dir / ".evolution_last_run"
-        state_file.write_text(_days_ago(10), encoding="utf-8")
-
-        called_with = []
-        def _mock_cycle(skills_dir, transcripts_dir, evals_dir, *, dry_run=True):
-            called_with.append((skills_dir, transcripts_dir, evals_dir))
-            return CycleReport(
-                cycle_id="test",
-                skills_checked=2,
-                eligible=1,
-                deployed=1,
-            )
-
-        monkeypatch.setattr(
-            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
-        )
-
-        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        asyncio.run(hook._maybe_run_evolution(ctx_dir))
-
-        assert len(called_with) == 1
-        # State file should be updated to today
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        assert state_file.read_text(encoding="utf-8").strip() == today
+    def test_maybe_run_evolution_is_gone(self):
+        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+        assert not hasattr(EvolutionMaintenanceHook, "_maybe_run_evolution")

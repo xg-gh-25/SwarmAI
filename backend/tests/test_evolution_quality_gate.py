@@ -37,7 +37,11 @@ def _make_context(tmp: Path) -> HookContext:
 
 
 def _write_recent_evolution_state(ctx_dir: Path) -> None:
-    """Write a recent .evolution_last_run so _maybe_run_evolution skips."""
+    """Write a recent .evolution_last_run (harmless no-op precondition).
+
+    run_6ac3fc0b: the hook no longer runs the evolution cycle, so this is not
+    required for test speed anymore; the hook ignores this file.
+    """
     state_file = ctx_dir / ".evolution_last_run"
     state_file.write_text(
         datetime.now(timezone.utc).strftime("%Y-%m-%d"), encoding="utf-8"
