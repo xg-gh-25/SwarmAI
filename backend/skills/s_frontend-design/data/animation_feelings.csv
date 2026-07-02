@@ -1,0 +1,7 @@
+Mood,Animation Approach,Timing,Palette Hint,Background Effect
+Dramatic,"slow fade-ins, large-scale transitions, parallax, spotlight reveals","slow (0.8-1.2s), expo easing","dark backgrounds, full-bleed images, high contrast","gradient mesh (layered radial gradients for depth)"
+Techy,"neon glow, glitch/scramble text, grid reveals, particle systems","medium, staggered grid","cyan/magenta/electric blue, monospace","grid pattern (thin linear gradients, 50px tile)"
+Playful,"bouncy spring easing, floating/bobbing, tilt-on-hover","medium with overshoot","bright colors, rounded corners, hand-drawn","noise texture (SVG grain data URI)"
+Professional,"fast subtle fades, clean slide transitions","fast (200-300ms)","navy/slate/charcoal, precise spacing","minimal / solid, precise data-viz"
+Calm,"very slow gentle fades, high whitespace","very slow (1s+), ease-out","muted palette, serif type, generous padding","subtle / none"
+Editorial,"staggered text reveals (animation-delay), image-text interplay","medium staggered","strong hierarchy, serif headlines + sans body, pull quotes","clean, layered typographic depth"

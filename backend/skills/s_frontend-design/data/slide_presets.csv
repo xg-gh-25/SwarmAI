@@ -1,0 +1,13 @@
+Name,Category,Background,Text,Accent,Palette Detail,Display Font,Body Font,Mood,Best For
+Bold Signal,dark,#1a1a1a,#ffffff,#FF5722,"bg #1a1a1a, gradient #1a1a1a->#2d2d2d->#1a1a1a, card #FF5722, on-card #1a1a1a",Archivo Black,Space Grotesk,"confident, bold, modern, high-impact","keynotes, product launches, manifestos"
+Electric Studio,dark,#0a0a0a,#ffffff,#4361ee,"bg #0a0a0a, text #ffffff, accent #4361ee, on-accent #0a0a0a",Manrope,Manrope,"bold, clean, professional, high contrast","B2B, SaaS, studio credentials"
+Creative Voltage,dark,#1a1a2e,#ffffff,#d4ff00,"bg #1a1a2e, primary #0066ff, accent #d4ff00, text #ffffff",Syne,Space Mono,"bold, creative, energetic, retro-modern","agencies, creative decks, launches"
+Dark Botanical,dark,#0f0f0f,#e8e4df,#d4a574,"bg #0f0f0f, text #e8e4df, muted #9a9590, accents #d4a574 #e8b4b8 #c9b896",Cormorant,IBM Plex Sans,"elegant, sophisticated, artistic, premium","luxury, editorial, premium products (abstract shapes only)"
+Notebook Tabs,light,#f8f6f1,#1a1a1a,#98d4bb,"bg #f8f6f1, text #1a1a1a, tab pastels #98d4bb #c7b8ea #f4b8c5 #a8d8ea #ffe6a7",Bodoni Moda,DM Sans,"editorial, organized, elegant, tactile","reports, structured content, editorial"
+Pastel Geometry,light,#faf9f7,#5a7c6a,#f0b4d4,"bg #faf9f7, base #c8d9e6, accents #f0b4d4 #a8d4c4 #9b8dc4 #7c6aad, text #5a7c6a",Plus Jakarta Sans,Plus Jakarta Sans,"friendly, organized, modern, approachable","consumer apps, onboarding, friendly SaaS"
+Split Pastel,light,#f5e6dc,#1a1a1a,#c8f0d8,"bg #f5e6dc / #e4dff0, text #1a1a1a, accents #c8f0d8 #f0f0c8 #f0d4e0",Outfit,Outfit,"playful, modern, friendly, creative","creator, indie launches, playful decks"
+Vintage Editorial,light,#f5f3ee,#1a1a1a,#e8d4c0,"bg #f5f3ee, text #1a1a1a, muted #555, accent #e8d4c0",Fraunces,Work Sans,"witty, confident, editorial, personality-driven","editorial features, opinion pieces (abstract shapes only)"
+Neon Cyber,specialty,#0a0f1c,#00ffcc,#ff00aa,"bg #0a0f1c, primary #00ffcc, accent #ff00aa",Clash Display,Satoshi,"futuristic, techy, confident","web3, gaming, tech launches"
+Terminal Green,specialty,#0d1117,#39d353,#39d353,"bg #0d1117, phosphor green #39d353",JetBrains Mono,JetBrains Mono,"developer-focused, hacker aesthetic","dev tools, hacker audience, dev blogs"
+Swiss Modern,specialty,#ffffff,#000000,#ff3300,"bg white, text black, accent #ff3300",Archivo,Nunito,"clean, precise, Bauhaus-inspired","corporate, B2B, documentation, grid-based"
+Paper & Ink,specialty,#faf9f7,#1a1a1a,#c41e3a,"bg #faf9f7, ink #1a1a1a, accent #c41e3a",Cormorant Garamond,Source Serif 4,"editorial, literary, thoughtful","essays, literary content, thoughtful decks"

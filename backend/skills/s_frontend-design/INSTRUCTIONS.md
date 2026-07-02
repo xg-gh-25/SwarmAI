@@ -61,6 +61,22 @@ python3 scripts/search.py "touch target accessibility" --domain ux
 | `data/landing.csv` | 24 | Landing page patterns with section order, CTA placement, conversion strategy |
 | `data/products.csv` | 161 | Product type → style + color + layout recommendations |
 | `data/charts.csv` | 25 | Chart type selection by data type with accessibility notes |
+| `data/slide_presets.csv` | 12 | Curated slide/deck presets — full hex palette + display/body font pairing + mood (dark/light/specialty) |
+| `data/slide_bold_templates.csv` | 34 | Bold-template taste index — id/name/scheme/mood/colors/fonts/use-case (reference shortlist, not full CSS) |
+| `data/animation_feelings.csv` | 6 | Mood → animation approach + timing + palette hint + background effect (Dramatic/Techy/Playful/Professional/Calm/Editorial) |
+| `data/anti_slop.md` | — | Anti-AI-slop rules: banned patterns (fonts/colors/layouts/decoration) + positive counter-rules. Read before any deck/landing generation. |
+
+**Slide / deck work:** when the brief is a presentation or slide deck (not a landing
+page), consult `slide_presets.csv` + `slide_bold_templates.csv` for a distinctive
+starting direction, and `animation_feelings.csv` to map the intended mood to an
+animation + palette approach. These are taste references — the presets carry complete
+palettes; the bold-template index is a shortlist (mood/colors/fonts/use-case) whose full
+per-template CSS lives on-demand in the source repo (see `data/ATTRIBUTION.md`).
+
+> **How to consult these 4 assets:** Read them **directly** (Read tool / `cat`). They are
+> NOT wired into `search.py` (the BM25 engine uses an explicit domain→file map in
+> `scripts/core.py` — these are reference tables, not a searchable `--domain`). Read
+> `anti_slop.md` in full; scan the CSVs for a preset/template whose mood matches the brief.
 
 ## Design Philosophy
 
@@ -71,6 +87,7 @@ The biggest risk with AI-generated UI is looking like every other AI-generated U
 1. **Run the Design System Generator** -- `python3 scripts/search.py "<product description>" --design-system -p "Name"` to get industry-specific recommendations
 2. **Commit to the recommended style fully** -- half-measures look worse than generic
 3. **Follow anti-patterns** -- the database tells you what NOT to do for each industry
+4. **Read `data/anti_slop.md`** -- the anti-AI-slop checklist: banned fonts (Inter/Roboto/Arial as display, over-converged Space Grotesk), banned colors (generic indigo `#6366f1`, purple-on-white gradients), banned layouts (all-centered, identical card grids, cookie-cutter dashboards), banned decoration (realistic illustrations, gratuitous glassmorphism) — plus the positive counter-rules (distinctive type, cohesive palette with dominant+accent, atmospheric layered backgrounds).
 
 ### Aesthetic Directions (67 styles in database)
 
