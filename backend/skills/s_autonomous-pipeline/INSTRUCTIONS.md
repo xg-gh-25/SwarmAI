@@ -579,19 +579,45 @@ stage). L4 checks whether all their findings are resolved. Only re-spawn
 specialists if a convergence fix changes code that the original review didn't cover.
 
 **L4 verify-against-disk (BLOCKING — never trust the `resolved` flag):** For each
-finding marked `resolved: true`, do NOT take the flag's word for it — grep the
-actual file on disk and confirm the fix is present. The artifact's `resolved`
-field records intent ("I applied the fix"), not state ("the fix is on disk").
-These diverge whenever a fix is reverted between application and delivery —
-e.g. an external `git stash pop`, a parallel-session commit, or a linter undo.
-This run (run_b5592983) shipped a delivery artifact marked `resolved: true` for
-a hardening fix that a mid-pipeline git conflict had silently reverted; the
-function had no test coverage, so nothing else caught it. PE review found it by
-reading the file. Mechanical step: for each resolved finding, `grep` the durable
-behavior (function name, guard, the specific line the fix added) in the current
-file. If absent → the finding is NOT resolved, re-apply. Cost: seconds per
-finding; the failure it prevents is "the record said done, the disk said
-otherwise" (C011 class).
+finding marked `resolved: true`, do NOT take the flag's word for it — confirm the
+fix is actually on disk. The artifact's `resolved` field records intent ("I
+applied the fix"), not state ("the fix is on disk"). These diverge whenever a fix
+is reverted between application and delivery — e.g. an external `git stash pop`, a
+parallel-session commit, or a linter undo. run_b5592983 shipped a delivery
+artifact marked `resolved: true` for a hardening fix that a mid-pipeline git
+conflict had silently reverted; the function had no test coverage, so nothing else
+caught it. PE review found it by reading the file.
+
+**Now code-enforced (Run B, run_c5935199).** Attach a structured `disk_check` to
+each resolved finding and the validator (`_verify_findings_on_disk`, called at BOTH
+the publish-time and completion-time gates, R27) greps it for you — a BLOCK the
+model cannot rationalize past:
+
+```json
+"findings": [{
+  "severity": "HIGH", "resolved": true,
+  "finding": "core/foo.py bar() line 42: missing null guard. Fixed: added guard.",
+  "disk_check": {"file": "/ABS/path/to/core/foo.py", "must_contain": "if x is None: return"}
+}]
+```
+
+- `disk_check.file` MUST be an **ABSOLUTE** source path. Findings reference the
+  SOURCE repo, but the validator's workspace root is `~/.swarm-ai/SwarmWS` (the
+  C040 source-vs-workspace split) — a relative path would be resolved against the
+  wrong tree and false-block. A relative/empty path is a WARN, not a check.
+- `must_contain` — for a fix that ADDED code: string ABSENT from the readable file
+  → **BLOCK** (fix reverted). Use the durable line the fix introduced.
+- `must_not_contain` — for a fix that REMOVED/refactored code: string STILL PRESENT
+  → **BLOCK**. A deleted file passes vacuously.
+- Fail-open on uncertainty: missing file (for must_contain) / unreadable / binary /
+  oversized → **WARN, never BLOCK** (a locus we can't verify is "can't check", not
+  "reverted" — never false-block a CI or other-machine run).
+- A resolved HIGH/CRITICAL finding with NO `disk_check` → **WARN** (nudge to add
+  one); LOW/unstructured findings are silent (no WARN-storm).
+
+Cost: seconds per finding; the failure it prevents is "the record said done, the
+disk said otherwise" (C011 class). This is distinct from the free-text `path`/`line`
+in the `finding` string — `disk_check` is the machine-verified locus.
 
 **L5 mechanism (Constitution Pattern):**
 L5 is NOT an honor-system self-assessment. It is a mechanical extraction + verification:

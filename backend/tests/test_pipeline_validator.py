@@ -3550,3 +3550,224 @@ class TestQualityGateAuditAccuracy:
         qg = [c for c in result["check_results"] if c["name"] == "quality_gate"]
         assert qg and qg[0]["status"] == "passed", \
             f"clean build must record PASSED: {qg}"
+
+
+class TestDiskCheckVerification:
+    """L4 verify-against-disk (Run B, run_c5935199) — code-enforces the
+    INSTRUCTIONS.md:581 BLOCKING prose that was never enforced.
+
+    A resolved:true finding may carry a structured disk_check:
+        {"file": "<ABSOLUTE path>", "must_contain": "<str>" | "must_not_contain": "<str>"}
+    The validator reads the file and confirms the durable change is on disk:
+      - must_contain ABSENT (file readable) → BLOCK (the run_b5592983 honest-fix-
+        then-externally-reverted catch)
+      - must_not_contain PRESENT → BLOCK (deletion/refactor fix reverted)
+      - file missing/unreadable/relative/binary → WARN-invalid, NEVER false-BLOCK
+        (fail-open on uncertainty)
+      - resolved finding with NO disk_check → no error (WARN only for HIGH/CRIT)
+
+    Threat model (Gate-0 reframe): the adversary is NOT a lying agent (a self-
+    reported disk_verified bool would be CLASS-A renamed) — it is an HONEST fix
+    silently reverted by an external event. A structured locus the validator
+    itself greps HAS teeth against that; the agent honestly records what it
+    added, the later revert makes the grep fail.
+
+    disk_check.file is ABSOLUTE (Gate-1 Attack-3 fix): findings reference SOURCE
+    repo files, but the validator's workspace root is ~/.swarm-ai/SwarmWS (the
+    C040 split) — joining against a repo_root would grep the WRONG tree and
+    false-block 100% of deliveries. Absolute paths eliminate the join entirely.
+    """
+
+    def _finding(self, disk_check=None, resolved=True, severity="HIGH"):
+        f = {"severity": severity, "confidence": 8, "resolved": resolved,
+             "finding": "x.py foo() line 12: bad thing. Fixed: added guard."}
+        if disk_check is not None:
+            f["disk_check"] = disk_check
+        return f
+
+    # ---- AC1: must_contain, readable file ----
+    def test_must_contain_present_passes(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        p = tmp_path / "mod.py"
+        p.write_text("def foo():\n    if x is None: return  # the guard\n")
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(p), "must_contain": "if x is None: return"})])
+        assert errs == [], f"present string must PASS, got: {errs}"
+        assert invalid == [], f"a readable matching file is not invalid: {invalid}"
+
+    def test_must_contain_absent_blocks(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        p = tmp_path / "mod.py"
+        p.write_text("def foo():\n    pass  # guard was reverted\n")
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(p), "must_contain": "if x is None: return"})])
+        assert errs, "must_contain absent from a readable file must BLOCK"
+        assert "disk" in errs[0].lower()
+
+    # ---- AC2: must_not_contain (deletion/refactor fixes) ----
+    def test_must_not_contain_present_blocks(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        p = tmp_path / "mod.py"
+        p.write_text("def dead():\n    return []  # should have been deleted\n")
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(p), "must_not_contain": "return []  # should have been deleted"})])
+        assert errs, "must_not_contain STILL PRESENT must BLOCK"
+
+    def test_must_not_contain_absent_passes(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        p = tmp_path / "mod.py"
+        p.write_text("def dead():\n    raise NotImplementedError\n")
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(p), "must_not_contain": "return []"})])
+        assert errs == [], f"removed string must PASS, got: {errs}"
+
+    def test_must_not_contain_file_deleted_passes(self, tmp_path):
+        # A deletion fix that removed the whole file: the thing to remove is
+        # definitionally gone → PASS (vacuous), NOT a false block.
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        gone = tmp_path / "removed.py"  # never created
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(gone), "must_not_contain": "anything"})])
+        assert errs == [], "must_not_contain on a missing file must PASS (vacuous)"
+
+    # ---- AC3: missing disk_check → no error; WARN only for HIGH/CRIT ----
+    def test_resolved_without_disk_check_no_error(self):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        errs, invalid = _verify_findings_on_disk([self._finding(None)])
+        assert errs == [], "a resolved finding without disk_check must NOT block"
+
+    def test_no_disk_check_warns_not_blocks_at_publish(self):
+        # HIGH resolved finding, no disk_check → WARN in validate_artifact_data,
+        # never a blocking error (no common-path regression — Run A lesson).
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver_art(
+            [self._finding(None, severity="HIGH")]), profile="bugfix")
+        disk_block = [e for e in errors if "disk-check FAILED" in e]
+        assert not disk_block, f"missing disk_check must NOT BLOCK, got: {disk_block}"
+
+    def test_low_severity_no_disk_check_no_warn(self):
+        # LOW resolved finding without disk_check → not even a WARN (no storm).
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", self._deliver_art(
+            [self._finding(None, severity="LOW")]), profile="bugfix")
+        assert not [e for e in errors if "disk-check FAILED" in e]
+
+    # ---- AC4: shared by BOTH gate sites (R27) ----
+    def test_both_sites_call_shared_helper(self, tmp_path, monkeypatch):
+        # Patch the shared helper; assert BOTH the publish path
+        # (validate_artifact_data) and the completion path (validate→_check_depth)
+        # invoke it. This proves R27 single-source-of-truth, not two forks.
+        import scripts.pipeline_validator as pv
+        calls = {"n": 0}
+        real = pv._verify_findings_on_disk
+
+        def spy(findings, allowed_root=None):
+            calls["n"] += 1
+            return real(findings, allowed_root)
+
+        monkeypatch.setattr(pv, "_verify_findings_on_disk", spy)
+        # publish path
+        pv.validate_artifact_data("deliver", self._deliver_art(
+            [self._finding(None)]), profile="bugfix")
+        after_publish = calls["n"]
+        # completion path
+        pv._check_depth("deliver", self._deliver_art([self._finding(None)]),
+                        "bugfix", run_id="")
+        assert after_publish >= 1, "publish path must call the shared helper"
+        assert calls["n"] > after_publish, "completion path must call the shared helper too"
+
+    def test_disk_failure_blocks_at_publish(self, tmp_path):
+        # End-to-end at the publish gate: a resolved finding whose must_contain
+        # is gone on disk BLOCKS validate_artifact_data.
+        from scripts.pipeline_validator import validate_artifact_data
+        p = tmp_path / "mod.py"
+        p.write_text("def foo():\n    pass  # reverted\n")
+        errors = validate_artifact_data("deliver", self._deliver_art(
+            [self._finding({"file": str(p), "must_contain": "the real guard"})]),
+            profile="bugfix")
+        assert [e for e in errors if "disk-check FAILED" in e], (
+            f"publish gate must BLOCK a reverted resolved finding, got: {errors}")
+
+    # ---- AC5: fail-open on uncertainty (never false-BLOCK) ----
+    def test_relative_path_warns_not_blocks(self):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": "relative/mod.py", "must_contain": "x"})])
+        assert errs == [], "a relative path must NOT block (fail-open)"
+        assert invalid, "a relative path must be flagged invalid (WARN)"
+
+    def test_missing_file_must_contain_warns_not_blocks(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        gone = tmp_path / "nope.py"
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(gone), "must_contain": "x"})])
+        assert errs == [], "missing file + must_contain must NOT block (uncertainty)"
+        assert invalid, "missing file must be flagged invalid (WARN)"
+
+    def test_allowed_root_escape_warns_not_blocks(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        outside = tmp_path / "outside.py"
+        outside.write_text("secret")
+        root = tmp_path / "repo"
+        root.mkdir()
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(outside), "must_contain": "secret"})],
+            allowed_root=str(root))
+        assert errs == [], "a path escaping allowed_root must NOT block"
+        assert invalid, "escaping allowed_root must be flagged invalid"
+
+    def test_binary_file_warns_not_crashes(self, tmp_path):
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        p = tmp_path / "blob.bin"
+        p.write_bytes(b"\x00\x01\x02\xff\xfe")
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(p), "must_contain": "x"})])
+        assert errs == [], "a binary file must NOT block (unreadable → WARN)"
+        assert invalid, "binary file must be flagged invalid"
+
+    def test_disk_failure_blocks_at_completion(self, tmp_path):
+        # Gate-2 mutation finding: the COMPLETION path (_check_depth — the
+        # STRONGER gate, it gates status:completed) had NO test asserting a
+        # reverted disk_check BLOCKS there. A future refactor could drop
+        # `errors.extend(_disk_errs)` at the completion site and the whole suite
+        # would stay green. This test is the mirror of
+        # test_disk_failure_blocks_at_publish for _check_depth.
+        from scripts.pipeline_validator import _check_depth
+        p = tmp_path / "mod.py"
+        p.write_text("def foo():\n    pass  # reverted\n")
+        errors = _check_depth("deliver", self._deliver_art(
+            [self._finding({"file": str(p), "must_contain": "the real guard"})]),
+            "bugfix", run_id="")
+        assert [e for e in errors if "disk-check FAILED" in e], (
+            f"completion gate (_check_depth) must BLOCK a reverted resolved "
+            f"finding — this is the stronger gate; got: {errors}")
+
+    def test_must_not_contain_missing_file_warns(self, tmp_path):
+        # Gate-2 LOW (signal parity): must_not_contain on a missing file passes
+        # (vacuous) but must emit an invalid-WARN like the must_contain branch,
+        # not be fully silent.
+        from scripts.pipeline_validator import _verify_findings_on_disk
+        gone = tmp_path / "removed.py"
+        errs, invalid = _verify_findings_on_disk(
+            [self._finding({"file": str(gone), "must_not_contain": "x"})])
+        assert errs == [], "missing file + must_not_contain must NOT block (vacuous)"
+        assert invalid, "missing file + must_not_contain must emit an invalid-WARN (parity)"
+
+    def _deliver_art(self, findings):
+        return {
+            "title": "X",
+            "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "meta_review": {"blind_spots": "none"},
+            "convergence": {"iterations": 1, "final_status": "push-ready"},
+            "ac_verification": {"verified": True},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "spawned": True,
+                "evidence": "Agent tool invocation: correctness specialist",
+                "findings_total": len(findings),
+                "findings_fixed": len(findings),
+                "findings_remaining": 0,
+                "findings": findings,
+            },
+        }

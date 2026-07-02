@@ -47,6 +47,7 @@ Public symbols:
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -142,6 +143,150 @@ def _blocked_findings(
                 except (TypeError, ValueError):
                     blocked.append(f)   # unparseable confidence → fail-closed
     return blocked
+
+
+# Max bytes read when verifying a disk_check locus. A findings file is source
+# code; 2 MB is far beyond any real source file and bounds a pathological read.
+_DISK_CHECK_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _verify_findings_on_disk(
+    findings: object, allowed_root: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """L4 verify-against-disk (Run B) — code-enforce INSTRUCTIONS.md:581.
+
+    The COMPLEMENT of `_blocked_findings` (which filters UNRESOLVED findings):
+    this pass inspects **resolved:true** findings that carry a structured
+    ``disk_check`` and confirms the durable change is actually on disk. It is a
+    SEPARATE, disjoint pass — never fold it into `_blocked_findings` (opposite
+    resolved-polarity).
+
+    A ``disk_check`` is::
+
+        {"file": "<ABSOLUTE path>", "must_contain": "<str>"}     # fix ADDED code
+        {"file": "<ABSOLUTE path>", "must_not_contain": "<str>"} # fix REMOVED code
+
+    Returns ``(errors, invalid_warnings)``:
+      - ``errors`` (BLOCK): file was READABLE and the durable change is gone —
+        ``must_contain`` absent, or ``must_not_contain`` still present. This is
+        the run_b5592983 "record said done, disk said otherwise" (C011) catch:
+        an honest fix silently reverted by an external event (git-stash-pop,
+        parallel-session commit, linter undo).
+      - ``invalid_warnings`` (WARN, never BLOCK): the check could not be
+        performed — file missing (for must_contain), unreadable, binary,
+        oversized, a relative/empty path, or outside ``allowed_root``.
+        **Fail-open on uncertainty** — a locus we cannot verify is "can't
+        check", NOT "fix reverted"; blocking on it would false-block correct
+        deliveries run from CI or another machine (Gate-1 Attack-5/6).
+
+    ``disk_check.file`` is ABSOLUTE by contract (Gate-1 Attack-3): findings
+    reference SOURCE-repo files, but the validator's workspace root is
+    ``~/.swarm-ai/SwarmWS`` (the C040 source-vs-workspace split). Joining a
+    relative path against the workspace root would grep the WRONG tree and
+    false-block 100% of code-fix deliveries. Absolute paths eliminate the join.
+    ``allowed_root``, when set, confines reads to that subtree (defence in depth
+    against a traversal-crafted absolute path); when None, any absolute path is
+    read (the finding author is the pipeline itself, not untrusted input).
+    """
+    errors: list[str] = []
+    invalid: list[str] = []
+    if not isinstance(findings, list):
+        return errors, invalid
+
+    for f in findings:
+        if not isinstance(f, dict) or not f.get("resolved"):
+            continue
+        dc = f.get("disk_check")
+        if not isinstance(dc, dict):
+            continue  # no structured locus → caller decides whether to WARN
+
+        raw = dc.get("file")
+        must_contain = dc.get("must_contain")
+        must_not_contain = dc.get("must_not_contain")
+        label = str(f.get("finding", ""))[:80]
+
+        # --- path validity (fail-open to WARN, never BLOCK) ---
+        if not raw or not isinstance(raw, str) or not os.path.isabs(raw):
+            invalid.append(
+                f"disk_check invalid (non-absolute/empty file path) for finding "
+                f"'{label}': disk_check.file must be an absolute source path — cannot verify."
+            )
+            continue
+        try:
+            rp = Path(raw).resolve()
+        except (OSError, ValueError):
+            invalid.append(f"disk_check invalid (unresolvable path '{raw}') for '{label}'.")
+            continue
+        if allowed_root:
+            try:
+                root = Path(allowed_root).resolve()
+                if not (rp == root or root in rp.parents):
+                    invalid.append(
+                        f"disk_check invalid (path '{rp}' escapes allowed_root) for '{label}'."
+                    )
+                    continue
+            except (OSError, ValueError):
+                invalid.append(f"disk_check invalid (bad allowed_root) for '{label}'.")
+                continue
+
+        if must_contain is None and must_not_contain is None:
+            invalid.append(
+                f"disk_check invalid (neither must_contain nor must_not_contain) for '{label}'."
+            )
+            continue
+
+        # --- file read (fail-open to WARN on any read problem) ---
+        exists = rp.is_file()
+        text = None
+        if exists:
+            try:
+                if rp.stat().st_size > _DISK_CHECK_MAX_BYTES:
+                    invalid.append(f"disk_check skipped (file >2MB) for '{label}'.")
+                    continue
+                text = rp.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                invalid.append(
+                    f"disk_check skipped (unreadable/binary file '{rp}') for '{label}'."
+                )
+                continue
+
+        # --- the actual gate ---
+        if must_contain is not None:
+            if not exists:
+                # can't confirm the fix is present → WARN, don't BLOCK.
+                # (A revert keeps the file and changes content; a MISSING file is
+                #  "wrong machine / not built here", i.e. uncertainty, not proof.)
+                invalid.append(
+                    f"disk_check skipped (file not found '{rp}', cannot confirm "
+                    f"must_contain) for '{label}'."
+                )
+            elif str(must_contain) not in text:
+                errors.append(
+                    f"L4 disk-check FAILED: resolved finding claims a fix but its "
+                    f"must_contain marker is ABSENT from {rp} — the fix is not on "
+                    f"disk (reverted?). Finding: '{label}'. Re-apply or un-resolve."
+                )
+        if must_not_contain is not None:
+            if not exists:
+                # File absent → the thing to remove is definitionally gone, so
+                # this is NOT a block. But absent-because-wrong-checkout is also
+                # "can't verify the removal actually happened here" → emit a WARN
+                # for signal parity with the must_contain missing-file branch
+                # (Gate-2 finding: the two branches were asymmetric — one warned,
+                # one was fully silent).
+                invalid.append(
+                    f"disk_check skipped (file not found '{rp}', must_not_contain "
+                    f"passes vacuously — cannot confirm removal on this checkout) "
+                    f"for '{label}'."
+                )
+            elif str(must_not_contain) in text:
+                errors.append(
+                    f"L4 disk-check FAILED: resolved finding claims a removal/refactor "
+                    f"but its must_not_contain marker is STILL PRESENT in {rp} — the fix "
+                    f"is not on disk (reverted?). Finding: '{label}'. Re-apply or un-resolve."
+                )
+
+    return errors, invalid
 
 
 class _CheckGuard:
@@ -915,7 +1060,9 @@ def get_stage_schema(stage: str) -> dict:
     }
 
 
-def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> list[str]:
+def validate_artifact_data(
+    stage: str, data: dict, profile: str = "full", repo_root: str | None = None,
+) -> list[str]:
     """Public API: validate artifact data against stage schema.
 
     Returns list of error strings. Empty list = valid.
@@ -928,6 +1075,10 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
         profile: Pipeline profile (full, bugfix, trivial, research, docs). Defaults to
                  "full" which is the strictest — trivial/research/docs exempt from
                  adversarial review requirements.
+        repo_root: Optional source-repo root used ONLY to confine the L4
+                 verify-against-disk reads (deliver stage). None (the default,
+                 preserving all existing callers) = no confinement; disk_check
+                 loci are absolute paths so no join is performed regardless.
     """
     errors: list[str] = []
 
@@ -1039,6 +1190,16 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                         f"lower a MEDIUM's confidence below {CONFIDENCE_GATE_THRESHOLD} "
                         f"if it is genuinely note-only."
                     )
+                # L4 verify-against-disk (Run B): the COMPLEMENT pass over
+                # RESOLVED findings — confirm each disk_check locus is actually
+                # on disk (INSTRUCTIONS.md:581, previously prose-only). Shared
+                # helper with the completion-time gate in _check_depth (R27).
+                # Only BLOCK-level disk errors surface here (this function returns
+                # errors only); the WARN-level signals (missing disk_check on
+                # HIGH/CRIT, invalid loci) surface at the completion validate()
+                # path, which owns a warnings list — see _check_depth below.
+                _disk_errs, _ = _verify_findings_on_disk(ar.get("findings", []), repo_root)
+                errors.extend(_disk_errs)
 
         # --- Three-Layer Governance: Full deliver ceremony enforcement ---
         # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
@@ -1654,6 +1815,16 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                         f"with confidence >= {CONFIDENCE_GATE_THRESHOLD} (missing "
                         f"confidence = fail-closed). Fix before delivery."
                     )
+                # L4 verify-against-disk (Run B): COMPLEMENT pass over RESOLVED
+                # findings — the stronger completion-time gate (this path gates
+                # status:completed). Shared helper with the publish-time gate in
+                # validate_artifact_data (R27: one source of truth, no fork).
+                # disk_check loci are absolute; repo_root is not threaded here
+                # (None = no confinement) — the completion path runs from the
+                # validator CLI without a registry, and absolute paths need no
+                # join anyway (Gate-1 Attack-3).
+                _disk_errs, _ = _verify_findings_on_disk(ar.get("findings", []))
+                errors.extend(_disk_errs)
 
             # Two-field (spawned + evidence) enforcement at COMPLETION time.
             # Mirrors validate_artifact_data:423-445 (publish-time), closing the
@@ -2770,6 +2941,35 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             else:
                 _g.failed()
             checks_total += 1
+            # --- L4 disk-check WARN surfacing (Run B) — inside the depth guard
+            # so a crash here is crash-isolated like every other check. The
+            # BLOCK-level disk errors are already emitted by _check_depth via the
+            # shared _verify_findings_on_disk helper (R27). Here — where the
+            # `warnings` list lives — we surface the advisory (non-blocking) signals:
+            #   (1) resolved HIGH/CRITICAL findings with NO disk_check locus
+            #       (scoped to HIGH/CRIT to avoid a LOW-severity WARN-storm — Gate-1)
+            #   (2) invalid/unverifiable loci (relative/missing/binary) which fail
+            #       OPEN (WARN, never BLOCK — never false-block CI/other-machine runs)
+            if stage == "deliver":
+                _ar = artifact_data.get("adversarial_review")
+                if isinstance(_ar, dict):
+                    _findings = _ar.get("findings", [])
+                    _, _disk_invalid = _verify_findings_on_disk(_findings)
+                    _hi_no_dc = [
+                        f for f in _findings
+                        if isinstance(f, dict) and f.get("resolved")
+                        and str(f.get("severity", "")).strip().upper() in ("HIGH", "CRITICAL")
+                        and not isinstance(f.get("disk_check"), dict)
+                    ]
+                    if _hi_no_dc:
+                        warnings.append(
+                            f"L4: {len(_hi_no_dc)} resolved HIGH/CRITICAL finding(s) carry "
+                            f"no disk_check locus — cannot confirm the fix is on disk. Add "
+                            f"disk_check:{{file(abs),must_contain|must_not_contain}} to "
+                            f"enable verify-against-disk (INSTRUCTIONS.md:581)."
+                        )
+                    for _inv in _disk_invalid:
+                        warnings.append(f"L4 disk-check WARN: {_inv}")
 
     # --- Check 9b: Gate 2 Agent Tool Audit (marker file verification) ---
     # Written by SubagentStop hook when Agent tool completes during a pipeline run.
