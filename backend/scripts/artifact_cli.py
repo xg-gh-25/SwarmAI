@@ -223,6 +223,7 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     "validation_failed": True,
                     "stage": stage,
                     "errors": errors,
+                    "hint": f"re-run without --quiet, or `artifact_cli.py schema --stage {stage}`, for the expected schema template",
                 }), file=sys.stderr)
             else:
                 schema_info = get_stage_schema(stage)
@@ -1305,10 +1306,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 _load_adata = getattr(_validator_mod, "_load_artifact_data", None)
                 if _validate_data is not None and _load_adata is not None:
                     _profile = run_state.get("profile", "full")
+                    _cur_profile_stages = _get_profile_stages(_profile)
                     for _s in run_state.get("stages", []):
                         _name = _s.get("stage", _s.get("name", ""))
                         # deliver already re-validated above; skip artifactless stages.
                         if _name in ("deliver", "reflect") or _s.get("status") not in ("completed", "done"):
+                            continue
+                        # This backstop re-validates historical artifacts for SHAPE only —
+                        # profile membership is already enforced by completion Check 6 + the
+                        # "all profile stages done" gate. Skip a stage not in the CURRENT
+                        # profile: a legit profile upgrade (goal→full, both rank 4) leaves a
+                        # completed off-profile stage record (goal_cycle), and
+                        # validate_artifact_data now fail-closes on off-profile stages (Run A,
+                        # run_7627f63c) — re-validating it here would newly BLOCK a run that
+                        # validated before. Off-profile PUBLISHING is caught at the publish
+                        # entrypoint (:216), the correct layer for it. (Gate-2 HIGH, run_7627f63c)
+                        if _name not in _cur_profile_stages:
                             continue
                         _aid = _s.get("artifact_id")
                         if not _aid:

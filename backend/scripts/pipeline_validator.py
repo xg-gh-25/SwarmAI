@@ -930,6 +930,24 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                  adversarial review requirements.
     """
     errors: list[str] = []
+
+    # Check 6 at PUBLISH time (Run A, run_7627f63c): reject an off-profile stage
+    # BEFORE any schema work. This MUST precede the `if not schema: return []`
+    # early-return below — else an artifactless off-profile stage (goal_cycle /
+    # reflect, which have no STAGE_SCHEMAS entry) would slip through un-checked.
+    # Reuses the SAME helper as the completion-time validate() Check 6 (:2288) — one
+    # source of truth, no forked profile logic (R27). Previously this check ran only
+    # at completion, so `publish --stage build` in a docs run was accepted and only a
+    # downstream build-specific invariant fired as a confusing symptom (run_6589c62b).
+    if not _check_profile_respected(stage, profile):
+        return [
+            f"'{stage}' is not in the '{profile}' profile "
+            f"(stages: {get_profile_stages(profile)}). "
+            f"Publish this stage under a profile whose stage-list includes it, or "
+            f"re-run run-create with the profile that matches your work "
+            f"(e.g. a markdown+commit change is 'trivial', not 'docs')."
+        ]
+
     schema = STAGE_SCHEMAS.get(stage)
     if not schema:
         return []

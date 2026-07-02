@@ -356,6 +356,65 @@ class TestProfileRespected:
             assert _check_profile_respected("reflect", profile) is True
 
 
+class TestProfileRespectedAtPublish:
+    """Run A (run_7627f63c): the profile check must ALSO fire at PUBLISH time
+    (validate_artifact_data), not only at completion-time validate(). Publishing an
+    off-profile stage (e.g. build in a docs run) must be rejected fail-closed at
+    publish — previously it slipped through and only a downstream build-specific
+    invariant fired as a confusing symptom (misdiagnosed as a validator bug)."""
+
+    def _errs(self, stage, profile):
+        from scripts.pipeline_validator import validate_artifact_data
+        return validate_artifact_data(stage, {}, profile=profile)
+
+    def _has_profile_violation(self, errs):
+        return any("not in the" in e and "profile" in e for e in errs)
+
+    def test_off_profile_stage_rejected_at_publish(self):
+        # AC1: build is not in docs profile → rejected at publish with a profile error
+        assert self._has_profile_violation(self._errs("build", "docs"))
+        assert self._has_profile_violation(self._errs("test", "docs"))
+        assert self._has_profile_violation(self._errs("build", "research"))
+
+    def test_artifactless_off_profile_stage_rejected(self):
+        # AC2: goal_cycle has NO STAGE_SCHEMAS entry — the check MUST sit above the
+        # `if not schema: return []` early-return, or this evades detection.
+        assert self._has_profile_violation(self._errs("goal_cycle", "docs"))
+        assert self._has_profile_violation(self._errs("goal_cycle", "full"))
+
+    def test_in_profile_stage_not_false_blocked(self):
+        # AC3: legit in-profile stages must NOT get a profile violation.
+        # reflect ∈ every profile; goal_cycle ∈ goal; build ∈ bugfix.
+        assert not self._has_profile_violation(self._errs("reflect", "docs"))
+        assert not self._has_profile_violation(self._errs("goal_cycle", "goal"))
+        assert not self._has_profile_violation(self._errs("build", "bugfix"))
+
+    def test_profile_hint_is_actionable(self):
+        # AC1 quality: the error names the profile and lists the profile's stages.
+        errs = self._errs("build", "docs")
+        viol = [e for e in errs if "not in the" in e]
+        assert viol and "docs" in viol[0] and "build" in viol[0]
+
+    def test_completion_backstop_skips_off_profile_stage_after_upgrade(self):
+        """Gate-2 HIGH regression guard (run_7627f63c): validate_artifact_data now
+        fail-closes on an off-profile stage — CORRECT at the publish entrypoint, but
+        the completion backstop loop re-validates EVERY completed stage against the
+        CURRENT profile. A legit goal→full upgrade (both rank 4) leaves a completed
+        `goal_cycle` record; re-validating it must NOT newly-block completion.
+
+        Pins BOTH halves: (a) validate_artifact_data still rejects goal_cycle under
+        'full' (publish-reject intact), AND (b) the backstop's guard predicate
+        (`stage not in get_profile_stages(profile)`) skips it, so the loop never calls
+        the validator for it. If a future refactor drops the loop guard, this fails."""
+        from core.pipeline_profiles import get_profile_stages
+        # (a) publish-reject is intact — goal_cycle is genuinely off-profile under full
+        assert self._has_profile_violation(self._errs("goal_cycle", "full"))
+        # (b) the backstop guard skips exactly this stage (goal_cycle ∉ full profile)
+        assert "goal_cycle" not in get_profile_stages("full")
+        # sanity: an IN-profile completed stage (build ∈ full) is NOT skipped
+        assert "build" in get_profile_stages("full")
+
+
 # ---------------------------------------------------------------------------
 # Integration: validate() full pipeline
 # ---------------------------------------------------------------------------
