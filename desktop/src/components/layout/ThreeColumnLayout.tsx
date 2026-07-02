@@ -498,11 +498,15 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   }, [editorFileDetail]);
 
   // Ref for file open routing — assigned after handleFileDoubleClick is defined below
-  const handleFileDoubleClickRef = useRef<(file: FileTreeItem) => Promise<void>>(null!);
+  const handleFileDoubleClickRef = useRef<(file: FileTreeItem, autoDiff?: boolean) => Promise<void>>(null!);
 
 
   // Handle file double-click — unified routing through FileViewer (Requirement 9.1)
-  const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
+  // `autoDiff` (optional) opens the file directly on its diff view — set here in
+  // the SAME setState as the rest of fileViewerFile so there is no post-await
+  // read-stale-`prev` race (handleFileDoubleClick is sync; a follow-up
+  // setFileViewerFile(prev=>…) would read the pre-flush prev and drop the flag).
+  const handleFileDoubleClick = useCallback(async (file: FileTreeItem, autoDiff?: boolean) => {
     if (file.isSwarmWorkspace) {
       setSwarmWarning({ isOpen: true, pendingFile: file });
       return;
@@ -515,6 +519,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       fileName: file.name,
       gitStatus: file.gitStatus,
       workspaceId: file.workspaceId,
+      autoDiff: autoDiff || undefined,
     });
     // Reset modal mode — FileViewer always starts in panel
     setEditorMode('panel');
@@ -569,16 +574,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
       // Route through handleFileDoubleClick for proper file type handling
       // (images preview inline, binary files show info modal, text opens editor).
+      // autoDiff (Radar ✍ Changes click) is threaded INTO the call so it lands
+      // in the single fileViewerFile setState — no post-await stale-prev race.
       try {
-        await handleFileDoubleClickRef.current(fileItem);
-        // Radar ✍ Changes click carries autoDiff — open directly on the diff
-        // view. handleFileDoubleClick set fileViewerFile fresh; patch in the
-        // flag (only for the matching path, only when requested).
-        if (autoDiff && mounted) {
-          setFileViewerFile((prev) =>
-            prev && prev.filePath === resolvedPath ? { ...prev, autoDiff: true } : prev,
-          );
-        }
+        await handleFileDoubleClickRef.current(fileItem, autoDiff);
       } catch {
         if (!mounted) return;
         addToast({
