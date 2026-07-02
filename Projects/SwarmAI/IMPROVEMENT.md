@@ -1,4 +1,16 @@
 
+### 2026-07-01: MILESTONE — "reliability + self-eval" 三周攻坚告一段落 (v1.23.0 shipped)
+<!-- ref:0 | last:none | decay:active | source:manual -->
+**What:** 三周 refactor 的主线不是功能堆料，而是把系统从"看着好了"逼到"真的好了" —— 结构性根治了三类"骗过自己"的失败模式，每一类的共性都是"表面绿/看着活但实际错"（authorship-trap / 假信号的家族）：
+- **(1) Session resume 死循环 & 首发 zombie** — 簇A WS1：串行化 `_client_io` 单 SDK 通道 + bounded `tool_call_leak` recovery（1st leak 注入纠正前缀+resume，2nd clean cold restart，杜绝自我强化重试）；DEAD-resume race：`_last_turn_clean` fail-closed guard（污染的 warm 子进程复用前 recycle）+ DEAD-state send-time recovery（撞 dead 自恢复，不干等 60s lifecycle loop）+ `_cleanup_dead` TOCTOU guard。
+- **(2) Streaming spinner 假信号 / render-freeze (OT01)** — backend-authoritative spinner（后端状态权威驱动）+ render-source 层根治（33 次复发全在 layer 1-9 打转，真 defect 在 React render-source）+ hard-cap backstop clock（churn-immune force-clear 边界）。
+- **(3) Golden case 假绿 (Eval)** — `gate_refs` anti-drift（每个 ref 必须解析到活内容否则 case fail）+ `hard_delete_cases`（物理删除、防复活）+ `validate-corpus` sweep（堵住 resting-corpus 漂移洞）+ judge-infra coverage-collapse 告警（errored case 不再冒充 clean pass）。
+- 附带治理升级：AGENT R30（context files = 认知器官：verify-before-quote / touch-it-fix-it）+ s_persist Step-0 admission gate。
+
+**Lesson — 这条主线值得，不要下次把同类"看着好了"问题当新问题重趟。** 三类失败表面无关（后端并发 / 前端渲染 / eval 数据），根因同族：**"表面信号为真"被当成"实际行为为真"**，这正是 SOUL P2（Done = 试着弄坏它并失败）+ CLASS-A authorship-trap 的系统级体现。修法也同族：把"真信号"变成结构性权威（backend-authoritative spinner / gate_refs 必解析 / 有界恢复而非无限重试），而非加容灾兜底。
+
+**Lesson — 三周投入在最后一米就回本了一次。** 发版当天 CI red（`chatStreamingState` 的 `toEqual` 漏了 OT01 新增的 `postDisconnectFlushing` 字段 —— 生产代码对、测试陈旧），被三周养成的纪律当场拦住：本地跑证明它是真 red 而非旧失败 → 根因定位为测试脱节而非代码 bug → adversarial CONFIRMED-CLEAN（还额外发现该字段在 TS type 里是必填，坐实测试才是陈旧方）→ 修复+commit 才放行。没有"本地证明/adversarial 必过/观测不推断"这套，这个 red 很可能带着上线。
+
 ### 2026-06-30: E2E disconnect verification chain — Gate-2 found a false-green INSIDE the anti-false-green test (run_91170d96, full)
 <!-- ref:0 | last:none | decay:active | source:pipeline -->
 **What:** Built the missing test layer behind ~33 OT01 recurrences (87 disconnect/reconcile commits in 7d): no test ever injected a REAL mid-stream SSE drop — all coverage mocked the boundary or fabricated the failure (`errorHandler(new Error(...))`), and the fix I shipped the same day (run_27485b25) had only mocked tests. Built two real-transport tests: frontend drives the REAL `consumeSSEStream` against a no-[DONE] fetch stream (mutation-proven); backend `smoke_e2e._check_disconnect_recovery` drops a real stream mid-flight and asserts recovery.
