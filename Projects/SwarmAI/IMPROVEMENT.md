@@ -251,3 +251,42 @@
 - **[Worked] Adversarial Gate 2 caught a real coverage gap.** RED test only locked 1 of 2 deleted stopSession sites (_healGraceActive=true skips the heal-grace branch). Added a fake-timer test for the heal-grace-expiry site; verified RED-on-reintroduce. Two deletions need two tests (STEERING #11: every removed path needs execution coverage).
 - **[Hazard] perl -i one-liner for temp regression-injection hit BOTH comment sites, leaving a stray `currentTab` ref in the terminal branch (undefined-var).** Full suite caught it (2 failures) on the post-restore run. Lesson: verifying-by-injection is fine, but a multi-match perl edit needs a full-suite GREEN confirm after restore — never trust "I reverted the one I added." The injection landed in 2 places; I reverted 1.
 - **[Decision/scope] A fixes ONLY the poison (layer 2).** Layer 1 (WHY SSE disconnects — stall timer 90s / tab-close abort / reconnect race; 30 events/day) and layer 3 (seamless mid-stream resume) are deliberate follow-up runs. Honest scope: user may still see "send again" on a genuine disconnect, but no more zombie/stuck-Continue loop.
+
+### What Worked — Decoupling a mislayered weekly job from a per-session hook (run_6ac3fc0b, 2026-07-02)
+
+**Bug:** evolution_maintenance lifecycle hook ran a ~5-min evolution cycle (mine
+3629 transcripts + Bedrock) synchronously on every session close. The 180s hook
+budget (main.py:943) < the 293s cycle → asyncio.wait_for cancelled the coroutine
+before the post-await state-write → `.evolution_last_run` never advanced →
+every session re-triggered (59×/day), each spawning an uncancellable 293s zombie
+thread. A flock made concurrent re-triggers cheap lock-rejections (so the cost
+was 1 real cycle + N rejections per wave), but neither path advanced state.
+
+**Fix (structural, 3 parts — the point):** the root was an ARCHITECTURAL
+MISLAYER (a weekly 5-min job on a per-session hook budget), not the timeout
+value. (1) Deleted `_maybe_run_evolution` + call site — the scheduled
+`evolution-cycle` job is now the sole trigger; the hook keeps only its cheap
+~7ms governance work. (2) Gave the scheduled job `timeout_seconds=1800` — it was
+inheriting the 300s default. (3) Dormant-doc'd the orphaned
+`.evolution_corrections_pending` writer.
+
+**The load-bearing lesson — Gate-1 caught a "structural fix" that RELOCATED the
+bug.** My initial plan (delete hook path → scheduled job sole trigger) was
+correct in direction but the scheduled job inherited the 300s default = only 7s
+over the 293s cycle. The first slow run would time out, never write state, and
+after 3 Thursday timeouts the circuit breaker would DISABLE evolution entirely —
+the same "silently stops advancing state" class, just moved from per-session to
+weekly. A pre-code Gate-1 skeptic (reading executor.py:813/models.py:118) found
+it before any code. **"Move the heavy work off the hot path" is only half a
+structural fix — the new home must actually be able to FINISH the work.** When
+decoupling A→B, verify B's own resource limits (timeout, budget, retry, circuit
+breaker) can hold the workload; a decouple that hands work to an under-resourced
+executor is 表面, not 根治.
+
+**Also validated:** (a) the M3 Understanding-Gate skeptic caught 2 CLASS-B
+factual errors in my own framing (asserted 30s timeout — really 180s; asserted
+empty state file — really valid 2026-06-25; I'd read the class default + the
+wrong filename). Observation beats memory, again. (b) Gate-2 confirmed a MEDIUM
+(AWS creds stripped from script-job subprocess env) that was real but
+non-blocking (~/.aws file-based creds survive env-strip) — flagged a deploy-time
+smoke-run rather than a code change.
