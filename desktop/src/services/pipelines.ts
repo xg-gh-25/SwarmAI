@@ -22,6 +22,15 @@ export interface PipelineRun {
   currentStage: string;
   /** checkpoint.reason — WHY it paused (the decision text). Null if not paused. */
   checkpointReason: string | null;
+  /** Stage progress string "N/M" (backend key ``progress``), e.g. "5/8". */
+  progress: string;
+  /**
+   * ISO timestamp of the last update (backend key ``updated_at``). The backend
+   * sorts runs by this and trims completed to the 5 most-recent per project, so
+   * it IS the "recently completed" recency signal — used to order the Jobs &
+   * Runs run list. Empty string when absent.
+   */
+  updatedAt: string;
 }
 
 /** Convert a backend snake_case pipeline run to camelCase PipelineRun. */
@@ -38,6 +47,8 @@ export function pipelineToCamelCase(r: Record<string, unknown>): PipelineRun {
     status: r.status as PipelineRun['status'],
     currentStage: checkpointStage ?? (r.progress as string) ?? '',
     checkpointReason: (checkpoint?.reason as string | undefined) ?? null,
+    progress: (r.progress as string) ?? '',
+    updatedAt: (r.updated_at as string) ?? '',
   };
 }
 
@@ -49,6 +60,20 @@ export const pipelinesService = {
   async fetchActivePipelines(): Promise<PipelineRun[]> {
     const response = await api.get<{ pipelines?: Record<string, unknown>[] }>(
       '/pipelines?active=true',
+    );
+    const rows = response.data?.pipelines ?? [];
+    return rows.map(pipelineToCamelCase);
+  },
+
+  /**
+   * Fetch ALL pipeline runs (active + up to 5 recently-completed per project) —
+   * the unfiltered dashboard endpoint. Powers the Jobs & Runs section's run
+   * roster, which shows completed runs the attention queue drops. Returns [] on
+   * any shape surprise — the sidebar must never crash on this.
+   */
+  async fetchAllPipelines(): Promise<PipelineRun[]> {
+    const response = await api.get<{ pipelines?: Record<string, unknown>[] }>(
+      '/pipelines',
     );
     const rows = response.data?.pipelines ?? [];
     return rows.map(pipelineToCamelCase);

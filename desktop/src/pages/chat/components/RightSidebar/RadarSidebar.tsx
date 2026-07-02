@@ -9,14 +9,18 @@
  *   ② 🔔 需要你      — the attention queue: paused pipelines (with the decision
  *                      they're blocked on), failing jobs, and background tabs
  *                      waiting on a question. Empty → the section disappears.
- *   ③ Files          — files touched this session (session context)
- *   ⚡ PipelinesBar  — bottom FYI bar: RUNNING pipelines, read-only, not clickable.
+ *   ③ Changes        — files touched this session (session context)
+ *   ④ ⚡ Jobs & Runs — the INVENTORY: every scheduled job (status + schedule +
+ *                      last-run) and every pipeline run (running/paused/recently-
+ *                      completed). Replaces the old bottom PipelinesBar. The 🔔
+ *                      queue owns only the ACTIONABLE copies; this is the full
+ *                      roster. Default-expanded so running work stays glanceable.
  *
  * The prior briefing feed (Working/Signals/Hot/Output/Artifacts/Stocks + the 60s
- * SessionBriefing poll + JobsBar) was removed from the sidebar — those feed
- * sections still live on the WelcomeScreen. The attention queue is aggregated by
- * useRadarAttention from three pre-existing, pure-read backend sources with zero
- * backend changes.
+ * SessionBriefing poll) was removed from the sidebar — those feed sections still
+ * live on the WelcomeScreen. The attention queue is aggregated by
+ * useRadarAttention; Jobs & Runs by useJobsRuns — both from pre-existing,
+ * pure-read backend sources with zero backend changes.
  *
  * @exports RadarSidebar
  */
@@ -28,7 +32,7 @@ import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
 import { ChangesSection } from './ChangesSection';
 import { AttentionSection } from './AttentionSection';
-import { PipelinesBar } from './PipelinesBar';
+import { JobsRunsSection } from './JobsRunsSection';
 import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
 import { useRadarAttention } from '../../../../hooks/useRadarAttention';
 import { HistoryPopover } from './HistoryPopover';
@@ -117,8 +121,10 @@ export function RadarSidebar({
   // Section counts
   const [todoCount, setTodoCount] = useState(0);
 
-  // Attention queue + running-pipeline FYI list (3 pure-read sources, polled).
-  const { attentionItems, runningPipelines } = useRadarAttention(sessionId, openTabs);
+  // Attention queue (3 pure-read sources, polled). The running-pipeline FYI list
+  // is no longer surfaced here — running/paused/completed runs now live in the
+  // Jobs & Runs section (Option B), the single run-status inventory.
+  const { attentionItems } = useRadarAttention(sessionId, openTabs);
 
   // Referenced Files tracking
   const { files: referencedFiles, totalCount: referencedCount } = useReferencedFiles(sessionId);
@@ -203,10 +209,12 @@ export function RadarSidebar({
             <ChangesSection grouped={referencedFiles} totalCount={referencedCount} />
           </CollapsibleSection>
         )}
-      </div>
 
-      {/* ⚡ Running-pipeline FYI bar (bottom) — read-only, hides when none. */}
-      <PipelinesBar running={runningPipelines} />
+        {/* ④ ⚡ Jobs & Runs — indigo (inventory): all scheduled jobs + all pipeline
+            runs (running/paused/completed). Replaces the old bottom PipelinesBar;
+            renders its own CollapsibleSection (default-expanded). Hides when empty. */}
+        <JobsRunsSection />
+      </div>
     </div>
   );
 }

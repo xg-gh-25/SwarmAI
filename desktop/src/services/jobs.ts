@@ -39,6 +39,18 @@ export interface JobStatus {
    * that it did. Null when absent.
    */
   lastError: string | null;
+  /**
+   * Cron/interval schedule string (backend key ``schedule``), e.g. "0 2 * * 1-5"
+   * or "after:signal-fetch". Surfaced by the Jobs & Runs section so the user can
+   * see WHEN each job runs. Empty string when absent.
+   */
+  schedule: string;
+  /**
+   * Outcome of the most recent run (backend key ``last_status``): "success" /
+   * "failed" / "skipped" / "never". Drives the Jobs & Runs status dot for a job
+   * that is enabled but not currently in a failure streak. Defaults to "never".
+   */
+  lastStatus: string;
 }
 
 /** Convert a backend snake_case job status to camelCase JobStatus. */
@@ -51,6 +63,8 @@ export function jobToCamelCase(j: Record<string, unknown>): JobStatus {
     enabled: (j.enabled as boolean) !== false,
     lastRun: (j.last_run as string) ?? null,
     lastError: (j.last_error as string) ?? null,
+    schedule: (j.schedule as string) ?? '',
+    lastStatus: (j.last_status as string) ?? 'never',
   };
 }
 

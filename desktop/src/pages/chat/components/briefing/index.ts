@@ -1,7 +1,9 @@
 /**
  * Barrel export for shared Briefing Hub components.
  *
- * Used by both WelcomeScreen (spacious 2-col) and RadarSidebar (compact list).
+ * Consumed by WelcomeScreen (spacious 2-col briefing hub). (JobsBar was removed
+ * 2026-07-02 — job/run status now lives in RadarSidebar's Jobs & Runs section,
+ * fed by useJobsRuns, not this barrel.)
  */
 
 export { WorkingSection } from './WorkingSection';
@@ -9,7 +11,6 @@ export { SignalsSection } from './SignalsSection';
 export { HotNewsSection } from './HotNewsSection';
 export { StocksSection } from './StocksSection';
 export { SwarmOutputSection } from './SwarmOutputSection';
-export { JobsBar } from './JobsBar';
 export {
   buildTodoContext,
   buildWorkingContext,
