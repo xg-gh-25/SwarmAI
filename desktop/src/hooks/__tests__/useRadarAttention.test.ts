@@ -27,6 +27,17 @@ function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
   };
 }
 
+function job(over: Partial<JobStatus> = {}): JobStatus {
+  return {
+    id: 'some-job',
+    name: 'Some Job',
+    consecutiveFailures: 0,
+    enabled: true,
+    lastRun: null,
+    ...over,
+  };
+}
+
 function streaming(over: Partial<StreamingStateEntry> = {}): StreamingStateEntry {
   return {
     streaming: false,
@@ -47,8 +58,8 @@ describe('aggregateAttention', () => {
       pipe({ id: 'run_running', status: 'running', currentStage: 'test' }),
     ];
     const jobs: JobStatus[] = [
-      { id: 'morning-inbox', name: 'Morning Inbox', consecutiveFailures: 2 },
-      { id: 'healthy-job', name: 'Healthy', consecutiveFailures: 0 },
+      job({ id: 'morning-inbox', name: 'Morning Inbox', consecutiveFailures: 2 }),
+      job({ id: 'healthy-job', name: 'Healthy', consecutiveFailures: 0 }),
     ];
     const streamingState: Record<string, StreamingStateEntry> = {
       'sess-other': streaming({ waitingInput: true, pendingQuestion: { toolUseId: 't1', questions: [{ header: 'Pick A/B', question: '', options: [] } as never] } }),
@@ -110,6 +121,36 @@ describe('aggregateAttention', () => {
     });
     expect(attentionItems).toEqual([]);
     expect(runningPipelines).toEqual([]);
+  });
+
+  it('AC-disabled: a DISABLED job with failures is EXCLUDED from the attention queue (brain-push repro)', () => {
+    const jobs: JobStatus[] = [
+      job({ id: 'brain-push', name: 'Brain Backup Push', consecutiveFailures: 1, enabled: false }),
+      job({ id: 'os-eval', name: 'OS Eval', consecutiveFailures: 2, enabled: true }),
+    ];
+    const { attentionItems } = aggregateAttention({
+      pipelines: [],
+      jobs,
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    // Only the ENABLED failing job surfaces; the disabled one is filtered out.
+    expect(attentionItems).toHaveLength(1);
+    expect(attentionItems[0].kind === 'job' && attentionItems[0].id).toBe('os-eval');
+  });
+
+  it('AC-failopen: a failing job with enabled omitted (shape surprise) still shows — fail OPEN', () => {
+    // jobToCamelCase defaults enabled=true when absent; assert the filter honors it.
+    const jobs: JobStatus[] = [job({ id: 'mystery', consecutiveFailures: 3 })];
+    const { attentionItems } = aggregateAttention({
+      pipelines: [],
+      jobs,
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    expect(attentionItems).toHaveLength(1);
   });
 
   it('AC3: a waiting session with no open tab is ignored (can not switch to a tab that is not open)', () => {

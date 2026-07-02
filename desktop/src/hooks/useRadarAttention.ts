@@ -73,9 +73,13 @@ export function aggregateAttention(input: AggregateInput): AggregateResult {
     // completed/failed/cancelled/abandoned → neither (no "watch me" value)
   }
 
-  // 2. Jobs: consecutive_failures > 0 → attention.
+  // 2. Jobs: enabled AND consecutive_failures > 0 → attention.
+  //    A DISABLED job's failure count is stale/non-actionable (e.g. brain-push,
+  //    halted 2026-06-27) — surfacing it drowns real signals in "Needs You".
+  //    `enabled` fails open (only explicit false hides), so a shape surprise
+  //    still shows the job rather than silently swallowing a real failure.
   for (const j of jobs) {
-    if (j.consecutiveFailures > 0) {
+    if (j.enabled && j.consecutiveFailures > 0) {
       attentionItems.push({
         kind: 'job',
         id: j.id,

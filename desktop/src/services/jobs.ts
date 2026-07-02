@@ -18,6 +18,20 @@ export interface JobStatus {
   id: string;
   name: string;
   consecutiveFailures: number;
+  /**
+   * Whether the job is currently enabled in the scheduler. A DISABLED job
+   * (e.g. brain-push, deliberately halted 2026-06-27) must never appear in the
+   * 🔔 attention queue — a stopped job's stale failure count is not actionable.
+   * Backend key: ``enabled``. Defaults to ``true`` when absent so a shape
+   * surprise fails OPEN (a job is shown, not silently hidden).
+   */
+  enabled: boolean;
+  /**
+   * ISO timestamp of the job's last run (backend key ``last_run``), or null if
+   * it has never run. Surfaced so the attention queue can age out stale
+   * one-off failures. Null when absent.
+   */
+  lastRun: string | null;
 }
 
 /** Convert a backend snake_case job status to camelCase JobStatus. */
@@ -26,6 +40,9 @@ export function jobToCamelCase(j: Record<string, unknown>): JobStatus {
     id: (j.id as string) ?? '',
     name: (j.name as string) ?? (j.id as string) ?? 'job',
     consecutiveFailures: (j.consecutive_failures as number) ?? 0,
+    // Fail OPEN: only an explicit `false` disables. Absent/unknown → shown.
+    enabled: (j.enabled as boolean) !== false,
+    lastRun: (j.last_run as string) ?? null,
   };
 }
 
