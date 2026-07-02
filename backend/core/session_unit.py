@@ -3335,11 +3335,11 @@ class SessionUnit:
         # dangerous_command_gate's await on wait_for_permission_decision().
         from core.permission_manager import permission_manager as _pm
         decision = "approve" if allowed else "deny"
-        # Flip status OUT of "pending" BEFORE signalling (mirrors the
-        # cmd-permission-response endpoint). Otherwise a /sessions/streaming-state
-        # poll landing between set_permission_decision and the awaiting coroutine's
-        # finally would see status=="pending" + a still-live waiter and re-surface
-        # an already-decided prompt (approve-into-void).
+        # Flip status OUT of "pending" BEFORE signalling. Otherwise a
+        # /sessions/streaming-state poll landing between set_permission_decision
+        # and the awaiting coroutine's finally would see status=="pending" + a
+        # still-live waiter and re-surface an already-decided prompt
+        # (approve-into-void).
         _pm.update_pending_request(request_id, {"status": decision})
         _pm.set_permission_decision(request_id, decision)
         logger.info(

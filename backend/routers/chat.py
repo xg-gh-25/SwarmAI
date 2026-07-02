@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 from schemas.message import ChatRequest, ChatSessionResponse, AnswerQuestionRequest, ChatMessageResponse
 from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
-from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
+from schemas.permission import PermissionResponseRequest
 from database import db
 from core.agent_defaults import agent_exists
 from core.session_utils import _build_error_event
@@ -1259,112 +1259,12 @@ async def delete_session(session_id: str):
     LifecycleManager._release_session_state(session_id)
 
 
-@router.post("/cmd-permission-response", response_model=PermissionRequestResponse)
-async def handle_cmd_permission_response(request: PermissionResponseRequest):
-    """Handle user's decision on a permission request (non-streaming).
-
-    This endpoint is called when the user approves or denies a dangerous command
-    that was flagged by the human approval hook. Use /cmd-permission-continue for
-    streaming response.
-
-    NOTE: This endpoint uses the shared permission_manager singleton. The permission
-    decision is delivered to the waiting subprocess via asyncio.Event signaling,
-    independent of which SessionUnit holds the session.
-    """
-    logger.info(f"Received permission response for request {request.request_id}: {request.decision}")
-
-    # Get the permission request from in-memory store
-    from core.permission_manager import permission_manager as _pm
-    permission_request = _pm.get_pending_request(request.request_id)
-    if not permission_request:
-        # Approve-into-void recovery (run_65f317db): the pending request is gone
-        # because its waiter coroutine was cancelled (SDK control_cancel_request)
-        # BEFORE the user's decision arrived — the finally in
-        # wait_for_permission_decision popped it while _pending_tool_use_id stayed
-        # stranded. A bare 400 here strands the session in WAITING_INPUT forever
-        # (stop/continue/input all dead). Instead: if the unit is a dead-waiter
-        # zombie, reap it to COLD so the next send() resumes cleanly, and return a
-        # RECOVERED signal the frontend resets on (not an error the user must act on).
-        unit = _get_router().get_unit(request.session_id)
-        if unit is not None:
-            try:
-                reaped = await unit.reap_dead_waiting_input()
-            except Exception as e:
-                logger.warning(
-                    "Failed to reap dead WAITING_INPUT for session %s: %s",
-                    request.session_id, e,
-                )
-                reaped = False
-            if reaped:
-                logger.info(
-                    "Permission request %s not found but session %s was a "
-                    "dead-waiter zombie — reaped to COLD (approve-into-void recovery)",
-                    request.request_id, request.session_id,
-                )
-                return PermissionRequestResponse(
-                    status="recovered",
-                    request_id=request.request_id,
-                )
-        raise ValidationException(
-            message="Permission request not found",
-            detail=f"No pending permission request found with ID '{request.request_id}'"
-        )
-
-    # Verify session matches
-    if permission_request.get("session_id") != request.session_id:
-        raise ValidationException(
-            message="Session mismatch",
-            detail="The session ID does not match the permission request"
-        )
-
-    # Update the permission request in memory
-    _pm.update_pending_request(
-        request.request_id,
-        {
-            "status": request.decision + "d",  # "approved" or "denied"
-            "decided_at": datetime.now().isoformat(),
-            "user_feedback": request.feedback
-        }
-    )
-
-    # If approved, store in per-session PermissionManager (in-memory only)
-    if request.decision == "approve":
-        tool_input = permission_request.get("tool_input", {})
-        if isinstance(tool_input, str):
-            tool_input = json.loads(tool_input)
-        command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-        if command:
-            _pm.approve_command(request.session_id, command)
-            logger.info(f"Command approved for session {request.session_id}: {command[:50]}...")
-
-    # Signal any waiting tasks
-    _pm.set_permission_decision(request.request_id, request.decision)
-
-    # On deny: the hook unblocks and returns deny to the SDK, but nobody
-    # is reading _read_formatted_response anymore (we returned from it
-    # after yielding cmd_permission_request and transitioning to
-    # WAITING_INPUT).  Interrupt the session to cleanly abort the
-    # response cycle so the session transitions WAITING_INPUT → IDLE.
-    if request.decision == "deny":
-        unit = _get_router().get_unit(request.session_id)
-        if unit and unit.state.value == "waiting_input":
-            try:
-                await unit.interrupt()
-                logger.info(
-                    "Session %s interrupted after permission deny "
-                    "(WAITING_INPUT → IDLE)",
-                    request.session_id,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to interrupt session %s after deny: %s",
-                    request.session_id, e,
-                )
-
-    return PermissionRequestResponse(
-        status="recorded",
-        request_id=request.request_id
-    )
+# NOTE: the non-streaming /cmd-permission-response endpoint was removed in
+# run_74992978. Both approve AND deny now stream via /cmd-permission-continue
+# (run_ec351cc9), so a decision always lets the agent continue. The
+# approve-into-void reap it once held is NOT lost — reap_dead_waiting_input is a
+# SessionUnit method still invoked by the live /cmd-permission-continue not-found
+# path (below), lifecycle_manager, and session_unit's own send path.
 
 
 @router.post("/cmd-permission-continue")

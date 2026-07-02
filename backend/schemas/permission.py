@@ -22,9 +22,3 @@ class PermissionResponseRequest(BaseModel):
     request_id: str = Field(..., description="ID of the permission request being responded to")
     decision: Literal["approve", "deny"] = Field(..., description="User's decision")
     feedback: Optional[str] = Field(default=None, description="Optional user feedback")
-
-
-class PermissionRequestResponse(BaseModel):
-    """Response after recording a permission decision."""
-    status: str = Field(default="recorded")
-    request_id: str
