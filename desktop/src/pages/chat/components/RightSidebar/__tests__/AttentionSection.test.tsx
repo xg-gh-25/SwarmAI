@@ -54,4 +54,39 @@ describe('AttentionSection', () => {
     expect(onItemClick).toHaveBeenCalledTimes(1);
     expect(onItemClick.mock.calls[0][0]).toContain('Morning Inbox');
   });
+
+  const pausedWithReason: AttentionItem = {
+    kind: 'paused', id: 'run_x', title: 'do a thing', project: 'SwarmAI', stage: 'build',
+    reason: 'Gate-1 BLOCK: this is a very long decision reason that should be collapsed by default',
+  };
+
+  it('AC1: paused reason is COLLAPSED by default (title + action shown, reason hidden)', () => {
+    render(<AttentionSection items={[pausedWithReason]} onItemClick={vi.fn()} />);
+    expect(screen.getByText('do a thing')).toBeInTheDocument();
+    expect(screen.getByText('→ Resume & answer')).toBeInTheDocument();
+    // reason text is NOT rendered until expanded
+    expect(screen.queryByText(/very long decision reason/)).not.toBeInTheDocument();
+    // chevron toggle present
+    expect(screen.getByLabelText('Expand decision detail')).toBeInTheDocument();
+  });
+
+  it('AC2: chevron click expands reason WITHOUT firing the card action; toggles back', () => {
+    const onItemClick = vi.fn();
+    render(<AttentionSection items={[pausedWithReason]} onItemClick={onItemClick} />);
+    const chevron = screen.getByLabelText('Expand decision detail');
+    fireEvent.click(chevron);
+    // reason now visible, action NOT fired
+    expect(screen.getByText(/very long decision reason/)).toBeInTheDocument();
+    expect(onItemClick).not.toHaveBeenCalled();
+    // collapse again
+    fireEvent.click(screen.getByLabelText('Collapse decision detail'));
+    expect(screen.queryByText(/very long decision reason/)).not.toBeInTheDocument();
+  });
+
+  it('AC3: paused card with NO reason shows no chevron', () => {
+    const noReason: AttentionItem = { kind: 'paused', id: 'run_y', title: 'no reason', project: 'P', stage: 'test', reason: '' };
+    render(<AttentionSection items={[noReason]} onItemClick={vi.fn()} />);
+    expect(screen.queryByLabelText('Expand decision detail')).not.toBeInTheDocument();
+    expect(screen.getByText('no reason')).toBeInTheDocument();
+  });
 });
