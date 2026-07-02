@@ -153,6 +153,33 @@ class TestLLMJudge:
         assert result is None
 
     @patch("core.skill_fitness.LLMJudge._get_client")
+    def test_score_zero_content_blocks_logs_distinct_signal(self, mock_get_client, judge, caplog):
+        """Zero content blocks → None + a DISTINCT (non-thinking-only) log signal.
+
+        Guards the empty-cause else-branch: previously a zero-block response was
+        silent at this site (only the thinking-only case logged). Mirrors
+        test_llm_optimizer.TestEmptyReturnLogSignals — drives the REAL score()
+        path, mocking only the boto3 client boundary.
+        """
+        import logging
+
+        mock_client = MagicMock()
+        mock_client.converse.return_value = {
+            "output": {"message": {"content": []}},  # zero content blocks
+        }
+        mock_get_client.return_value = mock_client
+
+        with caplog.at_level(logging.WARNING, logger="core.skill_fitness"):
+            result = judge.score("skill", "expected", "actual")
+
+        assert result is None
+        msgs = [r.getMessage() for r in caplog.records]
+        assert msgs, f"zero-content-blocks was silent at source: {msgs}"
+        assert not any("thinking-only" in m.lower() for m in msgs), (
+            f"zero-block wrongly labeled thinking-only: {msgs}"
+        )
+
+    @patch("core.skill_fitness.LLMJudge._get_client")
     def test_score_clamps_to_range(self, mock_get_client, judge):
         """Score outside [0,1] gets clamped."""
         mock_client = MagicMock()

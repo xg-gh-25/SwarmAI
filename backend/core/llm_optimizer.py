@@ -299,10 +299,21 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
         if "text" in block:
             return block["text"], usage
 
+    # Distinguish the two empty-return causes at the source so a future
+    # "LLM optimization silently degraded" incident is diagnosable from the log
+    # alone. The caller no longer adds a generic "empty response" line — that
+    # double-logged the thinking-only case and was the zero-block case's only
+    # signal. The exception path logs its own distinct signal in the caller.
     if content_blocks:
         logger.warning(
-            "Bedrock response had %d blocks but no text block (may be thinking-only)",
+            "LLM optimizer: Bedrock returned %d block(s) but no text block "
+            "(thinking-only response) — no changes extracted",
             len(content_blocks),
+        )
+    else:
+        logger.warning(
+            "LLM optimizer: Bedrock returned zero content blocks "
+            "(empty response) — no changes extracted",
         )
     return "", usage
 
@@ -342,7 +353,9 @@ def optimize_skill_with_llm(
     try:
         response_text, usage = _call_bedrock_opus(prompt)
         if not response_text:
-            logger.warning("LLM optimizer: empty response from Bedrock for %s", skill_name)
+            # _call_bedrock_opus already logged the specific empty cause
+            # (thinking-only vs zero-content-blocks). Falls back to heuristic
+            # via the caller in evolution_optimizer.
             return empty
 
         changes = _parse_llm_response(response_text)

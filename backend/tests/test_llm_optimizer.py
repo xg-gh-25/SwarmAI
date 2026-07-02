@@ -276,3 +276,79 @@ class TestTokenTracking:
 
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
+
+
+# ── Empty-return log-signal distinguishability (observability) ──
+#
+# _call_bedrock_opus returns "" for TWO distinct causes; the caller adds a THIRD
+# generic log. These tests drive the REAL _call_bedrock_opus (mocking only the
+# boto3 client boundary) and the REAL caller, asserting each empty cause emits ONE
+# distinguishable, greppable signal — no double-logging, no silent case.
+
+def _mock_bedrock_client(content_blocks):
+    """A boto3-client stand-in whose converse() returns the given content blocks."""
+    client = MagicMock()
+    client.converse.return_value = {
+        "usage": {"inputTokens": 10, "outputTokens": 0},
+        "output": {"message": {"content": content_blocks}},
+    }
+    return client
+
+
+class TestEmptyReturnLogSignals:
+    """Each empty-return cause must be told apart in the logs (observability only)."""
+
+    def test_thinking_only_logs_distinct_signal(self, caplog):
+        """Blocks present but none has 'text' → ONE thinking-only signal."""
+        import logging
+        from core.llm_optimizer import _call_bedrock_opus
+
+        # reasoningContent-only response (adaptive thinking, no text block)
+        client = _mock_bedrock_client([{"reasoningContent": {"text": "thinking..."}}])
+        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
+            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
+                text, _ = _call_bedrock_opus("prompt")
+
+        assert text == ""
+        msgs = [r.getMessage() for r in caplog.records]
+        thinking = [m for m in msgs if "thinking-only" in m.lower()]
+        assert len(thinking) == 1, f"expected exactly one thinking-only signal, got: {msgs}"
+
+    def test_zero_content_blocks_logs_distinct_signal(self, caplog):
+        """Zero content blocks → a DISTINCT non-thinking-only signal (was silent)."""
+        import logging
+        from core.llm_optimizer import _call_bedrock_opus
+
+        client = _mock_bedrock_client([])
+        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
+            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
+                text, _ = _call_bedrock_opus("prompt")
+
+        assert text == ""
+        msgs = [r.getMessage() for r in caplog.records]
+        # The zero-block case must produce SOME warning at the source (previously silent)…
+        assert msgs, f"zero-content-blocks was silent at source: {msgs}"
+        # …and it must NOT be mislabeled as thinking-only (that would be a wrong signal).
+        assert not any("thinking-only" in m.lower() for m in msgs), (
+            f"zero-block wrongly labeled thinking-only: {msgs}"
+        )
+
+    def test_thinking_only_not_double_logged_through_caller(self, caplog):
+        """A thinking-only response must NOT be logged twice (source + caller)."""
+        import logging
+        from core.llm_optimizer import optimize_skill_with_llm
+
+        client = _mock_bedrock_client([{"reasoningContent": {"text": "hmm"}}])
+        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
+            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
+                changes, _ = optimize_skill_with_llm(
+                    skill_text="Do stuff.",
+                    corrections=[("fix", "add", "high")],
+                    skill_name="thinky",
+                )
+
+        assert changes == []  # empty return → heuristic fallback path unaffected
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        # Exactly ONE empty-cause warning — the source signal, not source + generic caller.
+        empty_cause = [m for m in warnings if "thinking-only" in m.lower() or "empty response" in m.lower()]
+        assert len(empty_cause) == 1, f"empty cause double-logged: {empty_cause}"

@@ -292,8 +292,14 @@ class LLMJudge:
             if not text:
                 if content_blocks:
                     logger.warning(
-                        "LLMJudge: %d blocks but no text (thinking-only response)",
+                        "LLMJudge: %d block(s) but no text (thinking-only response) "
+                        "— no score returned",
                         len(content_blocks),
+                    )
+                else:
+                    logger.warning(
+                        "LLMJudge: zero content blocks (empty response) "
+                        "— no score returned",
                     )
                 return None
 
