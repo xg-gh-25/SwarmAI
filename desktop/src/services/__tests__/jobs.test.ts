@@ -10,13 +10,14 @@ import { describe, it, expect } from 'vitest';
 import { jobToCamelCase } from '../jobs';
 
 describe('jobToCamelCase', () => {
-  it('maps enabled + last_run from the backend snake_case payload', () => {
+  it('maps enabled + last_run + last_error from the backend snake_case payload', () => {
     const got = jobToCamelCase({
       id: 'os-eval',
       name: 'OS Eval',
       consecutive_failures: 2,
       enabled: true,
       last_run: '2026-07-02T04:28:03Z',
+      last_error: 'Script timed out after 900s',
     });
     expect(got).toEqual({
       id: 'os-eval',
@@ -24,7 +25,13 @@ describe('jobToCamelCase', () => {
       consecutiveFailures: 2,
       enabled: true,
       lastRun: '2026-07-02T04:28:03Z',
+      lastError: 'Script timed out after 900s',
     });
+  });
+
+  it('lastError defaults to null when the backend omits it (healthy job)', () => {
+    const got = jobToCamelCase({ id: 'healthy', consecutive_failures: 0 });
+    expect(got.lastError).toBeNull();
   });
 
   it('surfaces enabled=false for a disabled job (brain-push)', () => {

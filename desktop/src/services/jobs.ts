@@ -2,9 +2,9 @@
  * Scheduled-job status API service layer.
  *
  * Read access to the Swarm Job System's per-job status for the Radar sidebar's
- * attention queue (jobs with consecutive_failures > 0 → 🔔). First frontend
- * consumer of the consecutive_failures field, which exists backend-side but
- * was never surfaced to the UI.
+ * attention queue (enabled jobs with consecutive_failures > 0 → 🔔). Surfaces
+ * consecutive_failures, enabled, last_run, and last_error — the last so the
+ * 🔔 card shows WHY a job failed, not just that it did (run_f1a9b1ab).
  *
  * Exports:
  * - jobsService  — object with fetchJobs()
@@ -32,6 +32,13 @@ export interface JobStatus {
    * one-off failures. Null when absent.
    */
   lastRun: string | null;
+  /**
+   * Error/summary of the most recent failure (backend key ``last_error``),
+   * truncated to 500 chars server-side, or null when the job is healthy /
+   * never failed. Surfaced so the 🔔 queue shows WHY a job failed, not just
+   * that it did. Null when absent.
+   */
+  lastError: string | null;
 }
 
 /** Convert a backend snake_case job status to camelCase JobStatus. */
@@ -43,6 +50,7 @@ export function jobToCamelCase(j: Record<string, unknown>): JobStatus {
     // Fail OPEN: only an explicit `false` disables. Absent/unknown → shown.
     enabled: (j.enabled as boolean) !== false,
     lastRun: (j.last_run as string) ?? null,
+    lastError: (j.last_error as string) ?? null,
   };
 }
 

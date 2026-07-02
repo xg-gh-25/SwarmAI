@@ -55,6 +55,30 @@ describe('AttentionSection', () => {
     expect(onItemClick.mock.calls[0][0]).toContain('Morning Inbox');
   });
 
+  it('job with lastError: renders the reason line AND threads it into the triage context', () => {
+    const onItemClick = vi.fn();
+    const items: AttentionItem[] = [
+      { kind: 'job', id: 'os-eval', title: 'OS Eval', failures: 2,
+        lastError: 'Script timed out after 900s' },
+    ];
+    render(<AttentionSection items={items} onItemClick={onItemClick} />);
+    // the reason line is visible on the card (the whole point of this run)
+    expect(screen.getByText('Script timed out after 900s')).toBeTruthy();
+    fireEvent.click(screen.getByText(/failed 2x/));
+    const [, ctx] = onItemClick.mock.calls[0];
+    expect(ctx).toContain('Script timed out after 900s');
+  });
+
+  it('job WITHOUT lastError: no reason line, no context arg (backward-compat, no crash)', () => {
+    const onItemClick = vi.fn();
+    const items: AttentionItem[] = [
+      { kind: 'job', id: 'j', title: 'Legacy Job', failures: 1 },
+    ];
+    render(<AttentionSection items={items} onItemClick={onItemClick} />);
+    fireEvent.click(screen.getByText(/failed 1x/));
+    expect(onItemClick.mock.calls[0][1]).toBeUndefined();
+  });
+
   const pausedWithReason: AttentionItem = {
     kind: 'paused', id: 'run_x', title: 'do a thing', project: 'SwarmAI', stage: 'build',
     reason: 'Gate-1 BLOCK: this is a very long decision reason that should be collapsed by default',

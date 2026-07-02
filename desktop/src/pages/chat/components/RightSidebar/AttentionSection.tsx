@@ -214,6 +214,7 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
     } else if (item.kind === 'job') {
       onItemClick?.(
         `The "${item.title}" job has failed ${item.failures} time(s) in a row — investigate why.`,
+        item.lastError ? `Last error: ${item.lastError}` : undefined,
       );
     } else {
       onSelectTab?.(item.id);
@@ -261,6 +262,11 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
                       <TagPill kind="job" />
                       <span className={TITLE_CLS}>{item.title} failed {item.failures}x</span>
                     </span>
+                    {item.lastError && (
+                      <span className="mt-0.5 block truncate text-[11px] text-[var(--color-text-muted)]">
+                        {item.lastError}
+                      </span>
+                    )}
                     <span className={ACTION_CLS}>{actionLabel('job', acting)}</span>
                   </span>
                 </>

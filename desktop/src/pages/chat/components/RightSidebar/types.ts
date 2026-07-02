@@ -74,6 +74,8 @@ export type AttentionItem =
       title: string;
       /** Consecutive failure count (>0). */
       failures: number;
+      /** WHY it failed — most recent error/summary (backend last_error), or null. */
+      lastError?: string | null;
     }
   | {
       kind: 'waiting';

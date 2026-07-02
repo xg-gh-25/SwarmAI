@@ -85,6 +85,7 @@ export function aggregateAttention(input: AggregateInput): AggregateResult {
         id: j.id,
         title: j.name,
         failures: j.consecutiveFailures,
+        lastError: j.lastError,
       });
     }
   }
