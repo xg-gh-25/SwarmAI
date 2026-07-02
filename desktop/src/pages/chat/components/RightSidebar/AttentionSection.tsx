@@ -24,6 +24,10 @@
  * A paused card's (often long) checkpoint reason is COLLAPSED behind a chevron
  * (sibling button + stopPropagation).
  *
+ * Only the top SEE_MORE_LIMIT (3) items render by default; the rest fold behind
+ * a "See N more" toggle so the queue stays scannable. The section-header count
+ * always shows the TOTAL — nothing is hidden silently.
+ *
  * Empty queue → renders null (section disappears). Running pipelines live in the
  * bottom PipelinesBar, not here.
  */
@@ -44,10 +48,15 @@ interface AttentionSectionProps {
  *  until the poll removes it, rather than flashing back to un-acted at 8s. */
 const ACTING_EXPIRY_MS = 35_000;
 
+/** How many items show before the "See more" fold. Keeps the queue scannable —
+ *  the top N are what matter; the rest are one click away. The section-header
+ *  count always reflects the TOTAL, so nothing is hidden silently. */
+const SEE_MORE_LIMIT = 3;
+
 const CARD_CLS =
-  'flex w-full items-start gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer';
+  'flex w-full items-start gap-2 rounded px-2 py-1 text-left transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer';
 const TITLE_CLS = 'block truncate text-[12.5px] text-[var(--color-text)]';
-const ACTION_CLS = 'mt-1 block text-[10.5px] font-semibold text-[var(--color-accent)]';
+const ACTION_CLS = 'mt-0.5 block text-[10.5px] font-semibold text-[var(--color-accent)]';
 
 /** Category tag pill per kind — same visual family as the Changes NEW/UPD pills. */
 const KIND_TAG: Record<AttentionItem['kind'], { label: string; cls: string }> = {
@@ -136,7 +145,11 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
   // Section-level "acting" state: item keys the user has clicked, shown as a
   // progress state until the poll removes the item. Keyed by `${kind}-${id}`.
   const [actingIds, setActingIds] = useState<Set<string>>(new Set());
+  // Whether the fold is open (show all items vs just the top SEE_MORE_LIMIT).
+  const [showAll, setShowAll] = useState(false);
   const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const keyOf = (item: AttentionItem) => `${item.kind}-${item.id}`;
 
   // Clear all pending expiry timers on unmount (no leaked timers).
   useEffect(() => {
@@ -147,9 +160,32 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
     };
   }, []);
 
-  if (items.length === 0) return null;
+  // Reconcile acting-state against the live items on every poll: once an item
+  // leaves the queue (its source condition resolved), drop its acting key +
+  // timer. Without this, a reused `${kind}-${id}` (e.g. a job that fails again
+  // <35s after being clicked+cleared) would render spuriously "acting".
+  useEffect(() => {
+    const liveKeys = new Set(items.map(keyOf));
+    // Cancel timers for keys no longer present.
+    timeoutsRef.current.forEach((timer, key) => {
+      if (!liveKeys.has(key)) {
+        clearTimeout(timer);
+        timeoutsRef.current.delete(key);
+      }
+    });
+    setActingIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((key) => {
+        if (liveKeys.has(key)) next.add(key);
+        else changed = true;
+      });
+      return changed ? next : prev; // avoid a no-op re-render
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
-  const keyOf = (item: AttentionItem) => `${item.kind}-${item.id}`;
+  if (items.length === 0) return null;
 
   const markActing = (key: string) => {
     setActingIds((prev) => new Set(prev).add(key)); // new Set → triggers re-render
@@ -184,6 +220,9 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
     }
   };
 
+  const visibleItems = showAll ? items : items.slice(0, SEE_MORE_LIMIT);
+  const hiddenCount = items.length - visibleItems.length;
+
   return (
     <CollapsibleSection
       name="attention"
@@ -193,8 +232,8 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
       defaultExpanded={true}
       accent="rgba(245,166,35,0.5)"
     >
-      <div className="space-y-1 px-1 py-1">
-        {items.map((item) => {
+      <div className="space-y-0.5 px-1 py-0.5">
+        {visibleItems.map((item) => {
           const key = keyOf(item);
           const acting = actingIds.has(key);
           if (item.kind === 'paused') {
@@ -244,6 +283,23 @@ export function AttentionSection({ items, onItemClick, onSelectTab }: AttentionS
             </button>
           );
         })}
+
+        {(hiddenCount > 0 || showAll) && items.length > SEE_MORE_LIMIT && (
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="flex w-full items-center justify-center gap-0.5 rounded px-2 py-0.5 text-[10.5px] font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+            aria-expanded={showAll}
+          >
+            {showAll ? 'See less' : `See ${hiddenCount} more`}
+            <span
+              className="material-symbols-outlined text-[14px] transition-transform duration-150"
+              style={{ transform: showAll ? 'rotate(180deg)' : 'rotate(0deg)' }}
+            >
+              expand_more
+            </span>
+          </button>
+        )}
       </div>
     </CollapsibleSection>
   );

@@ -123,4 +123,59 @@ describe('AttentionSection', () => {
     expect(screen.getByText('opening…')).toBeInTheDocument(); // j1 acting
     expect(screen.getByText('→ Investigate')).toBeInTheDocument(); // j2 still not acting
   });
+
+  const fiveJobs: AttentionItem[] = Array.from({ length: 5 }, (_, i) => ({
+    kind: 'job' as const,
+    id: `j${i}`,
+    title: `Job ${i}`,
+    failures: 1,
+  }));
+
+  it('see-more: only top 3 items render by default; rest fold behind "See N more"', () => {
+    render(<AttentionSection items={fiveJobs} onItemClick={vi.fn()} />);
+    // top 3 visible
+    expect(screen.getByText(/Job 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Job 2/)).toBeInTheDocument();
+    // items at index 3,4 hidden
+    expect(screen.queryByText(/Job 3/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Job 4/)).not.toBeInTheDocument();
+    // fold toggle shows the hidden count
+    expect(screen.getByText('See 2 more')).toBeInTheDocument();
+  });
+
+  it('see-more: clicking "See more" reveals all; "See less" re-folds', () => {
+    render(<AttentionSection items={fiveJobs} onItemClick={vi.fn()} />);
+    fireEvent.click(screen.getByText('See 2 more'));
+    expect(screen.getByText(/Job 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Job 4/)).toBeInTheDocument();
+    // toggle now offers to re-fold
+    fireEvent.click(screen.getByText('See less'));
+    expect(screen.queryByText(/Job 3/)).not.toBeInTheDocument();
+  });
+
+  it('see-more: no fold toggle when items <= 3', () => {
+    render(<AttentionSection items={fiveJobs.slice(0, 3)} onItemClick={vi.fn()} />);
+    expect(screen.queryByText(/See .* more/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Job 2/)).toBeInTheDocument();
+  });
+
+  it('see-more: header count reflects TOTAL, not just the visible top-3', () => {
+    render(<AttentionSection items={fiveJobs} onItemClick={vi.fn()} />);
+    // CollapsibleSection renders the count badge with the full total (5)
+    expect(screen.getByText('5')).toBeInTheDocument();
+  });
+
+  it('acting-reconcile: an item that leaves + returns (reused key) does NOT render spuriously acting', () => {
+    const jobA: AttentionItem = { kind: 'job', id: 'morning-inbox', title: 'Morning Inbox', failures: 1 };
+    const { rerender } = render(<AttentionSection items={[jobA]} onItemClick={vi.fn()} />);
+    // click → acting
+    fireEvent.click(screen.getByText(/Morning Inbox/));
+    expect(screen.getByText('opening…')).toBeInTheDocument();
+    // poll resolves it (item gone)
+    rerender(<AttentionSection items={[]} onItemClick={vi.fn()} />);
+    // same job fails again <35s later — same key, but user never clicked THIS one
+    rerender(<AttentionSection items={[{ ...jobA, failures: 2 }]} onItemClick={vi.fn()} />);
+    expect(screen.queryByText('opening…')).not.toBeInTheDocument();
+    expect(screen.getByText('→ Investigate')).toBeInTheDocument();
+  });
 });
