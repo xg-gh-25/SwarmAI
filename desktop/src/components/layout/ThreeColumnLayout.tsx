@@ -449,6 +449,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     fileName: string;
     gitStatus?: GitStatus;
     workspaceId?: string;
+    autoDiff?: boolean;
   } | null>(null);
 
   // Legacy file editor state — kept for modal mode (fullscreen text editing only)
@@ -529,7 +530,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     let mounted = true;
 
     const handleOpenFileEvent = async (e: Event) => {
-      const { path: filePath } = (e as CustomEvent<{ path: string }>).detail ?? {};
+      const { path: filePath, autoDiff } = (e as CustomEvent<{ path: string; autoDiff?: boolean }>).detail ?? {};
       if (!filePath) return;
 
       let resolvedPath = filePath;
@@ -570,6 +571,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       // (images preview inline, binary files show info modal, text opens editor).
       try {
         await handleFileDoubleClickRef.current(fileItem);
+        // Radar ✍ Changes click carries autoDiff — open directly on the diff
+        // view. handleFileDoubleClick set fileViewerFile fresh; patch in the
+        // flag (only for the matching path, only when requested).
+        if (autoDiff && mounted) {
+          setFileViewerFile((prev) =>
+            prev && prev.filePath === resolvedPath ? { ...prev, autoDiff: true } : prev,
+          );
+        }
       } catch {
         if (!mounted) return;
         addToast({

@@ -59,6 +59,8 @@ export interface FileViewerProps {
     fileName: string;
     gitStatus?: GitStatus;
     workspaceId?: string;
+    /** Open directly on the diff view (Radar ✍ Changes click). */
+    autoDiff?: boolean;
   };
   onClose: () => void;
   onAttachToChat?: (item: FileTreeItem) => void;
@@ -412,6 +414,7 @@ export default function FileViewer({
           gitStatus={gitStatus}
           onAttachToChat={onAttachToChat}
           readonly={cached.readonly}
+          initialShowDiff={initialFile?.autoDiff && initialFile.filePath === filePath}
           variant={variant}
           onToggleMode={onToggleMode}
           onSaveWithDiff={onSaveWithDiff}

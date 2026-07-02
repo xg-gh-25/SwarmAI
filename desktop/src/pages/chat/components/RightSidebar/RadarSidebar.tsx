@@ -26,7 +26,7 @@ import type { RadarSidebarProps } from './types';
 import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
-import { ReferencedFilesSection } from './ReferencedFilesSection';
+import { ChangesSection } from './ChangesSection';
 import { AttentionSection } from './AttentionSection';
 import { PipelinesBar } from './PipelinesBar';
 import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
@@ -196,10 +196,11 @@ export function RadarSidebar({
           onSelectTab={onSelectTab}
         />
 
-        {/* ③ Referenced Files — teal (session context) */}
-        {referencedCount > 0 && (
-          <CollapsibleSection name="referenced-files" icon="insert_drive_file" label="Files" count={referencedCount} defaultExpanded={true} accent="rgba(20,184,166,0.35)">
-            <ReferencedFilesSection grouped={referencedFiles} totalCount={referencedCount} />
+        {/* ③ Changes — teal (session context): files written/edited this session,
+            with a git NEW/UPD badge; click → diff. Read/searched files dropped. */}
+        {referencedCount > 0 && referencedFiles.written.length > 0 && (
+          <CollapsibleSection name="changes" icon="edit_note" label="改动" count={referencedFiles.written.length} defaultExpanded={true} accent="rgba(20,184,166,0.35)">
+            <ChangesSection grouped={referencedFiles} totalCount={referencedCount} />
           </CollapsibleSection>
         )}
       </div>

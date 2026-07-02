@@ -50,6 +50,14 @@ export interface FileEditorCoreProps {
   isAttached?: boolean;
   readonly?: boolean;
   committedContent?: string;
+  /**
+   * When true, the editor opens with the diff view already shown (instead of
+   * the default edit view). Used by the Radar ✍ Changes section so clicking a
+   * changed file lands directly on its diff. Honored both on mount AND on the
+   * file-switch reset effect (see below) — a prop-only useState init would be
+   * clobbered by that effect, so the effect reads this too.
+   */
+  initialShowDiff?: boolean;
   /** 'panel' keeps editor open after save; 'modal' closes after save. */
   variant: 'panel' | 'modal';
   /** Toggle between panel ↔ modal mode. */
@@ -490,6 +498,7 @@ export default function FileEditorCore({
   isAttached,
   readonly,
   committedContent,
+  initialShowDiff,
   variant,
   onToggleMode,
   onSaveWithDiff,
@@ -503,7 +512,7 @@ export default function FileEditorCore({
   const [savedContent, setSavedContent] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
+  const [showDiff, setShowDiff] = useState(initialShowDiff ?? false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [showSvgPreview, setShowSvgPreview] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -824,7 +833,11 @@ export default function FileEditorCore({
     setOriginalContent(committedContent ?? initialContent);
     setSavedContent(null);
     setShowUnsavedWarning(false);
-    setShowDiff(false);
+    // Honor initialShowDiff on file-switch too — a bare `false` here would
+    // clobber the auto-diff intent the moment the file's content loads
+    // (this effect's deps include filePath/committedContent). Switching to a
+    // file opened WITHOUT autoDiff still resets to edit view (prop is false).
+    setShowDiff(initialShowDiff ?? false);
     setShowMarkdownPreview(false);
     setShowSvgPreview(false);
     setShowSearch(false);
@@ -837,7 +850,7 @@ export default function FileEditorCore({
     // Clear diff comment state
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
-  }, [initialContent, committedContent, filePath, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
+  }, [initialContent, committedContent, filePath, initialShowDiff, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
 
   // Syntax highlighting
   useEffect(() => {
