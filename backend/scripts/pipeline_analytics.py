@@ -27,10 +27,24 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# RP30 scan-recency window: aggregate only runs touched within this many days.
+# Wide (90d) so EVALUATE/BUILD's consumed intelligence stays populated; this is
+# the SCAN bound, not the weekly-report window.
+ANALYSIS_WINDOW_DAYS = 90
+
+# Anti-C044 completeness gate: a dimension-cell computed from fewer than this many
+# samples is rendered "insufficient data (n=X)" instead of a confident number.
+# Absolute per-cell threshold (the eligible-runs denominator for a coverage RATIO
+# is ambiguous per-dimension — profile_accuracy is per-profile, adversarial_value
+# is per-telemetry-field, abandon_patterns already self-gates at n>=3). Matches
+# the existing abandon_patterns idiom (analyze_abandon_patterns: count >= 3).
+INSUFFICIENT_N = 3
 
 
 def _get_workspace() -> Path:
@@ -41,11 +55,28 @@ def _get_workspace() -> Path:
     return Path(ws).expanduser().resolve()
 
 
-def _load_all_metrics(workspace: Path, project_filter: str | None = None) -> list[dict]:
-    """Load all METRICS.json files across projects."""
+def _load_all_metrics(
+    workspace: Path,
+    project_filter: str | None = None,
+    max_age_days: float | None = ANALYSIS_WINDOW_DAYS,
+) -> list[dict]:
+    """Load METRICS.json files across projects, bounded to a recency window.
+
+    RP30 (no-op-path scaling): the scan cost grows with ALL runs ever, but the
+    aggregate only needs recent history — so skip run dirs whose mtime is older
+    than ``max_age_days`` (default 90). The bound is on FILE MTIME, not a schema
+    field: METRICS.json carry ``generated_at`` but NONE carry ``created_at`` (as
+    of Run C), and mtime is universal (works for the run.json fallback path too). Pass
+    ``max_age_days=None`` to disable the bound (full-history analysis).
+
+    NOTE: this is the SCAN bound, deliberately kept wide (90d) so the JSON that
+    EVALUATE/BUILD consume stays populated; it is NOT the weekly-report window.
+    """
     projects_dir = workspace / "Projects"
     if not projects_dir.is_dir():
         return []
+
+    cutoff = None if max_age_days is None else (time.time() - max_age_days * 86400)
 
     metrics = []
     for project_dir in projects_dir.iterdir():
@@ -61,6 +92,17 @@ def _load_all_metrics(workspace: Path, project_filter: str | None = None) -> lis
         for run_dir in runs_dir.iterdir():
             if not run_dir.is_dir():
                 continue
+            # RP30 recency bound — skip runs older than the window. Use the
+            # METRICS.json mtime when present (the artifact we actually read),
+            # else the run dir mtime. Fail-OPEN (include) if mtime is unreadable.
+            if cutoff is not None:
+                try:
+                    _mf = run_dir / "METRICS.json"
+                    _mtime = (_mf if _mf.exists() else run_dir).stat().st_mtime
+                    if _mtime < cutoff:
+                        continue
+                except OSError:
+                    pass  # unreadable mtime → include (fail-open, don't lose data)
 
             # Try METRICS.json first
             metrics_file = run_dir / "METRICS.json"
@@ -422,8 +464,20 @@ def analyze_all_runs(workspace: Path, project_filter: str | None = None) -> dict
     return intelligence
 
 
+def _insufficient(n: int) -> bool:
+    """Anti-C044: True if a dimension-cell has too few samples to report a
+    confident number (absolute per-cell threshold — see INSUFFICIENT_N)."""
+    return (n or 0) < INSUFFICIENT_N
+
+
 def generate_report(intelligence: dict) -> str:
-    """Generate markdown health report from intelligence data."""
+    """Generate markdown health report from intelligence data.
+
+    Anti-C044 honesty: any dimension-cell whose sample count n<INSUFFICIENT_N is
+    rendered "insufficient data (n=X)" rather than a confident number — a green
+    metric over thin data misleads (the exact failure the completeness gate exists
+    to prevent). The gate is per-cell absolute-n, not a coverage ratio.
+    """
     lines = [
         "# Pipeline Health Report",
         f"",
@@ -443,7 +497,11 @@ def generate_report(intelligence: dict) -> str:
     lines.append("| Profile | Runs | Completion | Abandon | Fail |")
     lines.append("|---------|------|-----------|---------|------|")
     for profile, stats in pa.get("profile_success_rates", {}).items():
-        lines.append(f"| {profile} | {stats['total_runs']} | {stats['completion_rate']}% | {stats['abandon_rate']}% | {stats['failure_rate']}% |")
+        _n = stats.get("total_runs", 0)
+        if _insufficient(_n):
+            lines.append(f"| {profile} | {_n} | insufficient data (n={_n}) | — | — |")
+        else:
+            lines.append(f"| {profile} | {_n} | {stats['completion_rate']}% | {stats['abandon_rate']}% | {stats['failure_rate']}% |")
     lines.append("")
 
     # Abandon Patterns
@@ -465,7 +523,11 @@ def generate_report(intelligence: dict) -> str:
     lines.append("| Stage | Avg Tokens | Median | Samples |")
     lines.append("|-------|-----------|--------|---------|")
     for stage, data in se.get("stages", {}).items():
-        lines.append(f"| {stage} | {data['avg_tokens']:.0f} | {data['median_tokens']:.0f} | {data['sample_count']} |")
+        _n = data.get("sample_count", 0)
+        if _insufficient(_n):
+            lines.append(f"| {stage} | insufficient data (n={_n}) | — | {_n} |")
+        else:
+            lines.append(f"| {stage} | {data['avg_tokens']:.0f} | {data['median_tokens']:.0f} | {_n} |")
     lines.append("")
 
     # Adversarial Value
@@ -487,7 +549,11 @@ def generate_report(intelligence: dict) -> str:
     lines.append("| Profile | Avg Tokens | Median | P90 | Samples |")
     lines.append("|---------|-----------|--------|-----|---------|")
     for profile, cal in ea.get("calibration_by_profile", {}).items():
-        lines.append(f"| {profile} | {cal['avg_tokens']:,} | {cal['median_tokens']:,} | {cal['p90_tokens']:,} | {cal['sample_count']} |")
+        _n = cal.get("sample_count", 0)
+        if _insufficient(_n):
+            lines.append(f"| {profile} | insufficient data (n={_n}) | — | — | {_n} |")
+        else:
+            lines.append(f"| {profile} | {cal['avg_tokens']:,} | {cal['median_tokens']:,} | {cal['p90_tokens']:,} | {_n} |")
     lines.append("")
 
     if ea.get("stage_estimates"):
@@ -513,7 +579,8 @@ def generate_report(intelligence: dict) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Pipeline Meta-Intelligence — cross-run analytics")
     parser.add_argument("--output", default=None, help="Path to write pipeline_intelligence.json")
-    parser.add_argument("--report", action="store_true", help="Also generate markdown report")
+    parser.add_argument("--report", action="store_true", help="Also generate markdown report (next to --output)")
+    parser.add_argument("--report-path", default=None, help="Write the markdown report DIRECTLY to this path (implies --report; no cp needed)")
     parser.add_argument("--project", default=None, help="Filter to single project")
     parser.add_argument("--workspace", default=None, help="Override workspace path")
 
@@ -531,9 +598,13 @@ def main():
     Path(output_path).write_text(json.dumps(intelligence, indent=2), encoding="utf-8")
     print(json.dumps({"status": "ok", "output": output_path, "runs_analyzed": intelligence.get("runs_analyzed", 0)}))
 
-    if args.report:
+    if args.report or args.report_path:
         report = generate_report(intelligence)
-        report_path = str(Path(output_path).parent / "pipeline-health-report.md")
+        # --report-path lets a caller (the weekly job) write the markdown DIRECTLY
+        # to its final home (Knowledge/Reports/pipeline-weekly.md) — no fragile cp
+        # + filename-guess (RP34 shell-var / RP39 detached-reexec class avoided).
+        report_path = args.report_path or str(Path(output_path).parent / "pipeline-health-report.md")
+        Path(report_path).parent.mkdir(parents=True, exist_ok=True)
         Path(report_path).write_text(report, encoding="utf-8")
         print(json.dumps({"report": report_path}))
 
