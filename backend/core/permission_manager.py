@@ -142,12 +142,32 @@ class PermissionManager:
             # Update in-memory pending request with expired status
             self.update_pending_request(request_id, {"status": "expired"})
             return "timeout"
+        except asyncio.CancelledError:
+            # The awaiting hook coroutine was cancelled BEFORE the user decided —
+            # e.g. the SDK cancelled the detached PreToolUse control-request task
+            # (control_cancel_request) while the session sat in WAITING_INPUT. The
+            # finally below then pops _pending_requests, so a later approve reads
+            # "request not found" and the session's _pending_tool_use_id is left
+            # stranded (approve-into-void deadlock, run_65f317db). This used to be
+            # SILENT — log it so the desync is diagnosable, then re-raise (a cancel
+            # must never be swallowed). The send-path / lifecycle / approve-endpoint
+            # dead-waiter reap (has_live_waiter==False) is what actually recovers
+            # the session; this log is the breadcrumb that explains WHY it fired.
+            logger.warning(
+                "PermissionManager: wait_for_permission_decision CANCELLED before "
+                "decision for request_id=%s — popping pending request (waiter is now "
+                "dead; session recovery relies on has_live_waiter==False reap)",
+                request_id,
+            )
+            raise
         finally:
             self._permission_events.pop(request_id, None)
             self._permission_results.pop(request_id, None)
             # Guarantee _pending_requests cleanup — prevents memory leak if
             # the caller (security_hooks) fails to call remove_pending_request
-            # due to an exception between store and remove.
+            # due to an exception between store and remove. The CancelledError
+            # branch above INTENTIONALLY relies on this pop (it is the desync
+            # source, not a leak) — recovery is via the has_live_waiter reap.
             self._pending_requests.pop(request_id, None)
 
     def set_permission_decision(self, request_id: str, decision: str) -> None:

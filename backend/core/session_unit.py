@@ -817,6 +817,81 @@ class SessionUnit:
         """
         return self._pending_tool_use_id is not None
 
+    def _has_live_outstanding_waiter(self) -> bool:
+        """True iff the outstanding tool_use has a REAL awaiting hook coroutine.
+
+        ``has_outstanding_tool_use`` only reports whether ``_pending_tool_use_id``
+        is set — it CANNOT tell a genuinely-open prompt (a hook still blocked on
+        ``wait_for_permission_decision`` / ``wait_for_answer``) apart from a
+        DEAD-waiter zombie (the hook coroutine was cancelled — e.g. SDK
+        control_cancel_request — which pops the request store in its ``finally``
+        but leaves ``_pending_tool_use_id`` stranded). That desync is the
+        approve-into-void deadlock (run_65f317db).
+
+        This method closes the gap by consulting the ACTUAL waiter managers, which
+        are respawn-immune: the event is registered on entry to the wait coroutine
+        and popped in its ``finally`` (decision / timeout / cancel), so a True here
+        means a real coroutine is blocked RIGHT NOW to receive the decision.
+
+        Which manager owns the id is disambiguated by ``_pending_question`` shape
+        (set alongside ``_pending_tool_use_id`` on the same WAITING_INPUT emit),
+        NOT by blind-OR-ing both managers (id-namespace disjointness is incidental,
+        not an invariant — see streaming_orchestrator.py surface paths):
+          - permission prompt → ``_pending_question`` carries ``request_id``
+          - ask_user_question → ``_pending_question`` carries ``questions``
+        """
+        tuid = self._pending_tool_use_id
+        if tuid is None:
+            return False
+        pq = self._pending_question or {}
+        if "request_id" in pq:
+            from core.permission_manager import permission_manager as _pm
+            return _pm.has_live_waiter(tuid)
+        if "questions" in pq:
+            from core.ask_question_manager import ask_question_manager as _aqm
+            return _aqm.has_live_waiter(tuid)
+        # Unknown/absent shape (defensive): fall back to OR-ing both. A False here
+        # would wrongly reap a live prompt; only reap when BOTH managers agree the
+        # waiter is gone.
+        from core.permission_manager import permission_manager as _pm
+        from core.ask_question_manager import ask_question_manager as _aqm
+        return _pm.has_live_waiter(tuid) or _aqm.has_live_waiter(tuid)
+
+    async def reap_dead_waiting_input(self) -> bool:
+        """Recover a WAITING_INPUT session whose waiter coroutine is DEAD.
+
+        The single-predicate recovery for the approve-into-void deadlock
+        (run_65f317db, SSA Gate-1): a session is a dead-waiter zombie iff it is
+        ``WAITING_INPUT`` AND has an outstanding tool_use AND has NO live waiter.
+        In that state the prompt can never be answered (the hook that would
+        receive the decision is gone), so we reap it via the blessed
+        ``force_unstick_waiting_input`` recovery (arm checkpoint →
+        crash_to_cold(clear_identity=False) → next send() resumes with --resume;
+        ``_cleanup_internal`` clears ``_pending_tool_use_id`` so the drain guard
+        self-heals).
+
+        Returns True iff a reap happened. Idempotent + race-safe:
+        ``force_unstick_waiting_input`` no-ops if state left WAITING_INPUT, and the
+        live-waiter re-check here means a prompt whose real waiter just
+        (re)registered is NOT reaped. Called from THREE chokepoints — send()
+        (self-heal on next message), the lifecycle tick (self-heal with no message
+        or endpoint hit), and the approve endpoints (recover an approve-into-void).
+        """
+        if self.state != SessionState.WAITING_INPUT:
+            return False
+        if not self.has_outstanding_tool_use:
+            return False
+        if self._has_live_outstanding_waiter():
+            return False
+        logger.warning(
+            "session_unit.reap_dead_waiting_input session_id=%s tool_use=%s — "
+            "WAITING_INPUT with a DEAD waiter (no live hook to receive a decision); "
+            "forcing COLD for recovery (approve-into-void deadlock reap)",
+            self.session_id, self._pending_tool_use_id,
+        )
+        await self.force_unstick_waiting_input()
+        return True
+
     # Root-1 SSOT Phase 2 (L6, Option B): is_generating_after_disconnect (the
     # post-disconnect "still generating" limbo property) is DELETED. A disconnect
     # now yields a clean IDLE — there is no flag to consult. The streaming-state
@@ -1681,29 +1756,43 @@ class SessionUnit:
             # it only AFTER the question is answered and the session returns to a
             # clean IDLE with no outstanding tool_use (drain_pending precondition).
             if self.has_outstanding_tool_use:
-                from .exceptions import SessionBusyError
-                logger.info(
-                    "session_unit.waiting_input_pending session_id=%s "
-                    "tool_use=%s — new message queued (not auto-answered, F3)",
-                    self.session_id, self._pending_tool_use_id,
+                # Dead-waiter reap FIRST (run_65f317db): if the outstanding
+                # tool_use has NO live waiter (the hook coroutine was cancelled —
+                # e.g. SDK control_cancel_request — leaving _pending_tool_use_id
+                # stranded), the prompt can NEVER be answered. Recover to COLD
+                # instead of raising SessionBusyError forever (the approve-into-void
+                # deadlock: without this, every subsequent send() on this session
+                # raised SessionBusyError permanently). reap returns True + leaves
+                # state COLD → fall through to spawn-with-resume below.
+                if await self.reap_dead_waiting_input():
+                    pass  # state is now COLD — fall through to spawn
+                else:
+                    # A GENUINELY-open prompt (live waiter) — queue the message.
+                    from .exceptions import SessionBusyError
+                    logger.info(
+                        "session_unit.waiting_input_pending session_id=%s "
+                        "tool_use=%s — new message queued (not auto-answered, F3)",
+                        self.session_id, self._pending_tool_use_id,
+                    )
+                    raise SessionBusyError(
+                        detail=(
+                            f"Session {self.session_id} is waiting for an answer to a "
+                            f"pending question. Your message has been queued and will "
+                            f"be sent after the question is resolved."
+                        ),
+                    )
+            else:
+                # No outstanding tool_use but stuck in WAITING_INPUT (frontend
+                # crashed mid-question / stale state) — genuinely abandoned,
+                # recover to COLD.
+                logger.warning(
+                    "session_unit.auto_recover_waiting_input session_id=%s "
+                    "— WAITING_INPUT with no outstanding tool_use (abandoned), "
+                    "forcing COLD for recovery",
+                    self.session_id,
                 )
-                raise SessionBusyError(
-                    detail=(
-                        f"Session {self.session_id} is waiting for an answer to a "
-                        f"pending question. Your message has been queued and will "
-                        f"be sent after the question is resolved."
-                    ),
-                )
-            # No outstanding tool_use but stuck in WAITING_INPUT (frontend crashed
-            # mid-question / stale state) — genuinely abandoned, recover to COLD.
-            logger.warning(
-                "session_unit.auto_recover_waiting_input session_id=%s "
-                "— WAITING_INPUT with no outstanding tool_use (abandoned), "
-                "forcing COLD for recovery",
-                self.session_id,
-            )
-            await self.force_unstick_waiting_input()
-            # After force_unstick, state is COLD — fall through to spawn
+                await self.force_unstick_waiting_input()
+                # After force_unstick, state is COLD — fall through to spawn
 
         if self.state == SessionState.DEAD:
             # DEAD is recoverable at send-time, NOT a dead-end. Two DEAD sources

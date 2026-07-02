@@ -748,6 +748,23 @@ class LifecycleManager:
         for unit in self._router.list_units():
             if unit.state != SessionState.WAITING_INPUT:
                 continue
+            # Dead-waiter reap FIRST (run_65f317db, SSA Gate-1): a WAITING_INPUT
+            # session whose waiter coroutine is DEAD (outstanding tool_use but no
+            # live hook to receive a decision — the approve-into-void deadlock) can
+            # NEVER be answered. Reap it on THIS ~60s tick instead of waiting the
+            # full 4h05m WAITING_INPUT_TIMEOUT — this is the self-heal path for a
+            # session that receives NEITHER a new send NOR an approve-endpoint hit
+            # (the arm the send-path/endpoint reaps alone would leave stuck till
+            # TTL). reap_dead_waiting_input is idempotent + live-waiter-guarded, so
+            # a genuinely-open prompt is NOT reaped.
+            try:
+                if await unit.reap_dead_waiting_input():
+                    continue  # reaped to COLD — nothing more to do this tick
+            except Exception:
+                logger.exception(
+                    "lifecycle_manager.reap_dead_waiting_input failed session_id=%s",
+                    unit.session_id,
+                )
             waiting_seconds = now - unit.last_used
             if waiting_seconds > self.WAITING_INPUT_TIMEOUT_SECONDS:
                 # R3c (M2): the recovery DECISION routes through the one authority

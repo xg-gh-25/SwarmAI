@@ -1277,6 +1277,34 @@ async def handle_cmd_permission_response(request: PermissionResponseRequest):
     from core.permission_manager import permission_manager as _pm
     permission_request = _pm.get_pending_request(request.request_id)
     if not permission_request:
+        # Approve-into-void recovery (run_65f317db): the pending request is gone
+        # because its waiter coroutine was cancelled (SDK control_cancel_request)
+        # BEFORE the user's decision arrived — the finally in
+        # wait_for_permission_decision popped it while _pending_tool_use_id stayed
+        # stranded. A bare 400 here strands the session in WAITING_INPUT forever
+        # (stop/continue/input all dead). Instead: if the unit is a dead-waiter
+        # zombie, reap it to COLD so the next send() resumes cleanly, and return a
+        # RECOVERED signal the frontend resets on (not an error the user must act on).
+        unit = _get_router().get_unit(request.session_id)
+        if unit is not None:
+            try:
+                reaped = await unit.reap_dead_waiting_input()
+            except Exception as e:
+                logger.warning(
+                    "Failed to reap dead WAITING_INPUT for session %s: %s",
+                    request.session_id, e,
+                )
+                reaped = False
+            if reaped:
+                logger.info(
+                    "Permission request %s not found but session %s was a "
+                    "dead-waiter zombie — reaped to COLD (approve-into-void recovery)",
+                    request.request_id, request.session_id,
+                )
+                return PermissionRequestResponse(
+                    status="recovered",
+                    request_id=request.request_id,
+                )
         raise ValidationException(
             message="Permission request not found",
             detail=f"No pending permission request found with ID '{request.request_id}'"
@@ -1364,9 +1392,59 @@ async def cmd_permission_continue(request: Request):
     from core.permission_manager import permission_manager as _pm
     perm_req = _pm.get_pending_request(permission_request.request_id)
     if not perm_req:
-        raise ValidationException(
-            message="Permission request not found",
-            detail=f"No pending permission request found with ID '{permission_request.request_id}'"
+        # Approve-into-void recovery (run_65f317db): the request is gone because
+        # the waiter coroutine was cancelled before the decision arrived. A
+        # PRE-STREAM `raise` here becomes an HTTP 400 (response not ok) on the
+        # frontend, which leaves `isStreaming` pinned true — the tab looks alive
+        # but is dead. Instead, if the session is a dead-waiter zombie, reap it to
+        # COLD and return a STREAMING response that yields ONE terminal `error`
+        # event: the frontend stream handler resets isStreaming + tab status on an
+        # `error`-type event (useChatStreamingLifecycle.ts:2939), and the trailing
+        # [DONE] fires onComplete which clears permissionLoadingTabs.
+        #
+        # NOTE on the FE auto-retry (Gate-2 LOW): this path does NOT set a
+        # retryStreamFn, but retryStreamFn is a PERSISTENT tabState field that an
+        # EARLIER send() turn may have left set — so the FE error handler's
+        # auto-retry (hasReceivedData=false && retryStreamFn && attempt<1) MAY fire
+        # here. That outcome is benign and self-consistent: the one bounded retry
+        # re-sends the last message into the now-COLD session, which is exactly the
+        # suggested_action ("send your message again to continue"). It does NOT
+        # loop into this not-found path (the resend goes through the normal send
+        # endpoint, not cmd-permission-continue). So recovery holds either way.
+        #
+        # We emit PERMISSION_EXPIRED unconditionally (whether or not the reap
+        # actually fired): if the session was a dead-waiter zombie the reap
+        # recovered it; if the request was merely already-resolved/absent on a
+        # healthy session, a generic terminal error that resets the FE is still the
+        # correct, safe response. (Asymmetry-with-the-non-streaming-endpoint is
+        # intentional — the streaming path has no cheap way to signal "nothing to
+        # do" other than a terminal event.)
+        _reap_unit = _get_router().get_unit(permission_request.session_id) if permission_request.session_id else None
+        if _reap_unit is not None:
+            try:
+                await _reap_unit.reap_dead_waiting_input()
+            except Exception as e:
+                logger.warning(
+                    "Failed to reap dead WAITING_INPUT for session %s: %s",
+                    permission_request.session_id, e,
+                )
+
+        async def _expired_generator():
+            yield {
+                "type": "error",
+                "code": "PERMISSION_EXPIRED",
+                "message": "This permission request is no longer active (it expired or was cancelled).",
+                "suggested_action": "Your conversation is saved. Send your message again to continue.",
+            }
+
+        return StreamingResponse(
+            sse_with_heartbeat(_expired_generator(), request=request, stop_event=None),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # Get agent_id from the session
