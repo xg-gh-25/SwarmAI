@@ -47,7 +47,7 @@ const FileRow = memo(function FileRow({ file, badge }: { file: ReferencedFile; b
 
   return (
     <div
-      className="group flex items-center gap-1.5 px-2 py-0.5 cursor-pointer hover:bg-[var(--color-hover)] rounded text-[12px] transition-colors"
+      className="group flex h-6 items-center gap-1 px-2 cursor-pointer hover:bg-[var(--color-hover)] rounded text-[12px] transition-colors"
       onClick={handleClick}
       title={file.path}
     >
@@ -88,7 +88,7 @@ export function ChangesSection({ grouped }: ChangesSectionProps) {
   if (written.length === 0) return null;
 
   return (
-    <div className="py-1">
+    <div className="py-0.5">
       {ordered.map((file) => (
         <FileRow key={file.path} file={file} badge={statusMap.get(file.path)} />
       ))}

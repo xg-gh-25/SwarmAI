@@ -89,4 +89,38 @@ describe('AttentionSection', () => {
     expect(screen.queryByLabelText('Expand decision detail')).not.toBeInTheDocument();
     expect(screen.getByText('no reason')).toBeInTheDocument();
   });
+
+  it('tag: each kind shows its category pill (PIPELINE / JOB / TAB)', () => {
+    const items: AttentionItem[] = [
+      { kind: 'paused', id: 'p1', title: 'p', project: 'P', stage: 'build', reason: '' },
+      { kind: 'job', id: 'j1', title: 'j', failures: 1 },
+      { kind: 'waiting', id: 't1', title: 'Tab · x', question: 'q' },
+    ];
+    render(<AttentionSection items={items} onItemClick={vi.fn()} onSelectTab={vi.fn()} />);
+    expect(screen.getByText('PIPELINE')).toBeInTheDocument();
+    expect(screen.getByText('JOB')).toBeInTheDocument();
+    expect(screen.getByText('TAB')).toBeInTheDocument();
+  });
+
+  it('acting: clicking a paused card swaps its action label to "resuming…" (item stays visible)', () => {
+    const item: AttentionItem = { kind: 'paused', id: 'p1', title: 'do a thing', project: 'P', stage: 'build', reason: '' };
+    render(<AttentionSection items={[item]} onItemClick={vi.fn()} />);
+    expect(screen.getByText('→ Resume & answer')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('do a thing'));
+    // action label switched to the acting label; item still present
+    expect(screen.getByText('resuming…')).toBeInTheDocument();
+    expect(screen.queryByText('→ Resume & answer')).not.toBeInTheDocument();
+    expect(screen.getByText('do a thing')).toBeInTheDocument();
+  });
+
+  it('acting: is per-item — clicking one job does not put another into acting', () => {
+    const items: AttentionItem[] = [
+      { kind: 'job', id: 'j1', title: 'Job One', failures: 1 },
+      { kind: 'job', id: 'j2', title: 'Job Two', failures: 1 },
+    ];
+    render(<AttentionSection items={items} onItemClick={vi.fn()} />);
+    fireEvent.click(screen.getByText(/Job One/));
+    expect(screen.getByText('opening…')).toBeInTheDocument(); // j1 acting
+    expect(screen.getByText('→ Investigate')).toBeInTheDocument(); // j2 still not acting
+  });
 });
