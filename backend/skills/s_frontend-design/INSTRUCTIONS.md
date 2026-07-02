@@ -65,6 +65,7 @@ python3 scripts/search.py "touch target accessibility" --domain ux
 | `data/slide_bold_templates.csv` | 34 | Bold-template taste index — id/name/scheme/mood/colors/fonts/use-case (reference shortlist, not full CSS) |
 | `data/animation_feelings.csv` | 6 | Mood → animation approach + timing + palette hint + background effect (Dramatic/Techy/Playful/Professional/Calm/Editorial) |
 | `data/anti_slop.md` | — | Anti-AI-slop rules: banned patterns (fonts/colors/layouts/decoration) + positive counter-rules. Read before any deck/landing generation. |
+| `data/slide_bold_previews/<id>.md` | 34 | Per-template preview cards for the 34 bold templates — palette hex, typography, signature moves, best-for/avoid-for. One file per `slide_bold_templates.csv` id. Load ONLY the shortlisted candidates' cards (progressive disclosure). |
 
 **Slide / deck work:** when the brief is a presentation or slide deck (not a landing
 page), consult `slide_presets.csv` + `slide_bold_templates.csv` for a distinctive
@@ -72,6 +73,15 @@ starting direction, and `animation_feelings.csv` to map the intended mood to an
 animation + palette approach. These are taste references — the presets carry complete
 palettes; the bold-template index is a shortlist (mood/colors/fonts/use-case) whose full
 per-template CSS lives on-demand in the source repo (see `data/ATTRIBUTION.md`).
+
+**Style-discovery preview (bold templates):** after the `slide_bold_templates.csv`
+index narrows the field, read the shortlisted candidates' cards in
+`data/slide_bold_previews/<id>.md` (one per template) to present a real preview —
+palette, typography, signature moves, best-for/avoid-for. Load ONLY the shortlisted
+ids' cards, not all 34 (progressive disclosure). These cards are the selection layer;
+the full render CSS (`design.md`) is NOT ingested — it stays on-demand in the source
+repo (see `data/ATTRIBUTION.md`), so these previews inform the CHOICE, not the final
+render. A recommended discovery set is 1 safe preset + ≥1 bold template + 1 wildcard.
 
 > **How to consult these 4 assets:** Read them **directly** (Read tool / `cat`). They are
 > NOT wired into `search.py` (the BM25 engine uses an explicit domain→file map in

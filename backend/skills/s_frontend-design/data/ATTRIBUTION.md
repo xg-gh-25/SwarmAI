@@ -18,7 +18,7 @@ The slide-design taste assets are derived from [frontend-slides](https://github.
 
 - **License:** MIT
 - **Source:** https://github.com/zarazhangrui/frontend-slides (v2.1.0, retrieved 2026-07-02)
-- **Files:** slide_presets.csv (12 curated presets), slide_bold_templates.csv (34-template index), animation_feelings.csv (mood→animation mapping), anti_slop.md (anti-AI-slop rules)
+- **Files:** slide_presets.csv (12 curated presets), slide_bold_templates.csv (34-template index), animation_feelings.csv (mood→animation mapping), anti_slop.md (anti-AI-slop rules), slide_bold_previews/*.md (34 per-template preview cards — selection layer)
 
 The 34 bold-template index in `slide_bold_templates.csv` catalogs templates from
 [beautiful-html-templates](https://github.com/zarazhangrui/beautiful-html-templates)
