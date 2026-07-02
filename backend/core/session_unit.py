@@ -3289,7 +3289,7 @@ class SessionUnit:
             # (routers/chat.py) where the user can resubmit. By this chokepoint
             # the answer is committed; resolving the hook with whatever we have
             # (even {}) lets the agent proceed ("no selection") rather than
-            # WEDGING the session on a blocked hook until the 300s timeout. The
+            # WEDGING the session on a blocked hook until the 4h answer timeout. The
             # channel gateway builds a non-empty answers dict before calling this.
             _aqm.set_answer(_answer_tool_use_id, parsed_answers)
         else:

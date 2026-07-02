@@ -101,19 +101,41 @@ class TestPermissionDecisionSetWaitRoundTrip:
 
 
 class TestPermissionTimeout:
-    """Fix #2/#3: shorter timeout + a DISTINCT timeout result.
+    """Fix #2/#3: bounded timeout + a DISTINCT timeout result.
 
     Previously the default was 7200s (2h) and timeout silently returned
     "deny" — indistinguishable from a real user denial, so the UI could not
-    tell the user "审批超时" vs "you denied it". The session would appear to
-    hang for up to 2h. Now: default 300s, and timeout returns the sentinel
-    "timeout" so the caller can emit a visible expiry message.
+    tell the user "审批超时" vs "you denied it". Now: timeout returns the
+    sentinel "timeout" so the caller can emit a visible expiry message, and the
+    default is a deliberate bounded value (NOT an unbounded/accidental one).
+
+    run_6e780e00: the default was raised 300s→4h (PERMISSION_ANSWER_TIMEOUT_SECONDS)
+    for PARITY with the ask gate — once the artificial 5s chain-timeout was removed,
+    300s (5min) was too short for a human who steps away, and inconsistent with
+    ask_question_gate's 4h. MUST stay < the lifecycle WAITING_INPUT watchdog (4h05m)
+    so that watchdog remains the ultimate backstop.
     """
 
-    def test_default_timeout_is_300_not_7200(self):
+    def test_default_timeout_is_4h_matching_ask_gate(self):
         import inspect
+        from core.permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
+        from core.ask_question_manager import ASK_ANSWER_TIMEOUT_SECONDS
         sig = inspect.signature(PermissionManager.wait_for_permission_decision)
-        assert sig.parameters["timeout"].default == 300
+        # Default is the module constant (single source of truth), not a literal.
+        assert sig.parameters["timeout"].default == PERMISSION_ANSWER_TIMEOUT_SECONDS
+        # 4h — parity with the ask gate (the run_6e780e00 requirement).
+        assert PERMISSION_ANSWER_TIMEOUT_SECONDS == 14400
+        assert PERMISSION_ANSWER_TIMEOUT_SECONDS == ASK_ANSWER_TIMEOUT_SECONDS, \
+            "permission approval timeout must match the ask gate (both 4h)"
+
+    def test_permission_timeout_stays_below_waiting_input_watchdog(self):
+        """The approval timeout MUST stay strictly below the lifecycle
+        WAITING_INPUT watchdog, so the watchdog remains the ultimate backstop
+        against a genuinely-stuck slot (never fires before a legit approval expires)."""
+        from core.permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
+        from core.lifecycle_manager import LifecycleManager
+        assert PERMISSION_ANSWER_TIMEOUT_SECONDS < LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS, \
+            "approval timeout must be < WAITING_INPUT watchdog (else watchdog reaps a live prompt)"
 
     @pytest.mark.asyncio
     async def test_timeout_returns_distinct_sentinel(self):

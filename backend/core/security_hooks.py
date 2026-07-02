@@ -656,7 +656,7 @@ def create_dangerous_command_gate(
         # so a never-surfaced prompt reads as "审批超时" instead of a silent hang.
         if decision == "timeout":
             reason = (
-                "审批超时（Approval timed out after 5 minutes）: "
+                "审批超时（Approval timed out after 4 hours）: "
                 "the command was auto-denied because no decision was received. "
                 "Re-run if you still need it."
             )

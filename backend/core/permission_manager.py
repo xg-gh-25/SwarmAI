@@ -22,6 +22,18 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# How long a surfaced dangerous-command approval prompt waits for the user's
+# decision before auto-denying ("审批超时"). Set to 4h to match
+# ask_question_manager.ASK_ANSWER_TIMEOUT_SECONDS — a human may step away (meal,
+# meeting, nap) and a HITL approval should survive that, exactly like an
+# AskUserQuestion does. Was 300s (5min, run_6e780e00): once the artificial 5s
+# chain-timeout guillotine was removed (hook_builder no_timeout), 300s became the
+# real ceiling — too short and inconsistent with the 4h ask gate. The lifecycle
+# WAITING_INPUT watchdog (14700s / 4h05m) is sized strictly GREATER than this, so
+# a 4h approval block is fully accommodated with headroom (the watchdog remains
+# the ultimate backstop against a truly-stuck slot). MUST stay < that watchdog.
+PERMISSION_ANSWER_TIMEOUT_SECONDS = 14400  # 4 hours
+
 
 class PermissionManager:
     """Manages command approval tracking and permission request/response flow.
@@ -113,16 +125,22 @@ class PermissionManager:
         """
         return request_id in self._permission_events
 
-    async def wait_for_permission_decision(self, request_id: str, timeout: int = 300) -> str:
+    async def wait_for_permission_decision(
+        self, request_id: str, timeout: int = PERMISSION_ANSWER_TIMEOUT_SECONDS
+    ) -> str:
         """Wait for user permission decision.
 
         Args:
             request_id: The permission request ID
-            timeout: Timeout in seconds (default 5 minutes).
+            timeout: Timeout in seconds (default 4 hours —
+                     PERMISSION_ANSWER_TIMEOUT_SECONDS, matching the ask gate).
                      Bounded so an un-surfaced or unanswered prompt does not
-                     hang the subprocess for hours. The subprocess stays alive
+                     hang the subprocess forever. The subprocess stays alive
                      in WAITING_INPUT state (protected from eviction) until the
-                     decision arrives OR the timeout fires.
+                     decision arrives OR the timeout fires. A human may step
+                     away (meal, meeting) and the HITL approval survives that;
+                     the lifecycle WAITING_INPUT watchdog (4h05m, strictly
+                     greater) is the ultimate backstop for a truly-stuck slot.
 
         Returns:
             'approve', 'deny', or 'timeout'. ``'timeout'`` is a DISTINCT

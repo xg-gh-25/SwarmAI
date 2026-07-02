@@ -306,3 +306,84 @@ class TestHookRegistry:
         # HookMatcher should have matcher="Bash"
         hm = sdk_hooks["PreToolUse"][0]
         assert hm.matcher == "Bash"
+
+    # ── no_timeout exemption (run_6e780e00 — approve-into-void root cause) ──
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_hook_survives_past_5s(self):
+        """AC1: a no_timeout=True hook in a CHAIN is NOT cancelled at 5s.
+
+        Reproduces the fix: dangerous_command_gate blocks >5s awaiting the user;
+        with the exemption it must complete, not get guillotined at HOOK_TIMEOUT_SECONDS.
+        Sleeps 5.4s (just past the 5.0s threshold) — bounded, proves survival."""
+        from core.hook_builder import HookRegistry
+
+        async def slow_approval(input_data, tool_use_id, context):
+            await asyncio.sleep(5.4)  # > HOOK_TIMEOUT_SECONDS (5.0)
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecision": "deny", "permissionDecisionReason": "survived"}}
+
+        async def fast_guard(input_data, tool_use_id, context):
+            return {}
+
+        registry = HookRegistry()
+        # 2 hooks on the SAME slot → chained (this is the Bash-slot condition).
+        registry.register("PreToolUse", fast_guard, "fast_guard", matcher="Bash")
+        registry.register("PreToolUse", slow_approval, "slow_approval",
+                          matcher="Bash", no_timeout=True)
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+
+        result = await asyncio.wait_for(chained({}, None, MagicMock()), timeout=8.0)
+        # The exempt slow hook COMPLETED (its deny survived) — not cancelled at 5s.
+        assert result.get("hookSpecificOutput", {}).get("permissionDecisionReason") == "survived", \
+            "no_timeout hook must survive past the 5s chain timeout"
+
+    @pytest.mark.asyncio
+    async def test_non_exempt_slow_hook_still_cancelled_at_5s(self):
+        """AC2: a NON-exempt slow hook sharing the chain IS still cancelled at 5s.
+
+        The exemption must NOT weaken the 5s guard for the fast guards that need it."""
+        from core.hook_builder import HookRegistry
+
+        async def slow_guard(input_data, tool_use_id, context):
+            await asyncio.sleep(10)
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecisionReason": "should-not-appear"}}
+
+        async def fast_guard(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecisionReason": "fast-ran"}}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", slow_guard, "slow_guard", matcher="Bash")  # no_timeout defaults False
+        registry.register("PreToolUse", fast_guard, "fast_guard", matcher="Bash")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+
+        result = await asyncio.wait_for(chained({}, None, MagicMock()), timeout=8.0)
+        # slow_guard was cancelled at 5s (its output absent), fast_guard still ran.
+        assert result.get("hookSpecificOutput", {}).get("permissionDecisionReason") == "fast-ran", \
+            "non-exempt slow hook must still be cancelled at 5s (fast hook's result survives)"
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_preserves_deny_short_circuit(self):
+        """AC3: exemption does not regress the terminal permissionDecision
+        short-circuit (dc9fba77) — a deny from an exempt hook still short-circuits."""
+        from core.hook_builder import HookRegistry
+        ran_after = {"v": False}
+
+        async def exempt_deny(input_data, tool_use_id, context):
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                    "permissionDecision": "deny", "permissionDecisionReason": "blocked"}}
+
+        async def later_hook(input_data, tool_use_id, context):
+            ran_after["v"] = True
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", exempt_deny, "exempt_deny", matcher="Bash", no_timeout=True)
+        registry.register("PreToolUse", later_hook, "later_hook", matcher="Bash")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+
+        result = await chained({}, None, MagicMock())
+        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+        assert ran_after["v"] is False, "deny must short-circuit — later hook must NOT run (dc9fba77)"

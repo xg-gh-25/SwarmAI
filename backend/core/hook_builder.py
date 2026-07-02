@@ -49,8 +49,10 @@ class HookRegistry:
 
     Multiple hooks for the same event execute sequentially in registration
     order.  If any hook returns ``{"decision": "block"}``, the chain
-    short-circuits.  Each hook has a 5-second timeout — hanging hooks are
-    killed silently.
+    short-circuits.  Each chained hook has a 5-second timeout — hanging hooks
+    are killed silently — EXCEPT hooks registered with ``no_timeout=True``
+    (long-blocking HITL gates), which are exempt and rely on their own internal
+    bound (see ``register``'s ``no_timeout`` arg, run_6e780e00).
 
     Hooks with a ``matcher`` parameter (e.g., ``matcher="Bash"``) are
     registered as separate HookMatcher entries, not chained with
@@ -58,8 +60,8 @@ class HookRegistry:
     """
 
     def __init__(self) -> None:
-        # Key: (event, matcher|None) -> list of (name, hook_fn)
-        self._hooks: dict[tuple[str, Optional[str]], list[tuple[str, HookCallback]]] = defaultdict(list)
+        # Key: (event, matcher|None) -> list of (name, hook_fn, no_timeout)
+        self._hooks: dict[tuple[str, Optional[str]], list[tuple[str, HookCallback, bool]]] = defaultdict(list)
 
     def register(
         self,
@@ -67,6 +69,7 @@ class HookRegistry:
         hook: HookCallback,
         name: str,
         matcher: Optional[str] = None,
+        no_timeout: bool = False,
     ) -> None:
         """Register a hook for an SDK event.
 
@@ -75,8 +78,21 @@ class HookRegistry:
             hook: Async callable with signature (input_data, tool_use_id, context) -> dict
             name: Human-readable name for logging
             matcher: Optional tool matcher (e.g., "Bash", "Skill")
+            no_timeout: When True, this hook is EXEMPT from the chain's
+                ``HOOK_TIMEOUT_SECONDS`` guard. Reserved for hooks that
+                LEGITIMATELY block for a long time awaiting a human — e.g.
+                ``dangerous_command_gate`` (blocks up to 4h in
+                ``wait_for_permission_decision``) and ``ask_question_gate``
+                (blocks up to 4h in ``wait_for_answer``). Those hooks carry
+                their OWN internal bound, so the 5s chain timeout would only
+                ever *wrongly* cancel a live HITL prompt before the user can
+                decide (run_6e780e00 — the approve-into-void root cause: the
+                Bash slot has 5 hooks → chained → the gate's long wait was
+                guillotined at 5s). Do NOT set this on a fast guard — the 5s
+                timeout exists to stop a genuinely-hung hook (bash_syntax_guard
+                et al.), and exempting one un-bounds that protection.
         """
-        self._hooks[(event, matcher)].append((name, hook))
+        self._hooks[(event, matcher)].append((name, hook, no_timeout))
 
     def build_sdk_hooks(self) -> dict[str, list]:
         """Build the hooks dict for ClaudeAgentOptions.
@@ -88,7 +104,11 @@ class HookRegistry:
 
         for (event, matcher), hooks in self._hooks.items():
             if len(hooks) == 1:
-                name, fn = hooks[0]
+                # Solo hook: bare-registered with NO wait_for wrapper (this is
+                # already how a solo long-blocking hook like ask_question_gate
+                # escapes the 5s timeout). no_timeout is irrelevant here — discard
+                # it — but the 3-tuple MUST still be unpacked or this crashes.
+                name, fn, _no_timeout = hooks[0]
                 hm = HookMatcher(hooks=[fn])
                 if matcher:
                     hm = HookMatcher(matcher=matcher, hooks=[fn])
@@ -104,23 +124,34 @@ class HookRegistry:
         return dict(result)
 
     def _build_chain(
-        self, hooks: list[tuple[str, HookCallback]]
+        self, hooks: list[tuple[str, HookCallback, bool]]
     ) -> HookCallback:
         """Build a chained hook from multiple hooks.
 
-        Execution: sequential, first 'block' wins, 5s timeout per hook.
+        Execution: sequential, first 'block' wins, 5s timeout per hook —
+        EXCEPT hooks registered with ``no_timeout=True`` (long-blocking HITL
+        gates), which are awaited directly (their own internal bound applies).
         Results are merged: last non-empty additionalContext wins.
         """
 
         async def chained(input_data: Any, tool_use_id: Any, context: Any) -> dict:
             combined: dict[str, Any] = {}
 
-            for name, hook in hooks:
+            for name, hook, no_timeout in hooks:
                 try:
-                    result = await asyncio.wait_for(
-                        hook(input_data, tool_use_id, context),
-                        timeout=HOOK_TIMEOUT_SECONDS,
-                    )
+                    if no_timeout:
+                        # EXEMPT (run_6e780e00): a legitimately long-blocking HITL
+                        # gate (dangerous_command_gate 4h / ask_question_gate 4h).
+                        # Wrapping it in the 5s guard would cancel the live approval
+                        # prompt before the user can decide (the approve-into-void
+                        # root cause). Its OWN wait (wait_for_permission_decision /
+                        # wait_for_answer) is internally bounded, so no hang risk.
+                        result = await hook(input_data, tool_use_id, context)
+                    else:
+                        result = await asyncio.wait_for(
+                            hook(input_data, tool_use_id, context),
+                            timeout=HOOK_TIMEOUT_SECONDS,
+                        )
                     if not result:
                         continue
 
@@ -262,7 +293,13 @@ async def build_hooks(
         hook_session_context, session_key, permission_manager,
         enable_human_approval=enable_human_approval,
     )
-    registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash")
+    # no_timeout=True: this gate blocks up to 4h (PERMISSION_ANSWER_TIMEOUT_SECONDS)
+    # in wait_for_permission_decision awaiting the user's approve/deny. It shares the
+    # Bash matcher slot with 4 fast guards → it gets chained → without this flag the
+    # chain's 5s timeout cancels the live approval prompt at 5s (run_6e780e00
+    # approve-into-void root cause). Its own 4h internal bound (< the 4h05m lifecycle
+    # WAITING_INPUT watchdog) is the real backstop, so exemption cannot hang.
+    registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash", no_timeout=True)
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 
     # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──
@@ -273,7 +310,12 @@ async def build_hooks(
         session_context=hook_session_context,
         ask_question_mgr=ask_question_manager,
     )
-    registry.register("PreToolUse", ask_gate, "ask_question_gate", matcher="AskUserQuestion")
+    # no_timeout=True: blocks up to 4h in wait_for_answer. It currently solo-occupies
+    # the AskUserQuestion matcher slot so it's bare-registered (no chain, no 5s) — but
+    # that exemption is ACCIDENTAL (a 2nd AskUserQuestion hook would silently chain it
+    # and re-introduce the 5s guillotine). Declaring no_timeout makes the exemption
+    # EXPLICIT and future-proof (run_6e780e00).
+    registry.register("PreToolUse", ask_gate, "ask_question_gate", matcher="AskUserQuestion", no_timeout=True)
     logger.info(f"AskUserQuestion gate attached for session_key: {session_key}")
 
     # ── PreToolUse: governance file gate (Edit/Write-scoped) ──
