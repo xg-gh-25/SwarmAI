@@ -807,25 +807,26 @@ class TestDecisionJudgeUnit:
 
     _CASE = {"id": "X", "decision_rubric": "PASS if incremental, FAIL if big-bang"}
 
-    def _mock_converse(self, verdict, notes="x", conf=0.9):
-        from unittest.mock import MagicMock
-        client = MagicMock()
-        client.converse.return_value = {"output": {"message": {"content": [
+    def _mock_response(self, verdict, notes="x", conf=0.9):
+        # _judge_decision_direction calls jobs.bedrock.converse_with_retry, which
+        # returns the response DICT directly (not a client). Mock must match that
+        # shape, and the patch target must be the source symbol the call-time
+        # `from jobs.bedrock import converse_with_retry` (eval_runner.py:1163) resolves.
+        return {"output": {"message": {"content": [
             {"text": json.dumps({"verdict": verdict, "confidence": conf, "notes": notes})}
         ]}}}
-        return client
 
     def test_passed_verdict(self):
         from backend.scripts import eval_runner as er
         with patch.object(er, "_get_judge_model", return_value="us.anthropic.x"), \
-             patch("core.llm_optimizer._get_bedrock_client", return_value=self._mock_converse("passed")):
+             patch("jobs.bedrock.converse_with_retry", return_value=self._mock_response("passed")):
             r = er._judge_decision_direction(self._CASE, "use strangler-fig, not big-bang")
         assert r["status"] == "passed"
 
     def test_failed_verdict(self):
         from backend.scripts import eval_runner as er
         with patch.object(er, "_get_judge_model", return_value="us.anthropic.x"), \
-             patch("core.llm_optimizer._get_bedrock_client", return_value=self._mock_converse("failed")):
+             patch("jobs.bedrock.converse_with_retry", return_value=self._mock_response("failed")):
             r = er._judge_decision_direction(self._CASE, "do the big-bang rewrite")
         assert r["status"] == "failed"
 
