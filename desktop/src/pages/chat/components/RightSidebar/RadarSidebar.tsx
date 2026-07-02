@@ -1,37 +1,36 @@
 /**
- * Unified Radar sidebar — single scrollable view with all briefing sections.
+ * Unified Radar sidebar — a live "what needs me / what did it just do" HUD.
  *
- * D6: Mode toggle killed. History → search popover.
- * D7: Jobs = bottom status bar with expand.
- * D8: Section order = action priority gradient.
+ * Redesign (Run 1): the sidebar is an attention queue, not a data feed. It
+ * answers ONE question — "what should I be looking at right now?" — with three
+ * sections plus a bottom FYI bar:
  *
- * Sections: Todo → Working → Signals → Hot → Output → Artifacts → Stocks → Jobs bar
- * Each section uses CollapsibleSection wrapper.
- * Empty sections auto-hide (D3).
+ *   ① ToDo          — what you queued for yourself (top; you own the priority)
+ *   ② 🔔 需要你      — the attention queue: paused pipelines (with the decision
+ *                      they're blocked on), failing jobs, and background tabs
+ *                      waiting on a question. Empty → the section disappears.
+ *   ③ Files          — files touched this session (session context)
+ *   ⚡ PipelinesBar  — bottom FYI bar: RUNNING pipelines, read-only, not clickable.
+ *
+ * The prior briefing feed (Working/Signals/Hot/Output/Artifacts/Stocks + the 60s
+ * SessionBriefing poll + JobsBar) was removed from the sidebar — those feed
+ * sections still live on the WelcomeScreen. The attention queue is aggregated by
+ * useRadarAttention from three pre-existing, pure-read backend sources with zero
+ * backend changes.
  *
  * @exports RadarSidebar
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { RadarSidebarProps } from './types';
 import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
-import { ArtifactsSection } from './ArtifactsSection';
 import { ReferencedFilesSection } from './ReferencedFilesSection';
+import { AttentionSection } from './AttentionSection';
+import { PipelinesBar } from './PipelinesBar';
 import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
-import {
-  systemService,
-  type SessionBriefing,
-} from '../../../../services/system';
-import {
-  WorkingSection,
-  SignalsSection,
-  HotNewsSection,
-  StocksSection,
-  SwarmOutputSection,
-  JobsBar,
-} from '../briefing';
+import { useRadarAttention } from '../../../../hooks/useRadarAttention';
 import { HistoryPopover } from './HistoryPopover';
 
 // ---------------------------------------------------------------------------
@@ -41,7 +40,6 @@ import { HistoryPopover } from './HistoryPopover';
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
-const BRIEFING_POLL_MS = 60_000; // 60s — match backend cache TTL
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,6 +72,8 @@ export function RadarSidebar({
   workspaceId,
   sessionId,
   onItemClick,
+  onSelectTab,
+  openTabs = [],
 }: RadarSidebarProps) {
   // Auto-hide when file editor panel is open
   const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
@@ -114,34 +114,11 @@ export function RadarSidebar({
   // History popover
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  // Briefing data (polled every 60s)
-  const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
-
-  const fetchBriefing = useCallback(async () => {
-    try {
-      const data = await systemService.getBriefing();
-      setBriefing(data);
-    } catch { /* graceful */ }
-  }, []);
-
-  useEffect(() => { fetchBriefing(); }, [fetchBriefing]);
-  useEffect(() => {
-    const id = setInterval(fetchBriefing, BRIEFING_POLL_MS);
-    return () => clearInterval(id);
-  }, [fetchBriefing]);
-
   // Section counts
   const [todoCount, setTodoCount] = useState(0);
-  const [artifactCount, setArtifactCount] = useState(0);
 
-  const workingCount = briefing?.working.length ?? 0;
-  const signalsCount = briefing?.signals.length ?? 0;
-  const hotCount = briefing?.hotNews.length ?? 0;
-  const stocksCount = briefing?.stocks.length ?? 0;
-  const outputCount = useMemo(() => {
-    if (!briefing) return 0;
-    return briefing.output.builds.length + briefing.output.content.length + briefing.output.files.length;
-  }, [briefing]);
+  // Attention queue + running-pipeline FYI list (3 pure-read sources, polled).
+  const { attentionItems, runningPipelines } = useRadarAttention(sessionId, openTabs);
 
   // Referenced Files tracking
   const { files: referencedFiles, totalCount: referencedCount } = useReferencedFiles(sessionId);
@@ -204,65 +181,31 @@ export function RadarSidebar({
         </div>
       </div>
 
-      {/* Scrollable sections */}
+      {/* Scrollable sections: ToDo → 🔔 需要你 → Files */}
       <div className="flex-1 overflow-y-auto">
-        {/* Todo — red (action urgency) */}
+        {/* ① ToDo — red (action urgency); you own the priority */}
         <CollapsibleSection name="todo" icon="checklist" label="ToDo" count={todoCount} defaultExpanded={true} accent="rgba(239,68,68,0.35)">
           <TodoSection workspaceId={workspaceId} onCountChange={setTodoCount} onItemClick={onItemClick} />
         </CollapsibleSection>
 
-        {/* Working — amber/gold (attention — distinct from Todo red) */}
-        {workingCount > 0 && (
-          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true} accent="rgba(251,191,36,0.6)">
-            <WorkingSection items={briefing!.working} onItemClick={onItemClick} />
-          </CollapsibleSection>
-        )}
+        {/* ② 🔔 需要你 — the attention queue (paused pipelines / failed jobs /
+            waiting tabs). Renders null when empty (section disappears). */}
+        <AttentionSection
+          items={attentionItems}
+          onItemClick={onItemClick}
+          onSelectTab={onSelectTab}
+        />
 
-        {/* Signals — blue (information) */}
-        {signalsCount > 0 && (
-          <CollapsibleSection name="signals" icon="cell_tower" label="Signals" count={signalsCount} defaultExpanded={true} accent="rgba(59,130,246,0.35)">
-            <SignalsSection items={briefing!.signals} onItemClick={onItemClick} compact />
-          </CollapsibleSection>
-        )}
-
-        {/* Hot News — warm red (trending) */}
-        {hotCount > 0 && (
-          <CollapsibleSection name="hot" icon="whatshot" label="Hot" count={hotCount} defaultExpanded={true} accent="rgba(245,158,11,0.4)">
-            <HotNewsSection items={briefing!.hotNews} onItemClick={onItemClick} compact />
-          </CollapsibleSection>
-        )}
-
-        {/* Swarm Output — purple (brand) */}
-        {outputCount > 0 && (
-          <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false} accent="rgba(168,85,247,0.35)">
-            <SwarmOutputSection output={briefing!.output} compact />
-          </CollapsibleSection>
-        )}
-
-        {/* Referenced Files — teal (session context) */}
+        {/* ③ Referenced Files — teal (session context) */}
         {referencedCount > 0 && (
           <CollapsibleSection name="referenced-files" icon="insert_drive_file" label="Files" count={referencedCount} defaultExpanded={true} accent="rgba(20,184,166,0.35)">
             <ReferencedFilesSection grouped={referencedFiles} totalCount={referencedCount} />
           </CollapsibleSection>
         )}
-
-        {/* Artifacts — neutral (no accent) */}
-        <CollapsibleSection name="artifacts" icon="folder_open" label="Artifacts" count={artifactCount} defaultExpanded={false}>
-          <ArtifactsSection workspaceId={workspaceId} onCountChange={setArtifactCount} />
-        </CollapsibleSection>
-
-        {/* Stocks — green (personal, lower priority) */}
-        {stocksCount > 0 && (
-          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false} accent="rgba(34,197,94,0.35)">
-            <StocksSection items={briefing!.stocks} compact />
-          </CollapsibleSection>
-        )}
       </div>
 
-      {/* Jobs status bar (bottom) */}
-      {briefing?.jobsSummary && briefing.jobsSummary.total > 0 && (
-        <JobsBar summary={briefing.jobsSummary} />
-      )}
+      {/* ⚡ Running-pipeline FYI bar (bottom) — read-only, hides when none. */}
+      <PipelinesBar running={runningPipelines} />
     </div>
   );
 }

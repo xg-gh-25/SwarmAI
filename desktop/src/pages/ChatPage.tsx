@@ -2884,6 +2884,8 @@ export default function ChatPage() {
           sessionId={sessionId}
           onItemClick={handleItemClick}
           onSendMessage={handleFocusClick}
+          onSelectTab={selectTab}
+          openTabs={openTabs}
         />
       </div>
 

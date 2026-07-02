@@ -29,7 +29,7 @@ import type { DropPayload } from './types';
 // ---------------------------------------------------------------------------
 
 /** Default number of items shown before "See more" expansion. */
-const DISPLAY_LIMIT = 10;
+const DISPLAY_LIMIT = 5;
 
 /** Polling interval for background refresh (ms). */
 const POLL_INTERVAL_MS = 30_000;

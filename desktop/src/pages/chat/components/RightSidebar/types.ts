@@ -40,6 +40,60 @@ export interface RadarArtifact {
 }
 
 // ---------------------------------------------------------------------------
+// Attention queue (🔔 需要你) — Run 1 redesign
+// ---------------------------------------------------------------------------
+
+/**
+ * One item in the 🔔 "需要你" attention queue. Discriminated on ``kind``.
+ * The queue aggregates the three signals that genuinely need the user to act:
+ * a paused pipeline (blocked on a decision), a failing scheduled job, or a
+ * background tab waiting on an AskUserQuestion.
+ *
+ * Click semantics differ by kind (dispatched in AttentionSection):
+ * - ``paused`` / ``job`` → inject a message into the current chat input (onItemClick)
+ * - ``waiting`` → switch to the waiting tab (onSelectTab); the question lives there.
+ */
+export type AttentionItem =
+  | {
+      kind: 'paused';
+      /** Pipeline run id (run_xxxx) — used to build the resume message. */
+      id: string;
+      /** Human-readable requirement (already truncated by backend). */
+      title: string;
+      project: string;
+      /** Stage where it paused (e.g. "build"). */
+      stage: string;
+      /** The decision text from checkpoint.reason — WHY it needs the user. */
+      reason: string;
+    }
+  | {
+      kind: 'job';
+      /** Job id. */
+      id: string;
+      /** Job display name. */
+      title: string;
+      /** Consecutive failure count (>0). */
+      failures: number;
+    }
+  | {
+      kind: 'waiting';
+      /** The tab id to switch to (onSelectTab). NOT the session id. */
+      id: string;
+      /** Tab title / session label. */
+      title: string;
+      /** Short label of what it's asking (first question header, if any). */
+      question: string;
+    };
+
+/** A running pipeline, shown in the bottom FYI bar (read-only, not clickable). */
+export interface RunningPipeline {
+  id: string;
+  title: string;
+  project: string;
+  stage: string;
+}
+
+// ---------------------------------------------------------------------------
 // Component prop interfaces
 // ---------------------------------------------------------------------------
 
@@ -63,6 +117,18 @@ export interface RadarSidebarProps {
   onItemClick?: ItemClickHandler;
   /** Auto-send a message to the active chat tab (injects + sends immediately). */
   onSendMessage?: (text: string) => void;
+  /**
+   * Switch to another chat tab by id. Used by the 🔔 attention queue's
+   * "waiting tab" items — the pending question lives in that tab, so the
+   * correct action is to focus it, not to inject into the current input.
+   */
+  onSelectTab?: (tabId: string) => void;
+  /**
+   * Open tabs (id + sessionId) so the attention queue can map a
+   * waiting session (streaming-state is keyed by session_id) back to a
+   * tab id for onSelectTab, and exclude the currently-active session.
+   */
+  openTabs?: { id: string; sessionId?: string }[];
 }
 
 /** Props for the shared collapsible section wrapper. */
