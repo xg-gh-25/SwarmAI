@@ -587,6 +587,28 @@ class TestRetireEntry:
                               project_dir=tmp_path, source_path=src, dry_run=False, force=True)
         assert report.archived == 1, "force=True must retire the keep-class entry"
 
+    def test_retire_protects_evergreen_section_without_force(self, tmp_path):
+        """Gate-2 MED: an entry in an evergreen SECTION (Open Threads = type process,
+        Standing Preferences = type guideline) is keep-class by SECTION even though
+        its TYPE isn't — must be refused without force, parity with reclaim."""
+        from core.ddd_entry_lifecycle import retire_entry, RetireError, MEMORY_EVERGREEN_SECTIONS
+        today = date(2026, 7, 3)
+        recent = (today - timedelta(days=2)).isoformat()
+        content = f"""\
+## Open Threads
+- [process] **A live thread** — process-type, but section is evergreen. ({recent}, run_ot)
+  <!-- ref:0 | last:{recent} | decay:active -->
+"""
+        # default evergreen (MEMORY set) → Open Threads protected → refuse
+        with pytest.raises(RetireError):
+            retire_entry(content, title="A live thread", section="Open Threads",
+                         project_dir=tmp_path, dry_run=False)
+        # force overrides
+        src = tmp_path / "MEMORY.md"; src.write_text(content)
+        report = retire_entry(content, title="A live thread", section="Open Threads",
+                              project_dir=tmp_path, source_path=src, dry_run=False, force=True)
+        assert report.archived == 1
+
 
 class TestDecayThresholdsTightened:
     """run_186a5f15: dormant 90->60, archived total 180->150 (user directive —

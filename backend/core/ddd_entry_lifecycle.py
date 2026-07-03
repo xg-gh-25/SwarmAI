@@ -1015,6 +1015,7 @@ def retire_entry(
     dry_run: bool = True,
     force: bool = False,
     today: "date | None" = None,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
 ) -> ReclaimReport:
     """Agent-directed retire of ONE named (title, section) entry — the sanctioned
     'out' side of the knowledge layer (mirrors s_self-evolution's RETIRE for the
@@ -1062,7 +1063,14 @@ def retire_entry(
         )
 
     entry = matches[0]
-    if not force and is_keep_class(entry):
+    # Keep-class check MUST receive the doc's evergreen set — else section-based
+    # immunity (rule 1: Open Threads=process, Standing Preferences=guideline in
+    # MEMORY_EVERGREEN_SECTIONS) is silently dead and those permanent entries would
+    # be retirable WITHOUT --force, defeating the guard (Gate-2 MED). Parity with
+    # reclaim_noise_entries, which passes evergreen_sections. Default to the MEMORY
+    # set when the caller doesn't specify (the strictest, safest default).
+    _evergreen = evergreen_sections if evergreen_sections is not None else MEMORY_EVERGREEN_SECTIONS
+    if not force and is_keep_class(entry, evergreen_sections=_evergreen):
         raise RetireError(
             f"{title!r} is keep-class (type={entry.entry_type}, section={section!r}) — "
             f"refusing without force=True. Pass force to deliberately retire permanent "

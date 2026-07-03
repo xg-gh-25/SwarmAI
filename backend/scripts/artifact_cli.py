@@ -3454,7 +3454,7 @@ def cmd_ddd_retire(args, reg) -> None:
     the archive → lost from recall, and can destroy a same-title sibling).
     Fail-loud: no match / ambiguous duplicate → error, exit 1.
     """
-    from core.ddd_entry_lifecycle import retire_entry, RetireError
+    from core.ddd_entry_lifecycle import retire_entry, RetireError, MEMORY_EVERGREEN_SECTIONS
 
     ws = _get_workspace()
     p = Path(args.file)
@@ -3474,6 +3474,9 @@ def cmd_ddd_retire(args, reg) -> None:
             project_dir=p.parent, archive_name=archive_name,
             source_path=p if args.apply else None,
             dry_run=not args.apply, force=bool(args.force),
+            # MEMORY.md's evergreen sections (Open Threads, Standing Preferences,
+            # etc.) need --force parity with the autonomous reclaim path.
+            evergreen_sections=MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None,
         )
     except RetireError as e:
         print(json.dumps({"error": str(e), "retired": False}), file=sys.stderr)
