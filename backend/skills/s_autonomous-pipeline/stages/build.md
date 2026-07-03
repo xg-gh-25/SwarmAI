@@ -279,6 +279,28 @@ python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <
 - `gate1_checks` — per-check detail for signal quality tracking
 - `gate1_retries` — number of PLAN revisions attempted (0, 1, or 2)
 
+### Recording files_touched (for auto local-commit — MANDATORY)
+
+Every time you Edit or Write a **source file** during BUILD, record it so the
+DELIVER-stage `run-commit` can `git add` exactly this run's files (never `git add
+-A`, which would sweep a parallel session's edits — R29). Record in batches (e.g.
+at the end of BUILD, or after each cluster of edits):
+
+```bash
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
+  --files-touched '["backend/foo.py","desktop/src/Bar.tsx","backend/tests/test_foo.py"]'
+```
+
+- Record **WRITTEN files only** (Edit/Write targets + new test files) — NOT files
+  you merely Read. An over-broad list re-introduces the cross-session bleed this
+  design prevents.
+- Prefer ABSOLUTE paths (most robust — `run-commit` resolves each to its git repo
+  regardless of process cwd). Relative paths work only if `run-commit` runs from
+  inside that file's repo; when unsure, use absolute.
+- Dedup-append: safe to call multiple times; duplicates are ignored.
+- If you forget, `run-commit` WARNS about untracked working-tree changes rather
+  than committing the wrong set — but record diligently so nothing is missed.
+
 **Override tracking:** When `gate1_override: true`, OS Eval can later assess whether
 the override was justified (plan succeeded despite BLOCK) or the BLOCK was correct
 (plan produced rework). This data informs prompt tuning.

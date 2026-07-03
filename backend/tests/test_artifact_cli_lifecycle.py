@@ -344,7 +344,8 @@ class TestRunUpdateCarryForward:
         import argparse
         attrs = ("active_only actual_effort adversarial_count alternatives backend "
                  "categories command context data ddd_checksums dismissed escalated "
-                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+                 "frontend full indicators "
                  "lessons limit modules outcome overlap partial probes producer profile "
                  "project reason requirement resolved retries review_count rp_violations "
                  "run_id scope stage stage_json state status summary taste_decision "
@@ -830,7 +831,8 @@ class TestAdvanceDriftGuard:
         import argparse
         attrs = ("active_only actual_effort adversarial_count alternatives backend "
                  "categories command context data ddd_checksums dismissed escalated "
-                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+                 "frontend full indicators "
                  "lessons limit modules outcome overlap partial probes producer profile "
                  "project reason requirement resolved retries review_count rp_violations "
                  "run_id scope stage stage_json state status summary taste_decision "
@@ -928,7 +930,8 @@ class TestCompletionFailsClosedOnValidatorCrash:
         # All attrs cmd_run_update may read, defaulted None; override what matters.
         attrs = ("active_only actual_effort adversarial_count alternatives backend "
                  "categories command context data ddd_checksums dismissed escalated "
-                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+                 "frontend full indicators "
                  "lessons limit modules outcome overlap partial probes producer profile "
                  "project reason requirement resolved retries review_count rp_violations "
                  "run_id scope stage stage_json state status summary taste_decision "

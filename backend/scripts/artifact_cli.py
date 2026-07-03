@@ -1630,6 +1630,33 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     if args.ddd_checksums:
         run_state["ddd_checksums"] = json.loads(args.ddd_checksums)
 
+    if args.files_touched:
+        # ── A1 run-level file tracking (run_76932250) ───────────────────────────
+        # Accumulate the source files THIS run actually wrote, so `run-commit` can
+        # `git add` exactly them — never `git add -A` (which would sweep a parallel
+        # session's in-flight edits, R29). Dedup-append: BUILD may report in
+        # batches across multiple run-update calls. Only WRITTEN files belong here
+        # (the caller records Edit/Write targets, not Reads) — an over-broad list
+        # would re-introduce the cross-session bleed this design exists to prevent.
+        try:
+            incoming = json.loads(args.files_touched)
+        except (ValueError, TypeError):
+            print(json.dumps({"error": "--files-touched must be a JSON array of paths"}),
+                  file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(incoming, list):
+            print(json.dumps({"error": "--files-touched must be a JSON array of paths"}),
+                  file=sys.stderr)
+            sys.exit(1)
+        existing = run_state.get("files_touched", [])
+        # Preserve insertion order, dedup, drop empties/non-strings
+        seen = set(existing)
+        for p in incoming:
+            if isinstance(p, str) and p.strip() and p not in seen:
+                existing.append(p.strip())
+                seen.add(p.strip())
+        run_state["files_touched"] = existing
+
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
@@ -1667,6 +1694,148 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             pass  # Budget calculation failure should never block stage update
 
     print(json.dumps(result))
+
+
+def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
+    """Auto local-commit THIS run's files after PUSH-READY (A1, run_76932250).
+
+    LOCAL COMMIT ONLY — never pushes (STEERING #5: push is user-initiated).
+    Stages EXACTLY the files this run recorded in ``files_touched`` via
+    ``git add -- <path>`` (pathspec), NEVER ``git add -A`` — so a parallel
+    session's in-flight edits can't be swept in (R29). Files may live in the
+    source repo OR the SwarmWS workspace; each file is committed in the git
+    repo that actually contains it (grouped by repo root), so a run that
+    touched both gets one commit per repo.
+
+    Safety valves:
+      - PUSH-READY gate must have passed (deliver stage push_ready=true), else refuse.
+      - files_touched must be non-empty, else refuse (nothing to commit).
+      - If the working tree has changes NOT in files_touched, WARN + list them
+        (a forgotten record surfaces loudly) but still commit only tracked files.
+    """
+    import subprocess
+    from collections import defaultdict
+
+    run_file = _resolve_run_file(args.project, args.run_id)
+    run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    # ── Gate 1: PUSH-READY must have passed ──────────────────────────────────
+    deliver_rec = next(
+        (s for s in run_state.get("stages", [])
+         if s.get("stage", s.get("name", "")) == "deliver"
+         and s.get("status") in ("completed", "done")),
+        None,
+    )
+    push_ready = bool(deliver_rec and deliver_rec.get("push_ready", False))
+    if not push_ready and not getattr(args, "force", False):
+        print(json.dumps({
+            "blocked": True,
+            "error": "run-commit refused: deliver stage is not PUSH-READY. "
+                     "Auto-commit runs only after the push-ready gate passes. "
+                     "Pass --force to override.",
+        }), file=sys.stderr)
+        sys.exit(2)
+
+    # ── Gate 2: files_touched must be non-empty ──────────────────────────────
+    files_touched = run_state.get("files_touched", [])
+    if not files_touched:
+        print(json.dumps({
+            "blocked": True,
+            "error": "run-commit refused: run.json has no files_touched. BUILD must "
+                     "record written files via `run-update --files-touched '[...]'`. "
+                     "Nothing to commit (this run tracked zero files).",
+        }), file=sys.stderr)
+        sys.exit(2)
+
+    # ── Resolve each file to its git repo root; group so multi-repo runs get
+    #    one commit per repo. Never `git add -A`. ────────────────────────────
+    def _repo_root(path: str) -> str | None:
+        p = Path(path)
+        cwd = str(p.parent if p.is_absolute() else Path.cwd())
+        try:
+            r = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=cwd, capture_output=True, text=True, timeout=10,
+            )
+            return r.stdout.strip() if r.returncode == 0 else None
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
+    by_repo: dict[str, list[str]] = defaultdict(list)
+    unresolved: list[str] = []
+    for f in files_touched:
+        root = _repo_root(f)
+        if root:
+            by_repo[root].append(f)
+        else:
+            unresolved.append(f)
+
+    requirement = run_state.get("requirement", "")[:72] or "pipeline changes"
+    commit_msg = f"{requirement}\n\n(auto local-commit, run {args.run_id}; not pushed)"
+
+    committed, warnings = [], []
+    if unresolved:
+        warnings.append(f"{len(unresolved)} file(s) not in any git repo, skipped: {unresolved}")
+
+    for root, files in by_repo.items():
+        # Warn if the working tree has changes outside this run's files (forgotten record)
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            dirty = {ln[3:].strip() for ln in status.stdout.splitlines() if ln.strip()}
+            # Repo-relative path of each run file via git itself — robust for BOTH
+            # absolute and relative inputs (Path.resolve() would resolve a relative
+            # path against the process cwd, misfiring when cwd != repo root).
+            tracked_rel = set()
+            for f in files:
+                r = subprocess.run(
+                    ["git", "-C", root, "ls-files", "--full-name", "--", f],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for ln in r.stdout.splitlines():
+                    if ln.strip():
+                        tracked_rel.add(ln.strip())
+            untracked_by_run = dirty - tracked_rel
+            if untracked_by_run:
+                warnings.append(
+                    f"[{root}] working tree has {len(untracked_by_run)} change(s) NOT tracked by "
+                    f"this run (left uncommitted — verify they belong to another session): "
+                    f"{sorted(untracked_by_run)[:10]}"
+                )
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+        # Stage ONLY this run's files (pathspec — never -A)
+        add = subprocess.run(["git", "-C", root, "add", "--", *files],
+                             capture_output=True, text=True, timeout=15)
+        if add.returncode != 0:
+            warnings.append(f"[{root}] git add failed: {add.stderr.strip()[:200]}")
+            continue
+
+        # Anything actually staged? (files may be unchanged)
+        staged = subprocess.run(["git", "-C", root, "diff", "--cached", "--name-only"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if not staged:
+            warnings.append(f"[{root}] no staged changes for tracked files (already committed?)")
+            continue
+
+        commit = subprocess.run(["git", "-C", root, "commit", "-m", commit_msg],
+                                capture_output=True, text=True, timeout=15)
+        if commit.returncode == 0:
+            sha = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
+                                 capture_output=True, text=True, timeout=10).stdout.strip()
+            committed.append({"repo": root, "sha": sha, "files": staged.splitlines()})
+        else:
+            warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
+
+    print(json.dumps({
+        "committed": committed,
+        "warnings": warnings,
+        "pushed": False,  # NEVER — push is user-initiated (STEERING #5)
+        "note": "Local commit only. To push: `git push origin main` (user decision).",
+    }, indent=2))
 
 
 def cmd_run_get(args, reg: ArtifactRegistry) -> None:
@@ -3704,12 +3873,18 @@ def main() -> None:
     p_run_update.add_argument("--taste-decision", default=None, help="Taste decision JSON to append")
     p_run_update.add_argument("--profile", default=None, help="Pipeline profile override")
     p_run_update.add_argument("--ddd-checksums", default=None, help="DDD doc checksums JSON (from ddd-check)")
+    p_run_update.add_argument("--files-touched", default=None, help="JSON array of source file paths THIS run wrote (dedup-appended to run.json files_touched; consumed by run-commit)")
     p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")
 
     # run-get
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")
     p_run_get.add_argument("--project", required=True)
     p_run_get.add_argument("--run-id", default=None, help="Specific run ID (omit for list)")
+
+    p_run_commit = sub.add_parser("run-commit", help="Auto local-commit this run's files after PUSH-READY (never pushes)")
+    p_run_commit.add_argument("--project", required=True)
+    p_run_commit.add_argument("--run-id", required=True, help="Pipeline run ID")
+    p_run_commit.add_argument("--force", action="store_true", help="Commit even if push_ready gate hasn't passed")
 
     # run-checkpoint
     p_run_cp = sub.add_parser("run-checkpoint", help="Checkpoint: pause + artifact + Radar todo")
@@ -3837,6 +4012,7 @@ def main() -> None:
         "run-create": cmd_run_create,
         "run-update": cmd_run_update,
         "run-get": cmd_run_get,
+        "run-commit": cmd_run_commit,
         "run-checkpoint": cmd_run_checkpoint,
         "run-history": cmd_run_history,
         "run-budget": cmd_run_budget,

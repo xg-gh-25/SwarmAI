@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 import subprocess
 
 from core.session_hooks import HookContext
@@ -194,12 +193,14 @@ class WorkspaceAutoCommitHook:
                 "skipping auto-commit, changes will be picked up next time",
                 self.GIT_TIMEOUT,
             )
-            return  # Don't push if commit failed
+            return
 
-        # 6. Auto-push to remote (brain safety)
-        # Runs AFTER the commit try-block so its exceptions don't get caught
-        # by the commit timeout handler. _auto_push has its own exception handling.
-        self._auto_push(ws_path)
+        # NOTE: This hook is LOCAL-COMMIT ONLY. It deliberately does NOT push.
+        # Auto-push was removed (run_76932250): pushing the SwarmWS workspace
+        # (MEMORY/USER/Knowledge/Projects — personal + business data) to the
+        # PUBLIC origin is exactly the leak STEERING #5 forbids ("绝不 auto-push
+        # 到 GitHub"). The workspace is persisted on local disk via these commits;
+        # any push to a remote is a deliberate, user-initiated action.
 
     @staticmethod
     def _parse_diff_stat(diff_output: str) -> list[str]:
@@ -253,76 +254,3 @@ class WorkspaceAutoCommitHook:
                 for cat, n in sorted(categories.items(), key=lambda x: -x[1])
             ]
             return f"{dominant}: {', '.join(parts)}"
-
-    def _auto_push(self, ws_path: str) -> None:
-        """Push to remote if configured, reachable, and enough time has passed.
-
-        Rate-limited: only pushes if last push was >4h ago OR >20 commits ahead.
-        This avoids adding 15-45s network latency on every session close.
-        Non-blocking: failure is logged, not raised.
-        """
-        try:
-            # Check remote exists
-            remote_check = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                cwd=ws_path, capture_output=True, text=True, timeout=5,
-            )
-            if remote_check.returncode != 0:
-                return  # No remote configured — silent skip
-
-            # Rate limit: check commits ahead of remote.
-            # Try origin/HEAD first; fall back to @{u} (upstream tracking ref)
-            # because origin/HEAD only exists after clone, can be stale.
-            commits_ahead = 0
-            for ref in ("origin/HEAD", "@{u}"):
-                ahead_check = subprocess.run(
-                    ["git", "rev-list", "--count", f"{ref}..HEAD"],
-                    cwd=ws_path, capture_output=True, text=True, timeout=5,
-                )
-                if ahead_check.returncode == 0:
-                    try:
-                        commits_ahead = int(ahead_check.stdout.strip())
-                    except (ValueError, AttributeError):
-                        continue
-                    break
-
-            if commits_ahead == 0:
-                return  # Nothing to push
-
-            if commits_ahead < 20:
-                # Check time since last push (use reflog of remote tracking branch)
-                last_push_check = subprocess.run(
-                    ["git", "log", "-1", "--format=%ct", "@{u}"],
-                    cwd=ws_path, capture_output=True, text=True, timeout=5,
-                )
-                try:
-                    last_push_ts = int(last_push_check.stdout.strip())
-                    hours_since_push = (time.time() - last_push_ts) / 3600
-                except (ValueError, AttributeError):
-                    hours_since_push = 999
-
-                if hours_since_push < 4:
-                    return  # Pushed recently enough, skip
-
-            # Dry-run first (validates auth without side effects)
-            dry_run = subprocess.run(
-                ["git", "push", "--dry-run", "origin", "HEAD"],
-                cwd=ws_path, capture_output=True, text=True, timeout=15,
-            )
-            if dry_run.returncode != 0:
-                logger.warning("Auto-push dry-run failed: %s", dry_run.stderr[:200])
-                return
-
-            # Actual push
-            push = subprocess.run(
-                ["git", "push", "origin", "HEAD"],
-                cwd=ws_path, capture_output=True, text=True, timeout=30,
-            )
-            if push.returncode == 0:
-                logger.info("Auto-pushed %d commits to remote (brain safety)", commits_ahead)
-            else:
-                logger.warning("Auto-push failed: %s", push.stderr[:200])
-        except subprocess.TimeoutExpired:
-            logger.warning("Auto-push timed out (30s) — will retry next session")
-        except Exception as exc:
-            logger.warning("Auto-push error: %s", exc)
