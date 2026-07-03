@@ -33,6 +33,7 @@ function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
     status: 'completed',
     currentStage: 'reflect',
     checkpointReason: null,
+    pauseKind: null,
     progress: '8/8',
     updatedAt: '2026-07-02T10:00:00Z',
     ...over,
@@ -121,6 +122,33 @@ describe('aggregateJobsRuns', () => {
     const { runs: rows } = aggregateJobsRuns([], runs);
     // completed dropped; running first, then paused newest-first
     expect(rows.map((r) => r.id)).toEqual(['running', 'new_pause', 'old_pause']);
+  });
+
+  it('AC1: a crash-residue paused run is DROPPED from the run roster (mirrors NEEDS YOU)', () => {
+    const runs = [
+      pipe({ id: 'run_crash', status: 'paused', pauseKind: 'crash_residue',
+             checkpointReason: 'session_crash_auto_detected' }),
+    ];
+    const { runs: rows } = aggregateJobsRuns([], runs);
+    expect(rows).toEqual([]);
+  });
+
+  it('AC2: decision pause + running are KEPT; only crash-residue is dropped', () => {
+    const runs = [
+      pipe({ id: 'run_crash', status: 'paused', pauseKind: 'crash_residue' }),
+      pipe({ id: 'run_decision', status: 'paused', pauseKind: 'decision',
+             updatedAt: '2026-07-02T00:00:00Z' }),
+      pipe({ id: 'run_running', status: 'running', pauseKind: null,
+             updatedAt: '2026-07-01T00:00:00Z' }),
+    ];
+    const { runs: rows } = aggregateJobsRuns([], runs);
+    expect(rows.map((r) => r.id)).toEqual(['run_running', 'run_decision']);
+  });
+
+  it('AC-failopen: a paused run with pauseKind=null (old backend) STILL shows — fail SAFE', () => {
+    const runs = [pipe({ id: 'run_legacy', status: 'paused', pauseKind: null })];
+    const { runs: rows } = aggregateJobsRuns([], runs);
+    expect(rows.map((r) => r.id)).toEqual(['run_legacy']);
   });
 
   it('empty sources → empty rows (section will hide)', () => {

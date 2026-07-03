@@ -94,9 +94,11 @@ function runStatusRank(s: PipelineRun['status']): number {
 /**
  * Pure merge + sort of the two sources. No I/O, no React — unit-tested.
  * - Jobs: failed → healthy → disabled; stable (backend order) within a rank.
- * - Runs: ONLY active (running + paused) — completed/failed/cancelled/abandoned
- *   are dropped as historical noise. running → paused; within a bucket, newest
- *   first by updatedAt.
+ * - Runs: ONLY active (running + paused), EXCLUDING crash-residue pauses
+ *   (pauseKind==='crash_residue' — session-death residue, not an in-flight run;
+ *   mirrors the NEEDS YOU guard, run_3d61db5b). completed/failed/cancelled/
+ *   abandoned are dropped as historical noise. running → paused; within a
+ *   bucket, newest first by updatedAt.
  */
 export function aggregateJobsRuns(jobs: JobStatus[], pipelines: PipelineRun[]): JobsRunsResult {
   const jobRows: JobRow[] = jobs.map((j) => ({
@@ -110,7 +112,12 @@ export function aggregateJobsRuns(jobs: JobStatus[], pipelines: PipelineRun[]): 
   jobRows.sort((a, b) => healthRank(a.health) - healthRank(b.health));
 
   const runRows: RunRow[] = pipelines
-    .filter((p) => ACTIVE_RUN_STATUSES.has(p.status))
+    // Active = running/paused, but drop crash-residue pauses: a run the
+    // orphan-transition paused when a session died is not actionable roster
+    // content (it's residue, not an in-flight run). Mirrors the NEEDS YOU guard
+    // (run_3d61db5b) — consume the backend's pause_kind verdict, fail-SHOW on
+    // null (old backend / pre-field run still shows, never silently hidden).
+    .filter((p) => ACTIVE_RUN_STATUSES.has(p.status) && p.pauseKind !== 'crash_residue')
     .map((p) => ({
       id: p.id,
       title: p.requirement,
