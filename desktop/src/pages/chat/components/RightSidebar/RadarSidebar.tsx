@@ -11,11 +11,11 @@
  *                      waiting on a question. Empty → the section disappears.
  *   ③ Changes        — files touched this session (session context)
  *   ④ ⚡ Jobs & Runs — the INVENTORY: every scheduled job (status + schedule +
- *                      last-run) and every pipeline run (running/paused/recently-
- *                      completed). Replaces the old bottom PipelinesBar (which was
- *                      a pinned FYI bar); this is a default-expanded section in the
- *                      scroll stack — the full roster, not a pinned bar. The 🔔
- *                      queue owns only the ACTIONABLE copies; this owns the rest.
+ *                      last-run) and every ACTIVE pipeline run (running/paused
+ *                      only; completed/failed/etc dropped as history). Replaces
+ *                      the old bottom PipelinesBar (which was a pinned FYI bar);
+ *                      this is a default-expanded section in the scroll stack.
+ *                      The 🔔 queue owns the ACTIONABLE copies; this owns the rest.
  *
  * The prior briefing feed (Working/Signals/Hot/Output/Artifacts/Stocks + the 60s
  * SessionBriefing poll) was removed from the sidebar — those feed sections still
@@ -123,7 +123,7 @@ export function RadarSidebar({
   const [todoCount, setTodoCount] = useState(0);
 
   // Attention queue (3 pure-read sources, polled). The running-pipeline FYI list
-  // is no longer surfaced here — running/paused/completed runs now live in the
+  // is no longer surfaced here — active (running/paused) runs now live in the
   // Jobs & Runs section (Option B), the single run-status inventory.
   const { attentionItems } = useRadarAttention(sessionId, openTabs);
 
@@ -211,8 +211,8 @@ export function RadarSidebar({
           </CollapsibleSection>
         )}
 
-        {/* ④ ⚡ Jobs & Runs — indigo (inventory): all scheduled jobs + all pipeline
-            runs (running/paused/completed). Replaces the old bottom PipelinesBar;
+        {/* ④ ⚡ Jobs & Runs — indigo (inventory): all scheduled jobs + ACTIVE pipeline
+            runs (running/paused only). Replaces the old bottom PipelinesBar;
             renders its own CollapsibleSection (default-expanded). Hides when empty. */}
         <JobsRunsSection />
       </div>

@@ -76,16 +76,27 @@ function healthRank(h: JobHealth): number {
   return h === 'failed' ? 0 : h === 'healthy' ? 1 : 2;
 }
 
-/** Run-status sort rank: running → paused → everything-else (completed/failed/…). */
+/** The active run statuses IN DISPLAY ORDER — single source of truth for BOTH
+ *  the "worth showing" filter AND the sort rank (so they can't drift: add a
+ *  status here and it's both kept and correctly ranked). A run is ACTIVE iff
+ *  it's running or paused; completed/failed/cancelled/abandoned are historical
+ *  noise — not actionable, and the actionable paused copy also lives in 🔔. */
+const ACTIVE_RUN_ORDER: readonly PipelineRun['status'][] = ['running', 'paused'];
+const ACTIVE_RUN_STATUSES: ReadonlySet<PipelineRun['status']> = new Set(ACTIVE_RUN_ORDER);
+
+/** Run-status sort rank, derived from ACTIVE_RUN_ORDER (only active runs reach
+ *  here). Unknown → end, but the filter guarantees that never happens. */
 function runStatusRank(s: PipelineRun['status']): number {
-  return s === 'running' ? 0 : s === 'paused' ? 1 : 2;
+  const i = ACTIVE_RUN_ORDER.indexOf(s);
+  return i === -1 ? ACTIVE_RUN_ORDER.length : i;
 }
 
 /**
  * Pure merge + sort of the two sources. No I/O, no React — unit-tested.
  * - Jobs: failed → healthy → disabled; stable (backend order) within a rank.
- * - Runs: running → paused → recent; within the "recent" bucket, newest first
- *   by updatedAt (matches the backend's own recency trim).
+ * - Runs: ONLY active (running + paused) — completed/failed/cancelled/abandoned
+ *   are dropped as historical noise. running → paused; within a bucket, newest
+ *   first by updatedAt.
  */
 export function aggregateJobsRuns(jobs: JobStatus[], pipelines: PipelineRun[]): JobsRunsResult {
   const jobRows: JobRow[] = jobs.map((j) => ({
@@ -98,14 +109,16 @@ export function aggregateJobsRuns(jobs: JobStatus[], pipelines: PipelineRun[]): 
   }));
   jobRows.sort((a, b) => healthRank(a.health) - healthRank(b.health));
 
-  const runRows: RunRow[] = pipelines.map((p) => ({
-    id: p.id,
-    title: p.requirement,
-    project: p.project,
-    status: p.status,
-    progress: p.progress,
-    updatedAt: p.updatedAt,
-  }));
+  const runRows: RunRow[] = pipelines
+    .filter((p) => ACTIVE_RUN_STATUSES.has(p.status))
+    .map((p) => ({
+      id: p.id,
+      title: p.requirement,
+      project: p.project,
+      status: p.status,
+      progress: p.progress,
+      updatedAt: p.updatedAt,
+    }));
   runRows.sort((a, b) => {
     const byStatus = runStatusRank(a.status) - runStatusRank(b.status);
     if (byStatus !== 0) return byStatus;

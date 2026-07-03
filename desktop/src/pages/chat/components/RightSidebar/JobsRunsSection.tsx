@@ -3,9 +3,10 @@
  *
  * Restores the job + pipeline-run visibility the Run-1 redesign dropped (Option
  * B, run_06b89c00): it is the single INVENTORY surface — every scheduled job
- * (status dot + schedule + last-run) and every pipeline run (running / paused /
- * recently-completed, with a status badge + N/M progress). It REPLACES the old
- * bottom PipelinesBar (deleted) and the orphaned JobsBar (deleted).
+ * (status dot + schedule + last-run) and every ACTIVE pipeline run (running /
+ * paused only, with a status badge + N/M progress). Completed/failed/cancelled/
+ * abandoned runs are dropped as historical noise (run_820a4732). It REPLACES the
+ * old bottom PipelinesBar (deleted) and the orphaned JobsBar (deleted).
  *
  * Relationship to 🔔 Needs You: that queue owns only the ACTIONABLE copies
  * (failing jobs, paused runs). This section is the full roster — the same item

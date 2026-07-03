@@ -48,14 +48,19 @@ describe('JobsRunsSection', () => {
     expect(screen.getByText('Pipeline runs (1)')).toBeInTheDocument();
   });
 
-  it('shows a completed run (the status the attention queue drops)', () => {
+  it('shows active runs with their status badge (RUN / PAUSED)', () => {
     mockUseJobsRuns.mockReturnValue({
       jobs: [],
-      runs: [runRow({ id: 'done', title: 'finished feature', status: 'completed', progress: '8/8' })],
+      runs: [
+        runRow({ id: 'r1', title: 'live build', status: 'running', progress: '5/8' }),
+        runRow({ id: 'r2', title: 'blocked run', status: 'paused', progress: '3/8' }),
+      ],
     });
     render(<JobsRunsSection />);
-    expect(screen.getByText('finished feature')).toBeInTheDocument();
-    expect(screen.getByText('DONE')).toBeInTheDocument();
+    expect(screen.getByText('live build')).toBeInTheDocument();
+    expect(screen.getByText('RUN')).toBeInTheDocument();
+    expect(screen.getByText('blocked run')).toBeInTheDocument();
+    expect(screen.getByText('PAUSED')).toBeInTheDocument();
   });
 
   it('See-more fold: >5 jobs shows top 5 + toggle; expand reveals the rest', () => {

@@ -86,27 +86,41 @@ describe('aggregateJobsRuns', () => {
     expect(rows[0].failures).toBe(3);
   });
 
-  it('shows runs of ALL statuses incl. completed (attention queue drops these)', () => {
+  it('shows ONLY active runs (running + paused); drops completed/failed/cancelled/abandoned', () => {
     const runs = [
       pipe({ id: 'run_done', status: 'completed' }),
+      pipe({ id: 'run_fail', status: 'failed' }),
+      pipe({ id: 'run_cancel', status: 'cancelled' }),
+      pipe({ id: 'run_abandon', status: 'abandoned' }),
       pipe({ id: 'run_run', status: 'running' }),
       pipe({ id: 'run_pause', status: 'paused' }),
     ];
     const { runs: rows } = aggregateJobsRuns([], runs);
-    expect(rows).toHaveLength(3);
-    expect(rows.map((r) => r.id).sort()).toEqual(['run_done', 'run_pause', 'run_run']);
+    // only the 2 active survive
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual(['run_pause', 'run_run']);
   });
 
-  it('sorts runs running → paused → recent(newest first)', () => {
+  it('all-inactive runs → empty runs list (whole group hides)', () => {
     const runs = [
-      pipe({ id: 'old_done', status: 'completed', updatedAt: '2026-07-01T00:00:00Z' }),
-      pipe({ id: 'new_done', status: 'completed', updatedAt: '2026-07-02T00:00:00Z' }),
-      pipe({ id: 'paused', status: 'paused', updatedAt: '2026-06-01T00:00:00Z' }),
-      pipe({ id: 'running', status: 'running', updatedAt: '2026-05-01T00:00:00Z' }),
+      pipe({ id: 'd', status: 'completed' }),
+      pipe({ id: 'f', status: 'failed' }),
+      pipe({ id: 'a', status: 'abandoned' }),
     ];
     const { runs: rows } = aggregateJobsRuns([], runs);
-    // running first, paused second, then completed newest-first
-    expect(rows.map((r) => r.id)).toEqual(['running', 'paused', 'new_done', 'old_done']);
+    expect(rows).toEqual([]);
+  });
+
+  it('sorts active runs running → paused; newest-first within a bucket', () => {
+    const runs = [
+      pipe({ id: 'old_pause', status: 'paused', updatedAt: '2026-06-01T00:00:00Z' }),
+      pipe({ id: 'new_pause', status: 'paused', updatedAt: '2026-07-02T00:00:00Z' }),
+      pipe({ id: 'running', status: 'running', updatedAt: '2026-05-01T00:00:00Z' }),
+      pipe({ id: 'done', status: 'completed', updatedAt: '2026-07-03T00:00:00Z' }), // dropped despite newest
+    ];
+    const { runs: rows } = aggregateJobsRuns([], runs);
+    // completed dropped; running first, then paused newest-first
+    expect(rows.map((r) => r.id)).toEqual(['running', 'new_pause', 'old_pause']);
   });
 
   it('empty sources → empty rows (section will hide)', () => {
