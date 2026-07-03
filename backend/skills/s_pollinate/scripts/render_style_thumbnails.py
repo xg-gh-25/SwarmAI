@@ -160,7 +160,7 @@ def main():
     # don't compare pixels — we skip a thumbnail whose INPUTS (derived roles+fonts+
     # template) are unchanged since last run. Re-run with no input change = no-op
     # (no PNG rewrites → no git noise). --force overrides.
-    tmpl_sig = hashlib.md5((vp + deck_js).encode()).hexdigest()[:8]
+    tmpl_sig = hashlib.md5((vp + deck_js).encode(), usedforsecurity=False).hexdigest()[:8]
     sidecar = OUT / ".thumb-inputs.json"
     prev = {}
     if sidecar.exists() and not force:
@@ -178,7 +178,7 @@ def main():
             colors = re.findall(r'#[0-9A-Fa-f]{6}', pal.group(1)) if pal else []
             bg, text, accent = roles(colors, scheme, slug)
             disp, body = fonts(txt)
-            sig = hashlib.md5(f"{bg}{text}{accent}{disp}{body}{tmpl_sig}".encode()).hexdigest()[:12]
+            sig = hashlib.md5(f"{bg}{text}{accent}{disp}{body}{tmpl_sig}".encode(), usedforsecurity=False).hexdigest()[:12]
             cur_sig[slug] = sig
             manifest.append((slug, scheme, disp, bg, text, accent))
             png = OUT/f"{slug}.png"

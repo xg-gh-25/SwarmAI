@@ -26,6 +26,8 @@ describe('jobToCamelCase', () => {
       enabled: true,
       lastRun: '2026-07-02T04:28:03Z',
       lastError: 'Script timed out after 900s',
+      schedule: '',
+      lastStatus: 'never',
     });
   });
 
