@@ -1665,7 +1665,7 @@ def write_run(run_result: dict, root: Path) -> Path:
 
 # ─── HTML Report ─────────────────────────────────────────────────────────────
 
-# The 5 cognitive dimensions that organize the report.
+# The 6 cognitive dimensions that organize the report.
 # Each maps to categories in golden_set.yaml and answers a human question.
 DIMENSIONS = [
     {
@@ -1767,7 +1767,7 @@ def _compute_delta(current_results: dict, history: list[dict]) -> list[dict]:
 
 
 def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path:
-    """Generate purpose-driven HTML report organized by 5 cognitive dimensions.
+    """Generate purpose-driven HTML report organized by 6 cognitive dimensions.
 
     Enhancements over basic report:
     - Delta section: what changed since last run

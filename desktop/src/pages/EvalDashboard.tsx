@@ -1479,6 +1479,13 @@ const coverageGrid: Record<string, Record<string, number>> = {
   recovery:         { compliance: 0, decision: 0, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 3 },
 };
 
+// Derive the category columns from the grid itself (union of all row keys, first-seen
+// order) so the header and cells can never drift from the data — a hardcoded column
+// list silently renders '·' for any row key it doesn't list (Gate-2 HIGH, run_8c44b7bf).
+const coverageCols: string[] = Array.from(
+  new Set(Object.values(coverageGrid).flatMap((row) => Object.keys(row)))
+);
+
 export function GuideTab() {
   const [lang, setLang] = useState<'en' | 'zh'>('en');
   const t = lang; // shorthand
@@ -1647,7 +1654,7 @@ export function GuideTab() {
                 <th className="text-left px-2 py-1.5 font-medium text-[var(--color-text-muted)]">
                   {t === 'en' ? 'Dimension \\ Category' : '维度 \\ 类别'}
                 </th>
-                {['compliance', 'decision', 'recall', 'code_aware', 'loop_active', 'ddd_informed'].map(cat => (
+                {coverageCols.map(cat => (
                   <th key={cat} className="text-center px-1.5 py-1.5 font-medium text-[var(--color-text-muted)] font-mono">{cat}</th>
                 ))}
               </tr>
@@ -1656,7 +1663,7 @@ export function GuideTab() {
               {Object.entries(coverageGrid).map(([dim, cats]) => (
                 <tr key={dim} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="px-2 py-1.5 font-medium font-mono text-[var(--color-text-secondary)]">{dim}</td>
-                  {['compliance', 'decision', 'recall', 'code_aware', 'loop_active', 'ddd_informed'].map(cat => (
+                  {coverageCols.map(cat => (
                     <td key={cat} className="text-center px-1.5 py-1.5">
                       {cats[cat] > 0 ? (
                         <span className={`inline-block w-5 h-5 leading-5 rounded text-[9px] font-bold ${cats[cat] >= 4 ? 'bg-green-500/20 text-green-600' : cats[cat] >= 2 ? 'bg-yellow-500/20 text-yellow-600' : 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'}`}>{cats[cat]}</span>
