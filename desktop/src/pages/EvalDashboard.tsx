@@ -1258,8 +1258,8 @@ export function ReportsTab() {
 const guideContent = {
   title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
   subtitle: {
-    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. Proprioception: a living golden set (~185 cases as of 2026-06) defines "in this scenario I must do X." Programmatic checks run deterministically (zero-LLM BVT spine probes); LLM-judged behavioral cases run on the lunchtime schedule + as a git-bound release gate. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
-    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。Proprioception：一个活的 golden set（截至 2026-06 约 185 个 cases）定义了"在这个场景下我必须怎样做"。程序化检查确定性运行（零-LLM BVT spine probe）；LLM judge 行为用例按午间 schedule + 作为 git-bound 发版门跑。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
+    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. Proprioception: a living golden set defines "in this scenario I must do X." Programmatic checks run deterministically (zero-LLM BVT spine probes); LLM-judged behavioral cases run on the lunchtime schedule + as a git-bound release gate. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
+    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。程序化检查确定性运行（零-LLM BVT spine probe）；LLM judge 行为用例按午间 schedule + 作为 git-bound 发版门跑。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
   },
   overview: {
     en: ['What it evaluates', 'Why it matters', 'How it works'],
@@ -1278,11 +1278,12 @@ const guideContent = {
     ],
   },
   dimensions: {
-    en: 'The Seven Eval Dimensions',
-    zh: '七个评估维度',
+    en: 'The Five Eval Dimensions',
+    zh: '五个评估维度',
   },
-  // Dimensions ordered by live case-count (as of 2026-06). The `share` label is a
-  // relative-size snapshot, not a live count — exact numbers live on the Golden Set tab.
+  // The 5 canonical dimensions (source of truth: eval_runner.DIMENSIONS + golden_set.yaml
+  // `dimensions:`). The `share` label is a relative-size snapshot, not a live count —
+  // exact numbers live on the Golden Set tab.
   dimensionItems: [
     {
       key: 'capability',
@@ -1318,20 +1319,6 @@ const guideContent = {
       en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
       zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
       share: 'medium',
-    },
-    {
-      key: 'utility',
-      icon: '🔧',
-      en: { name: 'Utility', question: 'Does the tool actually do its job?', method: 'Functional spot-checks on utility skills/scripts — does the operation produce the expected artifact. Evaluators: file_contains, keyword_match.' },
-      zh: { name: '实用性', question: '工具真的完成了它的活吗？', method: '对 utility skill/脚本做功能抽查 — 操作是否产出预期产物。评估器：file_contains, keyword_match。' },
-      share: 'small',
-    },
-    {
-      key: 'recovery',
-      icon: '🔄',
-      en: { name: 'Recovery', question: 'Do I recover correctly from a crash/interrupt?', method: 'Recovery-path probes — resume, self-heal, and crash-to-cold paths reach a correct state. Evaluators: trajectory_in_order, goal_success.' },
-      zh: { name: '恢复能力', question: '崩溃/中断后我能正确恢复吗？', method: '恢复路径探测 — resume、自愈、crash-to-cold 路径达到正确状态。评估器：trajectory_in_order, goal_success。' },
-      share: 'small',
     },
   ],
   evaluators: {
@@ -1382,8 +1369,8 @@ const guideContent = {
     zh: '覆盖分布',
   },
   coverageDesc: {
-    en: 'Cases are tagged on 4 orthogonal axes — Category (~19 values: compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (7), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
-    zh: '每个 case 沿 4 个正交轴打标签 —— Category（约 19 个值：compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（7 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
+    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (5), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
+    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（5 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
   },
   lifecycle: {
     en: 'Case Lifecycle',
@@ -1531,7 +1518,7 @@ export function GuideTab() {
         <h2 className="text-[15px] font-semibold mb-3">{guideContent.dimensions[t]}</h2>
         <div className="space-y-2">
           {guideContent.dimensionItems.map((dim) => (
-            <div key={dim.key} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
+            <div key={dim.key} data-dim-key={dim.key} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
               <div className="flex items-start gap-3">
                 <span className="text-lg shrink-0">{dim.icon}</span>
                 <div className="flex-1 min-w-0">
