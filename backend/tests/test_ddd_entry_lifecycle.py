@@ -1307,6 +1307,18 @@ class TestParseEntriesProseOptIn:
             assert entries[0].title == "Adversarial review caught dead code"
             assert entries[2].entry_type == "decision"
 
+    def test_prose_mode_covers_arrows_and_shapes(self):
+        """Gate-2 re-review MED: the glyph range must cover arrow/shape/media leads that
+        appear in REAL curated content (e.g. IMPROVEMENT.md '- → **BLOCK...**', U+2192;
+        also ▶️ ◀️ ⏸), not just circle/check emoji — else those entries are un-retirable."""
+        content = """## Open Threads
+- → **Arrow-led decision** — real curated shape. (2026-06-25, run_x)
+- ▶️ **Play-led** — media control lead. (2026-07-01, run_y)
+- ✅ **Check-led** — common status. (2026-07-01, run_z)
+"""
+        titles = [e.title for e in parse_entries(content, include_prose=True)]
+        assert titles == ["Arrow-led decision", "Play-led", "Check-led"], titles
+
     def test_prose_mode_rejects_structural_markdown(self):
         """Gate-2 MED-1: the emoji class is an explicit allowlist, NOT a broad negation —
         it must NOT swallow blockquote '>', table '|', ':' '@' '#' leads as false entries."""

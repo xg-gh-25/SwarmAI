@@ -158,7 +158,13 @@ _ENTRY_RE = re.compile(
 # those must NOT become false entries (Gate-2 MED-1). group(1)=type, group(2)=title
 # stay identical to _ENTRY_RE for every non-prose bullet.
 _ENTRY_RE_PROSE = re.compile(
-    r"^- (?:[\U0001F300-\U0001FAFF☀-➿⬀-⯿️‍]+\s*)?"
+    # Leading glyph class = emoji (U+1F300–1FAFF) + a CONTIGUOUS U+2190–2BFF block
+    # (←-⯿) that covers arrows, geometric shapes, media controls, dingbats, misc
+    # symbols AND VS16/ZWJ — the glyphs real curated bullets actually lead with
+    # (🟡🟢🔵✅⚠️🚀🧬 AND → ▶️ ◀️ ⏸, e.g. IMPROVEMENT.md's "- → **BLOCK…**").
+    # It starts at U+2190, ABOVE the structural markers '>'(3E) '|'(7C) '@'(40)
+    # ':'(3A) '#'(23) '~'(7E), so those can never become false entries (MED-1).
+    r"^- (?:[\U0001F300-\U0001FAFF←-⯿️‍]+\s*)?"
     r"(?:\[(\w+)\] )?\*\*(.+?)\*\*"
 )
 
