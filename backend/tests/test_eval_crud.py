@@ -614,3 +614,79 @@ class TestAffectedCasesExcludesBehavior:
         ids = {c["id"] for c in affected}
         assert "NORM" in ids, "programmatic case should be triggered"
         assert "BEHAV" not in ids, "behavior case must NOT auto-spawn from a file edit"
+
+
+class TestDimensionCategoryGuard:
+    """Load-time fail-loud guard: any case whose .dimension is not in the canonical
+    dimensions list (or .category not in the canonical categories list) must emit a
+    WARNING at load — never raise, never drop the case (PIT118 fail-loud != fail-hard).
+
+    Root: compute_scores (eval_runner) aggregates raw .dimension tags with no
+    validation, so an off-canonical dimension silently leaks into /api/eval/health
+    while /api/eval/golden-set shows only the yaml-declared canonical 5. The guard
+    surfaces the drift the moment a case is loaded. (run_8c44b7bf)
+    """
+
+    def _workspace(self, tmp_path, cases, dimensions=None, categories=None):
+        import yaml
+        project_dir = tmp_path / "Eval"
+        project_dir.mkdir(parents=True)
+        (project_dir / "EvalHistory").mkdir()
+        gs = {
+            "version": 2,
+            "categories": categories or ["compliance", "recall"],
+            "dimensions": dimensions or ["compliance", "factual_accuracy"],
+            "cases": cases,
+        }
+        (project_dir / "golden_set.yaml").write_text(yaml.dump(gs, default_flow_style=False))
+        return tmp_path
+
+    def _case(self, cid, dimension, category="compliance"):
+        return {
+            "id": cid, "category": category, "dimension": dimension,
+            "level": "session", "title": "t", "source": "s",
+            "affected_by": ["AGENT.md"], "evaluators": ["file_contains"],
+            "scenario": {"turns": [{"input": "x"}]},
+            "verification": {"file": "x.py", "grep": "y"},
+        }
+
+    def test_off_canonical_dimension_warns_but_loads(self, tmp_path, caplog):
+        import logging
+        ws = self._workspace(
+            tmp_path,
+            [self._case("GS_BAD", dimension="bogus_dim"),
+             self._case("GS_OK", dimension="compliance")],
+        )
+        with caplog.at_level(logging.WARNING, logger="core.eval_service"):
+            svc = EvalService(workspace_root=ws)
+        # Load did NOT drop the bad case (fail-loud, not fail-hard)
+        ids = {c["id"] for c in svc._cases}
+        assert ids == {"GS_BAD", "GS_OK"}, "guard must not drop cases"
+        # A warning fired, naming the off-canonical dimension + case id
+        warned = "\n".join(r.getMessage() for r in caplog.records)
+        assert "bogus_dim" in warned and "GS_BAD" in warned, warned
+        assert "GS_OK" not in warned, "canonical case must not warn"
+
+    def test_off_canonical_category_warns(self, tmp_path, caplog):
+        import logging
+        ws = self._workspace(
+            tmp_path,
+            [self._case("GS_CATBAD", dimension="compliance", category="not_a_category")],
+        )
+        with caplog.at_level(logging.WARNING, logger="core.eval_service"):
+            svc = EvalService(workspace_root=ws)
+        warned = "\n".join(r.getMessage() for r in caplog.records)
+        assert "not_a_category" in warned and "GS_CATBAD" in warned, warned
+
+    def test_all_canonical_no_warning(self, tmp_path, caplog):
+        import logging
+        ws = self._workspace(
+            tmp_path,
+            [self._case("GS_A", dimension="compliance", category="compliance"),
+             self._case("GS_B", dimension="factual_accuracy", category="recall")],
+        )
+        with caplog.at_level(logging.WARNING, logger="core.eval_service"):
+            EvalService(workspace_root=ws)
+        dim_warns = [r.getMessage() for r in caplog.records
+                     if "dimension" in r.getMessage().lower() or "categor" in r.getMessage().lower()]
+        assert dim_warns == [], f"clean set must not warn: {dim_warns}"

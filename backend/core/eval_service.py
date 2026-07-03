@@ -149,6 +149,41 @@ class EvalService:
             sum(1 for c in merged if c.get("_origin") == "public"),
             sum(1 for c in merged if c.get("_origin") == "private"),
         )
+        self._validate_case_taxonomy(merged)
+
+    def _validate_case_taxonomy(self, cases: list[dict]) -> None:
+        """Fail-LOUD (warn, never raise) guard on the case taxonomy.
+
+        Every case's ``dimension`` must be one of the canonical dimensions and its
+        ``category`` one of the canonical categories declared in the PUBLIC
+        golden_set.yaml metadata. An off-canonical value is NOT dropped — the case
+        still loads (PIT118: fail-loud != fail-hard) — but a WARNING names the
+        offending value + case id so the drift is visible immediately.
+
+        Why: compute_scores (eval_runner) aggregates raw ``dimension`` tags with no
+        validation, so an off-canonical dimension silently leaks into
+        /api/eval/health while /api/eval/golden-set shows only the yaml-declared
+        canonical set — the exact divergence this guard surfaces at load time.
+        Skipped when the metadata list is absent (nothing to validate against →
+        no false-alarm storm). (run_8c44b7bf)
+        """
+        canonical_dims = set(self._golden_set.get("dimensions") or [])
+        canonical_cats = set(self._golden_set.get("categories") or [])
+        for case in cases:
+            cid = case.get("id", "?")
+            dim = case.get("dimension")
+            if canonical_dims and dim is not None and dim not in canonical_dims:
+                logger.warning(
+                    "eval_service: case %s has off-canonical dimension %r "
+                    "(not in %s) — will leak into /health per-dimension scores",
+                    cid, dim, sorted(canonical_dims),
+                )
+            cat = case.get("category")
+            if canonical_cats and cat is not None and cat not in canonical_cats:
+                logger.warning(
+                    "eval_service: case %s has off-canonical category %r (not in %s)",
+                    cid, cat, sorted(canonical_cats),
+                )
 
     def _load_history(self) -> None:
         """Parse all JSON files in EvalHistory/."""
