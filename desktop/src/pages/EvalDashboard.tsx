@@ -1258,8 +1258,8 @@ export function ReportsTab() {
 const guideContent = {
   title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
   subtitle: {
-    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. Proprioception: a living golden set defines "in this scenario I must do X." Programmatic checks run deterministically (zero-LLM BVT spine probes); LLM-judged behavioral cases run on the lunchtime schedule + as a git-bound release gate. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
-    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。程序化检查确定性运行（零-LLM BVT spine probe）；LLM judge 行为用例按午间 schedule + 作为 git-bound 发版门跑。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
+    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. Proprioception: a living golden set defines "in this scenario I must do X." Programmatic checks run deterministically (zero-LLM BVT spine probes); LLM-judged behavioral cases run on the weekly Monday-lunch schedule + as a git-bound release gate. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
+    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。程序化检查确定性运行（零-LLM BVT spine probe）；LLM judge 行为用例按每周一午间 schedule + 作为 git-bound 发版门跑。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
   },
   overview: {
     en: ['What it evaluates', 'Why it matters', 'How it works'],
@@ -1395,7 +1395,7 @@ const guideContent = {
     zh: '触发条件与节奏',
   },
   triggerItems: [
-    { en: { trigger: 'Scheduled (lunchtime)', cadence: 'Weekdays 12:30 ICT', desc: 'Full suite — never gates; continuous drift watch. Lunch window = machine on, creds fresh. BVT-red / score-drop → Slack alert.' }, zh: { trigger: '定时（午间）', cadence: '工作日 12:30 ICT', desc: '完整套件 — 永不当门；持续漂移监控。午间窗口 = 机器在线、creds 新鲜。BVT-red / 分数下降 → Slack 告警。' } },
+    { en: { trigger: 'Scheduled (drift watch)', cadence: 'Monday 12:30 ICT (cron 30 4 * * 1)', desc: 'Full suite, weekly — never gates; continuous drift watch. Lunch window = machine on, creds fresh. Weekly cadence fits behavior cases (real agent spawns, slow/costly). BVT-red / score-drop → Slack alert.' }, zh: { trigger: '定时（漂移监控）', cadence: '周一 12:30 ICT（cron 30 4 * * 1）', desc: '完整套件，每周一次 — 永不当门；持续漂移监控。午间窗口 = 机器在线、creds 新鲜。每周节奏适配 behavior 用例（spawn 真 agent，慢且贵）。BVT-red / 分数下降 → Slack 告警。' } },
     { en: { trigger: 'Deploy / CI gate', cadence: 'On release / post-push', desc: 'Git-bound gate (code_digest + BVT) — HARD stop, blocks a release that regresses. The only eval that GATES.' }, zh: { trigger: '发版 / CI 门', cadence: '发版时 / push 后', desc: 'Git-bound 门（code_digest + BVT）— 硬停，拦截会回归的发版。唯一会"当门"的 eval。' } },
     { en: { trigger: 'Manual', cadence: 'On demand', desc: 'POST /api/eval/run (non-blocking, returns run_id) — selected cases or full suite' }, zh: { trigger: '手动', cadence: '按需', desc: 'POST /api/eval/run（非阻塞，返回 run_id）— 选定案例或完整套件' } },
   ],
@@ -1520,10 +1520,19 @@ export function GuideTab() {
       </div>
 
       {/* Architecture diagram (official eval-architecture.svg) */}
-      <div className="mb-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+      <div className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
         <img
           src="/eval-architecture.svg"
           alt="SwarmAI Eval architecture — decoupled system-level subsystem"
+          className="w-full h-auto rounded"
+        />
+      </div>
+
+      {/* Single-run sequence diagram (eval-sequence.svg) */}
+      <div className="mb-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
+        <img
+          src="/eval-sequence.svg"
+          alt="SwarmAI Eval — one run end to end (trigger → clean-session spawn → per-case evaluator dispatch → score + BVT → report → consume)"
           className="w-full h-auto rounded"
         />
       </div>

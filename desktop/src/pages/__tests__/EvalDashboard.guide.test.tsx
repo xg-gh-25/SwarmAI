@@ -56,18 +56,23 @@ describe('GuideTab fact freshness', () => {
     expect(keys).not.toContain('utility');
   });
 
-  it('reflects the refreshed cadence (lunchtime / weekday) and runtime_health evaluator', () => {
+  it('reflects the CORRECT scheduled cadence (Monday-only, cron 30 4 * * 1) and runtime_health evaluator', () => {
     const { container } = renderGuide();
     const text = container.textContent || '';
-    // refreshed trigger cadence — 12:30 ICT weekday lunch window
-    expect(text).toMatch(/12:30|lunch|weekday|工作日|午/);
-    // the 7th programmatic evaluator now documented
+    // The real job is `30 4 * * 1` = MONDAY only. A prior version said "Weekdays 12:30"
+    // — that drift is fixed. Assert Monday is present AND the stale "weekday/工作日" claim is gone.
+    expect(text).toMatch(/Monday|周一/);
+    expect(text).not.toContain('Weekdays 12:30');
+    expect(text).not.toContain('工作日 12:30');
+    // the runtime_health evaluator stays documented
     expect(text).toContain('runtime_health');
   });
 
-  it('embeds the official eval-architecture diagram', () => {
+  it('embeds BOTH the overall architecture and the single-run sequence diagrams', () => {
     renderGuide();
-    const img = screen.getByAltText(/eval.*architecture/i);
-    expect(img.getAttribute('src')).toBe('/eval-architecture.svg');
+    const arch = screen.getByAltText(/eval.*architecture/i);
+    expect(arch.getAttribute('src')).toBe('/eval-architecture.svg');
+    const seq = screen.getByAltText(/one run end to end|sequence/i);
+    expect(seq.getAttribute('src')).toBe('/eval-sequence.svg');
   });
 });

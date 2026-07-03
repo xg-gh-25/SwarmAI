@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0c0e14"/>
+      <stop offset="100%" style="stop-color:#10131a"/>
+    </linearGradient>
+    <marker id="aMuted" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7" fill="#7B89A8"/>
+    </marker>
+    <marker id="aSage" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7" fill="#6FA88B"/>
+    </marker>
+    <marker id="aWheat" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7" fill="#C9A96E"/>
+    </marker>
+    <marker id="aRed" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7" fill="#E8694E"/>
+    </marker>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <text x="80" y="72" font-family="Inter, -apple-system, Arial" font-size="40" font-weight="700" fill="#E8E4E0">Eval OS &#8212; One Run, End to End</text>
+  <text x="80" y="108" font-family="Inter, -apple-system, Arial" font-size="20" fill="#8B8D94">A single eval run: trigger &#8594; clean-session spawn &#8594; per-case evaluator dispatch &#8594; score + BVT &#8594; report &#8594; consume</text>
+
+  <!-- ===== lifelines ===== -->
+  <!-- x centers: Trigger 200, Runner 560, CleanSession 940, GoldenSet 1300, History 1620, Sinks 1820(header only) -->
+  <g font-family="Inter, -apple-system, Arial" font-size="16" font-weight="600" text-anchor="middle">
+    <rect x="110" y="150" width="180" height="46" rx="8" fill="#1A1010" stroke="#3A2A2A"/>
+    <text x="200" y="179" fill="#E8694E">Trigger</text>
+    <rect x="470" y="150" width="180" height="46" rx="8" fill="#171A24" stroke="#2A3A2E"/>
+    <text x="560" y="179" fill="#8BAFD4">eval_runner</text>
+    <rect x="850" y="150" width="180" height="46" rx="8" fill="#171A24" stroke="#2A2E3A"/>
+    <text x="940" y="179" fill="#A8B0C0">clean session</text>
+    <rect x="1210" y="150" width="180" height="46" rx="8" fill="#171A24" stroke="#2A4A3A"/>
+    <text x="1300" y="179" fill="#6FA88B">golden set</text>
+    <rect x="1530" y="150" width="180" height="46" rx="8" fill="#171A24" stroke="#3A3222"/>
+    <text x="1620" y="179" fill="#C9A96E">EvalHistory/</text>
+  </g>
+  <!-- lifelines -->
+  <g stroke="#252932" stroke-width="1.5" stroke-dasharray="4,5">
+    <line x1="200" y1="196" x2="200" y2="1010"/>
+    <line x1="560" y1="196" x2="560" y2="1010"/>
+    <line x1="940" y1="196" x2="940" y2="1010"/>
+    <line x1="1300" y1="196" x2="1300" y2="1010"/>
+    <line x1="1620" y1="196" x2="1620" y2="1010"/>
+  </g>
+
+  <!-- ===== messages ===== -->
+  <g font-family="monospace" font-size="14">
+    <!-- 1 trigger fires -->
+    <line x1="200" y1="250" x2="552" y2="250" stroke="#E8694E" stroke-width="2" marker-end="url(#aRed)"/>
+    <text x="212" y="240" fill="#B8B4AF">1 &#183; CI-gate / deploy / Monday-scheduled fires (never the agent)</text>
+
+    <!-- 2 load golden set -->
+    <line x1="560" y1="308" x2="1292" y2="308" stroke="#6FA88B" stroke-width="2" marker-end="url(#aSage)"/>
+    <text x="572" y="298" fill="#B8B4AF">2 &#183; load cases + guard (public + private, taxonomy validated)</text>
+    <line x1="1300" y1="352" x2="568" y2="352" stroke="#6FA88B" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#aSage)"/>
+    <text x="700" y="342" fill="#6B6E76">&#8592; cases[] (filtered by tier/tags; behavior skipped unless opted-in)</text>
+
+    <!-- 3 spawn clean session -->
+    <line x1="560" y1="410" x2="932" y2="410" stroke="#8BAFD4" stroke-width="2" marker-end="url(#aMuted)"/>
+    <text x="572" y="400" fill="#B8B4AF">3 &#183; spawn clean session &#8212; same 11 context files + hooks + model, ZERO chat history</text>
+    <text x="572" y="428" fill="#6B6E76">reads the agent&#8217;s REAL rules files (no DDD at runtime) &#8212; proprioception</text>
+
+    <!-- 4 per-case loop box -->
+    <rect x="470" y="456" width="900" height="250" rx="8" fill="none" stroke="#3A4152" stroke-width="1.5"/>
+    <rect x="470" y="456" width="150" height="30" rx="0" fill="#171A24"/>
+    <text x="484" y="477" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="700" fill="#8BAFD4">loop / each case</text>
+
+    <line x1="560" y1="516" x2="932" y2="516" stroke="#8BAFD4" stroke-width="2" marker-end="url(#aMuted)"/>
+    <text x="572" y="506" fill="#B8B4AF">4a &#183; present scenario &#8594; capture response / tool trajectory</text>
+
+    <line x1="560" y1="566" x2="560" y2="566" stroke="#7B89A8" stroke-width="0"/>
+    <rect x="500" y="548" width="560" height="120" rx="6" fill="#12141C" stroke="#2A2E3A"/>
+    <text x="516" y="572" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="600" fill="#A8B0C0">4b &#183; evaluator dispatch (by case.evaluators[])</text>
+    <text x="516" y="596" fill="#6FA88B">programmatic &#8594; deterministic pass/fail ($0, &lt;1s)</text>
+    <text x="516" y="618" fill="#C9A96E">llm-judge &#8594; goal_success / quality_score (rubric)</text>
+    <text x="516" y="640" fill="#8BAFD4">behavior &#8594; trajectory_capture (real agent)</text>
+    <text x="516" y="660" fill="#C75B4A">judge-infra fail &#8594; ERRORED (excluded from score, not a pass)</text>
+
+    <line x1="940" y1="690" x2="568" y2="690" stroke="#8BAFD4" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#aMuted)"/>
+    <text x="620" y="680" fill="#6B6E76">&#8592; per-case verdict</text>
+
+    <!-- 5 score + BVT -->
+    <rect x="470" y="740" width="360" height="86" rx="8" fill="#12171C" stroke="#2A3A3A"/>
+    <text x="486" y="766" font-family="Inter, -apple-system, Arial" font-size="15" font-weight="700" fill="#6FA88B">5 &#183; compute_scores + BVT</text>
+    <text x="486" y="790" fill="#B8B4AF">overall 0&#8594;100 &#183; per-dimension (by .dimension)</text>
+    <text x="486" y="810" fill="#B8B4AF">BVT spine green/red &#183; alive &#8800; correct</text>
+
+    <!-- 6 persist -->
+    <line x1="560" y1="862" x2="1612" y2="862" stroke="#C9A96E" stroke-width="2" marker-end="url(#aWheat)"/>
+    <text x="572" y="852" fill="#B8B4AF">6 &#183; persist run snapshot + code_digest (git-bound to the commit)</text>
+
+    <!-- 7 consume/sinks -->
+    <rect x="120" y="900" width="1600" height="96" rx="8" fill="#13151C" stroke="#2A2E3A"/>
+    <text x="140" y="928" font-family="Inter, -apple-system, Arial" font-size="15" font-weight="700" fill="#C9A96E">7 &#183; consume (depends on trigger)</text>
+    <text x="140" y="954" fill="#E8694E">CI/deploy &#8594; HARD gate: regression or BVT-red &#8594; block merge / no ship</text>
+    <text x="140" y="978" fill="#6FA88B">scheduled &#8594; never gates &#8594; BVT-red / score-drop &#8594; Slack drift alert &#183; Dashboard (7 tabs) reads the snapshot</text>
+  </g>
+</svg>
