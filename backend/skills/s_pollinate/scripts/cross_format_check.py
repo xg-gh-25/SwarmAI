@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 """
-cross_format_check.py — RP-X Cross-Format Consistency Verification.
+cross_format_check.py — RP-X Cross-Format Consistency Verification (ADVISORY).
 
 Verifies that all tracks produced in a multi-track Pollinate run maintain
 consistency across format boundaries. Runs during REVIEW stage.
+
+⚠️ ENFORCEMENT SPLIT (run_be232a07, 2026-07-03): the DETERMINISTIC cross-format
+facts are now HARD-ENFORCED by pollinate_validator.py at the DELIVER chokepoint
+(the only place artifact_cli.py can exit(1)):
+    - RP-X1 (brand-token/--accent consistency)   → validator Check 7
+    - produced-tracks ⊆ confirmed_tracks          → validator Check 8
+    - production_tracks == confirmed_tracks drift  → validator Check 9
+This script REMAINS the home of the HEURISTIC checks (RP-X2/3/4/5), kept
+ADVISORY on purpose: thesis-keyword / numeric-coincidence / naming / color-overlap
+are false-positive-prone, so hard-failing on them would wrongly block a genuine
+delivery. Run it in REVIEW for signal; it does NOT gate the release. RP-X1 stays
+here too (advisory echo) so the REVIEW report is complete — the hard gate is the
+validator.
 
 Usage:
     python cross_format_check.py <content_dir> [--json]
 
 Checks:
-    RP-X1: Brand token consistency (same direction applied to all tracks)
-    RP-X2: Message alignment (thesis matches across all formats)
-    RP-X3: Data integrity (same numbers across all formats)
-    RP-X4: Naming conventions (consistent file/dir naming)
-    RP-X5: Visual coherence (color palette shared across visual formats)
+    RP-X1: Brand token consistency  (also hard-enforced as validator Check 7)
+    RP-X2: Message alignment (thesis matches across all formats)        [advisory]
+    RP-X3: Data integrity (same numbers across all formats)             [advisory]
+    RP-X4: Naming conventions (consistent file/dir naming)              [advisory]
+    RP-X5: Visual coherence (color palette shared across visual formats) [advisory]
 
 Exit codes:
     0 = all PASS
