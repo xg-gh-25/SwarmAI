@@ -1829,11 +1829,12 @@ class ContextHealthHook:
 
             # ── Decay: assess state transitions ──
             # A2 (run_55cb38d6): MEMORY.md uses a FASTER 45d dormant threshold.
-            # Operational memory (GUI/PIT) is written faster than the 90d global
+            # Operational memory (GUI/PIT) is written faster than the 60d global
             # decay can reclaim it (254 entries were <30d at one point). KNOWLEDGE.md
             # (the other call below) and IMPROVEMENT/DDD (ddd_orchestrator) keep the
-            # 90d global — hard-won failure lessons must decay SLOWLY. dormant→archived
-            # stays 180d for all (a faster-dormant entry still gets the full buffer).
+            # 60d global — hard-won failure lessons must decay SLOWLY. dormant→archived
+            # stays 150d for all (a faster-dormant entry still gets the full buffer).
+            # (thresholds tightened 90/180 -> 60/150, run_186a5f15.)
             transitions = assess_decay(
                 entries, today, evergreen_sections=evergreen, dormant_days=45
             )

@@ -113,6 +113,13 @@ knowledge layer (s_persist add ↔ ddd-retire out). Autonomous time-based decay
 (`ddd_entry_lifecycle`, 60d→dormant→150d→archived) still handles *un-attended* aging;
 `ddd-retire` is for a *deliberate* "this is done / wrong-home, remove it NOW".
 
+**Undo a retire:** a retire is recoverable, not permanent. The entry is preserved in
+two places — the archive file (`<doc>-archive.md`, e.g. `MEMORY-archive.md`, which stays
+FTS5-recallable) and a dated pre-strip snapshot (`<doc>.<YYYY-MM-DD>.bak`). To restore:
+copy the entry block back from the archive (or the `.bak`) into the source doc's correct
+section, then run `s_persist` on it so routing + dedup re-apply. (There is no `ddd-restore`
+CLI yet — restore is a manual copy-back; the archive/​.bak guarantee it's never lost.)
+
 ## How to Write
 
 ### Entry format (all targets use same format)
