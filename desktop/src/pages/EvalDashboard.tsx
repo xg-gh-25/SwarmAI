@@ -1522,7 +1522,7 @@ export function GuideTab() {
       {/* Architecture diagram (official eval-architecture.svg) */}
       <div className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
         <img
-          src="/eval-architecture.svg"
+          src={t === 'zh' ? '/eval-architecture-zh.svg' : '/eval-architecture.svg'}
           alt="SwarmAI Eval architecture — decoupled system-level subsystem"
           className="w-full h-auto rounded"
         />
@@ -1531,7 +1531,7 @@ export function GuideTab() {
       {/* Single-run sequence diagram (eval-sequence.svg) */}
       <div className="mb-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
         <img
-          src="/eval-sequence.svg"
+          src={t === 'zh' ? '/eval-sequence-zh.svg' : '/eval-sequence.svg'}
           alt="SwarmAI Eval — one run end to end (trigger → clean-session spawn → per-case evaluator dispatch → score + BVT → report → consume)"
           className="w-full h-auto rounded"
         />

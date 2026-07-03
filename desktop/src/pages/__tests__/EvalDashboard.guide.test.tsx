@@ -17,7 +17,7 @@
  * not pinned to exact live numbers (which legitimately grow).
  */
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { GuideTab } from '../EvalDashboard';
 
 function renderGuide() {
@@ -68,11 +68,21 @@ describe('GuideTab fact freshness', () => {
     expect(text).toContain('runtime_health');
   });
 
-  it('embeds BOTH the overall architecture and the single-run sequence diagrams', () => {
+  it('embeds BOTH the overall architecture and the single-run sequence diagrams (EN default)', () => {
     renderGuide();
     const arch = screen.getByAltText(/eval.*architecture/i);
     expect(arch.getAttribute('src')).toBe('/eval-architecture.svg');
     const seq = screen.getByAltText(/one run end to end|sequence/i);
     expect(seq.getAttribute('src')).toBe('/eval-sequence.svg');
+  });
+
+  it('switches BOTH diagrams to the Chinese SVGs when the language toggle is set to 中文', () => {
+    renderGuide();
+    // default = EN
+    expect(screen.getByAltText(/eval.*architecture/i).getAttribute('src')).toBe('/eval-architecture.svg');
+    // toggle to Chinese
+    fireEvent.click(screen.getByRole('button', { name: '中文' }));
+    expect(screen.getByAltText(/eval.*architecture/i).getAttribute('src')).toBe('/eval-architecture-zh.svg');
+    expect(screen.getByAltText(/one run end to end|sequence/i).getAttribute('src')).toBe('/eval-sequence-zh.svg');
   });
 });
