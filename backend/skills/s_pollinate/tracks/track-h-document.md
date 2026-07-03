@@ -6,7 +6,7 @@
 ## When This Track Runs
 
 This track executes during BUILD stage when `"document"` is in `confirmed_tracks`
-(from discovery.json). Read this file at BUILD time.
+(from discovery.json). Read this file at BUILD time — you do NOT need the full INSTRUCTIONS.md.
 
 ## Inputs Required
 

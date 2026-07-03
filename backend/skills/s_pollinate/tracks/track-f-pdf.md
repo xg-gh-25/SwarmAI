@@ -6,7 +6,7 @@
 ## When This Track Runs
 
 This track executes during BUILD stage when `"one_pager"` or `"full_pdf"` is in
-`confirmed_tracks` (from discovery.json). Read this file at BUILD time.
+`confirmed_tracks` (from discovery.json). Read this file at BUILD time — you do NOT need the full INSTRUCTIONS.md.
 
 ## Inputs Required
 
