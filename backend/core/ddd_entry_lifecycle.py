@@ -130,23 +130,50 @@ _TYPE_SIGNALS: dict[str, list[str]] = {
                   "roi", "saves", "prevents", "eliminates", "tip:"],
 }
 
-# Regex for entry bullet with optional type prefix
+# Regex for entry bullet with optional type prefix — the DEFAULT (narrow) matcher.
 # Matches: "- [type] **Title** — description (date, run)"
 # Or:      "- **Title** — description (date, run)"
-# Or (widened run_748f14a7): "- 🟡 **Title** ..." — an OPTIONAL leading run of marker
-#   glyphs (emoji/status like 🟡✅🔵, VS16/ZWJ-aware) before the optional [type] +
-#   **title**. This makes hand-curated Open-Threads / prose bullets parseable so the
-#   'out' side (ddd-retire) can act on them. The widen is ADDITIVE — every prior
-#   [type]/plain-bold entry parses identically (group(1)=type, group(2)=title
-#   unchanged). SAFE for autonomous decay: Open Threads is protected by a
-#   SECTION-level evergreen guard (MEMORY_EVERGREEN_SECTIONS), independent of this
-#   regex — parseable ≠ decay-eligible. The leading-glyph class EXCLUDES word chars
-#   (\w, incl. CJK), whitespace, '[', '*', '-' so it only consumes true marker
-#   glyphs and stops at the first '['/'**'/word char — nested bullets, code, no-bold
-#   and no-bold date lines still correctly fail to match.
+# group(1)=type (optional), group(2)=title.
+#
+# ⚠️ This is the matcher every AUTONOMOUS lifecycle path uses (parse_entries default,
+# inject_entry_metadata, decay, reclaim). It DELIBERATELY does NOT match emoji/marker-
+# prefixed hand-curated prose bullets (e.g. "- 🟡 **Title**") — because those paths
+# WRITE: inject stamps <!-- ref --> metadata, reclaim strips+archives. Making prose
+# parseable here would let the autonomous jobs mutate/strip XG's curated Open-Threads
+# prose (Gate-2 run_748f14a7: confirmed inject would stamp 8 OT bullets; ddd_orchestrator
+# reclaim would strip aged emoji bullets in IMPROVEMENT.md — neither is evergreen-guarded).
+# So prose-matching is OPT-IN, isolated to the retire path (see _ENTRY_RE_PROSE below).
 _ENTRY_RE = re.compile(
-    r"^- (?:[^\w\s\[\*-][️‍]?\s*)*(?:\[(\w+)\] )?\*\*(.+?)\*\*"
+    r"^- (?:\[(\w+)\] )?\*\*(.+?)\*\*"
 )
+
+# Prose-inclusive matcher — OPT-IN, used ONLY by the deliberate, by-name ddd-retire
+# path (parse_entries(include_prose=True) + _strip_entries(..., include_prose=True)).
+# Tolerates an OPTIONAL leading run of EMOJI/STATUS glyphs (🟡🟢🔵✅⚠️… VS16/ZWJ-aware)
+# before the optional [type] + **title**, so a curator can retire a hand-curated
+# Open-Threads bullet BY NAME. This is safe precisely because it is NOT on any
+# autonomous write path — retire is an explicit, single-entry, human-invoked removal.
+# The leading class is an EXPLICIT emoji/symbol range (NOT a broad negation) so it
+# cannot swallow structural markdown ('>' blockquote, '|' table, ':'/'@'/'#' leads) —
+# those must NOT become false entries (Gate-2 MED-1). group(1)=type, group(2)=title
+# stay identical to _ENTRY_RE for every non-prose bullet.
+_ENTRY_RE_PROSE = re.compile(
+    r"^- (?:[\U0001F300-\U0001FAFF☀-➿⬀-⯿️‍]+\s*)?"
+    r"(?:\[(\w+)\] )?\*\*(.+?)\*\*"
+)
+
+
+def _match_entry_line(line: str, *, include_prose: bool = False):
+    """Single source of truth for 'is this line a knowledge-entry bullet?'.
+
+    include_prose=False (DEFAULT): narrow _ENTRY_RE — autonomous paths (parse/inject/
+    decay/reclaim). Never matches emoji-prefixed curated prose (protects it from being
+    stamped/stripped by background jobs).
+    include_prose=True: _ENTRY_RE_PROSE — ONLY the by-name ddd-retire path opts in, so
+    a curator can archive+strip a hand-curated Open-Threads bullet deliberately.
+    Both return group(1)=type, group(2)=title.
+    """
+    return (_ENTRY_RE_PROSE if include_prose else _ENTRY_RE).match(line)
 
 # Regex for inline metadata comment
 # Matches: "  <!-- ref:N | last:YYYY-MM-DD | decay:state -->"
@@ -290,11 +317,17 @@ def classify_entry_type(text: str) -> str:
     return DEFAULT_TYPE
 
 
-def parse_entries(content: str) -> list[EntryMetadata]:
+def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMetadata]:
     """Parse all knowledge entries from DDD markdown content.
 
     Extracts entries from bullet lists (- **Title** ...) with optional
     [type] prefix and optional inline metadata comment.
+
+    include_prose=False (DEFAULT): narrow matcher — the shape every autonomous
+    lifecycle path (inject/decay/reclaim) must use, so emoji-prefixed curated
+    prose bullets are NOT treated as decay-managed entries (never stamped/stripped
+    by background jobs). include_prose=True: the by-name ddd-retire path opts in so
+    a curator can archive+strip a hand-curated Open-Threads bullet deliberately.
 
     Returns list of EntryMetadata in document order.
     """
@@ -316,7 +349,7 @@ def parse_entries(content: str) -> list[EntryMetadata]:
             continue
 
         # Check for entry bullet
-        m = _ENTRY_RE.match(line)
+        m = _match_entry_line(line, include_prose=include_prose)
         if m:
             entry_type = m.group(1) or ""
             title = m.group(2)
@@ -975,6 +1008,7 @@ def _archive_and_strip(
     *,
     archive_name: str,
     source_path: "Path | None",
+    include_prose: bool = False,
 ) -> None:
     """Shared apply-tail for reclaim_noise_entries AND retire_entry (R25 dedup):
     archive the `selected` entries to `archive_name`, physically strip them from
@@ -998,7 +1032,8 @@ def _archive_and_strip(
     archived = archive_entries(project_dir, selected, archive_name=archive_name)
     report.archived = archived
     report.new_content = _strip_entries(
-        content, {(e.title, e.section) for e in selected}
+        content, {(e.title, e.section) for e in selected},
+        include_prose=include_prose,
     )
     if source_path is not None:
         src = Path(source_path)
@@ -1059,7 +1094,10 @@ def retire_entry(
     if not content or not content.strip():
         raise RetireError("empty content — nothing to retire")
 
-    matches = [e for e in parse_entries(content)
+    # include_prose=True: retire is the ONE by-name, human-invoked path allowed to
+    # act on emoji-prefixed curated prose (Open-Threads bullets). Autonomous paths
+    # never opt in — so background inject/decay/reclaim can't touch prose (Gate-2).
+    matches = [e for e in parse_entries(content, include_prose=True)
                if e.title == title and e.section == section]
     if len(matches) == 0:
         raise RetireError(
@@ -1094,11 +1132,13 @@ def retire_entry(
 
     _archive_and_strip(content, [entry], today=today or date.today(),
                        project_dir=project_dir, report=report,
-                       archive_name=archive_name, source_path=source_path)
+                       archive_name=archive_name, source_path=source_path,
+                       include_prose=True)
     return report
 
 
-def _strip_entries(content: str, keys: "set[tuple[str, str]]") -> str:
+def _strip_entries(content: str, keys: "set[tuple[str, str]]", *,
+                   include_prose: bool = False) -> str:
     """Return content with the bullet blocks for `keys` physically removed.
 
     `keys` is a set of (title, section) pairs — NOT bare titles. Matching by
@@ -1108,6 +1148,11 @@ def _strip_entries(content: str, keys: "set[tuple[str, str]]") -> str:
     A "block" is the entry bullet line, its continuation/wrapped lines, and the
     trailing metadata comment (mirrors parse_entries' block boundaries). Section
     headers and non-matching entries are preserved verbatim.
+
+    include_prose MUST match the value parse_entries used to BUILD `keys` — else
+    the line-scan here and the entry-detection there disagree and a keyed prose
+    entry is never found to strip (archive-without-strip split). The retire path
+    passes include_prose=True on BOTH; autonomous reclaim leaves it False on both.
     """
     if not keys:
         return content
@@ -1127,7 +1172,7 @@ def _strip_entries(content: str, keys: "set[tuple[str, str]]") -> str:
             result.append(line)
             i += 1
             continue
-        m = _ENTRY_RE.match(line)
+        m = _match_entry_line(line, include_prose=include_prose)
         if m and (m.group(2), current_section) in keys:
             # Skip this entry's whole block: bullet + continuations + meta.
             i += 1
