@@ -332,7 +332,14 @@ SYSTEM_JOBS: list[Job] = [
             "command": "python -m backend.jobs.handlers.code_intel_reindex --full",
             "cwd": _SWARMAI_ROOT,
         },
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+        # 300s (was 120): the AGGREGATE full-reindex (fans out over ALL projects
+        # in SwarmWS/Projects/ — parse+clear+insert+export each) measured 81-114.5s
+        # for the current project set, hugging the old 120s wall and occasionally
+        # exceeding it → false "Script timed out" failures (run_ca79d3ef). 300 is a
+        # floor, not a cure: because runtime scales with (project count × repo size),
+        # this headroom ERODES as projects grow — if a reindex approaches 300s,
+        # re-benchmark and raise, don't assume it's a hang.
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
 ]
 
