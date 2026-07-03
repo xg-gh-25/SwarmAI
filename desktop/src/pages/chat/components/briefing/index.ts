@@ -8,14 +8,11 @@
 
 export { WorkingSection } from './WorkingSection';
 export { SignalsSection } from './SignalsSection';
-export { HotNewsSection } from './HotNewsSection';
 export { StocksSection } from './StocksSection';
 export { SwarmOutputSection } from './SwarmOutputSection';
 export {
-  buildTodoContext,
   buildWorkingContext,
   buildSignalContext,
-  buildHotContext,
   openWorkspaceFile,
   formatRelativeTime,
 } from './BriefingUtils';

@@ -20,21 +20,11 @@ import {
   type BriefingFocusItem,
 } from '../../../services/system';
 import type { ItemClickHandler } from './RightSidebar/types';
-import type { ToDo } from '../../../types';
-import { DEFAULT_WORKSPACE_ID } from '../../../types/workspace-config';
-import { todosService } from '../../../services/todos';
-import {
-  filterActiveTodos,
-  sortByPriorityThenDate,
-  PRIORITY_COLORS,
-} from './RightSidebar/TodoSection';
 import {
   WorkingSection,
   SignalsSection,
-  HotNewsSection,
   StocksSection,
   SwarmOutputSection,
-  buildTodoContext,
 } from './briefing';
 
 // ---------------------------------------------------------------------------
@@ -160,10 +150,6 @@ function useContainerWidth() {
 }
 
 // ---------------------------------------------------------------------------
-// Todo priorities reuse PRIORITY_COLORS from TodoSection (single source of truth)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
@@ -176,24 +162,16 @@ export interface WelcomeScreenProps {
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onItemClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
-  const [todos, setTodos] = useState<ToDo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const { ref: containerRef, width: containerWidth } = useContainerWidth();
 
   useEffect(() => {
     let cancelled = false;
-    // Fetch briefing + radar todos in parallel.
-    // Todos come from the same API as Radar sidebar (single source of truth).
-    Promise.all([
-      systemService.getBriefing(),
-      todosService.list(DEFAULT_WORKSPACE_ID).catch(() => [] as ToDo[]),
-    ])
-      .then(([data, todos]) => {
-        if (!cancelled) {
-          setBriefing(data);
-          setTodos(sortByPriorityThenDate(filterActiveTodos(todos)));
-        }
-      })
+    // Welcome is an input->output briefing (what the world did + what Swarm
+    // produced). ToDos live in the Radar sidebar (the act-now queue) — not
+    // duplicated here (run_b579f702 repositioning).
+    systemService.getBriefing()
+      .then((data) => { if (!cancelled) setBriefing(data); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
@@ -218,16 +196,14 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
   const hasFocus = briefing && briefing.focus.length > 0;
   const hasWorking = briefing && briefing.working.length > 0;
   const hasSignals = briefing && briefing.signals.length > 0;
-  const hasHotNews = briefing && briefing.hotNews.length > 0;
   const hasStocks = briefing && briefing.stocks.length > 0;
-  const hasTodos = todos.length > 0;
   const hasOutput = briefing && (
     briefing.output.builds.length > 0 ||
     briefing.output.content.length > 0 ||
     briefing.output.files.length > 0
   );
-  const hasAnyBriefing = hasFocus || hasWorking || hasSignals || hasHotNews ||
-    hasStocks || hasTodos || hasOutput || briefing?.learning;
+  const hasAnyBriefing = hasFocus || hasWorking || hasSignals ||
+    hasStocks || hasOutput || briefing?.learning;
 
   return (
     <div ref={containerRef} className="flex flex-col items-center h-full px-4 overflow-y-auto">
@@ -273,51 +249,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
             if (hasWorking) leftCards.push(
               <SectionCard key="working" icon="📋" title="Working" count={briefing!.working.length} accent="rgba(251,191,36,0.6)">
                 <WorkingSection items={briefing!.working} onItemClick={handleItemClick} />
-              </SectionCard>
-            );
-            if (hasHotNews) leftCards.push(
-              <SectionCard key="hot" icon="🔥" title="Hot News" count={briefing!.hotNews.length} accent="rgba(245,158,11,0.5)">
-                <HotNewsSection items={briefing!.hotNews} onItemClick={handleItemClick} />
-              </SectionCard>
-            );
-            if (hasTodos) leftCards.push(
-              <SectionCard key="todo" icon="☑" title="Todo" count={todos.length} accent="rgba(239,68,68,0.5)">
-                <div className="space-y-0.5">
-                  {todos.slice(0, 10).map((todo) => {
-                    const dotColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
-                    return (
-                      <button
-                        key={todo.id}
-                        type="button"
-                        onClick={() => handleItemClick(
-                          `[ToDo:${todo.id}] ${todo.title}`,
-                          buildTodoContext({
-                            id: todo.id,
-                            title: todo.title,
-                            priority: todo.priority,
-                            status: todo.status,
-                            nextStep: undefined,
-                            description: todo.description ?? undefined,
-                          }),
-                        )}
-                        className="flex items-center gap-2 w-full text-left px-1 py-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
-                      >
-                        <span
-                          className="shrink-0 w-2 h-2 rounded-full"
-                          style={{ backgroundColor: dotColor }}
-                        />
-                        <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
-                          {todo.title}
-                        </span>
-                        {todo.priority !== 'none' && (
-                          <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] uppercase font-mono">
-                            {todo.priority}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
               </SectionCard>
             );
 

@@ -2,28 +2,16 @@
  * Shared utilities for Briefing Hub components.
  *
  * Context builders produce blockquote strings for the ChatInput.
- * Shared across WelcomeScreen and RadarSidebar.
+ * Consumed by WelcomeScreen briefing cards.
  *
- * @exports buildTodoContext, buildWorkingContext, buildSignalContext
- * @exports buildHotContext, openWorkspaceFile, formatRelativeTime
+ * @exports buildWorkingContext, buildSignalContext
+ * @exports openWorkspaceFile, formatRelativeTime
  */
 
 import type {
-  BriefingTodo,
   WorkingItem,
   BriefingSignal,
-  HotNewsItem,
 } from '../../../../services/system';
-
-/** Build blockquote context for a todo item. */
-export function buildTodoContext(todo: BriefingTodo): string {
-  const lines: string[] = [];
-  if (todo.priority) lines.push(`Priority: ${todo.priority}`);
-  if (todo.nextStep) lines.push(`Next: ${todo.nextStep}`);
-  if (todo.files?.length) lines.push(`Files: ${todo.files.join(', ')}`);
-  if (todo.description) lines.push(todo.description.slice(0, 150));
-  return lines.join('\n');
-}
 
 /** Build blockquote context for a working item. */
 export function buildWorkingContext(item: WorkingItem): string {
@@ -40,16 +28,6 @@ export function buildSignalContext(signal: BriefingSignal): string {
   if (signal.source) lines.push(`Source: ${signal.source}`);
   if (signal.summary) lines.push(signal.summary.slice(0, 150));
   if (signal.sourceUrl) lines.push(`URL: ${signal.sourceUrl}`);
-  return lines.join('\n');
-}
-
-/** Build blockquote context for a hot news item. */
-export function buildHotContext(item: HotNewsItem): string {
-  const lines: string[] = [];
-  let platformInfo = item.platform || '';
-  if (item.rank) platformInfo += ` #${item.rank}`;
-  if (platformInfo) lines.push(platformInfo);
-  if (item.url) lines.push(`URL: ${item.url}`);
   return lines.join('\n');
 }
 
