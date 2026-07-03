@@ -14,5 +14,7 @@ Full release cycle for SwarmAI desktop app. Read INSTRUCTIONS.md before proceedi
 **Project Guard:** This skill is SwarmAI-only. If the active project is NOT SwarmAI,
 ABORT with: "s_swarm-release is SwarmAI-only. Other projects have their own release process."
 
-**Scope Gate:** STEERING rule mandates ≤20 commits per release without sign-off.
-If >20 commits since last tag, WARN and require explicit approval before proceeding.
+**Readiness Gate:** Release readiness = the **R6 quality gate** (local Build + affected
+Tests green + changes verified in the running system), NOT commit count. AGENT.md R11:
+"There is no commit-count threshold — a batch is shippable when it's qualified, however
+many commits it took." Commit count is informational (release-notes scope) only.

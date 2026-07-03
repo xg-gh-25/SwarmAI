@@ -71,7 +71,12 @@ git status --porcelain
 # 2. On main branch
 git branch --show-current
 
-# 3. Scope gate
+# 3. Commit count — INFORMATIONAL ONLY (for release-notes scope), NOT a gate.
+#    Release readiness = R6 quality gate (Build + Tests green + verified in the
+#    running system), NOT commit count. AGENT.md R11: "There is no commit-count
+#    threshold: a batch is shippable when it's qualified, however many commits it
+#    took." R6 lists "commit-count/volume → 'time to push'" as an anti-pattern.
+#    Do NOT block/warn/ask on this number — it only shapes the release notes.
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null)
 COMMIT_COUNT=$(git rev-list --count ${LAST_TAG}..HEAD)
 
@@ -89,8 +94,8 @@ gh run list --branch main --limit 3 --json status,conclusion,name
 **Pass criteria:**
 - Clean tree
 - **On main branch (BLOCK if not — releases MUST ship from main)**
-- ≤20 commits (or user approved >20, >40 = BLOCK)
-- CI green
+- **R6 quality gate satisfied — the ONLY scope gate: local Build + affected Tests green, changes verified in the running system. Commit count is NOT a gate (R11).**
+- CI green (formal post-push confirmation of an already-qualified HEAD, not the verification venue — R6)
 - **Eval gate (`gate_rc`): rc=0 fresh+green → PASS; rc=1 stale/red → BLOCK (re-run `python backend/scripts/eval_runner.py run`); rc=2 no report → WARN (interactive: ask; non-TTY/CI: fail-closed → re-run eval or set `SWARMAI_SKIP_EVAL_GATE=1`). The shared `_eval_gate` in `prod.sh` enforces this on `release`/`release-all`/`release-hive` (1e); the raw `gate_rc` you print here is advisory — if it's `1`, BLOCK now rather than handing off.**
 
 **Report:**
@@ -98,15 +103,17 @@ gh run list --branch main --limit 3 --json status,conclusion,name
 Stage 1 PREFLIGHT: PASS
   Branch: main
   Current version: X.Y.Z
-  Commits since vX.Y.Z: N
+  Commits since vX.Y.Z: N (informational — release-notes scope only, NOT a gate)
+  R6 gate: Build ✓ / Tests ✓ / verified-in-running-system ✓
   CI: 3/3 green
   Eval gate: PASS (rc=0) | WARN no-report (rc=2) | BLOCK stale/red (rc=1)
 ```
 
 If not on main: **BLOCK** — switch to main first.
 If dirty tree: commit housekeeping changes and continue.
-If >20 ≤40 commits: ask for sign-off.
-If >40: BLOCK — must split.
+If the R6 gate is NOT satisfied (Build/Tests not run-green, or HEAD unverified in the
+  running system): **BLOCK** — qualify it first. This is the real gate. Commit count
+  never blocks (R11) — a qualified 84-commit batch ships; an unqualified 3-commit one does not.
 If `gate_rc=1`: **BLOCK** — re-run eval before releasing.
 
 ---
@@ -309,7 +316,7 @@ RELEASE COMPLETE ✅ vX.Y.Z
 | Stage | Who | Duration | Can fail? |
 |-------|-----|----------|-----------|
 | 0 Guard | Agent | instant | Abort |
-| 1 Preflight | Agent | 30s | Block if >40 commits |
+| 1 Preflight | Agent | 30s | Block if R6 gate unmet or not on main |
 | 1.5 Convergence | Agent | 5s | Non-blocking |
 | 2 Version bump | Agent | 30s | No |
 | 3 Build+Deploy | **User** | 2-5 min | Yes — blocks release |
