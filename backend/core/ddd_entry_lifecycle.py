@@ -133,8 +133,19 @@ _TYPE_SIGNALS: dict[str, list[str]] = {
 # Regex for entry bullet with optional type prefix
 # Matches: "- [type] **Title** — description (date, run)"
 # Or:      "- **Title** — description (date, run)"
+# Or (widened run_748f14a7): "- 🟡 **Title** ..." — an OPTIONAL leading run of marker
+#   glyphs (emoji/status like 🟡✅🔵, VS16/ZWJ-aware) before the optional [type] +
+#   **title**. This makes hand-curated Open-Threads / prose bullets parseable so the
+#   'out' side (ddd-retire) can act on them. The widen is ADDITIVE — every prior
+#   [type]/plain-bold entry parses identically (group(1)=type, group(2)=title
+#   unchanged). SAFE for autonomous decay: Open Threads is protected by a
+#   SECTION-level evergreen guard (MEMORY_EVERGREEN_SECTIONS), independent of this
+#   regex — parseable ≠ decay-eligible. The leading-glyph class EXCLUDES word chars
+#   (\w, incl. CJK), whitespace, '[', '*', '-' so it only consumes true marker
+#   glyphs and stops at the first '['/'**'/word char — nested bullets, code, no-bold
+#   and no-bold date lines still correctly fail to match.
 _ENTRY_RE = re.compile(
-    r"^- (?:\[(\w+)\] )?\*\*(.+?)\*\*"
+    r"^- (?:[^\w\s\[\*-][️‍]?\s*)*(?:\[(\w+)\] )?\*\*(.+?)\*\*"
 )
 
 # Regex for inline metadata comment

@@ -1258,3 +1258,136 @@ class TestCollapseStackedMetadata:
 """
         out = collapse_stacked_metadata(content)
         assert out == content, "clean content (no stacks) must be unchanged; bullets untouched"
+
+
+class TestParseEntriesEmojiPrefix:
+    """run_748f14a7: _ENTRY_RE widened to tolerate an OPTIONAL leading marker-glyph
+    run (emoji/status like 🟡✅🔵, VS16/ZWJ-aware) before the optional [type] + **title**.
+    This makes Open-Threads / hand-curated prose bullets parseable (they were invisible
+    before), which is what lets ddd-retire act on them. The widen is ADDITIVE — every
+    pre-existing [type]/plain-bold entry must still parse identically (no group drift)."""
+
+    def test_emoji_prefix_entry_parses(self):
+        content = """## Open Threads
+- 🟡 **Frontend reconcile race** — #1 recurring bug. (2026-06-25, run_x)
+- 🟢 **WS1 DEPLOYED** — verified live. (2026-07-01, run_y)
+- 🔵 **MCP Gateway** — deferred. (2026-06-01, run_z)
+"""
+        entries = parse_entries(content)
+        titles = [e.title for e in entries]
+        assert "Frontend reconcile race" in titles, "emoji-prefix entry not parsed"
+        assert "WS1 DEPLOYED" in titles
+        assert "MCP Gateway" in titles
+        assert len(entries) == 3, f"expected 3 emoji entries, got {len(entries)}"
+
+    def test_emoji_stripped_from_title(self):
+        """group(2) title must NOT leak the leading emoji/space."""
+        content = "## Open Threads\n- 🟡 **Clean title** — text. (2026-06-25, run_x)\n"
+        entries = parse_entries(content)
+        assert len(entries) == 1
+        assert entries[0].title == "Clean title", f"emoji leaked into title: {entries[0].title!r}"
+
+    def test_bracket_in_bold_stays_in_title_not_type(self):
+        """Gate-1 HIGH: '- ✅ **[CLOSED] x**' — [CLOSED] is INSIDE the bold, so it is
+        part of the TITLE, not the [type] group. Do NOT type-parse brackets-in-title."""
+        content = "## Open Threads\n- ✅ **[CLOSED] gate skeptics** — done. (2026-07-01, run_x)\n"
+        entries = parse_entries(content)
+        assert len(entries) == 1
+        assert entries[0].title == "[CLOSED] gate skeptics"
+        assert entries[0].entry_type != "CLOSED", "must NOT parse [CLOSED] as a type"
+
+    def test_existing_entries_still_parse_identically(self):
+        """ADDITIVE widen: normal [type] and plain-bold entries unchanged (no regression)."""
+        entries = parse_entries(SAMPLE_CONTENT)
+        assert len(entries) == 5
+        assert entries[0].entry_type == "guideline"
+        assert entries[0].title == "Adversarial review caught dead code"
+        assert entries[2].entry_type == "decision"
+
+    def test_non_entries_still_rejected(self):
+        """Widen must NOT catch nested bullets, code, no-bold, or plain date lines."""
+        content = """## Open Threads
+- 🟡 **Real entry** — text. (2026-06-25, run_x)
+  - nested plain bullet should not parse
+- just plain text no bold
+- `code snippet` in a bullet
+- 2026-07-03: a no-bold date line
+"""
+        entries = parse_entries(content)
+        titles = [e.title for e in entries]
+        assert titles == ["Real entry"], f"widen over-matched non-entries: {titles}"
+
+
+class TestRetireProseEntry:
+    """run_748f14a7: the GOAL — ddd-retire can now archive+strip an Open-Threads
+    emoji-prefix (prose) entry, with the SAME guarantees as a normal entry:
+    exactly-1-match fail-loud, archive-preserved, dated .bak. (Requires force=True
+    because Open Threads is evergreen-protected — parity with the existing bold-OT test.)"""
+
+    def test_retire_emoji_prefix_ot_entry(self, tmp_path):
+        from core.ddd_entry_lifecycle import retire_entry
+        content = """## Open Threads
+- 🟡 **Reconcile race** — a live thread. (2026-06-25, run_x)
+- 🟢 **WS1 shipped** — another live thread. (2026-07-01, run_y)
+"""
+        src = tmp_path / "MEMORY.md"
+        src.write_text(content)
+        # emoji-prefix OT entry — was IMPOSSIBLE to retire before the widen (fail-loud on no-match)
+        report = retire_entry(
+            content, title="Reconcile race", section="Open Threads",
+            project_dir=tmp_path, source_path=src, dry_run=False, force=True,
+            archive_name="MEMORY-archive.md",
+        )
+        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
+        new_content = src.read_text()
+        assert "Reconcile race" not in new_content, "named prose entry not stripped"
+        assert "WS1 shipped" in new_content, "sibling OT entry wrongly removed"
+        archive = (tmp_path / "MEMORY-archive.md").read_text()
+        assert "Reconcile race" in archive, "retired prose entry not archived (recall-preserved)"
+
+    def test_retire_prose_dated_bak_written(self, tmp_path):
+        from core.ddd_entry_lifecycle import retire_entry
+        today = date(2026, 7, 3)
+        content = "## Open Threads\n- 🟡 **Thread A** — live. (2026-06-25, run_x)\n"
+        src = tmp_path / "MEMORY.md"
+        src.write_text(content)
+        retire_entry(content, title="Thread A", section="Open Threads",
+                     project_dir=tmp_path, source_path=src, dry_run=False, force=True,
+                     archive_name="MEMORY-archive.md", today=today)
+        bak = tmp_path / "MEMORY.md.2026-07-03.bak"
+        assert bak.exists(), "dated .bak not written for prose retire"
+
+    def test_retire_prose_fail_loud_on_no_match(self, tmp_path):
+        """Same fail-loud guarantee: a prose title that matches nothing → RetireError."""
+        from core.ddd_entry_lifecycle import retire_entry, RetireError
+        content = "## Open Threads\n- 🟡 **Thread A** — live. (2026-06-25, run_x)\n"
+        with pytest.raises(RetireError):
+            retire_entry(content, title="No such thread", section="Open Threads",
+                         project_dir=tmp_path, dry_run=False, force=True)
+
+
+class TestWidenBlastRadiusSafe:
+    """run_748f14a7 BLAST-RADIUS INVARIANT: widening _ENTRY_RE makes emoji-prose
+    entries PARSEABLE, but the autonomous decay job must STILL archive zero of them —
+    protection is SECTION-level (MEMORY_EVERGREEN_SECTIONS), independent of the regex.
+    This is the safety proof that global-widen does not expose OT prose to 60/150 decay."""
+
+    def test_aged_ot_prose_entry_not_decayed(self):
+        from core.ddd_entry_lifecycle import assess_decay, parse_entries, MEMORY_EVERGREEN_SECTIONS
+        today = date(2026, 7, 3)
+        old = (today - timedelta(days=200)).isoformat()  # way past 150d archived threshold
+        content = f"""## Open Threads
+- 🟡 **Ancient thread** — untouched 200 days. (2025-12-01, run_x)
+  <!-- ref:0 | last:{old} | decay:active -->
+"""
+        entries = parse_entries(content)
+        assert len(entries) == 1, "prose entry should now PARSE (widen worked)"
+        transitions = assess_decay(entries, today, evergreen_sections=MEMORY_EVERGREEN_SECTIONS)
+        assert transitions == [], "evergreen Open Threads entry must NOT decay even when aged + parseable"
+
+    def test_aged_ot_prose_entry_is_keep_class(self):
+        from core.ddd_entry_lifecycle import is_keep_class, parse_entries, MEMORY_EVERGREEN_SECTIONS
+        content = "## Open Threads\n- 🟡 **Ancient thread** — text. (2025-12-01, run_x)\n  <!-- ref:0 | last:none | decay:active -->\n"
+        entry = parse_entries(content)[0]
+        assert is_keep_class(entry, evergreen_sections=MEMORY_EVERGREEN_SECTIONS), \
+            "evergreen-section prose entry must be keep-class (reclaim-protected)"
