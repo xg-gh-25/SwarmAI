@@ -1057,7 +1057,7 @@ Respond in this exact JSON format:
             model_id=judge_model,
             region=_judge_region,
             read_timeout=_JUDGE_READ_TIMEOUT,  # fail-fast: throwaway client, one hung judge can't blow the wall
-            max_attempts=1,
+            max_attempts=_JUDGE_MAX_ATTEMPTS,
         )
 
         # Extract text response
@@ -1116,10 +1116,16 @@ LLM_EVALUATORS = {"goal_success", "quality_score"}
 # Fail-fast read timeout (seconds) for the LLM judge's Bedrock call. The shared
 # cached client uses 120s (skill proposals need 60-90s), but the judge runs in a
 # SERIAL sweep of ~89 cases — a single hung judge on the 120s client blows the
-# job wall. 30s is ample for a judgment call (temperature=0, ≤1000 tokens) and
-# bounds the worst-case tail. Wired via converse_with_retry(read_timeout=…),
-# which uses a THROWAWAY client so the shared 120s client is untouched (run_9fdb8ad5).
+# per-case tail. 30s is ample for a judgment call (temperature=0, ≤1000 tokens)
+# and bounds the tail (read_timeout is the anti-hang lever, NOT retry count).
+# Wired via converse_with_retry(read_timeout=…), which uses a THROWAWAY client so
+# the shared 120s client is untouched (run_9fdb8ad5).
 _JUDGE_READ_TIMEOUT = 30
+# Keep boto's throttle-absorbing retry (max_attempts=2) on the throwaway client —
+# read_timeout bounds the hang; max_attempts guards ThrottlingException. Gate-2
+# MEDIUM: max_attempts=1 would red a judge on a transient Bedrock-side throttle
+# that the shared client's 2-attempt/adaptive retry used to absorb.
+_JUDGE_MAX_ATTEMPTS = 2
 # Behavior evaluators spawn a real headless agent (see eval_trajectory_capture).
 # Dispatched inline at the evaluate_case switch; named here so callers/tests can
 # recognize them as valid evaluators without hard-coding the string.
@@ -1179,7 +1185,7 @@ Respond in this exact JSON format:
             model_id=judge_model,
             region=_judge_region,
             read_timeout=_JUDGE_READ_TIMEOUT,  # fail-fast: throwaway client, one hung judge can't blow the wall
-            max_attempts=1,
+            max_attempts=_JUDGE_MAX_ATTEMPTS,
         )
         blocks = response.get("output", {}).get("message", {}).get("content", [])
         response_text = next((b["text"] for b in blocks if "text" in b), "")

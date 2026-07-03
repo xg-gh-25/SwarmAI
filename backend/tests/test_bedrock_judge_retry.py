@@ -323,3 +323,36 @@ def test_build_timeout_client_config_and_no_cache_mutation():
     # the shared module cache is untouched by building a throwaway client
     assert bedrock._client == "SENTINEL_SHARED_CLIENT"
     bedrock._client = None  # cleanup
+
+
+def test_eval_llm_judge_uses_failfast_timeout_and_keeps_throttle_retry():
+    """The REAL judge passes read_timeout=30 (anti-hang) AND max_attempts=2
+    (Gate-2: keep boto throttle-retry) to the throwaway client."""
+    import importlib.util
+
+    runner_path = _BACKEND / "scripts" / "eval_runner.py"
+    spec = importlib.util.spec_from_file_location("eval_runner_failfast_cfg", runner_path)
+    eval_runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(eval_runner)
+
+    from jobs import bedrock
+
+    captured = {}
+
+    def _capturing_converse(**kwargs):
+        captured.update(kwargs)
+        return _valid_converse_response('{"verdict": "passed", "assertion_results": [], "confidence": 0.9, "notes": "ok"}')
+
+    case = {
+        "id": "GS_TEST_FFCFG",
+        "assertions": ["the agent does the right thing"],
+        "scenario": {"turns": [{"input": "do the thing"}]},
+    }
+
+    with patch.object(bedrock, "converse_with_retry", side_effect=_capturing_converse), \
+         patch.object(eval_runner, "_get_judge_model", return_value="us.anthropic.claude-opus-4-6-v1"):
+        result = eval_runner.eval_llm_judge(case, "goal_success")
+
+    assert result["status"] == "passed"
+    assert captured.get("read_timeout") == 30, "judge must use the 30s fail-fast read timeout"
+    assert captured.get("max_attempts") == 2, "judge must keep boto throttle-retry (Gate-2 MEDIUM)"
