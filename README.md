@@ -119,9 +119,13 @@ The same DDD-driven pattern powers content, not just code. **Pollinate** turns o
 
 <img src="./assets/pollinate-architecture.svg" alt="Pollinate — Media Value Delivery Engine · 9 Stages · 11 Tracks · 3-Tier Gates · DDD Flywheel" width="100%"/>
 
-### Eval OS — Proprioception, Not External Testing
+### Eval OS — The Agent-Era Replacement for `assert`
 
-Most agents are graded by an outside harness. SwarmAI grades **itself** — a decoupled, system-level subsystem that spawns a clean session against the agent's *real* rules files (no chat history, same 11 context files + hooks + model) and asks: is it still *correct*, not just *alive*? A **golden set** (public, git-tracked + private, gitignored) feeds cases through **6 scoring dimensions** and **15 categories**; every run is **git-bound to the commit** (`code_digest`) so regressions are attributable. It **never runs inside a coding pipeline** (that would test the old binary) — only CI-gate, deploy, or the Monday 12:30 scheduled run trigger it. On CI/deploy it's a **hard gate**: regression or BVT-red blocks the merge.
+Traditional software trusts `assert` + a green CI light. Agents can't: outputs are **non-deterministic** (even temp=0 isn't bit-reproducible), the **prompt is source code with no diff/review/rollback**, and **dependencies drift on their own** (the model updates silently — you shipped nothing, behavior changed). So SwarmAI treats **Eval as `assert`'s successor**: a decoupled, system-level subsystem that measures whether the OS is still *correct*, not merely *alive*.
+
+It's **proprioception, not external grading** — Eval spawns a clean session against the agent's *real* rules files and scores judgment across **6 dimensions** / **15 categories**, every run **git-bound** to its commit so a regression is attributable. And it's wired into the lifecycle as a gate, not a script you remember to run: **build doesn't block, release does** — regression or spine-red on CI/deploy stops the ship.
+
+> 📖 Full architecture + methodology (mapped to AWS's Eval-First framework): [Discussion #83](https://github.com/xg-gh-25/SwarmAI/discussions/83)
 
 <img src="./assets/eval-architecture.svg" alt="SwarmAI Eval OS — Decoupled System-Level Subsystem · WRITE → Golden Set → Execute → Consume · 6 Dimensions · 15 Categories · Git-Bound Regression Gate" width="100%"/>
 

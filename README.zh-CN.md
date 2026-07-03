@@ -118,9 +118,13 @@ cd ../desktop && npm install && npm run tauri:dev
 
 <img src="./assets/pollinate-architecture.svg" alt="Pollinate — 媒体价值交付引擎 · 9 阶段 · 11 轨道 · 3 级门控 · DDD 飞轮" width="100%"/>
 
-### Eval OS —— 本体感觉，而非外部测试
+### Eval OS —— Agent 时代的 `assert` 替代品
 
-大多数 Agent 由外部测试框架来打分。SwarmAI 给**自己**打分 —— 一个解耦的、系统级的子系统：它对着 Agent 的*真实*规则文件起一个干净会话（无聊天历史，同样的 11 个上下文文件 + hooks + 模型），然后问：它是否依然*正确*，而不只是*活着*？一套 **Golden Set**（公开、git 跟踪 + 私有、gitignore）把用例喂进 **6 个评分维度**和 **15 个分类**；每次运行都 **git 绑定到当次 commit**（`code_digest`），让回归可追溯。它**从不在编码流水线内运行**（那测的是旧 binary）—— 只由 CI 门控、部署、或周一 12:30 的定时任务触发。在 CI/部署时它是**硬门控**：回归或 BVT 变红就阻断合并。
+传统软件靠 `assert` + 一盏绿灯的 CI 就能担保"没有回归"。Agent 不行:输出是**非确定的**(即便 temp=0 也无法逐比特复现),**prompt 就是源码,却没有 diff/review/rollback**,而且**依赖会自己漂移**(模型静默更新 —— 你什么都没发,行为却变了)。所以 SwarmAI 把 **Eval 当作 `assert` 的继任者**:一个解耦的、系统级的子系统,衡量这套 OS 是否依然*正确*,而不只是*活着*。
+
+它是**本体感觉,不是外部打分** —— Eval 对着 Agent 的*真实*规则文件起一个干净会话,从 **6 个维度** / **15 个分类**给判断力打分,每次运行都 **git 绑定**到当次 commit,让回归可追溯。它作为门控嵌进研发生命周期,而不是一个你想起来才跑的脚本:**build 不阻断,release 才阻断** —— CI/部署上的回归或主干变红,直接拦住发布。
+
+> 📖 完整架构 + 方法论(对齐 AWS Eval-First 框架):[Discussion #83](https://github.com/xg-gh-25/SwarmAI/discussions/83)
 
 <img src="./assets/eval-architecture.svg" alt="SwarmAI Eval OS — 解耦系统级子系统 · WRITE → Golden Set → Execute → Consume · 6 维度 · 15 分类 · git 绑定回归门控" width="100%"/>
 

@@ -11,6 +11,12 @@ status: draft
 
 > **Thesis:** An AI OS without eval is an organism without proprioception — it doesn't know its own state until something breaks. Eval is not testing; it is *the capacity to know whether you're still you, and still good.*
 
+> ⚠️ **Current-implementation note (as of 2026-07-04).** This is the original **2026-06-08 design draft** — kept intact as the design narrative. The shipped system has since evolved; where the two disagree, the live source of truth wins:
+> - **Dimensions: 6, not the "Five" this doc describes** — canonical names are `factual_accuracy`, `judgment_quality`, `context_utility`, `compliance`, `capability`, `recovery`. (This draft uses the older names *judgment_consistency*, *behavioral_compliance*, *capability_integrity*, and folds recovery into capability; `recovery` is now a first-class 6th dimension, test-protected.) Source of truth: `Eval/golden_set.yaml` `dimensions:` + `backend/scripts/eval_runner.py` `DIMENSIONS`.
+> - **Categories: 15, not 12** — the draft's 12-category taxonomy has since added `safety`, `memory`, `runtime_health`. Source of truth: `Eval/golden_set.yaml` `categories:`.
+> - **Cadence:** the scheduled run is **Monday 12:30 ICT** (`cron 30 4 * * 1`), not the "continuous/quarterly" cadences sketched below.
+> The section headers/counts below were left as-written (historical); trust `golden_set.yaml` for live numbers.
+
 ## Origin & Inspiration
 
 Rob Chu's ADLC deck (AgenticEngineering, Jun 2026) defines:
@@ -35,7 +41,9 @@ Rob's model targets enterprise agent products (millions of users, model drift, A
 
 ---
 
-## Architecture: The Five Eval Dimensions
+## Architecture: The Eval Dimensions
+
+> _Draft describes 5; shipped system has **6** (adds `recovery`). See the current-implementation note at the top._
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -440,7 +448,7 @@ If agent fails → correction NOT internalized → escalate
 
 **Every correction = one new golden set case.** The golden set is literally the crystallized history of our failures, turned into a permanent test.
 
-### Complete Category Taxonomy (12 categories)
+### Complete Category Taxonomy (draft: 12 — shipped: 15, adds `safety`, `memory`, `runtime_health`)
 
 | Category | Definition | Eval Dimension | Source |
 |----------|-----------|----------------|--------|
@@ -597,7 +605,7 @@ Steady state: 100-150 active cases
 - Cases that pass 10 consecutive times → move to "stable" tier (run quarterly, not monthly)
 - Maximum 150 active cases (beyond = prune lowest-signal ones)
 - Each case must have a `source` (KD, LL, COE, or STEERING rule)
-- New categories can be proposed but must serve one of the 5 eval dimensions
+- New categories can be proposed but must serve one of the 6 eval dimensions
 
 ---
 
@@ -607,7 +615,7 @@ Steady state: 100-150 active cases
 
 | Change Type | Dimensions to Eval | Categories Tested | Latency |
 |-------------|-------------------|-------------------|---------|
-| **Model version bump** | ALL 5 | ALL 12 categories | Immediate full run |
+| **Model version bump** | ALL 6 | ALL 15 categories | Immediate full run |
 | **SOUL/AGENT/STEERING edit** | Judgment + Compliance | Decision, Refusal, Compliance | Before declaring edit complete |
 | **MEMORY.md major update** | Factual + Judgment | Recall, Knowledge, Decision | Within 24h |
 | **DDD doc changed** | Judgment | DDD-Informed, Cultivation | Same session |
