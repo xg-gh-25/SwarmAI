@@ -285,11 +285,18 @@ async def test_drain_rollback_on_send_failure(wired):
 
 @pytest.mark.asyncio
 async def test_waiting_input_send_raises_busy_when_tool_outstanding(wired):
-    """AC5/F3: a real SessionUnit in WAITING_INPUT with an outstanding tool_use
-    must reject a new send() as SessionBusyError (→ router converts to pending),
-    NOT kill→COLD (the abandoned-ask bug)."""
+    """AC5/F3: a real SessionUnit in WAITING_INPUT with a GENUINELY-OPEN
+    tool_use (a LIVE waiter is blocked to receive the answer) must reject a new
+    send() as SessionBusyError (→ router converts to pending), NOT kill→COLD (the
+    abandoned-ask bug).
+
+    NOTE (run_65f317db): the discriminator is now the LIVE WAITER, not merely
+    _pending_tool_use_id being set. A DEAD-waiter WAITING_INPUT is reaped instead
+    (see test_waiting_input_send_reaps_when_waiter_dead below). Here we register a
+    live ask waiter so this is a real open question."""
     from core.session_unit import SessionUnit
     from core.exceptions import SessionBusyError
+    from core.ask_question_manager import ask_question_manager
 
     unit = SessionUnit(session_id="sess-wi", agent_id="a")
     # Simulate the orchestrator having emitted an AskUserQuestion.
@@ -297,13 +304,53 @@ async def test_waiting_input_send_raises_busy_when_tool_outstanding(wired):
     unit._pending_tool_use_id = "tool-99"
     unit._pending_question = {"tool_use_id": "tool-99", "questions": []}
     unit._client = object()  # non-None so the guard path is reached
+    # A GENUINELY-open question: register a live waiter (the hook is blocked
+    # awaiting the answer). Without this the session would be a dead-waiter zombie.
+    ask_question_manager.register_waiter("tool-99")
+    try:
+        assert unit.has_outstanding_tool_use is True
+        with pytest.raises(SessionBusyError):
+            async for _ in unit.send("new msg while question open", MagicMock()):
+                pass
+        # The guard is NOT cleared by a rejected send — only the answer path clears it.
+        assert unit._pending_tool_use_id == "tool-99"
+    finally:
+        ask_question_manager.discard_waiter("tool-99")
 
-    assert unit.has_outstanding_tool_use is True
-    with pytest.raises(SessionBusyError):
-        async for _ in unit.send("new msg while question open", MagicMock()):
+
+@pytest.mark.asyncio
+async def test_waiting_input_send_reaps_when_waiter_dead(wired, monkeypatch):
+    """AC1 (run_65f317db): a real SessionUnit in WAITING_INPUT whose waiter is
+    DEAD (outstanding tool_use but NO live waiter — the approve-into-void deadlock)
+    must NOT raise SessionBusyError forever. send() reaps it via
+    force_unstick_waiting_input (→ COLD, falls through to spawn-with-resume)."""
+    from core.session_unit import SessionUnit
+
+    unit = SessionUnit(session_id="sess-wi-dead", agent_id="a")
+    unit.state = SessionState.WAITING_INPUT
+    unit._pending_tool_use_id = "perm-dead"
+    unit._pending_question = {"tool_use_id": "perm-dead", "request_id": "perm-dead"}
+    unit._client = object()
+    # Dead waiter: NO live waiter registered in either manager → reap path.
+    reaped = {"called": False}
+
+    async def _fake_force_unstick():
+        reaped["called"] = True
+        unit.state = SessionState.COLD
+        unit._pending_tool_use_id = None
+
+    monkeypatch.setattr(unit, "force_unstick_waiting_input", _fake_force_unstick)
+    # Stop send() right after the WAITING_INPUT branch reaps (before real spawn).
+    # _ensure_spawned is an async GENERATOR — the stub must be one too.
+    async def _boom(*a, **k):
+        raise RuntimeError("stop-after-reap")
+        yield  # pragma: no cover — makes this an async generator
+    monkeypatch.setattr(unit, "_ensure_spawned", _boom, raising=False)
+
+    with pytest.raises(RuntimeError, match="stop-after-reap|spawn|COLD|Cannot"):
+        async for _ in unit.send("msg after dead waiter", MagicMock()):
             pass
-    # The guard is NOT cleared by a rejected send — only the answer path clears it.
-    assert unit._pending_tool_use_id == "tool-99"
+    assert reaped["called"] is True, "dead-waiter WAITING_INPUT must be reaped, not SessionBusyError"
 
 
 @pytest.mark.asyncio
