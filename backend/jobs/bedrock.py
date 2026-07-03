@@ -234,6 +234,44 @@ def evict_client() -> None:
     _client_created_at = 0.0
 
 
+def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | None = None) -> Any:
+    """Build a THROWAWAY (uncached) bedrock-runtime client with tight timeouts.
+
+    For callers that need fail-fast behavior WITHOUT mutating the shared cached
+    client (which uses read_timeout=120/max_attempts=2 because skill proposals
+    need 60-90s). The OS-Eval judge uses this so one hung Bedrock call fails in
+    ~30s instead of stalling on the shared 120s client and blowing the eval wall
+    — a serial sweep of 89 judges cannot afford a 120s×N tail (run_9fdb8ad5).
+
+    Reuses the same pre-resolved credentials as get_client (the default chain
+    fails under launchd), but does NOT touch the module cache (`_client`) or
+    participate in evict_client — it is created, used, and discarded per call.
+    Mirrors the sanctioned pattern in core/auto_refresh.py.
+
+    Args:
+        read_timeout: socket read timeout in seconds (the anti-hang lever).
+        max_attempts: boto retry attempts. Use 1 for strict fail-fast; note this
+            disables adaptive throttle-retry, acceptable for the serial judge.
+        region: explicit region (caller preserves its own precedence). None →
+            resolved from AppConfigManager, same as get_client.
+    """
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    if region is None:
+        region, _ = _load_config()
+
+    boto_config = BotoConfig(
+        retries={"max_attempts": max_attempts, "mode": "standard"},
+        connect_timeout=10,
+        read_timeout=read_timeout,
+    )
+    creds = _resolve_credentials()
+    if creds:
+        return boto3.client("bedrock-runtime", region_name=region, config=boto_config, **creds)
+    return boto3.client("bedrock-runtime", region_name=region, config=boto_config)
+
+
 def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:
     """Resolve a model key to its Bedrock model ID via AppConfigManager.
 
@@ -350,6 +388,8 @@ def converse_with_retry(
     inference_config: dict,
     model_id: str,
     region: str | None = None,
+    read_timeout: int | None = None,
+    max_attempts: int | None = None,
 ) -> dict:
     """client.converse() with credential eviction + a single auth-error retry.
 
@@ -373,6 +413,19 @@ def converse_with_retry(
         region: optional region override forwarded to get_client so the caller's
             own region precedence is preserved (the judge honors AWS_REGION env
             first). None → get_client resolves region from AppConfigManager.
+        read_timeout: when set, FAIL-FAST mode — use a THROWAWAY tight-timeout
+            client (build_timeout_client) instead of the shared cached one, so a
+            hung call fails in read_timeout seconds without stalling on the shared
+            120s client. Still does the SAME one auth-error retry (self-heals a
+            transient stale credential — the 2026-06-28 incident), but "retry"
+            means build a FRESH throwaway client; the shared cache is never
+            touched or evicted. Used by the OS-Eval judge (serial ~89-case sweep
+            can't afford a 120s×N tail). None (default) → the standard
+            cached-client path below, byte-identical to before.
+        max_attempts: boto Config retry attempts for the throwaway fail-fast
+            client (default 1 when read_timeout is set). Ignored when read_timeout
+            is None. This is the boto-internal retry, distinct from the one
+            auth-evict retry above.
 
     Returns:
         The raw converse() response dict (caller extracts output/message/content).
@@ -380,6 +433,38 @@ def converse_with_retry(
     Raises:
         Exception: if both attempts fail, or on the first non-auth error.
     """
+    # FAIL-FAST path: throwaway tight-timeout client (bounds the hang window
+    # without touching the shared 120s client skill-proposals depend on). It
+    # KEEPS the same one auth-evict-retry discipline as the cached path — but
+    # "evict" here just means build a FRESH throwaway client (the shared cache is
+    # never involved), so a transient stale-credential moment still self-heals
+    # (the 2026-06-28 incident: 90/147 judges errored on one bad cred) while a
+    # hung read still fails in read_timeout seconds. Bounded at 2 attempts, never
+    # a loop.
+    if read_timeout is not None:
+        ffa = max_attempts if max_attempts is not None else 1
+        for attempt in range(2):
+            try:
+                client = build_timeout_client(
+                    read_timeout=read_timeout, max_attempts=ffa, region=region
+                )
+                return client.converse(
+                    modelId=model_id,
+                    messages=messages,
+                    system=system,
+                    inferenceConfig=inference_config,
+                )
+            except Exception as e:
+                err_str = str(e).lower()
+                retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
+                if retriable and attempt == 0:
+                    logger.warning(
+                        "Bedrock judge (fail-fast) auth error, rebuilding throwaway client: %s", e
+                    )
+                    continue  # fresh throwaway client on next loop; shared cache untouched
+                raise
+        raise RuntimeError("converse_with_retry (fail-fast) exhausted retries without returning")
+
     for attempt in range(2):
         try:
             client = get_client(force_new=(attempt > 0), region=region)
