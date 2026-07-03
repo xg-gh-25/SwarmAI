@@ -582,8 +582,11 @@ def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[s
     if not fresh:
         return []
 
-    # Sort by relevance_score descending
-    fresh.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+    # Sort by multi-dim final_score descending (falls back to relevance_score
+    # for legacy items written before ranking upgrade). final_score folds in
+    # tier authority + urgency + freshness, so a frontier/official item outranks
+    # a raw-relevant-but-low-tier one instead of tying at the 1.0 cap.
+    fresh.sort(key=lambda x: x.get("final_score", x.get("relevance_score", 0)), reverse=True)
 
     lines = []
     for item in fresh[:max_items]:
@@ -2487,6 +2490,8 @@ def build_session_briefing_data(
                                 "sourceUrl": sig.get("url", ""),
                                 "urgency": sig.get("urgency", "medium"),
                                 "relevance": sig.get("relevance_score", 0),
+                                "finalScore": sig.get("final_score", sig.get("relevance_score", 0)),
+                                "rank": sig.get("rank", 0),
                                 "lang": sig.get("lang", "en"),
                                 "feedId": feed_id,
                             })

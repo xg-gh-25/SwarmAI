@@ -50,6 +50,55 @@ _TIER_QUOTAS: dict[str, int] = {
     "trending": 10,  # virtual tier for TRENDING_FEED_IDS
 }
 
+# ── Multi-dimensional ranking ────────────────────────────────────────────────
+# The OLD rank was a single-dim `min(raw × tier_weight, 1.0)` sort. Two bugs:
+#   1. The 1.0 CAP crushed the top — a frontier item (0.85×2.0=1.7) clipped to
+#      1.0 could rank BELOW an un-boosted engineering item at 0.92, and the whole
+#      top band piled up at ~1.0 (6 items tied at 0.82 in a real sample).
+#   2. urgency & freshness never entered the sort at all.
+# Fix: keep `relevance_score` (0-1, tier-weighted, capped) for DISPLAY/back-compat,
+# but rank on a SEPARATE uncapped `final_score` that folds in all four dimensions.
+_URGENCY_BOOST: dict[str, float] = {"high": 1.3, "medium": 1.0, "low": 0.8}
+
+
+def _freshness_decay(fetched_at: str) -> float:
+    """Recency multiplier: <12h→1.2, <24h→1.0, <48h→0.85, older→0.7.
+
+    Fresh-but-fetched signals should out-rank stale ones of equal relevance.
+    Fails safe to 1.0 on any parse problem (never penalize on a bad timestamp).
+    """
+    if not fetched_at:
+        return 1.0
+    try:
+        dt = datetime.fromisoformat(str(fetched_at).replace("Z", "+00:00"))
+        age_h = (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+    except (ValueError, TypeError):
+        return 1.0
+    if age_h < 12:
+        return 1.2
+    if age_h < 24:
+        return 1.0
+    if age_h < 48:
+        return 0.85
+    return 0.7
+
+
+def _compute_final_score(
+    raw_relevance: float, tier: str, urgency: str, fetched_at: str
+) -> float:
+    """Single source of truth for ranking. UNCAPPED so tiers actually separate.
+
+    final = raw_relevance × tier_weight × urgency_boost × freshness_decay
+
+    Unlike the display `relevance_score`, this is NOT clamped to 1.0 — a frontier
+    (2.0×) high-urgency fresh item legitimately scores ~2.9 and a low-urgency stale
+    aggregate ~0.16, so the sort spreads instead of piling at the cap.
+    """
+    tw = TIER_WEIGHTS.get(tier, 1.0)
+    ub = _URGENCY_BOOST.get((urgency or "low").lower(), 1.0)
+    fd = _freshness_decay(fetched_at)
+    return round(max(raw_relevance, 0.0) * tw * ub * fd, 4)
+
 
 def _detect_lang(text: str) -> str:
     """Simple CJK detection — no external deps.
@@ -171,10 +220,11 @@ def handle_signal_digest(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     digest_path = SIGNALS_DIR / f"{today}-digest.md"
 
-    # Append if file exists (multiple digests per day)
-    if digest_path.exists():
-        existing = digest_path.read_text()
-        digest_md = existing + "\n\n---\n\n" + digest_md
+    # ONE digest per day (overwrite). The digest is a full snapshot of the
+    # current signal buffer — appending stacked 3 identical-shape digests/day
+    # into a 300+ line file (each fetch window 02/08/14 UTC re-wrote the whole
+    # thing anew). The latest run already reflects the freshest signals, so the
+    # last write of the day IS the digest. (Was: append-with-`---` separator.)
     digest_path.write_text(digest_md)
 
     # Write L4 JSON digest for proactive_intelligence._get_signal_highlights()
@@ -256,11 +306,25 @@ def _llm_digest(
 ## Raw Signals
 {signal_text}
 
-## Output: Markdown Digest
-Sections: 🔴 Act Now, 🟡 Worth Knowing, 🟢 Background.
-For each signal: 1-2 sentence summary, "Why it matters", source tier tag, URL.
-YAML frontmatter: date ({today}), signals_count, sources.
-Skip irrelevant signals. Include Chinese signals if relevant to user context."""
+## Output: Markdown Digest — scannable in 10 seconds, density by priority
+
+Start with a **## ⚡ TL;DR** section: the 3 single most important signals as ONE
+bullet each — `**title**` + a 6-10 word so-what + URL. Nothing else. This is what
+a busy reader sees first.
+
+Then three tiered sections, DENSITY DECREASING (do not pad lower tiers):
+- **🔴 Act Now** — only signals needing action on the user's projects. FULL treatment:
+  1-2 sentence summary + a real "Why it matters for <project>". Usually 0-2 items; if
+  nothing is truly actionable, write one line saying so. Do NOT inflate.
+- **🟡 Worth Knowing** — ONE tight sentence each + a half-line "why" + tier tag + URL.
+  No multi-sentence paragraphs here.
+- **🟢 Background** — title + tier tag + URL ONLY. No summary, no "why". One line each.
+
+Rules: skip irrelevant signals entirely. Rank within each section by importance
+(frontier/official > leaders > engineering > aggregate/trending). Include Chinese
+signals if relevant. Be ruthless — a shorter digest that surfaces the 3 things that
+matter beats a complete one nobody reads.
+YAML frontmatter: date ({today}), signals_count, sources."""
 
     markdown_part, md_in, md_out = invoke(
         md_prompt, max_tokens=MAX_OUTPUT_TOKENS_MD, temperature=0.3,
@@ -305,6 +369,8 @@ Rules:
                 raw_score = min(max(float(score_obj.get("relevance_score", 0.5)), 0), 1.0)
                 tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
                 weighted_score = min(raw_score * tier_weight, 1.0)
+                urgency = score_obj.get("urgency", "low")
+                fetched_at = datetime.now(timezone.utc).isoformat()
                 scored_items.append({
                     "title": s.title,
                     "summary": score_obj.get("summary", s.summary or ""),
@@ -312,10 +378,11 @@ Rules:
                     "url": s.url,
                     "relevance_score": round(weighted_score, 3),
                     "raw_relevance_score": round(raw_score, 3),
+                    "final_score": _compute_final_score(raw_score, s.tier, urgency, fetched_at),
                     "tier": s.tier,
                     "tier_weight": tier_weight,
-                    "urgency": score_obj.get("urgency", "low"),
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "urgency": urgency,
+                    "fetched_at": fetched_at,
                     "lang": _detect_lang(s.title),
                     "feed_id": s.feed_id,
                     "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
@@ -377,6 +444,7 @@ def _keyword_scored_items(signals: list[RawSignal], user_context: str = "") -> l
             "url": s.url,
             "relevance_score": round(weighted_score, 3),
             "raw_relevance_score": round(raw_score, 3),
+            "final_score": _compute_final_score(raw_score, s.tier, urgency, now),
             "tier": s.tier,
             "tier_weight": tier_weight,
             "urgency": urgency,
@@ -401,6 +469,7 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
         raw_score = min(max(s.score, 0.5), 1.0)
         tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
         weighted_score = min(raw_score * tier_weight, 1.0)
+        urgency = "medium" if weighted_score >= 0.7 else "low"
         items.append({
             "title": s.title,
             "summary": (s.summary or "")[:200],
@@ -408,9 +477,10 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
             "url": s.url,
             "relevance_score": round(weighted_score, 3),
             "raw_relevance_score": round(raw_score, 3),
+            "final_score": _compute_final_score(raw_score, s.tier, urgency, now),
             "tier": s.tier,
             "tier_weight": tier_weight,
-            "urgency": "medium" if weighted_score >= 0.7 else "low",
+            "urgency": urgency,
             "fetched_at": now,
             "lang": _detect_lang(s.title),
             "feed_id": s.feed_id,
@@ -480,20 +550,35 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     merged = [it for it in existing_items if it.get("title") not in new_titles]
     merged.extend(scored_items)
 
-    # Cap to 50 items with language diversity guarantee.
-    # Without this, stale English items at 0.50 (fallback floor) crowd out
-    # freshly-scored Chinese items that the LLM rated <0.50 for relevance.
-    # Reserve up to 5 slots for non-English items so Chinese AI signals
-    # always surface in the digest and Slack notifications.
-    merged.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+    # Backfill final_score for any legacy item written before multi-dim ranking
+    # (so a mixed old/new merge sorts on ONE consistent key, not a mix of
+    # capped relevance_score and uncapped final_score).
+    for it in merged:
+        if "final_score" not in it:
+            it["final_score"] = _compute_final_score(
+                it.get("raw_relevance_score", it.get("relevance_score", 0.5)),
+                it.get("tier", "engineering"),
+                it.get("urgency", "low"),
+                it.get("fetched_at", ""),
+            )
+
+    # Rank on the multi-dim final_score (uncapped) — NOT relevance_score, which
+    # was clipped at 1.0 and piled the top band together. Cap to 50 with a
+    # language-diversity guarantee: reserve up to 5 slots for non-English items
+    # so Chinese AI signals always surface in the digest and Slack.
+    _rank_key = lambda x: x.get("final_score", x.get("relevance_score", 0))
+    merged.sort(key=_rank_key, reverse=True)
     zh_items = [it for it in merged if it.get("lang") == "zh"
                 or any(ord(c) >= 0x4e00 for c in it.get("title", ""))]
     en_items = [it for it in merged if it not in zh_items]
     _ZH_RESERVE = 5
     zh_take = zh_items[:_ZH_RESERVE]
     en_take = en_items[:50 - len(zh_take)]
-    merged = sorted(en_take + zh_take,
-                    key=lambda x: x.get("relevance_score", 0), reverse=True)
+    merged = sorted(en_take + zh_take, key=_rank_key, reverse=True)
+
+    # Stamp final ordinal rank (1 = top) so consumers don't re-sort.
+    for i, it in enumerate(merged):
+        it["rank"] = i + 1
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),

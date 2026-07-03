@@ -116,6 +116,23 @@ feeds:
     tags: [frontier, ai, official]
     enabled: true
 
+  - id: ai-builders
+    name: AI Builder Podcasts (YouTube RSS, zero-API)
+    type: rss
+    tier: leaders
+    # Curated top-AI-builder podcasts (from follow-builders watchlist). YouTube
+    # channel RSS is free/keyless — the digest summarizes new episode titles.
+    config:
+      urls:
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCxBcwypKK-W3GHd_RZ9FZrQ   # Latent Space
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCSI7h9hydQ40K5MJHnCrQvw   # No Priors
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCUl-s_Vp-Kkk_XVyDylNwLA   # Unsupervised Learning (Redpoint)
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCQID78IY6EOojr5RUdD47MQ   # MAD Podcast (Matt Turck)
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCWrF0oN6unbXrWsTN7RctTw   # Training Data (Sequoia)
+        - https://www.youtube.com/feeds/videos.xml?channel_id=UCjIMtrzxYc0lblGhmOgC_CA   # AI & I (Every)
+    tags: [ai, builders, podcasts, leaders]
+    enabled: true
+
   - id: ai-newsletters
     name: AI Newsletters & Aggregators
     type: rss
