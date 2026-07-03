@@ -80,9 +80,14 @@ MEMORY_TYPE_TO_SECTION: dict[str, str] = {
 # Grace period: new entries are immune to decay
 GRACE_PERIOD_DAYS = 30
 
-# Decay thresholds (days since last reference)
-DORMANT_THRESHOLD_DAYS = 90
-ARCHIVED_THRESHOLD_DAYS = 180
+# Decay thresholds (days since last reference). Tightened 90/180 -> 60/150
+# (run_186a5f15, user directive): knowledge goes stale faster so always-injected
+# context sheds noise sooner. ARCHIVED is TOTAL days-since-ref (60 idle -> dormant,
+# then 90 more -> archived at 150 total), NOT additional-after-dormant. Archived
+# entries stay FTS5-recallable (knowledge_store indexes Archives) — this only stops
+# always-injection ~30d sooner, it does not drop anything from recall.
+DORMANT_THRESHOLD_DAYS = 60
+ARCHIVED_THRESHOLD_DAYS = 150
 
 # High-ref entries (ref >= HIGH_REF_THRESHOLD) get extended grace (2x)
 HIGH_REF_THRESHOLD = 10
@@ -555,19 +560,19 @@ def assess_decay(
     - Evergreen sections: entries within are immune (never decay)
     - Grace period: entries < 30 days old are immune
     - active → dormant: `dormant_days` days since last_referenced
-      (defaults to the global DORMANT_THRESHOLD_DAYS=90 when None)
-    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (180) — NOT parameterized
+      (defaults to the global DORMANT_THRESHOLD_DAYS=60 when None)
+    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (150 total) — NOT parameterized
     - Entries already archived are skipped
     - Entries with no date info are treated as infinitely old (decay immediately)
 
     Args:
         dormant_days: per-call active→dormant threshold (A2, run_55cb38d6).
             None → use the global DORMANT_THRESHOLD_DAYS (backward-compatible —
-            all existing callers pass nothing and keep 90d). The MEMORY.md decay
+            all existing callers pass nothing and keep 60d). The MEMORY.md decay
             path passes 45 so volatile operational memory ages faster than the
-            hard-won failure-lessons in IMPROVEMENT.md (which stay at 90d). Only
+            hard-won failure-lessons in IMPROVEMENT.md (which stay at 60d). Only
             the dormant threshold is tunable; dormant→archived stays at the
-            global 180d so a faster-dormant entry still gets a full archive buffer.
+            global 150d so a faster-dormant entry still gets an archive buffer.
     """
     # dormant_days<1 would make `days_since_ref >= threshold` always true →
     # mark everything past grace dormant. No live caller passes <1 (only 45),
@@ -944,30 +949,46 @@ def reclaim_noise_entries(
     if dry_run or not selected:
         return report
 
-    # Apply: archive to file, then physically strip from content.
-    # Strip by (title, section) identity — NOT title alone — so a keep-class
-    # entry that merely SHARES a title with a reclaimed one is never deleted
-    # (adversarial C1: title-only strip silently destroyed protected knowledge
-    # that wasn't even archived).
+    # Apply via the shared archive+strip+dated-bak tail (also used by retire_entry).
+    _archive_and_strip(content, selected, today, project_dir, report,
+                       archive_name=archive_name, source_path=source_path)
+    return report
+
+
+def _archive_and_strip(
+    content: str,
+    selected: list[EntryMetadata],
+    today: date,
+    project_dir: Path,
+    report: ReclaimReport,
+    *,
+    archive_name: str,
+    source_path: "Path | None",
+) -> None:
+    """Shared apply-tail for reclaim_noise_entries AND retire_entry (R25 dedup):
+    archive the `selected` entries to `archive_name`, physically strip them from
+    `content` by (title, section) identity, and — if `source_path` is given —
+    snapshot a DATED .bak then persist the stripped content. Mutates `report`
+    (sets .archived + .new_content). Selection is the CALLER's job; this is the
+    common machinery both selection strategies share.
+
+    Strip by (title, section) identity — NOT title alone — so a keep-class entry
+    that merely SHARES a title with a selected one is never deleted (adversarial
+    C1: title-only strip silently destroyed protected knowledge that wasn't even
+    archived).
+
+    Dated .bak rationale (H2 adversarial): a single rolling <name>.bak
+    self-destructs — reclaim runs every TIMER_30MIN + SESSION_CLOSE, so run N's
+    .bak (entries run N-1 stripped) would overwrite run N-1's. The dated name
+    gives one stable snapshot per day; we never rewrite an existing same-day .bak,
+    so the day's FIRST pre-strip state is preserved. With the forward-append
+    archive + git auto-commit, recovery is robust.
+    """
     archived = archive_entries(project_dir, selected, archive_name=archive_name)
     report.archived = archived
     report.new_content = _strip_entries(
         content, {(e.title, e.section) for e in selected}
     )
-
-    # If the caller hands us the source path, own the full persist: snapshot
-    # the pre-write content to a DATED <name>.<YYYY-MM-DD>.bak, then write the
-    # stripped content. Without source_path, the caller persists new_content
-    # itself (and no backup is written here).
-    #
-    # H2 (adversarial): a single rolling <name>.bak self-destructs — reclaim
-    # runs every TIMER_30MIN + SESSION_CLOSE, so run N's .bak (containing the
-    # entries run N-1 stripped) would overwrite run N-1's .bak. The dated name
-    # gives one stable snapshot per day; same-day re-runs only overwrite a
-    # backup already taken AFTER the first strip of the day (the pre-strip
-    # state for that day is preserved by the FIRST write, and we never rewrite
-    # an existing same-day .bak). Combined with the forward-append archive +
-    # git auto-commit, recovery is robust.
     if source_path is not None:
         src = Path(source_path)
         bak = src.with_name(f"{src.name}.{today.isoformat()}.bak")
@@ -975,6 +996,86 @@ def reclaim_noise_entries(
             bak.write_text(content, encoding="utf-8")
         src.write_text(report.new_content, encoding="utf-8")
 
+
+class RetireError(ValueError):
+    """retire_entry could not act safely — no match, or an ambiguous duplicate.
+    Fail-LOUD by design: a silent zero-strip or a strip-2-archive-1 would be data
+    loss (Gate-1 findings). The caller must correct the (title, section) and retry.
+    """
+
+
+def retire_entry(
+    content: str,
+    title: str,
+    section: str,
+    project_dir: Path,
+    *,
+    archive_name: str = "IMPROVEMENT-archive.md",
+    source_path: "Path | None" = None,
+    dry_run: bool = True,
+    force: bool = False,
+    today: "date | None" = None,
+) -> ReclaimReport:
+    """Agent-directed retire of ONE named (title, section) entry — the sanctioned
+    'out' side of the knowledge layer (mirrors s_self-evolution's RETIRE for the
+    governance layer). Reuses the same archive+strip+dated-bak machinery as
+    reclaim_noise_entries via _archive_and_strip; the ONLY difference is selection:
+    exactly the one entry the caller names, not the autonomous noise set.
+
+    This is why a raw markdown Edit-to-delete is NOT the sanctioned path: it skips
+    the archive (→ lost from FTS5 recall) and the (title, section) identity-strip
+    (→ can destroy a same-title sibling). Route removals through here.
+
+    Safety (Gate-1, run_186a5f15):
+    - EXACTLY-ONE match required. Zero matches → RetireError (never a silent
+      zero-strip). Two+ entries sharing the exact (title, section) → RetireError
+      (a single strip would remove BOTH while archive records ONE = data loss).
+    - keep-class entries (decision/model/principle/correction, COE/evergreen
+      sections) are REFUSED unless force=True — so a curator CAN deliberately
+      retire permanent knowledge by name (the point of agent-directed removal),
+      but never by accident.
+
+    dry_run=True (default): preview only — sets report.candidates, writes nothing.
+    dry_run=False: archive + strip (+ dated .bak if source_path given).
+
+    For a MOVE across files: the CALLER must add-to-target FIRST (via s_persist,
+    dedup-checked) and retire-from-source SECOND — so the entry is durable in its
+    new home before it leaves the old one (a mid-crash then leaves a recoverable
+    duplicate, never a loss).
+    """
+    report = ReclaimReport()
+    if not content or not content.strip():
+        raise RetireError("empty content — nothing to retire")
+
+    matches = [e for e in parse_entries(content)
+               if e.title == title and e.section == section]
+    if len(matches) == 0:
+        raise RetireError(
+            f"no entry titled {title!r} in section {section!r} — nothing retired "
+            f"(check the exact title + section; retire is fail-loud, not silent)."
+        )
+    if len(matches) > 1:
+        raise RetireError(
+            f"{len(matches)} entries share (title={title!r}, section={section!r}) — "
+            f"refusing: a strip would remove all {len(matches)} but archive only one "
+            f"(data loss). Disambiguate before retiring."
+        )
+
+    entry = matches[0]
+    if not force and is_keep_class(entry):
+        raise RetireError(
+            f"{title!r} is keep-class (type={entry.entry_type}, section={section!r}) — "
+            f"refusing without force=True. Pass force to deliberately retire permanent "
+            f"knowledge (decision/model/principle/correction/COE)."
+        )
+
+    report.candidates = [entry.title]
+    if dry_run:
+        return report
+
+    _archive_and_strip(content, [entry], today=today or date.today(),
+                       project_dir=project_dir, report=report,
+                       archive_name=archive_name, source_path=source_path)
     return report
 
 

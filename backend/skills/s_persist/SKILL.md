@@ -79,6 +79,40 @@ not route.** Only content that passes Step 0 continues to Step 1.
 > **YES → MEMORY.md** (cross-project cognitive knowledge)
 > **NO → Projects/<X>/...** (project-specific DDD doc)
 
+## RETIRE / MOVE — the sanctioned "out" side (do NOT hand-Edit to delete)
+
+Persist has an **out** side, not just in. When an entry is resolved, stale, wrong,
+or belongs in a different home, **retire it via the `ddd-retire` CLI — never a raw
+`Edit`-to-delete.** A hand-Edit skips the archive (→ the entry is lost from FTS5
+recall) and skips the `(title, section)` identity-strip (→ it can silently destroy a
+different entry that merely shares the title). `ddd-retire` archives (recall-preserved)
++ strips by identity + writes a dated `.bak`, and is **fail-loud** (no match / ambiguous
+duplicate → error, nothing removed).
+
+```bash
+# from the swarmai repo root, backend venv active
+# 1) PREVIEW (default dry-run — always look first):
+python backend/scripts/artifact_cli.py ddd-retire \
+  --file .context/MEMORY.md --title "Exact entry title" --section "Open Threads"
+# 2) APPLY:
+python backend/scripts/artifact_cli.py ddd-retire \
+  --file Projects/SwarmAI/IMPROVEMENT.md --title "..." --section "What Failed" --apply
+# keep-class (decision/model/principle/correction/COE) is REFUSED unless you add --force
+```
+
+**RETIRE** = remove one named entry (archive + strip). **MOVE** across files/sections =
+**add-to-target FIRST, retire-from-source SECOND** — so the entry is durable in its new
+home before it leaves the old one (a crash between the two steps then leaves a
+recoverable duplicate, never a loss):
+
+1. `s_persist` the entry into its new home (this file's routing + dedup).
+2. `ddd-retire --apply` the entry from its old home.
+
+This mirrors the governance layer's symmetry (s_self-evolution PROMOTE↔RETIRE) at the
+knowledge layer (s_persist add ↔ ddd-retire out). Autonomous time-based decay
+(`ddd_entry_lifecycle`, 60d→dormant→150d→archived) still handles *un-attended* aging;
+`ddd-retire` is for a *deliberate* "this is done / wrong-home, remove it NOW".
+
 ## How to Write
 
 ### Entry format (all targets use same format)

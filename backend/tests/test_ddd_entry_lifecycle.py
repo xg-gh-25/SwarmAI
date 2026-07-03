@@ -286,7 +286,7 @@ class TestAssessDecay:
         transition a 100d entry, matching the global-90 path exactly."""
         from core.ddd_entry_lifecycle import EntryMetadata, DORMANT_THRESHOLD_DAYS
 
-        assert DORMANT_THRESHOLD_DAYS == 90  # the default this test pins to
+        assert DORMANT_THRESHOLD_DAYS == 60  # the default this test pins to (tightened 90->60, run_186a5f15)
         today = date(2026, 6, 28)
         old = EntryMetadata(
             title="Hundred-day idle", entry_type="guideline", ref_count=0,
@@ -488,6 +488,134 @@ class TestReclaimNoiseEndToEnd:
         )
         assert report.archived == 0
         assert src.read_text() == content, "non-qualifying file was modified"
+
+
+class TestRetireEntry:
+    """run_186a5f15: agent-directed NAMED-entry retire — the 'out' side of the
+    knowledge layer. Reuses the reclaim archive+strip+dated-bak machinery via the
+    shared _archive_and_strip helper, but selects ONE named (title, section)
+    entry instead of the noise set. Requires EXACTLY-ONE match (else refuse), and
+    BYPASSES the keep-class guard only with force=True (so a curator CAN retire a
+    decision/model/principle by name — the point of agent-directed removal)."""
+
+    def _two_sections(self, today):
+        recent = (today - timedelta(days=2)).isoformat()
+        # SAME TITLE in two different sections — the identity-strip collision case.
+        return f"""\
+## Guidelines
+- [guideline] **Cache invalidation** — guideline flavor. ({recent}, run_g)
+  <!-- ref:0 | last:{recent} | decay:active -->
+
+## Pitfalls
+- [pitfall] **Cache invalidation** — pitfall flavor. ({recent}, run_p)
+  <!-- ref:0 | last:{recent} | decay:active -->
+"""
+
+    def test_retire_named_entry_archives_and_strips_only_that_one(self, tmp_path):
+        from core.ddd_entry_lifecycle import retire_entry
+        today = date(2026, 7, 3)
+        content = self._two_sections(today)
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(content)
+        report = retire_entry(
+            content, title="Cache invalidation", section="Pitfalls",
+            project_dir=tmp_path, source_path=src, dry_run=False,
+        )
+        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
+        new_content = src.read_text()
+        # The Pitfalls one is gone; the same-title Guidelines sibling SURVIVES (C1 identity-strip).
+        assert "pitfall flavor" not in new_content, "named entry not stripped"
+        assert "guideline flavor" in new_content, "same-title sibling wrongly removed"
+        archive = (tmp_path / "IMPROVEMENT-archive.md").read_text()
+        assert "pitfall flavor" in archive, "retired entry not archived (recall-preserved)"
+
+    def test_retire_dry_run_previews_without_mutating(self, tmp_path):
+        from core.ddd_entry_lifecycle import retire_entry
+        today = date(2026, 7, 3)
+        content = self._two_sections(today)
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(content)
+        report = retire_entry(content, title="Cache invalidation", section="Pitfalls",
+                              project_dir=tmp_path, source_path=src, dry_run=True)
+        assert report.candidates == ["Cache invalidation"], "dry-run should name the candidate"
+        assert report.archived == 0, "dry-run must not archive"
+        assert src.read_text() == content, "dry-run must not mutate source"
+
+    def test_retire_refuses_when_no_match(self, tmp_path):
+        """Fail-LOUD on a title/section that matches nothing — never silent zero-strip."""
+        from core.ddd_entry_lifecycle import retire_entry, RetireError
+        today = date(2026, 7, 3)
+        content = self._two_sections(today)
+        with pytest.raises(RetireError):
+            retire_entry(content, title="Nonexistent", section="Pitfalls",
+                         project_dir=tmp_path, dry_run=False)
+
+    def test_retire_refuses_ambiguous_duplicate(self, tmp_path):
+        """Two entries sharing EXACT (title, section) → refuse (strip-2-archive-1 data loss)."""
+        from core.ddd_entry_lifecycle import retire_entry, RetireError
+        today = date(2026, 7, 3)
+        recent = (today - timedelta(days=2)).isoformat()
+        dup = f"""\
+## Pitfalls
+- [pitfall] **Dup title** — first. ({recent}, run_1)
+  <!-- ref:0 | last:{recent} | decay:active -->
+- [pitfall] **Dup title** — second. ({recent}, run_2)
+  <!-- ref:0 | last:{recent} | decay:active -->
+"""
+        with pytest.raises(RetireError):
+            retire_entry(dup, title="Dup title", section="Pitfalls",
+                         project_dir=tmp_path, dry_run=False)
+
+    def test_retire_protects_keep_class_unless_forced(self, tmp_path):
+        """A keep-class entry (decision) is refused by default, retired with force=True."""
+        from core.ddd_entry_lifecycle import retire_entry, RetireError
+        today = date(2026, 7, 3)
+        recent = (today - timedelta(days=2)).isoformat()
+        content = f"""\
+## Recent Decisions
+- [decision] **Chose X over Y** — a permanent decision. ({recent}, run_d)
+  <!-- ref:0 | last:{recent} | decay:active -->
+"""
+        src = tmp_path / "PROJECT.md"
+        src.write_text(content)
+        # default: refuse (keep-class protected)
+        with pytest.raises(RetireError):
+            retire_entry(content, title="Chose X over Y", section="Recent Decisions",
+                         project_dir=tmp_path, source_path=src, dry_run=False)
+        # force=True: retired
+        report = retire_entry(content, title="Chose X over Y", section="Recent Decisions",
+                              project_dir=tmp_path, source_path=src, dry_run=False, force=True)
+        assert report.archived == 1, "force=True must retire the keep-class entry"
+
+
+class TestDecayThresholdsTightened:
+    """run_186a5f15: dormant 90->60, archived total 180->150 (user directive —
+    knowledge goes stale faster to cut always-injected noise). MEMORY path
+    (explicit dormant_days=45) is below 60 so it is unaffected."""
+
+    def test_threshold_constants(self):
+        from core.ddd_entry_lifecycle import DORMANT_THRESHOLD_DAYS, ARCHIVED_THRESHOLD_DAYS
+        assert DORMANT_THRESHOLD_DAYS == 60
+        assert ARCHIVED_THRESHOLD_DAYS == 150
+
+    def test_entry_dormant_at_60_not_before(self):
+        from core.ddd_entry_lifecycle import EntryMetadata, assess_decay
+        today = date(2026, 7, 3)
+        # 61d idle → dormant under new 60 (would still be active under old 90)
+        e = EntryMetadata(title="idle 61d", entry_type="guideline", ref_count=0,
+                          last_referenced=today - timedelta(days=61), decay_state="active",
+                          created_date=today - timedelta(days=200), section="Guidelines")
+        t = assess_decay([e], today)
+        assert len(t) == 1 and t[0].new_state == "dormant"
+
+    def test_entry_archived_at_150_total(self):
+        from core.ddd_entry_lifecycle import EntryMetadata, assess_decay
+        today = date(2026, 7, 3)
+        e = EntryMetadata(title="idle 151d", entry_type="guideline", ref_count=0,
+                          last_referenced=today - timedelta(days=151), decay_state="dormant",
+                          created_date=today - timedelta(days=300), section="Guidelines")
+        t = assess_decay([e], today)
+        assert len(t) == 1 and t[0].new_state == "archived"
 
 
 # ── AC3/AC4/AC5: get_stage_knowledge ─────────────────────────────────────────
