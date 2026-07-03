@@ -261,3 +261,83 @@ class TestPipelinesEndpoint:
 
         resp = client.get("/api/pipelines")
         assert resp.json()["pipelines"][0]["status"] == "running"
+
+
+# --- pause_kind classification + terminal-zombie exclude (run_3d61db5b) -------
+#
+# A crashed session leaves paused runs stamped checkpoint.reason ==
+# "session_crash_auto_detected" (the canonical _CRASH_ZOMBIE_REASON). These are
+# NOT real decision-pauses (Gate BLOCK / L2 / budget) — they are residue. The
+# API must classify them (pause_kind) so consumers (Radar NEEDS YOU) can drop
+# them, AND must exclude an already-FINISHED zombie (reflect/deliver done but
+# status flipped to paused+crash-reason) from the active list entirely.
+
+_CRASH_REASON = "session_crash_auto_detected"  # mirrors artifact_cli._CRASH_ZOMBIE_REASON
+
+
+class TestPauseKindClassification:
+    def test_crash_residue_paused_gets_pause_kind_crash_residue(self, client, workspace):
+        """AC1/AC4: a paused run whose reason IS the crash marker → pause_kind='crash_residue'."""
+        _create_run(workspace, "Proj", "run_crash",
+                    status="paused",
+                    stages=[{"stage": "evaluate", "status": "completed", "token_cost": 5000}],
+                    checkpoint={"reason": _CRASH_REASON, "stage": "think",
+                                "checkpointed_at": "2026-07-03T10:00:00+00:00",
+                                "completed_stages": ["evaluate"]})
+        resp = client.get("/api/pipelines")
+        p = next(x for x in resp.json()["pipelines"] if x["id"] == "run_crash")
+        assert p["status"] == "paused"
+        assert p["pause_kind"] == "crash_residue"
+
+    def test_decision_paused_gets_pause_kind_decision(self, client, workspace):
+        """AC2/AC4: a paused run with a REAL decision reason → pause_kind='decision'."""
+        _create_run(workspace, "Proj", "run_decision",
+                    status="paused",
+                    stages=[{"stage": "evaluate", "status": "completed", "token_cost": 5000}],
+                    checkpoint={"reason": "Gate-1 BLOCK: ambiguous scope", "stage": "plan",
+                                "checkpointed_at": "2026-07-03T10:00:00+00:00",
+                                "completed_stages": ["evaluate", "think"]})
+        resp = client.get("/api/pipelines")
+        p = next(x for x in resp.json()["pipelines"] if x["id"] == "run_decision")
+        assert p["status"] == "paused"
+        assert p["pause_kind"] == "decision"
+
+    def test_non_paused_run_has_null_pause_kind(self, client, workspace):
+        """A running/completed run carries no pause_kind (None)."""
+        _create_run(workspace, "Proj", "run_running", status="running",
+                    stages=[{"stage": "evaluate", "status": "completed", "token_cost": 5000}])
+        resp = client.get("/api/pipelines")
+        p = next(x for x in resp.json()["pipelines"] if x["id"] == "run_running")
+        assert p["pause_kind"] is None
+
+    def test_terminal_zombie_excluded_from_active(self, client, workspace):
+        """AC3: a FINISHED run (reflect done) flipped to paused+crash-reason is a
+        terminal zombie — is_terminal_run true — and must NOT appear in ?active=true."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        _create_run(workspace, "Proj", "run_zombie",
+                    status="paused", updated_at=now_iso,
+                    stages=[
+                        {"stage": "evaluate", "status": "completed", "token_cost": 5000},
+                        {"stage": "think", "status": "completed", "token_cost": 5000},
+                        {"stage": "build", "status": "completed", "token_cost": 5000},
+                        {"stage": "review", "status": "completed", "token_cost": 5000},
+                        {"stage": "test", "status": "completed", "token_cost": 5000},
+                        {"stage": "deliver", "status": "completed", "token_cost": 5000},
+                        {"stage": "reflect", "status": "completed", "token_cost": 5000},
+                    ],
+                    checkpoint={"reason": _CRASH_REASON, "stage": "reflect",
+                                "checkpointed_at": now_iso, "completed_stages": []})
+        # A genuinely-resumable mid-pipeline paused run (NOT terminal) must survive.
+        _create_run(workspace, "Proj", "run_midpause",
+                    status="paused", updated_at=now_iso,
+                    stages=[
+                        {"stage": "evaluate", "status": "completed", "token_cost": 5000},
+                        {"stage": "think", "status": "completed", "token_cost": 5000},
+                    ],
+                    checkpoint={"reason": _CRASH_REASON, "stage": "plan",
+                                "checkpointed_at": now_iso, "completed_stages": ["evaluate", "think"]})
+
+        resp = client.get("/api/pipelines?active=true")
+        ids = {p["id"] for p in resp.json()["pipelines"]}
+        assert "run_zombie" not in ids, "terminal zombie must be excluded from active"
+        assert "run_midpause" in ids, "a mid-pipeline paused run must remain active/resumable"

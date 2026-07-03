@@ -22,6 +22,15 @@ export interface PipelineRun {
   currentStage: string;
   /** checkpoint.reason — WHY it paused (the decision text). Null if not paused. */
   checkpointReason: string | null;
+  /**
+   * Semantic pause classification from the backend (pause_kind):
+   * - 'crash_residue' — paused by the orphan-transition when a session died
+   *   (NOT a real decision — the Radar attention queue drops these).
+   * - 'decision'      — a genuine pause the user must act on (Gate BLOCK / L2 /
+   *   budget / retry-exhausted).
+   * - null            — not a paused run (running/completed/etc.).
+   */
+  pauseKind: 'crash_residue' | 'decision' | null;
   /** Stage progress string "N/M" (backend key ``progress``), e.g. "5/8". */
   progress: string;
   /**
@@ -47,6 +56,7 @@ export function pipelineToCamelCase(r: Record<string, unknown>): PipelineRun {
     status: r.status as PipelineRun['status'],
     currentStage: checkpointStage ?? (r.progress as string) ?? '',
     checkpointReason: (checkpoint?.reason as string | undefined) ?? null,
+    pauseKind: (r.pause_kind as PipelineRun['pauseKind']) ?? null,
     progress: (r.progress as string) ?? '',
     updatedAt: (r.updated_at as string) ?? '',
   };

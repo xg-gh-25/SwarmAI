@@ -23,6 +23,9 @@ function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
     status: 'running',
     currentStage: 'build',
     checkpointReason: null,
+    pauseKind: null,
+    progress: '',
+    updatedAt: '',
     ...over,
   };
 }
@@ -146,6 +149,78 @@ describe('aggregateAttention', () => {
     const { attentionItems } = aggregateAttention({
       pipelines: [],
       jobs,
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    expect(attentionItems).toHaveLength(1);
+  });
+
+  it('AC1: a crash-residue paused run (pauseKind=crash_residue) is DROPPED from NEEDS YOU', () => {
+    // The common case per Gate-1 finding C: a NON-terminal crash-residue run
+    // (partial stages, session died) — must NOT nag the user as a decision.
+    const pipelines: PipelineRun[] = [
+      pipe({ id: 'run_crash', status: 'paused', currentStage: 'think',
+             checkpointReason: 'session_crash_auto_detected', pauseKind: 'crash_residue' }),
+    ];
+    const { attentionItems } = aggregateAttention({
+      pipelines,
+      jobs: [],
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    expect(attentionItems).toHaveLength(0);
+  });
+
+  it('AC2: a real decision pause (pauseKind=decision) STILL appears in NEEDS YOU with its reason', () => {
+    const pipelines: PipelineRun[] = [
+      pipe({ id: 'run_decision', status: 'paused', currentStage: 'plan',
+             checkpointReason: 'Gate-1 BLOCK: decide X?', pauseKind: 'decision' }),
+    ];
+    const { attentionItems } = aggregateAttention({
+      pipelines,
+      jobs: [],
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    expect(attentionItems).toHaveLength(1);
+    const it0 = attentionItems[0];
+    expect(it0.kind === 'paused' && it0.id).toBe('run_decision');
+    expect(it0.kind === 'paused' && it0.reason).toBe('Gate-1 BLOCK: decide X?');
+  });
+
+  it('AC1-mixed: crash-residue dropped while decision + running are kept in the same batch', () => {
+    const pipelines: PipelineRun[] = [
+      pipe({ id: 'run_crash', status: 'paused', pauseKind: 'crash_residue',
+             checkpointReason: 'session_crash_auto_detected' }),
+      pipe({ id: 'run_decision', status: 'paused', pauseKind: 'decision',
+             checkpointReason: 'budget checkpoint' }),
+      pipe({ id: 'run_running', status: 'running' }),
+    ];
+    const { attentionItems, runningPipelines } = aggregateAttention({
+      pipelines,
+      jobs: [],
+      streamingState: {},
+      openTabs: [],
+      currentSessionId: undefined,
+    });
+    // only the decision pause reaches NEEDS YOU; running is FYI-only
+    expect(attentionItems.map((i) => i.id)).toEqual(['run_decision']);
+    expect(runningPipelines.map((p) => p.id)).toEqual(['run_running']);
+  });
+
+  it('AC1-failopen: a paused run with pauseKind=null (old backend / pre-field) STILL shows — fail SAFE', () => {
+    // During a deploy window the field may be absent; an attention queue must
+    // never SILENTLY hide a possible real decision. null !== crash_residue → show.
+    const pipelines: PipelineRun[] = [
+      pipe({ id: 'run_legacy', status: 'paused', pauseKind: null,
+             checkpointReason: 'Gate-1 BLOCK: legacy' }),
+    ];
+    const { attentionItems } = aggregateAttention({
+      pipelines,
+      jobs: [],
       streamingState: {},
       openTabs: [],
       currentSessionId: undefined,

@@ -54,6 +54,15 @@ export function aggregateAttention(input: AggregateInput): AggregateResult {
   // 1. Pipelines: paused → attention (with decision reason); running → FYI list.
   for (const p of pipelines) {
     if (p.status === 'paused') {
+      // Drop crash-residue pauses: a run the orphan-transition paused when a
+      // session died is NOT a decision the user must make — surfacing it buries
+      // the real decision-pauses. The backend classifies this via pause_kind
+      // (canonical _CRASH_ZOMBIE_REASON) — we consume the verdict, never re-derive
+      // it here (the frontend only gets an "N/M" progress string, so it cannot
+      // replicate the backend's stage-based is_terminal_run check). Fail SAFE:
+      // an absent/null pauseKind (old backend, pre-field run) is NOT dropped —
+      // an attention queue must never silently hide a possible real decision.
+      if (p.pauseKind === 'crash_residue') continue;
       attentionItems.push({
         kind: 'paused',
         id: p.id,

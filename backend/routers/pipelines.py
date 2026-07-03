@@ -31,6 +31,11 @@ from schemas.pipeline_run import (
     PipelineRunStatus,
     PipelineStatusSummary,
 )
+# Canonical crash-zombie discriminator + terminal-run predicate — single source
+# of truth in artifact_cli (already reused by proactive_intelligence). Importing
+# them here (rather than re-inventing a string/status match) keeps ONE definition
+# of "this pause is crash residue" / "this run is finished" across all consumers.
+from scripts.artifact_cli import _CRASH_ZOMBIE_REASON, is_terminal_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -160,6 +165,17 @@ def _to_response(raw: dict) -> PipelineRunResponse:
     except ValueError:
         status = PipelineRunStatus.RUNNING
 
+    # Classify a paused run for attention-queue consumers (Radar "NEEDS YOU").
+    # Only a genuine decision-pause should demand the user's attention; a pause
+    # stamped with the canonical crash marker is residue left by a dead session.
+    # Everything-not-crash → "decision" is intentional: budget / retry-exhausted /
+    # gate_spawn_blocked / Gate BLOCK are ALL real pauses the user should act on
+    # (mirrors artifact_cli._abandon_verdict, which reaps ONLY _CRASH_ZOMBIE_REASON).
+    pause_kind: Optional[str] = None
+    if status == PipelineRunStatus.PAUSED:
+        reason = checkpoint_raw.get("reason") if isinstance(checkpoint_raw, dict) else None
+        pause_kind = "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
+
     return PipelineRunResponse(
         id=raw.get("id", "unknown"),
         project=raw.get("_project", raw.get("project", "unknown")),
@@ -172,6 +188,7 @@ def _to_response(raw: dict) -> PipelineRunResponse:
         tokens_consumed=consumed,
         taste_decisions=len(raw.get("taste_decisions", [])),
         checkpoint=checkpoint,
+        pause_kind=pause_kind,
         abandon_reason=raw.get("abandon_reason"),
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
@@ -226,11 +243,25 @@ async def list_pipelines(
     if not all_runs:
         return PipelineDashboard()
 
-    responses = [_to_response(r) for r in all_runs]
+    # Pair each raw run dict with its response: is_terminal_run needs the RAW
+    # dict (stage array), which _to_response does not carry forward. Filtering on
+    # the response alone (status only) would leave terminal zombies in `active`.
+    paired = [(raw, _to_response(raw)) for raw in all_runs]
 
     if active:
-        responses = [r for r in responses if r.status in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED)]
+        # Active = running/paused, EXCLUDING terminal zombies. A run whose stages
+        # are all done (reflect/deliver completed) but whose status was flipped to
+        # paused+crash-reason by the orphan-transition is FINISHED, not resumable —
+        # it must not surface as active to ANY consumer. is_terminal_run is
+        # stage-based (not status-based) precisely so a genuine mid-pipeline pause
+        # (evaluate+think done, no reflect/deliver) is NOT misread as terminal.
+        responses = [
+            r for raw, r in paired
+            if r.status in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED)
+            and not is_terminal_run(raw)
+        ]
     else:
+        responses = [r for _raw, r in paired]
         # Keep all active + max 5 completed per project
         active_runs = [r for r in responses if r.status in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED)]
         completed_runs = [r for r in responses if r.status not in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED)]

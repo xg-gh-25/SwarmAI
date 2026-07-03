@@ -62,6 +62,15 @@ class PipelineRunResponse(BaseModel):
     tokens_consumed: int = Field(0, description="Total tokens used across all stages")
     taste_decisions: int = Field(0, description="Number of pending taste decisions")
     checkpoint: Optional[PipelineCheckpoint] = Field(None, description="Checkpoint info if paused")
+    pause_kind: Optional[str] = Field(
+        None,
+        description="Semantic classification of a paused run, for attention-queue "
+                    "consumers (Radar 'NEEDS YOU'). 'crash_residue' = paused by the "
+                    "orphan-transition when a session died (checkpoint.reason == the "
+                    "canonical _CRASH_ZOMBIE_REASON) — NOT a real decision, drop it. "
+                    "'decision' = a genuine pause the user must act on (Gate BLOCK / "
+                    "L2 escalation / budget / retry-exhausted). None for non-paused runs.",
+    )
     abandon_reason: Optional[str] = Field(
         None,
         description="Why an abandoned run was abandoned: 'orphaned_no_resume' "
