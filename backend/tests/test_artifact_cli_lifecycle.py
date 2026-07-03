@@ -426,6 +426,50 @@ class TestRunUpdateCarryForward:
         assert build.get("status") != "completed", "status must NOT carry forward from the old record"
 
 
+class TestPublishBackfillsArtifactIdIntoExistingRecord:
+    """run_b7620c6e (dogfood-surfaced): the REAL stage order is gate-1 writes a
+    stage record (e.g. build + gate1_verdict) via run-update BEFORE publish runs.
+    The old _append_stage_to_run skipped entirely when the stage existed → the
+    artifact_id was never linked → the stage stayed permanently unlinked. Publish
+    must BACK-FILL artifact_id into the existing record instead of skipping."""
+
+    def test_publish_backfills_artifact_id_when_record_preexists(self, workspace, monkeypatch):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        # Gate-1 already wrote a build record WITHOUT an artifact_id.
+        _create_run(workspace, "TestProject", "run_bf1", "running",
+                    stages=[{"stage": "build", "gate1_verdict": "WARN"}])
+        cli._append_stage_to_run(
+            "TestProject", "run_bf1",
+            {"stage": "build", "status": "recorded", "artifact_id": "art_pub"},
+            reg,
+        )
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_bf1" / "run.json"
+        stages = _read_run(run_file)["stages"]
+        builds = [s for s in stages if s["stage"] == "build"]
+        assert len(builds) == 1, "must not duplicate the stage"
+        assert builds[0]["artifact_id"] == "art_pub", "artifact_id must be back-filled into the existing record"
+        assert builds[0]["gate1_verdict"] == "WARN", "existing fields must be preserved"
+
+    def test_publish_does_not_clobber_existing_artifact_id(self, workspace, monkeypatch):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_bf2", "running",
+                    stages=[{"stage": "build", "artifact_id": "art_first"}])
+        cli._append_stage_to_run(
+            "TestProject", "run_bf2",
+            {"stage": "build", "status": "recorded", "artifact_id": "art_second"},
+            reg,
+        )
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_bf2" / "run.json"
+        build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
+        assert build["artifact_id"] == "art_first", "an existing artifact_id must NOT be clobbered"
+
+
 class TestPublishDataFromFile:
     """run_b7620c6e #1: publish --data only accepted a raw JSON string. Add
     @FILE / @- (stdin) so large artifact payloads avoid shell-string gymnastics."""

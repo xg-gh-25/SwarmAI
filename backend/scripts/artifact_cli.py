@@ -156,8 +156,22 @@ def _append_stage_to_run(
         return
     data = json.loads(run_file.read_text())
     stages = data.get("stages", [])
-    # Don't duplicate if stage already recorded
-    if any(s.get("stage") == stage_record["stage"] for s in stages):
+    # If the stage already has a record (e.g. Gate-1 wrote a `build` record with
+    # gate1_verdict BEFORE publish ran), don't drop the artifact link on the floor
+    # — back-fill artifact_id into the existing record. Publish is the ONLY writer
+    # of artifact_id; skipping entirely (the old behavior) left the stage
+    # permanently unlinked whenever any prior run-update created the record first
+    # (run_b7620c6e — surfaced by dogfooding: gate-1-writes-then-publish is the
+    # real order, not the publish-first order the unit fixture assumed). Only
+    # back-fill when the existing record LACKS it (never clobber an explicit one).
+    _existing = next((s for s in stages if s.get("stage") == stage_record["stage"]), None)
+    if _existing is not None:
+        _incoming_aid = stage_record.get("artifact_id")
+        if _incoming_aid and not _existing.get("artifact_id"):
+            _existing["artifact_id"] = _incoming_aid
+            data["stages"] = stages
+            data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return
     stages.append(stage_record)
     data["stages"] = stages

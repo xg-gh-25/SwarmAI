@@ -41,13 +41,76 @@ templates/html-deck/
 
 Source: `zarazhangrui/frontend-slides` (MIT) — attribution in `s_frontend-design/data/ATTRIBUTION.md`.
 
-## Step 1 — Pick ONE design system
+## Step 0 — (if importing an existing PPT) extract content first
 
-Consult `s_frontend-design/data/slide_bold_previews/<id>.md` (the selection cards) OR
-`systems/<id>/design.md` directly. Use the Direction Gate result / user pick. The 34 ids
-match the preview cards exactly. Only load the ONE picked system's `design.md`.
+If the user gave a `.pptx` (upload or path) to "turn into a web deck":
+```bash
+python "$SKILL_DIR/scripts/pptx_to_deck.py" "<path/to.pptx>" --out "<content_dir>/import"
+```
+This extracts per-slide {title, bullets, images KEPT, notes} → `deck_content.json`
+(+ `images/`). We do NOT reproduce the original styling — the value is the
+professional RESTYLE. Images are preserved (professionally made); decorative chrome
+(page numbers, footers, empty shapes) is dropped. Feed this content into Step 2 with
+the user-selected system. Then continue to style selection below.
+
+## Step 1 — Pick ONE design system (chat-inline gallery)
+
+The 34 systems are too many to list blind. Recommend a few, show them as INLINE
+thumbnails, let the user pick — all as ordinary chat markdown (no new UI).
+
+1. **Recommend top-3** from the DISCOVER answers (audience/outcome/context/tone):
+   ```bash
+   python "$SKILL_DIR/scripts/recommend_systems.py" \
+     --audience {audience} --outcome {outcome} --context {context} --tone {tone} \
+     --top 3 --offset 0 --json
+   ```
+   Each result carries `thumbnail` = a workspace-relative PNG path.
+2. **Present them inline** — for each recommendation, emit a standard markdown image
+   + the tagline + one-line "why".
+   ⚠️ **MUST use an ABSOLUTE image URL, not the workspace-relative path.** Chat
+   assistant messages render via `ContentBlockRenderer` → `MarkdownRenderer` WITHOUT a
+   `basePath`, so a relative `![](Knowledge/...)` does NOT resolve and shows a broken
+   image. `MarkdownRenderer.resolveImageSrc` passes `http(s)://` URLs through
+   unchanged, and the backend serves any workspace file at
+   `/api/workspace/file/raw?path=<workspace-relative>`. **Do not hand-build this URL —
+   use the recommender's `thumbnail_url` field verbatim** (it already prefixes the raw
+   endpoint with the correct daemon port from `$SWARMAI_PORT`, default 18321). The src
+   looks like:
+   `http://localhost:18321/api/workspace/file/raw?path=Knowledge/assets/deck-styles/<slug>.png`
+   (verified this renders in chat). Example:
+   ```
+   Based on your answers, three styles fit:
+
+   ![vellum](http://localhost:18321/api/workspace/file/raw?path=Knowledge/assets/deck-styles/vellum.png)
+   **Vellum** — scholarly, quiet navy + warm-yellow serif. Fits a considered leadership brief.
+
+   ![blue-professional](http://localhost:18321/api/workspace/file/raw?path=Knowledge/assets/deck-styles/blue-professional.png)
+   **Blue-Professional** — consulting-grade cream + cobalt. Clean and authoritative.
+
+   ![cartesian](http://localhost:18321/api/workspace/file/raw?path=Knowledge/assets/deck-styles/cartesian.png)
+   **Cartesian** — museum-catalog Playfair serif. Calm and editorial.
+
+   Pick one, or say **"show more"** for the next set, or **"see all"** for the full gallery.
+   ```
+   (The recommender's `thumbnail` field is the workspace-relative path — wrap it in the
+   `http://localhost:18321/api/workspace/file/raw?path=` prefix when emitting.)
+3. **"show more" / "next batch"** → re-run with `--offset 3` (then 6, 9 …). Ordering
+   is deterministic, so batches are disjoint (no repeats).
+4. **"see all"** → present the full ranked list (thumbnails in batches to stay scannable).
+5. **User picks** by name or by pointing ("the orange one", "the retro Windows one").
+   Only then load that ONE system's `systems/<id>/design.md`.
+
+Thumbnails are pre-generated (idempotent) by:
+`python "$SKILL_DIR/scripts/render_style_thumbnails.py"` — one comparable sample slide
+per system. Re-run only if a system's palette/fonts change (`--force` to rebuild all).
 
 ## Step 2 — Assemble a single self-contained HTML file
+
+**Content source:** either the DISCOVER-generated content, OR — if Step 0 ran — the
+`deck_content.json` from the imported PPT (reflow each extracted slide's title +
+bullets into the chosen system's layout; place its KEPT `images/*` where they fit —
+data/diagram images earn a slide region, purely decorative ones may be dropped by
+judgment). The design system is the user's pick; the content is theirs.
 
 The picked `design.md` contains the font `<link>`, the theme CSS, and the layout. To assemble:
 
