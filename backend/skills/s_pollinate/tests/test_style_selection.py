@@ -55,11 +55,200 @@ def test_ppt_that_MENTIONS_web_as_topic_stays_pptx():
         "做个关于网页设计的ppt",          # a PPT about web design
         "做个ppt讲讲html的历史",          # a PPT on the history of html
         "我要做个pptx，主题是网页开发",   # explicit pptx, topic = web dev
+        # English "web page" as a TOPIC noun (Gate-2 CRITICAL, run_32392299):
+        # bare "web page"/"web pages" nouns must NOT fire html_deck — only a
+        # verb-anchored conversion phrase does.
+        "a deck about our web page redesign",
+        "make a deck comparing our web pages to competitors",
+        "build a ppt on how to design a web page",
+        # "as a web page" as a NON-conversion prepositional phrase (Gate-2 MEDIUM,
+        # run_32392299): a preposition alone is not a conversion verb governing the
+        # target — a deck-noun object between verb and target = topic mention.
+        "a deck describing our product as a web page",
+        "make a ppt that presents our app as a web page",
     ]:
         got = fr.detect_fast_path(msg)
         assert got == ["deck"], (
             f"{msg!r} → {got}; a web/html TOPIC mention (no conversion verb) must "
             f"stay ['deck'] — dropping it to {got} silently loses the user's format")
+
+
+def test_deck_to_web_TEAM_destination_is_not_html_deck():
+    """Over-broad MEDIUM regression (run_32392299): the bare 'to web' / 'into a web'
+    substrings matched a DESTINATION phrase ('send this deck to web team') and
+    misfired html_deck. These are deck requests being SENT somewhere web-adjacent —
+    NOT conversion-to-web-format intent. They must stay ['deck']."""
+    for msg in [
+        "send this deck to web team",
+        "push the ppt to web team review",
+        "email deck to web ops",
+        "hand this deck into a web-facing group",
+        # Gate-2 CRITICAL (run_32392299): a LEADING conversion verb + a SEPARATE
+        # destination clause must NOT be read as conversion. The verb ('make')
+        # governs the deck; 'send/email/post ... to/as a web page' is the
+        # destination. _WEB_CONVERT_RE forbids a clause break in its object gap.
+        "make a deck and send it to a web page",
+        "make a deck and email it to a web page owner",
+        "make slides and post them as a web page",
+        "make a deck for the demo to a web page team",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["deck"], (
+            f"{msg!r} → {got}; a destination clause after a deck request must stay "
+            f"['deck'] — the leading verb does not govern the web target")
+
+
+def test_clause_break_ending_in_source_noun_is_not_html_deck():
+    """Gate-2 iter-4→6 CRITICAL (run_32392299): a SECOND clause that ends in a source
+    noun ('...and send SLIDES to a web page') must NOT be read as one conversion
+    object. The object is validated by a POSITIVE noun-phrase grammar
+    (_object_is_clean_noun_phrase / _OBJECT_NP_RE): a genuine object is a single NP
+    headed by a source noun (optionally with adjective + prepositional modifiers);
+    a clause break has a non-source head ("a POSTER fix slides"), a punctuation
+    boundary, or a connector — none match the grammar → html_deck must NOT fire, the
+    real format (poster/video/deck) is preserved. A denylist of connectors/verbs was
+    tried first and PROVED leaky (iter-2→5: 'while'/'with'/'fix'/'tweak'/punctuation
+    kept slipping through); the positive grammar is the structural fix."""
+    checks = [
+        # conjunction + verb clauses (iter-4)
+        ("make a poster and send slides to a web page", "poster"),
+        ("make a poster and share slides as a web page", "poster"),
+        ("make a video and edit slides to a web page", "video"),
+        ("make a report and print slides as a web page", "deck"),
+        ("convert the essay and post slides to a web page", "deck"),
+        ("convert the memo and the deck to a web page", "deck"),
+        # preposition + subordinator + gerund connectors (iter-5)
+        ("make a poster while editing slides to a web page", "poster"),
+        ("make a poster with slides to a web page", "poster"),
+        ("make a poster of slides to a web page", "poster"),
+        ("make a poster from slides to a web page", "poster"),
+        ("make a poster showing slides to a web page", "poster"),
+        ("make a report summarizing slides to a web page", "deck"),
+        ("convert the memo by attaching slides to a web page", "deck"),
+        ("convert the memo before showing slides to a web page", "deck"),
+        # UNENUMERATED verbs (iter-6 Q1a): a denylist can't list every English verb;
+        # the positive grammar rejects these because the object head ("poster") is a
+        # format noun, not a source noun — "slides" can't be the head behind it.
+        ("make a poster fix slides to a web page", "poster"),
+        ("make a poster tweak slides to a web page", "poster"),
+        ("make a poster rework slides to a web page", "poster"),
+        ("make a poster port slides to a web page", "poster"),
+        ("make a poster migrate slides to a web page", "poster"),
+        # PUNCTUATION clause boundaries (iter-6 Q1b): a ,/;/: in the object span is a
+        # clause/list boundary the grammar rejects.
+        ("make a poster; reuse slides to a web page", "poster"),
+        ("make a poster, revamp slides to a web page", "poster"),
+        ("make a poster, slides to a web page", "poster"),
+        # destination noun after target (iter-6): "to a web page TEAM" = destination.
+        ("make a deck for the demo to a web page team", "deck"),
+    ]
+    for msg, expected in checks:
+        got = fr.detect_fast_path(msg)
+        assert got is not None and "html_deck" not in got, (
+            f"{msg!r} → {got}; a connector-led clause ending in a source noun is a "
+            f"SEPARATE clause (destination), not a conversion object — html_deck must "
+            f"NOT fire")
+        assert expected in got, (
+            f"{msg!r} → {got}; the real requested format {expected!r} must be preserved")
+
+
+def test_prepositional_object_conversion_is_html_deck():
+    """Gate-2 iter-6 Q2 (run_32392299): a genuine conversion whose object is a
+    source-noun head + prepositional modifier ('convert the deck OF q3 results to a
+    web page', 'turn the slides FROM last week into a web page') must fire html_deck.
+    Banning all prepositions (the iter-5 denylist attempt) wrongly rejected these;
+    the positive NP grammar attaches the PP to the source-noun head and accepts it,
+    while still rejecting a destination ('to a web page team')."""
+    for msg in [
+        "convert the deck of q3 results to a web page",
+        "convert the deck about our roadmap to a web page",
+        "convert the deck with the q3 numbers to a web page",
+        "turn the slides from last week into a web page",
+        "turn the slides in the appendix into a web page",
+        "convert the deck on our strategy to a web page",
+        "turn the deck on pricing into a web page",
+        "convert the deck for marketing into a web page",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["html_deck"], (
+            f"{msg!r} → {got}; a source-noun-headed object with a prepositional "
+            f"modifier is a genuine conversion — must be ['html_deck']")
+
+
+def test_possessive_and_powerpoint_conversion_is_html_deck():
+    """Gate-2 iter-7 (run_32392299): two ordinary phrasings the grammar/source-noun
+    set initially missed. (1) Possessive modifiers ("last week's deck", "the team's
+    deck") — the object token must allow an apostrophe (_NP_MOD → [...']* ). (2) The
+    spelled-out word "powerpoint" as a source noun — was absent from _WEB_SRC_NOUN/
+    _NP_SRC, so "convert my powerpoint to a web page" returned None (total miss).
+    Both are the most natural way an English speaker states this exact intent."""
+    for msg in [
+        "convert last week's deck to a web page",
+        "turn the team's deck into a web page",
+        "convert our client's slides to a web page",
+        "turn john's slides into a web page",
+        "convert my powerpoint to a web page",
+        "turn the powerpoint into a webpage",
+        "convert powerpoint to html",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["html_deck"], (
+            f"{msg!r} → {got}; a possessive-modifier or 'powerpoint'-headed conversion "
+            f"is genuine — must be ['html_deck']")
+
+
+def test_genuine_web_conversion_still_html_deck():
+    """Paired guard: genuine PPT→web conversion intent must fire html_deck. These
+    are verb-anchored (a conversion verb governs a web target), matched by
+    _WEB_CONVERT_RE — NOT by bare noun/prep substrings (which mis-fire, see the
+    topic + destination tests). Covers both regex shapes: (A) prep-anchored
+    ('as a web page') and (B) prep-less ('make this a webpage')."""
+    for msg in [
+        "convert this ppt to a web deck",
+        "make it into a web page",
+        "export these slides as a web page",
+        "render the deck as web pages",
+        "web version of this deck",
+        "convert to web",
+        # bare "html" as the conversion target (Gate-2 HIGH, run_32392299): the
+        # target was previously "html <noun>" only, so "convert this ppt to html"
+        # wrongly returned ['deck']. _WEB_TARGET now accepts bare "html".
+        "convert this ppt to html",
+        "turn the pptx into html",
+        "turn my slides into html",
+        # rich object (modifiers + year + hyphenated) between verb and prep (Gate-2
+        # iter-3 under-match): the tight object gap must still allow adjective/noun/
+        # year modifiers ending in a source noun — not just a bare determiner. These
+        # are the ORDINARY ways users name a deck; missing them silently delivered a
+        # PPTX. Paired with the clause-break destination test (must NOT match those).
+        "convert the quarterly review deck into a web page",
+        "turn the 2026 board presentation into a webpage",
+        "export the final revised slides as a web page",
+        "convert this sales deck to a web page",
+        "render the pitch deck as a web page",
+        "convert the 30-slide deck to a webpage",
+        "export the q3 slides as a web page",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["html_deck"], (
+            f"{msg!r} → {got}; genuine PPT→web conversion must still be ['html_deck']")
+
+
+def test_webpage_one_word_conversion_is_html_deck():
+    """Gate-2 gap (run_32392299): the single-word 'webpage' spelling was absent
+    from the old substring list — 'make this a webpage' → None, 'host the deck as
+    a webpage' → ['deck'] (actively WRONG format). The verb-anchored _WEB_CONVERT_RE
+    covers 'webpage' as a _WEB_TARGET, including the prep-less 'make this a X' shape."""
+    for msg in [
+        "turn it into a webpage",
+        "make this a webpage",
+        "host the deck as a webpage",
+        "convert my slides to a webpage",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["html_deck"], (
+            f"{msg!r} → {got}; single-word 'webpage' conversion must be ['html_deck'] "
+            f"— not None (missed) nor ['deck'] (wrong format delivered)")
 
 
 # ---------- Defect 2: tone optional, derived from audience+outcome ----------

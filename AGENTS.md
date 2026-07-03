@@ -181,7 +181,7 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 | Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
 | GitHub Community Engine | `backend/skills/s_github_community/scripts/monitor.py` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
 | Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
-| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | 17,150 symbols, 23,508 edges — deterministic graph traversal for code context retrieval |
+| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | 17,394 symbols, 23,698 edges — deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
 | Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
@@ -195,16 +195,16 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 2638+ | `git log --oneline | wc -l` |
-| Duration | ~130 days | First commit to latest (1 human contributor) |
-| Backend core modules | 133 Python files, 71377 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 167562 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
-| Test files | 354 | `find backend/tests -name "*.py" | wc -l` |
+| Total commits | 2676+ | `git log --oneline | wc -l` |
+| Duration | ~131 days | First commit to latest (1 human contributor) |
+| Backend core modules | 133 Python files, 71718 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
+| Total backend LOC | 169176 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
+| Test files | 356 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 88 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 14 | `ls backend/hooks/*.py | wc -l` |
-| React components | 188 | `find desktop/src -name "*.tsx" | wc -l` |
+| React components | 193 | `find desktop/src -name "*.tsx" | wc -l` |
 | Pipeline spec depth | 1553 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 4344 lines | `wc -l backend/core/session_unit.py` |
+| Largest state machine | 4433 lines | `wc -l backend/core/session_unit.py` |
 | Context system | 1163 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 11 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |

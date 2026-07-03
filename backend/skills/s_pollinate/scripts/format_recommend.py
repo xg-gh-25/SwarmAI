@@ -18,6 +18,7 @@ No external dependencies. Pure mapping logic.
 
 import argparse
 import json
+import re
 import sys
 from typing import Any
 
@@ -299,6 +300,115 @@ def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
 # window-scan helper — that ordered-detection test IS the collision fix, and it
 # does not over-match a web/html TOPIC mention (which matches no html_deck phrase).
 
+# Conversion-to-web INTENT, verb-anchored (English). A plain substring like
+# "web page" / "as a web page" cannot express "a CONVERSION VERB governs this
+# target" — it fires on topic mentions ("a deck ABOUT our web page") and on
+# non-conversion prepositional uses ("describe our product AS a web page").
+# Only a real conversion verb (convert/turn/make/render/export/…) immediately
+# governing a web target is genuine PPT→web-deck intent. This regex encodes that
+# adjacency; it also covers the one-word "webpage" spelling variant. Everything
+# NOT matching (topic mentions, destinations like "send deck to web team") keeps
+# the PPTX "deck" track. (Gate-2 run_32392299: substring lists mis-fire both ways;
+# verb-anchoring is the correct layer.)
+_WEB_CONVERT_VERB = r"(?:convert|turn|make|render|export|publish|host|rebuild|redo|recreate|remake|change)"
+_WEB_TARGET = (
+    r"(?:web\s?pages?|web\s+decks?|web\s+versions?"
+    r"|html(?:\s+(?:deck|page|slides?|version)s?)?)"  # bare "html" OR "html deck/page/…"
+    # ...but NOT when immediately followed by a person/org noun — "to a web page
+    # TEAM/group/vendor/owner/ops" is a DESTINATION (send it to that group), not a
+    # conversion target. (Gate-2 run_32392299: "make a deck for the demo to a web
+    # page team" is a destination despite the valid conversion-shaped prefix.)
+    r"(?!\s+(?:team|teams|group|groups|vendor|vendors|owner|owners|ops|dept|"
+    r"department|people|folks|guys|person|contact|admin|admins)\b)"
+)
+_WEB_DET = r"(?:it|this|that|the|my|these|those|our|your|a|an)"
+_WEB_SRC_NOUN = r"(?:slides?|decks?|ppt|pptx|powerpoints?|presentations?|files?|docs?|documents?)"
+# Two genuine PPT→web conversion shapes, both VERB-anchored. The candidate regex
+# below is intentionally PERMISSIVE about the object (`.{0,40}?` between verb and
+# prep); the object is then validated by a POSITIVE noun-phrase grammar
+# (`_object_is_clean_noun_phrase` / `_OBJECT_NP_RE`) — see its docstring for why a
+# denylist was abandoned. The permissive candidate + positive post-validation is
+# what lets the same regex accept "convert the deck of q3 results to a web page"
+# and reject "make a poster and send slides to a web page".
+#   (A) verb <object> (into|to|as|in) [a/an] <web target>  — object grammar-validated
+#   (B) verb (it|this|that) (a|an) <web target>            — prep-less "make this a webpage"
+_WEB_CONVERT_RE = re.compile(
+    _WEB_CONVERT_VERB
+    + r"(?P<obj>.{0,40}?)\s+(?:in?to|to|as|in)\s+(?:an?\s+)?" + _WEB_TARGET  # (A)
+    + r"|" + _WEB_CONVERT_VERB + r"\s+(?:it|this|that)\s+an?\s+" + _WEB_TARGET,  # (B)
+    re.IGNORECASE,
+)
+
+# A conversion object is validated by a POSITIVE noun-phrase grammar anchored on a
+# source-artifact HEAD noun — NOT by scanning for banned tokens. Gate-2 iter-2→6
+# proved a denylist (of connectors, then of verbs) is永远 leaky: English verbs and
+# connectors are open/large classes, so "make a poster FIX slides to a web page"
+# (fix ∉ any list) and "make a poster; reuse slides …" (punctuation) kept
+# reopening the clause-break over-match, while banning ALL prepositions to kill
+# destinations wrongly rejected genuine prepositional objects ("convert the deck
+# OF q3 results to a web page"). The only fix that closes BOTH directions is a
+# positive grammar: the object must BE a single noun phrase whose head is a source
+# noun, optionally followed by prepositional modifiers that attach to that head.
+#   NP  := <det>? <modifier>* <SRC-NOUN> <PP>*
+#   PP  := <prep> <det>? <modifier>* <noun>
+# "a poster fix slides" → head is "poster" (NOT a source noun) → reject (fix/slides
+# can't both be the head). "the deck of q3 results" → head "deck" (source) + PP
+# "of q3 results" → accept. A ,/;/: anywhere = clause/list boundary → reject.
+_WEB_SRC_NOUN_WORDS = frozenset(
+    "slide slides deck decks ppt pptx powerpoint powerpoints presentation "
+    "presentations file files doc docs document documents".split()
+)
+_NP_DET = r"(?:it|this|that|the|my|these|those|our|your|a|an)"
+# A pre-modifier is an ADJECTIVE-ish token: NOT a format-track noun (poster/video/
+# deck/…) and NOT a source noun (those can only be the HEAD, never a pre-modifier —
+# this is what rejects "a POSTER fix slides", where "poster" would otherwise sit as
+# a pre-modifier before head "slides"). Hyphen/digit/apostrophe ok ("30-slide",
+# "q3", "week's" — a possessive is noun-phrase-internal, Gate-2 iter-7).
+_NP_TRACK_NOUN = r"(?:poster|video|shorts?|narrative|article|blog|podcast|audio|deck|decks|ppt|pptx|powerpoints?|slides?|presentations?|files?|docs?|documents?|report|memo|essay|dashboard|image)"
+_NP_MOD = r"(?!" + _NP_TRACK_NOUN + r"\b)[a-z0-9][\w\-']*"  # adjective-ish (poss. ok), not a format/src noun
+_NP_SRC = r"(?:slides?|decks?|ppt|pptx|powerpoints?|presentations?|files?|docs?|documents?)"
+_NP_PREP = r"(?:of|from|with|about|on|for|in)"  # preps that attach a modifier PP to the head
+# The object is EITHER just determiners/pronouns (shape "convert THIS to …",
+# "make IT into …") OR a source-noun-headed NP with optional pre-modifiers + PPs.
+_OBJECT_NP_RE = re.compile(
+    r"^\s*(?:"
+    + r"(?:" + _NP_DET + r")(?:\s+" + _NP_DET + r"){0,2}"   # pronoun/determiner-only object
+    + r"|"
+    + r"(?:" + _NP_DET + r"\s+)?"                            # optional determiner
+    + r"(?:" + _NP_MOD + r"\s+){0,2}"                        # ≤2 adjective pre-modifiers (NOT a format/src noun)
+    + _NP_SRC                                                # source-noun HEAD
+    + r"(?:\s+" + _NP_PREP + r"\s+(?:" + _NP_DET + r"\s+)?(?:" + _NP_MOD + r"\s+){0,3}[a-z0-9][\w\-]*)*"  # ≤N PP modifiers
+    + r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _object_is_clean_noun_phrase(obj: str) -> bool:
+    """True iff `obj` (the shape-A capture between the conversion verb and the prep)
+    is a single noun phrase — determiners/pronouns only, OR headed by a
+    source-artifact noun (slides/deck/ppt/…) with optional adjective + prepositional
+    modifiers. POSITIVE grammar, not a banned-token scan: it structurally
+    distinguishes a genuine conversion object ("the deck of q3 results", "it") from
+    a clause break ("a poster fix slides" — head would be "slides" but "poster" is a
+    format noun barred from pre-modifier position; "a poster; reuse slides" — crosses
+    punctuation).
+
+    Empty object is clean ("convert to a web page" → verb directly governs target).
+    NOTE: this is a fast-path CONFIRM-and-skip heuristic (INSTRUCTIONS.md:47-53) —
+    the agent shows the detected format and the user can add/narrow, and a miss
+    falls through to full discovery. So exotic ungrammatical inputs failing either
+    way are user-correctable, not silent. (Gate-2 run_32392299 iter-6: positive NP
+    grammar replaces the leaky denylist — closes both over- and under-match.)"""
+    if obj is None:
+        return True
+    s = obj.strip()
+    if not s:
+        return True
+    # A ,/;/: in the object span is a clause/list boundary — never part of one NP.
+    if any(p in s for p in (",", ";", ":")):
+        return False
+    return _OBJECT_NP_RE.match(s) is not None
+
 
 def detect_fast_path(user_message: str) -> list[str] | None:
     """
@@ -319,19 +429,23 @@ def detect_fast_path(user_message: str) -> list[str] | None:
         "html_deck": ["html deck", "html slides", "web deck", "html-deck",
                       "网页ppt", "网页幻灯", "网页演示", "html演示", "html幻灯",
                       "浏览器演示", "网页deck",
-                      # PPT→web conversion intent (most natural phrasings) — these
-                      # fire html_deck; the loop then suppresses the bare PPTX
-                      # "deck"/"ppt" substring via the `"html_deck" in detected` guard.
+                      # PPT→web conversion intent. CJK phrasings are already
+                      # verb+target compounds ("转成网页" = convert-to-web), safe as
+                      # substrings. English conversion intent is NOT a substring
+                      # match — it is handled by _WEB_CONVERT_RE (verb-anchored)
+                      # injected below, because bare English noun/prep phrases
+                      # ("web page", "as a web page") mis-fire on topic mentions and
+                      # destinations. Only unambiguous English COMPOUNDS stay here.
                       "网页版", "转网页", "转成网页", "变成网页", "做成网页", "做个网页",
                       "转html", "转成html", "做成html",
                       "web version", "convert to web", "convert to html",
-                      "to a web deck", "to web", "into a web", "web presentation",
+                      "to a web deck", "web presentation",
                       "在线演示", "在线幻灯"],
         "poster": ["海报", "poster", "长图", "图片", "card"],
         "video": ["视频", "video", "b站", "bilibili", "youtube"],
         "narrative": ["文章", "narrative", "article", "长文", "掘金", "公众号", "blog"],
         "shorts": ["短视频", "shorts", "reels", "抖音", "竖屏"],
-        "deck": ["deck", "ppt", "pptx", "slides", "演示", "幻灯片"],
+        "deck": ["deck", "ppt", "pptx", "powerpoint", "slides", "演示", "幻灯片"],
         "one_pager": ["one-pager", "one pager", "单页", "pdf", "一页纸"],
         "data_report": ["数据报告", "data report", "excel", "xlsx", "报表"],
         "document": ["文档", "document", "docx", "六页纸", "six-pager", "白皮书", "white paper"],
@@ -342,6 +456,23 @@ def detect_fast_path(user_message: str) -> list[str] | None:
 
     user_lower = user_message.lower()
     detected = []
+
+    # Verb-anchored English PPT→web conversion (see _WEB_CONVERT_RE). Seed html_deck
+    # FIRST (before the loop) so the `"html_deck" in detected` collision guard below
+    # suppresses the bare PPTX "deck"/"ppt" substring — same mechanism as a CJK
+    # html_deck phrase, but gated on a real conversion verb governing a web target.
+    # Shape-A candidates are STRUCTURALLY validated: the captured object must be a
+    # clean noun phrase (no clause break) — this is what rejects "make a poster
+    # WHILE EDITING slides to a web page" (destination) while accepting "convert
+    # the quarterly review deck to a web page". Shape B (no 'obj' group) is already
+    # tight (verb + anaphora pronoun + article). Respect negation ("don't convert").
+    web_convert = _WEB_CONVERT_RE.search(user_lower)
+    if web_convert and not _is_negated(user_lower, web_convert.group(0), web_convert.start()):
+        obj = web_convert.groupdict().get("obj")
+        # obj is None for a shape-B match (no capture group hit) → already tight.
+        # For shape A, the object span must be a clean noun phrase.
+        if obj is None or _object_is_clean_noun_phrase(obj):
+            detected.append("html_deck")
 
     for track, signals in format_signals.items():
         for signal in signals:
