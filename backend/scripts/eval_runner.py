@@ -1683,7 +1683,7 @@ DIMENSIONS = [
         "subtitle": "Subsystem imports, DDD engine, pipeline",
         "when": "Daily (python import canary, ~14s)",
         "purpose": "Catch broken dependencies before they surface as user-facing errors",
-        "categories": ["loop_active", "code_aware", "cultivation"],
+        "categories": ["loop_active", "code_aware", "cultivation", "memory"],
     },
     {
         "id": "compliance",
@@ -1691,7 +1691,7 @@ DIMENSIONS = [
         "subtitle": "STEERING/AGENT rule compliance",
         "when": "Monthly (LLM judge, ~$0.05)",
         "purpose": "Detect rule drift — rules that stop firing due to attention decay",
-        "categories": ["compliance", "quality"],
+        "categories": ["compliance", "quality", "safety"],
         "eval_method": "llm",
     },
     {
