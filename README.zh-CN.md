@@ -100,7 +100,7 @@ cd ../desktop && npm install && npm run tauri:dev
 | 2 | **记忆流水线** | 4 层持久化：DailyActivity → 蒸馏 → 复利召回 | [docs](./docs/Memory-Management-Design.md) |
 | 3 | **DDD 知识引擎** | 自生长领域知识，7 类本体，达尔文式淘汰 | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
 | 4 | **自主流水线** | 一句需求 → 可推送代码。9 stages · 3 gates（framing/plan/build）· 2 modes（Full + Goal Loop） | [docs](./docs/Autonomous-Pipeline-Design.md) |
-| 5 | **Pollinate 引擎** | 一条消息 → 多格式品牌内容 | [docs](./docs/Pollinate-Content-Engine.md) |
+| 5 | **Pollinate 引擎** | 一条消息 → 多格式品牌内容。9 阶段 · 11 轨道 · 3 级门控 · DDD 飞轮 | [docs](./docs/Pollinate-Content-Engine.md) · [架构图](./assets/pollinate-architecture.svg) |
 | 6 | **自进化** | 认知 L0→L3 补丁。42 条纠正 → 复发类别转化为结构性门控 | [docs](./docs/Self-Evolution-Harness-Design.md) |
 | 7 | **自愈合** | 不可见恢复：5 传感器，自动重生，用户无感知 | [code](./backend/core/session_healing.py) |
 | 8 | **多标签页 + MessageStore** | 并发会话，阶段门控单写者，跨标签页隔离 | [code](./desktop/src/stores/MessageStore.ts) |
@@ -108,11 +108,21 @@ cd ../desktop && npm install && npm run tauri:dev
 | 10 | **任务系统** | 后台智能：13 信号源，定时任务，预算门控 | [code](./backend/jobs/scheduler.py) |
 | 11 | **4 平台后端** | macOS daemon · Hive (EC2) · Windows · Linux。编译时隔离 | [code](./backend/main.py) |
 | 12 | **技能 + 通道** | 88 技能（lazy/always），Slack 网关，三层权限 | [code](./backend/core/skill_registry.py) |
-| 13 | **Eval（本体感觉）** | 解耦、系统级：Golden Set + git 绑定回归门控。证明收敛，而非凭感觉 | [docs](./docs/OS-Eval-Function-Design.md) |
+| 13 | **Eval（本体感觉）** | 解耦、系统级：Golden Set + git 绑定回归门控。证明收敛，而非凭感觉 | [docs](./docs/OS-Eval-Function-Design.md) · [架构图](./assets/eval-architecture.svg) |
 
 **复利闭环：** 记忆 → Pipeline 判断 → DDD → 进化 → 门控 → 记忆。去掉一个，其余变弱。
 
 <img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="自主流水线 — 9 阶段 · 3 道门 · 2 模式" width="100%"/>
+
+同一套 DDD 驱动的模式，不止用于代码，也用于内容。**Pollinate** 把一条消息变成任意格式 —— 并把经验写回 DDD，让每一次交付都复利：
+
+<img src="./assets/pollinate-architecture.svg" alt="Pollinate — 媒体价值交付引擎 · 9 阶段 · 11 轨道 · 3 级门控 · DDD 飞轮" width="100%"/>
+
+### Eval OS —— 本体感觉，而非外部测试
+
+大多数 Agent 由外部测试框架来打分。SwarmAI 给**自己**打分 —— 一个解耦的、系统级的子系统：它对着 Agent 的*真实*规则文件起一个干净会话（无聊天历史，同样的 11 个上下文文件 + hooks + 模型），然后问：它是否依然*正确*，而不只是*活着*？一套 **Golden Set**（公开、git 跟踪 + 私有、gitignore）把用例喂进 **6 个评分维度**和 **15 个分类**；每次运行都 **git 绑定到当次 commit**（`code_digest`），让回归可追溯。它**从不在编码流水线内运行**（那测的是旧 binary）—— 只由 CI 门控、部署、或周一 12:30 的定时任务触发。在 CI/部署时它是**硬门控**：回归或 BVT 变红就阻断合并。
+
+<img src="./assets/eval-architecture.svg" alt="SwarmAI Eval OS — 解耦系统级子系统 · WRITE → Golden Set → Execute → Consume · 6 维度 · 15 分类 · git 绑定回归门控" width="100%"/>
 
 > 📊 更多架构图：[复利飞轮](./assets/platform-flywheel.svg) · [上下文](./assets/context-engineering.svg) · [记忆](./assets/memory-pipeline.svg) · [DDD](./assets/ddd-three-layer-stack.svg) · [会话](./assets/multi-tab-sessions.svg) · [任务](./assets/job-system.svg) · [进化](./assets/self-evolution.svg)
 

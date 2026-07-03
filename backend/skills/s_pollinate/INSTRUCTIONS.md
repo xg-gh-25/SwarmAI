@@ -397,7 +397,7 @@ Message first, format follows.
        ★ Brand Conformance — identity.yaml exact match
        ★ Platform Specs — per-platform validation
 
-  Stages: EVALUATE → THINK → STRATEGIZE → PLAN → BUILD → REVIEW → DELIVER → REFLECT
+  Stages: EVALUATE → THINK → STRATEGIZE → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 

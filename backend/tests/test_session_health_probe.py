@@ -414,6 +414,187 @@ def test_bug2_and_bug1_end_to_end_checks_actually_execute(tmp_path, monkeypatch)
         "unrecovered force_unstick in the real log must be flagged")
 
 
+# ── run_6b10ea1c: bug1 recency-based progress + bug2 daemon-pid resolution ──
+#
+# bug1: the OLD _session_log_progressed used a 2s before/after delta. The ONLY
+# per-session line the daemon emits between turn events is
+# lifecycle_manager.memory_sample (~60s cadence, emitted for EVERY live session
+# incl. wedged ones). So a HEALTHY turn mid-Bedrock-inference showed no new line
+# in the 2s window → progressed=False → combined with IO-wait's ~0 CPU delta, a
+# healthy turn was flagged wedged (the live false-positive on session 90732703).
+# The fix: progress = a REAL (non-housekeeping) turn event within a recency
+# window > the heartbeat period.
+
+from datetime import datetime, timedelta
+
+_NOW = datetime(2026, 7, 3, 20, 16, 0)
+
+
+def _ts(delta_s: int) -> str:
+    return (_NOW - timedelta(seconds=delta_s)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def test_bug1_recent_real_event_is_progress():
+    """AC1: a healthy IO-wait turn with a REAL turn event within the recency
+    window → progressed=True (NOT wedged). This is the live false-positive."""
+    log = f"{_ts(30)},123 - core.streaming_orchestrator - INFO - Query sent for session abcd1234-1e8a\n"
+    assert shp._session_log_progressed("abcd1234", log, now=_NOW) is True
+
+
+def test_bug1_only_housekeeping_is_not_progress():
+    """AC3: a session visible ONLY via lifecycle_manager.memory_sample
+    (housekeeping — fires for wedged sessions too) has NO real progress → False.
+    The RECENT housekeeping line must NOT be mistaken for turn progress."""
+    log = (f"{_ts(5)},1 - core.lifecycle_manager - INFO - memory_sample "
+           f"total=1000MB sessions=[abcd1234=500MB(peak=600MB,STREAMING)]\n")
+    assert shp._session_log_progressed("abcd1234", log, now=_NOW) is False
+
+
+def test_bug1_stale_real_event_beyond_window_is_not_progress():
+    """AC1: a real event older than the recency window → not progressing → False."""
+    log = f"{_ts(300)},1 - core.streaming_orchestrator - INFO - Query sent for session abcd1234\n"
+    assert shp._session_log_progressed("abcd1234", log, now=_NOW) is False
+
+
+def test_bug1_unseen_session_is_none_failsafe():
+    """AC2: session id never appears → None → caller fails safe (never alarm)."""
+    assert shp._session_log_progressed("zzzz9999", "unrelated line\n", now=_NOW) is None
+
+
+def test_bug1_recency_boundary_inclusive():
+    """Adversarial LOW: pin the recency window boundary (uses <=, inclusive).
+    Exactly recency_s ago → True; one second beyond → False. Guards against a
+    `<=`→`<` flip or an off-by-one in _PROGRESS_RECENCY_S."""
+    at_edge = f"{_ts(int(shp._PROGRESS_RECENCY_S))},1 - core.streaming_orchestrator - INFO - Query sent for session abcd1234\n"
+    assert shp._session_log_progressed("abcd1234", at_edge, now=_NOW) is True, "boundary is inclusive"
+    beyond = f"{_ts(int(shp._PROGRESS_RECENCY_S) + 1)},1 - core.streaming_orchestrator - INFO - Query sent for session abcd1234\n"
+    assert shp._session_log_progressed("abcd1234", beyond, now=_NOW) is False, "one second past window → stale"
+
+
+def test_bug1_recent_housekeeping_but_stale_real_is_not_progress():
+    """AC3 (the exact wedge signature): fresh memory_sample housekeeping (~5s ago)
+    but the last REAL event is 5min old → the housekeeping must NOT rescue it →
+    False. This is what makes a genuine wedge detectable despite the heartbeat."""
+    log = (f"{_ts(300)},1 - core.streaming_orchestrator - INFO - Query sent for session abcd1234\n"
+           f"{_ts(5)},1 - core.lifecycle_manager - INFO - memory_sample sessions=[abcd1234=500MB(STREAMING)]\n")
+    assert shp._session_log_progressed("abcd1234", log, now=_NOW) is False
+
+
+def test_bug1_healthy_turn_not_wedged_end_to_end(monkeypatch):
+    """AC1 end-to-end: drive the FULL probe with a real dict-of-dicts payload and
+    a log whose only recent line is a REAL turn event (idle CPU in the slice).
+    Pre-fix this false-flagged wedged; post-fix the recency signal clears it."""
+    from jobs.handlers import session_health_probe as h
+    # NOTE: build the log relative to real now so the recency check sees it fresh.
+    fresh = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logf = _tmp_log(monkeypatch, h,
+                    f"{fresh},1 - core.streaming_orchestrator - INFO - Query sent for session live5678\n")
+    payload = {"sessions": {"live5678": {"streaming": True, "state": "streaming", "pid": 999999}}}
+    monkeypatch.setattr(h, "_http_json", lambda p, timeout=4.0: payload)
+    cpu_vals = iter([5.0, 5.0])  # zero CPU delta — IO-wait; only the log signal can clear it
+    result = shp.session_health_probe(
+        health_fetcher=lambda: {"database": {"healthy": True},
+                                "channel_gateway": {"startup_state": "started"}},
+        streaming_fetcher=h._fetch_streaming,
+        rss_fetcher=lambda: 1000.0,
+        cpu_sampler=lambda pid: next(cpu_vals),
+        log_reader=h._read_log,
+        sleep_fn=_noop_sleep,
+    )
+    checks = {c.name: c for c in result.checks}
+    assert checks["no_wedged_sessions"].ok is True, (
+        f"healthy IO-wait turn with a recent real event must NOT be flagged wedged; "
+        f"got {checks['no_wedged_sessions'].detail!r}")
+
+
+def _tmp_log(monkeypatch, h, content: str):
+    import tempfile, pathlib
+    p = pathlib.Path(tempfile.mkstemp(suffix="-backend-daemon.log")[1])
+    p.write_text(content)
+    monkeypatch.setattr(h, "_LOG_PATH", p)
+    return p
+
+
+# ── bug2: _fetch_rss must measure the resolved DAEMON pid, not os.getpid() ──
+#
+# The scheduled job runs in-process (os.getpid()==daemon), but a standalone
+# `python -c` / on-demand call measures the caller temp process (reported 45MB
+# while the daemon was ~1600MB) — the RSS check was silently dead for that path.
+
+def test_bug2_resolve_daemon_pid_env_first(monkeypatch):
+    """env pid is trusted when it is LIVE (os.getpid() is always live)."""
+    import os as _os
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.setenv("SWARMAI_OWNER_PID", str(_os.getpid()))
+    assert h._resolve_daemon_pid() == _os.getpid()
+
+
+def test_bug2_stale_env_pid_falls_through_to_launchctl(monkeypatch):
+    """Adversarial MED: a STALE/dead SWARMAI_OWNER_PID (daemon restarted, env
+    inherited) must NOT be trusted — else a dead pid → process_tree_rss 0 →
+    RSS check silently passes (bug2's own failure mode). Fall through to launchctl."""
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.setenv("SWARMAI_OWNER_PID", "999999")  # not a live pid
+    monkeypatch.setattr(h, "_pid_alive", lambda pid: False)  # force dead
+
+    class _R:
+        returncode = 0
+        stdout = '\t"PID" = 21510;\n\t"Label" = "com.swarmai.backend";\n'
+
+    monkeypatch.setattr(h.subprocess, "run", lambda *a, **k: _R())
+    assert h._resolve_daemon_pid() == 21510, "stale env pid must fall through, not be trusted"
+
+
+def test_bug2_pid_alive_probe(monkeypatch):
+    import os as _os
+    from jobs.handlers import session_health_probe as h
+    assert h._pid_alive(_os.getpid()) is True
+    assert h._pid_alive(999999) is False
+
+
+def test_bug2_resolve_daemon_pid_launchctl_fallback(monkeypatch):
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.delenv("SWARMAI_OWNER_PID", raising=False)
+
+    class _R:
+        returncode = 0
+        stdout = '\t"PID" = 21510;\n\t"Label" = "com.swarmai.backend";\n'
+
+    monkeypatch.setattr(h.subprocess, "run", lambda *a, **k: _R())
+    assert h._resolve_daemon_pid() == 21510
+
+
+def test_bug2_resolve_daemon_pid_last_resort_getpid(monkeypatch):
+    """No env, launchctl unavailable (Linux/CI or no daemon) → os.getpid()."""
+    import os as _os
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.delenv("SWARMAI_OWNER_PID", raising=False)
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("launchctl not found")
+
+    monkeypatch.setattr(h.subprocess, "run", _boom)
+    assert h._resolve_daemon_pid() == _os.getpid()
+
+
+def test_bug2_fetch_rss_measures_resolved_pid(monkeypatch):
+    """AC4: _fetch_rss must call process_tree_rss with the RESOLVED daemon pid,
+    not os.getpid() of a (possibly standalone) caller."""
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.setattr(h, "_resolve_daemon_pid", lambda: 424242)
+    seen = {}
+
+    class _FakeRM:
+        def process_tree_rss(self, pid):
+            seen["pid"] = pid
+            return 1600 * 1024 * 1024
+
+    monkeypatch.setattr("core.resource_monitor.resource_monitor", _FakeRM())
+    mb = h._fetch_rss()
+    assert seen["pid"] == 424242, "must measure the resolved daemon pid, not os.getpid()"
+    assert abs(mb - 1600.0) < 1.0
+
+
 def test_bug1_mutation_prefix_dict_makes_wedged_check_fail_safe():
     """MUTATION PROOF that the shape fix is load-bearing: feed the core probe the
     PRE-FIX shape (the raw inner dict, exactly what the old _fetch_streaming returned)

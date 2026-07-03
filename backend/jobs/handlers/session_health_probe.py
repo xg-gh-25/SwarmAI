@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import subprocess
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
@@ -72,16 +74,70 @@ def _fetch_streaming() -> list[dict]:
     return sessions if isinstance(sessions, list) else []
 
 
+_LAUNCHD_LABEL = "com.swarmai.backend"
+_LAUNCHCTL_PID_RE = re.compile(r'"PID"\s*=\s*(\d+)')
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if pid is a live process. os.kill(pid, 0) sends no signal — it only
+    probes existence: ProcessLookupError → dead; PermissionError → alive but
+    owned by another user (still live)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_daemon_pid() -> int:
+    """Resolve the REAL daemon root pid (run_6b10ea1c bug2).
+
+    The scheduled job runs IN-PROCESS (main.py in-process scheduler), so there
+    os.getpid() already IS the daemon. But a standalone ``python -c`` /
+    on-demand invocation is a SEPARATE process — os.getpid() would measure the
+    caller (reported 45MB while the daemon was ~1600MB), silently disabling the
+    RSS check for that path. Resolution order:
+      1. ``SWARMAI_OWNER_PID`` env — set by the daemon on itself
+         (claude_environment.py) and inherited by children/job threads. Correct
+         for BOTH the in-process job and a shell launched from the daemon's env.
+      2. ``launchctl list <label>`` PID — for a fully-detached standalone call.
+      3. ``os.getpid()`` — last resort (Linux/CI/dev, no launchd).
+    """
+    env_pid = os.environ.get("SWARMAI_OWNER_PID")
+    # Liveness-gate the env pid: a restarted daemon leaves a STALE SWARMAI_OWNER_PID
+    # in an inherited/exported env. Trusting it blindly reintroduces bug2's own
+    # failure mode — a dead pid makes process_tree_rss return 0 (RSS check silently
+    # passes), and a RECYCLED pid measures an unrelated process. os.kill(pid, 0)
+    # raises ProcessLookupError if dead; PermissionError means alive-but-not-ours
+    # (still a live pid → trust it).
+    if env_pid and env_pid.isdigit() and _pid_alive(int(env_pid)):
+        return int(env_pid)
+    try:
+        r = subprocess.run(["launchctl", "list", _LAUNCHD_LABEL],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            m = _LAUNCHCTL_PID_RE.search(r.stdout)
+            if m:
+                return int(m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return os.getpid()
+
+
 def _fetch_rss() -> float:
     """Total RSS (MB) of the daemon process tree (backend + CLI + MCP children).
 
-    The handler runs INSIDE the daemon, so os.getpid() is the daemon root.
-    process_tree_rss returns bytes (0 on failure → fail-safe: 0 < threshold
-    passes, matching the probe's no-alarm-on-unreadable philosophy).
+    Measures the RESOLVED daemon pid (not os.getpid()), so a standalone/on-demand
+    invocation measures the daemon, not the caller temp process. process_tree_rss
+    returns bytes (0 on failure → fail-safe: 0 < threshold passes, matching the
+    probe's no-alarm-on-unreadable philosophy).
     """
-    import os
     from core.resource_monitor import resource_monitor
-    rss_bytes = resource_monitor.process_tree_rss(os.getpid())
+    rss_bytes = resource_monitor.process_tree_rss(_resolve_daemon_pid())
     return rss_bytes / (1024 * 1024)
 
 

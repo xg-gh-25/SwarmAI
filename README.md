@@ -101,7 +101,7 @@ If you're also using AI to write code, make content, or run operations — these
 | 2 | **Memory Pipeline** | 4-tier persistence: DailyActivity → distillation → compound recall | [docs](./docs/Memory-Management-Design.md) |
 | 3 | **DDD Cultivation** | Self-growing domain knowledge, 7-type ontology, Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
 | 4 | **Autonomous Pipeline** | One requirement → push-ready code. 9 stages · 3 gates (framing/plan/build) · 2 modes (Full + Goal Loop) | [docs](./docs/Autonomous-Pipeline-Design.md) |
-| 5 | **Pollinate Engine** | One message → multi-format brand content | [docs](./docs/Pollinate-Content-Engine.md) |
+| 5 | **Pollinate Engine** | One message → multi-format brand content. 9 stages · 11 tracks · 3-tier gates · DDD flywheel | [docs](./docs/Pollinate-Content-Engine.md) · [diagram](./assets/pollinate-architecture.svg) |
 | 6 | **Self-Evolution** | Cognitive L0→L3 patching. 42 corrections → recurring classes become structural gates | [docs](./docs/Self-Evolution-Harness-Design.md) |
 | 7 | **Self-Healing** | Invisible recovery: 5 sensors, auto-respawn, user sees nothing | [code](./backend/core/session_healing.py) |
 | 8 | **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | [code](./desktop/src/stores/MessageStore.ts) |
@@ -114,6 +114,16 @@ If you're also using AI to write code, make content, or run operations — these
 **The compound loop:** Memory → Pipeline judgment → DDD → Evolution → Gates → Memory. Remove one, the rest weaken.
 
 <img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="Autonomous Pipeline — 9 Stages · 3 Gates · 2 Modes" width="100%"/>
+
+The same DDD-driven pattern powers content, not just code. **Pollinate** turns one message into any format — and writes its lessons back to the DDD, so every run compounds:
+
+<img src="./assets/pollinate-architecture.svg" alt="Pollinate — Media Value Delivery Engine · 9 Stages · 11 Tracks · 3-Tier Gates · DDD Flywheel" width="100%"/>
+
+### Eval OS — Proprioception, Not External Testing
+
+Most agents are graded by an outside harness. SwarmAI grades **itself** — a decoupled, system-level subsystem that spawns a clean session against the agent's *real* rules files (no chat history, same 11 context files + hooks + model) and asks: is it still *correct*, not just *alive*? A **golden set** (public, git-tracked + private, gitignored) feeds cases through **6 scoring dimensions** and **15 categories**; every run is **git-bound to the commit** (`code_digest`) so regressions are attributable. It **never runs inside a coding pipeline** (that would test the old binary) — only CI-gate, deploy, or the Monday 12:30 scheduled run trigger it. On CI/deploy it's a **hard gate**: regression or BVT-red blocks the merge.
+
+<img src="./assets/eval-architecture.svg" alt="SwarmAI Eval OS — Decoupled System-Level Subsystem · WRITE → Golden Set → Execute → Consume · 6 Dimensions · 15 Categories · Git-Bound Regression Gate" width="100%"/>
 
 > 📊 More diagrams: [Flywheel](./assets/platform-flywheel.svg) · [Context](./assets/context-engineering.svg) · [Memory](./assets/memory-pipeline.svg) · [DDD](./assets/ddd-three-layer-stack.svg) · [Sessions](./assets/multi-tab-sessions.svg) · [Jobs](./assets/job-system.svg) · [Evolution](./assets/self-evolution.svg)
 

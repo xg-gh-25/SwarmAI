@@ -22,7 +22,7 @@ Pollinate is SwarmAI's content delivery engine. Give it a topic and it runs a co
 
 The core insight remains: **the same DDD knowledge layer that makes Pipeline produce domain-correct code makes Pollinate produce brand-correct content.** Both engines read from and write back to the same four DDD documents. Both use stage-based structure with quality convergence. The difference is the domain — code delivery vs. content delivery — not the architecture.
 
-![9-Stage Pipeline Overview](diagrams-pollinate/01-nine-stages.svg)
+![Pollinate — 9-Stage Pipeline Overview](../assets/pollinate-architecture.svg)
 
 **What's new in v3:**
 - **DISCOVER stage** — human-in-the-loop scope clarification before any production (5 questions: message, audience, outcome, context, scope)
@@ -67,37 +67,39 @@ These are not intelligence failures. They are **context failures**. The LLM is c
 
 ---
 
-## 3. Overall Architecture: 8 Stages + Quality Gates
+## 3. Overall Architecture: 9 Stages + Quality Gates
 
-### The 8-Stage Pipeline
+### The 9-Stage Pipeline
 
-Pollinate follows the same structural pattern as Pipeline — eight sequential stages, each with a clear purpose, defined inputs, and defined outputs. The stages mirror Pipeline's stages (Evaluate, Think, Plan, Build, Review, Test, Deliver, Reflect) with content-domain equivalents.
+Pollinate runs a **mandatory DISCOVER step (Step 0)** — the one human-in-the-loop gate, where the user confirms message/audience/outcome/context/scope before any production — then **nine sequential stages**, each with a clear purpose, defined inputs, and defined outputs. The stages mirror Pipeline's stages (Evaluate, Think, Plan, Build, Review, Test, Deliver, Reflect) with content-domain equivalents, plus a content-specific **STRATEGIZE** stage (PR/FAQ + channel × format matrix) between THINK and PLAN.
 
-![Full 8-Stage Flow](diagrams-pollinate/01-eight-stages.svg)
+![Pollinate — 9-Stage Pipeline · 11 Tracks · 3-Tier Gates · DDD Flywheel](../assets/pollinate-architecture.svg)
 
 ### Stage-by-Stage Breakdown
 
 | Stage | Purpose | DDD Input | Output |
 |-------|---------|-----------|--------|
 | **EVALUATE** | Determine if this message is worth producing and aligns with current campaign | PRODUCT.md (brand alignment check) | GO/DEFER/REJECT decision |
-| **THINK** | Determine optimal format(s) for this message given current audience and channels | PROJECT.md (campaign context, target audience) | Format selection + audience mapping |
-| **PLAN** | Create storyboard/outline per selected format, including visual direction, hook, and CTA | TECH.md (real capabilities for content substance) | Per-format creative brief |
-| **PRODUCE** | Generate content in each selected format according to the creative brief | All 4 docs (full context for generation) | Draft content per format |
-| **REVIEW** | Check all drafts against brand conformance gates | All 4 docs (full conformance check) | PASS/FAIL per gate |
-| **REFINE** | Iterate on failures until all gates pass (quality convergence) | IMPROVEMENT.md (avoid past mistakes) | Converged content |
-| **DELIVER** | Package all formats with metadata and publishing instructions | PROJECT.md (channel targeting) | Delivery package |
-| **REFLECT** | Capture messaging learnings and feed back to DDD | Writes to IMPROVEMENT.md | Updated knowledge |
+| **THINK** | Research + differentiation: what's the angle, what already exists, what makes this distinct | PROJECT.md (campaign context, target audience) | Differentiated angle + audience mapping |
+| **STRATEGIZE** | PR/FAQ + channel × format matrix: pick the formats for the confirmed audience/context | PROJECT.md (channels, audience) | Channel × format matrix + PR/FAQ |
+| **PLAN** | Build the shared content_package + per-track specs (visual direction, hook, CTA) | TECH.md (real capabilities for content substance) | content_package + per-track creative briefs |
+| **BUILD** | Produce content natively in each confirmed track according to its spec | All 4 docs (full context for generation) | Draft content per track |
+| **REVIEW** | Audit all drafts against brand conformance gates | All 4 docs (full conformance check) | PASS/FAIL per gate |
+| **TEST** | Render + platform validation: render each artifact, validate against platform specs | IMPROVEMENT.md (avoid past mistakes) | Rendered, spec-validated artifacts |
+| **DELIVER** | Package all formats with metadata + publishing instructions, generate REPORT.md | PROJECT.md (channel targeting) | Delivery package + report |
+| **REFLECT** | Capture messaging learnings, feed back to DDD, update user_prefs | Writes to IMPROVEMENT.md | Updated knowledge + prefs |
 
 ### Parallel to Pipeline
 
 | Pipeline (Code) | Pollinate (Content) | Shared Pattern |
 |----------------|--------------------|-|
 | Evaluate: should we build this? | Evaluate: should we produce this? | DDD-informed go/no-go gate |
-| Think: what approach? | Think: what format(s)? | Context-driven strategy selection |
-| Plan: architecture + test plan | Plan: storyboard + creative brief | Structured blueprint before execution |
-| Build: write code (TDD) | Produce: generate content | Execution against spec |
+| Think: what approach? | Think: what angle / differentiation? | Context-driven strategy selection |
+| _(no direct equivalent)_ | Strategize: PR/FAQ + channel × format | Content-specific: pick formats for the audience |
+| Plan: architecture + test plan | Plan: content_package + creative briefs | Structured blueprint before execution |
+| Build: write code (TDD) | Build: produce content per track | Execution against spec |
 | Review: code quality check | Review: brand conformance check | Multi-dimensional quality validation |
-| Test: verify behavior | Refine: iterate to convergence | Quality convergence loop |
+| Test: verify behavior | Test: render + platform validation | Verify the artifact actually works |
 | Deliver: package + PR | Deliver: package + publish | Structured output with metadata |
 | Reflect: learnings to DDD | Reflect: learnings to DDD | Knowledge write-back |
 
@@ -113,7 +115,7 @@ Content passes through 5 gates before delivery (detailed in Section 6):
 4. Messaging Originality
 5. Format Suitability
 
-Any gate failure returns content to the REFINE stage. The loop iterates until convergence (all gates pass) or escalation (human judgment needed).
+Any gate failure returns content to BUILD for revision, then re-REVIEW. The loop iterates until convergence (all gates pass) or escalation (human judgment needed).
 
 ---
 
@@ -191,7 +193,7 @@ Format selection is not arbitrary. It follows a decision matrix:
 | Campaign phase (awareness) | Poster, video (broad reach) |
 | Campaign phase (consideration) | Narrative, README (depth for evaluation) |
 
-The THINK stage applies this matrix using PROJECT.md context (current campaign phase, target channels) to select which formats to produce.
+The STRATEGIZE stage applies this matrix using PROJECT.md context (current campaign phase, target channels) to select which formats to produce.
 
 ### Per-Format Constraints
 
@@ -288,7 +290,7 @@ Content quality in Pollinate is not subjective assessment — it is structured v
 
 ### Quality Convergence
 
-When any gate fails, content returns to the REFINE stage. The convergence process:
+When any gate fails, content returns to BUILD for revision (then re-REVIEW). The convergence process:
 
 1. Identify which gate(s) failed and why
 2. Determine minimum edit needed to pass (do not rewrite what already passes)
@@ -447,7 +449,7 @@ Each cycle makes both engines more effective. The compound rate accelerates as t
 
 **Brand Consistency Score**
 Measure: percentage of generated content that passes Gate 1 (brand voice) on first attempt.
-Target: >80% first-pass, >95% after one REFINE iteration.
+Target: >80% first-pass, >95% after one revision iteration.
 Baseline (generic AI): ~40% first-pass (requires extensive human editing).
 
 **Audience Engagement Alignment**

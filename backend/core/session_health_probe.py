@@ -12,15 +12,19 @@ Wedged-detection reuses the PRODUCTION-TESTED interval CPU-delta primitive
 (`resource_monitor.tree_cpu_seconds`, the same signal `session_unit._tool_hang_probe`
 uses) — NOT a single-frame CPU read. RP41: a single sample reads identically for a
 healthy turn waiting on Bedrock IO and a genuinely wedged one. We require a DOUBLE
-signal — (a) CPU-delta over an interval AND (b) log-progress (did this session emit
-new events in the window) — and we FAIL SAFE: if either signal is unreadable
-(None / no log access), we DO NOT alarm. A muted probe is worse than a quiet one.
+signal — (a) CPU-delta over an interval AND (b) log-progress: did this session emit
+a REAL turn event (streaming/transition/result_usage — NOT the ~60s
+lifecycle_manager.memory_sample housekeeping heartbeat, which fires for wedged
+sessions too) RECENTLY (within _PROGRESS_RECENCY_S). See _session_log_progressed.
+We FAIL SAFE: if either signal is unreadable (None / no log access), we DO NOT
+alarm. A muted probe is worse than a quiet one.
 """
 from __future__ import annotations
 
 import logging
 import re
 import time
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -42,6 +46,22 @@ _RECOVERY_PATTERN = re.compile(r"Retry \d+/\d+|--resume|recovered|_crash_to_cold
 _RECOVERY_WINDOW_LINES = 40
 # Extract a session-id-ish token to correlate failure↔recovery on the same session.
 _SID_RE = re.compile(r"\b([0-9a-f]{8})\b")
+
+# ── Progress-signal tuning (run_6b10ea1c) ──────────────────────────────────
+# The ONLY per-session line the daemon emits BETWEEN turn events is
+# lifecycle_manager.memory_sample (~60s cadence) — and it fires for EVERY live
+# session, wedged ones included. So it is NOT a turn-progress signal: it is
+# session-independent housekeeping that both (a) can't be seen in a 2s window
+# and (b) would falsely "rescue" a genuinely wedged session. We EXCLUDE it and
+# judge progress by whether a REAL turn event for the session appeared within a
+# recency window LARGER than the heartbeat period.
+_HOUSEKEEPING_MARKERS = ("lifecycle_manager", "memory_sample")
+# > memory_sample cadence (~60s measured) so a genuinely-progressing turn whose
+# last event predates one heartbeat is not missed; small enough that a real
+# wedge (no event for minutes) is still caught.
+_PROGRESS_RECENCY_S = 90.0
+# Leading "YYYY-MM-DD HH:MM:SS" stamp on daemon.log lines (comma-millis ignored).
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
 @dataclass
@@ -185,14 +205,15 @@ def session_health_probe(
         sessions = streaming_fetcher()
         streaming = [s for s in sessions if s.get("state") in ("streaming", "STREAMING") or s.get("streaming")]
         wedged: list[str] = []
-        # Read the log window ONCE before, to compute per-session progress.
-        log_before = log_reader()
+        # Read the log window ONCE; progress is now a recency check over it
+        # (real turn event within _PROGRESS_RECENCY_S), not a 2s before/after delta.
+        log_now = log_reader()
         for s in streaming:
             pid = s.get("pid") or s.get("claude_pid")
             sid = str(s.get("session_id", "?"))[:8]
             if not pid:
                 continue  # no pid → cannot probe → skip (fail-safe)
-            progressed = _session_log_progressed(sid, log_before, log_reader, sleep_fn)
+            progressed = _session_log_progressed(sid, log_now)
             if is_session_wedged(pid, cpu_sampler=cpu_sampler, log_progressed=progressed,
                                  sleep_fn=sleep_fn):
                 wedged.append(sid)
@@ -218,21 +239,56 @@ def session_health_probe(
 
 def _session_log_progressed(
     sid: str,
-    log_before: str,
-    log_reader: Callable[[], str],
-    sleep_fn: Callable[[float], None],
+    log_text: str,
+    *,
+    now: Optional[datetime] = None,
+    recency_s: float = _PROGRESS_RECENCY_S,
 ) -> Optional[bool]:
-    """Did this session emit NEW log lines across the probe window?
+    """Has this session emitted a REAL turn event recently?
 
-    Returns True/False, or None when the session id never appears in the log
-    (can't measure → caller fails safe). Counts lines mentioning the session id.
+    Recency-based (run_6b10ea1c), replacing the old 2s before/after delta. The
+    daemon's only per-session line between turn events is the ~60s
+    ``lifecycle_manager.memory_sample`` heartbeat — which (a) can't be seen in a
+    2s window and (b) fires for wedged sessions too. So the old delta declared a
+    healthy Bedrock-IO-wait turn "no progress" (→ false wedge) and could let a
+    housekeeping line mask a genuine wedge.
+
+    Now: scan the log for lines that mention ``sid`` AND are NOT housekeeping
+    (``lifecycle_manager`` / ``memory_sample``). Of those real turn-event lines,
+    take the most recent parseable timestamp.
+
+    Returns:
+      - ``True``  — a real event for this session within ``recency_s`` → working.
+      - ``False`` — real events exist but the latest is older than ``recency_s``
+        (stale → candidate wedge), OR the session appears ONLY in housekeeping
+        lines (no real turn activity at all).
+      - ``None``  — the session id never appears in the log, or no real line has
+        a parseable timestamp → cannot measure → caller FAILS SAFE (no alarm).
+
+    Pure over ``log_text`` — no sleep, no second read. ``now`` is injectable for
+    tests; defaults to wall clock.
     """
-    def _count(text: str) -> int:
-        return sum(1 for ln in text.splitlines() if sid in ln)
+    now = now or datetime.now()
+    seen_sid = False
+    latest: Optional[datetime] = None
+    for ln in log_text.splitlines():
+        if sid not in ln:
+            continue
+        seen_sid = True
+        if any(m in ln for m in _HOUSEKEEPING_MARKERS):
+            continue  # housekeeping heartbeat — not a turn-progress signal
+        m = _LOG_TS_RE.match(ln)
+        if not m:
+            continue
+        try:
+            ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
 
-    before = _count(log_before)
-    if before == 0:
-        return None  # session not visible in log → unknown → fail safe
-    sleep_fn(CPU_PROBE_INTERVAL_S)
-    after = _count(log_reader())
-    return after > before
+    if latest is not None:
+        return (now - latest) <= timedelta(seconds=recency_s)
+    if seen_sid:
+        return False  # only housekeeping lines → no real turn activity
+    return None       # not visible at all → unknown → fail safe

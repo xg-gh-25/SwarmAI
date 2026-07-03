@@ -169,21 +169,29 @@ class EvalService:
         """
         canonical_dims = set(self._golden_set.get("dimensions") or [])
         canonical_cats = set(self._golden_set.get("categories") or [])
+        bad_dims: list[str] = []
+        bad_cats: list[str] = []
         for case in cases:
             cid = case.get("id", "?")
             dim = case.get("dimension")
             if canonical_dims and dim is not None and dim not in canonical_dims:
-                logger.warning(
-                    "eval_service: case %s has off-canonical dimension %r "
-                    "(not in %s) — will leak into /health per-dimension scores",
-                    cid, dim, sorted(canonical_dims),
-                )
+                bad_dims.append(f"{cid}={dim!r}")
             cat = case.get("category")
             if canonical_cats and cat is not None and cat not in canonical_cats:
-                logger.warning(
-                    "eval_service: case %s has off-canonical category %r (not in %s)",
-                    cid, cat, sorted(canonical_cats),
-                )
+                bad_cats.append(f"{cid}={cat!r}")
+        # One summary WARNING per axis (not N lines) — names every offender so the
+        # drift is actionable without a log storm.
+        if bad_dims:
+            logger.warning(
+                "eval_service: %d case(s) with off-canonical dimension (not in %s) "
+                "— these leak into /health per-dimension scores: %s",
+                len(bad_dims), sorted(canonical_dims), ", ".join(bad_dims),
+            )
+        if bad_cats:
+            logger.warning(
+                "eval_service: %d case(s) with off-canonical category (not in %s): %s",
+                len(bad_cats), sorted(canonical_cats), ", ".join(bad_cats),
+            )
 
     def _load_history(self) -> None:
         """Parse all JSON files in EvalHistory/."""

@@ -1,13 +1,26 @@
 /**
- * HtmlRenderer -- Sandboxed HTML preview with source-code toggle.
+ * HtmlRenderer -- HTML viewer: open-in-browser (rendered) + in-app source view.
  *
- * Features:
- *   - Preview mode: sandboxed iframe with allow-same-origin, filling the panel
- *   - Source mode: raw HTML displayed in a syntax-highlighted <pre><code> block
- *   - Toggle button in the top-right corner to switch between [Preview] and [Source]
- *   - Reports file size via onStatusInfo
+ * ⚠️ Why NOT an in-app iframe preview: srcDoc rendering in the Tauri WebKit
+ * (WKWebView) webview is unreliable — it renders a blank frame in the production
+ * .app even for a valid static single-file document (Chrome/dev renders it fine,
+ * so the bug is invisible until packaged). This is the SAME conclusion the Eval
+ * report viewer already reached (see EvalDashboard ReportsTab: "srcDoc rendering
+ * in the Tauri WebKit webview proved unreliable" → open in system browser). So
+ * this renderer follows that established pattern instead of repeating the bug.
+ *
+ * Modes:
+ *   - Rendered  (default): a card that opens the file in the system browser via
+ *     the /workspace/file/raw endpoint (served as text/html — the browser renders
+ *     it natively, fully process-isolated). This is the "real" rendered view.
+ *   - Source: raw HTML in a syntax-highlighted <pre><code> block (in-app; works
+ *     fine because it's plain <pre>, not an iframe).
+ *   - Toggle button top-right switches [Source] / [Rendered].
+ *   - Reports file size via onStatusInfo.
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
+import { openExternal } from '../../../utils/openExternal';
+import { getApiBaseUrl } from '../../../services/tauri';
 
 interface RendererProps {
   filePath: string;
@@ -59,16 +72,25 @@ function highlightHtml(html: string): string {
 }
 
 export default function HtmlRenderer({
+  filePath,
+  fileName,
   content,
   fileSize,
   onStatusInfo,
 }: RendererProps) {
-  const [mode, setMode] = useState<'preview' | 'source'>('preview');
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [mode, setMode] = useState<'rendered' | 'source'>('rendered');
 
   useEffect(() => {
     onStatusInfo?.({ customInfo: formatFileSize(fileSize) });
   }, [fileSize, onStatusInfo]);
+
+  // Open the file in the system browser, which renders text/html natively and
+  // process-isolated. Reuse the dynamic api base (dev=8000 / desktop=dynamic /
+  // Hive=same-origin) — never hardcode host/port — and encode the path (paths
+  // contain spaces/CJK). Same contract as EvalDashboard ReportsTab.
+  const openInBrowser = () => {
+    void openExternal(`${getApiBaseUrl()}/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`);
+  };
 
   if (!content) {
     return (
@@ -83,30 +105,40 @@ export default function HtmlRenderer({
       {/* Toggle button */}
       <div className="absolute top-2 right-2 z-10">
         <button
-          onClick={() => setMode((prev) => (prev === 'preview' ? 'source' : 'preview'))}
+          onClick={() => setMode((prev) => (prev === 'rendered' ? 'source' : 'rendered'))}
           className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium
             text-[var(--color-text-muted)] hover:text-[var(--color-text)]
             bg-[var(--color-card)] border border-[var(--color-border)]
             hover:bg-[var(--color-hover)] transition-colors shadow-sm"
-          title={mode === 'preview' ? 'Show HTML source' : 'Show rendered preview'}
+          title={mode === 'rendered' ? 'Show HTML source' : 'Show rendered view'}
         >
           <span className="material-symbols-outlined text-sm">
-            {mode === 'preview' ? 'code' : 'visibility'}
+            {mode === 'rendered' ? 'code' : 'visibility'}
           </span>
-          {mode === 'preview' ? 'Source' : 'Preview'}
+          {mode === 'rendered' ? 'Source' : 'Rendered'}
         </button>
       </div>
 
       {/* Content area */}
-      {mode === 'preview' ? (
-        <iframe
-          ref={iframeRef}
-          sandbox="allow-same-origin"
-          srcDoc={content}
-          title="HTML Preview"
-          className="flex-1 w-full border-0 bg-white rounded"
-          style={{ minHeight: 0 }}
-        />
+      {mode === 'rendered' ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+          <span className="material-symbols-outlined text-5xl text-[var(--color-text-muted)]">language</span>
+          <div>
+            <p className="text-sm font-medium text-[var(--color-text)] mb-1">{fileName}</p>
+            <p className="text-xs text-[var(--color-text-muted)] max-w-sm">
+              HTML renders in your system browser — the in-app webview can't display it reliably.
+              Click below to open the fully-rendered page, or switch to <strong>Source</strong> to read the markup here.
+            </p>
+          </div>
+          <button
+            onClick={openInBrowser}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium
+              text-white bg-[var(--color-accent)] hover:opacity-90 transition-opacity shadow-sm"
+          >
+            <span className="material-symbols-outlined text-base">open_in_new</span>
+            Open in browser
+          </button>
+        </div>
       ) : (
         <div className="flex-1 overflow-auto min-h-0 p-4">
           <pre
