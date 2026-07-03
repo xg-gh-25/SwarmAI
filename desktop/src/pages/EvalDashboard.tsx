@@ -1278,10 +1278,10 @@ const guideContent = {
     ],
   },
   dimensions: {
-    en: 'The Five Eval Dimensions',
-    zh: '五个评估维度',
+    en: 'The Six Eval Dimensions',
+    zh: '六个评估维度',
   },
-  // The 5 canonical dimensions (source of truth: eval_runner.DIMENSIONS + golden_set.yaml
+  // The 6 canonical dimensions (source of truth: eval_runner.DIMENSIONS + golden_set.yaml
   // `dimensions:`). The `share` label is a relative-size snapshot, not a live count —
   // exact numbers live on the Golden Set tab.
   dimensionItems: [
@@ -1319,6 +1319,13 @@ const guideContent = {
       en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
       zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
       share: 'medium',
+    },
+    {
+      key: 'recovery',
+      icon: '🔄',
+      en: { name: 'Recovery', question: 'Do I recover correctly from a crash/interrupt?', method: 'Fault-injection harness — resume, self-heal, and crash-to-cold paths reach a correct state. Evaluator: runtime_health.' },
+      zh: { name: '恢复能力', question: '崩溃/中断后我能正确恢复吗？', method: '故障注入 harness — resume、自愈、crash-to-cold 路径达到正确状态。评估器：runtime_health。' },
+      share: 'small',
     },
   ],
   evaluators: {
@@ -1369,8 +1376,8 @@ const guideContent = {
     zh: '覆盖分布',
   },
   coverageDesc: {
-    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (5), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
-    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（5 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
+    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
+    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
   },
   lifecycle: {
     en: 'Case Lifecycle',
@@ -1464,11 +1471,12 @@ const guideContent = {
 // live, filterable source). Shows the SHAPE: capability/judgment/compliance dominate;
 // the dot grid conveys where cases cluster, not exact totals (which grow every run).
 const coverageGrid: Record<string, Record<string, number>> = {
-  capability:       { compliance: 0, decision: 0, recall: 0, code_aware: 5, loop_active: 4, ddd_informed: 2 },
-  judgment_quality: { compliance: 0, decision: 4, recall: 0, code_aware: 0, loop_active: 0, ddd_informed: 1 },
-  compliance:       { compliance: 4, decision: 1, recall: 0, code_aware: 0, loop_active: 0, ddd_informed: 0 },
-  factual_accuracy: { compliance: 0, decision: 0, recall: 3, code_aware: 0, loop_active: 0, ddd_informed: 0 },
-  context_utility:  { compliance: 0, decision: 0, recall: 1, code_aware: 0, loop_active: 0, ddd_informed: 1 },
+  capability:       { compliance: 0, decision: 0, recall: 0, code_aware: 5, loop_active: 4, runtime_health: 0 },
+  judgment_quality: { compliance: 0, decision: 4, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 0 },
+  compliance:       { compliance: 4, decision: 1, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 0 },
+  factual_accuracy: { compliance: 0, decision: 0, recall: 3, code_aware: 0, loop_active: 0, runtime_health: 0 },
+  context_utility:  { compliance: 0, decision: 0, recall: 1, code_aware: 0, loop_active: 0, runtime_health: 0 },
+  recovery:         { compliance: 0, decision: 0, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 3 },
 };
 
 export function GuideTab() {

@@ -1709,7 +1709,16 @@ DIMENSIONS = [
         "subtitle": "Knowledge retrieval, DDD consultation, proactive action",
         "when": "Monthly (LLM judge) + session (file checks)",
         "purpose": "Verify the learning loop is spinning — knowledge grows and gets used",
-        "categories": ["knowledge", "ddd_informed", "action", "recovery"],
+        "categories": ["knowledge", "ddd_informed", "action"],
+    },
+    {
+        "id": "recovery",
+        "question": "崩溃/中断后我能正确恢复吗？",
+        "subtitle": "Self-healing, resume, crash-to-cold recovery paths",
+        "when": "Biweekly (runtime_health fault-injection harness)",
+        "purpose": "Verify recovery paths execute — a passed recovery case must score into "
+                   "its own dimension, not vanish (else it inflates confidence without moving health)",
+        "categories": ["runtime_health", "recovery"],
     },
 ]
 

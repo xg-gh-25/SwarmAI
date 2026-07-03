@@ -4,9 +4,10 @@
  * The Guide tab had hardcoded facts that drifted from the live eval system:
  *   - "115 behavioral cases / 84 LLM-judged"  → dropped (volatile absolutes removed)
  *   - "~185 cases as of 2026-06"              → dropped (live count is on Overview/Golden Set)
- *   - "Seven Eval Dimensions" / "Dimension (7)" → 5 canonical dims (source: eval_runner.DIMENSIONS
+ *   - "Seven Eval Dimensions" / "Dimension (7)" → 6 canonical dims (source: eval_runner.DIMENSIONS
  *       + golden_set.yaml `dimensions:`). A PRIOR fix (run_26cc4bd4) miscounted live as 7 and
- *       set "Five"→"Seven"; the source truth is 5, so this run corrects it back. (run_8c44b7bf)
+ *       set "Five"→"Seven". run_8c44b7bf corrected it: folded the duplicate `utility`→`context_utility`,
+ *       and kept `recovery` as a first-class (test_ac6-protected) dimension → 6 total. (run_8c44b7bf)
  *   - triggers "Weekly (Thu 04:00 UTC)"       → live lunchtime 12:30 ICT weekdays
  *   - 6 programmatic evaluators               → 7 (runtime_health added)
  *   - no architecture diagram                 → embed eval-architecture.svg
@@ -37,17 +38,22 @@ describe('GuideTab fact freshness', () => {
     expect(text).not.toContain('周四 04:00');
   });
 
-  it('shows the correct canonical dimension count (5, not the stale 7)', () => {
+  it('shows the correct canonical dimension count (6, not the stale 7)', () => {
     const { container } = renderGuide();
     const text = container.textContent || '';
-    // Source of truth = eval_runner.DIMENSIONS (5). A prior fix wrongly set "Seven".
+    // Source of truth = eval_runner.DIMENSIONS + golden_set.yaml (6: canonical 5 + recovery).
+    // A prior fix wrongly set "Seven"; the duplicate "utility" folded into context_utility.
     expect(text).not.toContain('Seven Eval Dimensions');
     expect(text).not.toContain('七个评估维度');
     expect(text).not.toContain('Dimension (7)');
     expect(text).not.toContain('Dimension（7');
-    expect(text).toContain('Five Eval Dimensions');
-    // exactly 5 dimension cards render (utility + recovery removed)
-    expect(container.querySelectorAll('[data-dim-key]').length).toBe(5);
+    expect(text).toContain('Six Eval Dimensions');
+    // exactly 6 dimension cards render (stale "utility" removed, "recovery" kept)
+    expect(container.querySelectorAll('[data-dim-key]').length).toBe(6);
+    // the folded-away duplicate must be gone, the kept dimension present
+    const keys = Array.from(container.querySelectorAll('[data-dim-key]')).map(e => e.getAttribute('data-dim-key'));
+    expect(keys).toContain('recovery');
+    expect(keys).not.toContain('utility');
   });
 
   it('reflects the refreshed cadence (lunchtime / weekday) and runtime_health evaluator', () => {
