@@ -105,7 +105,7 @@ def test_both_counters_reset_on_stage_completion(tmp_path, monkeypatch):
         "stage_json": json.dumps({"stage": "build", "status": "completed",
                                   "stage_doc_consumed": True, "token_cost": 100}),
         "status": None, "profile": None, "ddd_checksums": None,
-        "taste_decision": None,
+        "taste_decision": None, "files_touched": None,
     })()
     cli.cmd_run_update(args, reg=None)
 
