@@ -294,17 +294,10 @@ def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
     return False
 
 
-def _is_html_deck_context(user_lower: str, signal: str, match_pos: int) -> bool:
-    """True if a bare 'deck'-family signal is actually part of an html-deck phrase.
-
-    'html deck' / '网页deck' contain the substring 'deck', so a naive match on the
-    PPTX 'deck' token would double-emit alongside html_deck. This checks the words
-    IMMEDIATELY before the match for an html/web/网页 qualifier (narrow window, same
-    approach as _is_negated) so only the html_deck track fires for such phrases.
-    """
-    prefix = user_lower[max(0, match_pos - 8):match_pos]
-    qualifiers = ["html", "html-", "html ", "web ", "web-", "网页", "浏览器"]
-    return any(prefix.rstrip().endswith(q.rstrip()) or q in prefix for q in qualifiers)
+# NOTE: PPT→web-deck collision is handled directly in detect_fast_path's loop via
+# the `"html_deck" in detected` guard (html_deck is iterated first). No separate
+# window-scan helper — that ordered-detection test IS the collision fix, and it
+# does not over-match a web/html TOPIC mention (which matches no html_deck phrase).
 
 
 def detect_fast_path(user_message: str) -> list[str] | None:
@@ -316,15 +309,24 @@ def detect_fast_path(user_message: str) -> list[str] | None:
     Supports Chinese and English format names.
     """
     # NOTE: html_deck is listed BEFORE deck intentionally. Its signals ("html
-    # deck", "网页ppt", ...) are the self-contained browser HTML-deck track,
-    # distinct from the PptxGenJS "deck" (PPTX) track. Because the bare "deck"
-    # signal is a SUBSTRING of "html deck", the loop below suppresses a "deck"
-    # match when it is part of an html-deck phrase (see _is_html_deck_context)
-    # so an "html deck" request does NOT double-emit the PPTX deck track.
+    # deck", "网页ppt", "网页版", "转成网页", ...) are the self-contained browser
+    # HTML-deck track, distinct from the PptxGenJS "deck" (PPTX) track. Because the
+    # bare "deck"/"ppt" signal is a SUBSTRING of html-deck phrases, the loop below
+    # suppresses the PPTX "deck" match when html_deck ALREADY fired
+    # (`"html_deck" in detected`) — so an html-deck request does NOT double-emit,
+    # while a PPTX that merely mentions web as a topic keeps its deck track.
     format_signals = {
         "html_deck": ["html deck", "html slides", "web deck", "html-deck",
                       "网页ppt", "网页幻灯", "网页演示", "html演示", "html幻灯",
-                      "浏览器演示", "网页deck"],
+                      "浏览器演示", "网页deck",
+                      # PPT→web conversion intent (most natural phrasings) — these
+                      # fire html_deck; the loop then suppresses the bare PPTX
+                      # "deck"/"ppt" substring via the `"html_deck" in detected` guard.
+                      "网页版", "转网页", "转成网页", "变成网页", "做成网页", "做个网页",
+                      "转html", "转成html", "做成html",
+                      "web version", "convert to web", "convert to html",
+                      "to a web deck", "to web", "into a web", "web presentation",
+                      "在线演示", "在线幻灯"],
         "poster": ["海报", "poster", "长图", "图片", "card"],
         "video": ["视频", "video", "b站", "bilibili", "youtube"],
         "narrative": ["文章", "narrative", "article", "长文", "掘金", "公众号", "blog"],
@@ -348,10 +350,17 @@ def detect_fast_path(user_message: str) -> list[str] | None:
                 # Check for negation before the match
                 if _is_negated(user_lower, signal, pos):
                     break
-                # Collision guard: a bare PPTX-"deck" signal that is actually
-                # part of an "html deck" / "网页…" phrase must NOT emit the PPTX
-                # deck track (html_deck already captured it).
-                if track == "deck" and _is_html_deck_context(user_lower, signal, pos):
+                # Collision guard: suppress the PPTX "deck" track ONLY when the
+                # html_deck track ALREADY fired (html_deck is iterated FIRST). This
+                # is the precise "the user asked for an html deck" signal — "html
+                # deck"/"网页ppt"/"把ppt转成网页版" all match an html_deck phrase →
+                # html_deck in `detected` → suppress the substring "deck"/"ppt"
+                # double-emit. A message that merely MENTIONS 网页/web as a TOPIC
+                # ("做个关于网页设计的ppt") matches NO html_deck phrase → html_deck
+                # NOT in detected → "deck" correctly stays (it's a PPTX about web
+                # design). Replaces an earlier window-scan that over-matched topic
+                # mentions and silently dropped the PPTX request (Gate-2 HIGH).
+                if track == "deck" and "html_deck" in detected:
                     break
                 if track not in detected:
                     detected.append(track)

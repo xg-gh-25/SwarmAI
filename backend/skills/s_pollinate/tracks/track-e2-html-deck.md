@@ -96,7 +96,10 @@ thumbnails, let the user pick — all as ordinary chat markdown (no new UI).
    `http://localhost:18321/api/workspace/file/raw?path=` prefix when emitting.)
 3. **"show more" / "next batch"** → re-run with `--offset 3` (then 6, 9 …). Ordering
    is deterministic, so batches are disjoint (no repeats).
-4. **"see all"** → present the full ranked list (thumbnails in batches to stay scannable).
+4. **"see all"** → do NOT dump 34 thumbnails at once (floods the chat). Present in
+   batches of **6** (`--top 6`, then `--offset 6`, `12`, …), and after each batch ask
+   "keep going, or pick one?" — wait for the user before the next batch. Same
+   deterministic ordering, so batches stay disjoint.
 5. **User picks** by name or by pointing ("the orange one", "the retro Windows one").
    Only then load that ONE system's `systems/<id>/design.md`.
 

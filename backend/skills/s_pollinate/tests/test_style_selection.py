@@ -20,6 +20,74 @@ sys.path.insert(0, str(SCRIPTS))
 
 import recommend_systems as rec  # noqa: E402
 import render_style_thumbnails as rt  # noqa: E402
+import format_recommend as fr  # noqa: E402
+
+
+# ---------- Defect 1: PPT→web intent detection (run_a620a6ca) ----------
+
+def test_ppt_to_web_conversion_emits_html_deck_only():
+    """The natural PPT→web-deck phrasings must return html_deck ONLY — never the
+    PPTX 'deck' track (user asked for a web deck, not a PowerPoint file)."""
+    for msg in [
+        "把这个ppt转成网页版",
+        "convert this pptx to html deck",
+        "我有个ppt想变成网页演示",
+        "turn my slides into a web deck",
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["html_deck"], f"{msg!r} → {got}, expected ['html_deck'] only"
+
+
+def test_plain_ppt_still_pptx_no_html_deck_regression():
+    """REGRESSION guard: a plain deck/ppt request with NO web qualifier must stay
+    the PPTX 'deck' track and must NOT gain html_deck."""
+    for msg in ["make a ppt", "做个演示", "build a deck", "需要一个pptx", "幻灯片"]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["deck"], f"{msg!r} → {got}, expected ['deck'] only (no html_deck)"
+
+
+def test_ppt_that_MENTIONS_web_as_topic_stays_pptx():
+    """Gate-2 HIGH regression: a PPTX that merely MENTIONS web/html as its TOPIC
+    (no conversion verb) must stay ['deck'] — NOT be suppressed to None/html_deck.
+    The over-broad whole-message qualifier scan dropped these entirely."""
+    for msg in [
+        "做个ppt介绍我们的网页",          # a PPT introducing our webpage
+        "做个关于网页设计的ppt",          # a PPT about web design
+        "做个ppt讲讲html的历史",          # a PPT on the history of html
+        "我要做个pptx，主题是网页开发",   # explicit pptx, topic = web dev
+    ]:
+        got = fr.detect_fast_path(msg)
+        assert got == ["deck"], (
+            f"{msg!r} → {got}; a web/html TOPIC mention (no conversion verb) must "
+            f"stay ['deck'] — dropping it to {got} silently loses the user's format")
+
+
+# ---------- Defect 2: tone optional, derived from audience+outcome ----------
+
+def test_recommender_works_without_tone():
+    """DISCOVER yields audience/outcome/context but NOT tone. The recommender must
+    still produce a sane derived tone + ranking (not crash, not degrade to noise)."""
+    assert rec.derive_tone("leadership", "alignment") == "serious"
+    assert rec.derive_tone("social_followers", "awareness") == "bold"
+    assert rec.derive_tone("developer_community", None) == "technical"
+    # audience-only fallback + unknown → graceful
+    assert rec.derive_tone("team", None) == "warm"
+    assert rec.derive_tone(None, None) is None  # no signal → tone simply omitted
+
+
+def test_derived_tone_ranks_like_explicit_tone():
+    """A leadership+alignment profile with NO tone should rank professional systems
+    top (via derived 'serious'), matching what an explicit tone would do."""
+    cards = rec.load_cards()
+    tone = rec.derive_tone("leadership", "alignment")
+    ranked = sorted(
+        ((rec.score(c, "leadership", "alignment", "meeting", tone)[0], c["slug"], c["formality"])
+         for c in cards),
+        key=lambda x: (-x[0], x[1]),
+    )
+    top3_formality = [f for _, _, f in ranked[:3]]
+    assert all(f in ("high", "medium-high") for f in top3_formality), \
+        f"derived-tone ranking surfaced low-formality for leadership: {ranked[:3]}"
 
 
 # ---------- recommender: data + ranking ----------

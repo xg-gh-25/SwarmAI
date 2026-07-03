@@ -62,6 +62,38 @@ TONE_KEYWORDS = {  # free-text tone → mood keywords (user may say anything)
     "creative": ["playful", "expressive", "creative", "bold", "hand-crafted"],
 }
 
+# Defect 2: the DISCOVER flow (INSTRUCTIONS Q1-Q5) yields message/audience/outcome/
+# context/scope but NOT tone. --tone is optional; when absent we DERIVE an implicit
+# tone from (audience, outcome) so the recommender still gets its strongest signal.
+# Explicit --tone always overrides.
+_DERIVED_TONE = {
+    # (audience, outcome) → tone. outcome=None = audience-only fallback.
+    ("leadership", None):          "professional",
+    ("leadership", "alignment"):   "serious",
+    ("leadership", "data_decision"): "quiet",
+    ("customer", None):            "professional",
+    ("customer", "action"):        "bold",
+    ("team", None):                "warm",
+    ("developer_community", None): "technical",
+    ("social_followers", None):    "playful",
+    ("social_followers", "awareness"): "bold",
+}
+_OUTCOME_TONE = {  # last-resort when audience unknown
+    "awareness": "bold", "alignment": "professional", "action": "bold",
+    "data_decision": "quiet", "education": "elegant",
+}
+
+def derive_tone(audience, outcome):
+    """Implicit tone from audience+outcome when the user didn't state one."""
+    if audience:
+        if (audience, outcome) in _DERIVED_TONE:
+            return _DERIVED_TONE[(audience, outcome)]
+        if (audience, None) in _DERIVED_TONE:
+            return _DERIVED_TONE[(audience, None)]
+    if outcome in _OUTCOME_TONE:
+        return _OUTCOME_TONE[outcome]
+    return None  # no signal → tone simply doesn't contribute (still ranks on the rest)
+
 
 def load_cards():
     cards = []
@@ -129,10 +161,14 @@ def main():
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
+    # Defect 2: DISCOVER doesn't yield tone → derive it from audience+outcome when
+    # the user didn't pass --tone (explicit --tone always wins).
+    effective_tone = a.tone or derive_tone(a.audience, a.outcome)
+
     cards = load_cards()
     ranked = []
     for c in cards:
-        sc, why = score(c, a.audience, a.outcome, a.context, a.tone)
+        sc, why = score(c, a.audience, a.outcome, a.context, effective_tone)
         ranked.append((sc, c, why))
     # DETERMINISTIC order: score desc, then slug asc (stable tiebreak → paginates
     # cleanly with --offset, no repeats/gaps across "next batch").
@@ -151,7 +187,9 @@ def main():
         })
     result = {
         "profile": {"audience": a.audience, "outcome": a.outcome,
-                    "context": a.context, "tone": a.tone},
+                    "context": a.context, "tone": a.tone,
+                    "effective_tone": effective_tone,
+                    "tone_derived": a.tone is None and effective_tone is not None},
         "total": len(ranked), "offset": a.offset, "returned": len(out),
         "has_more": a.offset + a.top < len(ranked),
         "recommendations": out,
