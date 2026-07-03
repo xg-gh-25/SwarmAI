@@ -56,6 +56,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.artifact_registry import ArtifactRegistry
 from core.pipeline_profiles import get_profile_stages
 
+# Fields that `publish --stage` auto-records into a stage stub (see cmd_publish)
+# and that a subsequent `run-update --stage-json` finalize must NOT lose to the
+# full-record replace. ONLY artifact_id: it is the sole publish-set field that a
+# gate reads (the completion/advance artifact-link check). `status` is excluded
+# on purpose (finalize upgrades recorded→completed); `auto_recorded` is provenance
+# no gate reads. Widen this ONLY when a new publish-set, gate-read field is proven.
+_CARRY_FORWARD_FIELDS = frozenset({"artifact_id"})
+
 
 def _get_workspace() -> Path:
     """Resolve workspace root from environment or default."""
@@ -167,8 +175,23 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     With --stage: runs validate_artifact_data() from pipeline_validator
     (single source of truth). On failure, returns errors + expected template.
     """
+    # --data accepts a raw JSON string OR "@PATH" (read a file) OR "@-" (stdin).
+    # A JSON value never starts with '@' (object/array/string/number/bool/null),
+    # so the '@' prefix is an unambiguous discriminator. Lets large artifact
+    # payloads avoid shell-string quoting gymnastics (run_b7620c6e #1).
+    _raw = args.data
+    if isinstance(_raw, str) and _raw.startswith("@"):
+        try:
+            if _raw == "@-":
+                _raw = sys.stdin.read()
+            else:
+                _raw = Path(_raw[1:]).expanduser().read_text(encoding="utf-8")
+        except (OSError, IOError) as e:
+            print(json.dumps({"error": f"Could not read --data source {args.data!r}: {e}"}),
+                  file=sys.stderr)
+            sys.exit(1)
     try:
-        data = json.loads(args.data)
+        data = json.loads(_raw)
     except json.JSONDecodeError as e:
         print(json.dumps({"error": f"Invalid JSON data: {e}"}), file=sys.stderr)
         sys.exit(1)
@@ -1521,6 +1544,20 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             None,
         )
         if existing_idx is not None:
+            # Carry-forward safelist: run-update REPLACES the whole record, but the
+            # documented finalize workflow (INSTRUCTIONS.md:1372-1379) omits fields
+            # that `publish --stage` auto-recorded — chiefly artifact_id (the stub at
+            # cmd_publish sets stage/status/artifact_id/auto_recorded). Without this,
+            # finalizing wipes the artifact link → the completion gate's artifact
+            # check silently skips (run_dc86c466 hit this 2x). Preserve ONLY fields
+            # in this safelist when the incoming finalize omits them; an explicit
+            # value always wins. Deliberately EXCLUDES `status` (it must upgrade
+            # recorded→completed) and `auto_recorded` (provenance, no gate reads it).
+            existing_rec = run_state["stages"][existing_idx]
+            if isinstance(existing_rec, dict):
+                for _cf in _CARRY_FORWARD_FIELDS:
+                    if _cf not in stage_record and existing_rec.get(_cf):
+                        stage_record[_cf] = existing_rec[_cf]
             run_state["stages"][existing_idx] = stage_record
         else:
             run_state["stages"].append(stage_record)

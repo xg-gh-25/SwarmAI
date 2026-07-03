@@ -331,6 +331,146 @@ class TestAutoRecordStage:
         assert "stage_doc_consumed" not in build
 
 
+class TestRunUpdateCarryForward:
+    """run_b7620c6e: run-update --stage-json full-replaced the stage record,
+    clobbering the artifact_id that publish --stage auto-recorded. The documented
+    finalize workflow omits top-level artifact_id for non-deliver stages, so
+    finalizing silently broke the artifact link (bit run_dc86c466 2x). Fix:
+    carry forward a NAMED safelist ({artifact_id}) from the existing record when
+    the incoming finalize stage-json omits it. Explicit value wins; status must
+    NOT carry (it upgrades recorded->completed)."""
+
+    def _update_args(self, workspace, run_id, stage_json):
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "lessons limit modules outcome overlap partial probes producer profile "
+                 "project reason requirement resolved retries review_count rp_violations "
+                 "run_id scope stage stage_json state status summary taste_decision "
+                 "timestamp tokens_consumed topic type types user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.stage_json = stage_json
+        return ns
+
+    def test_finalize_omitting_artifact_id_preserves_it(self, workspace, monkeypatch):
+        """The core bug: publish auto-records artifact_id; finalize omits it → must be preserved."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        # Prior state: publish auto-recorded the stub (status=recorded + artifact_id).
+        _create_run(workspace, "TestProject", "run_cf1", "running",
+                    stages=[{"stage": "build", "status": "recorded", "artifact_id": "art_pub123"}])
+        # Finalize WITHOUT artifact_id (the documented non-deliver finalize shape).
+        args = self._update_args(workspace, "run_cf1",
+                                 json.dumps({"stage": "build", "status": "completed",
+                                             "stage_doc_consumed": True, "token_cost": 100}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf1" / "run.json"
+        build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
+        assert build["artifact_id"] == "art_pub123", "artifact_id must survive the finalize replace"
+        assert build["status"] == "completed", "status must still upgrade recorded->completed"
+
+    def test_explicit_artifact_id_wins_over_carried(self, workspace, monkeypatch):
+        """An explicitly-passed artifact_id always overrides the carried-forward one."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_cf2", "running",
+                    stages=[{"stage": "build", "status": "recorded", "artifact_id": "art_old"}])
+        args = self._update_args(workspace, "run_cf2",
+                                 json.dumps({"stage": "build", "status": "completed",
+                                             "stage_doc_consumed": True, "artifact_id": "art_new"}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf2" / "run.json"
+        build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
+        assert build["artifact_id"] == "art_new", "explicit artifact_id must win"
+
+    def test_no_prior_record_does_not_fabricate_artifact_id(self, workspace, monkeypatch):
+        """A stage with NO prior record + no artifact_id in stage-json stays without one
+        (carry-forward must not fabricate a link — the deliver gate depends on this)."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_cf3", "running", stages=[])
+        args = self._update_args(workspace, "run_cf3",
+                                 json.dumps({"stage": "build", "status": "completed",
+                                             "stage_doc_consumed": True}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf3" / "run.json"
+        build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
+        assert not build.get("artifact_id"), "no prior record → no fabricated artifact_id"
+
+    def test_status_not_carried_forward(self, workspace, monkeypatch):
+        """status must NOT carry forward: a re-finalize that omits status must not
+        silently retain 'recorded' (the recorded->completed upgrade contract)."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        _create_run(workspace, "TestProject", "run_cf4", "running",
+                    stages=[{"stage": "build", "status": "completed", "artifact_id": "art_x"}])
+        # A stage-json that omits status entirely — carried 'status' would be a bug;
+        # we assert artifact_id carries but status is whatever the new record says (None here).
+        args = self._update_args(workspace, "run_cf4",
+                                 json.dumps({"stage": "build", "token_cost": 50}))
+        cli.cmd_run_update(args, reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_cf4" / "run.json"
+        build = next(s for s in _read_run(run_file)["stages"] if s["stage"] == "build")
+        assert build["artifact_id"] == "art_x", "artifact_id carries"
+        assert build.get("status") != "completed", "status must NOT carry forward from the old record"
+
+
+class TestPublishDataFromFile:
+    """run_b7620c6e #1: publish --data only accepted a raw JSON string. Add
+    @FILE / @- (stdin) so large artifact payloads avoid shell-string gymnastics."""
+
+    def _publish_args(self, data_arg):
+        import argparse
+        ns = argparse.Namespace(project="TestProject", type="changeset", data=data_arg,
+                                producer="s_autonomous-pipeline", summary="t", topic="",
+                                stage=None, run_id=None, quiet=True)
+        return ns
+
+    def test_data_at_file_is_read(self, workspace, tmp_path, monkeypatch, capsys):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        payload = tmp_path / "p.json"
+        payload.write_text(json.dumps({"branch": "x", "commits": ["abc1234"], "files_changed": ["f.py"]}))
+        cli.cmd_publish(self._publish_args("@" + str(payload)), reg)
+        out = capsys.readouterr().out
+        assert "artifact_id" in out, f"@file publish should succeed: {out}"
+
+    def test_raw_string_still_works(self, workspace, monkeypatch, capsys):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        raw = json.dumps({"branch": "x", "commits": ["abc1234"], "files_changed": ["f.py"]})
+        cli.cmd_publish(self._publish_args(raw), reg)
+        out = capsys.readouterr().out
+        assert "artifact_id" in out, f"raw-string publish must still work: {out}"
+
+    def test_data_at_stdin_is_read(self, workspace, monkeypatch, capsys):
+        import io
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        monkeypatch.setattr("sys.stdin",
+                            io.StringIO(json.dumps({"branch": "x", "commits": ["abc1234"], "files_changed": ["f.py"]})))
+        reg = ArtifactRegistry(workspace)
+        cli.cmd_publish(self._publish_args("@-"), reg)
+        out = capsys.readouterr().out
+        assert "artifact_id" in out, f"@- stdin publish should succeed: {out}"
+
+
 class TestPublishQuietMode:
     """--quiet: parse-proof output for orchestrators (run_688b6487 DoD1).
 
