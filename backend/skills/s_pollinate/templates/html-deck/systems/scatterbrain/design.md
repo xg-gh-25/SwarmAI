@@ -513,6 +513,7 @@ A `@media print` rule sets `page-break-after: always` on each slide with `min-he
 
 ```html
 <link href="https://chinese-fonts-cdn.deno.dev/packages/zcool-kuaile/dist/ZCOOLKuaiLe-Regular/result.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Shrikhand&family=Zilla+Slab:wght@400;500;700&family=Caveat:wght@400;500;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/cn-fontsource-yozai-regular/font.css" rel="stylesheet">
 ```
 

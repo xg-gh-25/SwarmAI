@@ -558,7 +558,7 @@ Add to the existing Google Fonts `<link>` (or as a second link tag):
 ```html
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@500;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@500;700;800&family=Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,700;1,6..96,400&family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
 ```
 
 LXGW WenKai TC is the version on Google Fonts (ships both traditional and simplified glyphs).
