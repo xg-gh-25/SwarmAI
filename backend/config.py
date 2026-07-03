@@ -50,6 +50,28 @@ def get_app_data_dir() -> Path:
     """
     return Path.home() / ".swarm-ai"
 
+
+def get_log_file_path() -> Path:
+    """Get the daemon log file path — the single source of truth for the log
+    filename across all consumers (main.py's RotatingFileHandler AND any job
+    handler that needs to read the live log).
+
+    Daemon writes to backend-daemon.log; dev.sh redirects to backend.log, so
+    multiple processes never share a file.
+
+    Lives in config.py (a dependency-free leaf module) on purpose: importing it
+    from main.py would drag in the entire FastAPI app + a duplicate
+    RotatingFileHandler on the live log file (import blast radius). Consumers
+    import THIS, not main.
+    """
+    import os
+    log_dir = get_app_data_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    mode = os.environ.get("SWARMAI_MODE", "daemon")
+    if mode == "daemon":
+        return log_dir / "backend-daemon.log"
+    return log_dir / "backend.log"
+
 # Default model ID mapping: Anthropic API model ID -> AWS Bedrock cross-region inference profile
 # Used when CLAUDE_CODE_USE_BEDROCK=true and no override exists in config.json
 # Format: us.anthropic.<model>-v1 (cross-region inference profile)

@@ -18,7 +18,23 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 _DAEMON_BASE = os.environ.get("SWARMAI_HEALTH_BASE", "http://127.0.0.1:18321")
-_LOG_PATH = Path.home() / ".swarm-ai" / "logs" / "daemon.log"
+
+
+def _resolve_log_path() -> Path:
+    """The REAL daemon log path, from the single source of truth (config).
+
+    Was previously hardcoded to a nonexistent ``daemon.log`` → _read_log()
+    always returned "" → no_unrecovered_events scanned nothing (silent
+    fail-safe). Fail-safe fallback to backend-daemon.log if the import fails.
+    """
+    try:
+        from config import get_log_file_path
+        return get_log_file_path()
+    except Exception:
+        return Path.home() / ".swarm-ai" / "logs" / "backend-daemon.log"
+
+
+_LOG_PATH = _resolve_log_path()
 _LOG_TAIL_BYTES = 200_000  # ~last 200KB window
 
 
@@ -33,11 +49,25 @@ def _fetch_health() -> dict:
 
 
 def _fetch_streaming() -> list[dict]:
+    """Normalize the streaming-state endpoint into a list[dict], each item
+    carrying its session_id.
+
+    The live endpoint returns a session-KEYED dict:
+    ``{"sessions": {session_id: {state, streaming, pid, ...}}}`` — the
+    session_id is the KEY, not a field. The core probe iterates the returned
+    value and calls ``.get()`` on each item, so we MUST hand it a list of
+    dicts (with session_id merged in from the key), not the raw dict — else it
+    iterates the dict's string keys and crashes into its fail-safe branch
+    (the bug that silently disabled the wedged-session check). Also still
+    handles the legacy {"sessions": [...]} and bare-list shapes.
+    """
     data = _http_json("/api/chat/sessions/streaming-state")
-    # endpoint returns {"sessions": [...]} or a list; normalize.
-    if isinstance(data, dict):
-        return data.get("sessions", [])
-    return data if isinstance(data, list) else []
+    sessions = data.get("sessions", data) if isinstance(data, dict) else data
+    if isinstance(sessions, dict):
+        # dict-of-dicts → list, injecting session_id from the key.
+        return [{"session_id": sid, **val} for sid, val in sessions.items()
+                if isinstance(val, dict)]
+    return sessions if isinstance(sessions, list) else []
 
 
 def _fetch_rss() -> float:

@@ -18,7 +18,7 @@ import time
 import uuid
 from pathlib import Path
 
-from config import settings, get_app_data_dir
+from config import settings, get_app_data_dir, get_log_file_path
 from core import session_registry
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, voice_router, hive_router
@@ -67,18 +67,8 @@ _startup_time_ms: float | None = None
 _phase_timings: dict[str, float] | None = None
 
 
-def get_log_file_path() -> Path:
-    """Get the log file path based on run mode.
-
-    Daemon writes to backend-daemon.log.  dev.sh already redirects to
-    backend-dev.log, so multiple processes never share a file.
-    """
-    log_dir = get_app_data_dir() / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    mode = os.environ.get("SWARMAI_MODE", "daemon")
-    if mode == "daemon":
-        return log_dir / "backend-daemon.log"
-    return log_dir / "backend.log"
+# get_log_file_path() moved to config.py (leaf module, single source of truth) so
+# job handlers can read the live log path without importing main.py's full app graph.
 
 
 # Configure logging

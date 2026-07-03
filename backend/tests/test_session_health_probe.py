@@ -296,3 +296,140 @@ def test_m2_recovery_outside_window_does_not_absolve():
            + "Retry 1/3 for session aaaaaaaa --resume\n")
     out = shp.scan_unrecovered_events(log)
     assert len(out) == 1, "recovery beyond the window must not absolve"
+
+
+# ── run_dc86c466: the 3 silent-fail-safe bugs (dict shape / missing pid / log path) ──
+#
+# These exercise the REAL wiring (real _fetch_streaming, real core probe, real log
+# path resolution) against the REAL endpoint payload shape ({"sessions": {sid: {...}}}).
+# Every prior streaming test used a hand-rolled LIST fixture, which structurally hid
+# the fact that the live endpoint returns a dict-of-dicts. See EVOLUTION skeptic verdict.
+
+def test_bug1_fetch_streaming_normalizes_dict_of_dicts(monkeypatch):
+    """AC1: the REAL endpoint returns {"sessions": {sid: {...}}} (dict-of-dicts).
+    _fetch_streaming MUST normalize that into a list[dict] where each item carries
+    session_id (injected from the key). Pre-fix it returned the inner dict verbatim,
+    so the core probe iterated string keys and crashed into fail-safe."""
+    from jobs.handlers import session_health_probe as h
+    real_payload = {"sessions": {
+        "sid-aaaa": {"streaming": True, "state": "streaming", "pid": 4242},
+        "sid-bbbb": {"streaming": False, "state": "idle", "pid": None},
+    }}
+    monkeypatch.setattr(h, "_http_json", lambda path, timeout=4.0: real_payload)
+    out = h._fetch_streaming()
+    assert isinstance(out, list), f"must be list, got {type(out).__name__}"
+    assert len(out) == 2
+    for item in out:
+        assert isinstance(item, dict), "each item must be a dict, not a bare key string"
+        assert "session_id" in item, "session_id must be injected from the dict key"
+        assert "state" in item and "streaming" in item
+    by_id = {i["session_id"]: i for i in out}
+    assert by_id["sid-aaaa"]["pid"] == 4242
+    assert by_id["sid-aaaa"]["state"] == "streaming"
+
+
+def test_bug1_fetch_streaming_still_handles_list_and_wrapped_list(monkeypatch):
+    """Regression: the pre-existing {"sessions": [...]} and bare-list shapes must
+    still normalize (don't break the shapes the old code handled)."""
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.setattr(h, "_http_json",
+                        lambda p, timeout=4.0: {"sessions": [{"session_id": "x", "state": "idle"}]})
+    assert h._fetch_streaming() == [{"session_id": "x", "state": "idle"}]
+    monkeypatch.setattr(h, "_http_json",
+                        lambda p, timeout=4.0: [{"session_id": "y", "state": "idle"}])
+    assert h._fetch_streaming() == [{"session_id": "y", "state": "idle"}]
+
+
+def test_bug3_log_path_points_at_real_daemon_log():
+    """AC3: the handler's log path must be the REAL file the daemon writes
+    (backend-daemon.log), not the non-existent daemon.log. Sourced from the single
+    source of truth, not a second hardcoded string that can drift."""
+    from jobs.handlers import session_health_probe as h
+    from config import get_log_file_path
+    assert h._LOG_PATH == get_log_file_path(), (
+        f"handler log path {h._LOG_PATH} != source-of-truth {get_log_file_path()}")
+    assert h._LOG_PATH.name == "backend-daemon.log"
+
+
+def test_bug3_read_log_reads_a_real_file(tmp_path, monkeypatch):
+    """AC3: _read_log() must return the file's content (pre-fix it pointed at a
+    nonexistent path → always returned "" → no_unrecovered_events scanned nothing)."""
+    from jobs.handlers import session_health_probe as h
+    logf = tmp_path / "backend-daemon.log"
+    logf.write_text("force_unstick fired on session zzzzzzzz\n(no recovery after)\n")
+    monkeypatch.setattr(h, "_LOG_PATH", logf)
+    content = h._read_log()
+    assert "force_unstick" in content, "must read the real log content, not empty string"
+
+
+def test_bug2_and_bug1_end_to_end_checks_actually_execute(tmp_path, monkeypatch):
+    """AC4 (mutation-proven): drive the REAL _fetch_streaming + REAL core probe
+    against the REAL dict-of-dicts payload and a REAL temp log. Both previously-dead
+    checks must now EXECUTE:
+      - no_wedged_sessions produces a COUNT detail ("N streaming, wedged=...") — NOT
+        the "session scan unreadable (fail-safe)" string.
+      - no_unrecovered_events flags the unrecovered marker from the temp log.
+    """
+    from jobs.handlers import session_health_probe as h
+
+    # Real log with an unrecovered failure marker + the streaming session's id so
+    # _session_log_progressed can measure it.
+    logf = tmp_path / "backend-daemon.log"
+    logf.write_text(
+        "sid-wedged streaming turn began\n"
+        "force_unstick fired on session other999\n"  # unrecovered → must flag
+    )
+    monkeypatch.setattr(h, "_LOG_PATH", logf)
+
+    # Real endpoint shape: one streaming session WITH a pid so the wedged loop
+    # does not skip it (proves bug #2 fixed: pid present + reachable).
+    payload = {"sessions": {
+        "sid-wedged": {"streaming": True, "state": "streaming", "pid": 999999},
+    }}
+    monkeypatch.setattr(h, "_http_json", lambda p, timeout=4.0: payload)
+
+    # cpu_sampler: deterministic zero-delta (idle) so — combined with no NEW log
+    # progress — the double-signal declares wedged. This proves the check RAN.
+    cpu_vals = iter([5.0, 5.0])
+    result = shp.session_health_probe(
+        health_fetcher=lambda: {"database": {"healthy": True},
+                                "channel_gateway": {"startup_state": "started"}},
+        streaming_fetcher=h._fetch_streaming,          # REAL fetcher
+        rss_fetcher=lambda: 1000.0,
+        cpu_sampler=lambda pid: next(cpu_vals),
+        log_reader=h._read_log,                        # REAL log reader
+        sleep_fn=_noop_sleep,
+    )
+    checks = {c.name: c for c in result.checks}
+
+    wedged_detail = checks["no_wedged_sessions"].detail
+    assert "unreadable" not in wedged_detail, (
+        f"no_wedged_sessions still fail-safing: {wedged_detail!r}")
+    assert "streaming" in wedged_detail, (
+        f"expected a real count detail, got {wedged_detail!r}")
+    # zero-cpu + no-log-progress for a visible session → genuinely wedged → flagged
+    assert checks["no_wedged_sessions"].ok is False, "wedged session must be detected"
+
+    assert checks["no_unrecovered_events"].ok is False, (
+        "unrecovered force_unstick in the real log must be flagged")
+
+
+def test_bug1_mutation_prefix_dict_makes_wedged_check_fail_safe():
+    """MUTATION PROOF that the shape fix is load-bearing: feed the core probe the
+    PRE-FIX shape (the raw inner dict, exactly what the old _fetch_streaming returned)
+    and confirm no_wedged_sessions crashes into fail-safe. If this test ever goes
+    green with the buggy shape, the fix was cosmetic."""
+    raw_dict = {"sid-aaaa": {"streaming": True, "state": "streaming", "pid": 1}}
+    result = shp.session_health_probe(
+        health_fetcher=lambda: {"database": {"healthy": True},
+                                "channel_gateway": {"startup_state": "started"}},
+        streaming_fetcher=lambda: raw_dict,   # BUG shape: dict, not list
+        rss_fetcher=lambda: 1000.0,
+        cpu_sampler=lambda pid: 5.0,
+        log_reader=lambda: "",
+        sleep_fn=_noop_sleep,
+    )
+    detail = {c.name: c for c in result.checks}["no_wedged_sessions"].detail
+    assert "unreadable" in detail, (
+        "the raw-dict shape MUST fail-safe (proves the normalize fix is load-bearing); "
+        f"got {detail!r}")

@@ -909,6 +909,11 @@ async def get_streaming_state_endpoint():
         result[unit.session_id] = {
             "streaming": is_streaming,
             "state": unit.state.value,
+            # pid = the owned Claude subprocess pid (unit.pid → _wrapper.pid),
+            # None when no live subprocess. The session-health-probe's wedged
+            # check needs it to sample tree CPU; a None pid → probe skips the
+            # session (fail-safe). Additive field — frontend ignores unknowns.
+            "pid": unit.pid,
             "post_disconnect_flushing": post_disconnect_flushing,
             # waiting_input must also reflect a re-surfaced durable request, else
             # the frontend won't render the prompt it was just handed.
