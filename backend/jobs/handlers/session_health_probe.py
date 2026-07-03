@@ -64,8 +64,10 @@ def _fetch_streaming() -> list[dict]:
     data = _http_json("/api/chat/sessions/streaming-state")
     sessions = data.get("sessions", data) if isinstance(data, dict) else data
     if isinstance(sessions, dict):
-        # dict-of-dicts → list, injecting session_id from the key.
-        return [{"session_id": sid, **val} for sid, val in sessions.items()
+        # dict-of-dicts → list, injecting session_id from the key. The KEY is the
+        # authoritative session id, so it wins over any stray same-named field in
+        # val (spread val FIRST, then session_id — later key wins).
+        return [{**val, "session_id": sid} for sid, val in sessions.items()
                 if isinstance(val, dict)]
     return sessions if isinstance(sessions, list) else []
 
