@@ -687,6 +687,52 @@ def _run_tokens(data: dict) -> int:
 _CRASH_ZOMBIE_REASON = "session_crash_auto_detected"
 
 
+def is_terminal_run(data: dict) -> bool:
+    """Single source of truth: has this run reached a TERMINAL (finished) state,
+    judged by STAGE PROGRESS — not by the top-level `status` string?
+
+    Why stage-based, not status-based: the orphan-transition
+    (proactive_intelligence: running->paused + reason=session_crash_auto_detected)
+    can flip a run whose STAGES are all done to status='paused' during a session
+    refresh. Such a run is FINISHED, not a crash orphan — but every liveness check
+    that keys off `status` alone mis-reads it as a resumable crash-zombie and
+    re-surfaces it forever (run_bf840159: 6/6 stages incl. reflect completed, yet
+    status='paused'+crash-reason → endless auto-resume prompt).
+
+    A run is terminal when EITHER:
+      - top-level status is an explicit terminal value, OR
+      - a completed 'reflect' or 'deliver' stage exists (the pipeline's own
+        end-of-run markers — reaching either means the run delivered).
+
+    NOT terminal just because "every LISTED stage is completed": a paused
+    mid-pipeline run only lists the stages done SO FAR and carries a
+    `checkpoint.next_stage` pointing at remaining work (e.g. evaluate+think done,
+    next_stage=build). Treating that as terminal would silently skip a genuinely
+    resumable run. The reflect/deliver marker is the reliable end-of-run signal —
+    the pipeline appends those only at the very end.
+
+    Terminal runs are NEVER crash orphans: crash-detect, orphan-transition,
+    supersede, and _abandon_verdict must all skip them regardless of `status`.
+    """
+    if not isinstance(data, dict):
+        return False
+    status = data.get("status")
+    if status in ("completed", "complete", "abandoned", "failed", "cancelled"):
+        return True
+    stages = data.get("stages") or []
+    if not isinstance(stages, list) or not stages:
+        return False
+    # End-of-run stage markers ONLY: a completed reflect/deliver means the run
+    # produced its deliverable. (Do NOT infer terminal from "all listed stages
+    # done" — a mid-pipeline pause satisfies that yet has next_stage remaining.)
+    return any(
+        isinstance(s, dict)
+        and s.get("stage") in ("reflect", "deliver")
+        and s.get("status") == "completed"
+        for s in stages
+    )
+
+
 def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
     """Single source of truth for "should this run be auto-abandoned?".
 
@@ -711,6 +757,14 @@ def _abandon_verdict(data: dict, threshold) -> tuple[bool, str | None]:
     """
     status = data.get("status")
     if status not in ("running", "paused"):
+        return (False, None)
+
+    # TERMINAL GUARD (run_bf840159): a run whose STAGES are all done (or has a
+    # completed reflect/deliver) is FINISHED — even if the orphan-transition
+    # flipped its status to 'paused'+crash-reason during a session refresh. Never
+    # abandon a finished run; it is not a crash-zombie, it is a completed run
+    # wearing a stale status string.
+    if is_terminal_run(data):
         return (False, None)
 
     # Age gate (shared) — a run newer than threshold is never reaped.

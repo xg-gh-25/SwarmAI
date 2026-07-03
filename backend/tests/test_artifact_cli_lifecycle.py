@@ -1286,3 +1286,91 @@ class TestCrashZombieAbandon:
         data = _read_run(f)
         assert data["status"] == "abandoned"
         assert data["abandon_reason"] == "orphaned_no_resume"
+
+
+class TestTerminalRunNeverCrashZombie:
+    """run_bf840159: a run whose STAGES are all completed (incl. reflect) but whose
+    top-level status was flipped to paused+session_crash_auto_detected by the
+    orphan-transition during a session refresh must NEVER be treated as a crash
+    orphan. Stage-based terminal detection, because the status string is exactly
+    what the false-positive corrupts.
+    """
+
+    CRASH = "session_crash_auto_detected"
+
+    def test_predicate_true_on_all_stages_completed(self):
+        from scripts.artifact_cli import is_terminal_run
+        d = {"status": "paused",
+             "checkpoint": {"reason": self.CRASH},
+             "stages": [{"stage": "evaluate", "status": "completed"},
+                        {"stage": "build", "status": "completed"},
+                        {"stage": "reflect", "status": "completed"}]}
+        assert is_terminal_run(d) is True
+
+    def test_predicate_true_on_completed_reflect_marker(self):
+        """A completed reflect stage alone marks terminal even if an earlier stage
+        is only 'recorded' (the pipeline reached its end-of-run marker)."""
+        from scripts.artifact_cli import is_terminal_run
+        d = {"status": "paused",
+             "stages": [{"stage": "think", "status": "recorded"},
+                        {"stage": "reflect", "status": "completed"}]}
+        assert is_terminal_run(d) is True
+
+    def test_predicate_MUTATION_false_when_stages_unfinished(self):
+        """RED-line: flip every stage to a non-done state → predicate MUST flip to
+        False. If this stays True, the predicate is vacuous (would skip live runs)."""
+        from scripts.artifact_cli import is_terminal_run
+        d = {"status": "paused",
+             "checkpoint": {"reason": self.CRASH},
+             "stages": [{"stage": "evaluate", "status": "completed"},
+                        {"stage": "build", "status": "recorded"},
+                        {"stage": "reflect", "status": "recorded"}]}
+        assert is_terminal_run(d) is False, \
+            "an unfinished run (no completed reflect/deliver, not all-done) is NOT terminal"
+
+    def test_predicate_false_on_empty_stages(self):
+        """A fresh run with no stages yet is NOT terminal (guards the all([]) == True
+        vacuous-truth trap)."""
+        from scripts.artifact_cli import is_terminal_run
+        assert is_terminal_run({"status": "running", "stages": []}) is False
+
+    def test_predicate_false_on_midpipeline_pause(self):
+        """CRITICAL regression guard: a paused mid-pipeline run lists only the
+        stages done SO FAR (all 'completed') but has next_stage remaining. It is
+        RESUMABLE, NOT terminal. If the predicate returned True here it would
+        silently skip genuinely-resumable crash orphans (broke 3 auto-resume tests
+        during development — this pins the fix)."""
+        from scripts.artifact_cli import is_terminal_run
+        d = {"status": "paused",
+             "checkpoint": {"next_stage": "build", "reason": self.CRASH},
+             "stages": [{"stage": "evaluate", "status": "completed"},
+                        {"stage": "think", "status": "completed"}]}
+        assert is_terminal_run(d) is False, \
+            "evaluate+think done + next_stage=build is a RESUMABLE pause, not terminal"
+
+    def test_completed_run_with_paused_status_NEVER_abandoned(self, workspace):
+        """The exact run_bf840159 shape: status=paused + crash reason + 0 tokens +
+        stale, BUT all stages completed. _abandon_verdict must return (False,None) —
+        a finished run is not a crash-zombie even though every OTHER gate (status,
+        reason, tokens, age) says 'reap it'."""
+        from scripts.artifact_cli import cleanup_orphans
+        f = _create_run(
+            workspace, "TestProject", "run_terminal", "paused",
+            hours_ago=72, checkpoint_reason=self.CRASH,
+            stages=[{"stage": "evaluate", "status": "completed"},
+                    {"stage": "deliver", "status": "completed"},
+                    {"stage": "reflect", "status": "completed"}])
+        with patch("scripts.artifact_cli._get_workspace", return_value=workspace):
+            cleanup_orphans()
+        assert _read_run(f)["status"] == "paused", \
+            "a completed run (all stages done) must NOT be abandoned as a crash-zombie"
+
+    def test_verdict_directly_false_for_terminal(self, workspace):
+        """_abandon_verdict is the shared single-source gate — assert it directly."""
+        from datetime import datetime, timezone, timedelta
+        from scripts.artifact_cli import _abandon_verdict
+        threshold = datetime.now(timezone.utc) - timedelta(hours=2)
+        terminal = {"status": "paused", "updated_at": "2020-01-01T00:00:00+00:00",
+                    "checkpoint": {"reason": self.CRASH},
+                    "stages": [{"stage": "reflect", "status": "completed"}]}
+        assert _abandon_verdict(terminal, threshold) == (False, None)

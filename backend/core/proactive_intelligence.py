@@ -782,7 +782,10 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
     # Deliberate-pause guard discriminant — single-source, word-boundary matcher
     # (reused, not re-implemented; Gate-1 Item-3). Imported once at function entry,
     # not per-run-iteration (Gate-2 LOW style nit).
-    from scripts.artifact_cli import _checkpoint_reason_has_true_trigger
+    from scripts.artifact_cli import (
+        _checkpoint_reason_has_true_trigger,
+        is_terminal_run as _is_terminal_run,
+    )
 
     lines: list[str] = []
     try:
@@ -842,6 +845,16 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
 
                 status = run_data.get("status", "")
                 if status not in ("paused", "running"):
+                    continue
+
+                # TERMINAL GUARD (run_bf840159): a run whose STAGES are all done
+                # (or has a completed reflect/deliver) is FINISHED — never a crash
+                # orphan, even if a session-refresh orphan-transition flipped its
+                # status to 'paused'+session_crash_auto_detected. Skip it entirely:
+                # do NOT surface it as resumable, do NOT flip running->paused, do
+                # NOT supersede/abandon it. Stage-based, not status-based, because
+                # the status string is exactly what the false-positive corrupts.
+                if _is_terminal_run(run_data):
                     continue
 
                 # Check freshness FIRST — skip old runs before any mutation
