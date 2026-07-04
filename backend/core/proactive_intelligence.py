@@ -2444,90 +2444,59 @@ def build_session_briefing_data(
         # ── Briefing Hub v2: area-based signal extraction ──────────────
         # Split signal_digest.json into signals (tech) vs hotNews (trending).
         # Keep source language (D9), include lang/feed_id/platform fields.
-        _TRENDING_FEEDS = frozenset({"china-trending"})
-        # Feeds excluded from the Welcome "Signals" card entirely — market/stock
-        # data (eastmoney) is not an AI/tech signal; it was leaking into Signals
-        # because it is not a trending feed. It has no home on the Welcome page.
-        _SIGNALS_EXCLUDED_FEEDS = frozenset({"eastmoney-market"})
-        # Per-feed cap inside Signals: the reference-commits stream
-        # (hermes-agent/openclaw commits) is high-volume and would otherwise
-        # fill the top-8, crowding out higher-tier frontier/leaders/research
-        # items. Cap it so a handful of commit items surface without flooding.
-        _SIGNALS_PER_FEED_CAP = {"reference-commits": 3}
-        _per_feed_count: dict[str, int] = {}
+        # Denoising (feed exclusion / trending split / per-feed cap / 48h cutoff /
+        # final_score sort) is delegated to jobs.signal_selection.select_signals —
+        # the SINGLE source shared with the Slack digest formatter so the two
+        # surfaces never drift. This function keeps only its own field-shaping.
         signals_list: list[dict] = []
         hot_news_list: list[dict] = []
         digest_path = workspace / "Services" / "signals" / "signal_digest.json"
         if digest_path.exists():
             try:
                 data = json.loads(digest_path.read_text(encoding="utf-8"))
-                cutoff = time.time() - 48 * 3600
-                for sig in data.get("items", []):
-                    fetched = sig.get("fetched_at", "")
-                    if isinstance(fetched, str) and fetched:
-                        try:
-                            dt_val = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-                            if dt_val.timestamp() < cutoff:
-                                continue
-                        except (ValueError, TypeError):
-                            continue
-                    else:
-                        continue
+                from jobs.signal_selection import select_signals
+                _selected = select_signals(data.get("items", []))
+                # For GitHub/commits, source is a programming language —
+                # use feed label as the readable source instead.
+                _FEED_SOURCE_LABELS = {
+                    "frontier-labs": "Frontier Labs",
+                    "ai-leaders": "AI Leaders",
+                    "ai-engineering": "AI Engineering",
+                    "ai-newsletters": "Newsletter",
+                    "tool-releases": "Tool Release",
+                    "github-trending": "GitHub Trending",
+                    "reference-commits": "Repo Update",
+                }
+                _LANG_SOURCE_FEEDS = {"github-trending", "reference-commits"}
+                for sig in _selected["signals"][:8]:
                     feed_id = sig.get("feed_id", "")
-                    is_trending = feed_id in _TRENDING_FEEDS
-
-                    # Drop feeds that have no home on the Welcome page (e.g. stock data).
-                    if feed_id in _SIGNALS_EXCLUDED_FEEDS:
-                        continue
-
-                    if is_trending:
-                        if len(hot_news_list) < 10:
-                            hot_news_list.append({
-                                "title": sig.get("title", ""),
-                                "platform": sig.get("platform", sig.get("source", "")),
-                                "rank": sig.get("rank", 0),
-                                "url": sig.get("url", ""),
-                                "region": sig.get("region", "cn"),
-                                "lang": sig.get("lang", "zh"),
-                            })
-                    else:
-                        # Per-feed cap: skip a high-volume feed once it hits its
-                        # cap so lower-ranked but higher-value feeds get the slot.
-                        _cap = _SIGNALS_PER_FEED_CAP.get(feed_id)
-                        if _cap is not None and _per_feed_count.get(feed_id, 0) >= _cap:
-                            continue
-                        if len(signals_list) < 8:
-                            _per_feed_count[feed_id] = _per_feed_count.get(feed_id, 0) + 1
-                            raw_source = sig.get("source", "")
-                            # For GitHub/commits, source is a programming language —
-                            # use feed label as the readable source instead.
-                            _FEED_SOURCE_LABELS = {
-                                "frontier-labs": "Frontier Labs",
-                                "ai-leaders": "AI Leaders",
-                                "ai-engineering": "AI Engineering",
-                                "ai-newsletters": "Newsletter",
-                                "tool-releases": "Tool Release",
-                                "github-trending": "GitHub Trending",
-                                "reference-commits": "Repo Update",
-                            }
-                            _LANG_SOURCE_FEEDS = {"github-trending", "reference-commits"}
-                            source_label = (
-                                _FEED_SOURCE_LABELS.get(feed_id, raw_source)
-                                if feed_id in _LANG_SOURCE_FEEDS
-                                else raw_source
-                            )
-                            signals_list.append({
-                                "title": sig.get("title", ""),
-                                "summary": sig.get("summary", ""),
-                                "source": source_label,
-                                "sourceUrl": sig.get("url", ""),
-                                "urgency": sig.get("urgency", "medium"),
-                                "relevance": sig.get("relevance_score", 0),
-                                "finalScore": sig.get("final_score", sig.get("relevance_score", 0)),
-                                "rank": sig.get("rank", 0),
-                                "lang": sig.get("lang", "en"),
-                                "feedId": feed_id,
-                            })
+                    raw_source = sig.get("source", "")
+                    source_label = (
+                        _FEED_SOURCE_LABELS.get(feed_id, raw_source)
+                        if feed_id in _LANG_SOURCE_FEEDS
+                        else raw_source
+                    )
+                    signals_list.append({
+                        "title": sig.get("title", ""),
+                        "summary": sig.get("summary", ""),
+                        "source": source_label,
+                        "sourceUrl": sig.get("url", ""),
+                        "urgency": sig.get("urgency", "medium"),
+                        "relevance": sig.get("relevance_score", 0),
+                        "finalScore": sig.get("final_score", sig.get("relevance_score", 0)),
+                        "rank": sig.get("rank", 0),
+                        "lang": sig.get("lang", "en"),
+                        "feedId": feed_id,
+                    })
+                for sig in _selected["hot_news"][:10]:
+                    hot_news_list.append({
+                        "title": sig.get("title", ""),
+                        "platform": sig.get("platform", sig.get("source", "")),
+                        "rank": sig.get("rank", 0),
+                        "url": sig.get("url", ""),
+                        "region": sig.get("region", "cn"),
+                        "lang": sig.get("lang", "zh"),
+                    })
             except (json.JSONDecodeError, OSError):
                 pass
         # Backward compat: ext_signals used by _get_signal_highlights for system prompt

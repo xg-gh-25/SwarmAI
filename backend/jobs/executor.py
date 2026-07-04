@@ -1041,10 +1041,20 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
 
 
 def _format_signal_digest_message(max_items: int = 10) -> str:
-    """Format signal_digest.json into a grouped, linked Slack message.
+    """Format signal_digest.json into a flat, ranked, linked Slack message.
 
-    Groups signals by feed, makes titles clickable, shows source context
-    appropriately per feed type, and applies mrkdwn escaping.
+    Denoising (feed exclusion / china-trending split / per-feed cap / 48h
+    freshness / final_score ranking) is delegated to
+    ``jobs.signal_selection.select_signals`` — the SAME single source the
+    Welcome Page signals card uses, so the two surfaces never drift (they did:
+    this formatter used to re-sort by the capped ``relevance_score`` with no
+    filters, so it flooded Slack with eastmoney-market + reference-commits junk).
+
+    Presentation is Slack-specific (option A: shared denoising, separate
+    display): a FLAT top-N ranked by ``final_score`` — no per-feed_id section
+    headers (the old unfriendly structure). English and Chinese signals are
+    split into two readable language groups; every selected signal renders
+    exactly once (no silent drops).
     """
     digest_path = SWARMWS / "Services" / "signals" / "signal_digest.json"
     if not digest_path.exists():
@@ -1059,91 +1069,76 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
     if not items:
         return ""
 
-    # Take top N by relevance score
-    items = sorted(items, key=lambda x: x.get("relevance_score", 0), reverse=True)
-    items = items[:max_items]
+    from jobs.signal_selection import select_signals
+
+    # Shared denoiser: filters + splits + caps + sorts by final_score. Take the
+    # top-N ranked signals (hot_news trending is intentionally NOT in the digest).
+    signals = select_signals(items)["signals"][:max_items]
+    if not signals:
+        return ""
 
     esc = _escape_slack_mrkdwn
-
-    # Feed display names — ordered for presentation priority
-    _FEED_LABELS: dict[str, str] = {
-        "frontier-labs": "🔬 Frontier Labs",
-        "ai-leaders": "👤 AI Leaders",
-        "ai-engineering": "⚙️ AI Engineering",
-        "ai-newsletters": "📰 Newsletters",
-        "tool-releases": "🔧 Tool Releases",
-        "github-trending": "🐙 GitHub Trending",
-        "reference-commits": "📦 Reference Commits",
-    }
-    # Feeds where `source` is a programming language, not a meaningful source name
-    _LANG_SOURCE_FEEDS = frozenset({"github-trending", "reference-commits"})
-
     urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
-    # Group by feed_id, preserving relevance order within each group
-    groups: dict[str, list[dict]] = {}
-    for item in items:
-        fid = item.get("feed_id", "other")
-        groups.setdefault(fid, []).append(item)
+    # For GitHub/commits, `source` is a programming language — show a readable
+    # feed label instead (mirrors the Welcome path's source-label mapping).
+    _FEED_SOURCE_LABELS = {
+        "frontier-labs": "Frontier Labs",
+        "ai-leaders": "AI Leaders",
+        "ai-engineering": "AI Engineering",
+        "ai-newsletters": "Newsletter",
+        "tool-releases": "Tool Release",
+        "github-trending": "GitHub Trending",
+        "reference-commits": "Repo Update",
+    }
+    _LANG_SOURCE_FEEDS = frozenset({"github-trending", "reference-commits"})
 
-    # Sort groups by _FEED_LABELS key order (known feeds first, unknown last)
-    label_order = list(_FEED_LABELS.keys())
-    sorted_groups = sorted(
-        groups.items(),
-        key=lambda kv: label_order.index(kv[0]) if kv[0] in label_order else 999,
-    )
+    def _render_line(item: dict) -> str:
+        emoji = urgency_emoji.get(item.get("urgency", "low"), "🟢")
+        # Coerce to str at the render boundary: signal_digest.json is external
+        # (RSS/HN/scraped), so title/summary/source could be non-string on a
+        # malformed item — degrade to text rather than crash the Slack job (O023).
+        raw_title = str(item.get("title", "Untitled"))
+        title = esc(raw_title)
+        url = str(item.get("url", ""))
+        feed_id = item.get("feed_id", "")
+        raw_source = str(item.get("source", ""))
+        source = (
+            _FEED_SOURCE_LABELS.get(feed_id, raw_source)
+            if feed_id in _LANG_SOURCE_FEEDS
+            else raw_source
+        )
+        title_part = f"<{url}|{title}>" if url else title
+        suffix = f" — _{esc(source)}_" if source else ""
+        line = f"{emoji} {title_part}{suffix}"
 
-    total = data.get("signals_count", len(items))
-    sections: list[str] = [f"📡 *Signal Digest* — {total} signals"]
-
-    for feed_id, feed_items in sorted_groups:
-        label = _FEED_LABELS.get(feed_id, f"📋 {esc(feed_id)}")
-        is_lang_source = feed_id in _LANG_SOURCE_FEEDS
-
-        # If all items in this group share the same source, show it once
-        # on the header line instead of repeating per item.
-        sources = {it.get("source", "") for it in feed_items} - {""}
-        shared_source = sources.pop() if len(sources) == 1 and not is_lang_source else None
-        header_suffix = f" — _{esc(shared_source)}_" if shared_source else ""
-        lines: list[str] = [f"\n*{label}*{header_suffix}"]
-
-        for item in feed_items:
-            emoji = urgency_emoji.get(item.get("urgency", "low"), "🟢")
-            raw_title = item.get("title", "Untitled")
-            title = esc(raw_title)
-            url = item.get("url", "")
-            source = item.get("source", "")
-            summary = item.get("summary", "")
-
-            # Title is the clickable link
-            title_part = f"<{url}|{title}>" if url else title
-
-            # Source suffix: skip if already shown on group header
-            if shared_source:
-                suffix = ""
-            elif is_lang_source and source:
-                suffix = f" · {esc(source)}"
-            elif source:
-                suffix = f" — _{esc(source)}_"
-            else:
-                suffix = ""
-
-            lines.append(f"{emoji} {title_part}{suffix}")
-
-            # Summary: strip leading title echo, skip if empty/redundant
+        # Summary: strip leading title echo, cap length, skip if redundant.
+        summary = str(item.get("summary", ""))
+        if summary:
+            summary = _html_mod.unescape(summary)
+            if summary.startswith(raw_title):
+                summary = summary[len(raw_title):].lstrip(" :—-–")
+            summary = summary.strip()
             if summary:
-                summary = _html_mod.unescape(summary)
-                # RSS feeds often echo the title at the start of the summary
-                if summary.startswith(raw_title):
-                    summary = summary[len(raw_title):].lstrip(" :—-–")
-                summary = summary.strip()
-                if summary:
-                    summary = esc(summary)
-                    if len(summary) > 100:
-                        summary = summary[:97] + "…"
-                    lines.append(f"   {summary}")
+                summary = esc(summary)
+                if len(summary) > 100:
+                    summary = summary[:97] + "…"
+                line += f"\n   {summary}"
+        return line
 
-        sections.append("\n".join(lines))
+    # Split into language groups (order preserved within each; zh detected by the
+    # write-time lang field). Non-zh (incl. missing lang) falls into the main
+    # group — no item is dropped (count-in == count-out).
+    en_items = [s for s in signals if s.get("lang") != "zh"]
+    zh_items = [s for s in signals if s.get("lang") == "zh"]
+
+    total = data.get("signals_count", len(signals))
+    sections: list[str] = [f"📡 *Signal Digest* — top {len(signals)} of {total} signals"]
+
+    if en_items:
+        sections.append("\n".join([f"\n*🌐 Global*"] + [_render_line(it) for it in en_items]))
+    if zh_items:
+        sections.append("\n".join([f"\n*🌏 中文*"] + [_render_line(it) for it in zh_items]))
 
     return "\n".join(sections)
 
