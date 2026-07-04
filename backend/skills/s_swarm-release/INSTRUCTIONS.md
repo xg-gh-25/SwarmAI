@@ -10,7 +10,7 @@ terminal where they can't be killed by session management.
 
 ```
 Agent: PREFLIGHT → BUMP → USER: prod.sh build → Agent: SMOKE →
-USER: TAURI BUILD → Agent: VERIFY DMG → PUBLISH
+USER: TAURI BUILD → Agent: VERIFY DMG → PUSH → [CI GREEN GATE] → PUBLISH
 ```
 
 ---
@@ -260,7 +260,16 @@ build floor, not a "backend is included" check. Do NOT raise this toward 30MB.)
 
 ---
 
-## Stage 7: PUBLISH (Agent, 30s)
+## Stage 7: PUBLISH (Agent, ~5-10min incl. CI gate)
+
+**R6 ORDER (non-negotiable):** push → **wait for CI green** → THEN publish. The push is
+FORMAL confirmation of an already-qualified HEAD; CI is the barrier BEFORE the Release
+object exists, never after. Splitting 7 into 7a→7b→7c is the structural fix for the
+v1.24.0 miss (published on HEAD `2d4a2ff2`, CI then went red on 3 stale artifacts —
+IMPROVEMENT.md 2026-07-04). The GitHub Release (tag + DMG) is the star/download-
+side-effect artifact — it MUST NOT be created until 7b is green.
+
+### Stage 7a: PUSH (Agent, 30s)
 
 ```bash
 cd $SWARMAI_ROOT
@@ -269,14 +278,74 @@ VERSION=$(cat VERSION)
 # Push commits (MUST succeed — no silent swallowing)
 git push origin main
 
-# Tag
+# Tag (safe to push before CI — a tag has no star/download side effect;
+# if 7b goes red, fix forward → HEAD advances → re-tag on the green HEAD)
 git tag -a "v${VERSION}" -m "Release v${VERSION}" 2>/dev/null || true
 git push origin "v${VERSION}"
+```
+
+If `git push` fails (auth, network): **STOP and report** — do NOT proceed.
+
+### Stage 7b: CI GREEN GATE (Agent, blocking, ~3-8min wall-clock) — the ONLY thing that unlocks 7c
+
+Poll the CI run for the pushed HEAD until it completes. **Do NOT use `gh run watch`** —
+it polls silently and gets killed by the foreground timeout (observed 2026-07-04).
+**And do NOT wrap a `sleep`-loop in ONE bash call either** — a `for i in seq…; sleep 30`
+loop is a multi-minute single foreground call that hits the SAME timeout kill (it just
+replaces one silently-killed poller with another; the `echo` verdict never runs). The
+correct shape is **agent-driven polling: ONE short `gh` call per Bash invocation (≤5s),
+then the AGENT decides + re-invokes** between turns. Each poll is a fresh, fast,
+bounded command — no long-lived bash process to be killed.
+
+**Each poll = this single bash call (returns in ~2-3s):**
+```bash
+cd $SWARMAI_ROOT && HEAD8="$(git rev-parse HEAD | cut -c1-8)" \
+  gh run list --branch main --limit 8 \
+    --json databaseId,name,headSha,status,conclusion 2>/dev/null \
+  | HEAD8="$HEAD8" python3 -c "import sys,json,os
+h=os.environ['HEAD8']
+hit=[r for r in json.load(sys.stdin) if r['name']=='CI' and r['headSha'].startswith(h)]
+if not hit: print('NOT_REGISTERED')
+else:
+    r=hit[0]; print(r['status'], r['conclusion'] or '', r['databaseId'])"
+```
+
+**Agent loop (you drive it, NOT a bash loop):**
+1. Run the poll call above.
+2. Read the one-line result:
+   - `completed success <id>` → **PASS** → go to 7c.
+   - `completed <red> <id>` (`failure`/`cancelled`/`timed_out`) → **BLOCK** (see below).
+   - `in_progress …` / `queued …` / `NOT_REGISTERED` → not done yet. Wait ~30-45s
+     (a short standalone `sleep 40` bash call is fine — it's bounded, not a 10-min loop),
+     then re-run the poll. Give up after ~12-15 polls (~8-10min wall-clock) → HALT + report.
+
+**On BLOCK (CI red):** run `gh run view <id> --json jobs` to list failing jobs, diagnose
++ fix. A release batch's own commits often leave test/scan artifacts stale — md5-intent
+(`usedforsecurity=False`), camelCase-mapper shape (`toEqual`), hand-built arg stubs
+(missing new attr) — the highest-probability red source; sweep those first. Fix → push →
+**re-run 7b on the new HEAD.** Do NOT create the Release.
+
+**On never-completes (polls exhausted, still `in_progress`/`NOT_REGISTERED`):** HALT +
+report — tell the user CI hasn't finished; let them decide wait-more vs investigate. Do
+NOT publish on an uncompleted CI.
+
+**No skip flag — by design, but be honest about enforcement.** This gate is
+**runbook-enforced, not code-enforced**: nothing in code prevents jumping to the 7c
+`gh release create` snippet. The agent MUST NOT reach 7c without a green 7b. Publishing
+before CI green is the exact "skip verification" hole this stage closes (CLASS A) — a
+hotfix that "can't wait for CI" is not ready to ship. (A future hardening could make 7c
+check a marker written only by a green 7b; today it is discipline + this runbook.)
+
+### Stage 7c: PUBLISH RELEASE (Agent, 30s) — reached ONLY after 7b is green
+
+```bash
+cd $SWARMAI_ROOT
+VERSION=$(cat VERSION)
 
 # Find the DMG
 DMG=$(find desktop/src-tauri/target/release/bundle -name "*.dmg" -newer desktop/src-tauri/Cargo.toml | sort -t. -k1,1 | tail -1)
 
-# Create GitHub Release with DMG
+# Create GitHub Release with DMG (CI is green — this HEAD is qualified)
 gh release create "v${VERSION}" "$DMG" \
   --title "v${VERSION}" \
   --notes "<release notes>"
@@ -286,12 +355,12 @@ gh release view "v${VERSION}" --json tagName,url
 ```
 
 Release notes: summarize commits since last tag, grouped by type (feat/fix/improve/content).
-If `git push` fails (auth, network): **STOP and report** — do NOT proceed to gh release.
 
 **Report:**
 ```
 Stage 7 PUBLISH: PASS
   Tag: vX.Y.Z
+  CI gate: GREEN (HEAD <sha>, run <id>)
   Release: https://github.com/xg-gh-25/SwarmAI/releases/tag/vX.Y.Z
   DMG: uploaded
 ```
@@ -323,7 +392,9 @@ RELEASE COMPLETE ✅ vX.Y.Z
 | 4 Smoke | Agent | 15s | Yes — blocks release |
 | 5 Tauri build | **User** | 3-5 min | Yes |
 | 6 Verify DMG | Agent | 5s | Yes — blocks release |
-| 7 Publish | Agent | 30s | Rare |
+| 7a Push | Agent | 30s | Yes — stop if push fails |
+| 7b CI green gate | Agent | 3-8 min (blocking) | Yes — BLOCK publish if CI red; NO skip flag |
+| 7c Publish release | Agent | 30s | Rare — reached only after 7b green |
 
 ---
 
@@ -333,7 +404,9 @@ At any stage, if failure occurs:
 1. Report which stage failed with error details
 2. Do NOT proceed to later stages
 3. Do NOT retry automatically
-4. If Stage 7 push succeeded but release failed: re-run Stage 7 only.
+4. If 7a push succeeded but 7c release-create failed: re-run 7c only (do NOT re-push).
+5. If 7b CI gate is red: HALT, list failing jobs, fix forward → push → re-run 7b on the
+   new HEAD. NEVER create the Release on a red HEAD, and NEVER skip 7b to publish faster.
 
 ---
 
