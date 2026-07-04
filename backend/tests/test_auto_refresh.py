@@ -533,36 +533,68 @@ class TestCollectMetrics:
         """core_loc + core_modules must use the SAME git-tracked, tests-OUT
         caliber as total_backend_loc — the REVIEW LOW finding from run_7c8453a2.
 
-        RED on the old filesystem commands (`find backend/core -exec cat` /
-        `find backend/core | wc -l`): they INCLUDE the 10 core-internal test
-        files under backend/core/code_intel/tests/ (2178 LOC), so core_loc was
-        72582 / core_modules 143 — inconsistent with total_backend_loc which
-        already excludes /tests/. GREEN: 70404 / 133 (tests excluded).
+        The bug this guards: the old filesystem commands (`find backend/core
+        -exec cat` / `find backend/core | wc -l`) INCLUDE the core-internal
+        test files under backend/core/code_intel/tests/, so core_loc/core_modules
+        were inconsistent with total_backend_loc (which already excludes /tests/).
+
+        Discriminator is SEMANTIC, not a frozen number (AGENT R30#4 — don't
+        store drift-prone LOC ceilings; legit code growth pushed a prior fixed
+        `< 72_000` ceiling RED at 72019). We measure BOTH calibers live and
+        assert the tests-OUT metric is strictly smaller than the tests-IN
+        caliber — i.e. it genuinely excluded the core-internal tests. A revert
+        to the tests-IN command makes core_loc == the tests-IN number → RED.
         """
         r = _import_refresh_ai_docs()
 
         r._SCRIPT_DEADLINE = __import__("time").monotonic() + r._SCRIPT_TIMEOUT
         try:
             m = r.collect_metrics()
+
+            core_loc = int(m["core_loc"])
+            core_modules = int(m["core_modules"])
+
+            # tests-IN caliber = the regression the metric must NOT match (it
+            # re-includes backend/core/**/tests/). Measured live via the SAME
+            # _run helper + cwd the metric uses, so it never drifts and the two
+            # calibers are apples-to-apples (only the /tests/ filter differs).
+            def _int(out: str) -> int:
+                out = (out or "").strip()
+                return int(out) if out.isdigit() else 0
+
+            tests_in_loc = _int(r._run(
+                "git ls-files '*.py' | grep '^backend/core/' "
+                "| xargs wc -l | awk '$2!=\"total\"{n+=$1} END{print n}'"
+            ))
+            tests_in_mods = _int(r._run(
+                "git ls-files '*.py' | grep '^backend/core/' | wc -l"
+            ))
         finally:
             r._SCRIPT_DEADLINE = 0.0
 
-        core_loc = int(m["core_loc"])
-        core_modules = int(m["core_modules"])
+        # Sanity floor: proves the metric counts the real core (not blank/0),
+        # without pinning an upper bound that legit growth would trip.
+        assert core_loc > 50_000, f"core_loc={core_loc} implausibly small (blank/0 bug?)"
+        assert core_modules > 100, f"core_modules={core_modules} implausibly small"
 
-        # tests-OUT caliber: backend/core production code only. The 10
-        # core_intel test files (2178 LOC) must NOT be counted here — they
-        # are test code, counted (if anywhere) by the test_files metric.
-        # Upper bound 72_000 is BELOW the 72582 the tests-IN command produced,
-        # so a revert to filesystem-cat (which re-includes tests) is caught.
-        assert 60_000 < core_loc < 72_000, (
-            f"core_loc={core_loc} outside tests-OUT caliber band "
-            f"(>=72582 = filesystem cat re-including core-internal tests)"
+        # Precondition: there ARE core-internal test files to exclude, else the
+        # discriminator below is vacuous (tests-OUT would equal tests-IN through
+        # no fault of the metric). If this ever fails, the test — not the metric
+        # — needs revisiting (backend/core/**/tests/ was emptied).
+        assert tests_in_mods > core_modules, (
+            f"discriminator vacuous: tests-IN modules ({tests_in_mods}) not "
+            f"greater than tests-OUT ({core_modules}) — are there any "
+            f"backend/core/**/tests/ files left to exclude?"
         )
-        # core_modules must be the tests-OUT file count (133), NOT 143 — they
-        # MUST move in lockstep or the rendered '143 modules / 70404 LOC' is a
-        # self-contradiction (143 counts tests, 70404 does not).
-        assert 120 < core_modules < 143, (
-            f"core_modules={core_modules} still includes core-internal tests "
-            f"(143 = filesystem find counting backend/core/.../tests/)"
+
+        # The real property: tests-OUT is strictly SMALLER than tests-IN —
+        # i.e. the core-internal test files were genuinely excluded. A revert to
+        # the filesystem-cat / tests-IN command makes these equal → RED.
+        assert core_loc < tests_in_loc, (
+            f"core_loc={core_loc} is NOT smaller than the tests-IN caliber "
+            f"({tests_in_loc}) — core-internal tests are being re-included"
+        )
+        assert core_modules < tests_in_mods, (
+            f"core_modules={core_modules} is NOT smaller than the tests-IN "
+            f"caliber ({tests_in_mods}) — core-internal test files re-included"
         )
