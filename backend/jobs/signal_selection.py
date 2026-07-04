@@ -48,6 +48,36 @@ SIGNALS_PER_FEED_CAP: dict[str, int] = {"reference-commits": 3}
 # Freshness window: signals older than this are dropped (stale ≠ signal).
 FRESHNESS_CUTOFF_H: int = 48
 
+# ── Display source labels — shared by BOTH surfaces to prevent label drift ───
+# For github/commit feeds the raw `source` field is a programming language
+# ("python", "go") rather than a meaningful source name; render a readable feed
+# label instead. This map + the readable_source() helper live here (not in each
+# caller) so a label edit can never silently diverge the Welcome card and the
+# Slack digest (drift risk flagged by REVIEW + Gate-2 in run_44342b40).
+_FEED_SOURCE_LABELS: dict[str, str] = {
+    "frontier-labs": "Frontier Labs",
+    "ai-leaders": "AI Leaders",
+    "ai-engineering": "AI Engineering",
+    "ai-newsletters": "Newsletter",
+    "tool-releases": "Tool Release",
+    "github-trending": "GitHub Trending",
+    "reference-commits": "Repo Update",
+}
+_LANG_SOURCE_FEEDS: frozenset[str] = frozenset({"github-trending", "reference-commits"})
+
+
+def readable_source(feed_id: str, raw_source: str) -> str:
+    """The human-readable source label for a signal.
+
+    For lang-source feeds (github/commits) the raw `source` is a programming
+    language — substitute the feed's readable label. Every other feed uses its
+    raw source verbatim. Single source of truth for both the Welcome card and
+    the Slack digest.
+    """
+    if feed_id in _LANG_SOURCE_FEEDS:
+        return _FEED_SOURCE_LABELS.get(feed_id, raw_source)
+    return raw_source
+
 
 def _rank_key(item: dict) -> float:
     """Sort key: the uncapped multi-dim final_score (write-time ranking).

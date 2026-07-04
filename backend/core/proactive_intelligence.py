@@ -2454,28 +2454,13 @@ def build_session_briefing_data(
         if digest_path.exists():
             try:
                 data = json.loads(digest_path.read_text(encoding="utf-8"))
-                from jobs.signal_selection import select_signals
+                from jobs.signal_selection import readable_source, select_signals
                 _selected = select_signals(data.get("items", []))
-                # For GitHub/commits, source is a programming language —
-                # use feed label as the readable source instead.
-                _FEED_SOURCE_LABELS = {
-                    "frontier-labs": "Frontier Labs",
-                    "ai-leaders": "AI Leaders",
-                    "ai-engineering": "AI Engineering",
-                    "ai-newsletters": "Newsletter",
-                    "tool-releases": "Tool Release",
-                    "github-trending": "GitHub Trending",
-                    "reference-commits": "Repo Update",
-                }
-                _LANG_SOURCE_FEEDS = {"github-trending", "reference-commits"}
                 for sig in _selected["signals"][:8]:
                     feed_id = sig.get("feed_id", "")
-                    raw_source = sig.get("source", "")
-                    source_label = (
-                        _FEED_SOURCE_LABELS.get(feed_id, raw_source)
-                        if feed_id in _LANG_SOURCE_FEEDS
-                        else raw_source
-                    )
+                    # Shared label map (github/commit feeds → readable label)
+                    # lives in signal_selection.readable_source — single source.
+                    source_label = readable_source(feed_id, sig.get("source", ""))
                     signals_list.append({
                         "title": sig.get("title", ""),
                         "summary": sig.get("summary", ""),

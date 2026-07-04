@@ -83,7 +83,11 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
         return FreshnessResult(stale=True, reason=f"git error: {head_error}")
 
     if current_head == last_commit:
-        return FreshnessResult(stale=False)
+        # Carry current_head even on the fresh path so the field's contract is
+        # uniform ("set whenever git succeeded"). A --full rebuild on an
+        # already-fresh repo can then still refresh the marker via the
+        # `if freshness.current_head:` writer (Gate-2 MED, run_9a23dd4a).
+        return FreshnessResult(stale=False, current_head=current_head)
 
     # Edge case: force push / rebase removed our baseline commit
     try:

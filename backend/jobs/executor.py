@@ -1069,7 +1069,7 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
     if not items:
         return ""
 
-    from jobs.signal_selection import select_signals
+    from jobs.signal_selection import readable_source, select_signals
 
     # Shared denoiser: filters + splits + caps + sorts by final_score. Take the
     # top-N ranked signals (hot_news trending is intentionally NOT in the digest).
@@ -1079,19 +1079,6 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
 
     esc = _escape_slack_mrkdwn
     urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-
-    # For GitHub/commits, `source` is a programming language — show a readable
-    # feed label instead (mirrors the Welcome path's source-label mapping).
-    _FEED_SOURCE_LABELS = {
-        "frontier-labs": "Frontier Labs",
-        "ai-leaders": "AI Leaders",
-        "ai-engineering": "AI Engineering",
-        "ai-newsletters": "Newsletter",
-        "tool-releases": "Tool Release",
-        "github-trending": "GitHub Trending",
-        "reference-commits": "Repo Update",
-    }
-    _LANG_SOURCE_FEEDS = frozenset({"github-trending", "reference-commits"})
 
     def _render_line(item: dict) -> str:
         emoji = urgency_emoji.get(item.get("urgency", "low"), "🟢")
@@ -1103,11 +1090,9 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
         url = str(item.get("url", ""))
         feed_id = item.get("feed_id", "")
         raw_source = str(item.get("source", ""))
-        source = (
-            _FEED_SOURCE_LABELS.get(feed_id, raw_source)
-            if feed_id in _LANG_SOURCE_FEEDS
-            else raw_source
-        )
+        # Shared label map (github/commit feeds → readable label) lives in
+        # signal_selection.readable_source — single source, no drift.
+        source = readable_source(feed_id, raw_source)
         title_part = f"<{url}|{title}>" if url else title
         suffix = f" — _{esc(source)}_" if source else ""
         line = f"{emoji} {title_part}{suffix}"

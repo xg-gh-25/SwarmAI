@@ -60,6 +60,30 @@ def reindex_projects(full: bool = False) -> dict:
         # Ensure repo_root is stored as absolute (fixes '.' from early indexing)
         graph.set_meta("repo_root", str(repo_root))
 
+        # A full rebuild triggered from the INCREMENTAL job (full=False, e.g.
+        # on:git_commit, 120s timeout) must NOT run inline: a full reparse
+        # measures ~85-118s and hugs/exceeds the 120s wall, so it gets killed
+        # before persisting the marker — the exact flap run_9a23dd4a fixes.
+        # Delegate to the code_intel_full_reindex event (300s job), mirroring
+        # context_health_hook's never-indexed path. When invoked as --full
+        # (that 300s job itself, full=True) we DO run inline. (Gate-2 HIGH)
+        if freshness.suggest_full_rebuild and not full:
+            try:
+                from jobs.scheduler import emit_event_atomic
+                emit_event_atomic("code_intel_full_reindex", data={
+                    "project": project_name,
+                    "commits_behind": freshness.commits_behind,
+                    "files_changed": len(freshness.changed_files),
+                })
+                results.append({"project": project_name, "status": "delegated_full_reindex"})
+            except Exception as emit_err:
+                logger.warning(
+                    "code_intel %s: failed to delegate full reindex, "
+                    "falling back to inline: %s", project_name, emit_err,
+                )
+            else:
+                continue
+
         if full or freshness.suggest_full_rebuild:
             # Full reindex: clear + re-parse entire repo
             from core.code_intel.parser import parse_repo, LANGUAGE_MAP
@@ -69,6 +93,16 @@ def reindex_projects(full: bool = False) -> dict:
                 graph.clear()
                 graph.bulk_insert(parse_results)
                 # bulk_insert already rebuilds FTS + resolves cross-file
+                # Persist the freshness marker ONLY after a genuine rebuild.
+                # freshness.current_head is now populated even on the
+                # never-indexed path (freshness.py), so this breaks the
+                # perpetual-full-rebuild loop (run_9a23dd4a). MUST stay INSIDE
+                # `if parse_results:` — a transient empty parse (pyo3 teardown,
+                # ThreadPool timeout, repo-not-yet-on-disk) must NOT advance the
+                # marker over a stale/empty graph, else check_freshness would
+                # report fresh forever (Gate-2 HIGH, run_9a23dd4a).
+                if freshness.current_head:
+                    graph.set_meta("last_indexed_commit", freshness.current_head)
                 # Preserve repo_root metadata
                 graph.set_meta("repo_root", str(repo_root))
                 # Extract routes from all parsed files
@@ -85,13 +119,6 @@ def reindex_projects(full: bool = False) -> dict:
                                 pass
                 # Apply router prefix resolution (FastAPI include_router)
                 _resolve_prefixes(graph, repo_root)
-            # Persist the freshness marker even when parse_results is empty
-            # (empty repo, all files skipped/binary, or every parse dropped):
-            # we DID index HEAD, it's just empty. Keeping this OUTSIDE the
-            # `if parse_results:` block prevents the perpetual-rebuild loop from
-            # surviving on an empty-parse full run (run_9a23dd4a, Gate-1 MF-1).
-            if freshness.current_head:
-                graph.set_meta("last_indexed_commit", freshness.current_head)
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
             # Export code-intel.json v2 after full reindex
             _export_json(graph, project_name, project_dir)

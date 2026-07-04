@@ -93,6 +93,10 @@ class TestCheckFreshness:
         mock_git_fn.return_value = "abc123\n"
         result = check_freshness(mock_graph)
         assert result.stale is False
+        # Fresh path now carries current_head (Gate-2 MED, run_9a23dd4a): the
+        # field is set whenever git succeeded, so a --full rebuild on an
+        # already-fresh repo can still refresh the marker.
+        assert result.current_head == "abc123"
 
     @patch("core.code_intel.freshness.subprocess.run")
     @patch("core.code_intel.freshness._git")
@@ -254,3 +258,67 @@ class TestPersistenceLoopBreaks:
         assert fr2.stale is False
         assert fr2.suggest_full_rebuild is False
         db.close()
+
+
+class TestFullRebuildDelegation:
+    """Gate-2 HIGH (run_9a23dd4a): the INCREMENTAL job (full=False, 120s) must
+    NOT run a full rebuild inline — a full reparse hugs/exceeds 120s and gets
+    killed before persisting the marker. When suggest_full_rebuild is True and
+    full=False, delegate to the code_intel_full_reindex event (300s job).
+    The --full job itself (full=True) still runs inline.
+    """
+
+    def _make_project(self, tmp_path, monkeypatch):
+        """A Projects/ dir with one never-indexed code_intel.db on a git repo.
+
+        Redirects BOTH path sources the handler uses: Path.home() (for the
+        Projects/ iteration) AND load_project_graph (for the DB load, which
+        otherwise resolves via the frozen jobs.paths.PROJECTS_DIR).
+        """
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        proj = tmp_path / ".swarm-ai" / "SwarmWS" / "Projects" / "P1"
+        proj.mkdir(parents=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        sp.run(["git", "init", "-q"], cwd=proj, check=True, env=env)
+        (proj / "f.py").write_text("x = 1\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "i"], cwd=proj, check=True, env=env)
+        db = GraphStore(proj / "code_intel.db")
+        db.set_meta("repo_root", str(proj))  # never indexed: no last_indexed_commit
+        db.close()
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        # load_project_graph is imported function-locally from core.code_intel,
+        # and resolves DB via the frozen PROJECTS_DIR — patch it at the source
+        # so the handler operates on OUR never-indexed tmp db.
+        import core.code_intel as ci
+        monkeypatch.setattr(
+            ci, "load_project_graph",
+            lambda name: GraphStore(proj / "code_intel.db"),
+        )
+        import jobs.handlers.code_intel_reindex as handler
+        return handler
+
+    def test_incremental_job_delegates_full_rebuild(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+        handler = self._make_project(tmp_path, monkeypatch)
+        with patch("jobs.scheduler.emit_event_atomic") as mock_emit, \
+             patch("core.code_intel.parser.parse_repo") as mock_parse:
+            result = handler.reindex_projects(full=False)
+            # Delegated → event emitted, parse_repo NOT called inline
+            mock_emit.assert_called_once()
+            assert mock_emit.call_args[0][0] == "code_intel_full_reindex"
+            mock_parse.assert_not_called()
+        statuses = {r["project"]: r["status"] for r in result["projects"]}
+        assert statuses.get("P1") == "delegated_full_reindex"
+
+    def test_full_job_runs_inline_not_delegated(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+        handler = self._make_project(tmp_path, monkeypatch)
+        with patch("jobs.scheduler.emit_event_atomic") as mock_emit, \
+             patch("core.code_intel.parser.parse_repo", return_value=[]) as mock_parse:
+            handler.reindex_projects(full=True)
+            # full=True → inline (parse called), NOT delegated
+            mock_emit.assert_not_called()
+            mock_parse.assert_called_once()

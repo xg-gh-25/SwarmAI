@@ -127,6 +127,51 @@ class TestSingleSourceConstants:
             assert '"reference-commits": 3' not in src, \
                 f"{mod.__name__} re-declares SIGNALS_PER_FEED_CAP literal"
 
+    def test_no_duplicate_label_map_in_other_modules(self):
+        """The DISPLAY source-label map must also live only in signal_selection —
+        both callers use readable_source() (run_cda1e759, closes the last drift
+        risk from run_44342b40's REVIEW+Gate-2)."""
+        import jobs.executor as ex
+        import core.proactive_intelligence as pi
+
+        for mod in (ex, pi):
+            src = inspect.getsource(mod)
+            assert "_FEED_SOURCE_LABELS = {" not in src, \
+                f"{mod.__name__} re-declares the display label map literal"
+            assert '"reference-commits": "Repo Update"' not in src, \
+                f"{mod.__name__} still has an inline label-map entry"
+
+
+class TestReadableSource:
+    """readable_source() is the single source for display source labels."""
+
+    def test_lang_source_feed_uses_label(self):
+        from jobs.signal_selection import readable_source
+        # github/commit feeds: raw source is a language → readable label
+        assert readable_source("reference-commits", "python") == "Repo Update"
+        assert readable_source("github-trending", "go") == "GitHub Trending"
+
+    def test_non_lang_feed_uses_raw_source(self):
+        from jobs.signal_selection import readable_source
+        assert readable_source("ai-leaders", "机器之心") == "机器之心"
+        assert readable_source("frontier-labs", "OpenAI") == "OpenAI"
+
+    def test_matches_old_inline_logic(self):
+        """Behavior-preserving: reproduces the exact expression both callers had
+        inline — .get(feed_id, raw) if feed_id in LANG_SOURCE_FEEDS else raw."""
+        from jobs.signal_selection import (
+            readable_source, _FEED_SOURCE_LABELS, _LANG_SOURCE_FEEDS,
+        )
+        cases = [
+            ("reference-commits", "python"), ("github-trending", "rust"),
+            ("frontier-labs", "OpenAI"), ("ai-leaders", "机器之心"),
+            ("unknown-feed", "whatever"), ("reference-commits", ""),
+        ]
+        for feed_id, raw in cases:
+            old = (_FEED_SOURCE_LABELS.get(feed_id, raw)
+                   if feed_id in _LANG_SOURCE_FEEDS else raw)
+            assert readable_source(feed_id, raw) == old
+
 
 # ─────────────────────────── select_signals behavior ───────────────────────────
 
