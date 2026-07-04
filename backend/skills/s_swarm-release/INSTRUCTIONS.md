@@ -288,53 +288,37 @@ If `git push` fails (auth, network): **STOP and report** — do NOT proceed.
 
 ### Stage 7b: CI GREEN GATE (Agent, blocking, ~3-8min wall-clock) — the ONLY thing that unlocks 7c
 
-Poll the CI run for the pushed HEAD until it completes. **Do NOT use `gh run watch`** —
-it polls silently and gets killed by the foreground timeout (observed 2026-07-04).
-**And do NOT wrap a `sleep`-loop in ONE bash call either** — a `for i in seq…; sleep 30`
-loop is a multi-minute single foreground call that hits the SAME timeout kill (it just
-replaces one silently-killed poller with another; the `echo` verdict never runs). The
-correct shape is **agent-driven polling: ONE short `gh` call per Bash invocation (≤5s),
-then the AGENT decides + re-invokes** between turns. Each poll is a fresh, fast,
-bounded command — no long-lived bash process to be killed.
+**This gate is now CODE-ENFORCED** (run_9fec1fb1): `release-gate --poll` is the only thing
+that writes the CI-green marker, and the `release_publish_guard` PreToolUse hook DENIES
+`gh release create` unless that marker's `head_sha` == the current HEAD. You cannot skip
+to 7c — the hook blocks it. 7b is how you EARN the marker.
 
-**Each poll = this single bash call (returns in ~2-3s):**
+Poll via the CLI (one bounded call per invocation — **do NOT use `gh run watch` or wrap a
+`sleep`-loop in one bash call**; both are multi-minute single foreground calls that get
+silently killed by the foreground timeout). The AGENT drives the loop:
+
+**Each poll = this single call (returns in ~2-3s):**
 ```bash
-cd $SWARMAI_ROOT && HEAD8="$(git rev-parse HEAD | cut -c1-8)" \
-  gh run list --branch main --limit 8 \
-    --json databaseId,name,headSha,status,conclusion 2>/dev/null \
-  | HEAD8="$HEAD8" python3 -c "import sys,json,os
-h=os.environ['HEAD8']
-hit=[r for r in json.load(sys.stdin) if r['name']=='CI' and r['headSha'].startswith(h)]
-if not hit: print('NOT_REGISTERED')
-else:
-    r=hit[0]; print(r['status'], r['conclusion'] or '', r['databaseId'])"
+cd $SWARMAI_ROOT && python backend/scripts/artifact_cli.py release-gate --poll --project SwarmAI
 ```
 
-**Agent loop (you drive it, NOT a bash loop):**
-1. Run the poll call above.
-2. Read the one-line result:
-   - `completed success <id>` → **PASS** → go to 7c.
-   - `completed <red> <id>` (`failure`/`cancelled`/`timed_out`) → **BLOCK** (see below).
-   - `in_progress …` / `queued …` / `NOT_REGISTERED` → not done yet. Wait ~30-45s
-     (a short standalone `sleep 40` bash call is fine — it's bounded, not a 10-min loop),
-     then re-run the poll. Give up after ~12-15 polls (~8-10min wall-clock) → HALT + report.
+**Read the JSON `state` + exit code:**
+- `state=PASS` (exit 0) → CI green on HEAD, **marker written** → proceed to 7c.
+- `state=WAIT` (exit 3) → CI not done / not registered yet. Wait ~30-45s (a short
+  standalone `sleep 40` bash call is fine — bounded, not a 10-min loop), then re-poll.
+  Give up after ~12-15 polls (~8-10min) → HALT + report.
+- `state=BLOCK` (exit 1) → CI is RED. Run `gh run view <run_id> --json jobs` to list
+  failing jobs, diagnose + fix. A release batch's own commits often leave test/scan
+  artifacts stale — md5-intent (`usedforsecurity=False`), camelCase-mapper shape
+  (`toEqual`), hand-built arg stubs (missing new attr) — the highest-probability red
+  source; sweep those first. Fix → push → **re-poll on the new HEAD** (the old marker,
+  if any, no longer matches the new HEAD → still fail-closed). Do NOT create the Release.
 
-**On BLOCK (CI red):** run `gh run view <id> --json jobs` to list failing jobs, diagnose
-+ fix. A release batch's own commits often leave test/scan artifacts stale — md5-intent
-(`usedforsecurity=False`), camelCase-mapper shape (`toEqual`), hand-built arg stubs
-(missing new attr) — the highest-probability red source; sweep those first. Fix → push →
-**re-run 7b on the new HEAD.** Do NOT create the Release.
-
-**On never-completes (polls exhausted, still `in_progress`/`NOT_REGISTERED`):** HALT +
-report — tell the user CI hasn't finished; let them decide wait-more vs investigate. Do
-NOT publish on an uncompleted CI.
-
-**No skip flag — by design, but be honest about enforcement.** This gate is
-**runbook-enforced, not code-enforced**: nothing in code prevents jumping to the 7c
-`gh release create` snippet. The agent MUST NOT reach 7c without a green 7b. Publishing
-before CI green is the exact "skip verification" hole this stage closes (CLASS A) — a
-hotfix that "can't wait for CI" is not ready to ship. (A future hardening could make 7c
-check a marker written only by a green 7b; today it is discipline + this runbook.)
+**No skip flag — code-enforced, not just runbook.** `release_publish_guard` blocks
+`gh release create` whenever the marker is absent / stale / HEAD-mismatched. Publishing
+before CI green is the exact "skip verification" hole this closes (CLASS A). A legit
+manual re-publish (e.g. re-uploading an asset to an already-CI-green tag) can set
+`SWARM_RELEASE_GATE_FORCE=1` — deliberate + logged, never the default.
 
 ### Stage 7c: PUBLISH RELEASE (Agent, 30s) — reached ONLY after 7b is green
 
@@ -352,6 +336,10 @@ gh release create "v${VERSION}" "$DMG" \
 
 # Verify release actually exists
 gh release view "v${VERSION}" --json tagName,url
+
+# Consume the CI-green marker (one publish = one marker; prevents a stale marker
+# from authorizing a future accidental publish on the same HEAD)
+python backend/scripts/artifact_cli.py release-gate --clear --project SwarmAI
 ```
 
 Release notes: summarize commits since last tag, grouped by type (feat/fix/improve/content).

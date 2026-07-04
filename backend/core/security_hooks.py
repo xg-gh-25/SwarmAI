@@ -1041,6 +1041,130 @@ async def eval_command_guard(
 
 
 # ---------------------------------------------------------------------------
+# release-publish guard — code-enforced CI-green gate (PreToolUse, Bash)
+# ---------------------------------------------------------------------------
+# run_9fec1fb1 (2026-07-04): hardens s_swarm-release Stage 7b from runbook-enforced
+# to CODE-enforced. Root cause (v1.24.0): a `gh release create` published a GitHub
+# Release (tag + DMG — irreversible star/download side effects) on a HEAD that CI
+# had NOT validated; CI then went red on 3 stale artifacts. A prose runbook gate
+# does not structurally stop the agent from reaching `gh release create` (CLASS A:
+# skip-verification, 12 prior occurrences). This gate removes the choice.
+#
+# Design A (marker-based, NO network in the hook): the gate ALLOWS `gh release
+# create` ONLY when a CI-green marker exists AND its head_sha == the current git
+# HEAD. The marker is written EXCLUSIVELY by `artifact_cli.py release-gate --poll`,
+# which is the only thing that actually queries CI. Keeping the `gh run list` call
+# in the CLI (not here) is deliberate: a network call inside a <5s PreToolUse hook
+# would reintroduce the exact foreground-timeout hang trap this whole effort fixed.
+# The hook only reads a local file + compares HEAD — it CANNOT hang.
+#
+# Fail-closed: marker absent / unreadable / head_sha mismatch (stale = previous
+# release's HEAD) → DENY. Escape hatch for a legit manual re-publish:
+# SWARM_RELEASE_GATE_FORCE=1 (env) — logged, deliberate, never the default.
+
+# `gh release create` at a command-word boundary (the ONLY publish verb we gate;
+# `gh release view/list/download/delete` are not publish and pass through — delete
+# is separately handled by the C041 irreversible-op gate).
+_GH_RELEASE_CREATE_RE = re.compile(r"\bgh\s+release\s+create\b", re.IGNORECASE)
+
+
+def _release_marker_authorizes_head() -> tuple[bool, str]:
+    """(authorized, reason). True IFF the CI-green marker's head_sha == git HEAD.
+
+    All-local: reads Projects/SwarmAI/.artifacts/.release-ci-green.json + `git
+    rev-parse HEAD`. No network. Any failure → (False, reason) — fail-closed.
+    """
+    import subprocess
+    try:
+        from config import get_app_data_dir
+        ws = os.environ.get("SWARM_WORKSPACE", str(get_app_data_dir() / "SwarmWS"))
+        marker = Path(ws).expanduser() / "Projects" / "SwarmAI" / ".artifacts" / ".release-ci-green.json"
+    except Exception as e:  # noqa: BLE001 — config import failure → fail-closed
+        return False, f"cannot resolve marker path: {type(e).__name__}"
+    if not marker.exists():
+        return False, "no CI-green marker (run `artifact_cli.py release-gate --poll` until PASS)"
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return False, f"marker unreadable: {type(e).__name__}"
+    marker_head = data.get("head_sha") or ""
+    repo_root = data.get("repo_root") or ""
+    if not marker_head or not repo_root:
+        return False, "marker missing head_sha/repo_root (stale format — re-poll release-gate)"
+    # CRITICAL: resolve HEAD in the SOURCE repo the marker names (`git -C
+    # <repo_root>`), NOT this process's cwd. The hook runs IN-PROCESS in the daemon
+    # whose cwd is "/" (not a git repo) — a bare `git rev-parse HEAD` here returns
+    # 128 and would DENY every release (adversarial run_9fec1fb1 caught this). The
+    # marker records which repo its head_sha came from; re-resolve against that.
+    try:
+        r = subprocess.run(["git", "-C", repo_root, "rev-parse", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        head = r.stdout.strip() if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, f"cannot resolve HEAD in {repo_root}: {type(e).__name__}"
+    if not head:
+        return False, f"git HEAD unresolved in marker repo_root {repo_root}"
+    if marker_head != head:
+        return False, f"marker HEAD {marker_head[:8]} != current HEAD {head[:8]} (stale — CI not green on THIS HEAD)"
+    return True, f"CI green on HEAD {head[:8]} (run {data.get('run_id')})"
+
+
+async def release_publish_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Bash): DENY `gh release create` unless CI is green on the current
+    HEAD (marker written by `artifact_cli.py release-gate --poll`).
+
+    The code-enforced half of s_swarm-release Stage 7b (run_9fec1fb1). Prose said
+    "wait for CI green before publish" and was structurally unenforced; this gate
+    makes publishing-before-green impossible without an explicit logged override.
+    Fail-safe: non-Bash / non-`gh release create` commands approve untouched.
+
+    Accepted residuals (adversarial run_9fec1fb1, both by-design not defects):
+    - Indirect invocation (`bash -c "gh release create …"`) is NOT caught: `_strip_quoted`
+      removes the quoted span before the regex (same documented residual as
+      pytest_command_guard). The release skill types a BARE `gh release create` (7c),
+      never wrapped — this is a contrived-attack surface, not a flow-hit. LOW.
+    - The marker is a plaintext file the agent could `echo >` to forge a green.
+      Threat model here is "stop CLASS-A skip-verification," not a malicious agent;
+      `SWARM_RELEASE_GATE_FORCE=1` is already a sanctioned bypass, so the gate is an
+      honor-system guardrail by design (forgery just makes the bypass explicit). MEDIUM.
+    """
+    if input_data.get("tool_name") != "Bash":
+        return {"decision": "approve"}
+    command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
+    if not command or not _GH_RELEASE_CREATE_RE.search(_strip_quoted(command)):
+        return {"decision": "approve"}
+
+    if os.environ.get("SWARM_RELEASE_GATE_FORCE") == "1":
+        logger.warning("[release-gate] FORCE override — publishing without CI-green marker check: %s",
+                       command[:80])
+        return {"decision": "approve"}
+
+    ok, reason = _release_marker_authorizes_head()
+    if ok:
+        logger.info("[release-gate] publish allowed — %s", reason)
+        return {"decision": "approve"}
+
+    logger.warning("[BLOCKED] gh release create without CI-green marker: %s", reason)
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"`gh release create` → DENY: {reason}. "
+                "发布 GitHub Release(tag+DMG,有 star/下载不可逆副作用)前,CI 必须在**当前 HEAD** 上绿。 "
+                "先跑 `python backend/scripts/artifact_cli.py release-gate --poll`(agent 驱动轮询,一次一 call)"
+                "直到 state=PASS 写下 marker,再发布。CI 红 → 修 → push → 重新 poll,绝不在红的 HEAD 上发。 "
+                "(s_swarm-release 7b, R6; 合法手动补发用 SWARM_RELEASE_GATE_FORCE=1)"
+            ),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # bash-syntax guard — hang prevention via parse-check (PreToolUse, Bash)
 # ---------------------------------------------------------------------------
 # A syntactically INCOMPLETE bash command (unterminated quote/backtick, unclosed

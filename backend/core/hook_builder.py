@@ -27,6 +27,7 @@ from .security_hooks import (
     background_command_guard,
     pytest_command_guard,
     eval_command_guard,
+    release_publish_guard,
     bash_syntax_guard,
     create_ask_question_gate,
     create_governance_file_gate,
@@ -265,6 +266,18 @@ async def build_hooks(
     registry.register(
         "PreToolUse", eval_command_guard,
         "eval_command_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: release-publish guard (Bash-scoped) ──────
+    # Deny `gh release create` unless CI is green on the CURRENT HEAD (marker
+    # written by `artifact_cli.py release-gate --poll`). Code-enforced half of
+    # s_swarm-release Stage 7b (run_9fec1fb1) — prevents publishing a GitHub
+    # Release on an unvalidated HEAD (the v1.24.0 miss; CLASS A skip-verification).
+    # All-local (reads marker + git HEAD, no network — cannot hang). Fail-closed;
+    # SWARM_RELEASE_GATE_FORCE=1 escapes for a legit manual re-publish.
+    registry.register(
+        "PreToolUse", release_publish_guard,
+        "release_publish_guard", matcher="Bash",
     )
 
     # ── PreToolUse: bash-syntax guard (Bash-scoped) ──────────

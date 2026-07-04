@@ -1838,6 +1838,151 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     }, indent=2))
 
 
+# ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b ──────
+#
+# Design A (run_9fec1fb1, 2026-07-04): the ONLY writer of the CI-green marker that
+# `release_publish_guard` (security_hooks.py) reads to allow `gh release create`.
+# This is the "check CI" half; the hook is the "enforce" half. Splitting it this
+# way keeps ALL network I/O (the `gh run list` call, which can hang) OUT of the
+# <5s PreToolUse hook — the hook only reads a local file + compares HEAD. That is
+# the whole point of the marker design: we do NOT reintroduce the foreground-timeout
+# hang trap (the exact bug the 7b runbook poll had, and that `gh run watch` has)
+# inside the hook path.
+#
+# Marker: Projects/<project>/.artifacts/.release-ci-green.json
+#   {"head_sha": "<40-char>", "run_id": <int>, "conclusion": "success", "ts": "<iso>"}
+# The guard allows publish IFF marker.head_sha == current git HEAD. A stale marker
+# (previous release's HEAD) therefore authorizes nothing on a new HEAD — fail-closed.
+
+def _release_marker_path(project: str) -> Path:
+    return (_get_workspace() / "Projects" / project / ".artifacts"
+            / ".release-ci-green.json")
+
+
+def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
+    """CI-green gate for the release skill's Stage 7b (design A, run_9fec1fb1).
+
+    --poll: do ONE `gh run list` check for the CI run on the CURRENT git HEAD.
+      - CI conclusion == success  → atomically write the marker, print PASS, exit 0
+      - CI completed but red       → print BLOCK + failing conclusion, exit 1 (no marker)
+      - CI not done / not registered → print WAIT, exit 3 (agent should sleep + re-poll)
+    --clear: delete the marker (call after a successful publish, or to reset).
+    --status: print current marker vs HEAD without touching CI.
+
+    NEVER loops internally — the AGENT drives polling (one fast call per invocation),
+    so no long-lived process can be foreground-timeout-killed. Bounded git/gh calls
+    each carry a timeout.
+    """
+    import subprocess
+    from datetime import datetime, timezone
+
+    marker = _release_marker_path(args.project)
+
+    def _head_and_root() -> tuple[str | None, str | None]:
+        """(HEAD sha, repo root) of the CWD's git repo. The CLI is run by the agent
+        via `cd $SWARMAI_ROOT && ...`, so this resolves the SOURCE repo. Both are
+        recorded in the marker so the (differently-cwd'd) hook can re-resolve HEAD
+        against the SAME repo via `git -C <repo_root>` — never its own daemon cwd."""
+        try:
+            r = subprocess.run(["git", "rev-parse", "HEAD", "--show-toplevel"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                return None, None
+            lines = r.stdout.strip().splitlines()
+            head = lines[0].strip() if lines else None
+            root = lines[1].strip() if len(lines) > 1 else None
+            return head, root
+        except (subprocess.TimeoutExpired, OSError):
+            return None, None
+
+    def _head() -> str | None:
+        return _head_and_root()[0]
+
+    if getattr(args, "clear", False):
+        existed = marker.exists()
+        marker.unlink(missing_ok=True)
+        print(json.dumps({"cleared": existed, "marker": str(marker)}))
+        return
+
+    head, repo_root = _head_and_root()
+    if not head:
+        print(json.dumps({"error": "cannot resolve git HEAD (not a repo / git unavailable)"}),
+              file=sys.stderr)
+        sys.exit(2)
+
+    if getattr(args, "status", False):
+        cur = None
+        if marker.exists():
+            try:
+                cur = json.loads(marker.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cur = None
+        matches = bool(cur and cur.get("head_sha") == head)
+        print(json.dumps({"head": head, "marker": cur, "authorizes_current_head": matches}))
+        return
+
+    # --poll (default): one gh check for the CI run on HEAD
+    try:
+        r = subprocess.run(
+            ["gh", "run", "list", "--branch", "main", "--limit", "8",
+             "--json", "databaseId,name,headSha,status,conclusion"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        print(json.dumps({"state": "WAIT", "reason": "gh run list timed out (30s) — retry"}),
+              file=sys.stderr)
+        sys.exit(3)
+    except OSError as e:
+        print(json.dumps({"error": f"gh unavailable: {e}"}), file=sys.stderr)
+        sys.exit(2)
+
+    if r.returncode != 0:
+        print(json.dumps({"state": "WAIT", "reason": f"gh error: {r.stderr.strip()[:160]}"}),
+              file=sys.stderr)
+        sys.exit(3)
+
+    try:
+        runs = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print(json.dumps({"state": "WAIT", "reason": "gh returned non-JSON — retry"}),
+              file=sys.stderr)
+        sys.exit(3)
+
+    ci = next((x for x in runs
+               if x.get("name") == "CI" and (x.get("headSha") or "").startswith(head[:8])),
+              None)
+    if ci is None:
+        print(json.dumps({"state": "WAIT", "reason": "CI run not registered for HEAD yet",
+                          "head": head}))
+        sys.exit(3)
+
+    status, concl = ci.get("status"), ci.get("conclusion")
+    if status != "completed":
+        print(json.dumps({"state": "WAIT", "status": status, "run_id": ci.get("databaseId"),
+                          "head": head}))
+        sys.exit(3)
+
+    if concl == "success":
+        # Atomic write (temp + replace) — mirror the file-write discipline used elsewhere.
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"head_sha": head, "repo_root": repo_root,
+                   "run_id": ci.get("databaseId"),
+                   "conclusion": "success",
+                   "ts": datetime.now(timezone.utc).isoformat()}
+        tmp = marker.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(marker)
+        print(json.dumps({"state": "PASS", **payload, "marker": str(marker)}))
+        return
+
+    # completed + red
+    print(json.dumps({"state": "BLOCK", "conclusion": concl,
+                      "run_id": ci.get("databaseId"), "head": head,
+                      "hint": "gh run view <run_id> --json jobs → fix → push → re-poll"}),
+          file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_run_get(args, reg: ArtifactRegistry) -> None:
     """Get a pipeline run's current state."""
     if args.run_id:
@@ -3998,6 +4143,13 @@ def main() -> None:
     p_ddd_inject.add_argument("--stage", required=True, help="Pipeline stage: evaluate/think/plan/build/review/test/deliver")
     p_ddd_inject.add_argument("--context", default=None, help="Comma-separated context file paths (for relevance boost)")
 
+    # release-gate (run_9fec1fb1: code-enforced CI-green gate for s_swarm-release 7b)
+    p_rel_gate = sub.add_parser("release-gate", help="CI-green gate: poll CI for HEAD, write marker on green (authorizes gh release create)")
+    p_rel_gate.add_argument("--project", default="SwarmAI", help="Project owning the marker (default SwarmAI)")
+    p_rel_gate.add_argument("--poll", action="store_true", help="One gh run list check for HEAD; green→write marker (exit 0), red→exit 1, not-done→exit 3")
+    p_rel_gate.add_argument("--status", action="store_true", help="Print marker vs HEAD (does it authorize current HEAD?) without touching CI")
+    p_rel_gate.add_argument("--clear", action="store_true", help="Delete the marker (call after publish, or to reset)")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -4028,6 +4180,7 @@ def main() -> None:
         "ddd-retire": cmd_ddd_retire,
         "ddd-noise": cmd_ddd_noise,
         "ddd-stage-inject": cmd_ddd_stage_inject,
+        "release-gate": cmd_release_gate,
     }
     handlers[args.command](args, reg)
 

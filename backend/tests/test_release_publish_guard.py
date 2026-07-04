@@ -1,0 +1,216 @@
+"""Tests for release_publish_guard PreToolUse Bash gate (run_9fec1fb1, 2026-07-04).
+
+Code-enforced half of s_swarm-release Stage 7b. `gh release create` publishes a
+GitHub Release (tag + DMG — irreversible star/download side effects); it must NOT
+run on a HEAD that CI has not validated (the v1.24.0 miss: published, then CI red).
+
+Design A (marker-based): the guard ALLOWS `gh release create` ONLY when a CI-green
+marker exists AND marker.head_sha == the current git HEAD. The marker is written
+exclusively by `artifact_cli.py release-gate --poll`. The guard does NO network
+call — it reads a local file + `git rev-parse HEAD` — so it CANNOT reintroduce the
+foreground-timeout hang trap that the 7b runbook poll (and `gh run watch`) had.
+
+Invariants:
+  - DENY  `gh release create` when marker absent / unreadable / HEAD-mismatch (stale)
+  - ALLOW `gh release create` when marker.head_sha == current HEAD
+  - ALLOW everything else (non-Bash, non-create gh verbs, unrelated commands)
+  - SWARM_RELEASE_GATE_FORCE=1 → ALLOW (logged escape hatch)
+Methodology: monkeypatch the guard's HEAD-resolver + marker path so tests are
+hermetic (no real git/gh), then assert the allow/deny decision.
+"""
+
+import asyncio
+import json
+
+import pytest
+
+from core import security_hooks
+from core.security_hooks import release_publish_guard
+
+
+def _run(command, tool_name="Bash"):
+    return asyncio.run(
+        release_publish_guard(
+            {"tool_name": tool_name, "tool_input": {"command": command}}, None, None
+        )
+    )
+
+
+def _is_deny(result):
+    return result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+@pytest.fixture
+def marker_env(tmp_path, monkeypatch):
+    """Point the guard at a temp marker + a fixed HEAD. Returns (write_marker, HEAD)."""
+    HEAD = "a" * 40
+    marker = tmp_path / ".release-ci-green.json"
+
+    # The guard resolves the marker via config.get_app_data_dir()/SwarmWS/... —
+    # override by pointing SWARM_WORKSPACE at tmp and materializing the tree, OR
+    # patch the helper directly. Patch the helper's two IO points for hermeticity.
+    def fake_authorizes():
+        # re-implement the real predicate against our temp marker + fixed HEAD,
+        # exercising the SAME allow/deny logic paths.
+        if not marker.exists():
+            return False, "no CI-green marker"
+        try:
+            data = json.loads(marker.read_text())
+        except Exception:
+            return False, "marker unreadable"
+        if data.get("head_sha") != HEAD:
+            return False, f"marker HEAD {data.get('head_sha','')[:8]} != current {HEAD[:8]}"
+        return True, f"CI green on HEAD {HEAD[:8]}"
+
+    def write_marker(head_sha):
+        marker.write_text(json.dumps({"head_sha": head_sha, "run_id": 123,
+                                       "conclusion": "success", "ts": "t"}))
+
+    monkeypatch.setattr(security_hooks, "_release_marker_authorizes_head", fake_authorizes)
+    monkeypatch.delenv("SWARM_RELEASE_GATE_FORCE", raising=False)
+    return write_marker, HEAD
+
+
+class TestPublishGatedOnMarker:
+    def test_deny_when_marker_absent(self, marker_env):
+        # no marker written → fail-closed DENY
+        assert _is_deny(_run("gh release create v1.25.0 dist/app.dmg --title v1.25.0"))
+
+    def test_allow_when_marker_matches_head(self, marker_env):
+        write_marker, HEAD = marker_env
+        write_marker(HEAD)  # CI green on the current HEAD
+        assert not _is_deny(_run("gh release create v1.25.0 dist/app.dmg --title v1.25.0"))
+
+    def test_deny_when_marker_is_stale(self, marker_env):
+        write_marker, HEAD = marker_env
+        write_marker("b" * 40)  # marker from a PREVIOUS release's HEAD
+        assert _is_deny(_run("gh release create v1.25.0 dist/app.dmg")), \
+            "a stale marker (different HEAD) must NOT authorize publish on this HEAD"
+
+    def test_deny_reason_names_ci_and_head(self, marker_env):
+        r = _run("gh release create v1.25.0 dist/app.dmg")
+        reason = r.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+        assert "CI" in reason
+        assert "release-gate" in reason or "HEAD" in reason
+
+
+class TestNonPublishApproved:
+    """Fail-safe: only `gh release create` is gated; everything else passes."""
+
+    @pytest.mark.parametrize("cmd", [
+        "gh release view v1.24.0 --json tagName",     # view is not publish
+        "gh release list",                             # list is not publish
+        "gh release download v1.24.0",                 # download is not publish
+        "git push origin main",
+        "python scripts/artifact_cli.py release-gate --poll",
+        "gh run list --branch main",
+        'git commit -m "docs: describe gh release create flow"',  # quoted → not a real create
+    ])
+    def test_non_publish_approved(self, cmd, marker_env):
+        assert not _is_deny(_run(cmd)), f"non-publish command must be APPROVED: {cmd!r}"
+
+    def test_non_bash_tool_approved(self, marker_env):
+        assert not _is_deny(_run("gh release create v1.25.0 x.dmg", tool_name="Read"))
+
+    def test_empty_command_approved(self, marker_env):
+        assert not _is_deny(_run(""))
+
+
+class TestForceOverride:
+    def test_force_env_allows_without_marker(self, marker_env, monkeypatch):
+        monkeypatch.setenv("SWARM_RELEASE_GATE_FORCE", "1")
+        # no marker, but FORCE set → allowed (logged escape hatch)
+        assert not _is_deny(_run("gh release create v1.25.0 dist/app.dmg"))
+
+
+class TestRegisteredInHookChain:
+    def test_guard_registered(self):
+        import inspect
+        from core import hook_builder
+        src = inspect.getsource(hook_builder)
+        assert "release_publish_guard" in src, (
+            "release_publish_guard must be registered in hook_builder.build_hooks — "
+            "an unregistered guard is dead code."
+        )
+
+
+class TestRealPredicateFailClosed:
+    """Exercise the REAL _release_marker_authorizes_head (not the fixture stub) to
+    prove it fail-closes when the marker genuinely does not exist for SwarmAI."""
+
+    def test_real_predicate_denies_without_marker(self, monkeypatch, tmp_path):
+        # Point workspace at an empty tmp → no marker → must be (False, ...)
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        ok, reason = security_hooks._release_marker_authorizes_head()
+        assert ok is False
+        assert "marker" in reason.lower()
+
+
+class TestRealPredicateCwdIndependence:
+    """Regression for the run_9fec1fb1 adversarial BLOCK: the hook runs in the daemon
+    whose cwd is '/' (NOT a git repo). A bare `git rev-parse HEAD` there returns 128
+    → would DENY every release. The marker records repo_root; the predicate must
+    resolve HEAD via `git -C <repo_root>` so it works REGARDLESS of process cwd.
+    These drive the REAL predicate against a REAL temp git repo, from a NON-repo cwd."""
+
+    @staticmethod
+    def _make_repo(tmp_path):
+        import subprocess
+        repo = tmp_path / "srcrepo"
+        repo.mkdir()
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(tmp_path)}
+        import os as _os
+        e = {**_os.environ, **env}
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=e)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, env=e)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True, env=e)
+        head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        return repo, head
+
+    def _write_marker(self, tmp_path, monkeypatch, head_sha, repo_root):
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        marker = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / ".release-ci-green.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"head_sha": head_sha, "repo_root": str(repo_root),
+                                      "run_id": 1, "conclusion": "success", "ts": "t"}))
+
+    def test_real_allow_path_from_non_repo_cwd(self, tmp_path, monkeypatch):
+        """The bug the skeptic caught: marker+matching HEAD must AUTHORIZE even when
+        the process cwd is a non-repo dir (mirrors the daemon's cwd='/')."""
+        import os
+        repo, head = self._make_repo(tmp_path)
+        self._write_marker(tmp_path, monkeypatch, head, repo)
+        # chdir to a NON-repo dir — the exact condition that broke the first version
+        non_repo = tmp_path / "elsewhere"; non_repo.mkdir()
+        cwd0 = os.getcwd()
+        try:
+            os.chdir(non_repo)
+            ok, reason = security_hooks._release_marker_authorizes_head()
+        finally:
+            os.chdir(cwd0)
+        assert ok is True, f"real predicate must AUTHORIZE from non-repo cwd via git -C: {reason}"
+
+    def test_real_stale_marker_denies_from_non_repo_cwd(self, tmp_path, monkeypatch):
+        import os
+        repo, head = self._make_repo(tmp_path)
+        self._write_marker(tmp_path, monkeypatch, "d" * 40, repo)  # marker HEAD != real HEAD
+        non_repo = tmp_path / "elsewhere"; non_repo.mkdir()
+        cwd0 = os.getcwd()
+        try:
+            os.chdir(non_repo)
+            ok, reason = security_hooks._release_marker_authorizes_head()
+        finally:
+            os.chdir(cwd0)
+        assert ok is False and "stale" in reason.lower()
+
+    def test_real_missing_repo_root_denies(self, tmp_path, monkeypatch):
+        """Old-format marker without repo_root → fail-closed (not a silent allow)."""
+        monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+        marker = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / ".release-ci-green.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"head_sha": "a" * 40, "conclusion": "success"}))
+        ok, reason = security_hooks._release_marker_authorizes_head()
+        assert ok is False and "repo_root" in reason
