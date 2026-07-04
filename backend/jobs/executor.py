@@ -1128,6 +1128,13 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
     return "\n".join(sections)
 
 
+# Matches a domain-like `word.letter` token (cs.AI, arXiv.org, Latent.Space) that
+# Slack auto-links in bare text. Group 1 = the char before the dot, group 2 = the
+# letter after it, so the sub can splice a zero-width space between them. Requires
+# an ALPHA after the dot so numeric decimals ("3.5", "v1.2") are NOT matched.
+_DOMAIN_LIKE_RE = re.compile(r"(\w)\.([A-Za-z])")
+
+
 def _escape_slack_mrkdwn(text: str) -> str:
     """Escape Slack mrkdwn special characters in user-generated text.
 
@@ -1141,6 +1148,13 @@ def _escape_slack_mrkdwn(text: str) -> str:
     text = _html_mod.unescape(text)
     # < and > are the only ones that create link injection; escape them first
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Neutralize Slack auto-linking of domain-like bare tokens (cs.AI, arXiv.org,
+    # Latent.Space): Slack turns `word.letter` into a hyperlink, which both emits
+    # a spurious http://_word link AND severs the surrounding _italic_ span. A
+    # zero-width space after the dot breaks the domain heuristic while leaving the
+    # visible text unchanged. Requires a LETTER after the dot (so decimals like
+    # "3.5" / "v1.2" are untouched — those aren't auto-link triggers).
+    text = _DOMAIN_LIKE_RE.sub("\\1.​\\2", text)
     return text
 
 
@@ -1173,7 +1187,7 @@ def _format_briefing_slack_message() -> str:
             title = esc(item.get("title", ""))
             source = item.get("source", "")
             detail = item.get("sourceDetail", item.get("source_detail", ""))
-            suffix = f" — _{source}"
+            suffix = f" — _{esc(source)}"
             if detail:
                 suffix += f", {esc(detail)}"
             suffix += "_"

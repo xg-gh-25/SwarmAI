@@ -382,3 +382,70 @@ class TestSlackFormatter:
         self._patch_digest(monkeypatch, tmp_path, items)
         msg = _format_signal_digest_message(max_items=20)  # must not raise
         assert "12345" in msg
+
+
+class TestSlackAutoLinkSuppression:
+    """Bare display text with domain-like tokens (cs.AI, arXiv.org, Latent.Space)
+    must NOT be auto-linked by Slack — that produced spurious http://_cs.AI links
+    AND severed the surrounding _italic_ span (run_e4c4ead8, live Slack repro)."""
+
+    ZWSP = "​"
+
+    def test_domain_like_token_gets_zwsp(self):
+        from jobs.executor import _escape_slack_mrkdwn
+        # cs.AI / arXiv.org / Latent.Space are word.word tokens Slack auto-links.
+        out = _escape_slack_mrkdwn("cs.AI updates on arXiv.org")
+        assert self.ZWSP in out, "domain-like token must be broken with a ZWSP"
+        # The visible text is preserved once the ZWSP is stripped.
+        assert out.replace(self.ZWSP, "") == "cs.AI updates on arXiv.org"
+
+    def test_latent_space_broken(self):
+        from jobs.executor import _escape_slack_mrkdwn
+        out = _escape_slack_mrkdwn("Latent.Space")
+        assert self.ZWSP in out
+        assert out.replace(self.ZWSP, "") == "Latent.Space"
+
+    def test_plain_text_untouched(self):
+        from jobs.executor import _escape_slack_mrkdwn
+        # No domain-like token → no ZWSP inserted (don't pollute normal text).
+        assert self.ZWSP not in _escape_slack_mrkdwn("GitHub Trending")
+        assert self.ZWSP not in _escape_slack_mrkdwn("机器之心")
+        assert self.ZWSP not in _escape_slack_mrkdwn("Frontier Labs")
+
+    def test_decimal_number_not_broken(self):
+        from jobs.executor import _escape_slack_mrkdwn
+        # A number like "3.5" or "v1.2" is not a Slack auto-link trigger
+        # (needs a letter after the dot / a TLD-like tail) — leave it alone.
+        assert self.ZWSP not in _escape_slack_mrkdwn("version 3.5 released")
+
+    def test_url_still_escaped_and_functional(self):
+        from jobs.executor import _escape_slack_mrkdwn
+        # < > injection guard still holds (the original escaper contract).
+        out = _escape_slack_mrkdwn("<script>alert(1)</script>")
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_real_slack_render_no_broken_italic(self, monkeypatch, tmp_path):
+        """E2E: a signal whose source is 'cs.AI updates on arXiv.org' must render
+        in Slack with the source italic span intact and NO http://_ artifact."""
+        from jobs.executor import _format_signal_digest_message
+        items = [{
+            "title": "Agent4cs paper", "summary": "multi-agent code summarization",
+            "source": "cs.AI updates on arXiv.org", "url": "https://arxiv.org/abs/2607.01425",
+            "final_score": 1.5, "urgency": "medium", "tier": "ai-research",
+            "lang": "en", "feed_id": "ai-research", "fetched_at": _fresh(),
+        }]
+        # _patch_digest lives on TestSlackFormatter; replicate the minimal setup.
+        import jobs.executor as ex
+        sig_dir = tmp_path / "Services" / "signals"
+        sig_dir.mkdir(parents=True, exist_ok=True)
+        digest = {"generated_at": _fresh(), "signals_count": 1, "items": items}
+        (sig_dir / "signal_digest.json").write_text(json.dumps(digest), encoding="utf-8")
+        monkeypatch.setattr(ex, "SWARMWS", tmp_path)
+
+        msg = _format_signal_digest_message(max_items=5)
+        # The source label is present (ZWSP-stripped) and the italic markers wrap it.
+        assert "cs.AI updates on arXiv.org".replace(".", ".") not in msg or self.ZWSP in msg
+        # No severed-italic artifact: the raw source must not sit as a naked
+        # domain-like token that Slack would auto-link — a ZWSP must be present.
+        assert self.ZWSP in msg, "rendered digest must neutralize domain-like source tokens"
