@@ -54,16 +54,33 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
 
     last_commit = graph_store.get_meta("last_indexed_commit")
 
-    if not last_commit:
-        return FreshnessResult(stale=True, suggest_full_rebuild=True,
-                               reason="Never indexed")
-
-    # What's HEAD now?
+    # Compute HEAD once (best-effort). BOTH the never-indexed path and the
+    # comparison below need it. Critically, populating current_head on the
+    # never-indexed path lets the 3 marker writers — all guarded by
+    # `if freshness.current_head:` (code_intel_reindex.py:73/129,
+    # context_health_hook.py:649) — persist last_indexed_commit. Without it,
+    # check_freshness returned current_head=None on "Never indexed", the marker
+    # never persisted, and every on:git_commit reindex redid a full repo reparse
+    # (~85-118s) forever, flapping past the 120s timeout (run_9a23dd4a).
     try:
         current_head = _git(repo_root, ["rev-parse", "HEAD"]).strip()
+        head_error: GitError | None = None
     except GitError as e:
         logger.warning(f"Git rev-parse failed: {e}")
-        return FreshnessResult(stale=True, reason=f"git error: {e}")
+        current_head = None
+        head_error = e
+
+    if not last_commit:
+        # Never indexed → full rebuild regardless of git outcome. current_head is
+        # best-effort: set when git works (breaks the perpetual-rebuild loop),
+        # None on genuine git failure (write-guard stays closed, no crash).
+        return FreshnessResult(stale=True, suggest_full_rebuild=True,
+                               current_head=current_head,
+                               reason="Never indexed")
+
+    # Beyond here we need a real HEAD to diff against last_commit.
+    if current_head is None:
+        return FreshnessResult(stale=True, reason=f"git error: {head_error}")
 
     if current_head == last_commit:
         return FreshnessResult(stale=False)

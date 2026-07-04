@@ -69,8 +69,6 @@ def reindex_projects(full: bool = False) -> dict:
                 graph.clear()
                 graph.bulk_insert(parse_results)
                 # bulk_insert already rebuilds FTS + resolves cross-file
-                if freshness.current_head:
-                    graph.set_meta("last_indexed_commit", freshness.current_head)
                 # Preserve repo_root metadata
                 graph.set_meta("repo_root", str(repo_root))
                 # Extract routes from all parsed files
@@ -87,6 +85,13 @@ def reindex_projects(full: bool = False) -> dict:
                                 pass
                 # Apply router prefix resolution (FastAPI include_router)
                 _resolve_prefixes(graph, repo_root)
+            # Persist the freshness marker even when parse_results is empty
+            # (empty repo, all files skipped/binary, or every parse dropped):
+            # we DID index HEAD, it's just empty. Keeping this OUTSIDE the
+            # `if parse_results:` block prevents the perpetual-rebuild loop from
+            # surviving on an empty-parse full run (run_9a23dd4a, Gate-1 MF-1).
+            if freshness.current_head:
+                graph.set_meta("last_indexed_commit", freshness.current_head)
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
             # Export code-intel.json v2 after full reindex
             _export_json(graph, project_name, project_dir)
