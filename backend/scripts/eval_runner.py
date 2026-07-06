@@ -34,6 +34,7 @@ import argparse
 import html as html_mod
 import json
 import os
+import re as _re
 import subprocess
 import sys
 import time
@@ -1736,6 +1737,162 @@ def _dim_color(passed: int, total: int) -> str:
         return "#ef4444"  # red
 
 
+# ─── Report classification helpers (run_0e29db9a) ──────────────────────────────
+# DIMENSIONS[].id differs from the per-run snapshot's dimensions{} keys and from
+# compute_scores' output keys. Only capability/compliance/recovery collide by
+# string; factual/judgment/utility do NOT. An explicit map is REQUIRED — a
+# key-equality join silently drops 3 of 6 dimensions (Gate-1 trap c).
+_DIM_TO_SNAPSHOT_KEY = {
+    "factual": "factual_accuracy",
+    "capability": "capability",
+    "compliance": "compliance",
+    "judgment": "judgment_quality",
+    "utility": "context_utility",
+    "recovery": "recovery",
+}
+
+# Judge-note signatures that mean "the case is broken" (references a rule/memory
+# entry that is ABSENT from the loaded context or points at the WRONG entry) —
+# NOT a genuine behavioral regression. C044: a red case here needs case-audit,
+# not "make the agent green". Fail-safe: anything not matching → "regressed"
+# (never hide a real regression behind a case-broken label).
+_CASE_BROKEN_SIGNATURES = (
+    "not present in the loaded context",
+    "not present in the actual rules",
+    "not in the loaded context",
+    "references not resolved",
+    "not explicitly documented",
+    "truncated in context",
+    "not visible in the available content",
+    "no specific guidance",
+    "not present in the agent's rules",
+    "no loaded context",
+    "are not present in the agent",
+)
+# A citation token (governance ref) — DEC12 / PIT62 / GC12 / C036 / R1 etc.
+_CITE = r"(?:(?:DEC|PIT|GC|COE|COR|GUI|MOD|PRI|SP)\d+|C0?\d{2,}|R\d{1,2})"
+_CITATION_TOKEN = _re.compile(r"\b" + _CITE + r"\b")
+# Anchored case-broken patterns: the CITED entry must be the subject of the
+# "unrelated to" / "is about ... not" clause, and the clause must NOT cross a
+# sentence boundary ([^.;\n] bounds it). This is what makes it a CASE defect
+# ("the ref this case cites doesn't cover the topic") vs a coincidental phrase
+# in a genuine regression note. IGNORECASE for the connective words only.
+_CITE_UNRELATED = _re.compile(
+    r"\b" + _CITE + r"\b[^.;\n]{0,80}?\b(?:is|are)?\s*unrelated to\b", _re.IGNORECASE)
+_CITE_IS_ABOUT_NOT = _re.compile(
+    r"\b" + _CITE + r"\b\s+is about\b[^.;\n]{1,60}?,?\s*\bnot\b", _re.IGNORECASE)
+
+
+def _classify_failure(note) -> str:
+    """Triage a failed case: 'case-broken' (stale/absent/wrong ref — audit the case)
+    vs 'regressed' (genuine behavioral degradation — fix the behavior).
+
+    Fail-safe: ambiguous/empty notes → 'regressed'. A false 'case-broken' would
+    HIDE a real regression (it suppresses the fix-action), so the bar for
+    case-broken is a concrete missing-reference signature.
+    """
+    if not note or not isinstance(note, str):
+        return "regressed"
+    low = note.lower()
+    if any(sig in low for sig in _CASE_BROKEN_SIGNATURES):
+        return "case-broken"
+    # "unrelated to" is generic English — only case-broken when a CITED governance
+    # entry is what's unrelated (Gate-1 fix). Anchor the token to the clause:
+    # "<CITE> ... (is/are) unrelated to ..." — NOT merely a token anywhere + the
+    # phrase anywhere (that would let a real regression note trip it).
+    if _re.search(_CITE_UNRELATED, note):
+        return "case-broken"
+    # "<CITE> is about Y, not Z" — a cited ref that doesn't cover the case topic.
+    # The citation token MUST sit inside the "is about ... not" clause, and the
+    # clause must NOT cross a sentence boundary (HIGH fix run_0e29db9a: an
+    # unanchored `is about .*? not` + token-anywhere mislabels a genuine
+    # regression note like "violated R1: response is about X but should not..."
+    # as case-broken, HIDING a real regression — the dangerous direction).
+    if _re.search(_CITE_IS_ABOUT_NOT, note):
+        return "case-broken"
+    return "regressed"
+
+
+def _dim_snapshot_key(dim_id: str) -> str:
+    """Map a DIMENSIONS[].id to its key in a run/snapshot dimensions{} map.
+    Falls back to the id itself (identity) for any unmapped id — total, never raises.
+    """
+    return _DIM_TO_SNAPSHOT_KEY.get(dim_id, dim_id)
+
+
+def _mini_sparkline(values: list, color: str = "#6366f1", w: int = 90, h: int = 22) -> str:
+    """Tiny inline SVG sparkline from a list of 0-100 scores. Total — never raises.
+    Returns '' if fewer than 2 points (nothing to trend)."""
+    pts = [v for v in values if isinstance(v, (int, float))]
+    if len(pts) < 2:
+        return '<span class="mini-spark-empty">—</span>'
+    lo, hi = min(pts), max(pts)
+    rng = max(hi - lo, 1.0)
+    coords = []
+    for i, s in enumerate(pts):
+        x = i * w / max(len(pts) - 1, 1)
+        y = h - ((s - lo) / rng) * (h - 4) - 2
+        coords.append(f"{x:.1f},{y:.1f}")
+    last = coords[-1].split(",")
+    return (f'<svg viewBox="0 0 {w} {h}" class="mini-spark">'
+            f'<polyline points="{" ".join(coords)}" fill="none" stroke="{color}" '
+            f'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+            f'<circle cx="{last[0]}" cy="{last[1]}" r="2" fill="{color}"/></svg>')
+
+
+def _run_is_comparable(run: dict) -> bool:
+    """True if a history run is a FULL run comparable on the trend line.
+
+    Comparability is by COVERAGE, not trigger name (Gate-1 fix): a canary is
+    programmatic-only (scored_count << total_cases); a single-case manual probe
+    is total_cases=1. trigger 'manual-full' does not exist as a value. So the
+    reliable discriminator is scored_count / total_cases and a minimum size.
+    """
+    total = run.get("total_cases") or 0
+    scored = run.get("scored_count") or 0
+    if total < 50:  # single-case / tiny probe runs are not comparable
+        return False
+    return scored / total >= 0.9  # total>=50 here, so no ZeroDivision
+
+
+def _comparable_full_runs(history: list) -> tuple:
+    """Filter history to comparable full runs for the trend line.
+    Returns (kept_runs, excluded_count). Total — never raises on odd shapes.
+    """
+    if not history:
+        return [], 0
+    kept = [r for r in history if isinstance(r, dict) and _run_is_comparable(r)]
+    return kept, len(history) - len(kept)
+
+
+def _report_populations(golden_set: dict, run_result: dict) -> dict:
+    """Single-source count populations for the report (Gate-1 fix: never hardcode).
+
+    - golden_size:  how many cases the golden set defines (what we COULD test)
+    - executed:     run cases that ARE in the golden set (reconciles with golden_size)
+    - orphans:      run case ids NOT in the golden set (retired/renamed cases) —
+                    surfaced so executed+pending==golden_size always holds
+    - pending:      golden ids NOT executed in this run (incl. behavior-tier cases
+                    filtered out before the run) — a true un-run count, computed by
+                    set difference, NOT by counting status=='skipped'.
+    """
+    gcases = (golden_set or {}).get("cases", []) or []
+    golden_ids = {c.get("id") for c in gcases if c.get("id")}
+    run_ids = {c.get("id") for c in (run_result or {}).get("cases", []) if c.get("id")}
+    pending_ids = golden_ids - run_ids
+    # executed counts only run cases that live in the golden set, so the reconcile
+    # identity executed + pending == golden_size holds even when a run carries
+    # retired/renamed ids (MED fix run_0e29db9a — orphans surfaced, not folded in).
+    executed_in_golden = golden_ids & run_ids
+    return {
+        "golden_size": len(golden_ids),
+        "executed": len(executed_in_golden),
+        "orphans": len(run_ids - golden_ids),
+        "pending": len(pending_ids),
+        "pending_ids": pending_ids,
+    }
+
+
 def _load_history(root: Path) -> list[dict]:
     """Load all previous eval runs from EvalHistory/ for trend/delta analysis."""
     hist_dir = _eval_history_dir(root)
@@ -1755,8 +1912,11 @@ def _compute_delta(current_results: dict, history: list[dict]) -> list[dict]:
     if not history:
         return []
     last_run = history[-1]
-    last_cases = {c["id"]: c["status"] for c in last_run.get("cases", [])}
-    current_cases = {c["id"]: c["status"] for c in current_results.get("cases", [])}
+    # .get() not direct-subscript: a malformed snapshot case (missing id/status)
+    # must not KeyError → debug-swallowed silent no-report (meta-review fix
+    # run_0e29db9a). Skip entries with no id.
+    last_cases = {c["id"]: c.get("status") for c in last_run.get("cases", []) if c.get("id")}
+    current_cases = {c["id"]: c.get("status") for c in current_results.get("cases", []) if c.get("id")}
 
     changes = []
     for case_id, cur_status in current_cases.items():
@@ -1783,10 +1943,14 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     # Load history for trend + delta
     history = _load_history(root)
     delta = _compute_delta(run_result, history)
+    # Trend/streak use ONLY comparable full runs — a canary (programmatic-only,
+    # skips 89 cases) or a single-case manual probe on the same line = sawtooth
+    # noise (Gate-1 trap a). Set difference here; growth block reuses these vars.
+    comparable_history, non_comparable_excluded = _comparable_full_runs(history)
 
-    # Streak calculation
+    # Streak calculation (over comparable full runs only)
     streak = 0
-    for h in reversed(history):
+    for h in reversed(comparable_history):
         if h.get("cases_failed", 1) == 0:
             streak += 1
         else:
@@ -1794,12 +1958,15 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     if run_result["cases_failed"] == 0:
         streak += 1  # include current run
 
-    # Last failure info
-    last_failure_info = "Never failed (first run)" if not history else ""
-    for h in reversed(history):
+    # Last failure info (over comparable full runs only)
+    last_failure_info = "Never failed (first run)" if not comparable_history else ""
+    for h in reversed(comparable_history):
         if h.get("cases_failed", 0) > 0:
             fail_date = h.get("triggered_at", "")[:10]
-            fail_cases = [c["id"] for c in h.get("cases", []) if c["status"] == "failed"]
+            # .get() not direct-subscript: a malformed snapshot case (missing
+            # id/status) must not KeyError → debug-swallowed silent no-report
+            # (meta-review MED fix run_0e29db9a).
+            fail_cases = [c.get("id", "?") for c in h.get("cases", []) if c.get("status") == "failed"]
             last_failure_info = f"{fail_date}: {', '.join(fail_cases[:3])}"
             break
     if not last_failure_info:
@@ -1860,10 +2027,102 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     triggered_at = run_result["triggered_at"][:19].replace("T", " ")
     trigger = run_result["triggered_by"]
 
-    # SVG sparkline from history
+    # ── Two-track pass rate + classification matrix (dimension × eval_method) ──
+    # eval_method is the PROOF-STRENGTH axis: programmatic (config present) <
+    # llm (would-comply) < behavior (agent actually used memory/DDD). The 94%
+    # headline only ever covered programmatic+llm; behavior cases are filtered
+    # out of the run entirely (pending). Show that honestly, don't fold it in.
+    _METHOD_ORDER = ["programmatic", "llm", "behavior"]
+    _METHOD_LABEL = {"programmatic": "Programmatic", "llm": "LLM Judge", "behavior": "Behavior"}
+    # Per-case eval_method comes from the golden set (run snapshot doesn't carry it).
+    _method_of = {c.get("id"): c.get("eval_method", "?") for c in cases}
+    # matrix[dim_id][method] = {"passed","total"} from the CURRENT run join.
+    matrix = {dim["id"]: {m: {"passed": 0, "total": 0} for m in _METHOD_ORDER} for dim in DIMENSIONS}
+    _cat_to_dim = {cat: dim["id"] for dim in DIMENSIONS for cat in dim["categories"]}
+    # "other" bucket catches an executed case with a missing/typo'd eval_method so
+    # the two-track numbers reconcile with `executed` instead of silently dropping
+    # it (LOW fix run_0e29db9a).
+    executed_by_method = {m: {"passed": 0, "total": 0} for m in _METHOD_ORDER + ["other"]}
+    for c in cases:
+        cid = c.get("id")
+        r = case_results.get(cid)
+        if not r:
+            continue  # not executed this run (e.g. behavior-tier pending)
+        status = r.get("status", "skipped")
+        if status not in ("passed", "failed"):
+            continue  # skipped/error don't count toward a pass rate
+        method = _method_of.get(cid, "?")
+        bucket = method if method in executed_by_method else "other"
+        executed_by_method[bucket]["total"] += 1
+        if status == "passed":
+            executed_by_method[bucket]["passed"] += 1
+        dim_id = _cat_to_dim.get(c.get("category"))
+        if dim_id and method in matrix.get(dim_id, {}):
+            matrix[dim_id][method]["total"] += 1
+            if status == "passed":
+                matrix[dim_id][method]["passed"] += 1
+
+    # Executed track = programmatic + llm actually scored this run.
+    exec_passed = sum(executed_by_method[m]["passed"] for m in ("programmatic", "llm"))
+    exec_total = sum(executed_by_method[m]["total"] for m in ("programmatic", "llm"))
+    exec_pct = int(exec_passed / exec_total * 100) if exec_total else 0
+    # Behavior track = pending (filtered out of the run). Count from golden set.
+    behavior_total = sum(1 for c in cases if c.get("eval_method") == "behavior")
+    behavior_run = executed_by_method["behavior"]["total"]
+    behavior_pending = behavior_total - behavior_run
+
+    two_track_html = f'''<div class="two-track">
+        <span class="track track-exec">机械+判断层 (programmatic+judge): <strong>{exec_passed}/{exec_total}</strong> ({exec_pct}%)</span>
+        <span class="track track-behavior">行为层 (behavior): <strong>{f"{executed_by_method['behavior']['passed']}/{behavior_run} run" if behavior_run else f"⏸️ {behavior_pending} pending — 未在本次运行"}</strong></span>
+    </div>'''
+
+    # Classification matrix: cognitive dimension × eval_method proof strength.
+    _mrow = ""
+    for dim in DIMENSIONS:
+        cells = ""
+        for m in _METHOD_ORDER:
+            cell = matrix[dim["id"]][m]
+            if cell["total"] == 0:
+                cells += '<td class="mx-cell mx-empty">—</td>'
+            else:
+                col = _dim_color(cell["passed"], cell["total"])
+                cells += f'<td class="mx-cell" style="color:{col}">{cell["passed"]}/{cell["total"]}</td>'
+        _mrow += f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>{cells}</tr>'
+    # Per-dimension trend: one sparkline per cognitive dimension from the
+    # COMPARABLE runs' aggregate dimensions{} map (history stores no per-case
+    # dims — only the 6 aggregate floats). Uses the EXPLICIT id→snapshot-key map
+    # (AC7) so factual/judgment/utility don't silently drop.
+    _trend_runs = comparable_history[-12:] + [run_result]
+    _dim_trend_rows = ""
+    for dim in DIMENSIONS:
+        skey = _dim_snapshot_key(dim["id"])
+        series = [r.get("dimensions", {}).get(skey) for r in _trend_runs]
+        series = [v for v in series if isinstance(v, (int, float))]
+        latest = series[-1] if series else None
+        # round (not int-floor) + clamp to [0,100] so 89.6 doesn't cliff-flip and
+        # an out-of-scale value can't break the colorer (LOW fix run_0e29db9a).
+        col = _dim_color(round(max(0.0, min(100.0, latest))), 100) if latest is not None else "#6b7280"
+        spark = _mini_sparkline(series, color=col)
+        latest_txt = f"{latest:.0f}" if latest is not None else "—"
+        _dim_trend_rows += (f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>'
+                            f'<td class="dt-spark">{spark}</td>'
+                            f'<td class="dt-latest" style="color:{col}">{latest_txt}</td></tr>')
+
+    matrix_html = f'''<div class="matrix-section">
+        <h3>分类矩阵 — Classification: cognitive dimension × proof strength (eval_method)</h3>
+        <p class="matrix-sub">每格 = 本次运行的 passed/total。空格 = 该类无 case 或未运行（如 behavior 层 pending）。</p>
+        <table class="matrix"><thead><tr><th></th>{"".join(f"<th>{_METHOD_LABEL[m]}</th>" for m in _METHOD_ORDER)}</tr></thead>
+        <tbody>{_mrow}</tbody></table>
+        <h3 style="margin-top:1.25rem;">各维度趋势 — Per-dimension trend (comparable runs)</h3>
+        <p class="matrix-sub">聚合分数走势，看哪个"器官"在退化。数据源 = 可比 full run 的 dimensions{{}} 聚合分。</p>
+        <table class="matrix"><thead><tr><th></th><th>Trend</th><th>Latest</th></tr></thead>
+        <tbody>{_dim_trend_rows}</tbody></table>
+    </div>'''
+
+    # SVG sparkline from COMPARABLE full runs only (AC6 — never mix canary/partial)
     sparkline_svg = ""
-    if len(history) >= 2:
-        scores = [h.get("overall_score", 0) for h in history[-12:]] + [overall]
+    if len(comparable_history) >= 2:
+        scores = [h.get("overall_score", 0) for h in comparable_history[-12:]] + [overall]
         max_score = max(scores) if scores else 100
         min_score = min(scores) if scores else 0
         score_range = max(max_score - min_score, 10)  # avoid division by zero
@@ -1883,30 +2142,49 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             <span class="sparkline-label">{len(scores)} runs</span>
         </div>'''
 
-    # Growth Intelligence — shows learning trajectory, not just pass rate
-    total_cases = len(cases)
+    # ── Single-source populations (Gate-1 fix: never hardcode counts) ──
+    # golden_size = cases the golden set defines; executed = cases this run ran;
+    # pending = golden ids NOT run (incl. behavior-tier filtered out pre-run).
+    pops = _report_populations(golden_set, run_result)
+    golden_size = pops["golden_size"]
+    executed = pops["executed"]
+    pending = pops["pending"]
+    orphans = pops["orphans"]  # run ids not in golden (retired/renamed) — surfaced, not hidden
+
+    # Growth Intelligence — learning trajectory. Counts derive from the golden set
+    # (what we could test); tier cards + an "other" catch-all always reconcile to
+    # golden_size (Gate-1: the old cards summed to 152 ≠ 177, a silent gap).
+    total_cases = golden_size  # kept name for downstream refs; == len(golden ids)
     stable_cases = [c for c in cases if c.get("tier") == "stable"]
     active_cases = [c for c in cases if c.get("tier") == "active"]
     draft_cases = [c for c in cases if c.get("tier") == "draft"]
+    other_cases = [c for c in cases if c.get("tier") not in ("stable", "active", "draft")]
 
-    # Find cases that flipped from fail→pass across history (concrete improvement evidence)
+    # Find cases that flipped from fail→pass across COMPARABLE runs only
+    # (a canary that skips 89 cases would fake "fixes"). comparable_history was
+    # computed once up top (shared with streak + sparkline).
     recently_fixed = []
-    if len(history) >= 2:
-        prev_failed = {c["id"] for c in history[-1].get("cases", []) if c["status"] == "failed"}
-        curr_passed = {c["id"] for c in run_result.get("cases", []) if c["status"] == "passed"}
+    if len(comparable_history) >= 1:
+        prev_failed = {c["id"] for c in comparable_history[-1].get("cases", []) if c.get("status") == "failed"}
+        curr_passed = {c["id"] for c in run_result.get("cases", []) if c.get("status") == "passed"}
         recently_fixed = list(prev_failed & curr_passed)[:3]
 
-    # Case growth over history
-    first_run_cases = history[0].get("total_cases", 0) if history else 0
+    # Case growth over history — baseline is the first COMPARABLE run (not a tiny probe)
+    first_run_cases = comparable_history[0].get("total_cases", 0) if comparable_history else 0
     growth_delta = total_cases - first_run_cases if first_run_cases > 0 else 0
 
+    _other_card = (f'''<div class="growth-card">
+                <div class="growth-value">{len(other_cases)}</div>
+                <div class="growth-label">Other</div>
+                <div class="growth-sub">behavior / canary tier</div>
+            </div>''' if other_cases else "")
     growth_html = f'''<div class="growth-section">
         <h3>Growth Intelligence — 越来越好的证据</h3>
         <div class="growth-grid">
             <div class="growth-card">
-                <div class="growth-value">{total_cases}</div>
-                <div class="growth-label">Total Cases</div>
-                <div class="growth-sub">自我认知深度{f" (+{growth_delta} since first run)" if growth_delta > 0 else ""}</div>
+                <div class="growth-value">{golden_size}</div>
+                <div class="growth-label">Golden Set</div>
+                <div class="growth-sub">定义的 case 总数{f" (+{growth_delta} since first run)" if growth_delta > 0 else ""}</div>
             </div>
             <div class="growth-card">
                 <div class="growth-value">{len(stable_cases)}</div>
@@ -1923,7 +2201,9 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
                 <div class="growth-label">Draft</div>
                 <div class="growth-sub">Flywheel 产出（correction → case）</div>
             </div>
+            {_other_card}
         </div>
+        <div class="growth-reconcile">Stable {len(stable_cases)} + Active {len(active_cases)} + Draft {len(draft_cases)}{f" + Other {len(other_cases)}" if other_cases else ""} = {golden_size} · 本次运行 {executed} + 待运行 {pending} = {golden_size}{f" · {orphans} orphan (run 中已退役 case)" if orphans else ""}</div>
         {f'<div class="growth-fixed"><strong>最近修复:</strong> {", ".join(recently_fixed)}</div>' if recently_fixed else '<div class="growth-fixed"><span class="growth-clean">无退化 — 所有 case 保持 pass</span></div>'}
     </div>'''
 
@@ -1938,8 +2218,11 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
 
     # Build dimension sections
     dim_sections = ""
+    _CIRCLED = "❶❷❸❹❺❻❼❽❾❿"
     for i, d in enumerate(dim_stats, 1):
-        circled = "❶❷❸❹❺"[i - 1]
+        # Robust to DIMENSIONS growth (was hardcoded 5 → IndexError on the 6th
+        # 'recovery' dimension, silently swallowed by eval_service's debug except).
+        circled = _CIRCLED[i - 1] if i <= len(_CIRCLED) else f"({i})"
         color = _dim_color(d["passed"], d["total"])
 
         # Failure details
@@ -2005,7 +2288,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         '''
 
     # Methodology section
-    methodology_html = '''
+    methodology_html = f'''
     <div class="methodology">
         <h2>How OS Eval Works</h2>
         <div class="method-grid">
@@ -2015,7 +2298,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             </div>
             <div class="method-card">
                 <h4>📋 Golden Set</h4>
-                <p><strong>115 behavioral contracts</strong> crystallized from past failures (corrections, COEs, decisions). Each case = "in this situation, I must do X."</p>
+                <p><strong>{golden_size} behavioral contracts</strong> crystallized from past failures (corrections, COEs, decisions). Each case = "in this situation, I must do X."</p>
             </div>
             <div class="method-card">
                 <h4>⚡ Three Evaluation Tiers</h4>
@@ -2032,18 +2315,37 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     '''
 
     # Next action
+    # ── Failure triage (C044): split failures into case-broken vs agent-regressed ──
+    # A red case is NOT automatically a regression. If the judge note says the
+    # referenced rule/memory is absent-from-context or points at the wrong entry,
+    # the CASE is broken (audit it — do NOT "make the agent green"). Only genuine
+    # behavioral degradation is a regression. Default = regressed (fail-safe).
+    failed_results = [r for r in run_result.get("cases", []) if r.get("status") == "failed"]
+    triage = {"case-broken": [], "regressed": []}
+    for r in failed_results:
+        triage[_classify_failure(r.get("notes", ""))].append(r.get("id", "?"))
+    n_broken = len(triage["case-broken"])
+    n_regressed = len(triage["regressed"])
+
     next_action = ""
-    if total_skipped > 0:
+    if total_failed > 0:
+        broken_line = (f'<p>🔧 <strong>{n_broken} case-broken</strong> — 引用的 rule/memory 在 context 中缺失或指向错误条目。'
+                       f'<em>审查 case 有效性（C044 五轴），不是把 agent 改绿</em>: {", ".join(html_mod.escape(x) for x in triage["case-broken"][:8])}</p>'
+                       if n_broken else "")
+        regressed_line = (f'<p>⚠️ <strong>{n_regressed} regressed</strong> — 真实行为退化，修复 agent 行为: '
+                          f'{", ".join(html_mod.escape(x) for x in triage["regressed"][:8])}</p>'
+                          if n_regressed else "")
+        next_action = f'''<div class="next-action next-action-fix">
+            <h4>Next Action — {n_broken} case-broken · {n_regressed} regressed</h4>
+            {broken_line}
+            {regressed_line}
+        </div>'''
+    elif pending > 0:
         next_action = f'''<div class="next-action">
             <h4>Next Action</h4>
-            <p>Run LLM judge sweep to evaluate {total_skipped} pending behavioral cases:</p>
+            <p>{pending} case(s) not run this cycle (incl. behavior-tier). Run a full sweep to evaluate them:</p>
             <code>python backend/scripts/eval_runner.py run --trigger monthly</code>
-            <p class="action-meta">Cost: ~$0.05 | Duration: ~2min | Unlocks dimensions ❸❹</p>
-        </div>'''
-    elif total_failed > 0:
-        next_action = f'''<div class="next-action next-action-fix">
-            <h4>Next Action</h4>
-            <p>Fix {total_failed} failing case(s) — these represent regressions in agent behavior or stale MEMORY claims.</p>
+            <p class="action-meta">behavior tier proves the agent USES memory/DDD — not covered by programmatic+judge.</p>
         </div>'''
 
     html = f'''<!DOCTYPE html>
@@ -2143,6 +2445,28 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 .growth-sub {{ font-size: 0.65rem; color: var(--muted); margin-top: 0.2rem; }}
 .growth-fixed {{ margin-top: 0.75rem; font-size: 0.8rem; padding: 0.5rem 0.75rem; background: rgba(16,185,129,0.08); border-radius: 6px; border: 1px solid rgba(16,185,129,0.2); }}
 .growth-clean {{ color: var(--green); }}
+.growth-reconcile {{ margin-top: 0.6rem; font-size: 0.72rem; color: var(--muted); text-align: center; }}
+
+/* Two-track pass rate */
+.two-track {{ display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; margin-top: 0.75rem; }}
+.track {{ font-size: 0.82rem; padding: 0.35rem 0.9rem; border-radius: 20px; border: 1px solid var(--border); background: var(--card); }}
+.track-exec {{ border-color: var(--green); color: var(--green); }}
+.track-behavior {{ border-color: var(--accent); color: #a5b4fc; }}
+
+/* Classification matrix */
+.matrix-section {{ background: var(--card); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; border: 1px solid var(--border); }}
+.matrix-section h3 {{ font-size: 0.95rem; font-weight: 600; margin-bottom: 0.3rem; }}
+.matrix-sub {{ font-size: 0.72rem; color: var(--muted); margin-bottom: 0.75rem; }}
+.matrix {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; }}
+.matrix th {{ text-align: center; padding: 0.4rem 0.5rem; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 0.75rem; }}
+.matrix th:first-child {{ text-align: left; }}
+.mx-cell {{ text-align: center; padding: 0.45rem 0.5rem; font-weight: 600; border-bottom: 1px solid rgba(51,65,85,0.4); }}
+.mx-empty {{ color: #475569; font-weight: 400; }}
+.mx-dim {{ text-align: left; padding: 0.45rem 0.5rem; color: var(--text); font-size: 0.78rem; border-bottom: 1px solid rgba(51,65,85,0.4); }}
+.mini-spark {{ width: 90px; height: 22px; vertical-align: middle; }}
+.mini-spark-empty {{ color: #475569; }}
+.dt-spark {{ text-align: center; padding: 0.35rem 0.5rem; border-bottom: 1px solid rgba(51,65,85,0.4); }}
+.dt-latest {{ text-align: center; padding: 0.35rem 0.5rem; font-weight: 600; font-size: 0.8rem; border-bottom: 1px solid rgba(51,65,85,0.4); }}
 
 /* Footer */
 .footer {{ text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.78rem; }}
@@ -2161,22 +2485,25 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
             <span>Passed: <strong>{total_passed}</strong></span>
             <span>Failed: <strong>{total_failed}</strong></span>
             {f'<span style="color:#ef4444;">Errored: <strong>{total_error}</strong></span>' if total_error else ''}
-            <span>Pending: <strong>{total_skipped}</strong></span>
+            {f'<span>Skipped (ran, undetermined): <strong>{total_skipped}</strong></span>' if total_skipped else ''}
+            <span title="golden-set cases NOT executed this run (incl. behavior tier)">Pending (not run): <strong>{pending}</strong></span>
             <span>Duration: <strong>{duration:.1f}s</strong></span>
         </div>
+        {two_track_html}
         <div class="streak{' streak-good' if streak > 1 else ''}">{f'🔥 {streak} consecutive clean runs' if streak > 1 else f'Run #{len(history) + 1}'} | Last failure: {html_mod.escape(last_failure_info)}</div>
         {sparkline_svg}
     </div>
 
     {growth_html}
     {delta_html}
+    {matrix_html}
     {dim_sections}
     {methodology_html}
     {next_action}
 
     <div class="footer">
-        <p>Generated: {triggered_at} UTC | {run_result["total_cases"]} cases (Golden Set v2) | {len(history)} historical runs</p>
-        <p>Programmatic: every session, $0, &lt;1s | LLM Judge: monthly, ~$0.05, ~2min</p>
+        <p>Generated: {triggered_at} UTC | Golden Set: <strong>{golden_size}</strong> defined · <strong>{executed}</strong> run this cycle · <strong>{pending}</strong> pending{f" · {orphans} orphan" if orphans else ""} | {len(history)} historical runs ({non_comparable_excluded} non-comparable excluded from trend)</p>
+        <p>Programmatic: every session, $0, &lt;1s | LLM Judge: monthly, ~$0.05, ~2min | Behavior: real agent spawn</p>
         <p>Source: Eval/golden_set.yaml | Engine: backend/scripts/eval_runner.py</p>
     </div>
 </div>
