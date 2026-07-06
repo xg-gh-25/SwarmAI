@@ -56,6 +56,7 @@ from channels.message_queue import (
     ChannelMessageQueue,
     QueuedMessage,
 )
+from channels.egress_redactor import redact_text
 from channels.response_formatter import HumanResponseFormatter
 from core import session_registry
 from core.session_manager import session_manager
@@ -1584,6 +1585,13 @@ class ChannelGateway:
             reply_text = ctx.stream_flushed
         if not reply_text:
             reply_text = "(No response generated)"
+
+        # Egress redaction (G1): redact the settled reply ONCE here so every
+        # finalize path is covered — native stop_stream, legacy update_message
+        # (both take reply_text directly, bypassing OutboundMessage), and the
+        # OutboundMessage send paths (which re-redact idempotently). This is the
+        # streaming-finalize counterpart to OutboundMessage.__post_init__.
+        reply_text = redact_text(reply_text)
 
         # ── Final status reaction ───────────────────────────────────
         if ctx.streaming:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from channels.base import ChannelAdapter
 
@@ -97,6 +97,12 @@ class StreamContext:
     native_pending_buf: list[str] = dataclasses.field(default_factory=list)
     native_flush_handle: Optional[asyncio.TimerHandle] = None
     native_flush_task: Optional[asyncio.Task] = None
+
+    # Egress redaction (G1): rolling-buffer redactor for the append-only native
+    # stream, so a credential split across two token-chunks never leaves
+    # half-redacted. Lazily created on first drain (keeps the leaf import out of
+    # this module's import path). See channels/egress_redactor.py.
+    stream_redactor: Any = None
 
     # Legacy flusher
     flush_task: Optional[asyncio.Task] = None
@@ -223,15 +229,46 @@ async def legacy_periodic(ctx: StreamContext) -> None:
         await legacy_flush(ctx)
 
 
+def _ensure_stream_redactor(ctx: StreamContext) -> Any:
+    """Lazily create the per-stream egress redactor (G1)."""
+    if ctx.stream_redactor is None:
+        from channels.egress_redactor import StreamRedactor
+        ctx.stream_redactor = StreamRedactor()
+    return ctx.stream_redactor
+
+
+def drain_stream_redactor(ctx: StreamContext) -> str:
+    """Release + redact the withheld tail before any STATIC content is appended.
+
+    The native stream is append-only, so ordering matters: whenever a caller is
+    about to append a static separator / tool-status line directly (bypassing
+    ``native_flush_now``), it must first release the redactor's held-back token
+    tail — otherwise that tail would be emitted *after* the separator, scrambling
+    order. Returns the redacted tail (possibly "").
+    """
+    if ctx.stream_redactor is None:
+        return ""
+    return ctx.stream_redactor.flush()
+
+
 async def native_flush_now(ctx: StreamContext) -> None:
-    """Flush buffered native tokens via append_stream."""
+    """Flush buffered native tokens via append_stream (egress-redacted, G1).
+
+    Tokens pass through a rolling-buffer ``StreamRedactor`` so a credential split
+    across two throttle batches (``AKIA…`` in one, the rest in the next) is never
+    appended half-formed. The trailing not-yet-terminated token is withheld until
+    the next batch completes it or a phase boundary flushes it.
+    """
     if not ctx.native_pending_buf or not ctx.streaming_msg_id or not ctx.adapter:
         return
     chunk = "".join(ctx.native_pending_buf)
     ctx.native_pending_buf.clear()
+    safe = _ensure_stream_redactor(ctx).feed(chunk)
+    if not safe:
+        return  # entire chunk is a still-in-flight token; hold for next batch
     try:
         await ctx.adapter.append_stream(
-            ctx.external_chat_id, ctx.streaming_msg_id, chunk,
+            ctx.external_chat_id, ctx.streaming_msg_id, safe,
         )
     except Exception:
         logger.debug("native append_stream failed for %s", ctx.streaming_msg_id)
@@ -276,11 +313,16 @@ async def end_thinking_phase(ctx: StreamContext) -> None:
         ctx.native_flush_handle.cancel()
         ctx.native_flush_handle = None
 
-    # Flush remaining thinking tokens + close italic + separator
+    # Flush remaining thinking tokens (egress-redacted, G1) + release any tail
+    # the rolling redactor withheld, THEN close italic + separator. The redacted
+    # dynamic content must precede the static separator to keep append order.
     pending = ""
     if ctx.native_pending_buf:
         pending = "".join(ctx.native_pending_buf)
         ctx.native_pending_buf.clear()
+    if pending:
+        pending = _ensure_stream_redactor(ctx).feed(pending)
+    pending += drain_stream_redactor(ctx)
 
     # Only emit separator if thinking content was actually delivered to user.
     # If the opener (💭 _) failed, sending a stray _\n\n---\n\n is confusing.
@@ -327,6 +369,11 @@ async def handle_tool_use(ctx: StreamContext, tool_name: str) -> None:
         if ctx.native_pending_buf:
             pending = "".join(ctx.native_pending_buf)
             ctx.native_pending_buf.clear()
+        # Egress-redact dynamic tokens + release the withheld tail (G1) before
+        # the static tool-status line, so append order is preserved.
+        if pending:
+            pending = _ensure_stream_redactor(ctx).feed(pending)
+        pending += drain_stream_redactor(ctx)
         # Drain stream_buf for bookkeeping
         if ctx.stream_buf:
             ctx.stream_flushed += "".join(ctx.stream_buf)
@@ -381,17 +428,27 @@ async def cleanup_stream(ctx: StreamContext) -> None:
         ctx.native_pending_buf.clear()
         ctx.in_thinking = False
 
-    # Final native flush — send any remaining text tokens so the user
-    # sees them before stop_stream replaces with Block Kit.
-    if ctx.native_pending_buf and ctx.streaming_msg_id and ctx.adapter:
-        chunk = "".join(ctx.native_pending_buf)
-        ctx.native_pending_buf.clear()
-        try:
-            await ctx.adapter.append_stream(
-                ctx.external_chat_id, ctx.streaming_msg_id, chunk,
-            )
-        except Exception:
-            pass  # non-fatal — tokens still in stream_buf via drain below
+    # Final native flush — send any remaining text tokens so the user sees them
+    # before stop_stream replaces with Block Kit. Egress-redacted (G1): route the
+    # terminal buffer through the redactor AND release its withheld tail, so this
+    # last append can neither leak a credential (raw append) nor silently drop the
+    # tail the rolling buffer was holding. This is the stream-termination
+    # counterpart to native_flush_now; it MUST redact like every other append.
+    if ctx.streaming_msg_id and ctx.adapter:
+        pending = ""
+        if ctx.native_pending_buf:
+            pending = "".join(ctx.native_pending_buf)
+            ctx.native_pending_buf.clear()
+        if pending:
+            pending = _ensure_stream_redactor(ctx).feed(pending)
+        pending += drain_stream_redactor(ctx)  # release + redact the withheld tail
+        if pending:
+            try:
+                await ctx.adapter.append_stream(
+                    ctx.external_chat_id, ctx.streaming_msg_id, pending,
+                )
+            except Exception:
+                pass  # non-fatal — tokens still in stream_buf via drain below
 
     if ctx.flush_task is not None:
         ctx.flush_task.cancel()

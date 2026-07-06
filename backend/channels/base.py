@@ -82,13 +82,28 @@ class InboundMessage:
 
 @dataclass
 class OutboundMessage:
-    """Message from SwarmAI to be sent to an external channel."""
+    """Message from SwarmAI to be sent to an external channel.
+
+    Egress redaction (Phase-0 gap G1): ``text`` is redacted for known credential
+    shapes / exfiltration URLs in ``__post_init__``. This is the single structural
+    chokepoint for **all** non-streaming send sites — every ``adapter.send_message``
+    goes through an ``OutboundMessage``, so no send path can bypass redaction
+    (STEERING #1). The native *streaming* path (append_stream) is covered separately
+    by ``egress_redactor.StreamRedactor`` since it does not build OutboundMessages.
+    """
     channel_id: str
     external_chat_id: str
     external_thread_id: Optional[str] = None
     reply_to_message_id: Optional[str] = None
     text: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Import locally to avoid a module-import cycle (egress_redactor is a
+        # leaf; base.py is imported very early in channel bootstrap).
+        if self.text:
+            from channels.egress_redactor import redact_text
+            self.text = redact_text(self.text)
 
 
 # Type for the on_message callback: async function that takes InboundMessage

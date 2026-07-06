@@ -43,6 +43,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ── Sensitive MCP gate (G2) — single source of truth ──────────────────
+# MCP servers a NON-OWNER channel sender must never reach (even TRUSTED tier):
+# email = acting-as-XG + personal data; sentral = XG revenue/CRM (raw business
+# data). STEERING #6 forbids both for allowlisted users. Matched by stable name
+# SUBSTRING so a rename/prefix variant (user-aws-outlook-mcp, aws-outlook, …) is
+# still caught, and a newly-added sensitive integration is caught by default when
+# its name contains one of these — fail-closed. To share a currently-sensitive
+# MCP with trusted teammates, that is a deliberate one-line removal HERE.
+_SENSITIVE_MCP_SUBSTRINGS = ("aws-outlook", "aws-sentral", "outlook-mcp", "sentral-mcp")
+
+
+def _is_sensitive_mcp(name: str) -> bool:
+    """True if an MCP server name matches the sensitive set (G2, non-owner strip)."""
+    low = name.lower()
+    return any(sub in low for sub in _SENSITIVE_MCP_SUBSTRINGS)
+
+
+def strip_sensitive_mcps(mcp_servers: dict) -> dict:
+    """Return *mcp_servers* without the sensitive set (G2 non-owner strip).
+
+    THE single source of the non-owner strip — the ``build_options`` TRUSTED
+    branch calls this, and the test drives THIS (not a re-derived copy), so a
+    regression in the strip logic is caught, not only a regression in the
+    predicate (avoids the re-derivation test-theater class, M1).
+    """
+    return {name: cfg for name, cfg in mcp_servers.items() if not _is_sensitive_mcp(name)}
+
+
 # ── DailyActivity token cap constants ──────────────────────────────
 # Applied ephemerally at prompt-assembly time; disk files are never modified.
 TOKEN_CAP_PER_DAILY_FILE = 2000
@@ -1373,8 +1401,11 @@ class PromptBuilder:
         mcp_servers = self.inject_channel_mcp(mcp_servers, channel_context, working_directory)
 
         # 6a. Non-owner channel sessions: MCP access depends on permission tier.
-        #   - TRUSTED: keep ALL enabled MCPs (skills + MCPs = full agent capability)
         #   - PUBLIC:  strip to channel-tools only (no access to owner's integrations)
+        #   - TRUSTED: keep MCPs EXCEPT the sensitive set (G2) — a trusted teammate
+        #     must not reach XG's email (act-as-XG) or revenue/CRM data through the
+        #     bot. STEERING #6 forbids external actions as XG + raw personal data
+        #     even for allowlisted users; behavioral prose alone is not a gate.
         if _channel_sender_dir and mcp_servers and channel_context:
             sender = channel_context.get("sender_identity", {})
             tier = sender.get("permission_tier", "public")
@@ -1392,10 +1423,18 @@ class PromptBuilder:
                     )
                 mcp_servers = safe_mcps
             else:
-                logger.info(
-                    "Trusted channel user: keeping all %d MCP servers",
-                    len(mcp_servers),
-                )
+                # TRUSTED (and any non-owner, non-public tier): fail-closed strip
+                # of the sensitive set via the shared single-source helper (so the
+                # test drives THIS code, not a copy — M1).
+                safe_mcps = strip_sensitive_mcps(mcp_servers)
+                stripped = len(mcp_servers) - len(safe_mcps)
+                if stripped:
+                    logger.info(
+                        "Trusted channel user: stripped %d sensitive MCP server(s) "
+                        "(email/revenue), kept %d",
+                        stripped, len(safe_mcps),
+                    )
+                mcp_servers = safe_mcps
 
         # 7. Resolve model (with Bedrock conversion if needed)
         model = self.resolve_model(agent_config)
