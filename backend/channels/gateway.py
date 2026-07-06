@@ -855,6 +855,84 @@ class ChannelGateway:
         }
 
     # ------------------------------------------------------------------
+    # L1 activation gate (should-I-reply)
+    # ------------------------------------------------------------------
+
+    async def _should_reply(
+        self,
+        channel: dict,
+        msg: InboundMessage,
+        chat_type: str,
+        is_owner: bool,
+    ) -> bool:
+        """Decide whether the bot should reply to *msg* (L1 activation).
+
+        Orthogonal to ``_check_access`` (authorization). This governs the
+        SHOULD-I-REPLY decision per the channel's ``activation`` mode:
+
+        * ``off``     — never reply (except the owner, who can always drive it,
+                        e.g. to re-enable the channel).
+        * ``mention`` — reply only when @-mentioned, OR (when ``thread_follow``
+                        is on, the default) when this thread already has an
+                        active session (the bot was engaged earlier in it).
+        * ``review``  — reply (visible-text suppression is a downstream concern;
+                        for Run 1 review behaves like ``always`` at this gate —
+                        the no-visible-text rendering is a follow-up).
+        * ``always``  — reply to every (authorized) message.
+
+        Defaults: group channels (channel/group/mpim) → ``mention``; DMs (im)
+        → ``always`` (a 1:1 DM is inherently addressed to the bot; requiring a
+        mention there would silence it — F-regression the plan guards against).
+
+        Fail-closed: an unknown/unrecognised mode falls back to ``mention``
+        (the safest gating), never to ``always``.
+        """
+        is_group = chat_type in ("group", "channel", "mpim")
+        default_mode = "mention" if is_group else "always"
+        mode = (channel.get("activation") or default_mode)
+        if not isinstance(mode, str):
+            mode = default_mode
+        mode = mode.strip().lower()
+
+        # DMs are always addressed to the bot — never mention-gate them.
+        if not is_group:
+            return mode != "off" or is_owner
+
+        if mode == "off":
+            # Owner can still drive an off channel (e.g. a re-enable command).
+            return is_owner
+        if mode == "always" or mode == "review":
+            return True
+        if mode == "mention":
+            if msg.metadata.get("is_mention"):
+                return True
+            # thread_follow (default on): once engaged in a thread, keep
+            # following without a re-@. "Engaged" = a channel_session already
+            # exists for this (channel, chat, thread) — reuse existing state,
+            # no new store (run_4c5ad9c5).
+            thread_follow = channel.get("thread_follow", True)
+            if thread_follow and msg.external_thread_id:
+                try:
+                    existing = await db.channel_sessions.find_by_external(
+                        channel.get("id") or channel.get("channel_id"),
+                        msg.external_chat_id,
+                        msg.external_thread_id,
+                    )
+                    if existing:
+                        return True
+                except Exception as e:
+                    # Fail-closed: if we can't confirm an engaged thread, do
+                    # NOT reply to a non-mention (privacy/noise safe default).
+                    logger.warning(
+                        "channel_gateway._should_reply thread_follow lookup "
+                        "failed (%s: %s) — treating as not-engaged",
+                        type(e).__name__, e,
+                    )
+            return False
+        # Unknown mode → fail-closed to mention gating (not always).
+        return bool(msg.metadata.get("is_mention"))
+
+    # ------------------------------------------------------------------
     # Inbound message handling (core routing logic)
     # ------------------------------------------------------------------
 
@@ -956,6 +1034,21 @@ class ChannelGateway:
             channel, msg.external_sender_id, msg.sender_display_name,
         )
         is_owner = sender_identity.is_owner
+
+        # 3.5. L1 activation gate (SHOULD-I-REPLY) --------------------------------
+        # Orthogonal to access_mode (MAY-YOU-TALK, handled above). Decides whether
+        # the bot replies at all, per the channel's activation mode. Group channels
+        # default to `mention` (quiet unless @-mentioned or already engaged in the
+        # thread); DMs (im) default to `always`. See _should_reply. run_4c5ad9c5.
+        if not await self._should_reply(channel, msg, chat_type, is_owner):
+            logger.info(
+                "channel_gateway.activation_skip channel=%s chat_type=%s "
+                "mode=%s is_mention=%s — no reply",
+                channel_id, chat_type,
+                (channel.get("activation") or ("always" if chat_type == "im" else "mention")),
+                bool(msg.metadata.get("is_mention")),
+            )
+            return
 
         # 4. Rate limiting (owner exempt) -----------------------------------------
         rate_limit = channel.get("rate_limit_per_minute", 10)

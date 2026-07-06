@@ -784,3 +784,101 @@ class TestUserNameResolution:
         result2 = adapter._get_user_name("U_NEW")
         assert result2 == "Test User"
         assert mock_client.users_info.call_count == 1
+
+
+# ===================================================================
+# L1 activation: mention detection + double-fire dedup (run_4c5ad9c5)
+# ===================================================================
+
+class TestL1MentionAndDedup:
+    """_normalize_event marks mentions and drops Slack's double-fire."""
+
+    @pytest.mark.asyncio
+    async def test_app_mention_event_marked_is_mention(self, adapter):
+        """An event flagged _is_app_mention → metadata.is_mention True."""
+        ev = {"user": "U1", "text": "hey bot", "channel": "C1",
+              "ts": "100.1", "channel_type": "channel", "_is_app_mention": True}
+        msg = adapter._normalize_event(ev)
+        assert msg is not None and msg.metadata["is_mention"] is True
+
+    @pytest.mark.asyncio
+    async def test_bot_userid_in_text_marked_is_mention(self, adapter):
+        """Raw text containing <@bot_user_id> → is_mention True (Socket Mode
+        path where the message arrives as a plain 'message' event)."""
+        adapter._bot_user_id = "UBOT"
+        ev = {"user": "U1", "text": "hello <@UBOT> please help", "channel": "C1",
+              "ts": "101.1", "channel_type": "channel"}
+        msg = adapter._normalize_event(ev)
+        assert msg is not None and msg.metadata["is_mention"] is True
+
+    @pytest.mark.asyncio
+    async def test_plain_message_not_marked_mention(self, adapter):
+        """A plain non-mention message → is_mention False."""
+        adapter._bot_user_id = "UBOT"
+        ev = {"user": "U1", "text": "just chatting", "channel": "C1",
+              "ts": "102.1", "channel_type": "channel"}
+        msg = adapter._normalize_event(ev)
+        assert msg is not None and msg.metadata["is_mention"] is False
+
+    @pytest.mark.asyncio
+    async def test_double_fire_deduped_by_ts(self, adapter):
+        """The SAME (channel, ts) delivered twice (message + app_mention) →
+        second normalize returns None (exactly-once) AND the surviving message
+        carries is_mention=True (the mention signal must SURVIVE dedup — the
+        adversarial-found bug was the mention being dropped)."""
+        adapter._bot_user_id = "UBOT"
+        ev1 = {"user": "U1", "text": "hi <@UBOT>", "channel": "C1",
+               "ts": "103.1", "channel_type": "channel"}
+        ev2 = {"user": "U1", "text": "hi <@UBOT>", "channel": "C1",
+               "ts": "103.1", "channel_type": "channel", "_is_app_mention": True}
+        first = adapter._normalize_event(ev1)
+        second = adapter._normalize_event(ev2)
+        assert first is not None
+        assert first.metadata["is_mention"] is True, "mention must survive dedup"
+        assert second is None, "duplicate ts must be dropped (double-fire)"
+
+    @pytest.mark.asyncio
+    async def test_missed_mention_upgraded_when_bot_id_unresolved(self, adapter):
+        """Adversarial HIGH regression: if _bot_user_id is UNSET and the plain
+        `message` event arrives FIRST (is_mention=False), the authoritative
+        `app_mention` event (same ts) must NOT be silently dropped — it upgrades
+        the missed mention and is re-emitted with is_mention=True, so the bot
+        never ignores a real @mention."""
+        adapter._bot_user_id = ""  # startup auth blip — identity unresolved
+        plain = {"user": "U1", "text": "hey <@UBOT>", "channel": "C1",
+                 "ts": "105.1", "channel_type": "channel"}
+        app_mention = {"user": "U1", "text": "hey <@UBOT>", "channel": "C1",
+                       "ts": "105.1", "channel_type": "channel", "_is_app_mention": True}
+        first = adapter._normalize_event(plain)
+        second = adapter._normalize_event(app_mention)
+        assert first is not None and first.metadata["is_mention"] is False
+        assert second is not None, "app_mention must re-emit to correct a missed mention"
+        assert second.metadata["is_mention"] is True
+
+    @pytest.mark.asyncio
+    async def test_app_mention_reliable_without_bot_id(self, adapter):
+        """_is_app_mention alone marks a mention even if _bot_user_id never
+        resolves (the always-reliable signal)."""
+        adapter._bot_user_id = ""
+        ev = {"user": "U1", "text": "help me", "channel": "C1",
+              "ts": "106.1", "channel_type": "channel", "_is_app_mention": True}
+        msg = adapter._normalize_event(ev)
+        assert msg is not None and msg.metadata["is_mention"] is True
+
+    @pytest.mark.asyncio
+    async def test_different_ts_not_deduped(self, adapter):
+        """Distinct ts values are both processed (dedup is per-ts, not a mute)."""
+        a = adapter._normalize_event(
+            {"user": "U1", "text": "one", "channel": "C1", "ts": "104.1", "channel_type": "channel"})
+        b = adapter._normalize_event(
+            {"user": "U1", "text": "two", "channel": "C1", "ts": "104.2", "channel_type": "channel"})
+        assert a is not None and b is not None
+
+    @pytest.mark.asyncio
+    async def test_seen_ts_set_is_bounded(self, adapter):
+        """The dedup seen-set never grows past _SEEN_TS_MAX (no memory leak)."""
+        for i in range(adapter._SEEN_TS_MAX + 50):
+            adapter._normalize_event(
+                {"user": "U1", "text": f"m{i}", "channel": "C1",
+                 "ts": f"200.{i}", "channel_type": "channel"})
+        assert len(adapter._seen_ts) <= adapter._SEEN_TS_MAX

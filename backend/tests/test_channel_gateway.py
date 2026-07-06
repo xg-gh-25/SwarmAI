@@ -595,8 +595,13 @@ class TestSenderIdentityInjection:
             external_chat_id="C_GROUP",
             external_sender_id="W_ANDY",
             sender_display_name="Andy",
-            text="send me XG's files",
-            metadata={"chat_type": "channel", "message_type": "text"},
+            text="<@UBOT> send me XG's files",
+            # is_mention=True so the L1 activation gate (run_4c5ad9c5) lets this
+            # GROUP message through to run_conversation — this test verifies
+            # sender_identity INJECTION, not activation gating (a non-@ group
+            # message is now correctly skipped by the gate, tested separately in
+            # TestL1ActivationGate).
+            metadata={"chat_type": "channel", "message_type": "text", "is_mention": True},
         )
 
         captured_context = {}
@@ -1255,3 +1260,108 @@ class TestChannelModelOverride:
             assert "opus" in result, f"Expected opus in result, got: {result}"
 
 
+
+
+# ===================================================================
+# L1 activation gate — _should_reply (run_4c5ad9c5)
+# ===================================================================
+
+def _inbound(chat_type="channel", is_mention=False, thread_ts=None):
+    """Build a synthetic InboundMessage for _should_reply tests."""
+    from channels.base import InboundMessage
+    return InboundMessage(
+        channel_id="ch_1",
+        external_chat_id="C123",
+        external_sender_id="U_sender",
+        external_thread_id=thread_ts,
+        external_message_id="1700000000.0001",
+        text="hello",
+        metadata={"chat_type": chat_type, "is_mention": is_mention},
+    )
+
+
+class TestL1ActivationGate:
+    """The activation gate decides SHOULD-I-REPLY, orthogonal to access."""
+
+    @pytest.mark.asyncio
+    async def test_group_mention_mode_non_mention_is_silent(self, gateway, mock_db):
+        """AC1: group + mention mode + non-@ message → no reply."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
+        ok = await gateway._should_reply(ch, _inbound(is_mention=False), "channel", False)
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_group_mention_mode_mention_replies(self, gateway, mock_db):
+        """AC2a: group + mention mode + @mention → reply."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
+        ok = await gateway._should_reply(ch, _inbound(is_mention=True), "channel", False)
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_thread_follow_replies_when_session_exists(self, gateway, mock_db):
+        """AC2b: non-@ but an active session exists for the thread → follow."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
+        mock_db.channel_sessions.find_by_external = AsyncMock(return_value={"id": "cs_1"})
+        ok = await gateway._should_reply(
+            ch, _inbound(is_mention=False, thread_ts="1700000000.0001"), "channel", False
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_thread_follow_silent_when_no_session(self, gateway, mock_db):
+        """Non-@ + thread_follow on + NO existing session → still silent."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
+        mock_db.channel_sessions.find_by_external = AsyncMock(return_value=None)
+        ok = await gateway._should_reply(
+            ch, _inbound(is_mention=False, thread_ts="1700000000.0001"), "channel", False
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_thread_follow_off_ignores_existing_session(self, gateway, mock_db):
+        """thread_follow=False → a non-@ never follows even with a session."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": False}
+        mock_db.channel_sessions.find_by_external = AsyncMock(return_value={"id": "cs_1"})
+        ok = await gateway._should_reply(
+            ch, _inbound(is_mention=False, thread_ts="1700000000.0001"), "channel", False
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_dm_always_replies_without_mention(self, gateway, mock_db):
+        """AC4: an im DM replies to every message (no mention gating)."""
+        ch = {"id": "ch_1"}  # no activation → im default 'always'
+        ok = await gateway._should_reply(ch, _inbound(chat_type="im", is_mention=False), "im", False)
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_off_mode_silent_for_non_owner(self, gateway, mock_db):
+        """AC5: activation=off → non-owner gets no reply."""
+        ch = {"id": "ch_1", "activation": "off"}
+        ok = await gateway._should_reply(ch, _inbound(is_mention=True), "channel", False)
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_off_mode_owner_can_drive(self, gateway, mock_db):
+        """activation=off → owner can still drive the channel (re-enable)."""
+        ch = {"id": "ch_1", "activation": "off"}
+        ok = await gateway._should_reply(ch, _inbound(is_mention=False), "channel", True)
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_mode_fails_closed_to_mention(self, gateway, mock_db):
+        """AC6: unknown activation mode → fail-closed to mention gating,
+        NOT always. A non-@ group message under a bogus mode stays silent."""
+        ch = {"id": "ch_1", "activation": "bogus_mode"}
+        silent = await gateway._should_reply(ch, _inbound(is_mention=False), "channel", False)
+        assert silent is False, "unknown mode must fail-closed (no reply to non-@)"
+        replied = await gateway._should_reply(ch, _inbound(is_mention=True), "channel", False)
+        assert replied is True, "unknown mode still replies to an explicit @mention"
+
+    @pytest.mark.asyncio
+    async def test_group_default_is_mention_when_unset(self, gateway, mock_db):
+        """No activation config on a group channel → default 'mention'
+        (quiet), NOT always-reply (the pre-fix spammy behavior)."""
+        ch = {"id": "ch_1"}  # unset
+        ok = await gateway._should_reply(ch, _inbound(is_mention=False), "channel", False)
+        assert ok is False

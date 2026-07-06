@@ -25,6 +25,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -47,6 +48,12 @@ from channels.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for "this (channel, ts) has never been seen" — distinct from a
+# stored False verdict (seen, but not a mention). Used by the dedup map in
+# _normalize_event so a missed-mention upgrade can be told apart from a
+# first sighting (run_4c5ad9c5).
+_UNSEEN = object()
 
 # Slack API limits
 _TEXT_FALLBACK_LIMIT = 39_000   # text field (notification fallback) — hard limit ~40K
@@ -409,6 +416,14 @@ class SlackChannelAdapter(ChannelAdapter):
         self._poll_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
         self._bot_user_id: str = ""
+        # Bounded seen-map of (channel, ts) -> is_mention verdict, to drop
+        # Slack's double-fire: an @mention arrives as BOTH a `message` and an
+        # `app_mention` event, and a reconnect can redeliver. The value is the
+        # mention verdict so a duplicate that PROVES a missed mention can
+        # upgrade+re-emit once (adversarial HIGH, run_4c5ad9c5). FIFO-evicted at
+        # _SEEN_TS_MAX so it never grows unbounded.
+        self._seen_ts: "OrderedDict[tuple[str, str], bool]" = OrderedDict()
+        self._SEEN_TS_MAX: int = 512
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -471,6 +486,19 @@ class SlackChannelAdapter(ChannelAdapter):
 
         self._loop = asyncio.get_running_loop()
         self._slack_client = WebClient(token=self._bot_token)
+
+        # Resolve bot_user_id up-front so mention detection (L1 activation) works
+        # in Socket Mode from the first message. _ensure_identity was previously
+        # only called lazily / in polling, so <@bot> detection would silently
+        # fail in Socket Mode until a poll happened (skeptic trap, run_4c5ad9c5).
+        try:
+            await self._ensure_identity()
+        except Exception as e:
+            logger.warning(
+                "Slack channel %s: _ensure_identity at startup failed "
+                "(%s: %s) — mention detection falls back to app_mention events",
+                self.channel_id, type(e).__name__, e,
+            )
 
         # Start Socket Mode in background thread
         self._start_socket_mode_thread()
@@ -559,6 +587,40 @@ class SlackChannelAdapter(ChannelAdapter):
         thread_ts = event.get("thread_ts")
         channel_type = event.get("channel_type", "im")
 
+        # ── Mention detection (L1 activation signal) — BEFORE dedup ──
+        # A message is an explicit @mention if it arrived via the app_mention
+        # handler (_is_app_mention, ALWAYS reliable — independent of
+        # _bot_user_id) OR the raw text contains <@{bot_user_id}>.
+        #
+        # ORDER MATTERS (adversarial HIGH, run_4c5ad9c5): Slack fires BOTH a
+        # `message` AND an `app_mention` event for one @mention with the same
+        # ts. If dedup ran first, the plain `message` (is_mention=False when
+        # _bot_user_id is unresolved after a startup auth blip) could win and
+        # drop the authoritative app_mention → a real @mention silently ignored.
+        # So detect mention FIRST, then fold the verdict into the seen-set: a
+        # duplicate that PROVES a mention the first pass missed upgrades it and
+        # is processed once more; a true duplicate (no stronger signal) is
+        # dropped. _is_app_mention alone guarantees mentions are never lost even
+        # if _bot_user_id never resolves.
+        is_mention = bool(event.get("_is_app_mention")) or (
+            bool(self._bot_user_id) and f"<@{self._bot_user_id}>" in event.get("text", "")
+        )
+
+        # ── Double-fire dedup (mention-signal-preserving) ──
+        if ts:
+            seen_key = (channel_id, ts)
+            prior = self._seen_ts.get(seen_key, _UNSEEN)
+            if prior is not _UNSEEN:
+                # Already emitted for this ts. Re-emit ONLY if this event
+                # upgrades a missed mention (stored False → now True); otherwise
+                # it is a true duplicate and is dropped.
+                if not (is_mention and prior is False):
+                    return None
+            self._seen_ts[seen_key] = is_mention
+            self._seen_ts.move_to_end(seen_key)
+            if len(self._seen_ts) > self._SEEN_TS_MAX:
+                self._seen_ts.popitem(last=False)  # FIFO evict oldest
+
         # Download any attached files
         attachments = []
         for file_info in event.get("files", []):
@@ -582,6 +644,7 @@ class SlackChannelAdapter(ChannelAdapter):
                 "chat_type": self._normalize_chat_type(channel_type),
                 "message_type": "text",
                 "ts": ts,
+                "is_mention": is_mention,
             },
         )
 
@@ -617,6 +680,11 @@ class SlackChannelAdapter(ChannelAdapter):
         # Treat as a regular message — the channel_type will indicate
         # it's a group context, and the gateway handles group exclusion.
         event.setdefault("channel_type", "channel")
+        # Mark this as an explicit @mention so the L1 activation gate replies
+        # even in a `mention`-mode channel. Slack fires BOTH a `message` and an
+        # `app_mention` event for the same @mention; _normalize_event dedups by
+        # (channel, ts) so only one is handled (run_4c5ad9c5).
+        event["_is_app_mention"] = True
         self._handle_message_event(event, say)
 
     # ------------------------------------------------------------------
