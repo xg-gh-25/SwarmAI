@@ -874,3 +874,87 @@ class TestDecisionJudgeUnit:
         from backend.scripts import eval_runner as er
         r = er._judge_decision_direction({"id": "X"}, "some answer")
         assert r["status"] == "skipped"
+
+
+class TestBehaviorSpawnTimeoutFallback:
+    """The operative per-case spawn timeout fallback (eval_trajectory_capture)
+    must give cold real-agent spawns headroom over their observed 82-95s
+    cold-start latency — a case without scenario_timeout runs at 240, not 120.
+    (run_e6921209: two DDD-read cases false-errored at the old 120s cap.)"""
+
+    _CASE = {
+        "id": "GS_TRAJ_TO", "eval_method": "behavior",
+        "evaluators": ["trajectory_capture"], "dimension": "utility",
+        "scenario": {"prompt": "read X"}, "expected_trajectory": ["Read X"],
+        "allowed_tools": ["Read"],
+    }
+
+    def test_default_fallback_timeout_is_240(self):
+        # A behavior case that does NOT set scenario_timeout must be spawned
+        # with timeout=240 (the raised fallback), captured at the real call.
+        captured = {}
+
+        def fake_spawn(prompt, allowed_tools=None, timeout=None):
+            captured["timeout"] = timeout
+            return (['Read {"file_path": "/ws/X"}'], "done")
+
+        with patch("scripts.scenario_runner.run_scenario_full", side_effect=fake_spawn):
+            eval_runner_mod.eval_trajectory_capture(self._CASE)
+        assert captured["timeout"] == 240
+
+    def test_explicit_scenario_timeout_still_honored(self):
+        # An explicit per-case scenario_timeout overrides the fallback.
+        captured = {}
+
+        def fake_spawn(prompt, allowed_tools=None, timeout=None):
+            captured["timeout"] = timeout
+            return (['Read {"file_path": "/ws/X"}'], "done")
+
+        case = dict(self._CASE, scenario_timeout=90)
+        with patch("scripts.scenario_runner.run_scenario_full", side_effect=fake_spawn):
+            eval_runner_mod.eval_trajectory_capture(case)
+        assert captured["timeout"] == 90
+
+
+class TestJudgeConfidenceCoercion:
+    """Both LLM judges format confidence with :.2f. A judge that returns
+    confidence as a STRING ("0.92") or a non-numeric value must NOT crash into
+    a swallowed 'error' (run_e6921209 / 2026-07-01: 'Unknown format code f for
+    object of type str' at GS_TRAJ_DECISION_NEGATIVE_CONTROL)."""
+
+    def test_coerce_conf_helper(self):
+        from backend.scripts import eval_runner as er
+        assert er._coerce_conf(0.92) == 0.92
+        assert er._coerce_conf("0.92") == 0.92      # str numeric → float
+        assert er._coerce_conf("high") == 0.0        # non-numeric → 0.0 fallback
+        assert er._coerce_conf(None) == 0.0          # None → 0.0
+        assert er._coerce_conf({"x": 1}) == 0.0      # wrong type → 0.0
+
+    def test_decision_judge_str_confidence_no_crash(self):
+        # The decision judge returns confidence as a string — must format
+        # cleanly (status passed/failed), NOT swallow into 'error'.
+        # converse_with_retry is `from jobs.bedrock import` inside the function;
+        # patch it at its source module + return the real nested response shape.
+        from backend.scripts import eval_runner as er
+        case = {"id": "GS_D", "decision_rubric": "PASS if incremental"}
+        verdict_json = '{"verdict":"passed","confidence":"0.92","notes":"recommended incremental"}'
+        fake_response = {"output": {"message": {"content": [{"text": verdict_json}]}}}
+        with patch("jobs.bedrock.converse_with_retry", return_value=fake_response):
+            r = er._judge_decision_direction(case, "use incremental strangler-fig")
+        assert r["status"] == "passed", f"got {r}"
+        assert r["status"] != "error"
+        assert "0.92" in r["notes"]
+
+    def test_goal_quality_judge_str_confidence_no_crash(self):
+        # Gate-2 LOW#1: SITE-1 (eval_llm_judge goal/quality judge) is the OTHER
+        # :.2f-on-confidence site — symmetric coverage so a future regression
+        # reverting site-1 to raw confidence is caught, not just the helper unit.
+        from backend.scripts import eval_runner as er
+        case = {"id": "GS_Q", "scenario": {"turns": [{"input": "do X"}]},
+                "assertions": ["did X"], "title": "quality case"}
+        verdict_json = '{"verdict":"passed","confidence":"0.88","notes":"looks compliant"}'
+        fake_response = {"output": {"message": {"content": [{"text": verdict_json}]}}}
+        with patch("jobs.bedrock.converse_with_retry", return_value=fake_response):
+            r = er.eval_llm_judge(case, "goal_success")
+        assert r["status"] != "error", f"got {r}"
+        assert "0.88" in r["notes"]

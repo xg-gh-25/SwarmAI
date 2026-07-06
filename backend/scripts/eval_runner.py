@@ -1084,7 +1084,7 @@ Respond in this exact JSON format:
 
         judge_result = json.loads(json_text)
         verdict = judge_result.get("verdict", "failed")
-        confidence = judge_result.get("confidence", 0.0)
+        confidence = _coerce_conf(judge_result.get("confidence", 0.0))
         notes = judge_result.get("notes", "")
 
         return {
@@ -1131,6 +1131,18 @@ _JUDGE_MAX_ATTEMPTS = 2
 # Dispatched inline at the evaluate_case switch; named here so callers/tests can
 # recognize them as valid evaluators without hard-coding the string.
 BEHAVIOR_EVALUATORS = {"trajectory_capture"}
+
+
+def _coerce_conf(v) -> float:
+    """Coerce an LLM-judge confidence to float for :.2f formatting. Judges
+    occasionally return it as a string ("0.92") or a non-numeric token; a bare
+    float() would raise into the swallowing except and mis-report a clean verdict
+    as 'error' (run_e6921209 / 2026-07-01 GS_TRAJ_DECISION_NEGATIVE_CONTROL).
+    Non-numeric → 0.0: confidence is display-only, never used in scoring."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _judge_decision_direction(case: dict, final_text: str) -> dict:
@@ -1200,7 +1212,7 @@ Respond in this exact JSON format:
         verdict = jr.get("verdict", "failed")
         return {
             "status": "passed" if verdict == "passed" else "failed",
-            "notes": f"[decision-judge conf={jr.get('confidence', 0.0):.2f}] {jr.get('notes', '')}",
+            "notes": f"[decision-judge conf={_coerce_conf(jr.get('confidence', 0.0)):.2f}] {jr.get('notes', '')}",
             "judge_detail": jr,
         }
     except ImportError:
@@ -1299,7 +1311,11 @@ def eval_trajectory_capture(case: dict) -> dict:
     _READ_ONLY = {"Read", "Grep", "Glob"}
     requested = case.get("allowed_tools") or ["Read"]
     allowed_tools = [t for t in requested if t in _READ_ONLY] or ["Read"]
-    timeout = case.get("scenario_timeout", 120)
+    # 240s fallback: cold real-agent behavior spawns run 82-95s (observed,
+    # run_e6921209); 120 sat below that distribution → false 'error' timeouts.
+    # This is the OPERATIVE production timeout (scenario_runner.DEFAULT_TIMEOUT_SECONDS
+    # is only the test-only wrapper default). Still a hard bound (2.6x slowest healthy).
+    timeout = case.get("scenario_timeout", 240)
 
     try:
         from scripts.scenario_runner import run_scenario_full, ScenarioInfraError

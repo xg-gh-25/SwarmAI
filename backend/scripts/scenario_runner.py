@@ -51,9 +51,13 @@ except Exception:  # pragma: no cover - import path fallback
     except Exception:  # pragma: no cover
         _validate_canary_command = None  # type: ignore
 
-# Default per-scenario timeout. A real agent turn with 1-3 tool calls completes
-# well under this; cap prevents a hung spawn from stalling the eval run.
-DEFAULT_TIMEOUT_SECONDS = 120
+# Default per-scenario timeout for the run_scenario/run_scenario_full wrappers.
+# ⚠️ NOT the production eval path: eval_trajectory_capture (eval_runner.py) passes
+# an EXPLICIT timeout (case.get("scenario_timeout", 240)) — THAT is the operative
+# value for behavior-eval spawns. This default only bounds the test-only wrapper
+# callers. Kept aligned at 240 for consistency. Cold real-agent turns run 82-95s
+# (run_e6921209); a hung spawn is still hard-bounded here.
+DEFAULT_TIMEOUT_SECONDS = 240
 
 
 class ScenarioInfraError(RuntimeError):
