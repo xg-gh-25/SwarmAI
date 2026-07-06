@@ -130,14 +130,24 @@ SYSTEM_JOBS: list[Job] = [
     # The gate (ci_eval_gate / prod.sh release) is the HARD stop; this is the
     # continuous-monitoring eye that catches model/dependency drift (AWS
     # Eval-First: "baseline is a drifting quantity, retest continuously").
-    # NOTE: runs 12:30 ICT (lunch), NOT nightly — name fixed to reflect reality.
+    # NOTE: cron fires EVERY Monday 12:30 ICT, but the handler's OWN 14-day gate
+    # (_should_run_biweekly, its own timestamp file) makes a REAL run happen only
+    # once per 2 weeks (run_6980cb35). This is now the SINGLE biweekly driver and
+    # runs the FULL golden set INCLUDING behavior-tier cases (include_behavior=True).
+    # Behavior spawns real agents (~17-120s each, worst-case ~48min): this is an
+    # IN-PROCESS handler so JobSafety.timeout_seconds does NOT bound it (only the
+    # per-behavior-case spawn timeouts inside eval_trajectory_capture do) — the
+    # 3600 below documents intent for the learner, not an enforced wall-clock.
+    # The old weekly os-eval-biweekly CLI job + the separate monthly behavior job
+    # were retired in favour of this one (behavior folded into the biweekly sweep).
     Job(
         id="eval-scheduled",
-        name="Scheduled Full Eval + Drift Alert",
+        name="Scheduled Full Eval + Drift Alert (every 2 weeks, incl behavior)",
         type="eval_scheduled",
-        schedule="30 4 * * 1",          # 04:30 UTC = 12:30 ICT, MONDAY only (lunch — machine on, creds fresh). Weekly: behavior cases spawn real agents (slow/costly), weekly cadence fits the cost.
+        schedule="30 4 * * 1",          # 04:30 UTC = 12:30 ICT Monday; 14-day gate in handler → biweekly
         enabled=True,
         category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=3600),
         config={},
     ),
 

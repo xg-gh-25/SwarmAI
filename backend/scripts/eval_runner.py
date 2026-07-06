@@ -1554,6 +1554,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
              *, tags: list[str] | None = None,
              canary_timeout: int | None = None,
              programmatic_only: bool = False,
+             include_behavior: bool = False,
              verify_teeth: bool = False) -> dict:
     """Execute eval run. Returns full run result dict.
 
@@ -1582,20 +1583,24 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         cases = [c for c in cases if c["id"] in case_filter]
 
     # Behavior cases (eval_method=behavior) spawn a REAL agent each (~17-120s +
-    # Bedrock cost) and are non-deterministic. They must NOT run on a default/
-    # manual sweep — only when EXPLICITLY requested via the behavior_trajectory
-    # tag or by being NAMED INDIVIDUALLY in case_filter. Otherwise this would be
-    # a surprise 4-agent cost/flake bomb (adversarial Gate-2 HIGH).
+    # Bedrock cost) and are non-deterministic. The raw run_eval default is SAFE:
+    # behavior is EXCLUDED unless a caller EXPLICITLY opts in via one of three
+    # signals (run_6980cb35 — M3-reframed from a dangerous global default-flip):
+    #   1. include_behavior=True  — the intended full-sweep opt-in (biweekly
+    #      scheduled handler + CLI --include-behavior). Default False keeps the
+    #      raw API safe: canary (programmatic_only) + the change-trigger hook's
+    #      _execute_run never pass it, so they can never spawn agents.
+    #   2. behavior_trajectory in tags — legacy explicit-tag path.
+    #   3. the case's OWN id in case_filter — named individually.
     #
-    # Structural safety (adversarial Gate-2 MED, run_75b656c1): we do NOT treat
-    # a non-empty case_filter as blanket consent. The change-trigger hook
-    # (eval_hooks → get_affected_cases) builds a broad affected_by filter; if a
-    # behavior case ever declares affected_by:[AGENT.md], a governance-file edit
-    # would silently spawn agents from a PostToolUse hook. So a behavior case
-    # runs via case_filter ONLY when its OWN id is explicitly in that filter —
-    # an affected_by sweep that happens to include it does NOT auto-spawn.
-    _tag_requested = bool(tags and "behavior_trajectory" in tags)
-    if not _tag_requested:
+    # Structural safety (adversarial Gate-2 MED, run_75b656c1): a non-empty
+    # case_filter is NOT blanket consent. The change-trigger hook
+    # (eval_hooks → get_affected_cases) already filters eval_method!=behavior at
+    # SOURCE (eval_service.py) so behavior ids never reach here from a hook; this
+    # per-id check is the defense-in-depth backstop. An affected_by sweep that
+    # merely includes a behavior id does NOT auto-spawn.
+    _behavior_allowed = bool(tags and "behavior_trajectory" in tags) or include_behavior
+    if not _behavior_allowed:
         _filter_set = set(case_filter) if case_filter else set()
         cases = [
             c for c in cases
@@ -1608,6 +1613,10 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
                                programmatic_only=programmatic_only,
                                verify_teeth=verify_teeth)
         result["id"] = case["id"]
+        # Carry eval_method into the result so downstream (eval_scheduled
+        # behavior-red segregation, run_6980cb35 Gate-1 E) can tell a behavior
+        # failure from a deterministic one without re-joining the golden set.
+        result["eval_method"] = case.get("eval_method", "programmatic")
         results.append(result)
 
     scores = compute_scores(cases, results)
@@ -1625,6 +1634,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
                 "id": r["id"],
                 "status": r["status"],
                 "evaluator": r.get("evaluator", ""),
+                "eval_method": r.get("eval_method", "programmatic"),
                 "duration_ms": r.get("duration_ms", 0),
                 "notes": r.get("notes", ""),
             }
@@ -2531,6 +2541,7 @@ def cmd_run(args):
     tags = args.tags.split(",") if args.tags else None
     run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags,
                           programmatic_only=getattr(args, "programmatic_only", False),
+                          include_behavior=getattr(args, "include_behavior", False),
                           verify_teeth=getattr(args, "verify_teeth", False))
 
     out_path = write_run(run_result, root)
@@ -2584,6 +2595,9 @@ def main():
     run_p.add_argument("--trigger", required=True, help="Trigger type: manual|weekly|monthly|steering_edit|model_change")
     run_p.add_argument("--cases", help="Comma-separated case IDs to run (default: all)")
     run_p.add_argument("--tags", help="Comma-separated tags to filter (smoke,full,regression)")
+    run_p.add_argument("--include-behavior", dest="include_behavior", action="store_true",
+                       default=False, help="Opt IN to behavior-tier cases (spawns real agents — "
+                       "used by the biweekly full sweep + manual full run). Default off (safe).")
     run_p.add_argument("--programmatic-only", action="store_true",
                        help="Skip LLM-judge cases — run only fast deterministic evaluators "
                             "(the BVT gate set). Zero Bedrock cost; refreshes the gate report.")

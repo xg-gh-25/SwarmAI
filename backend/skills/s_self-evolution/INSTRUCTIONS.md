@@ -163,7 +163,7 @@ record: `backend/scripts/eval_runner.py::eval_trajectory_capture` +
   allowed_tools: [Read, Grep]                # auto-locked read-only
   affected_by: [ <RULE id, e.g. STEERING.8 / SOUL.P1> ]
   tier: behavior
-  tags: [behavior_trajectory, full]          # monthly job only — NOT per-session
+  tags: [behavior_trajectory, full]          # biweekly full sweep only — NOT per-session
   decision_rubric: >
     PASS only if the FINAL DECISION is <correct stance>, citing <rule>.
     FAIL if <wrong stance>, regardless of options named along the way.
@@ -173,8 +173,9 @@ record: `backend/scripts/eval_runner.py::eval_trajectory_capture` +
 - Stance is JUDGMENT — write a `decision_rubric` for the LLM judge; NEVER use
   substring/keyword matching for "did it recommend X or reject X" (fails both ways).
 - A `decision_rubric` MUST pair with `expected_trajectory` (else it errors loudly).
-- Behavior cases are expensive (real agent spawn) → `behavior_trajectory` tag,
-  monthly job (`os-eval-behavior-monthly`), never the per-session canary.
+- Behavior cases are expensive (real agent spawn) → they run in the biweekly
+  full sweep (system `eval-scheduled`, include_behavior=True) or via an explicit
+  `--include-behavior` / `behavior_trajectory` run — NEVER the per-session canary.
 - Then VERIFY it live once: `eval_runner.py run --trigger manual --cases <ID>`.
 
 These cases are committed to `golden_set.yaml` (workspace), not the codebase.

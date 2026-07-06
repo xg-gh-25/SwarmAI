@@ -799,6 +799,41 @@ class TestBehaviorCaseDefaultGating:
             r = run_eval(gs, "manual", ["GS_TRAJ_X"], Path("/tmp"))
         spawn.assert_called_once()
 
+    def test_include_behavior_true_runs_behavior(self):
+        # run_0e29db9a follow-on: the biweekly/manual full sweep opts IN via
+        # include_behavior=True (M3 safe frame — default stays False, tripwire
+        # above). Mutation: removing `or include_behavior` from the gate flips
+        # this RED.
+        from backend.scripts.eval_runner import run_eval
+        gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(['Read X'], "ok")) as spawn:
+            r = run_eval(gs, "scheduled", None, Path("/tmp"), include_behavior=True)
+        spawn.assert_called_once()
+        ran_ids = {c["id"] for c in r["cases"]}
+        assert "GS_TRAJ_X" in ran_ids and "GS_NORM" in ran_ids
+
+    def test_include_behavior_false_still_excludes(self):
+        # Explicit default-False is identical to the implicit default — canary /
+        # hook / _execute_run paths (which never pass include_behavior) stay safe.
+        from backend.scripts.eval_runner import run_eval
+        gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
+        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
+            r = run_eval(gs, "manual", None, Path("/tmp"), include_behavior=False)
+        spawn.assert_not_called()
+        assert "GS_TRAJ_X" not in {c["id"] for c in r["cases"]}
+
+    def test_run_result_cases_carry_eval_method(self):
+        # Gate-1 E fix: behavior-red segregation needs eval_method in the per-case
+        # result dict (was absent → handler couldn't tell behavior from
+        # deterministic failures).
+        from backend.scripts.eval_runner import run_eval
+        gs = {"cases": [self._NORMAL]}
+        r = run_eval(gs, "manual", None, Path("/tmp"))
+        assert r["cases"], "expected at least one case result"
+        assert all("eval_method" in c for c in r["cases"]), \
+            "run_result cases must carry eval_method for behavior-red segregation"
+
 
 class TestDecisionJudgeUnit:
     """_judge_decision_direction: judges the agent's REAL answer for stance,
