@@ -1587,9 +1587,12 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     # behavior is EXCLUDED unless a caller EXPLICITLY opts in via one of three
     # signals (run_6980cb35 — M3-reframed from a dangerous global default-flip):
     #   1. include_behavior=True  — the intended full-sweep opt-in (biweekly
-    #      scheduled handler + CLI --include-behavior). Default False keeps the
-    #      raw API safe: canary (programmatic_only) + the change-trigger hook's
-    #      _execute_run never pass it, so they can never spawn agents.
+    #      scheduled handler + CLI --include-behavior + the HTTP API's
+    #      TriggerRunRequest.include_behavior). Default False keeps every path
+    #      that does NOT opt in safe: canary (programmatic_only) and the
+    #      change-trigger hook both call trigger_run/_execute_run WITHOUT
+    #      include_behavior, so they can never spawn agents. _execute_run only
+    #      forwards it when its caller (the manual /api/eval/run route) opts in.
     #   2. behavior_trajectory in tags — legacy explicit-tag path.
     #   3. the case's OWN id in case_filter — named individually.
     #

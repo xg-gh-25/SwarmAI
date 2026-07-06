@@ -291,6 +291,56 @@ class TestTriggerRun:
         with pytest.raises((ValueError, RuntimeError)):
             svc.trigger_run(trigger="second")
 
+    def _capture_run_eval_include_behavior(self, svc, **trigger_kwargs):
+        """Helper: trigger a run with run_eval mocked at the leaf boundary,
+        join the background thread, return the include_behavior kwarg run_eval
+        actually received. This proves end-to-end threading
+        TriggerRunRequest -> trigger_run -> _execute_run -> run_eval."""
+        import time
+        captured = {}
+        done = threading.Event()
+
+        def fake_run_eval(cases_data, trigger, case_ids, root, **kwargs):
+            captured["include_behavior"] = kwargs.get("include_behavior", "ABSENT")
+            done.set()
+            return {
+                "run_id": "x", "triggered_by": trigger, "overall_score": 100.0,
+                "dimensions": {}, "cases": [], "total_cases": 0,
+                "cases_passed": 0, "cases_failed": 0, "cases_skipped": 0,
+                "duration_seconds": 0.0,
+            }
+
+        # run_eval is imported inside _execute_run via `from scripts.eval_runner
+        # import run_eval` — patch it at its source module.
+        with patch("scripts.eval_runner.run_eval", side_effect=fake_run_eval):
+            svc.trigger_run(**trigger_kwargs)
+            assert done.wait(timeout=5.0), "run_eval was never called"
+        return captured.get("include_behavior", "ABSENT")
+
+    def test_trigger_run_forwards_include_behavior_true(self, svc):
+        """AC1: opt-in — trigger_run(include_behavior=True) reaches run_eval as True."""
+        assert self._capture_run_eval_include_behavior(
+            svc, trigger="manual", include_behavior=True) is True
+
+    def test_trigger_run_defaults_include_behavior_false(self, svc):
+        """AC2: safety default preserved — omitting the flag reaches run_eval as
+        False (behavior excluded on a blanket manual sweep)."""
+        assert self._capture_run_eval_include_behavior(
+            svc, trigger="manual") is False
+
+    def test_behavior_case_count(self, svc):
+        """Gate-2 MED#1: the /run route surfaces how many behavior cases an
+        include_behavior=True sweep will spawn, so the caller sees the ~cost
+        magnitude. The fixture golden_set has 0 behavior-method cases."""
+        assert svc.behavior_case_count() == 0
+        svc.add_case({
+            "id": "GS_BEH", "category": "compliance", "dimension": "compliance",
+            "title": "A behavior case", "eval_method": "behavior",
+            "evaluators": ["goal_success"], "affected_by": ["AGENT.md"],
+            "scenario": {"turns": [{"input": "x"}]},
+        })
+        assert svc.behavior_case_count() == 1
+
 
 class TestPersistPreservesDiskOnlyCases:
     """_persist_golden_set must NOT drop cases that exist on disk but not in

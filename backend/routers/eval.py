@@ -57,6 +57,13 @@ class UpdateCaseRequest(BaseModel):
 class TriggerRunRequest(BaseModel):
     trigger: str = Field(default="manual", description="Trigger type")
     case_ids: Optional[list[str]] = Field(default=None, description="Specific case IDs to run")
+    include_behavior: bool = Field(
+        default=False,
+        description="Opt-in to run the behavior tier (real agent spawns, ~17-120s/case + "
+        "Bedrock cost). Default False keeps a blanket manual sweep safe — behavior cases "
+        "are excluded unless explicitly requested, mirroring the CLI --include-behavior and "
+        "the scheduled handler's explicit opt-in.",
+    )
 
 
 class HardDeleteRequest(BaseModel):
@@ -164,8 +171,14 @@ async def trigger_eval_run(req: TriggerRunRequest):
     """Trigger a full eval run in background. Returns run_id immediately."""
     svc = get_eval_service()
     try:
-        run_id = svc.trigger_run(trigger=req.trigger, case_ids=req.case_ids)
-        return {"status": "started", "run_id": run_id}
+        run_id = svc.trigger_run(trigger=req.trigger, case_ids=req.case_ids,
+                                 include_behavior=req.include_behavior)
+        resp = {"status": "started", "run_id": run_id}
+        if req.include_behavior:
+            # Gate-2 MED#1: surface the real-agent-spawn cost magnitude so the
+            # caller/GUI knows this opt-in sweep is expensive (~17-120s each).
+            resp["behavior_cases"] = svc.behavior_case_count()
+        return resp
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -192,8 +205,12 @@ async def run_specific_cases(req: TriggerRunRequest):
         raise HTTPException(status_code=400, detail="case_ids required")
     svc = get_eval_service()
     try:
-        run_id = svc.trigger_run(trigger=req.trigger, case_ids=req.case_ids)
-        return {"status": "started", "run_id": run_id}
+        run_id = svc.trigger_run(trigger=req.trigger, case_ids=req.case_ids,
+                                 include_behavior=req.include_behavior)
+        resp = {"status": "started", "run_id": run_id}
+        if req.include_behavior:
+            resp["behavior_cases"] = svc.behavior_case_count()
+        return resp
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=409, detail=str(e))
 

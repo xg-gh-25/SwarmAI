@@ -218,6 +218,16 @@ class EvalService:
         """Number of golden set cases loaded."""
         return len(self._cases)
 
+    def behavior_case_count(self) -> int:
+        """Number of non-archived behavior-tier cases — i.e. how many REAL agent
+        spawns an include_behavior=True sweep will trigger. Surfaced in the
+        /api/eval/run response so a caller opting into behavior sees the cost
+        magnitude (each spawn is ~17-120s + Bedrock cost)."""
+        return sum(
+            1 for c in self._cases
+            if c.get("eval_method") == "behavior" and c.get("tier") != "archived"
+        )
+
     @property
     def run_count(self) -> int:
         """Number of eval runs loaded."""
@@ -468,10 +478,16 @@ class EvalService:
 
     # ─── Run Triggers (P3) ────────────────────────────────────────────────
 
-    def trigger_run(self, trigger: str = "manual", case_ids: list[str] | None = None) -> str:
+    def trigger_run(self, trigger: str = "manual", case_ids: list[str] | None = None,
+                    include_behavior: bool = False) -> str:
         """Trigger an eval run in background thread. Returns run_id.
 
         Raises RuntimeError if a run is already in progress.
+
+        ``include_behavior`` (default False) is the opt-in for the behavior tier
+        (real agent spawns + Bedrock cost). Default-False keeps the auto-seed hook
+        path (eval_hooks.py) and any caller that omits it safe — only an explicit
+        opt-in (the HTTP API's TriggerRunRequest.include_behavior) runs behavior.
         """
         with self._run_lock:
             if self._running:
@@ -484,7 +500,7 @@ class EvalService:
 
         thread = threading.Thread(
             target=self._execute_run,
-            args=(run_id, trigger, case_ids),
+            args=(run_id, trigger, case_ids, include_behavior),
             daemon=True,
             name=f"eval-run-{run_id}",
         )
@@ -1218,8 +1234,14 @@ class EvalService:
             json.dump(result, f, indent=2)
         return path
 
-    def _execute_run(self, run_id: str, trigger: str, case_ids: list[str] | None) -> None:
-        """Background execution of eval run."""
+    def _execute_run(self, run_id: str, trigger: str, case_ids: list[str] | None,
+                     include_behavior: bool = False) -> None:
+        """Background execution of eval run.
+
+        ``include_behavior`` forwards the caller's opt-in into run_eval. It
+        defaults False so the auto-seed hook path (which never passes it) and any
+        legacy caller stay safe; only an explicit HTTP-API opt-in runs behavior.
+        """
         try:
             from scripts.eval_runner import run_eval, generate_html_report, load_golden_set
 
@@ -1227,7 +1249,7 @@ class EvalService:
             # Manual/GUI full run → verify canary teeth (the per-session canary
             # path at run_canary() stays verify_teeth=False — it is deadline-bound).
             result = run_eval(cases_data, trigger, case_ids, self._workspace_root,
-                              verify_teeth=True)
+                              verify_teeth=True, include_behavior=include_behavior)
             result["run_id"] = run_id
 
             self._write_run_result(result)
