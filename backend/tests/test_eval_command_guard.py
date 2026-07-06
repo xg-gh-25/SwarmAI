@@ -47,6 +47,19 @@ class TestEvalInvocationsDenied:
         "perl -e 'alarm 300; exec @ARGV' python scripts/eval_runner.py run --trigger x",
         "eval_runner run --trigger code_change",
         "python -m core.eval_service run",
+        # run_3bde4b8b: ci_eval_gate.py EXECUTED via other launchers must STILL deny
+        # (the positive-anchor fix keeps these; skeptic caveat — cover ./ and bash,
+        # not only python-prefix).
+        "python3 backend/scripts/ci_eval_gate.py --check",
+        "./ci_eval_gate.py",
+        "bash ci_eval_gate.py",
+        "python -u backend/scripts/ci_eval_gate.py",
+        # Gate-2 security HIGH (run_3bde4b8b): uv/poetry/pdm `run` DO execute a
+        # non-+x .py, and uv is a first-class tool in THIS repo's CI — must deny.
+        "uv run backend/scripts/ci_eval_gate.py",
+        "uv run ci_eval_gate.py",
+        "poetry run python backend/scripts/ci_eval_gate.py",
+        "pdm run ci_eval_gate.py",
     ])
     def test_eval_command_denied(self, cmd):
         assert _is_deny(_run(cmd)), f"eval invocation must be DENIED: {cmd!r}"
@@ -68,6 +81,14 @@ class TestNonEvalApproved:
         "ls backend/scripts/",
         "cat backend/scripts/eval_runner.py",          # READING the file is fine
         "grep -n run backend/scripts/eval_runner.py",   # grepping is fine
+        # run_3bde4b8b Bug1: ci_eval_gate.py named as a READER ARG (not executed)
+        # must be APPROVED — the verb-less arm used to DENY these (every-pipeline
+        # papercut). The threat is EXECUTION, never a reader naming the file.
+        "grep -n generate_html_report backend/scripts/ci_eval_gate.py",
+        "cat backend/scripts/ci_eval_gate.py",
+        "wc -l backend/scripts/ci_eval_gate.py",
+        "git log --oneline backend/scripts/ci_eval_gate.py",
+        "head -50 backend/scripts/ci_eval_gate.py",
     ])
     def test_non_eval_approved(self, cmd):
         assert not _is_deny(_run(cmd)), f"non-eval command must be APPROVED: {cmd!r}"

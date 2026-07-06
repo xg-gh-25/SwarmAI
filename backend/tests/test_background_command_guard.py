@@ -59,6 +59,59 @@ def test_foreground_and_false_positive_amps_not_flagged(command):
     assert _is_backgrounded(command, {"command": command}) is False
 
 
+# ── run_3bde4b8b Bug2: heredoc-body & is DATA, not a control operator ──────────
+# A heredoc body fed to a program's stdin can legitimately contain `&` (Python
+# bitwise-and, an unquoted URL query string). The old strip pipeline missed
+# heredoc bodies → false "backgrounded" → the command was wrongly DENIED. This
+# guard's own false-positive blocked the pipeline that fixes it (3× this session).
+@pytest.mark.parametrize("command", [
+    "python3 - <<HDOC\nx = a & b\nHDOC",                    # bitwise-and in body
+    "python3 - <<'EOF'\nx = a & b\nEOF",                    # quoted delimiter (Gate-1: strip before quote-strip)
+    'python3 - <<"EOF"\ny = c & d\nEOF',                    # double-quoted delimiter
+    "cat <<-EOF\n\tport=1&reset=2\n\tEOF",                  # <<- indented terminator (Gate-1 finding)
+    "curl -d @- <<REQ\nhttp://x?a=1&b=2\nREQ",              # unquoted URL in body
+    "python3 - <<A\nfoo & bar\nA\npython3 - <<B\nbaz & qux\nB",  # two heredocs, both bodies
+])
+def test_heredoc_body_amp_not_flagged(command):
+    assert _is_backgrounded(command, {"command": command}) is False, (
+        f"heredoc-body & is data, not backgrounding: {command!r}")
+
+
+# A REAL backgrounding & that lives OUTSIDE the heredoc body (intro line or after
+# the terminator) MUST still be flagged — the body strip must not swallow it.
+@pytest.mark.parametrize("command", [
+    "cat <<EOF & echo started\nbody & data\nEOF",          # & on the intro line
+    "cat <<EOF\nbody & data\nEOF\n& echo done",            # & after the terminator
+    # Gate-2 correctness (run_3bde4b8b): the delimiter WORD recurs as a bare body
+    # line. bash ends the heredoc at the FIRST standalone delimiter line, so the
+    # trailing `sleep 999 &` is REAL backgrounding. A prefix-match terminator would
+    # let the body span swallow it (fail-open); the whole-line ^WORD$ anchor stops
+    # at the first `E` line, leaving the real & detectable.
+    "cat <<E\nE\nsleep 999 &\nE",
+    # delimiter appears as a PREFIX of a body line — must not early-terminate
+    "cat <<END & echo bg\nENDPOINT=1\ndata\nEND",
+])
+def test_heredoc_with_real_backgrounding_still_flagged(command):
+    assert _is_backgrounded(command, {"command": command}) is True, (
+        f"a real & outside the heredoc body must stay flagged: {command!r}")
+
+
+def test_heredoc_redos_guard_bounds_runtime():
+    """Gate-2 security HIGH: N unterminated `<<A` openers make the lazy body regex
+    O(N^2). The opener-count cap (_HEREDOC_MAX_OPENERS) skips the strip on a
+    pathological command so the <5s PreToolUse budget holds. Fail-SAFE: skipping
+    the strip can only over-DENY (a body-& re-counts as bg), never fail-open."""
+    import time
+    pathological = "<<A\n" * 5000  # 5000 unterminated openers, ~20KB
+    start = time.monotonic()
+    result = _is_backgrounded(pathological, {"command": pathological})
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0, f"heredoc strip must be bounded, took {elapsed:.2f}s"
+    # no real `&` present → not backgrounded (the cap-skip path returns the raw
+    # string to the &-scan, which finds none)
+    assert result is False
+
+
 # ── the guard decision (the path that was never exercised) ──────────────────
 
 @pytest.mark.asyncio

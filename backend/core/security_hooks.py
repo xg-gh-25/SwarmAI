@@ -691,6 +691,30 @@ def create_dangerous_command_gate(
 # detached work belongs on the daemon job system, not a background shell.
 
 _BG_KEYWORD_RE = re.compile(r"\b(?:nohup|disown|setsid)\b")
+# A heredoc body is DATA piped to a program's stdin — any `&` inside it is never a
+# shell control operator (it's Python bitwise-and, an unquoted URL query, etc.).
+# Matches `<<[-]?['"]?WORD` then the body up to the terminator, which MUST be its
+# own whole line (`^[ \t]*WORD[ \t]*$`, MULTILINE) — bash ends a heredoc only on a
+# line equal to the delimiter, so a PREFIX match (`WORD ...` mid-line, or a bare
+# `WORD` line that is the real empty-body terminator) would let the lazy `.*?` span
+# stretch PAST the true terminator and swallow a real backgrounding `&` that lives
+# after it (Gate-2 correctness finding: `cat <<E\nE\nsleep 999 &\nE`). The
+# terminator may be indented (the `<<-` tab-strip form). DOTALL lets `.*?` cross
+# lines; MULTILINE anchors the terminator to a line. The opening `<<WORD` and any
+# real `&` (intro line, or after the terminator) live OUTSIDE the matched span, so
+# stripping the body can never hide a genuine control `&`.
+_HEREDOC_BODY_RE = re.compile(
+    r"<<-?\s*(['\"]?)(\w+)\1\n.*?^[ \t]*\2[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+# Cap on `<<` occurrences before running the (lazy, backtracking) heredoc strip.
+# _HEREDOC_BODY_RE's `.*?` scans to end-of-string for every UNTERMINATED `<<WORD`,
+# so N such openers cost O(N^2) — a pathological command (thousands of `<<A`) could
+# exceed the <5s PreToolUse budget and hang the hook (Gate-2 security finding, ReDoS).
+# Over the cap we SKIP the strip (fail-SAFE: a body-`&` is then re-counted as
+# backgrounding → an extra DENY on a 64+-heredoc command, NEVER a fail-open). Real
+# commands have 0–2 heredocs; 64 is far above any legitimate use.
+_HEREDOC_MAX_OPENERS = 64
 # Narrow allowlist: deliberately long-lived services that SHOULD background.
 _BG_SERVICE_ALLOWLIST_RE = re.compile(
     r"\b(?:npm|yarn|pnpm)\s+(?:run\s+)?(?:dev|start|serve)\b"
@@ -707,16 +731,36 @@ _BG_SERVICE_ALLOWLIST_RE = re.compile(
 def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
     """True if the Bash call would run in the background (tool flag OR shell).
 
-    Shell detection strips every NON-backgrounding use of ``&`` — logical-AND
-    (``&&``), redirects (``&>``/``&>>``), fd-dups (``2>&1``), and quoted literals
-    — so any ``&`` left over is a backgrounding control operator (``cmd &`` or
-    ``cmd & next``). Plus nohup/disown/setsid.
+    Shell detection strips every NON-backgrounding use of ``&`` — heredoc bodies
+    (DATA, not shell), logical-AND (``&&``), redirects (``&>``/``&>>``), fd-dups
+    (``2>&1``), and quoted literals — so any ``&`` left over is a backgrounding
+    control operator (``cmd &`` or ``cmd & next``). Plus nohup/disown/setsid.
+
+    Heredoc bodies are stripped FIRST, BEFORE the quote strips: a quoted heredoc
+    delimiter (``<<'EOF'`` / ``<<"EOF"``, the common expansion-suppressing form)
+    would otherwise have its delimiter quotes eaten by the quote strip, so the
+    heredoc regex could no longer find the opening token and the body would survive
+    (Gate-1 finding, run_3bde4b8b). A real backgrounding ``&`` always lives OUTSIDE
+    the body (intro line or after the terminator), so this can never hide one.
+
+    ACCEPTED RESIDUAL (documented, not fixed — pytest_command_guard precedent):
+    ``&`` inside other DATA contexts that are NOT heredocs — command substitution
+    ``$(...)``, backticks, process substitution ``<(...)`` — is still counted. These
+    are far rarer than heredocs and each added strip is a new fail-open surface on a
+    security gate (a real ``&`` inside ``<(cmd &)`` is genuinely ambiguous), so the
+    trade is deliberately declined.
     """
     if tool_input.get("run_in_background") is True:
         return True
     if _BG_KEYWORD_RE.search(command):
         return True
-    s = re.sub(r"'[^']*'", "", command)   # strip single-quoted literals
+    # Strip heredoc bodies (DATA) FIRST — but skip on a pathological opener count
+    # (ReDoS guard, fail-safe: unstripped body-& only over-DENYs, never fail-opens).
+    if command.count("<<") <= _HEREDOC_MAX_OPENERS:
+        s = _HEREDOC_BODY_RE.sub(" ", command)
+    else:
+        s = command
+    s = re.sub(r"'[^']*'", "", s)         # strip single-quoted literals
     s = re.sub(r'"[^"]*"', "", s)         # strip double-quoted literals
     s = s.replace("&&", "")               # logical-AND, not background
     s = re.sub(r"&>>?", "", s)            # &> / &>> redirect
@@ -867,18 +911,48 @@ def _pytest_token_is_command_word(command: str) -> bool:
     return False
 
 
-# Eval invocation — `eval_runner.py run`, `ci_eval_gate.py`, or `eval_service`
-# CLI run. Eval is a SYSTEM-LEVEL decoupled subsystem (DEC05/PIT179) that runs
-# against the DEPLOYED system via CI (post-push) / deploy / scheduled — NEVER by
-# the agent inside a coding pipeline (running it on un-deployed changes tests the
-# OLD binary, proves nothing, wastes tokens, and hung the judge's Bedrock call,
-# 2026-06-28). Matched against the unquoted form so `git commit -m "fix eval"` is
-# not a false hit. Word-anchored on the script filenames the agent actually types.
+# Eval invocation — `eval_runner.py run`, `ci_eval_gate.py` (executed), or
+# `eval_service` CLI run. Eval is a SYSTEM-LEVEL decoupled subsystem (DEC05/PIT179)
+# that runs against the DEPLOYED system via CI (post-push) / deploy / scheduled —
+# NEVER by the agent inside a coding pipeline (running it on un-deployed changes
+# tests the OLD binary, proves nothing, wastes tokens, and hung the judge's Bedrock
+# call, 2026-06-28). Matched against the unquoted form so `git commit -m "fix eval"`
+# is not a false hit.
+#
+# The threat is EXECUTION, never a reader naming the file. `ci_eval_gate.py` has no
+# `run` subcommand (it IS the gate), so — unlike the three verb-bearing arms — its
+# arm anchors on an EXECUTION position instead of a verb: the filename must sit at a
+# command-word position (line start / after a `;`/`&`/`|` separator / immediately
+# after a `python[3]`/`bash` interpreter, optionally with flags / `./`-prefixed).
+# This is the run_3bde4b8b fix for the verb-less-arm false-positive: a bare
+# `grep/cat/wc/git log … ci_eval_gate.py` (filename as a trailing ARG of a reader)
+# is NOT at a command-word position → APPROVED, while every real execution shape
+# (`python … ci_eval_gate.py`, `./ci_eval_gate.py`, `bash ci_eval_gate.py`,
+# `cd x && python … ci_eval_gate.py`) still matches → DENIED (Gate-1 skeptic
+# verified the deny-set holds + no fail-open).
+# ACCEPTED RESIDUAL (documented, not fixed — pytest_command_guard precedent): an
+# indirect launch with a bare non-python/bash wrapper and no separator
+# (`time ci_eval_gate.py`, `xargs … ci_eval_gate.py`, `sudo ci_eval_gate.py`,
+# `env ci_eval_gate.py`, `sh ci_eval_gate.py`, `python -m foo ci_eval_gate.py`) is
+# NOT recognized → approved. This residual is SAFE ONLY WHILE `ci_eval_gate.py` stays
+# mode 0644 (non-executable): `sudo/time/sh/env <file>` would ENOEXEC / mis-parse and
+# NOT actually run the Python (Gate-2 security). ⚠️ If ci_eval_gate.py is ever made
+# `chmod +x`, these upgrade to real fail-opens — broaden the anchor then. The
+# script-runners that DO execute a non-+x .py (`uv/poetry/pdm run`, `python`, `bash`)
+# ARE covered above. The alternative (matching the bare filename anywhere) is the
+# false-positive we just fixed.
+_CI_EVAL_GATE_EXEC = (
+    r"(?:^|[;&|]"                              # line start / separator, OR an exec launcher:
+    r"|\bpython[\d.]*\s+(?:-\S+\s+)*"          #   python[3] [-flags]
+    r"|\b(?:uv|poetry|pdm)\s+run\s+(?:python[\d.]*\s+(?:-\S+\s+)*)?"  # uv/poetry/pdm run [python] — uv IS used in this repo's CI (Gate-2)
+    r"|\bbash\s+)"                             #   bash
+    r"\s*(?:[\w./]*/)?ci_eval_gate\.py\b"      # opt. path + filename
+)
 _EVAL_INVOCATION_RE = re.compile(
-    r"\b(?:eval_runner\.py\s+run\b"          # eval_runner.py run ...
-    r"|ci_eval_gate\.py\b"                    # ci_eval_gate.py
-    r"|eval_runner\s+run\b"                   # bare `eval_runner run` (entrypoint)
-    r"|eval_service\b[^|\n]*\brun\b)",        # eval_service ... run
+    r"(?:\beval_runner\.py\s+run\b"          # eval_runner.py run ...
+    r"|" + _CI_EVAL_GATE_EXEC +               # ci_eval_gate.py at an exec position
+    r"|\beval_runner\s+run\b"                 # bare `eval_runner run` (entrypoint)
+    r"|\beval_service\b[^|\n]*\brun\b)",      # eval_service ... run
     re.IGNORECASE,
 )
 
