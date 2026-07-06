@@ -77,13 +77,19 @@ def _check_exclude(name: str, attr: str, required: set, negative: bool) -> int:
 
 
 def safe_group_exclude(negative: bool) -> int:
-    """Group-channel prompts must exclude MEMORY.md + USER.md (privacy)."""
-    return _check_exclude("SAFE_GROUP", "GROUP_CHANNEL_EXCLUDE", {"MEMORY.md", "USER.md"}, negative)
+    """Group-channel prompts must exclude the whole-file-private set
+    (USER/EVOLUTION/MEMORY/PROJECTS) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {MEMORY, USER}, which leaked EVOLUTION.md into group channels."""
+    return _check_exclude("SAFE_GROUP", "GROUP_CHANNEL_EXCLUDE",
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md"}, negative)
 
 
 def safe_nonowner_exclude(negative: bool) -> int:
-    """Non-owner light-channel prompts must exclude EVOLUTION.md + PROJECTS.md."""
-    return _check_exclude("SAFE_NONOWNER", "CHANNEL_LIGHT_EXCLUDE", {"EVOLUTION.md", "PROJECTS.md"}, negative)
+    """Non-owner DM prompts must exclude the whole-file-private set
+    (USER/EVOLUTION/MEMORY/PROJECTS) — widened 2026-07-06 (run_20bd4a7b) from the
+    old {EVOLUTION, PROJECTS}, which leaked USER.md + MEMORY.md to teammates."""
+    return _check_exclude("SAFE_NONOWNER", "CHANNEL_LIGHT_EXCLUDE",
+                          {"USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md"}, negative)
 
 
 def gate_freshness(negative: bool) -> int:

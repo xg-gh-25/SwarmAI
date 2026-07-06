@@ -87,19 +87,45 @@ we can afford a richer system prompt (more DailyActivity, fuller
 MEMORY.md, untruncated KNOWLEDGE/PROJECTS) while still leaving 90%
 for conversation and tool use."""
 
-GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
-"""Files excluded from group channel prompts to prevent personal data leakage."""
-
-CHANNEL_LIGHT_EXCLUDE: frozenset[str] = frozenset({
-    "EVOLUTION.md", "PROJECTS.md",
+# Whole-file-private context files — the single source of truth for the
+# private lane (design 2026-07-06 §4). These carry XG's personal / self data
+# and MUST NOT reach ANY non-owner session:
+#   • USER.md      — org chain, level, manager, personal preferences
+#   • EVOLUTION.md — self-evolution + correction history (internal, no team value)
+#   • MEMORY.md    — cross-session memory incl. personal + correction segments
+#   • PROJECTS.md  — project index (may reference XG-personal work)
+# Fail-closed (C041): a NEW context file added here is excluded for every
+# non-owner path at once. Per-section sharing of MEMORY/PROJECTS is a FUTURE
+# opt-in (a shared-lane tag scanner that does not yet exist); until it ships,
+# these are excluded wholesale for non-owners. The shared corpus teammates need
+# (DDD project docs, domain skills) loads via a SEPARATE path, not this list —
+# so excluding these does not starve teammate usefulness.
+WHOLE_FILE_PRIVATE: frozenset[str] = frozenset({
+    "USER.md", "EVOLUTION.md", "MEMORY.md", "PROJECTS.md",
 })
-"""Files excluded from channel (Slack DM) sessions.
 
-Channel messages are typically quick exchanges (56% of sessions) that
-don't need Evolution registry or project index.  MEMORY.md and USER.md
-ARE included — channel DMs are personal and benefit from persistent memory.
-Saves ~3.5K tokens per channel response. Group channels get the stricter
-GROUP_CHANNEL_EXCLUDE instead (which also drops MEMORY.md and USER.md)."""
+GROUP_CHANNEL_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
+"""Files excluded from GROUP channel prompts (non-owner context).
+
+Excludes the whole-file-private set (USER/EVOLUTION/MEMORY/PROJECTS) so no
+personal data, correction history, or project index leaks to a shared channel.
+Previously only dropped {MEMORY, USER}, which leaked EVOLUTION.md — corrected
+2026-07-06 (run_20bd4a7b) to the full private lane."""
+
+CHANNEL_LIGHT_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
+"""Files excluded from NON-OWNER DM (Slack) sessions.
+
+A non-owner DM is a TRUSTED (allowlisted, non-owner) user — their turn must
+NOT carry XG's private files. Excludes the whole-file-private set so USER.md
+(org chain/level) and MEMORY.md (personal memory) never reach a teammate, and
+so introspection ("summarize your USER.md") cannot leak them (F8: the defense
+is assembly-time exclusion, not a model-judgment refusal).
+
+⚠️ Corrected 2026-07-06 (run_20bd4a7b): previously {EVOLUTION, PROJECTS} only,
+with a docstring claiming "MEMORY.md and USER.md ARE included — channel DMs are
+personal." That rationale is true for the OWNER (whose DMs take the full-context
+else-path), but this set applies to the `not is_owner` branch — so it was
+leaking USER.md + MEMORY.md to non-owner teammates. Owner DMs are unaffected."""
 
 
 # ── Lifecycle Filtering ─────────────────────────────────────────────────
@@ -235,6 +261,18 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
 """All 11 context source files in ascending priority order (P0-P10)."""
+
+
+# Fail-closed binding (adversarial LOW, Gate 2 run_20bd4a7b): every name in the
+# private-lane set MUST correspond to a real CONTEXT_FILES spec. Exclusion matches
+# on ``spec.filename`` by exact string, so a spec rename (e.g. "USER.md"→"user.md")
+# would silently stop excluding USER.md with no test catching it. This module-load
+# assert makes such a drift a hard import error, not a silent privacy regression.
+assert WHOLE_FILE_PRIVATE <= {s.filename for s in CONTEXT_FILES}, (
+    "WHOLE_FILE_PRIVATE contains a filename with no matching CONTEXT_FILES spec — "
+    "a rename would silently un-exclude a private file: "
+    f"{WHOLE_FILE_PRIVATE - {s.filename for s in CONTEXT_FILES}}"
+)
 
 
 class ContextDirectoryLoader:
@@ -1040,28 +1078,45 @@ class ContextDirectoryLoader:
 
     # ── L0 Cache ───────────────────────────────────────────────────────
 
-    def _load_l0(self, model_context_window: int) -> str:
+    def _load_l0(
+        self,
+        model_context_window: int,
+        exclude_filenames: set[str] | None = None,
+    ) -> str:
         """Load L0 compact cache or fall back to aggressive truncation.
 
         Reads ``L0_SYSTEM_PROMPTS.md`` if it exists.  If missing, falls
         back to ``_assemble_from_sources()`` which will apply token budget
         truncation and (for models < 32K) exclude KNOWLEDGE + PROJECTS.
 
+        ⚠️ PRIVACY (run_20bd4a7b): when ``exclude_filenames`` is non-empty the
+        session is a non-owner channel — the shared pre-baked L0 cache is
+        session-AGNOSTIC and would leak the private-lane files, so it is BYPASSED
+        (same policy as the L1 cache in ``load_all``). Exclusions are forwarded to
+        the fallback assembly so the private files never reach a non-owner prompt
+        on a sub-64K model. Fail-CLOSED — previously this path dropped
+        ``exclude_filenames`` on the floor (adversarial HIGH, Gate 2).
+
         Validates: Requirements 5.1, 5.2, 5.3, 6.3, 6.4
         """
-        l0_path = self.context_dir / L0_CACHE_FILENAME
-        try:
-            if l0_path.is_file():
-                content = l0_path.read_text(encoding="utf-8").strip()
-                if content:
-                    return content
-        except OSError as exc:
-            logger.warning("Failed to read L0 cache %s: %s", l0_path, exc)
+        # Non-owner session (exclusions active) → never serve the shared L0
+        # cache; assemble fresh WITH the exclusions applied.
+        if not exclude_filenames:
+            l0_path = self.context_dir / L0_CACHE_FILENAME
+            try:
+                if l0_path.is_file():
+                    content = l0_path.read_text(encoding="utf-8").strip()
+                    if content:
+                        return content
+            except OSError as exc:
+                logger.warning("Failed to read L0 cache %s: %s", l0_path, exc)
 
         # Fall back to assembly with the model's context window
-        # (will exclude low-priority files for small models)
+        # (will exclude low-priority files for small models) + any policy
+        # exclusions (privacy) for non-owner channel sessions.
         return self._assemble_from_sources(
             model_context_window=model_context_window,
+            exclude_filenames=exclude_filenames,
         )
 
     # ── Main Entry Point ───────────────────────────────────────────────
@@ -1110,8 +1165,10 @@ class ContextDirectoryLoader:
             dynamic_budget = self.compute_token_budget(model_context_window)
 
             if model_context_window < THRESHOLD_USE_L1:
-                # Small model: use L0 compact cache
-                return self._load_l0(model_context_window)
+                # Small model: use L0 compact cache. Forward exclusions so a
+                # non-owner channel session on a sub-64K model does NOT get the
+                # shared L0 cache (privacy — fail-closed, run_20bd4a7b).
+                return self._load_l0(model_context_window, exclude_filenames=exclude_filenames)
 
             # When files are excluded (group channels) or progressive memory
             # is active, skip L1 cache — both are session-specific.

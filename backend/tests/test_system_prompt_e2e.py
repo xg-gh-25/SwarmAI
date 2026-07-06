@@ -28,6 +28,7 @@ import pytest
 
 from core.context_directory_loader import (
     BUDGET_LARGE_MODEL,
+    CHANNEL_LIGHT_EXCLUDE,
     CONTEXT_FILES,
     ContextDirectoryLoader,
     DEFAULT_TOKEN_BUDGET,
@@ -205,10 +206,17 @@ def _simulate_build(
         token_budget=max(base_budget - EPHEMERAL_HEADROOM, base_budget // 2),
     )
 
-    # ── Exclude personal files for group channels ──
+    # ── Exclude private files for non-owner sessions ──
+    # MIRRORS prompt_builder.py:704-711 exactly (group → GROUP_CHANNEL_EXCLUDE;
+    # non-owner DM → CHANNEL_LIGHT_EXCLUDE; owner DM / chat tab → no exclusion).
+    # run_20bd4a7b: this harness previously had ONLY the is_group branch — a
+    # stale copy that never exercised the non-owner-DM exclusion, hiding the L3
+    # leak. Kept in sync with production so the E2E tests the REAL branching.
     exclude_files: set[str] | None = None
     if channel_context and channel_context.get("is_group"):
         exclude_files = set(GROUP_CHANNEL_EXCLUDE)
+    elif channel_context and not channel_context.get("is_owner"):
+        exclude_files = set(CHANNEL_LIGHT_EXCLUDE)
 
     context_text = loader.load_all(
         model_context_window=model_context_window,
@@ -544,7 +552,11 @@ class TestE2EGroupChannel:
         assert "TestUser" not in prompt
 
     def test_other_files_still_present_in_group(self, workspace):
-        """Non-excluded files (SWARMAI, SOUL, etc.) still appear in group."""
+        """Non-excluded files (SWARMAI, SOUL, etc.) still appear in group.
+
+        NOTE (run_20bd4a7b): PROJECTS.md is now whole-file-private (excluded for
+        all non-owner sessions incl. group), so it is no longer a valid "still
+        present" example — use KNOWLEDGE.md, which is neutral/shared."""
         prompt, _ = _simulate_build(
             workspace, channel_context=self._group_context()
         )
@@ -552,7 +564,9 @@ class TestE2EGroupChannel:
         assert "## Soul" in prompt
         assert "## Agent Directives" in prompt
         assert "## Steering" in prompt
-        assert "## Projects" in prompt
+        assert "## Knowledge" in prompt
+        # PROJECTS.md is now private — must NOT appear in a group channel.
+        assert "## Projects" not in prompt
 
     def test_daily_activity_still_injected_in_group(self, workspace):
         """DailyActivity is ephemeral content, still injected in group."""
@@ -561,16 +575,56 @@ class TestE2EGroupChannel:
         )
         assert "## Daily Activity (2026-03-08)" in prompt
 
-    def test_non_group_channel_includes_memory(self, workspace):
-        """A DM (is_group=False) still gets MEMORY.md."""
-        dm_context = {
+    def test_owner_dm_includes_memory(self, workspace):
+        """An OWNER DM (is_group=False, is_owner=True) still gets MEMORY.md.
+
+        NOTE (run_20bd4a7b): a non-owner DM now EXCLUDES MEMORY.md (whole-file
+        private). Only the owner's DM keeps it — the owner takes the full-context
+        else-path. This test pins the owner-keeps-memory half of the fix; the
+        non-owner-excludes-memory half is pinned by
+        test_prompt_builder_properties.test_private_files_excluded_for_nonowner_dm."""
+        owner_dm_context = {
             "channel_type": "slack",
             "channel_id": "ch_123",
             "chat_id": "chat_456",
             "is_group": False,
+            "is_owner": True,
         }
-        prompt, _ = _simulate_build(workspace, channel_context=dm_context)
+        prompt, _ = _simulate_build(workspace, channel_context=owner_dm_context)
         assert "Secret personal decision" in prompt or "project pivot" in prompt
+
+    def test_nonowner_dm_excludes_memory(self, workspace):
+        """A NON-OWNER DM (is_group=False, is_owner=False) EXCLUDES MEMORY.md —
+        the L3 private-lane leak fix (run_20bd4a7b). Pre-fix this leaked."""
+        nonowner_dm_context = {
+            "channel_type": "slack",
+            "channel_id": "ch_123",
+            "chat_id": "chat_456",
+            "is_group": False,
+            "is_owner": False,
+        }
+        prompt, _ = _simulate_build(workspace, channel_context=nonowner_dm_context)
+        assert "Secret personal decision" not in prompt
+        assert "project pivot" not in prompt
+
+    def test_nonowner_excludes_private_on_small_model_L0_path(self, workspace):
+        """L0 cache path (sub-64K model) must ALSO honor the private-lane
+        exclusion — Gate-2 adversarial HIGH (run_20bd4a7b): load_all previously
+        routed to _load_l0 BEFORE applying exclude_filenames, so a non-owner
+        session on a small-window model got the full context (fail-OPEN). This
+        drives model_context_window < THRESHOLD_USE_L1 (64K) for a non-owner DM
+        and asserts MEMORY.md still does not leak."""
+        nonowner = {
+            "channel_type": "slack", "channel_id": "ch_1", "chat_id": "c_1",
+            "is_group": False, "is_owner": False,
+        }
+        prompt, _ = _simulate_build(
+            workspace, channel_context=nonowner, model_context_window=30_000
+        )
+        assert "Secret personal decision" not in prompt, (
+            "MEMORY.md leaked via the L0 (small-model) cache path"
+        )
+        assert "project pivot" not in prompt
 
     def test_slack_group_channel_type_in_metadata(self, workspace):
         """Channel type appears in runtime metadata for group."""

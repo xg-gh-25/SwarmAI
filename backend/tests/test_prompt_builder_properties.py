@@ -398,20 +398,54 @@ class TestEvolutionUnconditionalLoad:
             "the O2 coding-gate must be removed"
         )
 
-    def test_evolution_still_excluded_for_nonowner_channel(self, tmp_path):
-        """Regression guard for the REAL risk (Gate-2 concern 2): removing the
-        desktop O2 gate must NOT leak EVOLUTION.md into a non-owner CHANNEL prompt.
-        CHANNEL_LIGHT_EXCLUDE still drops it. This pins the channel-exclusion path —
-        a DIFFERENT code path from the desktop test above (not a near-duplicate)."""
+    # Assembled-prompt SECTION HEADERS for the whole-file-private files. The
+    # `_system_prompt_metadata.files[]` list is NOT the right signal — it is a
+    # TSCC-viewer inventory that re-reads every CONTEXT_FILES entry on disk
+    # regardless of channel exclusion (prompt_builder.py:936). The real
+    # observable is whether the file's `## <section>` header made it into the
+    # assembled context_text (same signal the sibling evolution test uses).
+    _PRIVATE_SECTIONS = {
+        "USER.md": "## User\n",
+        "EVOLUTION.md": "## Evolution Registry\n",
+        "MEMORY.md": "## Memory\n",
+        "PROJECTS.md": "## Projects\n",
+    }
+
+    def _leaked_private_sections(self, agent_config: dict) -> set[str]:
+        text = self._assembled_text(agent_config)
+        return {fn for fn, hdr in self._PRIVATE_SECTIONS.items() if hdr in text}
+
+    def test_private_files_excluded_for_nonowner_dm(self, tmp_path):
+        """L3 private-lane: a NON-OWNER DM must exclude ALL whole-file-private
+        files (USER/EVOLUTION/MEMORY/PROJECTS). The pre-fix bug leaked USER.md +
+        MEMORY.md here (CHANNEL_LIGHT_EXCLUDE was only {EVOLUTION, PROJECTS}).
+        Mutation-proof: drop any file from WHOLE_FILE_PRIVATE → its section header
+        reappears in the assembled prompt → RED."""
         ctx = {"is_owner": False, "is_group": False, "channel_type": "slack"}
-        text = self._assembled_text(
-            self._run_build(tmp_path, coding=False, channel_context=ctx)
-        )
-        # Guard: build assembled SOMETHING (non-owner channel still loads most files).
-        assert text, "build produced empty prompt for non-owner channel"
-        assert "Evolution Registry" not in text, (
-            "EVOLUTION.md leaked into a non-owner channel prompt — "
-            "CHANNEL_LIGHT_EXCLUDE must still drop it"
+        cfg = self._run_build(tmp_path, coding=False, channel_context=ctx)
+        text = self._assembled_text(cfg)
+        assert text, "build produced empty prompt for non-owner DM"
+        leaked = self._leaked_private_sections(cfg)
+        assert not leaked, f"private files leaked into non-owner DM prompt: {leaked}"
+
+    def test_private_files_excluded_for_group_channel(self, tmp_path):
+        """L3 private-lane: a GROUP channel must exclude ALL whole-file-private
+        files. The pre-fix bug leaked EVOLUTION.md here (GROUP_CHANNEL_EXCLUDE was
+        only {MEMORY, USER})."""
+        ctx = {"is_owner": False, "is_group": True, "channel_type": "slack"}
+        cfg = self._run_build(tmp_path, coding=False, channel_context=ctx)
+        text = self._assembled_text(cfg)
+        assert text, "build produced empty prompt for group channel"
+        leaked = self._leaked_private_sections(cfg)
+        assert not leaked, f"private files leaked into group channel prompt: {leaked}"
+
+    def test_private_files_present_for_owner(self, tmp_path):
+        """AC3: owner DM / chat tab is UNCHANGED — the private files still load.
+        Guards against the fix over-reaching into the owner (full-context) path."""
+        cfg = self._run_build(tmp_path, coding=False, channel_context=None)
+        text = self._assembled_text(cfg)
+        assert "## Memory\n" in text and "## Evolution Registry\n" in text, (
+            "owner context lost private files (fix over-reached)"
         )
 
 
