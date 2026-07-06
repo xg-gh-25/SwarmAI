@@ -448,3 +448,119 @@ class TestSlugify:
     def test_unicode(self):
         result = _slugify("DDD调研")
         assert "ddd" in result
+
+
+class TestManifestConcurrencyLock:
+    """Regression: publish/supersede/advance_pipeline serialize their
+    manifest read-modify-write under an exclusive cross-process flock, so a
+    concurrent publisher cannot drop another's just-appended entry (the
+    lost-update race that orphaned data files from the manifest).
+
+    These use the OS-lock-hold shape (see test_eval_crud): hold the sidecar
+    lock from the main thread, run the mutation in a background thread, and
+    assert it BLOCKS until release. This goes RED if the flock is reverted
+    (the mutation would complete immediately, not block).
+    """
+
+    def test_publish_blocks_while_lock_held(self, workspace, registry):
+        import threading
+        from utils.file_lock import flock_exclusive, flock_unlock
+
+        project = "LockApp"
+        (workspace / "Projects" / project).mkdir()
+        # First publish creates .artifacts/ + manifest so the sidecar exists.
+        registry.publish(
+            project, "research", data={"x": 1},
+            producer="p", summary="seed",
+        )
+
+        lock_path = registry._lock_path(project)
+        holder_fd = open(lock_path, "w")
+        flock_exclusive(holder_fd)  # main thread holds the exclusive lock
+
+        done = threading.Event()
+
+        def run_publish():
+            registry.publish(
+                project, "review", data={"y": 2},
+                producer="p", summary="blocked-until-release",
+            )
+            done.set()
+
+        t = threading.Thread(target=run_publish, daemon=True)
+        t.start()
+
+        # While we hold the lock, publish's manifest append must NOT complete.
+        assert not done.wait(timeout=0.8), (
+            "publish completed while another process held the exclusive "
+            "manifest lock — it is not acquiring an OS-level lock (race open)"
+        )
+
+        flock_unlock(holder_fd)
+        holder_fd.close()
+        assert done.wait(timeout=5.0), "publish did not finish after release (deadlock?)"
+
+        # Both entries survive in the manifest (no lost update).
+        manifest = registry._read_manifest(project)
+        summaries = {e["summary"] for e in manifest["artifacts"]}
+        assert {"seed", "blocked-until-release"} <= summaries
+
+    def test_interleaved_publishes_all_survive(self, workspace, registry):
+        """A serialized burst of publishes all land — none is lost."""
+        project = "BurstApp"
+        (workspace / "Projects" / project).mkdir()
+        ids = [
+            registry.publish(
+                project, "research", data={"n": i},
+                producer="p", summary=f"entry-{i}",
+            )
+            for i in range(10)
+        ]
+        manifest = registry._read_manifest(project)
+        got = {e["id"] for e in manifest["artifacts"]}
+        assert set(ids) == got
+        assert len(manifest["artifacts"]) == 10
+
+    def test_lock_released_on_mutator_exception(self, workspace, registry):
+        """If the mutation raises, the lock is released (finally) so the next
+        acquire does not deadlock."""
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        project = "ErrApp"
+        (workspace / "Projects" / project).mkdir()
+        registry.publish(
+            project, "research", data={"x": 1}, producer="p", summary="seed",
+        )
+
+        def boom(_manifest):
+            raise ValueError("mutator failed")
+
+        with pytest.raises(ValueError, match="mutator failed"):
+            registry._mutate_manifest(project, boom)
+
+        # Lock must be free now — a non-blocking acquire succeeds.
+        fd = open(registry._lock_path(project), "w")
+        try:
+            flock_exclusive_nb(fd)  # raises if still held
+            flock_unlock(fd)
+        finally:
+            fd.close()
+
+    def test_supersede_and_advance_still_work_under_lock(self, workspace, registry):
+        """Locked path preserves supersede + advance_pipeline behavior."""
+        project = "MixApp"
+        (workspace / "Projects" / project).mkdir()
+        old = registry.publish(
+            project, "research", data={"x": 1}, producer="p", summary="old",
+        )
+        new = registry.publish(
+            project, "research", data={"x": 2}, producer="p", summary="new",
+        )
+        registry.supersede(project, old, new)
+        registry.advance_pipeline(project, "build")
+
+        manifest = registry._read_manifest(project)
+        by_id = {e["id"]: e for e in manifest["artifacts"]}
+        assert by_id[old]["superseded_by"] == new
+        assert by_id[new]["superseded_by"] is None
+        assert manifest["pipeline_state"] == "build"

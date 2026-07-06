@@ -24,12 +24,18 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypeVar
 from uuid import uuid4
 
+from utils.file_lock import flock_exclusive, flock_unlock
+
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Valid artifact types and pipeline states
@@ -95,14 +101,22 @@ class ProjectPipelineStatus:
 class ArtifactRegistry:
     """Filesystem-backed artifact registry.
 
-    One instance per workspace.  Thread-safe for reads; writes are
-    append-only to manifest.json (last-write-wins for concurrent publishes,
-    which is acceptable since skill invocations are serialized per session).
+    One instance per workspace.  Reads are lock-free.  All manifest.json
+    mutations (publish / supersede / advance_pipeline) go through
+    ``_mutate_manifest``, which serializes the read-modify-write under an
+    exclusive cross-process flock on a ``.manifest.lock`` sidecar — so
+    concurrent publishers (sibling sessions, background hooks) cannot drop
+    each other's entries.  Artifact data files are written outside the lock
+    (unique filenames never collide).
     """
 
     def __init__(self, workspace_root: Path):
-        self.workspace_root = workspace_root
-        self.projects_root = workspace_root / "Projects"
+        # Canonicalize so the daemon and a sibling CLI resolve the manifest
+        # (and its .lock sidecar) to the SAME inode even if one entry point
+        # passes a symlinked / un-resolved path — otherwise the cross-process
+        # flock would key on different paths and fail to serialize.
+        self.workspace_root = Path(workspace_root).expanduser().resolve()
+        self.projects_root = self.workspace_root / "Projects"
 
     # ── Discovery ─────────────────────────────────────────────────────
 
@@ -205,20 +219,14 @@ class ArtifactRegistry:
             write_dir = artifacts_dir
             filename = bare_filename
 
-        # Write artifact data file
+        # Write artifact data file OUTSIDE the manifest lock: filenames are
+        # unique per artifact so data-file writes never collide, and holding
+        # the manifest lock across a file write would be head-of-line blocking.
         artifact_path = write_dir / bare_filename
         artifact_path.write_text(
             json.dumps(data, indent=2, default=str),
             encoding="utf-8",
         )
-
-        # Update manifest
-        manifest = self._read_manifest(project) or {
-            "project": project,
-            "pipeline_state": "think",
-            "updated_at": now.isoformat(),
-            "artifacts": [],
-        }
 
         entry = {
             "id": artifact_id,
@@ -232,10 +240,14 @@ class ArtifactRegistry:
         if run_id:
             entry["run_id"] = run_id
 
-        manifest["artifacts"].append(entry)
-        manifest["updated_at"] = now.isoformat()
+        # Append under an exclusive lock so a concurrent publisher cannot
+        # read-before / write-after and drop this just-appended entry
+        # (the lost-update race that left data files orphaned from the
+        # manifest — the whole reason this method now locks).
+        def _append(manifest: dict) -> None:
+            manifest["artifacts"].append(entry)
 
-        self._write_manifest(project, manifest)
+        self._mutate_manifest(project, _append, default_state="think")
 
         logger.info(
             "Published artifact '%s' (%s) for project '%s': %s",
@@ -251,16 +263,19 @@ class ArtifactRegistry:
         The old artifact stays on disk for history.  Discovery methods
         skip superseded artifacts.
         """
-        manifest = self._read_manifest(project)
-        if manifest is None:
+        if self._read_manifest(project) is None:
+            # No manifest to mutate — nothing to supersede. (Checked outside
+            # the lock only to preserve the original early-return; the actual
+            # mark happens under the lock below on a fresh read.)
             return
 
-        for entry in manifest["artifacts"]:
-            if entry["id"] == old_id:
-                entry["superseded_by"] = new_id
-                break
+        def _mark(manifest: dict) -> None:
+            for entry in manifest.get("artifacts", []):
+                if entry["id"] == old_id:
+                    entry["superseded_by"] = new_id
+                    break
 
-        self._write_manifest(project, manifest)
+        self._mutate_manifest(project, _mark)
         logger.info(
             "Superseded artifact '%s' with '%s' in project '%s'",
             old_id, new_id, project,
@@ -291,16 +306,10 @@ class ArtifactRegistry:
                 f"Valid states: {list(PIPELINE_STATES)}"
             )
 
-        manifest = self._read_manifest(project) or {
-            "project": project,
-            "pipeline_state": new_state,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "artifacts": [],
-        }
-        manifest["pipeline_state"] = new_state
-        manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+        def _set_state(manifest: dict) -> None:
+            manifest["pipeline_state"] = new_state
 
-        self._write_manifest(project, manifest)
+        self._mutate_manifest(project, _set_state, default_state=new_state)
         logger.info(
             "Advanced project '%s' to pipeline state '%s'",
             project, new_state,
@@ -348,6 +357,55 @@ class ArtifactRegistry:
 
     def _manifest_path(self, project: str) -> Path:
         return self.projects_root / project / ".artifacts" / "manifest.json"
+
+    def _lock_path(self, project: str) -> Path:
+        return self.projects_root / project / ".artifacts" / ".manifest.lock"
+
+    def _mutate_manifest(
+        self,
+        project: str,
+        mutator: Callable[[dict], _T],
+        *,
+        default_state: str = "think",
+    ) -> _T:
+        """Serialize a manifest read-modify-write across processes.
+
+        Acquires an exclusive flock on a dedicated ``.manifest.lock`` sidecar,
+        then reads the manifest (constructing the default INSIDE the lock so
+        two processes seeing "no manifest" can't each write a fresh empty one),
+        applies ``mutator`` (which may append/mark/set-state), stamps
+        ``updated_at``, and writes — all under the lock. This closes the
+        lost-update race where a concurrent publisher read the manifest before
+        another's entry landed and then overwrote it (data file survived, its
+        manifest entry vanished).
+
+        The lock covers ONLY the manifest cycle — callers write their artifact
+        data files outside/before this call (unique filenames never collide).
+
+        Returns whatever ``mutator`` returns.
+        """
+        # Ensure .artifacts/ exists before opening the sidecar — supersede and
+        # advance_pipeline (unlike publish) don't mkdir it, and open('w') on a
+        # missing dir raises FileNotFoundError.
+        lock_path = self._lock_path(project)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        lock_fd = open(lock_path, "w")
+        try:
+            flock_exclusive(lock_fd)
+            manifest = self._read_manifest(project) or {
+                "project": project,
+                "pipeline_state": default_state,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "artifacts": [],
+            }
+            result = mutator(manifest)
+            manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._write_manifest(project, manifest)
+            return result
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
 
     def _read_manifest(self, project: str) -> dict | None:
         """Read manifest.json, returning None if missing or corrupt."""
