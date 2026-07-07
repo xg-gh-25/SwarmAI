@@ -740,3 +740,131 @@ class TestDimensionCategoryGuard:
         dim_warns = [r.getMessage() for r in caplog.records
                      if "dimension" in r.getMessage().lower() or "categor" in r.getMessage().lower()]
         assert dim_warns == [], f"clean set must not warn: {dim_warns}"
+
+
+class TestInflightMarker:
+    """Method-B durable-run-record fix: a status='running' marker in the
+    isolated EvalHistory/.inflight/ namespace makes a mid-flight-killed run
+    detectable (get_run → 200 running) instead of a 404 ghost, WITHOUT any
+    EvalHistory reader seeing it (namespace isolation, zero reader changes)."""
+
+    def test_trigger_writes_running_marker_synchronously(self, svc, eval_workspace):
+        """AC1: the marker exists BEFORE the thread would need to run — patch
+        Thread to a no-op so only the synchronous write in trigger_run happens."""
+        with patch("core.eval_service.threading.Thread") as MockThread:
+            MockThread.return_value.start.return_value = None
+            run_id = svc.trigger_run(trigger="manual")
+        marker = eval_workspace / "Eval" / "EvalHistory" / ".inflight" / f"{run_id}.json"
+        assert marker.exists(), "running marker not written synchronously"
+        data = json.loads(marker.read_text())
+        assert data["status"] == "running"
+        assert data["run_id"] == run_id
+        assert data["overall_score"] is None
+
+    def test_get_run_returns_running_marker(self, svc, eval_workspace):
+        """AC2: get_run falls back to the marker when run_id isn't a completed run."""
+        with patch("core.eval_service.threading.Thread") as MockThread:
+            MockThread.return_value.start.return_value = None
+            run_id = svc.trigger_run(trigger="manual")
+        run = svc.get_run(run_id)
+        assert run is not None and run["status"] == "running"
+
+    def test_marker_invisible_to_all_readers(self, svc, eval_workspace):
+        """AC4 ISOLATION: a marker in .inflight/ does NOT alter _load_history
+        count, get_health latest, or the ci_eval_gate / monthly_report readers —
+        because every one uses non-recursive glob('*.json'). This is the whole
+        payoff of Method B (no per-reader status filter needed)."""
+        history_dir = eval_workspace / "Eval" / "EvalHistory"
+        svc.reload()
+        baseline_count = len(svc._runs)
+
+        svc._write_inflight_marker("eval_20260707_120000_abc123_manual", "manual",
+                                   "2026-07-07T12:00:00+00:00")
+
+        svc._load_history()
+        assert len(svc._runs) == baseline_count, "marker leaked into _load_history"
+        assert all(r.get("status") != "running" for r in svc._runs)
+        # get_health latest must remain the pre-existing completed run (100.0)
+        health = svc.get_health()
+        assert health.get("overall_score") in (100.0, 100), health
+
+        # ci_eval_gate._reports_by_mtime — non-recursive glob, marker invisible
+        import importlib
+        cig = importlib.import_module("scripts.ci_eval_gate")
+        reports = cig._reports_by_mtime(eval_workspace)
+        assert all(r.get("status") != "running" for r in reports), \
+            "ci_eval_gate saw the .inflight marker"
+
+    def test_completion_clears_marker_and_writes_history(self, svc, eval_workspace):
+        """AC3: the marker EXISTS mid-run (proving trigger_run wrote it), then is
+        CLEARED after the terminal write (proving _clear_inflight_marker ran).
+
+        Non-vacuity (Gate-2 CRITICAL fix): the earlier version only asserted
+        `not marker.exists()` at the end — trivially true on reverted code where
+        the marker is never written. We now capture marker-existence AT the
+        terminal write (via a wrapper on _write_run_result), so the test fails if
+        either the write OR the clear is removed."""
+        inflight_dir = eval_workspace / "Eval" / "EvalHistory" / ".inflight"
+        done = threading.Event()
+        seen = {}
+        real_write = svc._write_run_result
+
+        def spy_write(result):
+            # At the moment the terminal record is written, the running marker
+            # must still be on disk — this is what proves the clear (which runs
+            # AFTER, in finally) actually removed a real file.
+            rid = result.get("run_id")
+            seen["marker_present_at_terminal"] = (inflight_dir / f"{rid}.json").exists()
+            return real_write(result)
+
+        def fake_run_eval(cases_data, trigger, case_ids, root, **kwargs):
+            done.set()
+            return {
+                "run_id": "x", "triggered_by": trigger, "overall_score": 100.0,
+                "triggered_at": "2026-07-07T12:00:00+00:00",
+                "dimensions": {}, "cases": [], "total_cases": 0,
+                "cases_passed": 0, "cases_failed": 0, "cases_skipped": 0,
+                "duration_seconds": 0.0,
+            }
+
+        with patch.object(svc, "_write_run_result", side_effect=spy_write), \
+                patch("scripts.eval_runner.run_eval", side_effect=fake_run_eval):
+            run_id = svc.trigger_run(trigger="manual")
+            assert done.wait(timeout=5.0)
+            # give the thread a beat to finish the terminal write + clear
+            import time
+            for _ in range(50):
+                if not svc.is_running:
+                    break
+                time.sleep(0.1)
+        assert seen.get("marker_present_at_terminal") is True, \
+            "marker was NOT on disk at terminal write — trigger_run didn't write it"
+        marker = inflight_dir / f"{run_id}.json"
+        assert not marker.exists(), "marker not cleared after completion"
+        svc.reload()
+        run = svc.get_run(run_id)
+        assert run is not None and run.get("run_id") == run_id
+
+    def test_marker_survives_when_no_terminal_write(self, svc, eval_workspace):
+        """AC3/AC6: simulate a SIGKILL-before-terminal — the marker written by
+        trigger_run persists (durable + detectable), so get_run still reports
+        running rather than 404. We call the synchronous writer directly (the
+        thread never gets to write a terminal record)."""
+        run_id = "eval_20260707_130000_dead01_manual"
+        svc._write_inflight_marker(run_id, "manual", "2026-07-07T13:00:00+00:00")
+        # No terminal write, no clear (thread died) → marker must remain.
+        svc.reload()
+        run = svc.get_run(run_id)
+        assert run is not None and run["status"] == "running"
+
+    def test_marker_write_is_atomic(self, svc, eval_workspace):
+        """AC5: a written marker always parses with a 'status' key (temp+replace,
+        no partial file ever exposed under {run_id}.json)."""
+        run_id = "eval_20260707_140000_atom01_manual"
+        svc._write_inflight_marker(run_id, "manual", "2026-07-07T14:00:00+00:00")
+        marker = eval_workspace / "Eval" / "EvalHistory" / ".inflight" / f"{run_id}.json"
+        data = json.loads(marker.read_text())
+        assert "status" in data and data["status"] == "running"
+        # no leftover .tmp files in the dir
+        tmps = list(marker.parent.glob("*.tmp"))
+        assert tmps == [], f"leftover temp files: {tmps}"

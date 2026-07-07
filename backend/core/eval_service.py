@@ -498,6 +498,15 @@ class EvalService:
         short_id = uuid.uuid4().hex[:6]
         run_id = f"eval_{now.strftime('%Y%m%d_%H%M%S')}_{short_id}_{trigger}"
 
+        # Durability: write a status='running' marker SYNCHRONOUSLY (before the
+        # thread starts) so a daemon SIGKILL mid-run leaves a detectable record
+        # instead of a 404-forever ghost. The marker lives in the isolated
+        # .inflight/ namespace (invisible to all EvalHistory readers) and is
+        # cleared once the run writes its terminal record. NOT written inside the
+        # thread — that would reopen the very SIGKILL window this closes.
+        with self._data_lock:
+            self._write_inflight_marker(run_id, trigger, now.isoformat())
+
         thread = threading.Thread(
             target=self._execute_run,
             args=(run_id, trigger, case_ids, include_behavior),
@@ -523,8 +532,21 @@ class EvalService:
         return result
 
     def get_run(self, run_id: str) -> Optional[dict]:
-        """Get a specific run by ID."""
-        return next((r for r in self._runs if r.get("run_id") == run_id), None)
+        """Get a specific run by ID.
+
+        Completed runs (in self._runs, loaded from EvalHistory/*.json) take
+        precedence. If not found there, fall back to the .inflight/ marker so an
+        in-progress OR mid-flight-killed run returns status=running instead of
+        404. A truly-unknown id still returns None.
+        """
+        completed = next((r for r in self._runs if r.get("run_id") == run_id), None)
+        if completed is not None:
+            return completed
+        marker_path = self._inflight_dir / f"{run_id}.json"
+        try:
+            return json.loads(marker_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
 
     @property
     def is_running(self) -> bool:
@@ -1222,6 +1244,74 @@ class EvalService:
             Path(tmp_fd.name).unlink(missing_ok=True)
             raise
 
+    @property
+    def _inflight_dir(self) -> Path:
+        """Isolated namespace for status='running' markers of in-flight runs.
+
+        A subdir of EvalHistory/, deliberately NOT matched by the non-recursive
+        ``glob("*.json")`` that every EvalHistory reader uses (eval_service
+        ._load_history, eval_runner._load_history, ci_eval_gate._reports_by_mtime,
+        swarmai_monthly_report._gather_eval, routers/eval.py). This namespace
+        isolation is the whole point: a running marker here is INVISIBLE to those
+        readers, so none of them can misread it as a scoreless completed run — no
+        per-reader status filter is needed.
+
+        INVARIANT — do NOT change any EvalHistory reader from a non-recursive
+        ``glob("*.json")`` to ``rglob`` / ``os.walk`` / ``iterdir``: that would
+        break the isolation and re-expose the running markers to every reader.
+
+        FOLLOW-UP (out of the minimal fix scope): a startup sweep to relabel stale
+        markers (status running → interrupted) or age them out after N days. The
+        minimal fix only needs the marker to PERSIST (durable+detectable) and
+        get_run to surface status=running; the sweep is a later enhancement.
+        """
+        return self._history_dir / ".inflight"
+
+    def _write_inflight_marker(self, run_id: str, trigger: str, triggered_at: str) -> None:
+        """Atomically write a status='running' marker for an in-flight run.
+
+        Keyed by run_id (stable → one run = one marker, overwrite-safe). Written
+        via same-dir tempfile + atomic replace so get_run never reads a partial
+        marker without a 'status' key. Same idiom as _persist_golden_set's
+        _write_partition (same-dir tempfile is required — a cross-filesystem
+        os.replace raises EXDEV and is NOT atomic).
+        """
+        marker = {
+            "run_id": run_id,
+            "triggered_by": trigger,
+            "triggered_at": triggered_at,
+            "status": "running",
+            "overall_score": None,
+            "dimensions": {},
+            "cases": [],
+            "total_cases": 0,
+            # Shape parity with completed/failure records so a get_run consumer
+            # (e.g. a UI rendering the running state) never KeyErrors on these.
+            "cases_passed": 0,
+            "cases_failed": 0,
+            "cases_skipped": 0,
+            "duration_seconds": 0,
+        }
+        self._inflight_dir.mkdir(parents=True, exist_ok=True)
+        tmp_fd = tempfile.NamedTemporaryFile(
+            mode="w", dir=str(self._inflight_dir), suffix=".json.tmp", delete=False
+        )
+        try:
+            json.dump(marker, tmp_fd, indent=2)
+            tmp_fd.flush()
+            tmp_fd.close()
+            Path(tmp_fd.name).replace(self._inflight_dir / f"{run_id}.json")
+        except Exception:
+            Path(tmp_fd.name).unlink(missing_ok=True)
+            raise
+
+    def _clear_inflight_marker(self, run_id: str) -> None:
+        """Delete an in-flight marker once a terminal record is durable. Best-effort."""
+        try:
+            (self._inflight_dir / f"{run_id}.json").unlink(missing_ok=True)
+        except OSError as e:
+            logger.debug("eval_service: could not clear inflight marker %s: %s", run_id, e)
+
     def _write_run_result(self, result: dict) -> Path:
         """Write eval run result to EvalHistory/."""
         self._history_dir.mkdir(parents=True, exist_ok=True)
@@ -1242,6 +1332,11 @@ class EvalService:
         defaults False so the auto-seed hook path (which never passes it) and any
         legacy caller stay safe; only an explicit HTTP-API opt-in runs behavior.
         """
+        # Track whether a terminal record (completed OR failed) actually reached
+        # disk. The .inflight marker is cleared in `finally` ONLY if it did — so a
+        # run whose BOTH write paths fail keeps its marker (durable + detectable,
+        # the whole point) rather than reverting to a 404 ghost.
+        terminal_written = False
         try:
             from scripts.eval_runner import run_eval, generate_html_report, load_golden_set
 
@@ -1253,6 +1348,7 @@ class EvalService:
             result["run_id"] = run_id
 
             self._write_run_result(result)
+            terminal_written = True
             with self._data_lock:
                 self._load_history()
 
@@ -1290,11 +1386,18 @@ class EvalService:
             }
             try:
                 self._write_run_result(failure_result)
+                terminal_written = True
                 with self._data_lock:
                     self._load_history()
             except Exception:
                 pass  # Best effort — don't mask original error
         finally:
+            # Clear the in-flight marker ONLY when a terminal record is durable
+            # (get_run then returns the completed/failed record from _runs, which
+            # _load_history already repopulated). If neither write succeeded, the
+            # marker stays so the run remains detectable, not a 404 ghost.
+            if terminal_written:
+                self._clear_inflight_marker(run_id)
             with self._run_lock:
                 self._running = False
 
