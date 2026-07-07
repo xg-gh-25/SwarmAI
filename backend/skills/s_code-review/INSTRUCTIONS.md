@@ -35,6 +35,54 @@ git log main..HEAD --oneline
 
 Read related files that the changed code depends on (imports, interfaces, types).
 
+**Load the project's OWN standards — they OVERRIDE generic best-practice.** Before
+applying any generic rule, check the repo for its declared conventions and review
+against THOSE first:
+
+```bash
+# Project standards (read whichever exist)
+for f in AGENTS.md AGENT.md CONTRIBUTING.md CONVENTIONS.md .editorconfig \
+         docs/STYLE.md .github/pull_request_template.md; do
+  [ -f "$f" ] && echo "== $f ==" && cat "$f"
+done
+```
+
+Also note the configured lint/format rules (`.eslintrc*`, `pyproject.toml [tool.ruff]`,
+`.golangci.yml`, `rustfmt.toml`) — these encode the team's accepted style.
+
+**Rule:** a convention in the project's own standards beats a generic rule you'd
+otherwise apply. When a finding rests on a project standard, **cite the standard**
+(e.g. "violates CONTRIBUTING.md: handlers must return typed errors") so the author
+can verify. When your generic instinct conflicts with a documented project rule,
+the project rule wins — flag it as a QUESTION, not a CRITICAL.
+
+### Step 2.5: Follow References (review against the REQUIREMENT, not just best-practice)
+
+If the PR/branch/commit messages link an issue, ticket, or design doc, **fetch it and
+review the code against what it PROMISED to do** — not only against generic quality.
+A change can be clean code yet not satisfy its own requirement.
+
+```bash
+# Always works (local diff or PR): commit messages are the primary reference source
+git log main..HEAD --format='%b' | grep -oE '#[0-9]+|https?://[^ )]+'
+
+# ONLY when reviewing an actual PR (you have its number). Skip entirely for a
+# local-diff / "my changes" review — there is no PR number to substitute.
+gh pr view <PR_NUMBER> --json body,comments 2>/dev/null | grep -oE '#[0-9]+|https?://[^ )]+'
+# Then, for each issue #NNN you found above, read it (repeat per number):
+gh issue view <NNN> 2>/dev/null
+```
+
+If `gh` is unauthenticated or the scope is a local diff with no PR, rely on the
+`git log` line alone — do NOT run the `gh` commands with a literal `{number}`
+(they error, and the error is swallowed by `2>/dev/null` — you'd get silent empty
+output, not a signal). Same fallback discipline as the Troubleshooting table.
+
+For each reference, extract the acceptance criteria / stated goal, then verify the
+diff actually delivers it. This becomes the **Requirements** review angle (Step 4).
+If no references are found, state "Requirements: N/A — no linked issue/design" and
+review against generic best-practice only.
+
 ### Step 3: Run Automated Checks
 
 Run available linters/checkers based on project type (only if config exists -- never install anything):
@@ -48,9 +96,26 @@ Run available linters/checkers based on project type (only if config exists -- n
 
 If no linters are configured, skip this step entirely -- rely on manual review.
 
+**Don't restate the tooling.** If a linter/scanner already flagged something, do NOT
+repeat it as your own finding — that adds no value (you'd just be a second linter).
+Instead: (a) VERIFY the tool's finding is real (tools have false positives too), and
+(b) find the **same-class issues the tool MISSED** — the ones that need human judgment
+the linter can't do. Your value is what the automated check *couldn't* catch.
+
 ### Step 4: Manual Review
 
 Review every changed line against these categories:
+
+#### 0. Requirements (if references were found in Step 2.5)
+
+| Check | What to Look For |
+|-------|-----------------|
+| Delivers the goal | Does the diff actually do what the linked issue/design asked? |
+| Complete | Every stated acceptance criterion has corresponding code |
+| No scope creep | Changes beyond the stated requirement — intentional or accidental? |
+
+If Step 2.5 found no references, mark "Requirements: N/A" and skip to Correctness.
+
 
 #### A. Correctness
 
@@ -113,6 +178,25 @@ Review every changed line against these categories:
 | Unbounded operations | Loading all records, no pagination |
 | Memory | Large allocations in hot paths, growing without bounds |
 | Unnecessary work | Redundant computation, extra network calls |
+
+### Step 4.5: Self-Review (MANDATORY — before you write the report)
+
+You are about to publish findings. Before you do, review your OWN findings once —
+this is a pre-output evidence pass, distinct from the post-hoc Verification checklist
+at the end. It catches the false positives and name errors that erode trust faster
+than a missed bug does.
+
+1. **Re-read the evidence** — for EACH finding, re-read the exact line(s) you cited.
+   Confirm the problem exists in the actual diff, not in your memory or imagination.
+2. **Verify every name** — every symbol, file path, function, class, config key, and
+   URL you referenced actually exists and is spelled correctly (grep to confirm).
+3. **Dedupe** — merge findings that describe the same root cause across files.
+4. **False-positive sweep** — delete any finding you can't back with a concrete
+   re-read. A suppressed maybe-bug is cheaper than a confident wrong finding.
+5. **Severity calibration** — re-check each severity against the definitions below.
+
+A single fabricated or misattributed finding makes the author distrust the whole
+review. This pass is the cost of being trusted.
 
 ### Step 5: Assign Confidence & Generate Report
 
@@ -271,6 +355,9 @@ The agent will rationalize skipping steps. These rebuttals are non-negotiable:
 | "No tests changed so test coverage review isn't needed" | That's exactly when coverage gaps appear. Flag missing test updates. |
 | "The author is senior, this is probably fine" | Code review is about the code, not the author. Same standards apply. |
 | "Too many files to review thoroughly" | Escalate scope concern (L2 BLOCK). Never rubber-stamp a large changeset. |
+| "I'll apply my generic style rules" | Load the project's OWN standards first (Step 2). A documented project convention overrides your generic instinct — flag conflicts as QUESTION, not CRITICAL. |
+| "The linter already flagged these, I'll list them too" | Don't be a second linter. Verify the tool's findings, then find what it MISSED. Repeating automated output adds zero value. |
+| "I'll just write the findings and ship" | Run the mandatory Self-Review pass (Step 4.5) first. Re-read every cited line + verify every name. One fabricated finding destroys trust in the whole review. |
 
 ## Verification
 
