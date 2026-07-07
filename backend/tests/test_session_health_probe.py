@@ -68,9 +68,90 @@ def test_recovered_failure_is_not_flagged():
 
 
 def test_unrecovered_failure_is_flagged():
-    log = "force_unstick fired on session xyz\n...nothing after..."
+    # A GENUINE terminal failure with no recovery after → flagged. Uses
+    # streaming_timeout (a real _FAILURE_MARKERS entry) — NOT force_unstick,
+    # which is a RECOVERY action, not a failure (run_67a391a4).
+    log = "session_unit.streaming_timeout on session xyz45678\n...nothing after..."
     out = shp.scan_unrecovered_events(log)
-    assert len(out) == 1 and "force_unstick" in out[0]
+    assert len(out) == 1 and "streaming_timeout" in out[0]
+
+
+# ── run_67a391a4: the daemon's OWN self-heal must NOT be flagged as a failure ──
+#
+# Root cause of the "FAILED: no_unrecovered_events" false-positive: the
+# waiting_input self-heal path (force_unstick_waiting_input → recovery_checkpoint_armed
+# → transition to=cold → force_kill_tree) was mis-classified as unrecovered failures,
+# because (1) force_unstick / stuck were in _FAILURE_MARKERS (they are RECOVERY
+# actions / a recovery reason-field substring, not failures) and (2) _RECOVERY_PATTERN
+# did not recognize the to=cold self-heal vocabulary (it only knew Retry/--resume).
+# These use the EXACT line shapes copied from the real backend-daemon.log 16:54 sequence.
+
+_REAL_WAITING_INPUT_SELFHEAL = (
+    "2026-07-07 16:54:43,941 - core.session_unit - WARNING - session_unit.reap_dead_waiting_input session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 pid=82827\n"
+    "2026-07-07 16:54:43,941 - core.session_unit - WARNING - session_unit.force_unstick_waiting_input session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 pid=82827 — frontend never answered, forcing COLD for recovery\n"
+    "2026-07-07 16:54:47,290 - core.session_unit - INFO - session_unit.recovery_checkpoint_armed session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 trigger=stuck_waiting_input fields=[completed=0]\n"
+    "2026-07-07 16:54:47,291 - core.session_unit - INFO - session_unit.transition session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 from=waiting_input to=dead pid=82827\n"
+    "2026-07-07 16:54:47,467 - core.session_unit - INFO - session_unit.force_kill_tree session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 pid=82827 tree_size=9\n"
+    "2026-07-07 16:54:47,520 - core.session_unit - INFO - session_unit.transition session_id=ce7ab76c-f980-4581-a24c-06cbb7c59bb2 from=dead to=cold pid=None\n"
+)
+
+
+def test_ac1_waiting_input_selfheal_is_not_flagged():
+    """AC1 (mutation-proven): the REAL waiting_input self-heal sequence is the
+    daemon recovering itself — it must scan clean. Pre-fix this flagged 2 events
+    (force_unstick_waiting_input + recovery_checkpoint_armed:trigger=stuck_*)."""
+    assert shp.scan_unrecovered_events(_REAL_WAITING_INPUT_SELFHEAL) == []
+
+
+def test_ac1_streaming_timeout_selfheal_to_cold_is_not_flagged():
+    """AC1: the streaming_timeout → force_unstick → to=cold path (no Retry line)
+    must also be recognized as recovered via the to=cold vocabulary."""
+    log = (
+        "2026-07-07 09:28:08,640 - core.lifecycle_manager - WARNING - lifecycle_manager.streaming_timeout session_id=2560c9b7-5d43-487b stall=608s > timeout=600s — forcing unstick\n"
+        "2026-07-07 09:28:08,640 - core.session_unit - WARNING - session_unit.force_unstick session_id=2560c9b7-5d43-487b pid=53139 attempt=1\n"
+        "2026-07-07 09:28:15,009 - core.session_unit - INFO - session_unit.recovery_checkpoint_armed session_id=2560c9b7-5d43-487b trigger=stuck_streaming\n"
+        "2026-07-07 09:28:15,100 - core.session_unit - INFO - session_unit.transition session_id=2560c9b7-5d43-487b from=streaming to=cold pid=None\n"
+    )
+    assert shp.scan_unrecovered_events(log) == []
+
+
+def test_ac2_genuine_sigkill_without_recovery_still_flagged():
+    """AC2: detection is NOT weakened — a genuine SIGKILL with no recovery after
+    must STILL be flagged."""
+    log = "2026-07-07 10:00:00,000 - core.session_unit - ERROR - subprocess SIGKILL session_id=deadbeef pid=111 (OOM, no recovery)\n"
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "SIGKILL" in out[0]
+
+
+def test_ac2_genuine_streaming_timeout_without_recovery_still_flagged():
+    """AC2: a streaming_timeout that never reaches to=cold/Retry (recovery itself
+    hung/died) must STILL be flagged — the true failure the probe exists to catch."""
+    log = "2026-07-07 10:00:00,000 - core.lifecycle_manager - WARNING - lifecycle_manager.streaming_timeout session_id=beefcafe stall=900s\n(recovery never completed)\n"
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "streaming_timeout" in out[0]
+
+
+def test_ac3_streaming_timeout_retry_resume_still_absolved():
+    """AC3 (no regression): the pre-existing streaming_timeout → Retry N/N --resume
+    path must stay absolved."""
+    log = (
+        "2026-07-07 10:00:00,000 - core.session_unit - WARNING - session_unit.streaming_timeout session_id=aaaa1111\n"
+        "2026-07-07 10:00:05,000 - core.retry_manager - INFO - Retry 1/3 for session aaaa1111 --resume\n"
+    )
+    assert shp.scan_unrecovered_events(log) == []
+
+
+def test_ac4_cross_session_to_cold_does_not_absolve_other_failure():
+    """AC4: a to=cold recovery for session B must NOT absolve a genuine
+    streaming_timeout failure for session A (cross-session correlation preserved
+    — the _SID_RE guard). Otherwise a busy self-healing daemon would mask real
+    failures on unrelated sessions."""
+    log = (
+        "2026-07-07 10:00:00,000 - core.lifecycle_manager - WARNING - lifecycle_manager.streaming_timeout session_id=aaaa1111 stall=900s\n"
+        "2026-07-07 10:00:01,000 - core.session_unit - INFO - session_unit.transition session_id=bbbb2222 from=dead to=cold pid=None\n"
+    )
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "aaaa1111" in out[0], "cross-session to=cold wrongly absolved a real failure"
 
 
 # ── AC1: probe core (each sub-check, pass + fail) ──────────────────────────
@@ -276,8 +357,10 @@ def test_c1c2_real_fetch_rss_returns_positive_mb():
 # ── M2: session-correlated recovery (no cross-session false-green) ─────────
 
 def test_m2_unrelated_session_recovery_does_not_absolve():
-    """A Retry for a DIFFERENT session must NOT mark this session's failure recovered."""
-    log = ("force_unstick fired on session aaaaaaaa\n"
+    """A Retry for a DIFFERENT session must NOT mark this session's failure recovered.
+    Failure fixture is a GENUINE marker (streaming_timeout), not force_unstick
+    (a recovery action) — run_67a391a4."""
+    log = ("streaming_timeout on session aaaaaaaa\n"
            + "unrelated line\n" * 3
            + "Retry 1/3 for session bbbbbbbb --resume\n")
     out = shp.scan_unrecovered_events(log)
@@ -291,7 +374,8 @@ def test_m2_same_session_recovery_within_window_absolves():
 
 
 def test_m2_recovery_outside_window_does_not_absolve():
-    log = ("force_unstick on session aaaaaaaa\n"
+    # Genuine-failure fixture (streaming_timeout), not force_unstick — run_67a391a4.
+    log = ("streaming_timeout on session aaaaaaaa\n"
            + "filler\n" * 60
            + "Retry 1/3 for session aaaaaaaa --resume\n")
     out = shp.scan_unrecovered_events(log)
@@ -356,10 +440,10 @@ def test_bug3_read_log_reads_a_real_file(tmp_path, monkeypatch):
     nonexistent path → always returned "" → no_unrecovered_events scanned nothing)."""
     from jobs.handlers import session_health_probe as h
     logf = tmp_path / "backend-daemon.log"
-    logf.write_text("force_unstick fired on session zzzzzzzz\n(no recovery after)\n")
+    logf.write_text("streaming_timeout on session zzzzzzzz\n(no recovery after)\n")
     monkeypatch.setattr(h, "_LOG_PATH", logf)
     content = h._read_log()
-    assert "force_unstick" in content, "must read the real log content, not empty string"
+    assert "streaming_timeout" in content, "must read the real log content, not empty string"
 
 
 def test_bug2_and_bug1_end_to_end_checks_actually_execute(tmp_path, monkeypatch):
@@ -373,11 +457,13 @@ def test_bug2_and_bug1_end_to_end_checks_actually_execute(tmp_path, monkeypatch)
     from jobs.handlers import session_health_probe as h
 
     # Real log with an unrecovered failure marker + the streaming session's id so
-    # _session_log_progressed can measure it.
+    # _session_log_progressed can measure it. Uses a GENUINE terminal marker
+    # (streaming_timeout, no recovery after) — NOT force_unstick, which is a
+    # recovery action (run_67a391a4).
     logf = tmp_path / "backend-daemon.log"
     logf.write_text(
         "sid-wedged streaming turn began\n"
-        "force_unstick fired on session other999\n"  # unrecovered → must flag
+        "lifecycle_manager.streaming_timeout session other999 stall=900s\n"  # unrecovered → must flag
     )
     monkeypatch.setattr(h, "_LOG_PATH", logf)
 
@@ -411,7 +497,7 @@ def test_bug2_and_bug1_end_to_end_checks_actually_execute(tmp_path, monkeypatch)
     assert checks["no_wedged_sessions"].ok is False, "wedged session must be detected"
 
     assert checks["no_unrecovered_events"].ok is False, (
-        "unrecovered force_unstick in the real log must be flagged")
+        "unrecovered streaming_timeout in the real log must be flagged")
 
 
 # ── run_6b10ea1c: bug1 recency-based progress + bug2 daemon-pid resolution ──

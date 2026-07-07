@@ -35,12 +35,29 @@ DEFAULT_RSS_THRESHOLD_MB = 3500          # PROACTIVE reclaim threshold (36GB mac
 CPU_PROBE_INTERVAL_S = 2.0               # same window as session_unit._tool_hang_probe
 CPU_LIVE_EPSILON = 0.05                  # cpu-seconds delta above which = "working"
 
-# Log events that indicate an UNRECOVERED failure in the window. A bare match is
-# not enough — see _scan_unrecovered_events for the "followed by recovery" logic.
-_FAILURE_MARKERS = ("force_unstick", "streaming_timeout", "SIGKILL", "stuck", "dumb-spawn-kill")
-# Tightened recovery markers (M2): specific, low-false-positive forms — not bare
-# substrings like "COLD"/"heal" that appear in benign lines.
-_RECOVERY_PATTERN = re.compile(r"Retry \d+/\d+|--resume|recovered|_crash_to_cold|HealingLoop")
+# Log events that indicate a GENUINE TERMINAL failure in the window. A bare match
+# is not enough — see scan_unrecovered_events for the "followed by recovery" logic.
+#
+# ⚠️ These are FAILURES, NOT recovery actions (run_67a391a4). Do NOT add
+# `force_unstick` / `stuck` here: `force_unstick*` (session_unit.force_unstick /
+# force_unstick_waiting_input) is the daemon's own self-heal ACTION — it logs the
+# marker then UNCONDITIONALLY runs `_arm_recovery_checkpoint → _crash_to_cold_async`
+# (session_unit.py:4378), so the line IS the recovery, never a fault. `stuck` only
+# ever appears inside `recovery_checkpoint_armed ... trigger=stuck_*` (a recovery
+# REASON field), never a standalone failure. Both were false-positive markers that
+# flagged the daemon self-healing itself as "unrecovered failures". The recovery
+# vocab below (to=cold / force_unstick / recovery_checkpoint_armed) absolves them.
+_FAILURE_MARKERS = ("streaming_timeout", "SIGKILL", "dumb-spawn-kill", "output_liveness_timeout")
+# Recovery markers (M2): specific, low-false-positive forms — not bare substrings
+# like "COLD"/"heal" that appear in benign lines. Two self-heal paths are absolved:
+#   • streaming_timeout → Retry N/N ... --resume  (retry path)
+#   • {streaming_timeout|force_unstick*} → recovery_checkpoint_armed → transition
+#     ... to=cold → force_kill_tree            (crash-to-COLD path, NO Retry line)
+# The `to=cold` transition is the terminal proof the daemon reclaimed the session.
+_RECOVERY_PATTERN = re.compile(
+    r"Retry \d+/\d+|--resume|recovered|_crash_to_cold|HealingLoop"
+    r"|force_unstick|recovery_checkpoint_armed|to=cold"
+)
 # How many lines AFTER a failure marker count as "the recovery window". A
 # recovery for an UNRELATED later session must not absolve an earlier failure.
 _RECOVERY_WINDOW_LINES = 40
