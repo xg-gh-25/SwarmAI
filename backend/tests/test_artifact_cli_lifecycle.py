@@ -1261,8 +1261,10 @@ class TestAbandonReasonSurfacedInStatus:
         assert rentry["abandon_reason"] is None
 
     def test_run_status_summary_counts_abandoned(self, tmp_path, monkeypatch, capsys):
-        """run-status summary dict includes an `abandoned` count alongside
-        running/paused/completed."""
+        """run-status summary SPLITS abandoned into genuine failures vs replaced
+        duplicates (Gap-2): a `superseded_by_*` run is a rerun replaced by a
+        completed successor, NOT a failure — it must NOT inflate `abandoned`.
+        run_a (orphan) → abandoned=1; run_b (superseded) → superseded=1."""
         import scripts.artifact_cli as cli
 
         runs = tmp_path / "Projects" / "P" / ".artifacts" / "runs"
@@ -1284,8 +1286,11 @@ class TestAbandonReasonSurfacedInStatus:
         args = type("A", (), {"active_only": False})()
         cli.cmd_run_status(args, None)
         out = json.loads(capsys.readouterr().out)
-        assert out["summary"]["abandoned"] == 2, \
-            f"expected 2 abandoned in summary, got {out['summary'].get('abandoned')}"
+        # Genuine failures only (orphan), superseded excluded.
+        assert out["summary"]["abandoned"] == 1, \
+            f"expected 1 genuine abandoned, got {out['summary'].get('abandoned')}"
+        assert out["summary"]["superseded"] == 1, \
+            f"expected 1 superseded, got {out['summary'].get('superseded')}"
 
 
 class TestReportRegenerationFlag:

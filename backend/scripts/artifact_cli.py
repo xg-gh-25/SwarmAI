@@ -2541,14 +2541,26 @@ def cmd_run_status(args, reg: ArtifactRegistry) -> None:
                 seen_completed[p["project"]] = count + 1
         output = active + filtered_completed
 
+    # Gap-2: split abandoned into GENUINE failures (crash/OOM/orphan) vs
+    # REPLACED duplicates (superseded_by_*). The superseded_by_* reason is
+    # written ONLY by proactive_intelligence under a newest-completed-successor
+    # guard, so it always denotes a rerun that a completed successor replaced —
+    # counting it as a failure double-counts one work unit and depresses the
+    # completion rate a reader/judge computes. Keep `abandoned` = genuine
+    # failures; surface `superseded` separately (neither success nor failure).
+    def _is_superseded(p: dict) -> bool:
+        return (p["status"] == "abandoned"
+                and str(p.get("abandon_reason") or "").startswith("superseded_by_"))
+    abandoned_all = [p for p in all_pipelines if p["status"] == "abandoned"]
+    superseded = [p for p in abandoned_all if _is_superseded(p)]
     summary = {
         "running": sum(1 for p in all_pipelines if p["status"] == "running"),
         "paused": sum(1 for p in all_pipelines if p["status"] == "paused"),
         "completed": sum(1 for p in all_pipelines if p["status"] == "completed"),
-        # Abandoned runs were previously invisible in the summary — surfacing the
-        # count (with per-run abandon_reason on each entry) makes the true
-        # orphan/failure rate legible instead of silently hidden.
-        "abandoned": sum(1 for p in all_pipelines if p["status"] == "abandoned"),
+        # Genuine failures only (crash/OOM/orphan) — replaced duplicates excluded.
+        "abandoned": len(abandoned_all) - len(superseded),
+        # Replaced-by-completed-successor reruns; not a failure, shown for legibility.
+        "superseded": len(superseded),
         "total_tokens": sum(p["tokens_consumed"] for p in all_pipelines),
     }
 

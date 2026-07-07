@@ -139,3 +139,154 @@ class TestReportPathOption:
         # report written to the EXACT path, parent auto-created
         assert report.exists()
         assert "Pipeline Health Report" in report.read_text()
+
+
+class TestReplacedDuplicateExclusion:
+    """Gap-2: a run superseded by a COMPLETED successor is a replaced duplicate
+    (a rerun), not a failure. It must be excluded from completion/abandon rate
+    denominators. Negative controls (F7): a superseded-by-ABANDONED-successor
+    and a plain crash-abandoned run must STAY counted as failures.
+    """
+
+    def _m(self, rid, status, profile="bugfix", reason=None, project="P"):
+        d = {"run_id": rid, "project": project, "profile": profile,
+             "status": status, "lifecycle_status": status, "telemetry": "legacy"}
+        if reason is not None:
+            d["abandon_reason"] = reason
+        return d
+
+    def _corpus(self):
+        # A: superseded by completed B  -> EXCLUDED (replaced duplicate)
+        # B: completed successor        -> counted, completed
+        # C: superseded by abandoned-crash D -> KEPT as failure (F3 neg-control)
+        # D: crash-abandoned successor  -> KEPT as failure
+        # E: plain crash-abandoned      -> KEPT as failure (neg-control)
+        return [
+            self._m("A", "abandoned", reason="superseded_by_B"),
+            self._m("B", "completed"),
+            self._m("C", "abandoned", reason="superseded_by_D"),
+            self._m("D", "abandoned", reason="orphaned_no_resume"),
+            self._m("E", "abandoned", reason="crash_zombie"),
+        ]
+
+    def test_replaced_ids_identifies_only_completed_successor(self):
+        ws = Path("/nonexistent")  # all successors are in-list; no disk needed
+        replaced = pa._replaced_duplicate_ids(self._corpus(), ws)
+        assert replaced == {("P", "A")}, replaced  # only A, NOT C (successor abandoned)
+
+    def test_no_id_variant_excluded(self):
+        m = [self._m("X", "abandoned", reason="superseded_by_completed_run"),
+             self._m("Y", "completed")]
+        replaced = pa._replaced_duplicate_ids(m, Path("/nonexistent"))
+        assert replaced == {("P", "X")}
+
+    def test_abandon_rate_excludes_replaced(self):
+        replaced = pa._replaced_duplicate_ids(self._corpus(), Path("/nonexistent"))
+        out = pa.analyze_abandon_patterns(self._corpus(), replaced)
+        # live corpus = 4 (A excluded). genuine abandoned = C,D,E = 3.
+        assert out["replaced_duplicates"] == 1
+        assert out["total_abandoned"] == 3
+        assert out["abandon_rate"] == pa._safe_pct(3, 4)
+
+    def test_completion_rate_excludes_replaced(self):
+        replaced = pa._replaced_duplicate_ids(self._corpus(), Path("/nonexistent"))
+        out = pa.analyze_profile_accuracy(self._corpus(), replaced)
+        # bugfix profile: A excluded; B completed; C,D,E abandoned => total 4, completed 1
+        bug = out["profile_success_rates"]["bugfix"]
+        assert bug["total_runs"] == 4
+        assert bug["completion_rate"] == pa._safe_pct(1, 4)
+
+    def test_revert_makes_it_red(self):
+        """Non-vacuity: WITHOUT the exclusion (replaced=empty), A is counted as
+        an abandoned failure and the numbers change — proving the exclusion is
+        load-bearing (RED on revert)."""
+        no_excl = pa.analyze_abandon_patterns(self._corpus(), set())
+        assert no_excl["total_abandoned"] == 4  # A wrongly counted
+        assert no_excl["abandon_rate"] == pa._safe_pct(4, 5)
+        # and the corrected path differs:
+        replaced = pa._replaced_duplicate_ids(self._corpus(), Path("/nonexistent"))
+        corrected = pa.analyze_abandon_patterns(self._corpus(), replaced)
+        assert corrected["abandon_rate"] != no_excl["abandon_rate"]
+
+    def test_chain_two_hop_completed_terminal(self):
+        # A -> B(superseded) -> C(completed): A and B are both replaced duplicates.
+        m = [self._m("A", "abandoned", reason="superseded_by_B"),
+             self._m("B", "abandoned", reason="superseded_by_C"),
+             self._m("C", "completed")]
+        replaced = pa._replaced_duplicate_ids(m, Path("/nonexistent"))
+        assert replaced == {("P", "A"), ("P", "B")}
+
+    def test_cycle_guard_fail_safe(self):
+        # A -> B -> A cycle: neither has a completed terminal -> keep both.
+        m = [self._m("A", "abandoned", reason="superseded_by_B"),
+             self._m("B", "abandoned", reason="superseded_by_A")]
+        replaced = pa._replaced_duplicate_ids(m, Path("/nonexistent"))
+        assert replaced == set()
+
+    def test_unresolvable_successor_kept(self):
+        # successor id not in list and not on disk -> fail-safe keep.
+        m = [self._m("A", "abandoned", reason="superseded_by_GHOST")]
+        replaced = pa._replaced_duplicate_ids(m, Path("/nonexistent"))
+        assert replaced == set()
+
+    def test_disk_fallback_resolves_out_of_window_successor(self, tmp_path):
+        """Successor outside the metrics list is resolved from run.json on disk."""
+        proj = tmp_path / "Projects" / "P" / ".artifacts" / "runs"
+        succ = proj / "run_succ"
+        succ.mkdir(parents=True)
+        (succ / "run.json").write_text(json.dumps({"id": "run_succ", "status": "completed"}))
+        # A is in the metrics list; its successor is ONLY on disk.
+        m = [self._m("A", "abandoned", reason="superseded_by_run_succ")]
+        replaced = pa._replaced_duplicate_ids(m, tmp_path)
+        assert replaced == {("P", "A")}
+
+    def test_completed_then_superseded_keeps_telemetry(self):
+        """F2: a run that COMPLETED and was later superseded must keep its
+        telemetry status='completed' for the 4 telemetry dimensions, while the
+        rate functions still treat it as a replaced duplicate via lifecycle."""
+        # METRICS-path shape: status=completed (at-completion), lifecycle=abandoned.
+        m = {"run_id": "A", "project": "P", "profile": "bugfix",
+             "status": "completed", "lifecycle_status": "abandoned",
+             "abandon_reason": "superseded_by_B", "total_tokens": 5000,
+             "telemetry": "full"}
+        succ = {"run_id": "B", "project": "P", "profile": "bugfix",
+                "status": "completed", "lifecycle_status": "completed"}
+        m["stage_tokens"] = {"build": 5000}  # A carries telemetry
+        corpus = [m, succ]
+        replaced = pa._replaced_duplicate_ids(corpus, Path("/nonexistent"))
+        assert ("P", "A") in replaced  # excluded from rates (lifecycle abandoned)
+        # F2 core: telemetry dimensions filter on the AT-COMPLETION `status`
+        # (='completed'), NOT lifecycle_status — so A is NOT dropped from
+        # telemetry despite being a replaced duplicate for rate purposes.
+        eff = pa.analyze_stage_efficiency(corpus)
+        assert "build" in eff["stages"], eff  # A's telemetry survived the supersede
+        assert eff["stages"]["build"]["sample_count"] == 1
+
+    def test_goal_performance_excludes_replaced(self):
+        """Gap-2 same-class (Gate-2 F1): goal completion_rate must also exclude
+        replaced duplicates and use lifecycle_status."""
+        m = [
+            self._m("A", "abandoned", profile="goal", reason="superseded_by_B"),
+            self._m("B", "completed", profile="goal"),
+            self._m("C", "abandoned", profile="goal", reason="crash_zombie"),
+        ]
+        replaced = pa._replaced_duplicate_ids(m, Path("/nonexistent"))
+        out = pa.analyze_goal_performance(m, replaced)
+        # A excluded (replaced) -> goal_runs = B,C = 2; completed = B = 1
+        assert out["total_goal_runs"] == 2
+        assert out["completion_rate"] == pa._safe_pct(1, 2)
+        # revert (no exclusion) would count A -> 3 runs, different rate
+        no_excl = pa.analyze_goal_performance(m, set())
+        assert no_excl["total_goal_runs"] == 3
+        assert no_excl["completion_rate"] != out["completion_rate"]
+
+    def test_resolve_run_rejects_path_traversal(self, tmp_path):
+        """Gate-2 F2: a path-escaping successor id must not read outside the
+        runs dir — resolver returns None (fail-safe keep)."""
+        cache = {}
+        assert pa._resolve_run("P", "../../etc/passwd", tmp_path, cache) is None
+        assert pa._resolve_run("P", "..", tmp_path, cache) is None
+        assert pa._resolve_run("P", "a/b", tmp_path, cache) is None
+        # and a traversal reason therefore never excludes:
+        m = [self._m("A", "abandoned", reason="superseded_by_../../x")]
+        assert pa._replaced_duplicate_ids(m, tmp_path) == set()

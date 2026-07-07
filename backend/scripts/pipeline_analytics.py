@@ -111,6 +111,29 @@ def _load_all_metrics(
                     m = json.loads(metrics_file.read_text(encoding="utf-8"))
                     m.setdefault("project", project_dir.name)
                     m.setdefault("run_id", run_dir.name)
+                    # LIFECYCLE-TRUTH OVERLAY (Gap-2, F1/F2): METRICS.json is
+                    # written at completion and goes STALE if the run is later
+                    # superseded (its status becomes 'abandoned' + gains an
+                    # abandon_reason that METRICS.json never sees). We overlay
+                    # ONLY the lifecycle fields the completion-rate calc needs —
+                    # `lifecycle_status` + `abandon_reason` — from the sibling
+                    # run.json, and DELIBERATELY do NOT touch `status`, because
+                    # the four telemetry dimensions (stage_efficiency /
+                    # adversarial / estimation / goal) filter on `status ==
+                    # 'completed'` and a completed-then-superseded run's
+                    # telemetry is still valid (F2: 12 real runs completed then
+                    # got superseded — dropping their telemetry would corrupt
+                    # those dimensions). The rate functions read
+                    # `lifecycle_status`; every other consumer keeps reading the
+                    # at-completion `status`.
+                    _rf = run_dir / "run.json"
+                    if _rf.exists():
+                        try:
+                            _r = json.loads(_rf.read_text(encoding="utf-8"))
+                            m["lifecycle_status"] = _r.get("status")
+                            m["abandon_reason"] = _r.get("abandon_reason")
+                        except (json.JSONDecodeError, OSError):
+                            pass
                     metrics.append(m)
                     continue
                 except (json.JSONDecodeError, OSError):
@@ -156,6 +179,11 @@ def _extract_minimal_metrics(run_state: dict, project: str) -> dict | None:
         "project": project,
         "profile": run_state.get("profile"),
         "status": status,
+        # lifecycle_status mirrors status here (run.json is the source of both),
+        # but the rate functions read lifecycle_status uniformly so the METRICS
+        # path and this fallback path expose the SAME field name (Gap-2).
+        "lifecycle_status": status,
+        "abandon_reason": run_state.get("abandon_reason"),
         "stages_completed": sum(1 for s in stages if s.get("status") in ("completed", "done")),
         "stages_total": len(stages),
         "duration_minutes": duration,
@@ -183,17 +211,152 @@ def _safe_pct(count: int, total: int) -> float:
     return round(count * 100 / total, 1) if total > 0 else 0.0
 
 
+# ─── Replaced-duplicate exclusion (Gap-2) ──────────────────────────────
+#
+# A run whose work was re-done by a successor is marked abandoned with
+# abandon_reason='superseded_by_<successor_id>' (or the no-id literal
+# 'superseded_by_completed_run'). It is NOT a failure — it is a replaced
+# duplicate of one unit of work. Counting it as abandoned depresses the
+# completion rate and double-counts one work unit as (1 completed successor +
+# 1 abandoned original), which systematically misleads any judge reading the
+# rate. These helpers identify such runs so the rate functions can exclude
+# them from BOTH numerator and denominator. Source of truth: run.json
+# lifecycle_status + abandon_reason (NOT the stale METRICS.json status).
+
+_SUPERSEDED_PREFIX = "superseded_by_"
+# Explicit "a completed run finished this" signal that carries no successor id
+# to verify (proactive_intelligence.py emits it on the completed-but-no-id
+# branch). It IS a confirmed-completed supersede by construction.
+_SUPERSEDED_NO_ID = "superseded_by_completed_run"
+_CHAIN_HOP_CAP = 5
+
+
+def _lifecycle_status(m: dict) -> str:
+    """Authoritative current status for rate bucketing — prefers the run.json
+    overlay (lifecycle_status), falls back to status for older dicts."""
+    return m.get("lifecycle_status") or m.get("status") or ""
+
+
+def _resolve_run(project: str, run_id: str, workspace: Path,
+                 cache: dict) -> dict | None:
+    """Resolve a run's {status, abandon_reason} — from cache, then disk run.json.
+
+    Used to reach a successor that fell outside the recency window / metrics
+    list. Same-project by construction (supersede only ever references a
+    same-project successor). Returns None if unresolvable (fail-safe: caller
+    must then NOT exclude)."""
+    key = (project, run_id)
+    if key in cache:
+        return cache[key]
+    result = None
+    # Defence-in-depth: run_id is sliced from an abandon_reason string. Today it
+    # is only ever a trusted internal run id, but reject any path-escaping value
+    # (traversal / separators) before interpolating it into a filesystem path.
+    if run_id != Path(run_id).name or run_id in ("", ".", ".."):
+        cache[key] = None
+        return None
+    try:
+        rf = workspace / "Projects" / project / ".artifacts" / "runs" / run_id / "run.json"
+        if rf.is_file():
+            r = json.loads(rf.read_text(encoding="utf-8"))
+            result = {"status": r.get("status"),
+                      "abandon_reason": r.get("abandon_reason")}
+    except (json.JSONDecodeError, OSError):
+        result = None
+    cache[key] = result
+    return result
+
+
+def _is_replaced_duplicate(m: dict, in_list: dict, workspace: Path,
+                           disk_cache: dict) -> bool:
+    """True iff this run is an abandoned original whose work was re-done by a
+    CONFIRMED-completed successor (directly or through a supersede chain).
+
+    Fail-safe (F3/F4): the chain-walk stops at the FIRST non-superseded
+    terminal and excludes ONLY when that terminal is 'completed'. A successor
+    that is abandoned-crash / failed / running / unresolvable / missing →
+    NOT a replaced duplicate (stays in the denominator). Cycle-guarded and
+    hop-capped so a malformed chain can't loop or scan unboundedly.
+
+    `in_list` maps (project, run_id) -> {status, abandon_reason} for the
+    already-loaded metrics (cheap hit); disk is the fallback for out-of-window
+    successors.
+    """
+    if _lifecycle_status(m) != "abandoned":
+        return False
+    reason = m.get("abandon_reason") or ""
+    if not reason.startswith(_SUPERSEDED_PREFIX):
+        return False
+    # No-id explicit signal: a completed run demonstrably finished this. Exclude.
+    if reason == _SUPERSEDED_NO_ID:
+        return True
+
+    project = m.get("project", "")
+    visited: set = set()
+    cur_reason = reason
+    for _ in range(_CHAIN_HOP_CAP):
+        succ_id = cur_reason[len(_SUPERSEDED_PREFIX):].strip()
+        if not succ_id or succ_id in visited:
+            return False  # malformed / cycle → fail-safe keep
+        visited.add(succ_id)
+        rec = in_list.get((project, succ_id)) \
+            or _resolve_run(project, succ_id, workspace, disk_cache)
+        if not rec:
+            return False  # unresolvable successor → fail-safe keep
+        s = rec.get("status")
+        if s == "completed":
+            return True  # confirmed completed terminal → replaced duplicate
+        # Continue the walk ONLY if the successor was itself superseded;
+        # any other terminal (abandoned-crash, failed, running, paused) → keep.
+        r2 = rec.get("abandon_reason") or ""
+        if s == "abandoned" and r2.startswith(_SUPERSEDED_PREFIX):
+            if r2 == _SUPERSEDED_NO_ID:
+                return True
+            cur_reason = r2
+            continue
+        return False
+    return False  # hop cap exhausted → fail-safe keep
+
+
+def _replaced_duplicate_ids(metrics: list[dict], workspace: Path) -> set:
+    """Set of (project, run_id) for every replaced-duplicate in the corpus.
+    Computed once, reused by all rate functions (single source of truth — no
+    per-function drift)."""
+    in_list = {
+        (m.get("project", ""), m.get("run_id", "")): {
+            "status": _lifecycle_status(m),
+            "abandon_reason": m.get("abandon_reason"),
+        }
+        for m in metrics
+    }
+    disk_cache: dict = {}
+    return {
+        (m.get("project", ""), m.get("run_id", ""))
+        for m in metrics
+        if _is_replaced_duplicate(m, in_list, workspace, disk_cache)
+    }
+
+
 # ─── Analysis Dimensions ───────────────────────────────────────────────
 
 
-def analyze_profile_accuracy(metrics: list[dict]) -> dict:
-    """Dimension 1: Which profiles succeed for which requirement shapes?"""
+def analyze_profile_accuracy(metrics: list[dict], replaced: set | None = None) -> dict:
+    """Dimension 1: Which profiles succeed for which requirement shapes?
+
+    `replaced` = (project, run_id) of replaced-duplicate runs (superseded by a
+    completed successor) — excluded from ALL buckets so the rate reflects real
+    work units, not reruns (Gap-2). Uses lifecycle_status (run.json truth), not
+    the stale METRICS.json status.
+    """
+    replaced = replaced or set()
     profile_stats: dict[str, dict] = defaultdict(lambda: {"total": 0, "completed": 0, "abandoned": 0, "failed": 0})
 
     for m in metrics:
+        if (m.get("project", ""), m.get("run_id", "")) in replaced:
+            continue  # replaced duplicate — neither success nor failure
         profile = str(m.get("profile", "None"))
         profile_stats[profile]["total"] += 1
-        status = m.get("status", "")
+        status = _lifecycle_status(m)
         if status == "completed":
             profile_stats[profile]["completed"] += 1
         elif status == "abandoned":
@@ -213,9 +376,11 @@ def analyze_profile_accuracy(metrics: list[dict]) -> dict:
         }
 
     # Identify multi-file requirements that used full but might benefit from goal
-    full_runs = [m for m in metrics if m.get("profile") == "full"]
+    full_runs = [m for m in metrics
+                 if m.get("profile") == "full"
+                 and (m.get("project", ""), m.get("run_id", "")) not in replaced]
     multi_file_full = [m for m in full_runs if m.get("build", {}).get("files_changed", 0) > 3]
-    multi_file_success = sum(1 for m in multi_file_full if m.get("status") == "completed")
+    multi_file_success = sum(1 for m in multi_file_full if _lifecycle_status(m) == "completed")
 
     return {
         "profile_success_rates": profile_success,
@@ -227,13 +392,21 @@ def analyze_profile_accuracy(metrics: list[dict]) -> dict:
     }
 
 
-def analyze_abandon_patterns(metrics: list[dict]) -> dict:
-    """Dimension 2: What shapes/stages tend to get abandoned?"""
-    abandoned = [m for m in metrics if m.get("status") == "abandoned"]
-    total = len(metrics)
+def analyze_abandon_patterns(metrics: list[dict], replaced: set | None = None) -> dict:
+    """Dimension 2: What shapes/stages tend to get abandoned?
+
+    Excludes replaced-duplicates (superseded-by-completed) so abandon_rate
+    counts only GENUINE failures (crash / OOM / orphan), not reruns (Gap-2).
+    """
+    replaced = replaced or set()
+    live = [m for m in metrics
+            if (m.get("project", ""), m.get("run_id", "")) not in replaced]
+    abandoned = [m for m in live if _lifecycle_status(m) == "abandoned"]
+    total = len(live)
 
     if not abandoned:
-        return {"total_abandoned": 0, "abandon_rate": 0, "hotspots": [], "high_risk_shapes": []}
+        return {"total_abandoned": 0, "abandon_rate": 0, "hotspots": [],
+                "high_risk_shapes": [], "replaced_duplicates": len(replaced)}
 
     # Last stage distribution
     last_stage_counts: Counter = Counter()
@@ -257,7 +430,7 @@ def analyze_abandon_patterns(metrics: list[dict]) -> dict:
     # Identify high-risk shapes (patterns that frequently abandon)
     high_risk_shapes = []
     for profile, count in profile_abandon.most_common():
-        total_profile = sum(1 for m in metrics if str(m.get("profile", "None")) == profile)
+        total_profile = sum(1 for m in live if str(m.get("profile", "None")) == profile)
         rate = _safe_pct(count, total_profile)
         if rate > 20 and count >= 3:
             high_risk_shapes.append({
@@ -273,6 +446,7 @@ def analyze_abandon_patterns(metrics: list[dict]) -> dict:
         "hotspots": [{"stage": s, "count": c} for s, c in last_stage_counts.most_common(5)],
         "profile_abandon": dict(profile_abandon),
         "high_risk_shapes": high_risk_shapes,
+        "replaced_duplicates": len(replaced),
     }
 
 
@@ -418,13 +592,21 @@ def analyze_estimation_accuracy(metrics: list[dict]) -> dict:
     }
 
 
-def analyze_goal_performance(metrics: list[dict]) -> dict:
-    """Dimension 6: Goal profile specific performance metrics."""
-    goal_runs = [m for m in metrics if m.get("profile") == "goal"]
+def analyze_goal_performance(metrics: list[dict], replaced: set | None = None) -> dict:
+    """Dimension 6: Goal profile specific performance metrics.
+
+    Excludes replaced-duplicates and uses lifecycle_status for the completion
+    rate — same Gap-2 correction as profile_accuracy/abandon_patterns, since
+    this dimension also renders a completion_rate in the report.
+    """
+    replaced = replaced or set()
+    goal_runs = [m for m in metrics
+                 if m.get("profile") == "goal"
+                 and (m.get("project", ""), m.get("run_id", "")) not in replaced]
     if not goal_runs:
         return {"total_goal_runs": 0, "message": "No goal runs yet"}
 
-    completed = [m for m in goal_runs if m.get("status") == "completed"]
+    completed = [m for m in goal_runs if _lifecycle_status(m) == "completed"]
     return {
         "total_goal_runs": len(goal_runs),
         "completed": len(completed),
@@ -443,21 +625,31 @@ def analyze_all_runs(workspace: Path, project_filter: str | None = None) -> dict
     if not metrics:
         return {"error": "No metrics data found", "runs_analyzed": 0}
 
+    # Gap-2: identify replaced-duplicate runs ONCE (single source of truth) so
+    # every rate function excludes the SAME set — no per-function drift.
+    replaced = _replaced_duplicate_ids(metrics, workspace)
+
     intelligence = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs_analyzed": len(metrics),
+        # Bridge the two numbers a reader would otherwise be unable to reconcile
+        # (F5): runs_analyzed counts every run on disk; the rate denominators
+        # below drop these replaced duplicates (reruns, neither success nor
+        # failure). rate_denominator = runs_analyzed - replaced_duplicates.
+        "replaced_duplicates": len(replaced),
+        "rate_denominator": len(metrics) - len(replaced),
         "projects": list(set(m.get("project", "?") for m in metrics)),
         "telemetry_coverage": {
             "full": sum(1 for m in metrics if m.get("telemetry") != "legacy"),
             "legacy": sum(1 for m in metrics if m.get("telemetry") == "legacy"),
         },
         "dimensions": {
-            "profile_accuracy": analyze_profile_accuracy(metrics),
-            "abandon_patterns": analyze_abandon_patterns(metrics),
+            "profile_accuracy": analyze_profile_accuracy(metrics, replaced),
+            "abandon_patterns": analyze_abandon_patterns(metrics, replaced),
             "stage_efficiency": analyze_stage_efficiency(metrics),
             "adversarial_value": analyze_adversarial_value(metrics),
             "estimation_accuracy": analyze_estimation_accuracy(metrics),
-            "goal_performance": analyze_goal_performance(metrics),
+            "goal_performance": analyze_goal_performance(metrics, replaced),
         },
     }
 
@@ -482,7 +674,10 @@ def generate_report(intelligence: dict) -> str:
         "# Pipeline Health Report",
         f"",
         f"Generated: {intelligence.get('generated_at', 'unknown')[:16]}",
-        f"Runs analyzed: {intelligence.get('runs_analyzed', 0)}",
+        f"Runs analyzed: {intelligence.get('runs_analyzed', 0)}"
+        + (f" ({intelligence['replaced_duplicates']} replaced duplicates excluded from rates; "
+           f"rate denominator {intelligence.get('rate_denominator', 0)})"
+           if intelligence.get('replaced_duplicates') else ""),
         f"Projects: {', '.join(intelligence.get('projects', []))}",
         "",
         "---",
