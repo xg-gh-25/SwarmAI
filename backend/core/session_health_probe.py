@@ -46,17 +46,28 @@ CPU_LIVE_EPSILON = 0.05                  # cpu-seconds delta above which = "work
 # ever appears inside `recovery_checkpoint_armed ... trigger=stuck_*` (a recovery
 # REASON field), never a standalone failure. Both were false-positive markers that
 # flagged the daemon self-healing itself as "unrecovered failures". The recovery
-# vocab below (to=cold / force_unstick / recovery_checkpoint_armed) absolves them.
+# vocab below (force_unstick / recovery_checkpoint_armed) absolves them.
 _FAILURE_MARKERS = ("streaming_timeout", "SIGKILL", "dumb-spawn-kill", "output_liveness_timeout")
-# Recovery markers (M2): specific, low-false-positive forms — not bare substrings
-# like "COLD"/"heal" that appear in benign lines. Two self-heal paths are absolved:
+# Recovery markers (M2): specific, low-false-positive SELF-HEAL EVENTS — never a
+# bare generic transition. Two self-heal paths are absolved:
 #   • streaming_timeout → Retry N/N ... --resume  (retry path)
 #   • {streaming_timeout|force_unstick*} → recovery_checkpoint_armed → transition
 #     ... to=cold → force_kill_tree            (crash-to-COLD path, NO Retry line)
-# The `to=cold` transition is the terminal proof the daemon reclaimed the session.
+# Both crash-to-COLD sequences carry `force_unstick` AND `recovery_checkpoint_armed`
+# for the same sid — those two specific events ARE the proof of self-heal, so we
+# match THEM, not the generic `to=cold` transition.
+#
+# ⚠️ Do NOT add bare `to=cold` here (Gate-2 multi-specialist HIGH, run_67a391a4):
+# `transition ... to=cold` fires for EVERY cold transition — routine idle→cold
+# reclaim, dead→cold cleanup, user-closed-tab — not just crash-to-cold recovery.
+# Matching it would let a benign same-sid cold transition within the recovery
+# window silently absolve a GENUINE unrecovered failure (a false-negative that
+# blinds the monitor). `force_unstick`/`recovery_checkpoint_armed` are specific
+# self-heal events that a routine reclaim does NOT emit — they close the loop
+# without the blinding hole.
 _RECOVERY_PATTERN = re.compile(
     r"Retry \d+/\d+|--resume|recovered|_crash_to_cold|HealingLoop"
-    r"|force_unstick|recovery_checkpoint_armed|to=cold"
+    r"|force_unstick|recovery_checkpoint_armed"
 )
 # How many lines AFTER a failure marker count as "the recovery window". A
 # recovery for an UNRELATED later session must not absolve an earlier failure.
@@ -162,7 +173,13 @@ def scan_unrecovered_events(log_text: str) -> list[str]:
             # If the failure line carried a session id, the recovery in the
             # window must mention the SAME id (correlated). If no id was present,
             # a windowed recovery marker is accepted (best effort).
-            if fail_sid is None or fail_sid.group(1) in wl:
+            #
+            # Token-equality, NOT substring (Gate-2 HIGH, run_67a391a4): compare
+            # the failure sid against the recovery line's OWN extracted sids, so a
+            # coincidental hex fragment (pid, uuid slice) sharing that 8-hex run
+            # can't mis-absolve. `fail_sid.group(1) in wl` would match e.g.
+            # "deadbeef" inside "deadbeef-1234-…" of an UNRELATED session.
+            if fail_sid is None or fail_sid.group(1) in _SID_RE.findall(wl):
                 recovered = True
                 break
         if not recovered:

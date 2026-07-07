@@ -154,6 +154,41 @@ def test_ac4_cross_session_to_cold_does_not_absolve_other_failure():
     assert len(out) == 1 and "aaaa1111" in out[0], "cross-session to=cold wrongly absolved a real failure"
 
 
+# ── Gate-2 HIGH (run_67a391a4): the blinding holes the adversarial review caught ──
+
+def test_gate2_same_session_benign_cold_does_not_absolve_genuine_failure():
+    """Gate-2 HIGH (correctness+security, multi-confirmed): a GENUINE failure whose
+    recovery ACTUALLY FAILED must NOT be absolved by a later BENIGN same-session
+    `to=cold` transition (idle→cold reclaim, dead→cold cleanup). This is why bare
+    `to=cold` was removed from _RECOVERY_PATTERN — only the specific self-heal
+    events (force_unstick / recovery_checkpoint_armed) count as recovery.
+    Mutation proof: if `|to=cold` is re-added to _RECOVERY_PATTERN, this goes RED."""
+    log = (
+        "2026-07-07 10:00:00,000 - core.session_unit - ERROR - subprocess SIGKILL session_id=aaaa1111 pid=111 (recovery FAILED, no self-heal)\n"
+        "2026-07-07 10:00:01,000 - core.session_unit - INFO - filler line\n"
+        "2026-07-07 10:00:05,000 - core.session_unit - INFO - session_unit.transition session_id=aaaa1111 from=idle to=cold pid=None\n"
+    )
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "SIGKILL" in out[0], (
+        "a benign same-session idle→cold reclaim must NOT absolve a genuine SIGKILL")
+
+
+def test_gate2_substring_sid_collision_does_not_absolve():
+    """Gate-2 HIGH (security): sid correlation must be TOKEN equality, not substring.
+    The failure's 8-hex token embedded inside a LONGER unbounded hex run on an
+    unrelated recovery line (a hex pid, a request-id) must NOT absolve it — there
+    is no bounded 8-hex sid token on the recovery line that equals the failure sid.
+    Mutation proof: revert to `fail_sid.group(1) in wl` (substring) and this goes RED
+    (substring 'deadbeef' IS inside 'deadbeef99abc')."""
+    log = (
+        "2026-07-07 10:00:00,000 - core.session_unit - ERROR - subprocess SIGKILL session_id=deadbeef pid=111\n"
+        "2026-07-07 10:00:01,000 - core.session_unit - WARNING - session_unit.force_unstick req_id=deadbeef99abc pid=222\n"
+    )
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "deadbeef" in out[0], (
+        "an embedded hex collision (no bounded matching sid token) must not absolve via substring match")
+
+
 # ── AC1: probe core (each sub-check, pass + fail) ──────────────────────────
 
 def _healthy_kwargs(**over):
