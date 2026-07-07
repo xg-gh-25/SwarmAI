@@ -133,6 +133,19 @@ _PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
 # Polling fallback constants
 # ---------------------------------------------------------------------------
 _WS_FAIL_THRESHOLD = 3       # consecutive WS thread deaths before switching to polling
+# Connectivity-stall detection (run_eb503e1e): the WS thread can stay ALIVE while
+# slack_bolt's internal reconnect loop fails forever (e.g. intermittent getaddrinfo
+# failure) — is_alive() never flips, so the thread-death path above never fires and
+# messages are silently dropped. We additionally watch handler.client.is_connected():
+# if the thread is alive but the client reports NOT connected for _STALL_MISS_THRESHOLD
+# consecutive health checks, we treat it as a stall and switch to polling.
+#   IMPORTANT (Gate-1 F2): is_connected() is False during ANY reconnect attempt —
+#   healthy OR stuck — because slack_bolt swaps current_session only AFTER the new
+#   socket connects (client.py connect()). A healthy reconnect recovers in seconds; a
+#   real stall stays down for minutes. So the threshold must span MINUTES, not seconds,
+#   or a normal reconnect blip would false-trip. At the 10s monitor cadence,
+#   18 misses ≈ 3 minutes of SUSTAINED disconnection — well beyond any healthy reconnect.
+_STALL_MISS_THRESHOLD = 18   # consecutive is_connected()==False checks (~3 min) → stall
 _POLL_INTERVAL = 5.0          # seconds between polling cycles
 _POLL_DM_REFRESH = 300.0      # seconds between DM channel list refresh
 _WS_RETRY_INTERVAL = 300.0    # seconds between Socket Mode reconnect attempts during polling
@@ -417,6 +430,12 @@ class SlackChannelAdapter(ChannelAdapter):
         # Polling fallback state
         self._connection_mode: str = "socket"  # "socket" or "polling"
         self._ws_fail_count: int = 0
+        # Consecutive health checks where the thread is alive but the socket-mode
+        # client reports NOT connected (run_eb503e1e connectivity-stall detection).
+        self._stall_misses: int = 0
+        # Stall-detection only arms AFTER the first successful connection — a slow
+        # cold-start handshake reads as not-connected but is NOT a stall (Gate-2 HIGH-1).
+        self._ever_connected: bool = False
         self._poll_channels: dict[str, str] = {}  # channel_id -> last_ts
         self._poll_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
@@ -1636,6 +1655,7 @@ class SlackChannelAdapter(ChannelAdapter):
         while not self._stopped and self._connection_mode == "socket":
             ws = self._ws_thread
             if ws is not None and not ws.is_alive() and not self._stopped:
+                self._stall_misses = 0  # thread-death path owns recovery now
                 self._ws_fail_count += 1
                 if self._ws_fail_count >= _WS_FAIL_THRESHOLD:
                     await self._switch_to_polling()
@@ -1658,7 +1678,61 @@ class SlackChannelAdapter(ChannelAdapter):
                             pass
                         self._handler = None
                     self._start_socket_mode_thread()
+            elif ws is not None and ws.is_alive() and not self._stopped:
+                # Thread ALIVE but is it actually connected? Detects the stuck-but-
+                # alive stall (slack_bolt reconnect-looping forever) that the
+                # is_alive() check above is structurally blind to (run_eb503e1e).
+                if self._is_socket_connected():
+                    self._ever_connected = True   # arm stall-detection
+                    self._stall_misses = 0
+                elif not self._ever_connected:
+                    # Gate-2 HIGH-1: never accuse a channel that has NOT YET made
+                    # its first connection — a slow initial handshake (cold start /
+                    # high-latency net) reads as not-connected but is NOT a stall.
+                    # Only arm stall-detection after we've seen ≥1 real connection.
+                    pass
+                else:
+                    self._stall_misses += 1
+                    if self._stall_misses >= _STALL_MISS_THRESHOLD:
+                        logger.warning(
+                            "Channel %s: Socket Mode alive but NOT connected for "
+                            "%d checks (~%ds) — treating as stall, switching to "
+                            "polling.",
+                            self.channel_id,
+                            self._stall_misses,
+                            self._stall_misses * 10,
+                        )
+                        # Do NOT rebuild the handler here (avoids a None-race with a
+                        # concurrent rebuild + slack_bolt IntervalRunner thread leak).
+                        # _switch_to_polling delivers messages immediately AND its
+                        # _try_socket_mode_reconnect (every 300s) cleanly rebuilds the
+                        # handler and self-heals back to socket once DNS recovers.
+                        self._stall_misses = 0
+                        await self._switch_to_polling()
+                        return
             await asyncio.sleep(10)
+
+    def _is_socket_connected(self) -> bool:
+        """Whether the Socket Mode client reports a live WSS session.
+
+        Fully None-safe + fail-SAFE: if the handler/client isn't reachable (e.g.
+        mid-rebuild, or a future slack_sdk that drops is_connected()), return True
+        so a mere probe gap can NEVER force a false stall→polling switch (Gate-1 F1).
+        Only an explicit, readable is_connected()==False counts as "not connected".
+        """
+        handler = self._handler
+        if handler is None:
+            return True  # no handler to probe → don't accuse it of stalling
+        client = getattr(handler, "client", None)
+        if client is None:
+            return True
+        is_connected = getattr(client, "is_connected", None)
+        if not callable(is_connected):
+            return True
+        try:
+            return bool(is_connected())
+        except Exception:
+            return True  # unreadable → fail-SAFE to connected
 
     def _start_socket_mode_thread(self) -> None:
         """Start (or restart) the Socket Mode background thread.
