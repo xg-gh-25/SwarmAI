@@ -29,6 +29,7 @@ No subprocess lifecycle, routing, or hook logic lives here.
 """
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -1367,12 +1368,23 @@ class PromptBuilder:
             # This is the STRUCTURAL enforcement — even if the agent tries
             # to read ~/.swarm-ai/SwarmWS/MEMORY.md, the hook
             # returns "deny" before the tool executes.
+            #
+            # L3 SHARED LANE (run_c220f153): additionally grant READ-ONLY access
+            # to the DDD docs of projects EXPLICITLY marked shareable, so a
+            # teammate can get project-specific help. Fail-closed — only
+            # shareable==True projects contribute paths; exact-file + read-only
+            # so .artifacts/ pipeline internals stay hidden and docs can't be
+            # corrupted (both were adversarial-found leaks in the dir-grant
+            # design that this replaces).
+            shared_ddd_files = await self._collect_shareable_ddd_paths()
             file_access_handler = create_file_access_permission_handler(
-                [_channel_sender_dir]
+                [_channel_sender_dir],
+                readonly_files=shared_ddd_files,
             )
             logger.info(
-                "Non-owner channel: file_access_handler scoped to [%s]",
-                _channel_sender_dir,
+                "Non-owner channel: file_access scoped to [%s] + %d shared DDD "
+                "doc(s) (read-only)",
+                _channel_sender_dir, len(shared_ddd_files),
             )
         elif global_user_mode:
             file_access_handler = None
@@ -1584,3 +1596,80 @@ class PromptBuilder:
             max_turns=max_turns,
             task_budget=task_budget,
         )
+
+    # Canonical DDD doc set (single source: swarm_workspace_manager.py:287).
+    # Only these four docs are ever shared to a non-owner — never CONTEXT.md,
+    # never .artifacts/, never archives.
+    _SHAREABLE_DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+
+    async def _collect_shareable_ddd_paths(self) -> list[str]:
+        """Collect exact file paths of DDD docs for projects marked shareable.
+
+        L3 SHARED LANE (run_c220f153). Scans ``Projects/*/.project.json`` for
+        an explicit ``shareable: true`` flag and returns the exact paths of
+        that project's four canonical DDD docs that ACTUALLY EXIST. These are
+        passed to the file-access handler as ``readonly_files`` so a non-owner
+        teammate can Read (not Write) project-specific domain knowledge.
+
+        FAIL-CLOSED by construction:
+          * ``shareable`` absent/false  -> project contributes nothing
+          * only the 4 canonical docs   -> .artifacts/ pipeline internals,
+                                           CONTEXT.md, archives stay hidden
+          * only EXISTING files         -> no phantom paths
+          * any error (bad JSON, IO)    -> that project skipped; total failure
+                                           returns ``[]`` (deny, never open)
+
+        Returns:
+            Sorted list of absolute file paths, read-only-granted. Empty if no
+            project is shareable or on any failure.
+        """
+        from .initialization_manager import initialization_manager
+
+        def _scan() -> list[str]:
+            paths: list[str] = []
+            try:
+                ws = initialization_manager.get_cached_workspace_path()
+                projects_dir = Path(ws) / "Projects"
+                if not projects_dir.is_dir():
+                    return []
+                for project_dir in projects_dir.iterdir():
+                    meta_file = project_dir / ".project.json"
+                    if not (project_dir.is_dir() and meta_file.is_file()):
+                        continue
+                    try:
+                        raw = json.loads(meta_file.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        # Fail-closed: an unreadable project is NOT shared.
+                        continue
+                    if raw.get("shareable", False) is not True:
+                        continue
+                    # Containment anchor: the project dir's REAL path. A granted
+                    # doc must resolve to a real file DIRECTLY inside it.
+                    proj_real = os.path.realpath(project_dir)
+                    for doc in self._SHAREABLE_DDD_DOCS:
+                        doc_path = project_dir / doc
+                        # SYMLINK ESCAPE GUARD (adversarial M1, run_c220f153):
+                        # is_file() FOLLOWS symlinks, and the handler realpath-
+                        # resolves the grant — so a symlink `TECH.md ->
+                        # ../../MEMORY.md` inside a shareable project would mint a
+                        # read grant for the owner's private file. Reject any
+                        # symlink component AND verify the resolved path is still
+                        # a direct child of the project dir. Fail-closed.
+                        if doc_path.is_symlink():
+                            continue
+                        if not doc_path.is_file():
+                            continue
+                        doc_real = os.path.realpath(doc_path)
+                        if os.path.dirname(doc_real) != proj_real:
+                            # resolved outside the project dir (symlink/.. escape)
+                            continue
+                        paths.append(str(doc_path))
+            except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error
+                logger.warning(
+                    "shareable-DDD scan failed (fail-closed, 0 shared): %s: %s",
+                    type(exc).__name__, exc,
+                )
+                return []
+            return sorted(paths)
+
+        return await asyncio.to_thread(_scan)

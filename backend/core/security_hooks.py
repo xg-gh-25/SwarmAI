@@ -1507,17 +1507,35 @@ def create_governance_file_gate() -> Callable[..., Any]:
     return governance_file_gate
 
 
-def create_file_access_permission_handler(allowed_directories: list[str]) -> Callable[..., Any]:
-    """Create a file access permission handler with allowed directories bound.
+def create_file_access_permission_handler(
+    allowed_directories: list[str],
+    readonly_files: list[str] | None = None,
+) -> Callable[..., Any]:
+    """Create a file access permission handler with allowed paths bound.
 
     Args:
-        allowed_directories: List of directory paths that are allowed for file access
+        allowed_directories: Directory paths allowed for file access. The grant
+            is RECURSIVE (any file at any depth under the dir) and READ+WRITE.
+        readonly_files: EXACT file paths granted READ-ONLY access (Read/Glob/Grep
+            allowed; Write/Edit denied). Unlike ``allowed_directories`` this is an
+            EXACT-match, non-recursive grant — used for the L3 shared lane
+            (run_c220f153): a non-owner channel user may read a shareable
+            project's DDD docs (PRODUCT/TECH/IMPROVEMENT/PROJECT.md) but NOT the
+            rest of the project dir (``.artifacts/`` pipeline internals) and
+            cannot corrupt them. Defaults to ``None`` → empty → zero behavior
+            change for every existing caller.
 
     Returns:
         Async permission handler function for can_use_tool
     """
     # Resolve symlinks and normalize paths for consistent, secure comparison
     normalized_dirs = [os.path.realpath(d).rstrip('/') for d in allowed_directories]
+    # Exact-path read-only allowlist (realpath-normalized, symlink-resolved on
+    # BOTH sides so a symlink to a shared doc can't smuggle a different file in).
+    normalized_ro_files = frozenset(
+        os.path.realpath(f) for f in (readonly_files or [])
+    )
+    _READONLY_TOOLS = frozenset({"Read", "Glob", "Grep"})
 
     async def file_access_permission_handler(
         tool_name: str,
@@ -1548,22 +1566,42 @@ def create_file_access_permission_handler(allowed_directories: list[str]) -> Cal
             # Resolve symlinks and normalize to prevent symlink-based path traversal
             normalized_path = os.path.realpath(file_path)
 
-            # Check if the path is within any allowed directory
+            # Check if the path is within any allowed directory (recursive, r/w)
             is_allowed = any(
                 normalized_path.startswith(allowed_dir + '/') or normalized_path == allowed_dir
                 for allowed_dir in normalized_dirs
             )
 
-            if not is_allowed:
-                logger.warning(f"[FILE ACCESS DENIED] Tool: {tool_name}, Path: {file_path}, Allowed: {normalized_dirs}")
+            if is_allowed:
+                logger.debug(f"[FILE ACCESS ALLOWED] Tool: {tool_name}, Path: {file_path}")
+                return {"behavior": "allow"}
+
+            # Read-only exact-file grant (L3 shared lane): a path in
+            # readonly_files is readable but NOT writable, and matched EXACTLY
+            # (no recursion — a sibling like .artifacts/ under the same project
+            # is NOT granted). Write/Edit to a read-only file is denied.
+            if normalized_path in normalized_ro_files:
+                if tool_name in _READONLY_TOOLS:
+                    logger.debug(
+                        f"[FILE ACCESS ALLOWED — read-only] Tool: {tool_name}, Path: {file_path}"
+                    )
+                    return {"behavior": "allow"}
+                logger.warning(
+                    f"[FILE ACCESS DENIED — read-only] Tool: {tool_name} cannot "
+                    f"modify shared file {file_path}"
+                )
                 return {
                     "behavior": "deny",
-                    "message": f"File access denied: {file_path} is outside allowed directories",
-                    "interrupt": False  # Don't interrupt, let agent try alternative approach
+                    "message": f"File is read-only (shared): {file_path} cannot be modified",
+                    "interrupt": False,
                 }
 
-            logger.debug(f"[FILE ACCESS ALLOWED] Tool: {tool_name}, Path: {file_path}")
-            return {"behavior": "allow"}
+            logger.warning(f"[FILE ACCESS DENIED] Tool: {tool_name}, Path: {file_path}, Allowed: {normalized_dirs}")
+            return {
+                "behavior": "deny",
+                "message": f"File access denied: {file_path} is outside allowed directories",
+                "interrupt": False  # Don't interrupt, let agent try alternative approach
+            }
 
         # Check Bash tool for file access commands
         if tool_name == 'Bash':
