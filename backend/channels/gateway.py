@@ -137,6 +137,57 @@ def _parse_json_list(value) -> list:
     return []
 
 
+def _is_authorized_tier(sender_identity: Optional[SenderIdentity]) -> bool:
+    """True iff the sender is OWNER or TRUSTED (allowlisted).
+
+    THE single source of the observe-mode authorization gate (run_84cb2ea3),
+    used by BOTH the write gate (A: only authorized messages are recorded) and
+    the read gate (B: only authorized history is injected).  FAIL-CLOSED: a
+    missing identity, or any tier that is not explicitly OWNER/TRUSTED (i.e.
+    PUBLIC or an unknown future tier), returns False — an unauthorized message
+    is never stored and never injected (anti-poisoning).
+    """
+    if sender_identity is None:
+        return False
+    return sender_identity.permission_tier in (
+        PermissionTier.OWNER,
+        PermissionTier.TRUSTED,
+    )
+
+
+_AUTH = {PermissionTier.OWNER.value, PermissionTier.TRUSTED.value}
+"""THE single source of the authorized ``sender_tier`` string VALUES (run_84cb2ea3).
+
+B's fail-closed read gate (`_recent_authorized_history`) admits a stored record
+only if its ``sender_tier`` is in this set.  Kept module-level so the write
+source (`_sender_metadata`) and the read gate cannot drift on what counts as
+authorized.  (Mirror of `_is_authorized_tier`, which gates on the enum; this
+gates on the persisted string value.)
+"""
+
+
+def _sender_metadata(
+    sender_identity: Optional[SenderIdentity], resolved_name: Optional[str]
+) -> dict:
+    """THE single source for the sender fields stamped on every recorded
+    channel message (run_84cb2ea3).
+
+    Used by BOTH write sites — the observe-record write (A) and the reply-path
+    inbound write — so the ``sender_tier`` that B's fail-closed read gate keys
+    on is produced in exactly ONE place.  If these two writes drift, B silently
+    excludes the affected turns → a partial, misleading history; single-source
+    prevents that divergence (R25).  FAIL-CLOSED: no identity → ``"unknown"``
+    tier, which B's read gate excludes.
+    """
+    return {
+        "sender_tier": (
+            sender_identity.permission_tier.value
+            if sender_identity else "unknown"
+        ),
+        "sender_display_name": resolved_name,
+    }
+
+
 # ---------------------------------------------------------------------------
 # ChannelGateway
 # ---------------------------------------------------------------------------
@@ -907,9 +958,15 @@ class ChannelGateway:
             if msg.metadata.get("is_mention"):
                 return True
             # thread_follow (default on): once engaged in a thread, keep
-            # following without a re-@. "Engaged" = a channel_session already
-            # exists for this (channel, chat, thread) — reuse existing state,
-            # no new store (run_4c5ad9c5).
+            # following without a re-@. "Engaged" = the bot has ACTUALLY REPLIED
+            # in this thread, i.e. a channel_session row exists AND its
+            # message_count > 0.  message_count is bumped +2 only on a
+            # successful reply (see _handle_conversation ~1806), so count==0
+            # means "row exists but bot never replied" — a failed first attempt
+            # OR an OBSERVE-only record (run_84cb2ea3).  Requiring count>0 is the
+            # root-fix that (a) stops a stale count==0 row from wrongly following
+            # and (b) lets observe-mode attach history to the SAME thread row
+            # without silently flipping the thread into auto-reply.
             thread_follow = channel.get("thread_follow", True)
             if thread_follow and msg.external_thread_id:
                 try:
@@ -918,7 +975,7 @@ class ChannelGateway:
                         msg.external_chat_id,
                         msg.external_thread_id,
                     )
-                    if existing:
+                    if existing and (existing.get("message_count", 0) or 0) > 0:
                         return True
                 except Exception as e:
                     # Fail-closed: if we can't confirm an engaged thread, do
@@ -1048,6 +1105,18 @@ class ChannelGateway:
                 (channel.get("activation") or ("always" if chat_type == "im" else "mention")),
                 bool(msg.metadata.get("is_mention")),
             )
+            # OBSERVE MODE (A) — run_84cb2ea3: the bot is NOT replying, but if the
+            # sender is authorized (OWNER/TRUSTED) we still RECORD the message so
+            # the bot has group context the next time it IS engaged (B), and so a
+            # future conversation->DDD step has authorized raw material.
+            # FAIL-CLOSED: a PUBLIC / unauthorized sender's message is NEVER
+            # written (anti-poisoning — same philosophy as L3 assembly-exclusion:
+            # never-stored > stored-but-guarded).  This path does NOT bump
+            # message_count (so thread_follow stays not-engaged) and NEVER spawns
+            # an agent (returns here, before run_conversation).
+            if _is_authorized_tier(sender_identity):
+                await self._observe_record(msg, channel, channel_id, agent_id,
+                                           sender_identity)
             return
 
         # 4. Rate limiting (owner exempt) -----------------------------------------
@@ -1131,6 +1200,140 @@ class ChannelGateway:
             )
 
     # ------------------------------------------------------------------
+    # Observe mode (A) — record without replying
+    # ------------------------------------------------------------------
+
+    async def _observe_record(
+        self,
+        msg: InboundMessage,
+        channel: dict,
+        channel_id: str,
+        agent_id: str,
+        sender_identity: Optional[SenderIdentity],
+    ) -> None:
+        """Record an authorized group message the bot chose NOT to reply to.
+
+        OBSERVE MODE (A) — run_84cb2ea3.  Gives the bot group context for the
+        next time it IS engaged (B) without replying now.  The CALLER has
+        already gated on ``_is_authorized_tier`` (A write gate) — this method
+        only runs for OWNER/TRUSTED senders.
+
+        Invariants (all enforced by construction):
+          * NEVER bumps ``message_count`` — reuses ``_resolve_session`` which
+            creates the row at count=0; only a real reply bumps it (~1806).
+            So thread_follow (which now requires count>0) stays not-engaged:
+            observation NEVER flips a thread into auto-reply.
+          * NEVER spawns an agent — no ``run_conversation`` call; returns after
+            the DB write.
+          * Shares the single UNIQUE(channel,chat,thread) channel_session row
+            (no separate observe row).
+          * Fail-soft: any error is logged, never raised (observation must not
+            break the inbound path).
+        """
+        try:
+            resolved_name = (
+                sender_identity.display_name if sender_identity else None
+            ) or msg.sender_display_name
+            _sid, channel_session_id, _is_new, _prior = await self._resolve_session(
+                channel_id=channel_id,
+                agent_id=agent_id,
+                external_chat_id=msg.external_chat_id,
+                external_sender_id=msg.external_sender_id,
+                external_thread_id=msg.external_thread_id,
+                sender_display_name=resolved_name,
+            )
+            await db.channel_messages.put({
+                "id": str(uuid4()),
+                "channel_session_id": channel_session_id,
+                "direction": "inbound",
+                "external_message_id": msg.external_message_id,
+                "content": msg.text or "[Attachment message]",
+                "content_type": msg.metadata.get("message_type", "text"),
+                "metadata": {
+                    **msg.metadata,
+                    "observed": True,  # recorded without a reply
+                    **_sender_metadata(sender_identity, resolved_name),
+                    "attachment_count": len(msg.attachments),
+                },
+                "status": "observed",
+            })
+            logger.info(
+                "channel_gateway.observe_record channel=%s thread=%s tier=%s "
+                "— recorded (no reply)",
+                channel_id, msg.external_thread_id,
+                sender_identity.permission_tier.value if sender_identity else "?",
+            )
+        except Exception:
+            logger.exception(
+                "channel_gateway.observe_record failed (non-fatal) channel=%s",
+                channel_id,
+            )
+
+    # Max recent authorized messages injected on engagement (B).
+    _OBSERVE_INJECT_MAX = 20
+
+    async def _recent_authorized_history(
+        self, channel_session_id: str
+    ) -> list[dict]:
+        """Return recent AUTHORIZED inbound history for injection (B).
+
+        OBSERVE MODE (B) — run_84cb2ea3.  Reads the thread's recorded messages
+        (``list_by_session`` → chronological ASC) and returns the last
+        ``_OBSERVE_INJECT_MAX``, each as ``{sender, text, ts}``.
+
+        READ GATE (defense-in-depth): a record is included ONLY if its stored
+        ``sender_tier`` is owner/trusted.  Even though the write gate (A)
+        already refuses to store PUBLIC messages, the read gate re-checks so a
+        single source (``_is_authorized_tier`` semantics) governs both ends and
+        a stray/legacy PUBLIC row can never leak into a prompt.  A record with
+        no tier metadata is treated as unknown → EXCLUDED (fail-closed).
+        """
+        try:
+            rows = await db.channel_messages.list_by_session(channel_session_id)
+        except Exception:
+            logger.exception("observe-inject: list_by_session failed")
+            return []
+        out: list[dict] = []
+        for r in rows:
+            if r.get("direction") != "inbound":
+                continue
+            meta = r.get("metadata") or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+            # Fail-closed read gate: only explicit owner/trusted survive.
+            if meta.get("sender_tier") not in _AUTH:
+                continue
+            out.append({
+                "sender": meta.get("sender_display_name") or "unknown",
+                "text": r.get("content") or "",
+                "ts": r.get("created_at"),
+            })
+        # Keep the newest _OBSERVE_INJECT_MAX (list is ASC → tail), preserve order.
+        return out[-self._OBSERVE_INJECT_MAX:]
+
+    async def _build_history_preamble(self, channel_session_id: str) -> str:
+        """Render recent authorized history as a prompt preamble (B).
+
+        Wraps ``_recent_authorized_history`` into a human-readable block that is
+        PREPENDED to the user message (the real consumer). Returns "" when there
+        is no authorized history (nothing to inject). The tier filter lives in
+        ``_recent_authorized_history`` — this method is pure formatting.
+        """
+        recent = await self._recent_authorized_history(channel_session_id)
+        if not recent:
+            return ""
+        lines = [f"- {h['sender']}: {h['text']}" for h in recent if h.get("text")]
+        if not lines:
+            return ""
+        return (
+            "[Recent channel discussion before this message — context only, "
+            "authorized participants]\n" + "\n".join(lines)
+        )
+
+    # ------------------------------------------------------------------
     # Conversation handler
     # ------------------------------------------------------------------
 
@@ -1183,6 +1386,12 @@ class ChannelGateway:
                 "content_type": msg.metadata.get("message_type", "text"),
                 "metadata": {
                     **msg.metadata,
+                    # sender_tier + display_name (single source: _sender_metadata)
+                    # so observe-inject (B, run_84cb2ea3) sees REAL reply-path
+                    # turns, not only observe-only rows. Without sender_tier,
+                    # B's fail-closed read gate excludes every reply-path
+                    # message → a partial, misleading history.
+                    **_sender_metadata(sender_identity, resolved_name),
                     "attachment_count": len(msg.attachments),
                     "attachment_names": [a.get("file_name") for a in msg.attachments],
                 },
@@ -1230,6 +1439,26 @@ class ChannelGateway:
         final_text = await self._prepare_message_text(
             msg, agent_id, sender_identity,
         )
+
+        # OBSERVE MODE (B) — run_84cb2ea3: PREPEND recent AUTHORIZED group
+        # history to the user message so an @-engaged bot has the context of the
+        # discussion that preceded the mention. This feeds the REAL consumer
+        # (user_message=final_text → run_conversation), not a dead context key.
+        # Group channels only (DMs carry their own session history). The read
+        # gate (_recent_authorized_history) re-applies the tier filter
+        # (defense-in-depth), so a PUBLIC/untiered record can never be injected.
+        if is_group:
+            try:
+                history_preamble = await self._build_history_preamble(
+                    channel_session_id
+                )
+                if history_preamble:
+                    final_text = f"{history_preamble}\n\n{final_text}"
+            except Exception:
+                logger.exception(
+                    "channel_gateway observe-inject failed (non-fatal) "
+                    "channel=%s", channel_id,
+                )
 
 
         # Build streaming context — all mutable state in a dataclass

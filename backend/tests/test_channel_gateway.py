@@ -1298,14 +1298,32 @@ class TestL1ActivationGate:
         assert ok is True
 
     @pytest.mark.asyncio
-    async def test_thread_follow_replies_when_session_exists(self, gateway, mock_db):
-        """AC2b: non-@ but an active session exists for the thread → follow."""
+    async def test_thread_follow_replies_when_engaged(self, gateway, mock_db):
+        """AC2b: non-@ but the bot has ENGAGED (replied → message_count>0) in the
+        thread → follow. Engaged = row exists AND message_count>0, NOT merely
+        row-exists (run_84cb2ea3: a count==0 row is observe-only / failed-first
+        and must NOT auto-follow)."""
         ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
-        mock_db.channel_sessions.find_by_external = AsyncMock(return_value={"id": "cs_1"})
+        mock_db.channel_sessions.find_by_external = AsyncMock(
+            return_value={"id": "cs_1", "message_count": 2}
+        )
         ok = await gateway._should_reply(
             ch, _inbound(is_mention=False, thread_ts="1700000000.0001"), "channel", False
         )
         assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_thread_follow_silent_when_observe_only(self, gateway, mock_db):
+        """A row exists but message_count==0 (observe-only / never replied) →
+        thread_follow must NOT engage (the skeptic's flip-bug guard)."""
+        ch = {"id": "ch_1", "activation": "mention", "thread_follow": True}
+        mock_db.channel_sessions.find_by_external = AsyncMock(
+            return_value={"id": "cs_1", "message_count": 0}
+        )
+        ok = await gateway._should_reply(
+            ch, _inbound(is_mention=False, thread_ts="1700000000.0001"), "channel", False
+        )
+        assert ok is False
 
     @pytest.mark.asyncio
     async def test_thread_follow_silent_when_no_session(self, gateway, mock_db):
