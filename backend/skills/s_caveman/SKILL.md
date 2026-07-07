@@ -25,8 +25,17 @@ it seems/might be), recap padding, bullet point summaries at end.
 exact, file paths exact, numbers exact.
 
 **Use:** fragments OK, short synonyms (big not extensive, fix not "implement a
-solution for"), arrows for causality (X → Y), abbreviations (DB/auth/config/
-req/res/fn/impl/dep/env). One word when one word enough.
+solution for"), standard readable abbreviations (DB/API/HTTP/auth/config/env).
+One word when one word enough.
+
+**Don't** invent truncated abbreviations (req/res/fn/impl/dep/cfg) or use causal
+arrows (→). Neither actually saves tokens: a short truncation typically costs the
+same single token as the plain word, and `→` is its own token — no cheaper than a
+comma or a period. But both make the reader stop and decode, so they cost clarity
+for zero gain. Prefer full words and plain punctuation; the standard abbreviations
+above are fine only because they're universally read at a glance, not because
+they're shorter. Show causality with a comma, colon, or a short word ("so"/
+"causes"), not an arrow.
 
 **Pattern:** `[thing] [action] [reason]. [next step].`
 
@@ -41,7 +50,7 @@ created on every render cycle, which causes the child component to re-render
 even though the actual values haven't changed. I'd recommend using useMemo to
 memoize the object."
 
-Caveman: "Inline obj prop → new ref each render → re-render. `useMemo`."
+Caveman: "Inline obj prop, new ref each render, re-renders child. Use `useMemo`."
 
 ---
 
@@ -55,16 +64,16 @@ are then deduplicated and buffered in the scheduler state. Subsequently, the
 signal_digest handler processes the buffered signals using Bedrock Sonnet for
 relevance scoring."
 
-Caveman: "config.yaml feeds → ADAPTER_MAP dispatch → adapters return RawSignal
-→ dedup → buffer → Sonnet digest scores relevance → signal_digest.json →
-briefing."
+Caveman: "config.yaml feeds, then ADAPTER_MAP dispatch, then adapters return
+RawSignal. Dedup, buffer. Sonnet digest scores relevance, writes
+signal_digest.json, then briefing."
 
 ---
 
 **"What went wrong with the voice feature?"**
 
-Caveman: "3 bugs pipeline missed: (1) VAD never implemented → recording never
-auto-stops, (2) concurrent Polly → audio out of order, (3) `interrupted` state
+Caveman: "3 bugs pipeline missed: (1) VAD never implemented, so recording never
+auto-stops, (2) concurrent Polly, audio out of order, (3) `interrupted` state
 declared but unreachable. Root: state machine in types ≠ state machine in code."
 
 ## Auto-Clarity Exception
@@ -87,7 +96,7 @@ Resume caveman after clear section done. Example:
 ## Pipeline Integration
 
 If caveman active during pipeline run:
-- Stage progress display → caveman format
-- Stage summaries in chat → caveman format
-- REPORT.md and artifacts → **always full format** (permanent records)
-- Commit messages → **always full format**
+- Stage progress display: caveman format
+- Stage summaries in chat: caveman format
+- REPORT.md and artifacts: **always full format** (permanent records)
+- Commit messages: **always full format**
