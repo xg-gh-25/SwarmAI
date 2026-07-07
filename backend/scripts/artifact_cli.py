@@ -2726,6 +2726,14 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     all_decisions = []
     for s in stages:
         for d in s.get("decisions", []):
+            # Decisions come from two shapes in the wild: pipeline stages write
+            # list[dict] ({classification, description, ...}), but session/
+            # DailyActivity-sourced decisions are list[str]. A bare string here
+            # crashes `**d` (TypeError: not a mapping). Coerce defensively — the
+            # report is a best-effort renderer that must never crash on a
+            # malformed-but-harmless stage record. (run_e346b8ed DoD0a)
+            if not isinstance(d, dict):
+                d = {"description": str(d)}
             all_decisions.append({
                 "stage": s.get("stage", s.get("name", "?")),
                 **d,
@@ -3093,7 +3101,9 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
 
     # Source 3: REFLECT stage decisions (if any contain lessons)
     for d in reflect_stage.get("decisions", []):
-        desc = d.get("description", "").strip()
+        # Coerce list[str] shape (see DoD0a note at the decisions-collection
+        # loop) — a bare string decision must not crash d.get(). (run_e346b8ed)
+        desc = (d if isinstance(d, str) else d.get("description", "")).strip()
         if desc and desc not in lessons_items:
             lessons_items.append(desc)
 
@@ -3249,7 +3259,9 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
     all_decisions = []
     for s in stages:
         for d in s.get("decisions", []):
-            all_decisions.append(d)
+            # Coerce list[str] shape (DoD0a, run_e346b8ed) — string decisions
+            # have no classification; skip the count safely rather than crash.
+            all_decisions.append(d if isinstance(d, dict) else {"description": str(d)})
     decision_counts = {
         "mechanical": sum(1 for d in all_decisions if d.get("classification") == "mechanical"),
         "taste": sum(1 for d in all_decisions if d.get("classification") == "taste"),

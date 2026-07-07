@@ -459,22 +459,31 @@ def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
 def read_pending_proposals(
     workspace_dir: Path, project: str
 ) -> List[CultivationProposal]:
-    """Read all pending (non-expired, non-resolved) proposals for a project.
+    """Read all proposals AWAITING HUMAN DECISION for a project.
 
-    These are RISKY changes awaiting human approval (escalations only).
+    These are RISKY changes awaiting human approval (escalations). Both
+    ``pending`` and ``escalated`` are awaiting-human states — ``write_proposal``
+    (the escalate path) persists ``status="escalated"``, so filtering to
+    ``pending`` alone would make EVERY escalated proposal invisible to the
+    approval UX (router GET /proposals + briefing L5), a silent black hole.
+    Terminal states (``applied`` / ``rejected`` / ``expired``) are excluded.
+    (run_e346b8ed: capability C's human-gate depends on escalated proposals
+    surfacing; this also fixes the same latent bug for reflect/decision
+    escalations.)
     """
     proposals_dir = workspace_dir / "Projects" / project / ".artifacts" / "proposals"
 
     if not proposals_dir.exists():
         return []
 
+    _AWAITING_HUMAN = {"pending", "escalated"}
     pending = []
     for filepath in proposals_dir.glob("*.json"):
         try:
             data = json.loads(filepath.read_text())
             proposal = CultivationProposal.from_dict(data)
 
-            if proposal.status != "pending":
+            if proposal.status not in _AWAITING_HUMAN:
                 continue
             if proposal.is_expired():
                 continue
@@ -519,6 +528,20 @@ def _cultivate_proposals(
     drift_errors: List[str] = []
 
     for proposal in proposals:
+        # 宁缺毋滥 — conversation-derived knowledge is NEVER auto-written
+        # (capability C, run_e346b8ed). The "settled decision vs chatter?"
+        # judgment is an LLM call UPSTREAM (conversation_extract); the
+        # STRUCTURAL guarantee that a wrong judgment can't silently land in DDD
+        # lives HERE: force this source down the escalate branch regardless of
+        # target section, so it always requires XG's approve-time confirmation
+        # (routers/cultivation.py). A safe-append target would otherwise
+        # auto-apply and silently defeat the human-gate. DEC19: False > Stale >
+        # Imperfect — a wrong DDD entry is worse than a missing one.
+        if proposal.source_stage == "conversation":
+            proposal.status = "escalated"
+            write_proposal(proposal, project_dir)
+            escalated += 1
+            continue
         if proposal.is_safe_append():
             # Additional auto-approval gate (maturity, magnitude, circuit breaker)
             # Gate is advisory: if it blocks, escalate. If it errors, allow (fail-open).
@@ -676,4 +699,71 @@ def cultivate_from_decisions(
     proposals = filter_lessons_for_ddd(decisions, session_id, project)
     for p in proposals:
         p.source_stage = "decision"
+    return _cultivate_proposals(proposals, project_dir)
+
+
+# Capability C (conversation→DDD, run_e346b8ed) --------------------------------
+# Anti-flood: conversation is a LOW-signal, adversarial source (raw multi-party
+# chat) vs the pre-curated reflect/decision sources. Cap it tighter and give it a
+# LOWER default confidence so that in the briefing's top-5-by-confidence view
+# (proactive_intelligence L5) a genuine reflect/correction escalation outranks a
+# chat extraction on a tie. (Skeptic anti-flood finding, run_e346b8ed.)
+MAX_CONVERSATION_PROPOSALS_PER_RUN = 3
+CONVERSATION_DEFAULT_CONFIDENCE = 0.3
+
+
+def cultivate_from_conversation(
+    candidates: List[dict], session_id: str, project: str, project_dir: Path
+) -> dict:
+    """Cultivate DDD candidates extracted from a group-channel conversation.
+
+    Capability C (run_e346b8ed). Each candidate is the output of the CONSERVATIVE
+    upstream extractor (``conversation_extract``, DoD2) — a settled, owner-ratified
+    conclusion with an evidence quote and a *suggested* target doc/section. This
+    function only converts candidates → proposals and routes them; it makes NO
+    judgment about whether a candidate is worthy (that already happened upstream).
+
+    STRUCTURAL 宁缺毋滥 GUARANTEE: every proposal is tagged
+    ``source_stage="conversation"``, which ``_cultivate_proposals`` forces down the
+    escalate branch — so a conversation-derived entry can NEVER auto-apply and
+    ALWAYS requires XG's approve-time confirmation (routers/cultivation.py). This
+    tag is load-bearing: if it were omitted, a safe-append target would auto-apply
+    and silently defeat the human-gate. That is why it is set here on EVERY
+    proposal, mirroring cultivate_from_decisions' source_stage discipline.
+
+    candidate dict shape (from the extractor):
+        {"content": str,            # the proposed DDD entry (1-3 sentences)
+         "target_doc": str,         # SUGGESTED doc (XG can re-target at approve)
+         "target_section": str,     # SUGGESTED section
+         "evidence": str,           # verbatim conversation quote(s) — for review
+         "confidence": float}       # optional; defaults low (anti-flood)
+
+    Returns: {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}.
+    In practice applied is ALWAYS 0 for this source (the guard forces escalation);
+    the return shape is kept identical to the other sources for caller uniformity.
+    """
+    proposals: List[CultivationProposal] = []
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        content = (cand.get("content") or "").strip()
+        if not content:
+            continue
+        # Evidence quote is carried in the content tail so the human-gate reviewer
+        # (routers/cultivation.py list/approve) sees WHAT conversation line drove
+        # the proposal — never extract without a traceable source.
+        evidence = (cand.get("evidence") or "").strip()
+        body = f"{content}\n\n_Source (conversation {session_id}): {evidence}_" if evidence else content
+        proposals.append(
+            CultivationProposal(
+                target_doc=cand.get("target_doc") or "PROJECT.md",
+                target_section=cand.get("target_section") or "Recent Decisions",
+                content=body,
+                source_run_id=session_id,
+                confidence=float(cand.get("confidence") or CONVERSATION_DEFAULT_CONFIDENCE),
+                source_stage="conversation",  # load-bearing: forces escalation
+            )
+        )
+        if len(proposals) >= MAX_CONVERSATION_PROPOSALS_PER_RUN:
+            break
     return _cultivate_proposals(proposals, project_dir)

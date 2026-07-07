@@ -194,6 +194,26 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "conversation_digest":
+            # Capability C daily digest (run_e346b8ed). Dormant by default —
+            # returns "skipped" unless a channel is opted-in via
+            # Services/swarm-jobs/conversation-digest.yaml.
+            import asyncio as _asyncio
+            from .handlers.conversation_digest import run_conversation_digest
+            cd_result = _asyncio.run(run_conversation_digest())
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            _cd_status = cd_result.get("status")
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if _cd_status in ("success", "skipped") else "failed",
+                summary=(f"Conversation→DDD digest: {cd_result.get('channels', 0)} channel(s), "
+                         f"{cd_result.get('escalated', 0)} proposal(s) escalated"
+                         if _cd_status == "success"
+                         else f"Conversation→DDD digest {_cd_status} "
+                              f"({cd_result.get('reason', '')})"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "ddd_weekly_report":
             from .handlers.ddd_weekly_report import run_ddd_weekly_report
             report_result = run_ddd_weekly_report(config=job.config)

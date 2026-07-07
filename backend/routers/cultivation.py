@@ -52,8 +52,22 @@ async def list_proposals(project: str = Query(default="SwarmAI")):
 
 
 @router.post("/proposals/{proposal_id}/approve")
-async def approve_proposal(proposal_id: str, project: str = Query(default="SwarmAI")):
-    """Approve a proposal: apply content to target DDD document."""
+async def approve_proposal(
+    proposal_id: str,
+    project: str = Query(default="SwarmAI"),
+    target_doc: Optional[str] = Query(default=None),
+    target_section: Optional[str] = Query(default=None),
+):
+    """Approve a proposal: apply content to target DDD document.
+
+    Approve-time RE-TARGET (capability C §9-D1, run_e346b8ed): a
+    conversation-derived proposal carries only a SUGGESTED target_doc/section
+    (the extractor never guess-writes). At approve time XG may override the
+    target via ``target_doc`` / ``target_section`` — that is where attribution
+    is actually decided, not by a channel→project binding. Omit both to apply
+    to the proposal's suggested target unchanged (existing behavior for
+    reflect/decision proposals).
+    """
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
         raise HTTPException(status_code=503, detail="Workspace not initialized")
@@ -64,6 +78,12 @@ async def approve_proposal(proposal_id: str, project: str = Query(default="Swarm
     proposal = _find_proposal(project_dir, proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
+
+    # Approve-time re-target: only override fields explicitly supplied (§9-D1).
+    if target_doc:
+        proposal.target_doc = target_doc
+    if target_section:
+        proposal.target_section = target_section
 
     # Apply to DDD document (returns a status string, not a bool).
     # "applied" and "created_section" both mean the lesson landed successfully
