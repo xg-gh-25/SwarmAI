@@ -155,6 +155,33 @@ def _is_authorized_tier(sender_identity: Optional[SenderIdentity]) -> bool:
     )
 
 
+def _resolve_reply_thread_ts(
+    external_thread_id: Optional[str],
+    external_message_id: Optional[str],
+    is_group: bool,
+) -> Optional[str]:
+    """THE single source of "which thread does the bot reply into" (run_45187d49).
+
+    * An explicit inbound ``external_thread_id`` always wins — reply in that thread.
+    * Otherwise, in a GROUP channel (channel/group/mpim), root a new thread under
+      the user's own message (``external_message_id``) so the reply lands in a
+      thread instead of the channel main stream, and so ``thread_follow`` can
+      re-engage the user's next in-thread message (whose thread_ts will equal this
+      value). Matches the existing intent of adapters/slack.py start_stream (which
+      already does ``external_thread_id or inbound_ts``).
+    * In a DM (im, ``is_group`` False) there is no thread to root — return the raw
+      value (None → top-level), leaving 1:1 DM behavior unchanged.
+
+    Used for BOTH the outbound reply target AND session identity / thread_follow
+    lookup, so the reply target and the session key can never drift (Gate-1).
+    """
+    if external_thread_id:
+        return external_thread_id
+    if is_group:
+        return external_message_id
+    return external_thread_id
+
+
 # Hard cap on live owner-approval prompts per channel (Gate-2 RANK-3 anti-DoS):
 # bounds channel_config['pending_approvals'] so a PUBLIC flood of distinct
 # sender_ids can't grow it unboundedly. Dead entries are reaped before the check.
@@ -1266,6 +1293,14 @@ class ChannelGateway:
         # "secure default" empty allowlist.
         chat_type = msg.metadata.get("chat_type", "im")
         is_dm = chat_type == "im"
+        # Single source (run_45187d49) of the thread the bot replies into: an
+        # explicit inbound thread, else (group only) root a thread under the user's
+        # message so replies/notices land in a thread, not the channel main stream.
+        # DM → None (top-level, unchanged). Reused for session identity below so the
+        # reply target and thread_follow key never drift.
+        reply_thread_ts = _resolve_reply_thread_ts(
+            msg.external_thread_id, msg.external_message_id, not is_dm and chat_type in ("group", "channel", "mpim")
+        )
 
         if is_dm:
             allowed = _parse_json_list(channel.get("allowed_senders"))
@@ -1370,7 +1405,7 @@ class ChannelGateway:
                     await adapter.send_message(OutboundMessage(
                         channel_id=channel_id,
                         external_chat_id=msg.external_chat_id,
-                        external_thread_id=msg.external_thread_id,
+                        external_thread_id=reply_thread_ts,
                         reply_to_message_id=msg.external_message_id,
                         text="You are sending messages too quickly. Please wait a moment and try again.",
                     ))
@@ -1387,7 +1422,7 @@ class ChannelGateway:
                 await adapter.send_message(OutboundMessage(
                     channel_id=channel_id,
                     external_chat_id=msg.external_chat_id,
-                    external_thread_id=msg.external_thread_id,
+                    external_thread_id=reply_thread_ts,
                     reply_to_message_id=msg.external_message_id,
                     text="Hi! I'm currently helping someone else. "
                          "I'll get to your question as soon as I'm done "
@@ -1435,6 +1470,7 @@ class ChannelGateway:
                 agent_id=agent_id,
                 is_owner=is_owner,
                 sender_identity=sender_identity,
+                reply_thread_ts=reply_thread_ts,
             )
 
     # ------------------------------------------------------------------
@@ -1583,8 +1619,17 @@ class ChannelGateway:
         agent_id: str,
         is_owner: bool = False,
         sender_identity: Optional[SenderIdentity] = None,
+        reply_thread_ts: Optional[str] = None,
     ) -> None:
-        """Inner handler — runs under per-conversation lock."""
+        """Inner handler — runs under per-conversation lock.
+
+        ``reply_thread_ts`` (run_45187d49) is the SINGLE-SOURCE thread the bot
+        replies into, computed ONCE by the caller (handle_inbound_message) via
+        _resolve_reply_thread_ts and passed down — never recomputed here, so the
+        reply target and the session key cannot drift on a chat_type default
+        mismatch (Gate-2 BUG#1). Group + no inbound thread → user's message ts;
+        DM → None (top-level).
+        """
         try:
             # Use sender_identity.display_name (gateway-resolved, with
             # fallback chain) rather than msg.sender_display_name (raw
@@ -1598,7 +1643,7 @@ class ChannelGateway:
                     agent_id=agent_id,
                     external_chat_id=msg.external_chat_id,
                     external_sender_id=msg.external_sender_id,
-                    external_thread_id=msg.external_thread_id,
+                    external_thread_id=reply_thread_ts,
                     sender_display_name=resolved_name,
                 )
             )
@@ -1653,6 +1698,7 @@ class ChannelGateway:
 
         chat_type = msg.metadata.get("chat_type", "")
         is_group = chat_type in ("group", "channel", "mpim")
+        # reply_thread_ts already computed at method entry (single source).
 
         channel_context = {
             "channel_type": channel.get("channel_type", ""),
@@ -1721,7 +1767,7 @@ class ChannelGateway:
             # progressive updates, no tool emojis.  The event loop still
             # runs but streaming guards (if ctx.streaming) skip everything.
             streaming=False if human_mode else (adapter is not None and adapter.supports_streaming),
-            stream_thread_ts=msg.external_thread_id or msg.external_message_id,
+            stream_thread_ts=reply_thread_ts or msg.external_message_id,
             native_streaming=False if human_mode else use_native,
         )
 
@@ -1734,7 +1780,7 @@ class ChannelGateway:
 
             # Build adapter-specific callables for heartbeat
             _chat_id = msg.external_chat_id
-            _thread_ts = msg.external_thread_id
+            _thread_ts = reply_thread_ts
 
             async def _post_ack(channel: str, text: str) -> Optional[str]:
                 """Post a plain text ack message to Slack, return ts."""
@@ -1788,7 +1834,7 @@ class ChannelGateway:
             try:
                 ctx.streaming_msg_id = await adapter.start_stream(
                     external_chat_id=ctx.external_chat_id,
-                    external_thread_id=msg.external_thread_id,
+                    external_thread_id=reply_thread_ts,
                     text=":bee: _Thinking..._",
                     recipient_user_id=msg.external_sender_id,
                     inbound_ts=msg.external_message_id,
@@ -1807,7 +1853,7 @@ class ChannelGateway:
                         "(stream_ts=%s, thread_ts=%s)",
                         channel_id,
                         ctx.streaming_msg_id,
-                        msg.external_thread_id or msg.external_message_id,
+                        reply_thread_ts or msg.external_message_id,
                     )
             except Exception:
                 ctx.native_streaming = False
@@ -1822,7 +1868,7 @@ class ChannelGateway:
             try:
                 ctx.streaming_msg_id = await adapter.send_typing_indicator(
                     external_chat_id=ctx.external_chat_id,
-                    external_thread_id=msg.external_thread_id,
+                    external_thread_id=reply_thread_ts,
                 )
             except Exception:
                 logger.exception("Failed to send typing indicator")
@@ -2183,7 +2229,7 @@ class ChannelGateway:
                     outbound = OutboundMessage(
                         channel_id=channel_id,
                         external_chat_id=msg.external_chat_id,
-                        external_thread_id=msg.external_thread_id,
+                        external_thread_id=reply_thread_ts,
                         reply_to_message_id=msg.external_message_id if i == 0 else None,
                         text=segment,
                     )
@@ -2237,7 +2283,7 @@ class ChannelGateway:
             outbound = OutboundMessage(
                 channel_id=channel_id,
                 external_chat_id=msg.external_chat_id,
-                external_thread_id=msg.external_thread_id,
+                external_thread_id=reply_thread_ts,
                 reply_to_message_id=msg.external_message_id,
                 text=reply_text,
             )
