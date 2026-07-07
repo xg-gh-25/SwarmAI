@@ -136,10 +136,22 @@ class ChannelAdapter(ABC):
         self.config = config
         self._on_message = on_message
         self._on_error: Optional[OnErrorCallback] = None
+        # Owner-approval resolution callback (run_6038cd2c). Set by the gateway;
+        # an adapter that supports interactive approval cards invokes it when the
+        # owner clicks Allow/Deny: _on_approval(channel_id, action_id, value, clicker_id).
+        self._on_approval = None
 
     def set_on_error(self, callback: OnErrorCallback) -> None:
         """Register a callback for reporting runtime errors to the gateway."""
         self._on_error = callback
+
+    def set_on_approval(self, callback) -> None:
+        """Register a callback for resolving owner-approval button clicks.
+
+        Signature: ``async (channel_id, action_id, value, clicker_id) -> None``.
+        Adapters without interactive-approval support simply never call it.
+        """
+        self._on_approval = callback
 
     @abstractmethod
     async def start(self) -> None:

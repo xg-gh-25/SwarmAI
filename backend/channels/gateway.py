@@ -155,6 +155,11 @@ def _is_authorized_tier(sender_identity: Optional[SenderIdentity]) -> bool:
     )
 
 
+# Hard cap on live owner-approval prompts per channel (Gate-2 RANK-3 anti-DoS):
+# bounds channel_config['pending_approvals'] so a PUBLIC flood of distinct
+# sender_ids can't grow it unboundedly. Dead entries are reaped before the check.
+_MAX_PENDING_APPROVALS = 200
+
 _AUTH = {PermissionTier.OWNER.value, PermissionTier.TRUSTED.value}
 """THE single source of the authorized ``sender_tier`` string VALUES (run_84cb2ea3).
 
@@ -392,6 +397,220 @@ class ChannelGateway:
         )
 
     # ------------------------------------------------------------------
+    # Allowlist mutation — the SINGLE approval-path writer
+    # ------------------------------------------------------------------
+
+    async def add_trusted_sender(
+        self, channel_id: str, sender_id: str, *, actor: str = "slack_approval"
+    ) -> bool:
+        """Append *sender_id* to a channel's ``allowed_senders`` as TRUSTED.
+
+        The single writer for the Slack-approval path (Gate-1 SSA). It enforces
+        the load-bearing invariants the tier model depends on:
+
+        * **Owner invariant** — ``allowed_senders[0]`` is the owner (see
+          ``_resolve_sender_identity``). This method is **append-only** and NEVER
+          reorders, so index 0 can never be displaced. It refuses to run on an
+          empty allowlist (no owner to preserve → fail closed).
+        * **Idempotent** — a sender already present (owner or trusted) is a no-op,
+          so a double-click / replay cannot corrupt the list.
+        * **Cache coherence** — after the DB write it re-gets the row and refreshes
+          ``_channel_cache`` (mirrors the P0-bootstrap write at ~1055), so the new
+          TRUSTED tier takes effect on the sender's NEXT message rather than
+          staying latent behind a stale cache.
+
+        Returns True if the sender was newly added, False on no-op (already present,
+        empty allowlist, or missing channel). Audited via the structured logger
+        (workspace_audit_log's CHECK constraint forbids entity_type='channel', so a
+        log marker is the correct durable audit surface here).
+        """
+        channel = self._channel_cache.get(channel_id) or await db.channels.get(channel_id)
+        if not channel:
+            logger.warning("add_trusted_sender: channel %s not found", channel_id)
+            return False
+
+        allowed = _parse_json_list(channel.get("allowed_senders"))
+        if not allowed or not allowed[0]:
+            # No valid owner to preserve — refuse (fail closed). Approval only
+            # makes sense once a channel has a NON-EMPTY owner at index 0 (a blank
+            # owner is the degenerate config Gate-2 RANK-1 flagged).
+            logger.warning(
+                "add_trusted_sender: refusing on empty/blank-owner allowlist "
+                "channel=%s", channel_id,
+            )
+            return False
+        if sender_id in allowed:
+            logger.info(
+                "add_trusted_sender: %s already allowed on channel=%s — no-op",
+                sender_id, channel_id,
+            )
+            return False
+
+        new_allowed = allowed + [sender_id]  # append-only; index 0 immovable
+        await db.channels.update(channel_id, {"allowed_senders": new_allowed})
+        # Refresh cache so the tier change is not latent (skeptic C2).
+        refreshed = await db.channels.get(channel_id)
+        if refreshed is not None:
+            self._channel_cache[channel_id] = refreshed
+        else:
+            self._channel_cache.pop(channel_id, None)
+        logger.info(
+            "channel_gateway.audit.allowlist_add channel=%s sender=%s actor=%s "
+            "tier=trusted owner_preserved=%s",
+            channel_id, sender_id, actor, allowed[0],
+        )
+        return True
+
+    async def _maybe_prompt_owner_approval(
+        self, channel: dict, channel_id: str, msg: "InboundMessage"
+    ) -> bool:
+        """DM the owner ONE Allow/Deny card for an unapproved group-channel sender.
+
+        Dedup: one prompt per (channel, sender). The 'prompted' set is persisted in
+        ``channel_config['pending_approvals']`` (survives gateway restart), so a
+        chatty stranger triggers exactly one owner DM, not one per message.
+
+        This NEVER grants access — it only surfaces the decision. The owner's
+        button click (resolved in the adapter → ``add_trusted_sender``) is the sole
+        grant path. Returns True if a prompt was sent this call, False on dedup /
+        no owner / no adapter.
+        """
+        from channels import slack_approval as _sa
+
+        allowed = _parse_json_list(channel.get("allowed_senders"))
+        if not allowed:
+            return False
+        owner_id = allowed[0]
+        sender_id = msg.external_sender_id
+
+        pending = channel.get("pending_approvals")
+        if isinstance(pending, str):
+            try:
+                pending = json.loads(pending)
+            except (json.JSONDecodeError, TypeError):
+                pending = {}
+        if not isinstance(pending, dict):
+            pending = {}
+
+        existing = pending.get(sender_id)
+        if _sa.pending_is_actionable(existing):
+            return False  # already have a live prompt out for this sender — dedup
+
+        # Bound the pending set (Gate-2 RANK-3): a PUBLIC flood of distinct
+        # sender_ids must not grow channel_config unboundedly. First drop any
+        # dead (resolved/expired) entries; if still at cap, refuse to add a new
+        # prompt (the flood is denied, existing legit prompts are untouched).
+        pending = {
+            sid: e for sid, e in pending.items()
+            if _sa.pending_is_actionable(e) or sid == sender_id
+        }
+        if len(pending) >= _MAX_PENDING_APPROVALS and sender_id not in pending:
+            logger.warning(
+                "owner-approval: pending cap (%d) reached on channel=%s — "
+                "refusing new prompt for %s", _MAX_PENDING_APPROVALS, channel_id, sender_id,
+            )
+            return False
+
+        adapter = self._adapters.get(channel_id)
+        send_blocks = getattr(adapter, "send_blocks_to_user", None) if adapter else None
+        if send_blocks is None:
+            return False  # adapter can't deliver an interactive card — skip quietly
+
+        pending_id = uuid4().hex
+        pending[sender_id] = {
+            "pending_id": pending_id,
+            "status": "pending",
+            "created_at": time.time(),
+            "chat_id": msg.external_chat_id,
+        }
+        await db.channels.update(channel_id, {"pending_approvals": pending})
+        refreshed = await db.channels.get(channel_id)
+        if refreshed is not None:
+            self._channel_cache[channel_id] = refreshed
+
+        blocks = _sa.build_approval_blocks(
+            sender_id=sender_id,
+            sender_display_name=msg.sender_display_name or sender_id,
+            pending_id=pending_id,
+            channel_label=msg.external_chat_id,
+        )
+        await send_blocks(
+            owner_id, blocks,
+            f"{msg.sender_display_name or sender_id} wants to talk to me — approve?",
+        )
+        logger.info(
+            "channel_gateway.audit.approval_prompt channel=%s sender=%s owner=%s "
+            "pending_id=%s", channel_id, sender_id, owner_id, pending_id,
+        )
+        return True
+
+    async def resolve_approval(
+        self, channel_id: str, action_id: str, value: str, clicker_id: str
+    ) -> None:
+        """Resolve an owner Allow/Deny button click (adapter → here).
+
+        Fail-closed on EVERY branch:
+        * unknown action_id → ignore.
+        * clicker is not the owner (``allowed_senders[0]``) → deny + audit, NEVER
+          mutate. (A non-owner cannot escalate themselves.)
+        * pending missing / already resolved / expired → no-op (state-based replay
+          guard — a double-click or stale card grants nothing).
+        Only an owner Allow on a live pending calls ``add_trusted_sender``.
+        """
+        from channels import slack_approval as _sa
+
+        if action_id not in _sa._KNOWN_ACTIONS:
+            return
+        pending_id, sender_id = _sa.parse_action_value(value)
+        if not pending_id or not sender_id:
+            return
+
+        channel = self._channel_cache.get(channel_id) or await db.channels.get(channel_id)
+        if not channel:
+            return
+
+        if not _sa.is_owner_click(channel, clicker_id):
+            logger.warning(
+                "channel_gateway.audit.approval_denied_nonowner channel=%s "
+                "clicker=%s sender=%s — ignored", channel_id, clicker_id, sender_id,
+            )
+            return
+
+        pending = channel.get("pending_approvals")
+        if isinstance(pending, str):
+            try:
+                pending = json.loads(pending)
+            except (json.JSONDecodeError, TypeError):
+                pending = {}
+        if not isinstance(pending, dict):
+            pending = {}
+        entry = pending.get(sender_id)
+        # Replay guard: the pending must exist, be unresolved, unexpired, AND match
+        # the pending_id in the clicked button (a stale card carries an old id).
+        if not _sa.pending_is_actionable(entry) or entry.get("pending_id") != pending_id:
+            logger.info(
+                "channel_gateway.approval_stale channel=%s sender=%s — no-op",
+                channel_id, sender_id,
+            )
+            return
+
+        approve = action_id == _sa.ACTION_ALLOW
+        entry["status"] = "approved" if approve else "denied"
+        pending[sender_id] = entry
+        await db.channels.update(channel_id, {"pending_approvals": pending})
+        refreshed = await db.channels.get(channel_id)
+        if refreshed is not None:
+            self._channel_cache[channel_id] = refreshed
+
+        if approve:
+            await self.add_trusted_sender(channel_id, sender_id, actor=f"owner:{clicker_id}")
+        else:
+            logger.info(
+                "channel_gateway.audit.approval_denied channel=%s sender=%s "
+                "owner=%s", channel_id, sender_id, clicker_id,
+            )
+
+    # ------------------------------------------------------------------
     # Channel slot awareness (queue notifications)
     # ------------------------------------------------------------------
 
@@ -575,6 +794,7 @@ class ChannelGateway:
             on_message=self.handle_inbound_message,
         )
         adapter.set_on_error(self._handle_adapter_error)
+        adapter.set_on_approval(self.resolve_approval)
 
         # Validate config before attempting to start
         is_valid, validation_error = await adapter.validate_config()
@@ -1091,6 +1311,24 @@ class ChannelGateway:
             channel, msg.external_sender_id, msg.sender_display_name,
         )
         is_owner = sender_identity.is_owner
+
+        # 3.4. Slack-native owner approval (run_6038cd2c) -------------------------
+        # If a PUBLIC (unapproved) sender speaks in a group channel that HAS an
+        # owner, DM the owner ONE Allow/Deny card so they can add this teammate as
+        # TRUSTED from inside Slack. Fail-closed + non-blocking: this NEVER grants
+        # access on its own (only the owner's button click, via add_trusted_sender,
+        # does) and the message continues down the normal path (the activation gate
+        # below still decides reply/observe — a PUBLIC sender won't be recorded).
+        # Dedup: one prompt per (channel, sender) via a persisted 'prompted' flag.
+        if (
+            not is_dm
+            and sender_identity.permission_tier == PermissionTier.PUBLIC
+            and _parse_json_list(channel.get("allowed_senders"))  # has an owner
+        ):
+            try:
+                await self._maybe_prompt_owner_approval(channel, channel_id, msg)
+            except Exception:
+                logger.debug("owner-approval prompt failed (non-fatal)", exc_info=True)
 
         # 3.5. L1 activation gate (SHOULD-I-REPLY) --------------------------------
         # Orthogonal to access_mode (MAY-YOU-TALK, handled above). Decides whether

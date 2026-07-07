@@ -161,7 +161,37 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest):
     if request.access_mode is not None:
         updates["access_mode"] = request.access_mode
     if request.allowed_senders is not None:
-        updates["allowed_senders"] = request.allowed_senders
+        # Owner invariant (run_6038cd2c): allowed_senders[0] IS the owner
+        # (channels/gateway.py _resolve_sender_identity). A full-replace via this
+        # admin endpoint must not silently DEMOTE the current owner by putting a
+        # different id at index 0 — that would flip who has OWNER tier. If the
+        # channel already has an owner and the incoming list is non-empty with a
+        # different head, reject. (Removing the owner entirely, i.e. empty list,
+        # is still allowed — that's an explicit teardown, not a stealth flip.)
+        import json as _json
+        _current = channel.get("allowed_senders", "[]")
+        if isinstance(_current, str):
+            try:
+                _current = _json.loads(_current)
+            except (_json.JSONDecodeError, TypeError):
+                _current = []
+        _new = request.allowed_senders
+        # Reject a blank owner at index 0 (Gate-2 RANK-2): an empty-string owner
+        # is a degenerate config that fails OPEN downstream (is_owner_click). A
+        # non-empty list MUST have a non-empty owner. (Empty list = explicit
+        # teardown, still allowed.)
+        if _new and not (_new[0] and str(_new[0]).strip()):
+            raise ValidationException(
+                detail="allowed_senders[0] (the owner) must be a non-empty id."
+            )
+        if _current and _new and _new[0] != _current[0]:
+            raise ValidationException(
+                detail=(
+                    f"Cannot change channel owner: allowed_senders[0] must remain "
+                    f"'{_current[0]}' (the owner). Reorder rejected."
+                )
+            )
+        updates["allowed_senders"] = _new
     if request.blocked_senders is not None:
         updates["blocked_senders"] = request.blocked_senders
     if request.rate_limit_per_minute is not None:

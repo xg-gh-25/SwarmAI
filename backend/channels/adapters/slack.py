@@ -57,6 +57,11 @@ _UNSEEN = object()
 
 # Slack API limits
 _TEXT_FALLBACK_LIMIT = 39_000   # text field (notification fallback) — hard limit ~40K
+# Owner-approval action ids — mirror channels.slack_approval (single source of the
+# strings the .action() handlers register on). Imported to avoid drift.
+from channels.slack_approval import ACTION_ALLOW as _APPROVAL_ACTION_ALLOW  # noqa: E402
+from channels.slack_approval import ACTION_DENY as _APPROVAL_ACTION_DENY  # noqa: E402
+
 _BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
 _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 _MAX_BLOCKS_TEXT_BYTES = 38_000  # total text across all blocks in one API call (~40K payload limit)
@@ -686,6 +691,94 @@ class SlackChannelAdapter(ChannelAdapter):
         # (channel, ts) so only one is handled (run_4c5ad9c5).
         event["_is_app_mention"] = True
         self._handle_message_event(event, say)
+
+    def _register_handlers(self, bolt_app) -> None:
+        """Register ALL Socket Mode handlers on a bolt App — the SINGLE place.
+
+        Both socket-start sites (initial `_start_socket_mode_thread` and the
+        `_try_socket_mode_reconnect` path) call THIS, so a handler can never be
+        registered in one site but silently dropped in the other after a
+        reconnect (R27 — the exact drift Gate-1 flagged). Add any new event /
+        action handler HERE, never inline at a call site.
+        """
+        bolt_app.event("message")(self._handle_message_event)
+        bolt_app.event("app_mention")(self._handle_app_mention)
+        bolt_app.event("member_joined_channel")(self._handle_member_joined)
+        bolt_app.action(_APPROVAL_ACTION_ALLOW)(self._handle_block_action)
+        bolt_app.action(_APPROVAL_ACTION_DENY)(self._handle_block_action)
+
+    def _handle_member_joined(self, event: dict, say=None) -> None:
+        """A member joined a channel the bot is in.
+
+        Intentionally a NO-OP today (silent): we do NOT DM the owner at join time
+        (that spams the owner on busy channels — the deliberate divergence from
+        MeshClaw). Approval is triggered lazily when the unapproved member first
+        SPEAKS (gateway._maybe_prompt_owner_approval). Registered so the
+        subscription exists + a future policy can hook here without touching the
+        socket-start wiring again.
+        """
+        return
+
+    def _handle_block_action(self, body: dict, ack=None, say=None) -> None:
+        """Handle an Allow/Deny button click (block_actions) over Socket Mode.
+
+        bolt has ALREADY authenticated that this payload genuinely came from Slack
+        (Socket Mode), so there is no signature to re-verify here — the owner-only
+        check + pending-state replay guard live in the gateway's resolve_approval.
+        This just ack's Slack and bridges the (action_id, value, clicker) to the
+        main loop.
+        """
+        if ack is not None:
+            try:
+                ack()
+            except Exception:
+                pass
+        if self._stopped or self._on_approval is None:
+            return
+        try:
+            action = (body.get("actions") or [{}])[0]
+            action_id = action.get("action_id", "")
+            value = action.get("value", "")
+            clicker_id = (body.get("user") or {}).get("id", "")
+        except Exception:
+            return
+        main_loop = self._loop
+        if main_loop is not None and not main_loop.is_closed() and not self._stopped:
+            main_loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                self._on_approval(self.channel_id, action_id, value, clicker_id),
+            )
+
+    async def send_blocks_to_user(
+        self, user_id: str, blocks: list, fallback: str
+    ) -> Optional[str]:
+        """Open a DM with *user_id* and post interactive *blocks* (Allow/Deny card).
+
+        Unlike ``send_message`` (which regenerates blocks from text and cannot
+        carry buttons), this posts the caller's Block Kit verbatim — required for
+        the interactive approval card. Best-effort: returns the message ts or None.
+        """
+        if not self._slack_client:
+            return None
+        loop = asyncio.get_running_loop()
+        client = self._slack_client
+        try:
+            dm = await loop.run_in_executor(
+                None, lambda: client.conversations_open(users=user_id)
+            )
+            dm_channel = (dm.get("channel") or {}).get("id")
+            if not dm_channel:
+                return None
+            result = await loop.run_in_executor(
+                None,
+                lambda: client.chat_postMessage(
+                    channel=dm_channel, text=fallback[:_TEXT_FALLBACK_LIMIT], blocks=blocks
+                ),
+            )
+            return result.get("ts")
+        except Exception:
+            logger.debug("send_blocks_to_user failed for %s", user_id, exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     # Chat type normalization
@@ -1469,8 +1562,7 @@ class SlackChannelAdapter(ChannelAdapter):
         )
         try:
             bolt_app = App(token=self._bot_token)
-            bolt_app.event("message")(self._handle_message_event)
-            bolt_app.event("app_mention")(self._handle_app_mention)
+            self._register_handlers(bolt_app)
             handler = SocketModeHandler(bolt_app, self._app_token)
 
             # Try connecting in a thread with a timeout
@@ -1576,8 +1668,7 @@ class SlackChannelAdapter(ChannelAdapter):
         """
         if self._bolt_app is None:
             self._bolt_app = App(token=self._bot_token)
-            self._bolt_app.event("message")(self._handle_message_event)
-            self._bolt_app.event("app_mention")(self._handle_app_mention)
+            self._register_handlers(self._bolt_app)
 
         if self._handler is None:
             self._handler = SocketModeHandler(self._bolt_app, self._app_token)
