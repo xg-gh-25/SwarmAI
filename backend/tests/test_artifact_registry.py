@@ -564,3 +564,57 @@ class TestManifestConcurrencyLock:
         assert by_id[old]["superseded_by"] == new
         assert by_id[new]["superseded_by"] is None
         assert manifest["pipeline_state"] == "build"
+
+
+class TestRunScopedFilenameCollision:
+    """Regression (run_fc95d24c / DoD0b): two same-type same-day publishes into
+    ONE run must NOT overwrite each other on disk.
+
+    Before the fix, bare_filename was f"{type}-{date}{topic}.json" with no
+    artifact_id, so two run-scoped publishes of the same type on the same day
+    produced identical filenames — the 2nd overwrote the 1st on disk while the
+    manifest kept two distinct ids, so id1's entry silently resolved to id2's
+    data (BUILD lost to DELIVER; think lost to plan — both hit this session).
+    Fix: run-scoped filenames append the artifact_id. Top-level names unchanged.
+
+    Mutation: revert the artifact_id append in publish() → this test goes RED
+    (1 file on disk, id1 resolves to id2's data).
+    """
+
+    def test_run_scoped_same_type_same_day_no_collision(self, workspace, registry):
+        project = "CollisionApp"
+        (workspace / "Projects" / project).mkdir()
+
+        id1 = registry.publish(project, "changeset", {"who": "BUILD"},
+                               producer="build", summary="build stage", run_id="run_x")
+        id2 = registry.publish(project, "changeset", {"who": "DELIVER"},
+                               producer="deliver", summary="deliver stage", run_id="run_x")
+
+        assert id1 != id2
+        run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / "run_x"
+        files = sorted(run_dir.glob("*.json"))
+        assert len(files) == 2, "two same-type publishes must produce two distinct files"
+
+        # Each artifact_id must resolve to ITS OWN data (not the other's).
+        a1 = registry.get_artifact(project, id1)
+        a2 = registry.get_artifact(project, id2)
+        assert a1 is not None and a2 is not None
+        assert a1.data["who"] == "BUILD", "id1 must resolve to BUILD (not overwritten)"
+        assert a2.data["who"] == "DELIVER"
+
+    def test_top_level_filename_scheme_unchanged(self, workspace, registry):
+        """Top-level (no run_id) filenames must stay byte-identical to the old
+        scheme so the by-name readers (_load_artifact_by_date etc.) keep working."""
+        project = "TopLevelApp"
+        (workspace / "Projects" / project).mkdir()
+
+        registry.publish(project, "research", {"k": "v"},
+                         producer="t", summary="s")  # no run_id → top-level
+        artifacts_dir = workspace / "Projects" / project / ".artifacts"
+        research_files = [f.name for f in artifacts_dir.iterdir()
+                          if f.name.startswith("research-")]
+        assert len(research_files) == 1
+        # Exact old scheme: research-YYYYMMDD.json — NO artifact_id suffix.
+        import re
+        assert re.fullmatch(r"research-\d{8}\.json", research_files[0]), \
+            f"top-level name must be unchanged, got {research_files[0]}"

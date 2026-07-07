@@ -207,21 +207,37 @@ class ArtifactRegistry:
         artifact_id = f"art_{uuid4().hex[:8]}"
         date_str = now.strftime("%Y%m%d")
         topic_slug = f"-{_slugify(topic)}" if topic else ""
-        bare_filename = f"{artifact_type}-{date_str}{topic_slug}.json"
 
-        # Determine storage directory: runs/<run_id>/ or top-level
+        # Determine storage directory: runs/<run_id>/ or top-level.
+        # RUN-SCOPED names APPEND the artifact_id (run_fc95d24c / DoD0b): a
+        # pipeline publishes several artifacts of the SAME type on the SAME day
+        # into ONE run (e.g. a re-run stage, or two changesets), so a bare
+        # "{type}-{date}.json" collides — the 2nd write silently overwrote the
+        # 1st on disk while the manifest kept both ids, so id1 resolved to id2's
+        # data (build lost to deliver; think lost to plan — both hit in one
+        # session). The id makes run-scoped filenames unique. TOP-LEVEL names
+        # are LEFT UNCHANGED ("{type}-{date}[-topic].json") because the by-name
+        # readers (_load_artifact_by_date / _load_latest_artifact_by_type) parse
+        # the top-level dir by that exact scheme; run-scoped artifacts are ALWAYS
+        # read via the manifest entry['file'], never reconstructed by name.
+        # The id is APPENDED (not prepended) so `startswith("{type}-")` filters
+        # keep matching. bare_filename feeds BOTH the disk write (below) and the
+        # manifest `filename` — computing it once keeps them consistent.
         if run_id:
+            bare_filename = f"{artifact_type}-{date_str}{topic_slug}-{artifact_id}.json"
             write_dir = artifacts_dir / "runs" / run_id
             write_dir.mkdir(parents=True, exist_ok=True)
             # file path in manifest is relative to .artifacts/
             filename = f"runs/{run_id}/{bare_filename}"
         else:
+            bare_filename = f"{artifact_type}-{date_str}{topic_slug}.json"
             write_dir = artifacts_dir
             filename = bare_filename
 
-        # Write artifact data file OUTSIDE the manifest lock: filenames are
-        # unique per artifact so data-file writes never collide, and holding
-        # the manifest lock across a file write would be head-of-line blocking.
+        # Write artifact data file OUTSIDE the manifest lock: each run-scoped
+        # filename carries its artifact_id and top-level names are unique per
+        # (type, date, topic), so data-file writes don't collide; holding the
+        # manifest lock across a file write would be head-of-line blocking.
         artifact_path = write_dir / bare_filename
         artifact_path.write_text(
             json.dumps(data, indent=2, default=str),

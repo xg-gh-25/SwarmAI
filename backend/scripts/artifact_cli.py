@@ -3416,6 +3416,14 @@ def _load_artifact_for_metrics(project: str, artifact_id: str) -> dict | None:
 def _load_latest_artifact_by_type(project: str, artifact_type: str) -> dict | None:
     """Load the most recent artifact file by type prefix (e.g. 'evaluation', 'changeset').
 
+    ⚠️ TOP-LEVEL ONLY BY DESIGN: this scans only the top-level ``.artifacts/``
+    dir, never ``runs/<run_id>/``. RUN-SCOPED artifacts must be read via the
+    manifest ``entry['file']`` (get_artifact/discover), NOT reconstructed by
+    name — their on-disk names carry an ``-<artifact_id>`` suffix (run_fc95d24c)
+    precisely because same-type same-day names collide within a run. Do NOT add
+    a ``runs/<id>/{type}-{date}.json`` glob here; it would miss the id-suffixed
+    files. Top-level names remain the bare ``{type}-{date}.json`` scheme.
+
     Artifacts are stored as <type>-YYYYMMDD.json in .artifacts/ directory.
     Returns the most recent one (sorted by filename descending).
 
