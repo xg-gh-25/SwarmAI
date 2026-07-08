@@ -170,6 +170,50 @@ function buildExport() {
 | Ad-hoc artifact | `Attachments/YYYY-MM-DD-<topic>.html` | One-off comparison |
 | ClientOrg reports | `Knowledge/Reports/` (already handled by client-* skills) | Weekly/Monthly |
 
+## Export to PDF (when the user asks for a PDF)
+
+**Use ONLY the bundled script. Never shell out to a browser CLI.**
+
+```bash
+python .claude/skills/s_html-artifact/scripts/html2pdf.py <src.html> [out.pdf]
+# out.pdf defaults to the source path with a .pdf suffix
+```
+
+Or in-process:
+
+```python
+from html2pdf import html_to_pdf   # scripts/html2pdf.py
+out = html_to_pdf("report.html", "report.pdf")  # returns the path; raises on failure
+```
+
+### 🚫 BANNED: `chrome --headless --print-to-pdf`
+
+Do NOT convert HTML→PDF with Chrome's CLI print flag. It is **not reliable** and it
+**lies about success**:
+
+- On complex HTML (flex/grid, `min-height:100vh`, inline SVG, `white-space:nowrap`)
+  Chrome's headless print pipeline fails inside `print_render_frame_helper.cc:2268
+  "Printing failed."` — **while the process still exits 0 and writes no file.**
+- Because `exit=0` looks like success, this triggers a retry-the-same-command loop.
+  It cost a prior session ~15 attempts (run_8debb0fe, 2026-07-08) before limping to
+  a result by splitting the page + stitching with pdfunite.
+
+`html2pdf.py` uses **Playwright** (Chromium via the DevTools `printToPDF` protocol,
+not the CLI print path). Playwright rendered the exact file Chrome CLI failed on in
+one shot. Same-engine, different code path — the reliable one.
+
+### Two hard rules (the script enforces both; you enforce them too)
+
+1. **Verify by output file size, never by exit code.** Success == the PDF exists
+   AND `os.path.getsize(out) > 0`. `html2pdf.py` raises `Html2PdfError` on a
+   missing/empty output instead of returning a fake success. If you ever verify a
+   PDF another way, check the file size — an exit code proves nothing here.
+2. **Stop after 2 failures — do NOT keep retrying.** If `html2pdf.py` fails twice,
+   STOP (Debugging Rule). Read its error message: the usual real cause is a missing
+   browser binary, and the fix it names is `python -m playwright install chromium`.
+   Never fall back to the banned Chrome CLI, and never retry the same command a
+   third time hoping for a different result.
+
 ## Chat Integration Pattern
 
 After generating an HTML artifact, the chat response MUST follow this pattern:

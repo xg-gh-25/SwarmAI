@@ -1,0 +1,17 @@
+# Manifest for html-artifact
+name: html-artifact
+version: "1.0.0"
+tier: lazy
+
+# html2pdf.py drives Chromium via Playwright's DevTools printToPDF protocol.
+# playwright is a repo dependency; the Chromium browser binary is installed via
+# `python -m playwright install chromium` (the script fails LOUD with this hint
+# if it is missing).
+dependencies:
+  pip:
+    - playwright
+
+scripts:
+  - path: scripts/html2pdf.py
+    description: "html2pdf.py — playwright-only HTML→PDF (verify by file size, chrome --print-to-pdf is banned: it exits 0 while silently failing on complex HTML)"
+    entry: true
