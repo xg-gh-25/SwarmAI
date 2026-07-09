@@ -297,6 +297,50 @@ class TestDeepCheck:
             hook._deep_check(workspace, str(workspace))
         assert any("MISSING: DailyActivity/" in r.message for r in caplog.records)
 
+
+class TestDddCompleteness:
+    """DDD 4-doc completeness detection — the gap that let CMHK_SalesIntel
+    sit with only IMPROVEMENT.md (3 missing docs) for >1 month unwarned."""
+
+    def test_half_created_project_warns(self, hook, workspace):
+        """A project with ≥1 but <4 DDD docs is flagged as half-created."""
+        # workspace's TestProject has only PRODUCT.md + TECH.md (2/4)
+        findings = hook._check_ddd_completeness(workspace)
+        assert any("DDD-INCOMPLETE" in f and "TestProject" in f for f in findings), \
+            f"Expected TestProject flagged incomplete, got: {findings}"
+        # names the missing docs
+        joined = " ".join(findings)
+        assert "IMPROVEMENT.md" in joined and "PROJECT.md" in joined
+
+    def test_complete_project_silent(self, hook, workspace):
+        """A project with all 4 DDD docs produces no completeness finding."""
+        proj = workspace / "Projects" / "Complete"
+        proj.mkdir(parents=True)
+        for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+            (proj / doc).write_text(f"# {doc}\n\nContent.\n")
+        findings = hook._check_ddd_completeness(workspace)
+        assert not any("Complete" in f for f in findings), \
+            f"Complete project should not be flagged, got: {findings}"
+
+    def test_zero_doc_dir_not_flagged(self, hook, workspace):
+        """A dir with 0 DDD docs is NOT a DDD project — don't flag it."""
+        empty = workspace / "Projects" / "NotADddProject"
+        empty.mkdir(parents=True)
+        (empty / "random.txt").write_text("not a ddd doc")
+        findings = hook._check_ddd_completeness(workspace)
+        assert not any("NotADddProject" in f for f in findings), \
+            f"0-doc dir should not be flagged, got: {findings}"
+
+    def test_wired_into_deep_check(self, hook, workspace, caplog):
+        """The completeness check is actually CALLED by _deep_check (not just
+        defined). Mutation-guard: if the wiring is removed, this goes RED."""
+        # TestProject (2/4 docs) is half-created → deep_check must surface it
+        with caplog.at_level(logging.WARNING, logger="hooks.context_health_hook"):
+            hook._deep_check(workspace, str(workspace))
+        assert any("DDD-INCOMPLETE" in r.message and "TestProject" in r.message
+                   for r in caplog.records), \
+            "deep_check did not surface the DDD-INCOMPLETE finding — wiring missing"
+
     def test_detects_stale_git_lock(self, hook, workspace, caplog):
         """Deep check removes stale .git/index.lock."""
         lock = workspace / ".git" / "index.lock"

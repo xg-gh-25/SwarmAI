@@ -2318,6 +2318,16 @@ class ContextHealthHook:
         #     pauses (Gate BLOCK / awaiting-decision / work-done). (run_5caa2588)
         findings += self._sweep_pipeline_zombies()
 
+        # 13. DDD completeness — detect HALF-CREATED projects (≥1 but <4 standard
+        #     DDD docs). This is the gap that let CMHK_SalesIntel sit with only
+        #     IMPROVEMENT.md (3 missing docs) for >1 month unwarned: cultivation
+        #     checks CONTENT freshness, _refresh_knowledge_projects_section
+        #     silently skips missing docs (`if docs:`), and nothing checked
+        #     EXISTENCE of the standard 4. A half-created project breaks
+        #     cross-project index refs + leaves EVALUATE without a PRODUCT/TECH
+        #     base. (run_5a29f00c)
+        findings += self._check_ddd_completeness(root)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -2352,6 +2362,47 @@ class ContextHealthHook:
         except Exception as e:  # noqa: BLE001 — fail-open by design
             findings.append(
                 f"pipeline zombie sweep failed (non-fatal): "
+                f"{type(e).__name__}: {e}"
+            )
+        return findings
+
+    def _check_ddd_completeness(self, root: Path) -> list[str]:
+        """Flag HALF-CREATED projects: ≥1 but <4 of the standard DDD docs.
+
+        A DDD project has 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT). A project
+        with SOME but not ALL is half-created — usually because it was made
+        outside standard `s_project-manager` provisioning. That silently breaks
+        cross-project index refs (PROJECTS.md points at files that don't exist)
+        and leaves the pipeline's EVALUATE stage without a PRODUCT/TECH base.
+
+        A dir with 0 DDD docs is NOT a DDD project (skip it). A dir with all 4
+        is healthy (skip it). Only the 1-3 range is flagged.
+
+        Fail-open: any error is logged + returned as a finding, never raised —
+        a health sub-item must not break the whole deep check or session start.
+        """
+        DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+        findings: list[str] = []
+        try:
+            projects_dir = root / "Projects"
+            if not projects_dir.is_dir():
+                return findings
+            for d in sorted(projects_dir.iterdir()):
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                present = [f for f in DDD_DOCS if (d / f).exists()]
+                if present and len(present) < len(DDD_DOCS):
+                    missing = [f for f in DDD_DOCS if f not in present]
+                    findings.append(
+                        f"[gap/medium] DDD-INCOMPLETE: project '{d.name}' has "
+                        f"{len(present)}/4 standard DDD docs — missing "
+                        f"{', '.join(missing)}. Half-created projects break "
+                        f"cross-project index refs + leave pipeline EVALUATE "
+                        f"without a PRODUCT/TECH base. Backfill via s_project-manager."
+                    )
+        except Exception as e:  # noqa: BLE001 — fail-open by design
+            findings.append(
+                f"DDD completeness check failed (non-fatal): "
                 f"{type(e).__name__}: {e}"
             )
         return findings
