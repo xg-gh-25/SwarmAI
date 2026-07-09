@@ -272,9 +272,9 @@ class TestListContentHandling:
 
 class TestUsageRefBridge:
     """R2-real (run_77504e11): bridge the LIVE .memory-usage.json signal to body
-    entry ref_count. ref is consumed by _is_reclaimable_noise (protect from strip)
-    + get_stage_knowledge (injection ranking). Only GENUINELY-used entries
-    (usage >= threshold) get a log-damped ref so reclaim isn't neutered for all."""
+    entry ref_count. ref is consumed by _is_reclaimable_noise (protect from strip).
+    Only GENUINELY-used entries (usage >= threshold) get a log-damped ref so
+    reclaim isn't neutered for all."""
 
     def test_build_usage_ref_map_joins_id_to_title(self):
         from core.memory_decay import build_usage_ref_map

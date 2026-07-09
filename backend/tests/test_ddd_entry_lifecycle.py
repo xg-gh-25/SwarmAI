@@ -640,55 +640,6 @@ class TestDecayThresholdsTightened:
         assert len(t) == 1 and t[0].new_state == "archived"
 
 
-# ── AC3/AC4/AC5: get_stage_knowledge ─────────────────────────────────────────
-
-class TestGetStageKnowledge:
-    def test_returns_filtered_by_type_and_stage(self):
-        from core.ddd_entry_lifecycle import get_stage_knowledge
-
-        entries = parse_entries(SAMPLE_CONTENT)
-        # BUILD stage should get guideline + pitfall entries
-        result = get_stage_knowledge(entries, "build")
-        types_returned = {e.entry_type for e in result}
-        # BUILD affinity: guideline(7) + pitfall(5) + decision(2)
-        assert "guideline" in types_returned or "pitfall" in types_returned
-
-    def test_respects_max_per_type(self):
-        from core.ddd_entry_lifecycle import get_stage_knowledge
-
-        entries = parse_entries(SAMPLE_CONTENT)
-        result = get_stage_knowledge(entries, "build")
-        # Should not exceed total budget (guideline:7 + pitfall:5 + decision:2 = 14 max)
-        assert len(result) <= 14
-
-    def test_excludes_dormant_entries(self):
-        from core.ddd_entry_lifecycle import get_stage_knowledge
-
-        entries = parse_entries(SAMPLE_CONTENT)
-        # Mark one as dormant
-        entries[0].decay_state = "dormant"
-        result = get_stage_knowledge(entries, "build")
-        dormant_in_result = [e for e in result if e.decay_state == "dormant"]
-        assert len(dormant_in_result) == 0
-
-    def test_sorts_by_ref_count_descending(self):
-        from core.ddd_entry_lifecycle import get_stage_knowledge
-
-        entries = parse_entries(SAMPLE_CONTENT)
-        result = get_stage_knowledge(entries, "review")
-        if len(result) >= 2:
-            # Higher ref_count should come first
-            for i in range(len(result) - 1):
-                assert result[i].ref_count >= result[i + 1].ref_count
-
-    def test_unknown_stage_returns_empty(self):
-        from core.ddd_entry_lifecycle import get_stage_knowledge
-
-        entries = parse_entries(SAMPLE_CONTENT)
-        result = get_stage_knowledge(entries, "nonexistent_stage")
-        assert result == []
-
-
 # ── M0: compute_entry_noise — honest per-entry noise metric ──────────────────
 #
 # Neutral synthetic fixture (NOT the real IMPROVEMENT.md): every entry's

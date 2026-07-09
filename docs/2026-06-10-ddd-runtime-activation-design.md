@@ -115,6 +115,18 @@ After implementation:
 
 ## F2: Activate `get_stage_knowledge()` — Stage-Aware Injection via CLI
 
+> **⛔ SUPERSEDED & REMOVED (run_7d2a6c57, 2026-07-09).** This F2 proposal was
+> implemented as `get_stage_knowledge()` + `STAGE_KNOWLEDGE_AFFINITY` +
+> `MEMORY_STAGE_AFFINITY` + the `ddd-stage-inject` CLI command — but it was
+> **never wired into any live pipeline stage** (no `stages/*.md` or
+> `INSTRUCTIONS.md` ever called it). It sat as tested-but-orphan code.
+> **Decision: DELETED, not activated** — per-stage type-filtering contradicts
+> our large-context design philosophy (discussion #19: in a 1M window, inject
+> the whole DDD doc and let the model reason; a per-stage filter/retrieval layer
+> is maintenance tax for no benefit). The whole-doc injection is the deliberate
+> choice, not a gap. The rest of this section is retained for historical context
+> only — do NOT re-implement it.
+
 ### Design Choice: CLI Command, Not Programmatic Injection
 
 We cannot inject content into the Agent's context mid-conversation (SDK limitation). But the pipeline Agent already runs CLI commands at each stage (`artifact_cli.py`). Adding one more command is zero-friction.

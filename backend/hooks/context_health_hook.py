@@ -1804,9 +1804,8 @@ class ContextHealthHook:
             # to body ref_count via index-ID→title→body, log-damped, only for
             # usage >= threshold (so reclaim is NOT neutered for the long tail).
             # ref is consumed by _is_reclaimable_noise (protect used entries from
-            # physical strip) + get_stage_knowledge (rank used entries higher in
-            # injection) — NOT by assess_decay (which no longer reads ref, R2-prime).
-            # So a genuinely-used entry survives reclaim AND resurfaces. Setting
+            # physical strip) — NOT by assess_decay (which no longer reads ref,
+            # R2-prime). So a genuinely-used entry survives reclaim. Setting
             # ref BEFORE inject means the existing inject_entry_metadata persists it
             # (ref is already a field it writes) — single canonical writer, no
             # clobber, no new format.

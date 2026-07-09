@@ -303,10 +303,9 @@ def bump_entry_references(
 # Connects the LIVE per-entry usage signal (.memory-usage.json, written by
 # context_health_hook._track_memory_usage from real transcript [ID] citations)
 # to body-entry ref_count. ref is consumed by ddd_entry_lifecycle's
-# _is_reclaimable_noise (ref!=0 → protected from physical strip) and
-# get_stage_knowledge (ref drives injection ranking). So a genuinely-used entry
-# survives reclaim AND resurfaces higher in injection — the honest replacement
-# for the removed toxic prose-bump. NOT wired to assess_decay (which no longer
+# _is_reclaimable_noise (ref!=0 → protected from physical strip). So a
+# genuinely-used entry survives reclaim — the honest replacement for the
+# removed toxic prose-bump. NOT wired to assess_decay (which no longer
 # reads ref — see ddd_entry_lifecycle R2-prime).
 #
 # Join: usage is keyed by INDEX-ID; the index block carries `- [ID] Title | ...`.
