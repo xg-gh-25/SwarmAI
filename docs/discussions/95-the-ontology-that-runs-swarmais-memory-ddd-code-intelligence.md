@@ -1,7 +1,7 @@
 ---
 title: "The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence (🏷️Classification + 🕸️Relations, no Neo4j)"
 created: 2026-07-08
-updated: 2026-07-08
+updated: 2026-07-09
 status: published
 ---
 <!-- GitHub Discussion #95: https://github.com/xg-gh-25/SwarmAI/discussions/95 -->

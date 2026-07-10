@@ -1,8 +1,10 @@
 ---
+title: "DDD Cultivation — The Full Story: Decisions, Failures, and Evidence"
 created: 2026-05-18
-updated: 2026-05-18
+updated: 2026-05-22
+status: published
 ---
-# DDD Cultivation — The Full Story: Decisions, Failures, and Evidence
+<!-- GitHub Discussion #40: https://github.com/xg-gh-25/SwarmAI/discussions/40 -->
 
 > GitHub: https://github.com/xg-gh-25/SwarmAI/discussions/40
 
@@ -28,7 +30,7 @@ Most AI agent "knowledge" is either a dumped README that rots in 2 weeks, or a R
 Every AI coding agent faces the same gap: the model knows programming but not **your** domain.
 
 ```
-User: "Add the AcmeCorp monthly report"
+User: "Add the CMHK monthly report"
 Agent without DDD: Generic report. Wrong scope. Wrong hierarchy. Wrong filters.
 Agent with DDD: Reads TECH.md → knows 5 hierarchy levels, 17 data tables, mandatory partition filters.
                 Reads IMPROVEMENT.md → knows previous report bugs (territory_owner column doesn't exist).
@@ -36,7 +38,7 @@ Agent with DDD: Reads TECH.md → knows 5 hierarchy levels, 17 data tables, mand
                 → Produces correct report on first attempt.
 ```
 
-This isn't hypothetical. We have 9 AcmeCorp skills that use DDD context. Before DDD was populated, each skill took 3-5 iterations to get the SQL right. After: first-attempt accuracy for domain-specific logic.
+This isn't hypothetical. We have 9 CMHK skills that use DDD context. Before DDD was populated, each skill took 3-5 iterations to get the SQL right. After: first-attempt accuracy for domain-specific logic.
 
 **Why existing approaches fail:**
 
@@ -205,7 +207,7 @@ Large TECH.md files (97K for SwarmAI) never load fully. Agent reads section TOC,
 | Project | Lines | Trust | Stale Sections |
 |---------|------:|:-----:|:--------------:|
 | SwarmAI | 2,090 | Full | 0 |
-| AcmeCorp | 1,694 | Full | 0 |
+| CMHK_BIZ | 1,694 | Full | 0 |
 | AIDLC | 888 | Full | 0 |
 | GitHub_Community | 398 | High | 0 |
 | PhysicalAI | 262 | Moderate | 1 (31d stale) |
@@ -275,7 +277,7 @@ DDD isn't valuable in isolation. Its value comes from feeding multiple engines s
 ```
 
 **What Pipeline learns → makes Pollinate smarter.**
-Example: Pipeline delivers a AcmeCorp monthly report, discovers `territory_owner` column doesn't exist (TECH.md pitfall). Next week, Pollinate generates GTM content for the same BU — it won't reference territory_owner data because TECH.md now says it doesn't exist.
+Example: Pipeline delivers a CMHK monthly report, discovers `territory_owner` column doesn't exist (TECH.md pitfall). Next week, Pollinate generates GTM content for the same BU — it won't reference territory_owner data because TECH.md now says it doesn't exist.
 
 **What Pollinate learns → makes Pipeline safer.**
 Example: Pollinate produces brand content, discovers a non-goal ("not multi-tenant SaaS" in PRODUCT.md). Pipeline won't build SaaS features because the same PRODUCT.md gates its EVALUATE stage.

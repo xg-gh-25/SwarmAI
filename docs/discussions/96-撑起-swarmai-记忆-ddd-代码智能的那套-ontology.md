@@ -1,7 +1,7 @@
 ---
 title: "撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology(🏷️分类 + 🕸️关系,不上 Neo4j)"
 created: 2026-07-08
-updated: 2026-07-08
+updated: 2026-07-09
 status: published
 ---
 <!-- GitHub Discussion #96: https://github.com/xg-gh-25/SwarmAI/discussions/96 -->
