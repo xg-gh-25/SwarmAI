@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Helvetica Neue","Segoe UI",Arial,sans-serif; background:#0b0f17; }
+  .page { width:1200px; min-height:720px; padding:56px 64px; background:linear-gradient(160deg,#0d1220 0%,#131a2b 100%);
+          color:#e6ebf5; display:flex; flex-direction:column; }
+  .kicker { font-size:20px; color:#5e7cff; letter-spacing:2px; font-weight:700; margin-bottom:6px; }
+  h1 { font-size:42px; font-weight:800; line-height:1.2; margin-bottom:8px; }
+  h1 .hl { color:#ffd15c; }
+  .sub { font-size:20px; color:#9fb0c9; margin-bottom:34px; line-height:1.5; }
+  .row { display:flex; gap:28px; flex:1; }
+  .card { flex:1; background:#182236; border:1px solid #263349; border-radius:18px; padding:30px 30px; display:flex; flex-direction:column; }
+  .card.noun { border-top:5px solid #4a6fa5; }
+  .card.verb { border-top:5px solid #ffb03a; }
+  .ctag { font-size:17px; font-weight:700; letter-spacing:1px; margin-bottom:4px; }
+  .noun .ctag { color:#7fa8e0; } .verb .ctag { color:#ffc46b; }
+  .ctitle { font-size:29px; font-weight:800; margin-bottom:18px; }
+  .li { font-size:19px; line-height:1.55; color:#cdd8ea; margin-bottom:12px; padding-left:26px; position:relative; }
+  .li:before { content:"▸"; position:absolute; left:0; color:#5e7cff; }
+  .verb .li:before { color:#ffb03a; }
+  .payoff { margin-top:auto; font-size:23px; font-weight:800; padding-top:18px; }
+  .noun .payoff { color:#7fa8e0; } .verb .payoff { color:#ffd15c; }
+  .foot { margin-top:30px; font-size:18px; color:#7c8aa5; text-align:center; }
+  .foot b { color:#e6ebf5; }
+  .ladder { display:flex; flex-direction:column; gap:16px; flex:1; }
+  .step { display:flex; align-items:center; background:#182236; border:1px solid #263349; border-radius:14px; padding:20px 28px; }
+  .step .n { font-size:24px; font-weight:800; width:190px; }
+  .step .arm { flex:1; font-size:20px; color:#cdd8ea; }
+  .step .sys { font-size:18px; color:#8fa3c2; font-weight:600; text-align:right; width:430px; }
+  .s1 { border-left:6px solid #3d5a80; } .s1 .n{color:#8aa7cc;}
+  .s2 { border-left:6px solid #4a7c8c; } .s2 .n{color:#7fc4c9;}
+  .s3 { border-left:6px solid #c98b3a; margin-left:40px; } .s3 .n{color:#ffb960;}
+  .s4 { border-left:6px solid #d9642e; margin-left:80px; } .s4 .n{color:#ff8a5c;}
+  .badge { display:inline-block; background:#233; color:#9fe0c0; font-size:15px; padding:2px 10px; border-radius:8px; margin-left:8px; }
+  .eng { flex:1; background:#182236; border:1px solid #263349; border-radius:18px; padding:30px; }
+  .eng.k { border-top:5px solid #d98cff; } .eng.c { border-top:5px solid #5ad1a0; }
+  .eng h3 { font-size:27px; margin-bottom:16px; } .eng.k h3{color:#d8a8ff;} .eng.c h3{color:#8de8c2;}
+  .kv { font-size:19px; line-height:1.65; color:#cdd8ea; margin-bottom:10px; }
+  .kv b { color:#fff; }
+  .num { font-size:38px; font-weight:800; color:#ffd15c; }
+</style></head>
+<body>
+
+<!-- PAGE 1: Noun vs Verb -->
+<div class="page" id="p1">
+  <div class="kicker">THE TWO LAYERS OF ONTOLOGY</div>
+  <h1>Ontology isn't a knowledge graph — <span class="hl">it's a decision layer</span></h1>
+  <div class="sub">One word, two camps using it — an order of magnitude apart in meaning</div>
+  <div class="row">
+    <div class="card noun">
+      <div class="ctag">🏷️ THE NOUN CAMP</div>
+      <div class="ctitle">Classification + Relations</div>
+      <div class="li">Tag each thing (contacts: family / colleague)</div>
+      <div class="li">Link things together (Zhang —is boss of→ Li)</div>
+      <div class="li">Knowledge graphs live here</div>
+      <div class="payoff">→ lets you «find it»<br><span style="font-size:18px;color:#9fb0c9;font-weight:500">can look up, but can't act</span></div>
+    </div>
+    <div class="card verb">
+      <div class="ctag">⚡ THE VERB CAMP</div>
+      <div class="ctitle">What you can DO + who owns the outcome</div>
+      <div class="li">Action: what you can do to the world (order / configure / kill)</div>
+      <div class="li">Function: decision rules, constraints, tradeoffs</div>
+      <div class="li">Proposal: AI proposes → human approves → system executes → <b>fully audited</b></div>
+      <div class="payoff">→ lets you «make the call»<br><span style="font-size:18px;color:#9fb0c9;font-weight:500">with tradeoffs, ownership, traceability</span></div>
+    </div>
+  </div>
+  <div class="foot"><b>The noun camp lets you see the world; the verb camp lets you change it.</b> A pure knowledge graph stops at the noun layer.</div>
+</div>
+
+<!-- PAGE 2: four-rung ladder -->
+<div class="page" id="p2">
+  <div class="kicker">ONE 4-RUNG RULER · EACH SUBSYSTEM IS A RUNG</div>
+  <h1>From <span class="hl">prediction</span>, all the way to <span class="hl">decision</span></h1>
+  <div class="sub">Most "data capabilities" stop at prediction. SwarmAI walks the whole chain.</div>
+  <div class="ladder">
+    <div class="step s1"><div class="n">Predict</div><div class="arm">what will happen</div><div class="sys">DDD · Memory · Knowledge (noun layer)</div></div>
+    <div class="step s2"><div class="n">Infer</div><div class="arm">why</div><div class="sys">7-type memory + relation graph · Darwinian fade</div></div>
+    <div class="step s3"><div class="n">Simulate</div><div class="arm">what if… (multi-path what-if)</div><div class="sys">CodeGraph (18K nodes / 28K edges) + THINK's 3 approaches</div></div>
+    <div class="step s4"><div class="n">Decide</div><div class="arm">which path, own the outcome, auditable</div><div class="sys">Adversarial gate + human approval + irreversible-op gate</div></div>
+  </div>
+  <div class="foot">The last two rungs <span class="badge">Simulate</span> <span class="badge">Decide</span> = an isomorph of Palantir's Proposal workflow — <b>where most agent tools can't reach</b></div>
+</div>
+
+<!-- PAGE 3: two engines -->
+<div class="page" id="p3">
+  <div class="kicker">ONE IDEA · TWO ENGINES</div>
+  <h1>Why <span class="hl">knowledge</span> and <span class="hl">code</span> don't share one engine</h1>
+  <div class="sub">Same "classification + relations" — but opposite lifecycle needs</div>
+  <div class="row">
+    <div class="eng k">
+      <h3>💛 Knowledge side</h3>
+      <div class="kv"><b>Cares about:</b> should this be forgotten?</div>
+      <div class="kv"><b>Objects:</b> memory + 9 project knowledge bases</div>
+      <div class="kv"><b>Engine:</b> ddd_entry_lifecycle.py (shared)</div>
+      <div class="kv"><b>Lifecycle:</b> Darwinian <b style="color:#ffd15c">fade → forget</b></div>
+      <div class="kv" style="margin-top:14px;color:#9fb0c9">Use it or lose it: referenced → +1 stronger; idle → dormant → archived</div>
+    </div>
+    <div class="eng c">
+      <h3>💚 Code side</h3>
+      <div class="kv"><b>Cares about:</b> who's connected to whom right now?</div>
+      <div class="kv"><b>Objects:</b> a call graph of <span class="num">18,034</span> functions</div>
+      <div class="kv"><b>Engine:</b> code_intel/graph_store.py (separate)</div>
+      <div class="kv"><b>Lifecycle:</b> on any code change, <b style="color:#8de8c2">invalidate → rebuild</b>, no fade</div>
+      <div class="kv" style="margin-top:14px;color:#9fb0c9">Changing a function? One graph query lists every caller — you know the blast radius before you touch it</div>
+    </div>
+  </div>
+  <div class="foot">They share the <b>idea</b> of Ontology (nodes + edges + classification), but opposite lifecycles → <b>two separate engines</b></div>
+</div>
+
+</body></html>

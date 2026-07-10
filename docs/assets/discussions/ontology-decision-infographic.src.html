@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif; background:#0b0f17; }
+  .page { width:1200px; min-height:720px; padding:56px 64px; background:linear-gradient(160deg,#0d1220 0%,#131a2b 100%);
+          color:#e6ebf5; display:flex; flex-direction:column; }
+  .kicker { font-size:20px; color:#5e7cff; letter-spacing:2px; font-weight:700; margin-bottom:6px; }
+  h1 { font-size:44px; font-weight:800; line-height:1.2; margin-bottom:8px; }
+  h1 .hl { color:#ffd15c; }
+  .sub { font-size:20px; color:#9fb0c9; margin-bottom:34px; line-height:1.5; }
+  .row { display:flex; gap:28px; flex:1; }
+  .card { flex:1; background:#182236; border:1px solid #263349; border-radius:18px; padding:30px 30px; display:flex; flex-direction:column; }
+  .card.noun { border-top:5px solid #4a6fa5; }
+  .card.verb { border-top:5px solid #ffb03a; }
+  .ctag { font-size:17px; font-weight:700; letter-spacing:1px; margin-bottom:4px; }
+  .noun .ctag { color:#7fa8e0; } .verb .ctag { color:#ffc46b; }
+  .ctitle { font-size:30px; font-weight:800; margin-bottom:18px; }
+  .li { font-size:20px; line-height:1.6; color:#cdd8ea; margin-bottom:12px; padding-left:26px; position:relative; }
+  .li:before { content:"▸"; position:absolute; left:0; color:#5e7cff; }
+  .verb .li:before { color:#ffb03a; }
+  .payoff { margin-top:auto; font-size:23px; font-weight:800; padding-top:18px; }
+  .noun .payoff { color:#7fa8e0; } .verb .payoff { color:#ffd15c; }
+  .foot { margin-top:30px; font-size:18px; color:#7c8aa5; text-align:center; }
+  .foot b { color:#e6ebf5; }
+  /* page 2 : ladder */
+  .ladder { display:flex; flex-direction:column; gap:16px; flex:1; }
+  .step { display:flex; align-items:center; background:#182236; border:1px solid #263349; border-radius:14px; padding:20px 28px; }
+  .step .n { font-size:26px; font-weight:800; width:150px; }
+  .step .arm { flex:1; font-size:21px; color:#cdd8ea; }
+  .step .sys { font-size:19px; color:#8fa3c2; font-weight:600; text-align:right; width:420px; }
+  .s1 { border-left:6px solid #3d5a80; } .s1 .n{color:#8aa7cc;}
+  .s2 { border-left:6px solid #4a7c8c; } .s2 .n{color:#7fc4c9;}
+  .s3 { border-left:6px solid #c98b3a; margin-left:40px; } .s3 .n{color:#ffb960;}
+  .s4 { border-left:6px solid #d9642e; margin-left:80px; } .s4 .n{color:#ff8a5c;}
+  .badge { display:inline-block; background:#233; color:#9fe0c0; font-size:15px; padding:2px 10px; border-radius:8px; margin-left:8px; }
+  /* page 3: two engines */
+  .eng { flex:1; background:#182236; border:1px solid #263349; border-radius:18px; padding:30px; }
+  .eng.k { border-top:5px solid #d98cff; } .eng.c { border-top:5px solid #5ad1a0; }
+  .eng h3 { font-size:28px; margin-bottom:16px; } .eng.k h3{color:#d8a8ff;} .eng.c h3{color:#8de8c2;}
+  .kv { font-size:20px; line-height:1.7; color:#cdd8ea; margin-bottom:10px; }
+  .kv b { color:#fff; }
+  .num { font-size:40px; font-weight:800; color:#ffd15c; }
+</style></head>
+<body>
+
+<!-- PAGE 1: 名词 vs 动词 -->
+<div class="page" id="p1">
+  <div class="kicker">ONTOLOGY 的两层</div>
+  <h1>Ontology 不是知识图谱,<span class="hl">是决策层</span></h1>
+  <div class="sub">同一个词,两拨人在用,含义差着一个数量级</div>
+  <div class="row">
+    <div class="card noun">
+      <div class="ctag">🏷️ 名词派</div>
+      <div class="ctitle">分类 + 关系</div>
+      <div class="li">每个东西归一类(通讯录:家人/同事)</div>
+      <div class="li">东西之间连线(张三 —是老板→ 李四)</div>
+      <div class="li">知识图谱活在这层</div>
+      <div class="payoff">→ 让你「查得到」<br><span style="font-size:18px;color:#9fb0c9;font-weight:500">能查,但不能动</span></div>
+    </div>
+    <div class="card verb">
+      <div class="ctag">⚡ 动词派</div>
+      <div class="ctitle">能做什么 + 谁担后果</div>
+      <div class="li">Action:能对世界做什么(下单/改配置/杀进程)</div>
+      <div class="li">Function:决策规则、约束、权衡</div>
+      <div class="li">Proposal:AI 提议→人审→执行→<b>全程审计</b></div>
+      <div class="payoff">→ 让你「拍得了板」<br><span style="font-size:18px;color:#9fb0c9;font-weight:500">带取舍、担后果、可追溯</span></div>
+    </div>
+  </div>
+  <div class="foot"><b>名词派让你看清世界,动词派让你改变世界。</b> 纯知识图谱停在名词层。</div>
+</div>
+
+<!-- PAGE 2: 四层尺台阶 -->
+<div class="page" id="p2">
+  <div class="kicker">一把四层尺 · 每个子系统一个台阶</div>
+  <h1>从<span class="hl">预测</span>,一路走到<span class="hl">决策</span></h1>
+  <div class="sub">大多数「数据能力」止步于预测。SwarmAI 走完了整条链。</div>
+  <div class="ladder">
+    <div class="step s1"><div class="n">预测 Predict</div><div class="arm">会发生什么</div><div class="sys">DDD · Memory · Knowledge(名词层)</div></div>
+    <div class="step s2"><div class="n">推理 Infer</div><div class="arm">为什么</div><div class="sys">7 类记忆 + 关系图 · 达尔文遗忘</div></div>
+    <div class="step s3"><div class="n">推演 Simulate</div><div class="arm">如果…会怎样(多路径 what-if)</div><div class="sys">CodeGraph(18K 节点/28K 边) + THINK 3 方案</div></div>
+    <div class="step s4"><div class="n">决策 Decide</div><div class="arm">选哪条、担后果、可审计</div><div class="sys">对抗门 + 人机审批 + 危险动作门</div></div>
+  </div>
+  <div class="foot">末两级 <span class="badge">推演</span> <span class="badge">决策</span> = Palantir Proposal 工作流的同构物 —— <b>大多数 Agent 工具够不着这里</b></div>
+</div>
+
+<!-- PAGE 3: 两个引擎 -->
+<div class="page" id="p3">
+  <div class="kicker">一个思想 · 两套引擎</div>
+  <h1>为什么<span class="hl">知识</span>和<span class="hl">代码</span>不共用一个引擎</h1>
+  <div class="sub">同样是「分类 + 关系」,但生命周期需求正相反</div>
+  <div class="row">
+    <div class="eng k">
+      <h3>💛 知识侧</h3>
+      <div class="kv"><b>关心:</b>这条该不该被遗忘?</div>
+      <div class="kv"><b>对象:</b>记忆 + 9 个项目知识库</div>
+      <div class="kv"><b>引擎:</b>ddd_entry_lifecycle.py(共享)</div>
+      <div class="kv"><b>生命周期:</b>达尔文式 <b style="color:#ffd15c">淡出 → 遗忘</b></div>
+      <div class="kv" style="margin-top:14px;color:#9fb0c9">用进废退:被引用 +1 变强,长期没用 → 休眠 → 归档</div>
+    </div>
+    <div class="eng c">
+      <h3>💚 代码侧</h3>
+      <div class="kv"><b>关心:</b>现在谁跟谁连着?</div>
+      <div class="kv"><b>对象:</b><span class="num">18,034</span> 函数的调用图</div>
+      <div class="kv"><b>引擎:</b>code_intel/graph_store.py(独立)</div>
+      <div class="kv"><b>生命周期:</b>代码一改 <b style="color:#8de8c2">失效 → 重建</b>,不淡出</div>
+      <div class="kv" style="margin-top:14px;color:#9fb0c9">改一个函数?一次图查询列全 caller,动手前就知道波及面</div>
+    </div>
+  </div>
+  <div class="foot">共享 Ontology 的<b>思想</b>(节点+边+分类),但生命周期正相反 → <b>拆成两套</b></div>
+</div>
+
+</body></html>
