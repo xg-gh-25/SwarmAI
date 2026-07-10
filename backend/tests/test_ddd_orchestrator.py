@@ -14,6 +14,80 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+class TestWatchPathsDerivation:
+    """M1 (run_91bc0651, DDD-alive): _SOURCE_WATCH_PATHS hardcoded → auto-derived.
+
+    A NEW project following the `s_<x>-*` skill-prefix convention gets a
+    staleness watch leg with ZERO manual registration (default-enable).
+    verify-before-attach: a non-existent prefix attaches nothing (no phantom).
+    """
+
+    def test_derive_skill_prefix_allowlisted_suffixes(self):
+        from core.ddd_orchestrator import _derive_skill_prefix
+        # allowlisted business suffixes → derive
+        assert _derive_skill_prefix("CMHK_SalesIntel") == "s_cmhk-"
+        assert _derive_skill_prefix("BMS_BIZ") == "s_bms-"
+        assert _derive_skill_prefix("Rocky_ISV") == "s_rocky-"
+        assert _derive_skill_prefix("") is None
+
+    def test_derive_rejects_non_business_names(self):
+        """Gate-2 H3/H4: a naive token-prefix mis-attributes. Non-business
+        names must NOT derive (fail-closed allowlist), else GitHub_Community
+        would wrongly attach unrelated s_github-* skills."""
+        from core.ddd_orchestrator import _derive_skill_prefix
+        assert _derive_skill_prefix("GitHub_Community") is None
+        assert _derive_skill_prefix("ai_ready_repo") is None
+        assert _derive_skill_prefix("SwarmAI") is None       # single token
+        assert _derive_skill_prefix("PhysicalAI") is None
+
+    def test_no_unrelated_skill_attached(self):
+        """Gate-2 H4 regression guard: GitHub_Community must NOT pull in the
+        unrelated s_github-research / s_github-trending standalone skills."""
+        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
+        root = _find_swarmai_root()
+        paths = _watch_paths_for("GitHub_Community", root)
+        assert not any("s_github-research" in p or "s_github-trending" in p
+                       for p in paths), f"attached unrelated skills: {paths}"
+
+    def test_convention_project_auto_derives_real_skills(self):
+        """E2 anchor: CMHK_SalesIntel auto-derives its real s_cmhk-* skills
+        with NO entry in _MANUAL_WATCH_PATHS."""
+        from core.ddd_orchestrator import (
+            _watch_paths_for, _MANUAL_WATCH_PATHS, _find_swarmai_root,
+        )
+        assert "CMHK_SalesIntel" not in _MANUAL_WATCH_PATHS  # zero manual reg
+        root = _find_swarmai_root()
+        paths = _watch_paths_for("CMHK_SalesIntel", root)
+        assert paths, "CMHK should auto-derive s_cmhk-* skills, got none"
+        assert all(p.startswith("backend/skills/s_cmhk-") for p in paths), paths
+
+    def test_manual_and_derived_union(self):
+        """SwarmAI keeps its manual core paths AND gets any derived ones."""
+        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
+        root = _find_swarmai_root()
+        paths = _watch_paths_for("SwarmAI", root)
+        # manual core files preserved
+        assert "backend/core/session_unit.py" in paths
+        assert "backend/main.py" in paths
+
+    def test_no_inrepo_source_attaches_nothing(self):
+        """verify-before-attach: a project with no matching skill dir gets an
+        empty watch list (falls back to Strategy-1), never a phantom path."""
+        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
+        root = _find_swarmai_root()
+        # PhysicalAI/Rocky_ISV have no s_physicalai-*/s_rocky-* skills
+        assert _watch_paths_for("PhysicalAI", root) == []
+        assert _watch_paths_for("Rocky_ISV", root) == []
+
+    def test_nonexistent_prefix_no_phantom_path(self):
+        """A derived prefix that matches no real dir attaches nothing —
+        the watch leg never contains a path that doesn't exist on disk."""
+        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
+        root = _find_swarmai_root()
+        paths = _watch_paths_for("Nonexistent_Xyzzy", root)
+        assert paths == [], f"phantom paths derived: {paths}"
+
+
 class TestOrchestratorExists:
     """AC1: DddCultivationOrchestrator class exists with run() method."""
 
@@ -165,11 +239,13 @@ class TestSourceWatchPaths:
     """DDD staleness detects changes via watched source paths, not just commit message grep."""
 
     def test_source_watch_paths_config_exists(self):
-        from core.ddd_orchestrator import _SOURCE_WATCH_PATHS
+        # M1 (run_91bc0651): renamed _SOURCE_WATCH_PATHS → _MANUAL_WATCH_PATHS
+        # (manual overrides) + auto-derive via _watch_paths_for.
+        from core.ddd_orchestrator import _MANUAL_WATCH_PATHS
 
-        assert "AIDLC" in _SOURCE_WATCH_PATHS
-        assert "SwarmAI" in _SOURCE_WATCH_PATHS
-        assert any("autonomous-pipeline" in p for p in _SOURCE_WATCH_PATHS["AIDLC"])
+        assert "AIDLC" in _MANUAL_WATCH_PATHS
+        assert "SwarmAI" in _MANUAL_WATCH_PATHS
+        assert any("autonomous-pipeline" in p for p in _MANUAL_WATCH_PATHS["AIDLC"])
 
     def test_staleness_detected_via_watch_path(self, tmp_path):
         """When commit grep finds nothing but watched path has commits, still flags stale."""
@@ -249,7 +325,7 @@ class TestSourceWatchPaths:
         call.
         """
         import time
-        from core.ddd_orchestrator import DddCultivationOrchestrator, _SOURCE_WATCH_PATHS
+        from core.ddd_orchestrator import DddCultivationOrchestrator, _MANUAL_WATCH_PATHS
 
         project_dir = tmp_path / "Projects" / "AIDLC"
         project_dir.mkdir(parents=True)
@@ -281,7 +357,9 @@ class TestSourceWatchPaths:
         assert len(strategy2_calls) == 1
         # That single call includes EVERY watched path for AIDLC.
         cmd = strategy2_calls[0]
-        for wp in _SOURCE_WATCH_PATHS["AIDLC"]:
+        # fake_swarmai has backend/ but no backend/skills/ → derived attaches
+        # nothing; watch paths = manual AIDLC entries only.
+        for wp in _MANUAL_WATCH_PATHS["AIDLC"]:
             assert wp in cmd, f"watch path {wp} missing from batched git call: {cmd}"
 
     def test_both_docs_share_single_strategy1_call(self, tmp_path):

@@ -47,7 +47,14 @@ _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 # This catches cases where commit messages don't mention the project name
 # (e.g., pipeline commits say "pipeline:" not "AIDLC").
 # NOTE: paths are checked against the SWARMAI repo (not SwarmWS).
-_SOURCE_WATCH_PATHS: dict[str, list[str]] = {
+#
+# MANUAL overrides — for projects whose in-repo source does NOT follow the
+# `s_<x>-*` skill-prefix convention (core files, multi-skill AIDLC). Projects
+# that DO follow the convention are auto-derived (see _watch_paths_for); the
+# two are UNIONed, never either/or. (run_91bc0651: DDD-alive M1 — replaces the
+# old hardcoded-only dict so a NEW project that follows the convention gets a
+# watch leg with ZERO manual registration.)
+_MANUAL_WATCH_PATHS: dict[str, list[str]] = {
     "AIDLC": [
         "backend/skills/s_autonomous-pipeline/",
         "backend/core/ddd/",
@@ -63,6 +70,76 @@ _SOURCE_WATCH_PATHS: dict[str, list[str]] = {
         "backend/main.py",
     ],
 }
+
+
+# Business-domain project suffixes that follow the "domain owns s_<domain>-*"
+# convention (a project `<DOMAIN>_<SUFFIX>` owns the whole s_<domain>-* skill
+# family). This is an ALLOWLIST, not a denylist (allowlist fails closed —
+# per session lesson: a naive token-prefix mis-attributes, e.g. GitHub_Community
+# would wrongly attach unrelated s_github-research/s_github-trending AND miss the
+# real s_github_community; ai_ready_repo would broad-match s_ai-*). Only the
+# business-project family is known to follow the domain-owns-family convention;
+# everything else falls back to _MANUAL_WATCH_PATHS ∪ Strategy-1 commit-grep
+# (project-agnostic, already covers every project). run_91bc0651 Gate-2 H3/H4.
+_BUSINESS_PROJECT_SUFFIXES: frozenset[str] = frozenset({
+    "salesintel", "biz", "isv",
+})
+
+
+def _derive_skill_prefix(project_name: str) -> "str | None":
+    """Derive the skill-prefix for a BUSINESS-DOMAIN project by convention.
+
+    ONLY `<DOMAIN>_<SUFFIX>` where SUFFIX ∈ _BUSINESS_PROJECT_SUFFIXES (e.g.
+    CMHK_SalesIntel → `s_cmhk-`, Foo_BIZ → `s_foo-`). These projects follow the
+    "domain owns the whole s_<domain>-* skill family" convention. Any other name
+    (GitHub_Community, ai_ready_repo, SwarmAI, PhysicalAI, single-token names)
+    returns None → NO auto-derive → falls back to manual ∪ Strategy-1.
+
+    Fail-closed by construction: an allowlisted-suffix match is the ONLY path to
+    a derived prefix. A wrong domain still can't produce a phantom path because
+    _watch_paths_for verifies the prefix exists under backend/skills/ before
+    attaching (verify-before-attach).
+    """
+    if not project_name or "_" not in project_name:
+        return None
+    head, _, suffix = project_name.partition("_")
+    head = head.strip().lower()
+    if not head or suffix.strip().lower() not in _BUSINESS_PROJECT_SUFFIXES:
+        return None
+    return f"s_{head}-"
+
+
+def _watch_paths_for(
+    project_name: str, swarmai_root: "Path | None" = None,
+) -> list[str]:
+    """Return the git-log watch paths for a project: MANUAL ∪ AUTO-DERIVED.
+
+    - MANUAL: explicit entries in _MANUAL_WATCH_PATHS (core / non-convention).
+    - AUTO-DERIVED: if `_<x>` convention yields a prefix `s_<x>-` AND at least
+      one skill dir with that prefix EXISTS under backend/skills/, attach that
+      glob dir(s). Verify-before-attach — a non-existent prefix attaches nothing
+      (no noise), so a project without in-repo skills simply has no derived leg
+      and falls back to the project-agnostic Strategy-1 commit-grep.
+
+    Replaces the old `project in _SOURCE_WATCH_PATHS` / `_SOURCE_WATCH_PATHS[p]`
+    lookups. Empty list = not watched via Strategy-2 (Strategy-1 still covers it).
+    """
+    paths: list[str] = list(_MANUAL_WATCH_PATHS.get(project_name, []))
+
+    prefix = _derive_skill_prefix(project_name)
+    if prefix:
+        if swarmai_root is None:
+            swarmai_root = _find_swarmai_root() or None
+        if swarmai_root:
+            skills_dir = Path(swarmai_root) / "backend" / "skills"
+            if skills_dir.is_dir():
+                for d in sorted(skills_dir.iterdir()):
+                    # verify-before-attach: only real skill dirs matching prefix
+                    if d.is_dir() and d.name.startswith(prefix):
+                        rel = f"backend/skills/{d.name}/"
+                        if rel not in paths:
+                            paths.append(rel)
+    return paths
 
 
 def _find_swarmai_root() -> "Path | None":
@@ -326,11 +403,14 @@ class DddCultivationOrchestrator:
                 # Strategy 2: watched source paths — ONE git call over ALL paths
                 # (was one subprocess per path). Catches commits that don't
                 # mention the project name. NOTE: runs against SWARMAI repo.
-                if commit_count == 0 and project_dir.name in _SOURCE_WATCH_PATHS:
+                if commit_count == 0:
                     if swarmai_root is None:
                         swarmai_root = _find_swarmai_root() or False
-                    if swarmai_root:
-                        watch_paths = _SOURCE_WATCH_PATHS[project_dir.name]
+                    watch_paths = (
+                        _watch_paths_for(project_dir.name, swarmai_root or None)
+                        if swarmai_root else []
+                    )
+                    if swarmai_root and watch_paths:
                         path_result = subprocess.run(
                             ["git", "log", "--oneline", "--since=14 days ago",
                              "--", *watch_paths],
@@ -1142,20 +1222,19 @@ class DddCultivationOrchestrator:
 
         # Check watched paths for this project
         project_name = project_dir.name
-        if project_name in _SOURCE_WATCH_PATHS:
-            for watch_path in _SOURCE_WATCH_PATHS[project_name]:
-                try:
-                    result = subprocess.run(
-                        ["git", "log", "--oneline", "--since=14 days ago",
-                         "--", watch_path],
-                        cwd=str(swarmai_root),
-                        capture_output=True, text=True,
-                        timeout=_GIT_TIMEOUT,
-                    )
-                    if result.stdout.strip():
-                        return True
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
+        for watch_path in _watch_paths_for(project_name, swarmai_root):
+            try:
+                result = subprocess.run(
+                    ["git", "log", "--oneline", "--since=14 days ago",
+                     "--", watch_path],
+                    cwd=str(swarmai_root),
+                    capture_output=True, text=True,
+                    timeout=_GIT_TIMEOUT,
+                )
+                if result.stdout.strip():
+                    return True
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
         # Fallback: check workspace commits mentioning project name
         try:
@@ -1174,20 +1253,19 @@ class DddCultivationOrchestrator:
     ) -> list[str]:
         """Get recent commit subjects for a project's watched paths."""
         commits: list[str] = []
-        if project_name in _SOURCE_WATCH_PATHS:
-            for watch_path in _SOURCE_WATCH_PATHS[project_name]:
-                try:
-                    result = subprocess.run(
-                        ["git", "log", "--oneline", "--since=14 days ago",
-                         "--max-count=10", "--", watch_path],
-                        cwd=str(swarmai_root),
-                        capture_output=True, text=True,
-                        timeout=_GIT_TIMEOUT,
-                    )
-                    if result.stdout.strip():
-                        commits.extend(result.stdout.strip().splitlines())
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
+        for watch_path in _watch_paths_for(project_name, swarmai_root):
+            try:
+                result = subprocess.run(
+                    ["git", "log", "--oneline", "--since=14 days ago",
+                     "--max-count=10", "--", watch_path],
+                    cwd=str(swarmai_root),
+                    capture_output=True, text=True,
+                    timeout=_GIT_TIMEOUT,
+                )
+                if result.stdout.strip():
+                    commits.extend(result.stdout.strip().splitlines())
+            except (subprocess.TimeoutExpired, OSError):
+                pass
         # Deduplicate (same commit may appear in multiple paths)
         seen = set()
         unique = []
@@ -1203,10 +1281,11 @@ class DddCultivationOrchestrator:
         excerpts: list[str] = []
         max_total = 3000
 
-        if project_name not in _SOURCE_WATCH_PATHS:
+        _wp = _watch_paths_for(project_name, swarmai_root)
+        if not _wp:
             return ""
 
-        for watch_path in _SOURCE_WATCH_PATHS[project_name][:3]:
+        for watch_path in _wp[:3]:
             full_path = swarmai_root / watch_path
             if full_path.is_file():
                 try:
