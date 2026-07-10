@@ -1,6 +1,8 @@
 ---
+title: "Reading Matrix — 3 Paths Through 74 Discussions (Builder / Architect / Leader)"
 created: 2026-06-20
 updated: 2026-07-10
+status: published
 ---
 
 ---
