@@ -632,11 +632,30 @@ Where this code runs: <hook/endpoint/cron/startup/CLI — infer from file path>
      something (nohup, special flags, coordination files) instead of
      providing a single correct interface.
 
+6. CROSS-FIX INTERACTION
+   - The adversarial specialists each reviewed the changeset in their OWN
+     domain (correctness, security, perf, …) and each fix was validated in
+     isolation. NOBODY checked whether the fixes INTERACT once merged. Answer:
+   - Do any two fixes touch the SAME function/state/flow such that applying
+     both changes the behavior neither reviewer saw alone? (e.g. fix-A adds a
+     guard that fix-B's new caller trips; fix-A and fix-B both mutate the same
+     field with opposite assumptions)
+   - Does fixing A REINTRODUCE or UN-FIX B — or a bug an EARLIER cycle already
+     resolved? (the fixes were applied at different times; the last one wins on
+     shared lines)
+   - Does the COMBINED changeset create an ordering/lifecycle dependency that no
+     single-fix review would flag? (fix-A must run before fix-B; a shared
+     resource is now acquired twice / released once)
+   - This is DISTINCT from: section 5 No-Patch (one fix at the wrong layer) and
+     the Shared-State Override in Step 3c.1 (one symbol's readers). Here the
+     unit is MULTIPLE fixes and whether they compose correctly. If the changeset
+     has only one fix, answer "N/A — single fix" and move on.
+
 ## Output
 ```json
 {
   "risks": [
-    {"category": "deployment|scaling|format|first-run",
+    {"category": "deployment|scaling|format|first-run|cross-fix",
      "description": "...",
      "severity": "HIGH|MED|LOW",
      "mitigation": "..."}
@@ -911,6 +930,7 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 | Operational scaling | CLEAR / RISK | <no-op cost, steady-state> |
 | Cross-boundary format | CLEAR / RISK | <format assumptions> |
 | First-run vs steady-state | CLEAR / RISK | <backlog behavior> |
+| Cross-fix interaction | CLEAR / RISK / N/A | <do the fixes compose; single fix = N/A> |
 
 **Overall:** CLEAR / RISKS_IDENTIFIED (N items, M addressed)
 
