@@ -62,7 +62,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # to the Python source tree. `backend` is relative to the scan root.
 SCAN_SUBDIR = "backend"
 # Exclusions passed to bandit (-x) — comma-separated, relative to root.
-BANDIT_EXCLUDES = "tests,.venv,node_modules"
+# Private/internal skills (.gitignored: s_cmhk-*, _shared) MUST be excluded here:
+# they exist ONLY on the maintainer's machine, so scanning them bakes their private
+# paths into the git-tracked baseline's findings[].file field → a private-skill-name
+# LEAK on the public repo (C041 family, run_f1fe156b). Excluding at scan-time (not
+# hand-editing the JSON) means the path is NEVER baselined and the fix survives
+# `--update-baseline`. Keep in sync with .gitignore's private-skill patterns.
+BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,_shared"
+# detect-secrets `--exclude-files` regex counterpart (same private-skill scope).
+SECRETS_EXCLUDE_RE = r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/_shared/"
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).
@@ -235,7 +243,7 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
     #      RELATIVE subdir. (This is the bug that made a real AWS key scan clean.)
     cmd = [
         sys.executable, "-m", "detect_secrets", "scan", "--all-files", SCAN_SUBDIR,
-        "--exclude-files", r"\.venv/|node_modules/",
+        "--exclude-files", SECRETS_EXCLUDE_RE,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(root))
     if not proc.stdout.strip():

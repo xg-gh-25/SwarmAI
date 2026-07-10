@@ -207,3 +207,45 @@ def test_inv5_scanner_never_writes_git_config():
             if "git config" in node.value and "\n" not in node.value:  # a command, not prose
                 offenders.append(f"single-line git-config command: {node.value[:50]!r}")
     assert not offenders, f"scanner must not mutate git config (git-defender owns hooksPath): {offenders}"
+
+
+# ── INV7: private/internal skills are excluded from scan → never baselined ──────
+def test_inv7_private_skill_paths_never_enter_baseline(scan_tree: Path):
+    """C041-family leak fix (run_f1fe156b): private skills (s_cmhk-*, _shared) are
+    .gitignored (local-only). If the scanner walked them, their private paths would
+    be baked into the git-tracked baseline's findings[].file → a private-skill-name
+    LEAK on the public repo. This asserts a HIGH finding inside a private-skill dir
+    does NOT appear in the generated baseline (excluded at scan-time, so the fix
+    survives --update-baseline — not a hand-edit that regenerates back)."""
+    priv = scan_tree / "backend" / "skills" / "s_cmhk-weekly-report"
+    priv.mkdir(parents=True)
+    # a real HIGH×HIGH bandit finding (md5) inside the private skill
+    (priv / "leak.py").write_text(
+        "import hashlib\nx = hashlib.md5(b'secret').hexdigest()\n"
+    )
+    # and a public finding so the baseline is non-empty (proves scan ran)
+    (scan_tree / "backend" / "pub.py").write_text(
+        "import hashlib\ny = hashlib.md5(b'a').hexdigest()\n"
+    )
+    _make_baseline(scan_tree)
+    bandit_bl = (scan_tree / "bandit-baseline.json").read_text()
+    secrets_bl = (scan_tree / ".secrets.baseline").read_text()
+    assert "s_cmhk" not in bandit_bl, "private skill path leaked into bandit baseline"
+    assert "s_cmhk" not in secrets_bl, "private skill path leaked into secrets baseline"
+    # sanity: the public finding IS baselined (scan genuinely ran, not empty-pass)
+    assert "pub.py" in bandit_bl, "public finding missing — scan didn't cover backend/"
+
+
+def test_inv7b_shared_dir_excluded(scan_tree: Path):
+    """The _shared helper dir (also .gitignored) is likewise excluded."""
+    shared = scan_tree / "backend" / "skills" / "_shared"
+    shared.mkdir(parents=True)
+    (shared / "util.py").write_text(
+        "import hashlib\nz = hashlib.md5(b'x').hexdigest()\n"
+    )
+    (scan_tree / "backend" / "pub.py").write_text(
+        "import hashlib\ny = hashlib.md5(b'a').hexdigest()\n"
+    )
+    _make_baseline(scan_tree)
+    assert "_shared" not in (scan_tree / "bandit-baseline.json").read_text(), \
+        "_shared path leaked into bandit baseline"

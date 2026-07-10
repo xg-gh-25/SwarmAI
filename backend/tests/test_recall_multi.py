@@ -281,8 +281,8 @@ class TestRenderBucketedRecall:
         s = render_bucketed_recall(
             self._bucket(ddd=[{"doc": "TECH.md", "section": "Arch",
                                "content": "ddd body"}]),
-            project="CMHK_SalesIntel")
-        assert "[DDD:CMHK_SalesIntel]" in s and "ddd body" in s
+            project="Acme_SalesIntel")
+        assert "[DDD:Acme_SalesIntel]" in s and "ddd body" in s
 
     def test_renders_content_not_bare_names(self):
         """The regression this feature exists to prevent: a hit with content
@@ -334,36 +334,40 @@ class TestDetectActiveProject:
     """M2 (run_91bc0651, DDD-alive): active-project detection for runtime DDD
     recall. FAIL-CLOSED — ambiguous/no-signal → None (inject nothing)."""
 
-    CANDS = ["AIDLC", "CMHK_SalesIntel", "GitHub_Community", "PhysicalAI", "SwarmAI"]
+    # SYNTHETIC project names only — NEVER real private/customer names (e.g.
+    # CMHK). This test file is git-tracked → public repo; a real private skill/
+    # project name here is a leak (C041 family, run_f1fe156b Gate-2 LOW). Acme_
+    # SalesIntel exercises the business-suffix derive path (→ s_acme-) identically.
+    CANDS = ["AIDLC", "Acme_SalesIntel", "Widgets_Community", "Zeta_Platform", "SwarmAI"]
 
     def test_signal1_project_path(self):
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            editor_file_path="/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            editor_file_path="/x/SwarmWS/Projects/Acme_SalesIntel/TECH.md",
             candidates=self.CANDS,
         )
-        assert proj == "CMHK_SalesIntel" and sig == "signal1_project_path"
+        assert proj == "Acme_SalesIntel" and sig == "signal1_project_path"
 
     def test_signal1_skill_path_maps_to_business_project(self):
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            editor_file_path="backend/skills/s_cmhk-weekly-report/SKILL.md",
+            editor_file_path="backend/skills/s_acme-weekly-report/SKILL.md",
             candidates=self.CANDS,
         )
-        assert proj == "CMHK_SalesIntel" and sig == "signal1_skill_path"
+        assert proj == "Acme_SalesIntel" and sig == "signal1_skill_path"
 
     def test_signal3_keyword_unique_match(self):
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            query="show me the CMHK weekly numbers", candidates=self.CANDS,
+            query="show me the acme weekly numbers", candidates=self.CANDS,
         )
-        assert proj == "CMHK_SalesIntel" and sig == "signal3_keyword"
+        assert proj == "Acme_SalesIntel" and sig == "signal3_keyword"
 
     def test_failclosed_ambiguous_two_matches(self):
         """≥2 project keyword matches → None (never guess, never pollute)."""
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            query="compare cmhk and github community", candidates=self.CANDS,
+            query="compare acme and widgets community", candidates=self.CANDS,
         )
         assert proj is None and sig == "ambiguous"
 
@@ -378,11 +382,11 @@ class TestDetectActiveProject:
         """Deterministic file-path signal wins over probabilistic keyword."""
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            editor_file_path="/x/SwarmWS/Projects/PhysicalAI/PRODUCT.md",
-            query="cmhk weekly revenue",  # keyword says CMHK, path says PhysicalAI
+            editor_file_path="/x/SwarmWS/Projects/Zeta_Platform/PRODUCT.md",
+            query="acme weekly revenue",  # keyword says Acme, path says Zeta
             candidates=self.CANDS,
         )
-        assert proj == "PhysicalAI" and sig == "signal1_project_path"
+        assert proj == "Zeta_Platform" and sig == "signal1_project_path"
 
     def test_unknown_project_path_ignored(self):
         """A Projects/ path for a dir NOT in candidates → not matched."""
@@ -411,11 +415,11 @@ class TestDetectActiveProject:
         resolves the project."""
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            editor_file_path="/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            editor_file_path="/x/SwarmWS/Projects/Acme_SalesIntel/TECH.md",
             query="继续",  # zero extractable keywords
             candidates=self.CANDS,
         )
-        assert proj == "CMHK_SalesIntel" and sig == "signal1_project_path"
+        assert proj == "Acme_SalesIntel" and sig == "signal1_project_path"
 
 
 class TestRecallAll:
