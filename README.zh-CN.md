@@ -51,8 +51,9 @@ SwarmAI 押的是相反的赌注——价值应该**复利**。每一次交互�
 | | |
 |---|---|
 | 🗺️ **[阅读矩阵 — 3 条精选路径](https://github.com/xg-gh-25/SwarmAI/discussions/35)** | **Builder**（~45 分钟）· **Architect**（~60 分钟）· **Leader**（~30 分钟）—— 别全读，挑你的路径 |
-| 💬 **[全部讨论（68 篇）](https://github.com/xg-gh-25/SwarmAI/discussions)** | 思想领导力、架构深潜、复盘报告 —— 同时镜像在 [`docs/discussions/`](./docs/discussions/) |
+| 💬 **[全部讨论](https://github.com/xg-gh-25/SwarmAI/discussions)** | 思想领导力、架构深潜、复盘报告 —— 同时镜像在 [`docs/discussions/`](./docs/discussions/) |
 | 🧭 **[设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39)** | 信念如何变成强制 —— 每一条都是从一次失败里挣来的 |
+| 🕸️ **[撑起这一切的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96)** | 一套 ontology（🏷️ 分类 + 🕸️ 关系，不上 Neo4j）统一记忆、DDD 与代码智能 |
 
 ![SwarmAI](./assets/swarm-2.png)
 
@@ -172,7 +173,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 | 内容 | 链接 |
 |------|------|
-| **讨论（68 篇）** | [阅读矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [全部](https://github.com/xg-gh-25/SwarmAI/discussions) |
+| **讨论** | [阅读矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [全部](https://github.com/xg-gh-25/SwarmAI/discussions) |
 | **AI Agent 避坑指南** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **设计文档** | [平台](./docs/DDD-Platform-Overview.md) · [流水线](./docs/Autonomous-Pipeline-Design.md) · [记忆](./docs/Memory-Management-Design.md) · [进化](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
 | **贡献** | [CONTRIBUTING.md](./CONTRIBUTING.md) |

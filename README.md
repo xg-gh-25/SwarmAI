@@ -52,8 +52,9 @@ As of **v1.22.0**, that loop is running healthy end-to-end — sessions self-hea
 | | |
 |---|---|
 | 🗺️ **[Reading Matrix — 3 Curated Paths](https://github.com/xg-gh-25/SwarmAI/discussions/35)** | **Builder** (~45 min) · **Architect** (~60 min) · **Leader** (~30 min) — don't read everything, pick your path |
-| 💬 **[All Discussions (68)](https://github.com/xg-gh-25/SwarmAI/discussions)** | Thought leadership, architecture deep-dives, and post-mortems — also mirrored in [`docs/discussions/`](./docs/discussions/) |
+| 💬 **[All Discussions](https://github.com/xg-gh-25/SwarmAI/discussions)** | Thought leadership, architecture deep-dives, and post-mortems — also mirrored in [`docs/discussions/`](./docs/discussions/) |
 | 🧭 **[Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38)** | The beliefs that became enforcement — why each one earned its place from a failure |
+| 🕸️ **[The Ontology Beneath It All](https://github.com/xg-gh-25/SwarmAI/discussions/95)** | The single ontology (🏷️ classification + 🕸️ relations, no Neo4j) that unifies Memory, DDD, and Code Intelligence |
 
 ![SwarmAI](./assets/swarm-2.png)
 
@@ -173,7 +174,7 @@ It's **proprioception, not external grading** — Eval spawns a clean session ag
 
 | What | Link |
 |------|------|
-| **Discussions (68)** | [Reading Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [all](https://github.com/xg-gh-25/SwarmAI/discussions) |
+| **Discussions** | [Reading Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/35) — Builder 45min · Architect 60min · Leader 30min · [all](https://github.com/xg-gh-25/SwarmAI/discussions) |
 | **AI Agent Pitfall Guide** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **Design Docs** | [Platform](./docs/DDD-Platform-Overview.md) · [Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Memory](./docs/Memory-Management-Design.md) · [Evolution](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
 | **Contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md) |
