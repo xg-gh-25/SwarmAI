@@ -319,13 +319,13 @@ class TestHistoryPreamble:
     # every test green). These drive the source directly, so dropping the
     # sender_tier field goes RED.
     def test_sender_metadata_stamps_tier_for_authorized(self):
-        from backend.channels.gateway import _sender_metadata
+        from channels.gateway import _sender_metadata
         meta = _sender_metadata(_identity(PermissionTier.OWNER), "XG")
         assert meta["sender_tier"] == "owner"
         assert meta["sender_display_name"] == "XG"
 
     def test_sender_metadata_failclosed_unknown_when_no_identity(self):
-        from backend.channels.gateway import _sender_metadata
+        from channels.gateway import _sender_metadata
         meta = _sender_metadata(None, None)
         # no identity → "unknown" → B's fail-closed read gate EXCLUDES it
         assert meta["sender_tier"] == "unknown"
@@ -333,7 +333,7 @@ class TestHistoryPreamble:
     def test_sender_metadata_tier_is_injectable_end_to_end(self):
         # the tier _sender_metadata stamps must be one B's read gate accepts —
         # ties the write source to the read gate's _AUTH set (no drift).
-        from backend.channels.gateway import _sender_metadata, _AUTH
+        from channels.gateway import _sender_metadata, _AUTH
         assert _sender_metadata(
             _identity(PermissionTier.TRUSTED), "T")["sender_tier"] in _AUTH
         assert _sender_metadata(None, None)["sender_tier"] not in _AUTH
