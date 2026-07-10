@@ -342,12 +342,12 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
     the same privacy gate as single-file recall — without it, --domains leaked
     MEMORY to sessions that --file correctly denies (run_4358cc95 Gate-2).
     """
-    from pathlib import Path
     from core.context_recall import recall_context
+    from core.project_registry import get_swarmws
 
     hits: list = []
     layer = "none"
-    mem_path = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
+    mem_path = get_swarmws() / ".context" / "MEMORY.md"
     if not mem_path.exists():
         return hits, layer
     try:
@@ -375,12 +375,12 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
 def _recall_ddd(query: str, project: Optional[str],
                 max_sections: int) -> tuple[list, str]:
     """Recall over a project's DDD docs via the generic ##-section scorer."""
-    from pathlib import Path
+    from core.project_registry import get_projects_dir
 
     hits: list = []
     if not project:
         return hits, "none"
-    base = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / project
+    base = get_projects_dir() / project
     if not base.exists():
         return hits, "none"
 
@@ -407,12 +407,15 @@ def _recall_ddd(query: str, project: Optional[str],
 def list_project_names() -> list[str]:
     """List SwarmWS project dir names (fs-scan, git-agnostic).
 
-    fs-scan (not git) so an UNTRACKED project (e.g. CMHK_SalesIntel, kept out of
-    git for privacy) is still discoverable. Skips dotfiles. (run_91bc0651 M2.)
-    """
-    from pathlib import Path
+    fs-scan (not git) so an UNTRACKED project (e.g. a privacy-held project kept
+    out of git) is still discoverable. Skips dotfiles. (run_91bc0651 M2.)
 
-    base = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects"
+    Root resolves via project_registry.get_projects_dir() (SWARMWS env override),
+    the single source shared with _recall_ddd — no hardcoded ~/.swarm-ai path.
+    """
+    from core.project_registry import get_projects_dir
+
+    base = get_projects_dir()
     if not base.is_dir():
         return []
     return sorted(

@@ -81,8 +81,49 @@ class TestUnifiedRecallCfull:
 class TestDddRuntimeInjection:
     """M2 (run_91bc0651, DDD-alive) E1/E4/E5: runtime DDD injection into the
     system prompt, fail-closed, with anti-silent-death counter. Drives the REAL
-    _inject_ddd_for_active_project (no mock of the function under test) against
-    the REAL CMHK_SalesIntel DDD docs on disk (GUI32/PIT13: exercise real path)."""
+    _inject_ddd_for_active_project (no mock of the function under test).
+
+    ENV-INDEPENDENT (run_20bd4a7b follow-up): previously these named the real
+    CMHK_SalesIntel project and only passed where its DDD docs happened to exist
+    on the developer's disk — a hidden host coupling AND a leak class (a
+    git-tracked test naming a real private customer). The autouse fixture below
+    now builds SYNTHETIC projects in a tmp dir and points the recall root at it
+    via the SWARMWS env override (the single seam project_registry.get_swarmws()
+    reads). The real ##-section scorer + fail-closed detector still run — only
+    the on-disk corpus is synthetic, so the test exercises the real path on ANY
+    host, in any checkout, with zero private names."""
+
+    _ACTIVE = "Acme_SalesIntel"      # signal-1 editor-path project + DDD hit
+    _OTHER = "Beacon_Community"      # 2nd project so a 2-token query is ambiguous
+
+    @pytest.fixture(autouse=True)
+    def _synthetic_swarmws(self, tmp_path, monkeypatch):
+        """Build a tmp SwarmWS with two synthetic DDD projects and redirect
+        recall to it. get_swarmws() re-reads os.environ every call (no cache),
+        so setenv fully controls list_project_names() + _recall_ddd()."""
+        projects = tmp_path / "Projects"
+        active = projects / self._ACTIVE
+        active.mkdir(parents=True)
+        # A ## section whose BODY matches the E1/E5 queries (BM25 over sections).
+        (active / "TECH.md").write_text(
+            "# Acme SalesIntel — Tech\n\n"
+            "## Revenue Forecast Model\n"
+            "The weekly revenue forecast baseline projects quarterly revenue "
+            "from historical sales pipeline data and seasonal adjustments.\n\n"
+            "## Data Ingestion\n"
+            "Nightly ETL loads CRM opportunities into the warehouse.\n",
+            encoding="utf-8",
+        )
+        other = projects / self._OTHER
+        other.mkdir(parents=True)
+        (other / "TECH.md").write_text(
+            "# Beacon Community — Tech\n\n"
+            "## Membership Sync\n"
+            "Reconciles community roster membership on a nightly cadence.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("SWARMWS", str(tmp_path))
+        yield
 
     def test_e1_editor_path_injects_ddd_provenance(self):
         """E1: signal-1 editor path → system_prompt gains [DDD:<project>] token
@@ -91,9 +132,9 @@ class TestDddRuntimeInjection:
         o = _FakeOpts()
         _inject_ddd_for_active_project(
             o, "weekly revenue forecast baseline",
-            "/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            f"/x/SwarmWS/Projects/{self._ACTIVE}/TECH.md",
         )
-        assert "[DDD:CMHK_SalesIntel]" in o.system_prompt, o.system_prompt
+        assert f"[DDD:{self._ACTIVE}]" in o.system_prompt, o.system_prompt
         assert o.system_prompt.startswith("BASE PROMPT"), "base must be preserved"
 
     def test_e4_no_signal_injects_nothing(self):
@@ -124,7 +165,9 @@ class TestDddRuntimeInjection:
         )
         _ddd_inject_count.clear()
         o = _FakeOpts()
-        _inject_ddd_for_active_project(o, "compare cmhk and github community", None)
+        # Mentions a distinctive whole-word token of BOTH synthetic projects
+        # (acme + beacon) → 2 matches → fail-closed at detection.
+        _inject_ddd_for_active_project(o, "compare acme and beacon rollout", None)
         assert "[DDD:" not in o.system_prompt
         assert _ddd_inject_count.get("declined:ambiguous", 0) == 1, \
             f"expected fail-closed on ambiguity; got {dict(_ddd_inject_count)}"
@@ -140,7 +183,7 @@ class TestDddRuntimeInjection:
         # one injected (signal-1) + one declined (no signal)
         _inject_ddd_for_active_project(
             _FakeOpts(), "weekly revenue",
-            "/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            f"/x/SwarmWS/Projects/{self._ACTIVE}/TECH.md",
         )
         _inject_ddd_for_active_project(_FakeOpts(), "hi", None)
         assert _ddd_inject_count.get("injected", 0) >= 1, _ddd_inject_count
