@@ -49,17 +49,26 @@ class TestWatchPathsDerivation:
         assert not any("s_github-research" in p or "s_github-trending" in p
                        for p in paths), f"attached unrelated skills: {paths}"
 
-    def test_convention_project_auto_derives_real_skills(self):
-        """E2 anchor: CMHK_SalesIntel auto-derives its real s_cmhk-* skills
-        with NO entry in _MANUAL_WATCH_PATHS."""
-        from core.ddd_orchestrator import (
-            _watch_paths_for, _MANUAL_WATCH_PATHS, _find_swarmai_root,
-        )
-        assert "CMHK_SalesIntel" not in _MANUAL_WATCH_PATHS  # zero manual reg
-        root = _find_swarmai_root()
-        paths = _watch_paths_for("CMHK_SalesIntel", root)
-        assert paths, "CMHK should auto-derive s_cmhk-* skills, got none"
-        assert all(p.startswith("backend/skills/s_cmhk-") for p in paths), paths
+    def test_convention_project_auto_derives_real_skills(self, tmp_path):
+        """E2 anchor: a business-suffix project auto-derives its s_<domain>-*
+        skills with NO entry in _MANUAL_WATCH_PATHS.
+
+        Uses a SYNTHETIC skills dir (tmp_path) — NOT the real private s_cmhk-*
+        skills. Those are .gitignored (local-only), so an external clone has zero
+        s_cmhk-*; a test asserting they exist would pass ONLY on the author's
+        machine (env-coupled test-theater). This validates the derive LOGIC
+        environment-independently. (external-isolation verify, run_ccd1b6c5.)"""
+        from core.ddd_orchestrator import _watch_paths_for, _MANUAL_WATCH_PATHS
+        # synthetic repo root with two matching skill dirs + one unrelated
+        skills = tmp_path / "backend" / "skills"
+        (skills / "s_foo-alpha").mkdir(parents=True)
+        (skills / "s_foo-beta").mkdir(parents=True)
+        (skills / "s_other-thing").mkdir(parents=True)
+        assert "Foo_BIZ" not in _MANUAL_WATCH_PATHS  # zero manual reg
+        paths = _watch_paths_for("Foo_BIZ", tmp_path)
+        assert sorted(paths) == [
+            "backend/skills/s_foo-alpha/", "backend/skills/s_foo-beta/",
+        ], f"should derive exactly the s_foo-* skills, got {paths}"
 
     def test_manual_and_derived_union(self):
         """SwarmAI keeps its manual core paths AND gets any derived ones."""
