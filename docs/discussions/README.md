@@ -84,6 +84,9 @@
 | 94 | [Pollinate — A Discussion Piece: Philosophy, Architecture, Super-Powers & Honest Lowlights](94-pollinate-a-discussion-piece-philosophy-architecture-super.md) | Ideas | 2026-07-04 |
 | 95 | [The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence (🏷️Classification + 🕸️Relations, no Neo4j)](95-the-ontology-that-runs-swarmais-memory-ddd-code-intelligence.md) | Show and tell | 2026-07-08 |
 | 96 | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology(🏷️分类 + 🕸️关系,不上 Neo4j)](96-撑起-swarmai-记忆-ddd-代码智能的那套-ontology.md) | Show and tell | 2026-07-08 |
+| 98 | [AI Agent for Data 续篇:把 L3 契约层和 L2 受约束 NL2SQL 真正做出来(带牙齿)](98-ai-agent-for-data-sequel-l3-contract-l2-constrained.md) | Ideas | 2026-07-10 |
+| 99 | [Ontology 不是知识图谱,是决策层 —— 一套轻量本体如何撑起整个 SwarmAI OS](99-ontology-不是知识图谱-是决策层.md) | Show and tell | 2026-07-10 |
+| 100 | [Ontology isn't a knowledge graph — it's a decision layer: how one lightweight ontology runs an entire self-evolving Agent OS](100-ontology-isnt-a-knowledge-graph-its-a-decision-layer.md) | Show and tell | 2026-07-10 |
 
 ---
 
