@@ -251,6 +251,85 @@ class TestMultiWordFTSRecall:
         assert '"pipeline goal cycle"' not in match, "must NOT be one verbatim phrase"
 
 
+class TestRenderBucketedRecall:
+    """C-full M1 (run_ccd1b6c5): BucketedRecall → injectable string. Renders
+    real CONTENT (not section names), provenance-tagged, empty-safe."""
+
+    def _bucket(self, **domains):
+        from core.recall_multi import BucketedRecall
+        r = BucketedRecall(query="q")
+        r.buckets = dict(domains)
+        return r
+
+    def test_empty_bucket_renders_nothing(self):
+        from core.recall_multi import render_bucketed_recall
+        assert render_bucketed_recall(self._bucket()) == ""
+
+    def test_none_result_safe(self):
+        from core.recall_multi import render_bucketed_recall
+        assert render_bucketed_recall(None) == ""
+
+    def test_provenance_header_present_when_hits(self):
+        from core.recall_multi import render_bucketed_recall
+        s = render_bucketed_recall(
+            self._bucket(library=[{"source": "N.md", "heading": "H",
+                                   "content": "real body text", "score": 1.0}]))
+        assert "[RECALLED]" in s and "real body text" in s
+
+    def test_ddd_carries_project_provenance(self):
+        from core.recall_multi import render_bucketed_recall
+        s = render_bucketed_recall(
+            self._bucket(ddd=[{"doc": "TECH.md", "section": "Arch",
+                               "content": "ddd body"}]),
+            project="CMHK_SalesIntel")
+        assert "[DDD:CMHK_SalesIntel]" in s and "ddd body" in s
+
+    def test_renders_content_not_bare_names(self):
+        """The regression this feature exists to prevent: a hit with content
+        must render the CONTENT, not just its section name."""
+        from core.recall_multi import render_bucketed_recall
+        s = render_bucketed_recall(
+            self._bucket(context_files=[
+                {"section": "COE Registry", "content": "FULL MEMORY BODY HERE"}]))
+        assert "FULL MEMORY BODY HERE" in s
+
+    def test_pointer_fallback_when_no_content(self):
+        """A hit missing content falls back to its pointer (never blank)."""
+        from core.recall_multi import render_bucketed_recall
+        s = render_bucketed_recall(
+            self._bucket(ddd=[{"doc": "TECH.md", "section": "Arch"}]))
+        assert "TECH.md" in s and "Arch" in s
+
+    def test_codeintel_renders_symbol_refs(self):
+        from core.recall_multi import render_bucketed_recall
+        s = render_bucketed_recall(
+            self._bucket(codeintel=[{"name": "foo", "id": "a.py::foo",
+                                     "callers": ["bar"]}]))
+        assert "a.py::foo" in s and "bar" in s
+
+
+class TestContentCarriedInBuckets:
+    """C-full M1: _recall_context_files + _recall_library must carry `content`
+    in their buckets (was dropped → rendering gave bare names = a regression)."""
+
+    def test_context_files_bucket_carries_content(self):
+        from core.recall_multi import recall_all
+        r = recall_all("session resume timeout", project="SwarmAI",
+                       domains=("context_files",))
+        b = r.buckets.get("context_files", [])
+        if b:  # only assert when there's a hit (live MEMORY.md dependent)
+            assert "content" in b[0] and len(b[0]["content"]) > 50, \
+                "context_files bucket must carry real content, not just names"
+
+    def test_library_bucket_carries_content(self):
+        from core.recall_multi import recall_all
+        r = recall_all("session resume timeout", project="SwarmAI",
+                       domains=("library",))
+        b = r.buckets.get("library", [])
+        if b:
+            assert "content" in b[0], "library bucket must carry content"
+
+
 class TestDetectActiveProject:
     """M2 (run_91bc0651, DDD-alive): active-project detection for runtime DDD
     recall. FAIL-CLOSED — ambiguous/no-signal → None (inject nothing)."""

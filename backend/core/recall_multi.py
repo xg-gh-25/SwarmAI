@@ -223,6 +223,110 @@ def recall_all(
     return result
 
 
+# ── Render layer: BucketedRecall → injectable system-prompt string ────
+# C-full M1 (run_ccd1b6c5): the unified runtime-injection path renders the
+# 5-domain bucket into ONE provenance-tagged string. Replaces the two divergent
+# formatters (RecallEngine.recall_knowledge string vs raw buckets). Each domain
+# gets a labeled block; a [RECALLED] header marks the whole as retrieved (not
+# this-turn reasoning); the project-DDD block additionally carries [DDD:<proj>].
+# Empty buckets produce NO output (no noise). Pure formatting, no I/O.
+
+_DOMAIN_LABELS = {
+    "context_files": "Memory (MEMORY.md)",
+    "ddd": "Project DDD",
+    "library": "Knowledge Library",
+    "session": "Past Sessions",
+    "codeintel": "Code Symbols",
+}
+
+
+def render_bucketed_recall(
+    result: "BucketedRecall",
+    project: Optional[str] = None,
+    graph_context: str = "",
+) -> str:
+    """Render a BucketedRecall into an injectable system-prompt block.
+
+    Returns "" when there is nothing to inject (all buckets empty AND no graph
+    context) — the caller then injects nothing (no empty "## Recalled" noise).
+
+    Provenance:
+      - a top-level ``[RECALLED]`` header (the whole block is retrieved context,
+        NOT this turn's reasoning — the confabulation-boundary marker).
+      - the DDD block additionally carries ``[DDD:<project>]`` so the project
+        cognition layer is distinguishable from generic recall.
+    """
+    body = render_recall_body(result, project=project, graph_context=graph_context)
+    if not body:
+        return ""
+    provenance = (
+        "> **[RECALLED]** The block below is keyword/FTS-retrieved prior context "
+        "— NOT this turn's reasoning and NOT new user input. Treat it as a lead "
+        "to verify against source, not an established fact.\n\n"
+    )
+    return "## Recalled Knowledge\n" + provenance + body
+
+
+def render_recall_body(
+    result: "BucketedRecall",
+    project: Optional[str] = None,
+    graph_context: str = "",
+) -> str:
+    """The domain-blocks body of a rendered recall — WITHOUT the outer
+    ``## Recalled Knowledge`` header + [RECALLED] provenance.
+
+    Split out (C-full M2) so the runtime injection path can reuse the exact same
+    5-domain rendering while keeping ITS OWN header/provenance/agentic-hint
+    wrapping (single source of that wrapping stays in _maybe_inject_recall).
+    Returns "" when nothing to render.
+    """
+    if result is None:
+        return graph_context or ""
+    parts: list[str] = []
+    for domain in DOMAINS:
+        hits = result.buckets.get(domain) or []
+        if not hits:
+            continue
+        label = _DOMAIN_LABELS.get(domain, domain)
+        header = (f"### {label} — [DDD:{project}]"
+                  if domain == "ddd" and project else f"### {label}")
+        parts.append(header + "\n" + _render_domain_hits(domain, hits))
+    if graph_context:
+        parts.append("### Graph-Connected\n" + graph_context)
+    return "\n\n".join(parts)
+
+
+def _render_domain_hits(domain: str, hits: list) -> str:
+    """Render one domain's hit list. Text domains emit content; codeintel emits
+    symbol references; a hit missing content falls back to its pointer fields."""
+    lines: list[str] = []
+    for h in hits:
+        if domain == "codeintel":
+            ref = h.get("id") or h.get("name", "?")
+            callers = h.get("callers") or []
+            stale = " ⚠️STALE" if h.get("graph_stale") else ""
+            line = f"- `{ref}`{stale}"
+            if callers:
+                line += f" (callers: {', '.join(str(c) for c in callers[:5])})"
+            lines.append(line)
+        elif domain == "session":
+            txt = (h.get("text") or "").strip()
+            if txt:
+                lines.append(txt)
+        else:
+            # context_files / ddd / library: prefer real content, else pointer.
+            content = (h.get("content") or "").strip()
+            if content:
+                lines.append(content)
+            else:
+                src = h.get("doc") or h.get("source") or ""
+                sec = h.get("section") or h.get("heading") or ""
+                ptr = " § ".join(x for x in (src, sec) if x)
+                if ptr:
+                    lines.append(f"- {ptr}")
+    return "\n".join(lines)
+
+
 def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
                           policy_excluded_files: frozenset[str] = frozenset(),
                           ) -> tuple[list, str]:
@@ -254,7 +358,16 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
                          policy_excluded_files=policy_excluded_files,
                          max_sections=max_sections, allow_embed=allow_embed)
     if res.allowed and res.sections:
+        # Carry the actual recalled CONTENT (res.content), not just the section
+        # NAMES (res.sections). C-full M1 (run_ccd1b6c5): the bucket previously
+        # kept only names — so a consumer that renders the bucket got "COE
+        # Registry\nPitfalls" instead of the 5.8K of real text in res.content.
+        # That made this bucket near-useless for injection and would have
+        # REGRESSED runtime recall when C-full points it at recall_all. The
+        # content is one string across the matched sections (recall_context's
+        # own contract); attach it once + keep the section names for provenance.
         hits = [{"section": s} for s in res.sections]
+        hits[0]["content"] = res.content  # full matched text, for rendering
         layer = res.hit_layer
     return hits, layer
 
@@ -423,7 +536,12 @@ def _recall_library(query: str, allow_embed: bool) -> tuple[list, str]:
 
     if not results:
         return [], "none"
+    # Carry `content` (the matched body), not just source/heading. C-full M1
+    # (run_ccd1b6c5): the bucket dropped content, so rendering it gave the model
+    # a bare file list instead of the recalled text — a regression vs the
+    # production _recall_for_query which returns full content.
     hits = [{"source": r.get("source_file", ""), "heading": r.get("heading", ""),
+             "content": r.get("content", ""),
              "score": round(r.get("score", 0.0), 4)} for r in results[:8]]
     return hits, "fts"
 

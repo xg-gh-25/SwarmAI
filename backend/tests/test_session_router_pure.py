@@ -18,6 +18,66 @@ class _FakeOpts:
         self.system_prompt = base
 
 
+class TestUnifiedRecallCfull:
+    """C-full (run_ccd1b6c5): runtime recall unified onto recall_all's 5-domain
+    path (minus ddd, which keeps its own pre-gate leg). Strangler-fig fallback."""
+
+    def test_unified_body_covers_four_domains_not_ddd(self):
+        """The unified body surfaces the 4 keyword-gated domains incl codeintel
+        (the net-new one), and NOT ddd (excluded to avoid double-inject). Signal-1
+        editor path resolves the SwarmAI project so codeintel has a graph."""
+        from core.session_router import _unified_recall_body
+        # 2nd arg is now editor_file_path (project detected inside, off-loop).
+        s = _unified_recall_body(
+            "session resume timeout",
+            "/x/SwarmWS/Projects/SwarmAI/TECH.md",
+        )
+        assert "Code Symbols" in s, "codeintel is the net-new runtime domain"
+        assert "[DDD:" not in s, "ddd must NOT be in unified path (own leg)"
+
+    def test_unified_failclosed_no_project_still_recalls(self):
+        """No editor path + a query that resolves to no single project →
+        codeintel empty, but the other domains still recall (recall never
+        degrades to empty just because there's no active project)."""
+        from core.session_router import _unified_recall_body
+        s = _unified_recall_body("resume cold start latency", None)
+        assert "Code Symbols" not in s and len(s) > 100
+
+    def test_unified_exception_returns_empty_for_fallback(self):
+        """Gate-2 C1: an EXCEPTION in the unified path (not just empty result)
+        must return "" so the caller falls back to legacy — NOT escape and leave
+        recall empty. Fault-inject recall_all to raise; assert "" (fallback trigger)."""
+        import core.recall_multi as rm
+        from core.session_router import _unified_recall_body
+        orig = rm.recall_all
+        rm.recall_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            assert _unified_recall_body("test query", None) == "", \
+                "unified exception must return '' so caller falls back to legacy"
+        finally:
+            rm.recall_all = orig
+
+    def test_m4_drift_single_source_shared(self):
+        """M4 drift-elimination: the unified runtime path and recall_all CLI share
+        ONE library-recall function. Mutating _recall_library affects BOTH — proven
+        by asserting both call the SAME symbol (not two divergent copies)."""
+        import core.recall_multi as rm
+        from core.session_router import _unified_recall_body
+        calls = {"n": 0}
+        orig = rm._recall_library
+        def spy(*a, **k):
+            calls["n"] += 1
+            return orig(*a, **k)
+        rm._recall_library = spy
+        try:
+            _unified_recall_body("session resume", None)   # runtime path
+            rm.recall_all("session resume", domains=("library",))  # CLI path
+        finally:
+            rm._recall_library = orig
+        # BOTH entry points routed through the same _recall_library → no drift.
+        assert calls["n"] == 2, f"expected shared single-source, got {calls['n']} calls"
+
+
 class TestDddRuntimeInjection:
     """M2 (run_91bc0651, DDD-alive) E1/E4/E5: runtime DDD injection into the
     system prompt, fail-closed, with anti-silent-death counter. Drives the REAL

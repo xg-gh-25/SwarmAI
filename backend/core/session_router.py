@@ -317,6 +317,56 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
         return ""
 
 
+def _unified_recall_body(
+    query: str, editor_file_path: Optional[str] = None,
+) -> str:
+    """C-full (run_ccd1b6c5): the UNIFIED recall path — one recall_all fan-out
+    across ALL 5 domains (context_files / ddd / library / session / codeintel),
+    rendered to an injectable body. Replaces the runtime path's old 3-leg subset
+    (Library+Transcript+Memory) — it now also surfaces DDD + code symbols, and
+    shares ONE code path with the CLI (no more edit-twice drift).
+
+    Active-project detection (for the codeintel domain) runs HERE, inside the
+    thread — its list_project_names() does a blocking Path.iterdir(), which must
+    NOT run on the event loop (Gate-2 M1). Fail-closed: no project → codeintel
+    empty, other domains still recall.
+
+    STRANGLER-FIG (R26): this is the NEW path. On ANY failure or empty result it
+    returns "" and the caller FALLS BACK to the legacy _recall_for_query 3-leg
+    path — recall never degrades to empty because the new path broke. keyword/
+    FTS5-only (allow_embed=False); graph-enrich preserved via render.
+
+    DDD is EXCLUDED here on purpose: the project-DDD leg has a DIFFERENT trigger
+    lifecycle — it must fire on a keyword-LESS opener via signal-1 (a user editing
+    Projects/<X>/ who types "继续"), so it runs on its OWN pre-keyword-gate guard
+    (_ddd_injected). Including ddd here too would DOUBLE-inject it for a keyword
+    query with an active project. So unified = the 4 keyword-gated domains;
+    ddd stays on its independent leg. (run_ccd1b6c5 M2/M3.)
+    """
+    # Own try/except so ANY unified-path exception returns "" (→ caller falls
+    # back to legacy), not just an empty result. Without this, an exception here
+    # escapes to the caller's outer handler which proceeds with ZERO recall —
+    # breaking the "recall NEVER degrades to empty because the new path broke"
+    # invariant the whole strangler-fig leans on. (Gate-2 C1, run_ccd1b6c5.)
+    try:
+        from .recall_multi import (
+            recall_all, render_recall_body, detect_active_project, DOMAINS,
+        )
+        # Detect active project INSIDE the thread (blocking iterdir off the loop).
+        project, _sig = detect_active_project(
+            editor_file_path=editor_file_path, query=query,
+        )
+        non_ddd = tuple(d for d in DOMAINS if d != "ddd")
+        result = recall_all(query, project=project, domains=non_ddd, allow_embed=False)
+        graph_context = _graph_enrich_recall(query)
+        return render_recall_body(result, project=project, graph_context=graph_context)
+    except Exception as exc:  # noqa: BLE001 — fail to "" so caller falls back to legacy
+        _record_recall_degraded(f"unified_exception:{type(exc).__name__}")
+        logger.warning("unified recall raised (falling back to legacy 3-leg): %s: %s",
+                        type(exc).__name__, exc)
+        return ""
+
+
 def _graph_enrich_recall(query: str) -> str:
     """Extract entities from query, find graph-connected knowledge entries.
 
@@ -468,21 +518,26 @@ async def _maybe_inject_recall(
     _base_tok = ContextDirectoryLoader.estimate_tokens(options.system_prompt or "")
     _t_recall_start = time.perf_counter()
 
+    _editor_fp = editor_context.get("file_path") if editor_context else None
+
     try:
-        # Keyword/FTS5 leg only (allow_embed=False), synchronous, to completion.
-        # The disaster cap only fires on a code hang; normal recall (~1-3s) never
-        # reaches it.
+        # C-full (run_ccd1b6c5): try the UNIFIED 5-domain path first. STRANGLER-
+        # FIG — on empty/failure we fall back to the legacy 3-leg _recall_for_query
+        # so recall NEVER degrades to empty because the new path broke.
+        # keyword/FTS5-only (allow_embed=False); disaster cap only fires on a hang.
+        # active-project detection (blocking iterdir) runs INSIDE the thread
+        # (_unified_recall_body), off the event loop (Gate-2 M1).
         recalled = await asyncio.wait_for(
-            asyncio.to_thread(
-                _recall_for_query,
-                keywords,
-                _RECALL_MAX_TOKENS,
-                False,  # allow_embed=False — pure-filesystem: NO vector/Titan leg
-                        # (design §3.3/§5.2). Recall is keyword/FTS5 only; the
-                        # synonym blind spot is covered by agentic re-search, not vector.
-            ),
+            asyncio.to_thread(_unified_recall_body, keywords, _editor_fp),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
+        if not recalled:
+            # Fallback to legacy 3-leg path (strangler-fig safety net).
+            _record_recall_degraded("unified_empty_fallback_legacy")
+            recalled = await asyncio.wait_for(
+                asyncio.to_thread(_recall_for_query, keywords, _RECALL_MAX_TOKENS, False),
+                timeout=_RECALL_DISASTER_TIMEOUT_S,
+            )
         _recall_ms = (time.perf_counter() - _t_recall_start) * 1000.0
         if recalled:
             # Append to this options instance only — safe even if options is
