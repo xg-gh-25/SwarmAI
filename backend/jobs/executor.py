@@ -108,6 +108,39 @@ def _get_learner():
     return _estimation_learner
 
 
+def _monitor_result_status(
+    handler_status: str,
+    *,
+    ok: set[str],
+    benign: set[str],
+) -> str:
+    """Classify a MONITOR handler's domain verdict into a JobResult status.
+
+    Monitor-type jobs (eval_scheduled, memory_health, session_health_probe,
+    ddd_refresh) run a check and return a *domain verdict*, not an execution
+    outcome. A verdict of "the thing I monitor is unhealthy" (regression,
+    degraded, drift) means the JOB SUCCEEDED at its purpose — the finding is
+    alerted independently inside the handler (e.g. eval_scheduled Slack alert).
+    Collapsing such a finding into JobResult "failed" wrongly increments
+    consecutive_failures and pins the job in the 🔔 Needs-You queue forever
+    (run_89d7b5b8 DoD2; the original bug: eval "regression" -> "failed").
+
+    Mapping:
+      - status in `ok`     -> "success"  (ran + verdict is a real result, incl. a finding)
+      - status in `benign` -> "skipped"  (ran + no-op / gate-skip; real enum,
+                                           resets consecutive_failures at _update_job_state,
+                                           and preserves after:/last_run semantics —
+                                           NOT "success", which would misreport a dependency)
+      - anything else      -> "failed"   (genuine EXECUTION failure: error/crash/unknown —
+                                           a real failure MUST stay visible)
+    """
+    if handler_status in ok:
+        return "success"
+    if handler_status in benign:
+        return "skipped"
+    return "failed"
+
+
 def execute_job(
     job: Job,
     state: SchedulerState,
@@ -187,9 +220,14 @@ def execute_job(
             from .handlers.ddd_refresh import run_ddd_refresh
             ddd_result = run_ddd_refresh()
             duration = (datetime.now(timezone.utc) - start).total_seconds()
+            # Monitor verdict: success = ran + found/refreshed; skipped/no_changes
+            # = ran + benign no-op; error/parse_error/crash = real failure (DoD2).
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if ddd_result.get("status") == "success" else "failed",
+                status=_monitor_result_status(
+                    ddd_result.get("status", ""),
+                    ok={"success"}, benign={"skipped", "no_changes"},
+                ),
                 summary=ddd_result.get("summary", "DDD refresh completed"),
                 duration_seconds=duration,
             )
@@ -245,9 +283,14 @@ def execute_job(
             h_status = health_result.get("status", "unknown")
             h_actions = health_result.get("actions", [])
             summary = "; ".join(h_actions) if h_actions else health_result.get("error", "Memory health: all clear")
+            # Monitor verdict: success = ran + maintained; integrity_only/dry_run
+            # = ran + benign (nothing to maintain / dry run); error = LLM crash =
+            # real failure (DoD2 — was collapsing integrity_only/dry_run to failed).
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if h_status == "success" else "failed",
+                status=_monitor_result_status(
+                    h_status, ok={"success"}, benign={"integrity_only", "dry_run"},
+                ),
                 summary=summary,
                 duration_seconds=duration,
             )
@@ -261,8 +304,14 @@ def execute_job(
             p_status = probe_result.get("probe_status", "unknown")
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                # healthy → success; degraded → failed (surfaces red in job dashboard)
-                status="success" if p_status == "healthy" else "failed",
+                # Monitor verdict: healthy/degraded both = the PROBE ran fine (a
+                # 'degraded' verdict is the probe succeeding + Slack-alerting the
+                # system problem, NOT the probe job failing). unknown/missing =
+                # the probe itself failed = real failure. (DoD2; runs q15min so
+                # any residue self-clears fast regardless.)
+                status=_monitor_result_status(
+                    p_status, ok={"healthy", "degraded"}, benign=set(),
+                ),
                 summary=probe_result.get("summary", "runtime health probe"),
                 duration_seconds=duration,
             )
@@ -274,9 +323,17 @@ def execute_job(
             )
             duration = (datetime.now(timezone.utc) - start).total_seconds()
             e_status = eval_result.get("status", "unknown")
+            # Monitor verdict (DoD2 — THE flagship bug): healthy/regression both
+            # mean the eval RAN and produced a verdict — "regression" is a drift
+            # FINDING (alerted to Slack inside the handler at eval_scheduled.py),
+            # NOT a job failure. skipped = biweekly-gate no-op (benign). error =
+            # the eval infra itself failed = real failure. Was: regression->failed
+            # -> pinned eval-scheduled in 🔔 Needs-You permanently.
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if e_status == "healthy" else "failed",
+                status=_monitor_result_status(
+                    e_status, ok={"healthy", "regression"}, benign={"skipped"},
+                ),
                 summary=(f"scheduled eval: {e_status}, score={eval_result.get('overall_score')}%, "
                          f"bvt_green={eval_result.get('bvt_green')}"
                          + (f" — {'; '.join(eval_result.get('reasons', []))}"

@@ -446,3 +446,41 @@ class TestUnifiedStatusEnabledGap:
         assert sched["healthy"] == 1
         assert sched["enabled"] == 1
         assert sched["total"] == 2
+
+
+# ── Monitor finding-vs-failure discriminator (run_89d7b5b8, DoD2) ────
+# A monitor handler that RAN TO COMPLETION and returned a domain verdict
+# (regression / degraded / integrity_only / no_changes) is NOT a job
+# execution failure — the finding is alerted independently inside the
+# handler. Only a genuine execution failure (error / crash / unknown)
+# should map to JobResult "failed" and increment consecutive_failures.
+
+class TestMonitorResultStatus:
+    """_monitor_result_status classifies handler verdicts into success/skipped/failed."""
+
+    def test_ok_verdict_maps_success(self):
+        from jobs.executor import _monitor_result_status
+        assert _monitor_result_status("healthy", ok={"healthy", "regression"}, benign={"skipped"}) == "success"
+        assert _monitor_result_status("regression", ok={"healthy", "regression"}, benign={"skipped"}) == "success"
+
+    def test_benign_verdict_maps_skipped(self):
+        from jobs.executor import _monitor_result_status
+        # benign (ran fine, no-op / gate-skip) -> "skipped" (real enum, resets
+        # consecutive_failures at :2146, preserves after:/last_run semantics)
+        assert _monitor_result_status("skipped", ok={"healthy", "regression"}, benign={"skipped"}) == "skipped"
+        assert _monitor_result_status("integrity_only", ok={"success"}, benign={"integrity_only", "dry_run"}) == "skipped"
+        assert _monitor_result_status("no_changes", ok={"success"}, benign={"skipped", "no_changes"}) == "skipped"
+
+    def test_execution_failure_maps_failed(self):
+        from jobs.executor import _monitor_result_status
+        # error / unknown / anything not ok-or-benign -> "failed" (real failure stays visible)
+        assert _monitor_result_status("error", ok={"healthy", "regression"}, benign={"skipped"}) == "failed"
+        assert _monitor_result_status("unknown", ok={"success"}, benign={"integrity_only"}) == "failed"
+        assert _monitor_result_status("", ok={"healthy"}, benign=set()) == "failed"
+
+    def test_eval_regression_is_not_a_failure(self):
+        """Regression tell for DoD2: the exact bug — a drift-detecting eval run
+        that returns 'regression' must NOT be a job failure."""
+        from jobs.executor import _monitor_result_status
+        # eval_scheduled config: healthy/regression -> success, skipped -> skipped, error -> failed
+        assert _monitor_result_status("regression", ok={"healthy", "regression"}, benign={"skipped"}) == "success"

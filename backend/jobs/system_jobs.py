@@ -58,7 +58,7 @@ SYSTEM_JOBS: list[Job] = [
         id="signal-fetch",
         name="Fetch Signals",
         type="signal_fetch",
-        schedule="0 2,8,14 * * *",   # 3x daily: ICT 10:00, 16:00, 22:00
+        schedule="0 6,9 * * 1-5",    # weekday 2x: ICT 14:00, 17:00 (UTC 6,9)
         enabled=True,
         category="system",
         config={"max_age_hours": 48},
@@ -78,7 +78,7 @@ SYSTEM_JOBS: list[Job] = [
         id="self-tune",
         name="Self-Tune Feeds",
         type="self_tune",
-        schedule="0 1 * * *",          # Daily ICT 09:00 (before first fetch at ICT 10:00)
+        schedule="0 5 * * 1-5",        # weekday ICT 13:00 (UTC 5)
         enabled=True,
         category="system",
         config={},
@@ -91,7 +91,7 @@ SYSTEM_JOBS: list[Job] = [
         id="weekly-maintenance",
         name="Weekly Maintenance",
         type="maintenance",
-        schedule="0 3 * * 1",          # Monday 03:00 UTC = 11:00 ICT
+        schedule="0 6 * * 1",          # Monday UTC 06:00 = ICT 14:00
         enabled=True,
         category="system",
         config={},
@@ -102,7 +102,7 @@ SYSTEM_JOBS: list[Job] = [
         id="memory-health",
         name="Memory Health Check",
         type="memory_health",
-        schedule="15 3 * * 1",         # Monday 03:15 UTC = 11:15 ICT
+        schedule="15 6 * * 1",         # Monday UTC 06:15 = ICT 14:15
         enabled=True,
         category="system",
         config={},
@@ -144,7 +144,10 @@ SYSTEM_JOBS: list[Job] = [
         id="eval-scheduled",
         name="Scheduled Full Eval + Drift Alert (every 2 weeks, incl behavior)",
         type="eval_scheduled",
-        schedule="30 4 * * 1",          # 04:30 UTC = 12:30 ICT Monday; 14-day gate in handler → biweekly
+        schedule="30 10 * * 1",         # Monday UTC 10:30 = ICT 18:30 — LAST Monday slot on purpose: this
+                                        # runs ~96min in-process and blocks the serial scheduler loop, so it
+                                        # must trail every other weekday job (nothing time-sensitive queues
+                                        # behind it). 14-day gate in handler → real run only biweekly.
         enabled=True,
         category="system",
         safety=JobSafety(max_budget_usd=0, timeout_seconds=3600),
@@ -156,7 +159,7 @@ SYSTEM_JOBS: list[Job] = [
         id="ddd-refresh",
         name="DDD Auto-Refresh",
         type="ddd_refresh",
-        schedule="30 3 * * 1",         # Monday 03:30 UTC = 11:30 ICT
+        schedule="30 5 * * 1",         # Monday UTC 05:30 = ICT 13:30
         enabled=True,
         category="system",
         config={},
@@ -170,7 +173,7 @@ SYSTEM_JOBS: list[Job] = [
         id="ddd-weekly-report",
         name="DDD Weekly Report",
         type="ddd_weekly_report",
-        schedule="0 4 * * 1",           # Monday 04:00 UTC = 12:00 ICT (after ddd-refresh)
+        schedule="0 7 * * 1",           # Monday UTC 07:00 = ICT 15:00 (after ddd-refresh)
         enabled=True,
         category="system",
         config={"window_days": 7},
@@ -183,7 +186,7 @@ SYSTEM_JOBS: list[Job] = [
         id="swarmai-monthly-report",
         name="SwarmAI Monthly Report",
         type="swarmai_monthly_report",
-        schedule="0 5 1 * *",           # 1st of month, 05:00 UTC = 13:00 ICT
+        schedule="0 5 1 * *",           # 1st of month, UTC 05:00 = ICT 13:00 (day-of-month pinned)
         enabled=True,
         category="system",
         config={},  # Uses previous month by default
@@ -198,7 +201,7 @@ SYSTEM_JOBS: list[Job] = [
         id="skill-proposer",
         name="Skill Proposer",
         type="skill_proposer",
-        schedule="45 3 * * 1",          # Monday 03:45 UTC = 11:45 ICT
+        schedule="45 5 * * 1",          # Monday UTC 05:45 = ICT 13:45
         enabled=True,
         category="system",
         config={},
@@ -228,7 +231,7 @@ SYSTEM_JOBS: list[Job] = [
         id="weekly-rollup",
         name="Weekly Signal Rollup",
         type="signal_digest",
-        schedule="0 2 * * 1",          # Monday ICT 10:00 — fresh weekly rollup
+        schedule="0 5 * * 1",          # Monday UTC 05:00 = ICT 13:00 — fresh weekly rollup
         enabled=True,
         category="system",
         config={"window_days": 7},
@@ -242,7 +245,7 @@ SYSTEM_JOBS: list[Job] = [
         id="todo-resolution",
         name="Todo Resolution",
         type="todo_resolution",
-        schedule="0 4 * * *",             # Daily 04:00 UTC = 12:00 ICT
+        schedule="0 9 * * 1-5",           # weekday UTC 09:00 = ICT 17:00
         enabled=True,
         category="system",
         config={"stale_days": 21, "working_stale_days": 14, "git_days": 7},
@@ -270,7 +273,7 @@ SYSTEM_JOBS: list[Job] = [
         id="evolution-cycle",
         name="Evolution Cycle",
         type="script",
-        schedule="0 4 * * 4",          # Thursday 04:00 UTC = 12:00 ICT
+        schedule="0 7 * * 4",          # Thursday UTC 07:00 = ICT 15:00
         enabled=True,
         category="system",
         # max_budget_usd=0: script jobs never consult max_budget_usd (only
@@ -295,7 +298,7 @@ SYSTEM_JOBS: list[Job] = [
         id="loops-health",
         name="Self-Loops Health Monitor",
         type="script",
-        schedule="0 6 * * 1",          # Monday 06:00 UTC = 14:00 ICT
+        schedule="0 10 * * 1",         # Monday UTC 10:00 = ICT 18:00 (staggered off weekly-maintenance)
         enabled=True,
         category="system",
         config={
