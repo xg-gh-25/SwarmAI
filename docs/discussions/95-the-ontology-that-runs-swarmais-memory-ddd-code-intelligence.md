@@ -5,7 +5,7 @@ updated: 2026-07-08
 status: published
 ---
 <!-- GitHub Discussion #95: https://github.com/xg-gh-25/SwarmAI/discussions/95 -->
-> 🌐 English | English | 中文版 → #96 · Related: #20 No Neo4j · #59 DDD Governance · #37 Memory
+> 🌐 English | 中文版 → #96 · Related: #20 No Neo4j · #59 DDD Governance · #37 Memory
 
 > **In one line**: What powers SwarmAI's *Memory, DDD, and Code Intelligence* is a single, ultra-lightweight Ontology — just two layers of rules: 🏷️**Classification** + 🕸️**Relations**. No Neo4j, no OWL — yet it lets the AI retrieve precisely and keep the whole picture in view across ~90K words of memory, 9 project knowledge bases, and 18K functions.
 
