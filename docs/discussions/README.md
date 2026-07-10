@@ -4,7 +4,7 @@
 >
 > **Live discussions:** [github.com/xg-gh-25/SwarmAI/discussions](https://github.com/xg-gh-25/SwarmAI/discussions)
 >
-> **Reading Guide:** See [Reading Matrix](35-reading-matrix-3-paths-through-55-discussions.md) for curated learning paths.
+> **Reading Guide:** See [Reading Matrix](35-reading-matrix-3-paths-through-72-discussions.md) for curated learning paths.
 
 ---
 
@@ -12,7 +12,7 @@
 
 | # | Title | Category | Date |
 |---|-------|----------|------|
-| 2 | [Welcome — What is this gallery?](02-welcome-what-is-this-gallery.md) | Announcements | 2026-05-18 |
+| 2 | [Welcome — Start Here (Read Me First)](02-welcome-start-here-read-me-first.md) | Announcements | 2026-05-18 |
 | 3 | [没有记忆就没有理解 — Why memory is the only durable moat in AI systems](03-没有记忆就没有理解-why-memory-is-the-only-durable-moat-in-ai-systems.md) | General | 2026-05-18 |
 | 4 | [Coding as Black Box — one requirement in, verified delivery out](04-coding-as-black-box-one-requirement-in-verified-delivery-out.md) | General | 2026-05-18 |
 | 5 | [Content as Black Box — one message in, published media out](05-content-as-black-box-one-message-in-published-media-out.md) | General | 2026-05-18 |
@@ -42,7 +42,7 @@
 | 32 | [人格陷阱：为什么 "有主见的 AI Agent" 会破坏指令遵从](32-人格陷阱为什么-有主见的-ai-agent-会破坏指令遵从.md) | Show and tell | 2026-05-20 |
 | 33 | [What Is an Agent Harness? The Self-Driving Car Analogy for AI Autonomy Levels](33-what-is-an-agent-harness-the-self-driving-car-analogy-for-ai.md) | General | 2026-05-21 |
 | 34 | [Agent Harness 是什么？用自动驾驶的思路理解 AI Agent 自治五级](34-agent-harness-是什么用自动驾驶的思路理解-ai-agent-自治五级.md) | General | 2026-05-21 |
-| 35 | [Reading Matrix — 3 Paths Through 68 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-55-discussions.md) | General | 2026-05-21 |
+| 35 | [Reading Matrix — 3 Paths Through 72 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-72-discussions.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
@@ -80,6 +80,10 @@
 | 89 | [认知进化,而非技能调优 —— 为什么我们不再优化错误的层](89-认知进化-而非技能调优-为什么我们不再优化错误的层.md) | Ideas | 2026-06-29 |
 | 90 | [AgentCore's Eval-First Workshop vs Our Decoupled Eval Subsystem — Where Two Designs Agree, and Diverge](90-agentcores-eval-first-workshop-vs-our-decoupled-eval-subsy.md) | Show and tell | 2026-06-29 |
 | 91 | [AgentCore Eval-First Workshop vs 我们解耦的 Eval 子系统 —— 两个独立设计的殊途同归](91-agentcore-eval-first-workshop-vs-我们解耦的-eval-子系统-两个独立设计的殊途同.md) | Show and tell | 2026-06-29 |
+| 93 | [Pollinate — 一篇讨论稿:哲学、架构、Super-Powers 与诚实的 Lowlights (v2)](93-pollinate-一篇讨论稿-哲学-架构-super-powers-与诚实的-lowlights.md) | Ideas | 2026-07-03 |
+| 94 | [Pollinate — A Discussion Piece: Philosophy, Architecture, Super-Powers & Honest Lowlights](94-pollinate-a-discussion-piece-philosophy-architecture-super.md) | Ideas | 2026-07-04 |
+| 95 | [The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence (🏷️Classification + 🕸️Relations, no Neo4j)](95-the-ontology-that-runs-swarmais-memory-ddd-code-intelligence.md) | Show and tell | 2026-07-08 |
+| 96 | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology(🏷️分类 + 🕸️关系,不上 Neo4j)](96-撑起-swarmai-记忆-ddd-代码智能的那套-ontology.md) | Show and tell | 2026-07-08 |
 
 ---
 
@@ -88,7 +92,7 @@
 | Theme | Key Articles |
 |-------|-------------|
 | **Agent Architecture** | Agent Harness (#33), Single-Agent vs Multi-Agent (#43), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
-| **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9/#40/#41) |
+| **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), Unified Ontology (#95/#96), DDD Cultivation (#9/#40/#41) |
 | **Quality & Governance** | Three-Layer Governance (#21/#22), Adversarial Review (#29/#30), Personality Trap (#31/#32) |
 | **Design Philosophy** | Six Pillars (#38), Compound Intelligence (#10), Time Symmetry (#14) |
 | **Autonomous Delivery** | Coding as Black Box (#4), Content as Black Box (#5), AI for Data (#36) |

@@ -1,13 +1,13 @@
 ---
 created: 2026-06-20
-updated: 2026-06-20
+updated: 2026-07-10
 ---
 <!-- https://github.com/xg-gh-25/SwarmAI/discussions/35 -->
-# Reading Matrix — 3 Paths Through 55 Discussions (Builder / Architect / Leader)
+# Reading Matrix — 3 Paths Through 72 Discussions (Builder / Architect / Leader)
 
 ---
 
-> 55 discussions, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 72 discussions, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -101,7 +101,9 @@ Then pick your path ↓
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if you're connecting agents to business data — semantic contracts, certified queries)
 - [DDD Cultivation Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (if you're building domain-aware agents — 3-layer engine, 7 channels, 4 real failures) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
 - [No Neo4j — Lightweight Ontology in Practice](https://github.com/xg-gh-25/SwarmAI/discussions/20) (if you're choosing knowledge representation)
+- [The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/95) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/96) (if you want the ONE ontology beneath all three subsystems — 🏷️ classification + 🕸️ relations, still no Neo4j)
 - [Content as Black Box — message in, media out](https://github.com/xg-gh-25/SwarmAI/discussions/5) (if you want multi-engine delivery)
+- [Pollinate — Philosophy, Architecture, Super-Powers & Honest Lowlights](https://github.com/xg-gh-25/SwarmAI/discussions/94) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/93) (the content delivery engine in depth: message-first / format-follows-audience, the 8-stage pipeline, plus an honest account of where it falls short)
 - [Time Symmetry — session = learning boundary](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you're designing session lifecycle)
 - [Agent Harness 避坑指南](https://github.com/xg-gh-25/SwarmAI/discussions/54) (CN — common harness pitfalls from production experience)
 
@@ -184,8 +186,22 @@ Then pick your path ↓
 | [53](https://github.com/xg-gh-25/SwarmAI/discussions/53) | [Karpathy's LLM Wiki Is a Manifesto](https://github.com/xg-gh-25/SwarmAI/discussions/53) | EN | Karpathy's vision maps 1:1 to DDD — and the gap we closed | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
 | [61](https://github.com/xg-gh-25/SwarmAI/discussions/61) | [Skill Portability is a Distribution Problem](https://github.com/xg-gh-25/SwarmAI/discussions/61) | EN | Why skill/plugin ecosystems fail at packaging, not capability | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#12](https://github.com/xg-gh-25/SwarmAI/discussions/12) |
 | [74](https://github.com/xg-gh-25/SwarmAI/discussions/74) | [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic](https://github.com/xg-gh-25/SwarmAI/discussions/74) | EN | Agent self-evaluation: internal proprioception vs external testing | ~ [#8](https://github.com/xg-gh-25/SwarmAI/discussions/8), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59) |
+| [83](https://github.com/xg-gh-25/SwarmAI/discussions/83) | [After `assert` Breaks Down — Eval Architecture & Methodology](https://github.com/xg-gh-25/SwarmAI/discussions/83) | EN | Why agents need eval not assert; full eval architecture | → [#74](https://github.com/xg-gh-25/SwarmAI/discussions/74) |
+| [78](https://github.com/xg-gh-25/SwarmAI/discussions/78) | [当 assert 失效之后 — Eval 架构全景与方法论](https://github.com/xg-gh-25/SwarmAI/discussions/78) | CN | 同 #83 中文版 | → [#74](https://github.com/xg-gh-25/SwarmAI/discussions/74) |
+| [90](https://github.com/xg-gh-25/SwarmAI/discussions/90) | [AgentCore Eval-First vs Our Decoupled Eval Subsystem](https://github.com/xg-gh-25/SwarmAI/discussions/90) | EN | Code-level read of THELMA + Mind the Goal vs ours; score→cause→action | → [#74](https://github.com/xg-gh-25/SwarmAI/discussions/74), ~ [#83](https://github.com/xg-gh-25/SwarmAI/discussions/83) |
+| [91](https://github.com/xg-gh-25/SwarmAI/discussions/91) | [AgentCore Eval-First vs 我们解耦的 Eval 子系统](https://github.com/xg-gh-25/SwarmAI/discussions/91) | CN | 同 #90 中文版 | → [#74](https://github.com/xg-gh-25/SwarmAI/discussions/74), ~ [#78](https://github.com/xg-gh-25/SwarmAI/discussions/78) |
+| [79](https://github.com/xg-gh-25/SwarmAI/discussions/79) | [Recall Architecture — The READ Path](https://github.com/xg-gh-25/SwarmAI/discussions/79) | EN | How recall works: keyword/FTS5 over markdown, no vector DB | → [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
+| [80](https://github.com/xg-gh-25/SwarmAI/discussions/80) | [Recall 架构全景 — READ 路径](https://github.com/xg-gh-25/SwarmAI/discussions/80) | CN | 同 #79 中文版 | → [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
+| [84](https://github.com/xg-gh-25/SwarmAI/discussions/84) | [Context as a Living System — The WRITE Path](https://github.com/xg-gh-25/SwarmAI/discussions/84) | EN | Ingestion → decay → archive; why we deleted the vector DB | → [#79](https://github.com/xg-gh-25/SwarmAI/discussions/79), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [85](https://github.com/xg-gh-25/SwarmAI/discussions/85) | [上下文是一个活系统 — WRITE 路径](https://github.com/xg-gh-25/SwarmAI/discussions/85) | CN | 同 #84 中文版 | → [#80](https://github.com/xg-gh-25/SwarmAI/discussions/80), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [86](https://github.com/xg-gh-25/SwarmAI/discussions/86) | [Quality Convergence — How a Pipeline Knows It's Done](https://github.com/xg-gh-25/SwarmAI/discussions/86) | EN | DoD-driven convergence, not stage-exhaustion | → [#68](https://github.com/xg-gh-25/SwarmAI/discussions/68), ~ [#29](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
+| [87](https://github.com/xg-gh-25/SwarmAI/discussions/87) | [质量收敛 — Pipeline 怎么知道做完了](https://github.com/xg-gh-25/SwarmAI/discussions/87) | CN | 同 #86 中文版 | → [#68](https://github.com/xg-gh-25/SwarmAI/discussions/68), ~ [#30](https://github.com/xg-gh-25/SwarmAI/discussions/30) |
+| [94](https://github.com/xg-gh-25/SwarmAI/discussions/94) | [Pollinate — Philosophy, Architecture, Super-Powers & Honest Lowlights](https://github.com/xg-gh-25/SwarmAI/discussions/94) | EN | Content delivery engine: message-first / format-follows-audience; the engine, its super-powers, and an honest account of where it falls short | → [#5](https://github.com/xg-gh-25/SwarmAI/discussions/5) |
+| [93](https://github.com/xg-gh-25/SwarmAI/discussions/93) | [Pollinate — 哲学、架构、Super-Powers 与诚实的 Lowlights](https://github.com/xg-gh-25/SwarmAI/discussions/93) | CN | 同 #94 中文版 | → [#5](https://github.com/xg-gh-25/SwarmAI/discussions/5) |
 | [20](https://github.com/xg-gh-25/SwarmAI/discussions/20) | [No Neo4j — Lightweight Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/20) | EN | Darwinian knowledge > graph database | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [19](https://github.com/xg-gh-25/SwarmAI/discussions/19) | [AI Agent 不需要 Neo4j](https://github.com/xg-gh-25/SwarmAI/discussions/19) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [95](https://github.com/xg-gh-25/SwarmAI/discussions/95) | [The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/95) | EN | One ontology beneath all three subsystems — 🏷️ classification + 🕸️ relations, no Neo4j | → [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
+| [96](https://github.com/xg-gh-25/SwarmAI/discussions/96) | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96) | CN | 同 #95 中文版 | → [#19](https://github.com/xg-gh-25/SwarmAI/discussions/19), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
 | [36](https://github.com/xg-gh-25/SwarmAI/discussions/36) | [AI Agent for Data — 从幻觉到精准](https://github.com/xg-gh-25/SwarmAI/discussions/36) | Mix | Semantic contracts + certified queries for data agents | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | EN | Full memory implementation: injection → progressive → FTS5 → RAG | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
 | [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | EN | 3-layer engine, 7 channels, 4 failures, real metrics | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
@@ -208,6 +224,9 @@ Then pick your path ↓
 | [32](https://github.com/xg-gh-25/SwarmAI/discussions/32) | [人格陷阱](https://github.com/xg-gh-25/SwarmAI/discussions/32) | CN | 同上中文版 | → [#27](https://github.com/xg-gh-25/SwarmAI/discussions/27) |
 | [29](https://github.com/xg-gh-25/SwarmAI/discussions/29) | [Adversarial Review](https://github.com/xg-gh-25/SwarmAI/discussions/29) | EN | Multi-specialist review as mechanical gate | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4) |
 | [30](https://github.com/xg-gh-25/SwarmAI/discussions/30) | [多专家对抗性审查](https://github.com/xg-gh-25/SwarmAI/discussions/30) | CN | 同上中文版 | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4) |
+| [75](https://github.com/xg-gh-25/SwarmAI/discussions/75) | [Mechanical Gate vs Ceremonial Gate](https://github.com/xg-gh-25/SwarmAI/discussions/75) | EN | Why your agent's approval step is probably theater | → [#26](https://github.com/xg-gh-25/SwarmAI/discussions/26), ~ [#29](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
+| [88](https://github.com/xg-gh-25/SwarmAI/discussions/88) | [Cognitive Evolution, Not Skill Tuning](https://github.com/xg-gh-25/SwarmAI/discussions/88) | EN | Fix the eye, not the glasses; prose fails 3× → build a gate | → [#26](https://github.com/xg-gh-25/SwarmAI/discussions/26), ~ [#75](https://github.com/xg-gh-25/SwarmAI/discussions/75) |
+| [89](https://github.com/xg-gh-25/SwarmAI/discussions/89) | [认知进化,而非技能调优](https://github.com/xg-gh-25/SwarmAI/discussions/89) | CN | 同 #88 中文版 | → [#27](https://github.com/xg-gh-25/SwarmAI/discussions/27), ~ [#75](https://github.com/xg-gh-25/SwarmAI/discussions/75) |
 
 ### Theme 4: Strategy — "Why does this matter?"
 
@@ -223,7 +242,7 @@ Then pick your path ↓
 
 | # | Title | Lang | Type | Prereqs |
 |---|-------|:----:|------|---------|
-| [2](https://github.com/xg-gh-25/SwarmAI/discussions/2) | [Welcome — What is this gallery?](https://github.com/xg-gh-25/SwarmAI/discussions/2) | EN | Announcement | None (START) |
+| [2](https://github.com/xg-gh-25/SwarmAI/discussions/2) | [Welcome — Start Here (Read Me First)](https://github.com/xg-gh-25/SwarmAI/discussions/2) | EN | Announcement | None (START) |
 | [17](https://github.com/xg-gh-25/SwarmAI/discussions/17) | [Memory Architecture Poll](https://github.com/xg-gh-25/SwarmAI/discussions/17) | EN | Q&A | [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3) |
 | [18](https://github.com/xg-gh-25/SwarmAI/discussions/18) | [Show Your Setup](https://github.com/xg-gh-25/SwarmAI/discussions/18) | EN | Show & tell | Any |
 | [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | EN | Announcement | None |
@@ -286,7 +305,7 @@ Then pick your path ↓
 
 | # | Title | Theme | Lang |
 |---|-------|:-----:|:----:|
-| [2](https://github.com/xg-gh-25/SwarmAI/discussions/2) | [Welcome — What is this gallery?](https://github.com/xg-gh-25/SwarmAI/discussions/2) | Community | EN |
+| [2](https://github.com/xg-gh-25/SwarmAI/discussions/2) | [Welcome — Start Here (Read Me First)](https://github.com/xg-gh-25/SwarmAI/discussions/2) | Community | EN |
 | [3](https://github.com/xg-gh-25/SwarmAI/discussions/3) | [没有记忆就没有理解 — Memory as moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) | Foundations | Mix |
 | [4](https://github.com/xg-gh-25/SwarmAI/discussions/4) | [Coding as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/4) | Architecture | EN |
 | [5](https://github.com/xg-gh-25/SwarmAI/discussions/5) | [Content as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/5) | Architecture | EN |
@@ -340,16 +359,35 @@ Then pick your path ↓
 | [61](https://github.com/xg-gh-25/SwarmAI/discussions/61) | [Skill Portability is a Distribution Problem](https://github.com/xg-gh-25/SwarmAI/discussions/61) | Architecture | EN |
 | [68](https://github.com/xg-gh-25/SwarmAI/discussions/68) | [Autonomous Pipeline v3 — Dual-Mode Execution](https://github.com/xg-gh-25/SwarmAI/discussions/68) | Architecture | EN |
 | [74](https://github.com/xg-gh-25/SwarmAI/discussions/74) | [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic](https://github.com/xg-gh-25/SwarmAI/discussions/74) | Architecture | EN |
+| [75](https://github.com/xg-gh-25/SwarmAI/discussions/75) | [Mechanical Gate vs Ceremonial Gate](https://github.com/xg-gh-25/SwarmAI/discussions/75) | Governance | EN |
+| [78](https://github.com/xg-gh-25/SwarmAI/discussions/78) | [当 assert 失效之后 — Eval 架构](https://github.com/xg-gh-25/SwarmAI/discussions/78) | Architecture | CN |
+| [79](https://github.com/xg-gh-25/SwarmAI/discussions/79) | [Recall Architecture — The READ Path](https://github.com/xg-gh-25/SwarmAI/discussions/79) | Architecture | EN |
+| [80](https://github.com/xg-gh-25/SwarmAI/discussions/80) | [Recall 架构全景 — READ 路径](https://github.com/xg-gh-25/SwarmAI/discussions/80) | Architecture | CN |
+| [83](https://github.com/xg-gh-25/SwarmAI/discussions/83) | [After `assert` Breaks Down — Eval Architecture](https://github.com/xg-gh-25/SwarmAI/discussions/83) | Architecture | EN |
+| [84](https://github.com/xg-gh-25/SwarmAI/discussions/84) | [Context as a Living System — The WRITE Path](https://github.com/xg-gh-25/SwarmAI/discussions/84) | Architecture | EN |
+| [85](https://github.com/xg-gh-25/SwarmAI/discussions/85) | [上下文是一个活系统 — WRITE 路径](https://github.com/xg-gh-25/SwarmAI/discussions/85) | Architecture | CN |
+| [86](https://github.com/xg-gh-25/SwarmAI/discussions/86) | [Quality Convergence — How a Pipeline Knows It's Done](https://github.com/xg-gh-25/SwarmAI/discussions/86) | Architecture | EN |
+| [87](https://github.com/xg-gh-25/SwarmAI/discussions/87) | [质量收敛 — Pipeline 怎么知道做完了](https://github.com/xg-gh-25/SwarmAI/discussions/87) | Architecture | CN |
+| [88](https://github.com/xg-gh-25/SwarmAI/discussions/88) | [Cognitive Evolution, Not Skill Tuning](https://github.com/xg-gh-25/SwarmAI/discussions/88) | Governance | EN |
+| [89](https://github.com/xg-gh-25/SwarmAI/discussions/89) | [认知进化,而非技能调优](https://github.com/xg-gh-25/SwarmAI/discussions/89) | Governance | CN |
+| [90](https://github.com/xg-gh-25/SwarmAI/discussions/90) | [AgentCore Eval-First vs Our Decoupled Eval Subsystem](https://github.com/xg-gh-25/SwarmAI/discussions/90) | Architecture | EN |
+| [91](https://github.com/xg-gh-25/SwarmAI/discussions/91) | [AgentCore Eval-First vs 我们解耦的 Eval 子系统](https://github.com/xg-gh-25/SwarmAI/discussions/91) | Architecture | CN |
+| [94](https://github.com/xg-gh-25/SwarmAI/discussions/94) | [Pollinate — Philosophy, Architecture, Super-Powers & Honest Lowlights](https://github.com/xg-gh-25/SwarmAI/discussions/94) | Architecture | EN |
+| [93](https://github.com/xg-gh-25/SwarmAI/discussions/93) | [Pollinate — 哲学、架构、Super-Powers 与 Lowlights](https://github.com/xg-gh-25/SwarmAI/discussions/93) | Architecture | CN |
+| [95](https://github.com/xg-gh-25/SwarmAI/discussions/95) | [The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/95) | Architecture | EN |
+| [96](https://github.com/xg-gh-25/SwarmAI/discussions/96) | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96) | Architecture | CN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 55 (including Welcome + Reading Matrix)
-- **Content articles:** 53
-- **Bilingual pairs (EN+CN):** 11 pairs (22 discussions)
-- **English only:** 26
-- **Mixed/bilingual single:** 5
-- **Themes:** Foundations (8), Architecture (31), Governance (8), Strategy (5), Community (4)
+- **Total discussions:** 72 (including Welcome + Reading Matrix)
+- **Content articles:** 70
+- **Bilingual pairs (EN+CN):** 19 pairs (38 discussions)
+- **English only:** 29
+- **Themes:** Foundations (8), Architecture (43), Governance (11), Strategy (5), Community (4)
 - **Avg reading time per article:** ~5-8 min
 - **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~47 min
+
+
+
