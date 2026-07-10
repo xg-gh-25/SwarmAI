@@ -12,6 +12,82 @@ import pytest
 from core.session_router import _extract_query_keywords, _get_access_hint
 
 
+class _FakeOpts:
+    """Minimal stand-in for the SDK options object (only system_prompt matters)."""
+    def __init__(self, base="BASE PROMPT"):
+        self.system_prompt = base
+
+
+class TestDddRuntimeInjection:
+    """M2 (run_91bc0651, DDD-alive) E1/E4/E5: runtime DDD injection into the
+    system prompt, fail-closed, with anti-silent-death counter. Drives the REAL
+    _inject_ddd_for_active_project (no mock of the function under test) against
+    the REAL CMHK_SalesIntel DDD docs on disk (GUI32/PIT13: exercise real path)."""
+
+    def test_e1_editor_path_injects_ddd_provenance(self):
+        """E1: signal-1 editor path → system_prompt gains [DDD:<project>] token
+        (assert the PROVENANCE token, NOT string length — L2 anti-vacuity)."""
+        from core.session_router import _inject_ddd_for_active_project
+        o = _FakeOpts()
+        _inject_ddd_for_active_project(
+            o, "weekly revenue forecast baseline",
+            "/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+        )
+        assert "[DDD:CMHK_SalesIntel]" in o.system_prompt, o.system_prompt
+        assert o.system_prompt.startswith("BASE PROMPT"), "base must be preserved"
+
+    def test_e4_no_signal_injects_nothing(self):
+        """E4 fail-closed: no active project → NO [DDD:] token injected,
+        prompt byte-unchanged.
+
+        Asserts the SPECIFIC decline reason `declined:no_signal`, not merely the
+        absence of injection: a downstream `no_ddd_hits` gate would ALSO produce
+        'no [DDD:]' for a wrongly-selected project on a garbage query, masking a
+        broken fail-closed. Keying on the reason gives the test real teeth —
+        mutation-verified (break the no_signal return → this goes RED)."""
+        from core.session_router import (
+            _inject_ddd_for_active_project, _ddd_inject_count,
+        )
+        _ddd_inject_count.clear()
+        o = _FakeOpts()
+        _inject_ddd_for_active_project(o, "hello how are you", None)
+        assert "[DDD:" not in o.system_prompt
+        assert o.system_prompt == "BASE PROMPT"
+        # teeth: decline must be at the DETECTION stage, not a downstream gate.
+        assert _ddd_inject_count.get("declined:no_signal", 0) == 1, \
+            f"expected fail-closed at detection; got {dict(_ddd_inject_count)}"
+
+    def test_e4_ambiguous_injects_nothing(self):
+        """E4: ambiguous query (2 project matches) → fail-closed at detection."""
+        from core.session_router import (
+            _inject_ddd_for_active_project, _ddd_inject_count,
+        )
+        _ddd_inject_count.clear()
+        o = _FakeOpts()
+        _inject_ddd_for_active_project(o, "compare cmhk and github community", None)
+        assert "[DDD:" not in o.system_prompt
+        assert _ddd_inject_count.get("declined:ambiguous", 0) == 1, \
+            f"expected fail-closed on ambiguity; got {dict(_ddd_inject_count)}"
+
+    def test_e5_counter_distinguishes_injected_from_declined(self):
+        """E5 anti-silent-death (Gate-2 L1): the counter must record BOTH an
+        inject AND a decline — proving the detector isn't permanently failing
+        closed (which would be byte-identical to 'correctly declined')."""
+        from core.session_router import (
+            _inject_ddd_for_active_project, _ddd_inject_count,
+        )
+        _ddd_inject_count.clear()
+        # one injected (signal-1) + one declined (no signal)
+        _inject_ddd_for_active_project(
+            _FakeOpts(), "weekly revenue",
+            "/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+        )
+        _inject_ddd_for_active_project(_FakeOpts(), "hi", None)
+        assert _ddd_inject_count.get("injected", 0) >= 1, _ddd_inject_count
+        assert any(k.startswith("declined:") for k in _ddd_inject_count), \
+            f"no declined outcome recorded — counter can't detect silent-death: {dict(_ddd_inject_count)}"
+
+
 class TestExtractQueryKeywords:
     """Exhaustive path coverage for _extract_query_keywords."""
 

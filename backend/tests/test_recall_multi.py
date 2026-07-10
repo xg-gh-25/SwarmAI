@@ -251,6 +251,94 @@ class TestMultiWordFTSRecall:
         assert '"pipeline goal cycle"' not in match, "must NOT be one verbatim phrase"
 
 
+class TestDetectActiveProject:
+    """M2 (run_91bc0651, DDD-alive): active-project detection for runtime DDD
+    recall. FAIL-CLOSED — ambiguous/no-signal → None (inject nothing)."""
+
+    CANDS = ["AIDLC", "CMHK_SalesIntel", "GitHub_Community", "PhysicalAI", "SwarmAI"]
+
+    def test_signal1_project_path(self):
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            editor_file_path="/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            candidates=self.CANDS,
+        )
+        assert proj == "CMHK_SalesIntel" and sig == "signal1_project_path"
+
+    def test_signal1_skill_path_maps_to_business_project(self):
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            editor_file_path="backend/skills/s_cmhk-weekly-report/SKILL.md",
+            candidates=self.CANDS,
+        )
+        assert proj == "CMHK_SalesIntel" and sig == "signal1_skill_path"
+
+    def test_signal3_keyword_unique_match(self):
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            query="show me the CMHK weekly numbers", candidates=self.CANDS,
+        )
+        assert proj == "CMHK_SalesIntel" and sig == "signal3_keyword"
+
+    def test_failclosed_ambiguous_two_matches(self):
+        """≥2 project keyword matches → None (never guess, never pollute)."""
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            query="compare cmhk and github community", candidates=self.CANDS,
+        )
+        assert proj is None and sig == "ambiguous"
+
+    def test_failclosed_no_signal(self):
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            query="hello how are you today", candidates=self.CANDS,
+        )
+        assert proj is None and sig == "no_signal"
+
+    def test_signal1_beats_signal3(self):
+        """Deterministic file-path signal wins over probabilistic keyword."""
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            editor_file_path="/x/SwarmWS/Projects/PhysicalAI/PRODUCT.md",
+            query="cmhk weekly revenue",  # keyword says CMHK, path says PhysicalAI
+            candidates=self.CANDS,
+        )
+        assert proj == "PhysicalAI" and sig == "signal1_project_path"
+
+    def test_unknown_project_path_ignored(self):
+        """A Projects/ path for a dir NOT in candidates → not matched."""
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            editor_file_path="/x/SwarmWS/Projects/Nonexistent_Xyz/TECH.md",
+            candidates=self.CANDS,
+        )
+        assert proj is None
+
+    def test_signal3_word_boundary_no_substring_falsepos(self):
+        """Gate-2 M2: substring match wrongly resolved 'aidlctastic' → AIDLC.
+        Word-boundary match must reject a token embedded in an unrelated word."""
+        from core.recall_multi import detect_active_project
+        assert detect_active_project(
+            query="the pipeline is aidlctastic today", candidates=self.CANDS,
+        ) == (None, "no_signal")
+        # but the real whole word still matches
+        assert detect_active_project(
+            query="what is the aidlc plan", candidates=self.CANDS,
+        )[0] == "AIDLC"
+
+    def test_signal1_keyword_less_opener_still_detects(self):
+        """Gate-2 HIGH: signal-1 is deterministic and must NOT require query
+        keywords. A keyword-less opener ('继续') with an editor path still
+        resolves the project."""
+        from core.recall_multi import detect_active_project
+        proj, sig = detect_active_project(
+            editor_file_path="/x/SwarmWS/Projects/CMHK_SalesIntel/TECH.md",
+            query="继续",  # zero extractable keywords
+            candidates=self.CANDS,
+        )
+        assert proj == "CMHK_SalesIntel" and sig == "signal1_project_path"
+
+
 class TestRecallAll:
     """AC3/AC4: recall_all returns a BucketedRecall with per-domain buckets +
     per-domain hit_layer, fanning across all 5 domains, embed-free by default."""

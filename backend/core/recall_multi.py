@@ -291,6 +291,111 @@ def _recall_ddd(query: str, project: Optional[str],
     return hits, "keyword"
 
 
+def list_project_names() -> list[str]:
+    """List SwarmWS project dir names (fs-scan, git-agnostic).
+
+    fs-scan (not git) so an UNTRACKED project (e.g. CMHK_SalesIntel, kept out of
+    git for privacy) is still discoverable. Skips dotfiles. (run_91bc0651 M2.)
+    """
+    from pathlib import Path
+
+    base = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects"
+    if not base.is_dir():
+        return []
+    return sorted(
+        d.name for d in base.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    )
+
+
+def detect_active_project(
+    editor_file_path: Optional[str] = None,
+    query: Optional[str] = None,
+    candidates: Optional[list[str]] = None,
+) -> tuple[Optional[str], str]:
+    """Detect the active project for runtime DDD recall. FAIL-CLOSED.
+
+    Two signals, first hit wins (spec run_4a5a5cab §3.1; signal-2 project_id is
+    vaporware — no session→thread wiring — so it is NOT implemented here):
+
+      signal-1 (DETERMINISTIC): editor_file_path points into `Projects/<X>/` or
+        `backend/skills/s_<x>-*` whose owning project is unambiguous.
+      signal-3 (PROBABILISTIC): query keywords match EXACTLY ONE project's
+        name/alias tokens. Ambiguous (≥2) or zero match → give up.
+
+    Returns (project, signal_name) on a confident hit, else (None, reason).
+    Ambiguity → (None, "ambiguous") so the caller injects NOTHING — a wrong
+    project is worse than no project (fail-closed; never pollute context).
+    """
+    if candidates is None:
+        candidates = list_project_names()
+    if not candidates:
+        return None, "no_projects"
+
+    # ── signal-1: file path (deterministic) ──
+    if editor_file_path:
+        fp = editor_file_path.replace("\\", "/")
+        # a) direct Projects/<X>/ path
+        marker = "Projects/"
+        if marker in fp:
+            tail = fp.split(marker, 1)[1]
+            proj = tail.split("/", 1)[0] if "/" in tail else tail
+            if proj in candidates:
+                return proj, "signal1_project_path"
+        # b) skill path s_<x>-* → map to the business project that owns it
+        if "backend/skills/s_" in fp:
+            skill = fp.split("backend/skills/", 1)[1].split("/", 1)[0]
+            # match a candidate whose derived prefix owns this skill dir
+            for proj in candidates:
+                pref = _project_skill_prefix(proj)
+                if pref and skill.startswith(pref):
+                    return proj, "signal1_skill_path"
+
+    # ── signal-3: keyword disambiguation (probabilistic, fail-closed) ──
+    if query:
+        ql = query.lower()
+        matched = [p for p in candidates if _project_matches_query(p, ql)]
+        if len(matched) == 1:
+            return matched[0], "signal3_keyword"
+        if len(matched) >= 2:
+            return None, "ambiguous"
+
+    return None, "no_signal"
+
+
+def _project_skill_prefix(project_name: str) -> Optional[str]:
+    """`<domain>_<BizSuffix>` → `s_<domain>-` (business-project convention only).
+
+    Delegates to the SINGLE source ddd_orchestrator._derive_skill_prefix (R25 —
+    was a duplicated allowlist literal; drift risk if a suffix is added to one
+    copy only, Gate-2 M2). signal-1's skill-path branch thus attributes a skill
+    to the SAME project the WRITE side (staleness watch) does.
+    """
+    try:
+        from core.ddd_orchestrator import _derive_skill_prefix
+        return _derive_skill_prefix(project_name)
+    except Exception:  # noqa: BLE001 — detection must never crash recall
+        return None
+
+
+def _project_matches_query(project_name: str, query_lower: str) -> bool:
+    """True if the query mentions this project by a distinctive WHOLE-WORD token.
+
+    Tokenizes the project name on separators (CMHK_SalesIntel →
+    {cmhk, salesintel}); a token matches only as a WHOLE WORD in the query
+    (\\b boundary), never a substring — so "aidlctastic" does NOT match AIDLC
+    (Gate-2 M2: raw substring gave false single-project resolutions). ≥3-char
+    tokens only. Deliberately strict — a false match pollutes recall, so this
+    keeps the fail-closed bias.
+    """
+    import re
+
+    tokens = [t for t in re.split(r"[_\-\s]+", project_name.lower()) if len(t) >= 3]
+    return any(
+        re.search(rf"\b{re.escape(t)}\b", query_lower) for t in tokens
+    )
+
+
 def _recall_library(query: str, allow_embed: bool) -> tuple[list, str]:
     """Recall over the Knowledge Library via the existing RecallEngine.
 

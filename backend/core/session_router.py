@@ -114,6 +114,24 @@ def _record_recall_degraded(reason: str) -> None:
     except Exception:  # noqa: BLE001 — metric must never break recall
         pass
 
+
+# DDD runtime-injection counter (run_91bc0651 M2, Gate-2 L1 anti-silent-death):
+# a fail-closed detector ("no active project → don't inject") makes "detection
+# always fails (bug)" byte-identical to "correctly declined (by design)". WITHOUT
+# a positive counter, a broken detector = DDD silently never injects, forever,
+# invisibly — the exact dead-path class this whole feature exists to kill. Track
+# injected vs declined-by-reason: a 100%-declined rate over many sessions is a
+# VISIBLE degradation signal (mirror _record_recall_degraded).
+_ddd_inject_count: dict[str, int] = {}
+
+
+def _record_ddd_inject(outcome: str) -> None:
+    """Count a DDD-recall outcome: 'injected' or 'declined:<reason>'."""
+    try:
+        _ddd_inject_count[outcome] = _ddd_inject_count.get(outcome, 0) + 1
+    except Exception:  # noqa: BLE001 — metric must never break recall
+        pass
+
 _STOP_WORDS: frozenset[str] = frozenset({
     "the", "this", "that", "with", "from", "what", "when", "where",
     "which", "about", "into", "than", "then", "them", "they", "been",
@@ -350,6 +368,7 @@ async def _maybe_inject_recall(
     user_message: str,
     options: Any,
     unit: SessionUnit,
+    editor_context: Optional[dict] = None,
 ) -> None:
     """Augment the system prompt with recalled knowledge from the user's query.
 
@@ -387,6 +406,34 @@ async def _maybe_inject_recall(
     if unit.is_channel_session:
         unit._recall_injected = True
         return
+
+    # ── DDD runtime injection (run_91bc0651 M2) — runs BEFORE the keyword gate ──
+    # signal-1 (editor file path) is DETERMINISTIC and needs NO query keywords, so
+    # it must NOT be gated behind the keyword-miss early-return below (Gate-2 HIGH:
+    # a user editing Projects/<X>/ who opens with "继续"/"hi" yields no keywords →
+    # the old placement skipped DDD entirely, defeating the headline use case).
+    # Own once-guard (_ddd_injected) so a sub-cap keyword-miss doesn't re-run it.
+    if not getattr(unit, "_ddd_injected", False):
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    _inject_ddd_for_active_project,
+                    options,
+                    user_message,
+                    editor_context.get("file_path") if editor_context else None,
+                ),
+                timeout=_RECALL_DISASTER_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            _record_ddd_inject("declined:disaster_timeout")
+            logger.error("DDD inject DISASTER TIMEOUT (>%.0fs) — proceeding without DDD",
+                         _RECALL_DISASTER_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — additive leg must never break recall
+            _record_ddd_inject(f"declined:exception:{type(exc).__name__}")
+            logger.warning("DDD inject failed (proceeding without DDD): %s: %s",
+                            type(exc).__name__, exc)
+        finally:
+            unit._ddd_injected = True
 
     # Extract keywords — skip if message too short/generic.
     #
@@ -530,8 +577,57 @@ async def _maybe_inject_recall(
         _record_recall_degraded(f"inject_exception:{type(exc).__name__}")
         logger.warning("Recall injection failed (proceeding without recall): %s: %s",
                         type(exc).__name__, exc)
-    finally:
-        unit._recall_injected = True
+
+    # DDD injection already ran above (own _ddd_injected guard, before the
+    # keyword gate — Gate-2 HIGH fix). Latch keyword-recall's guard.
+    unit._recall_injected = True
+
+
+def _inject_ddd_for_active_project(
+    options: Any,
+    user_message: str,
+    editor_file_path: Optional[str],
+) -> None:
+    """Detect active project + inject its top DDD sections. FAIL-CLOSED.
+
+    Runs in a thread (recall_all does blocking fs reads). On any non-confident
+    detection, records a declined-reason and injects NOTHING (Gate-2 L1: the
+    counter distinguishes 'correctly declined' from 'detector broken').
+    """
+    from .recall_multi import detect_active_project, recall_all
+
+    project, signal = detect_active_project(
+        editor_file_path=editor_file_path, query=user_message,
+    )
+    if not project:
+        _record_ddd_inject(f"declined:{signal}")
+        return
+
+    result = recall_all(user_message, project=project, domains=("ddd",))
+    ddd_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
+    if not ddd_hits:
+        _record_ddd_inject("declined:no_ddd_hits")
+        logger.info("DDD detected project=%s (%s) but 0 DDD sections matched",
+                    project, signal)
+        return
+
+    # Render top sections with a [DDD:<project>] provenance prefix (distinct
+    # token from [RECALLED] — E1/E4 assert on THIS, not string length).
+    lines = [
+        f"- **{h.get('doc', '?')}** § {h.get('section', '?')}"
+        for h in ddd_hits
+    ]
+    block = (
+        f"\n\n## Project DDD — [DDD:{project}]\n"
+        f"> **[DDD:{project}]** Retrieved from this project's DDD docs "
+        f"(detected via {signal}). Read the cited section(s) for authoritative "
+        f"project context before acting.\n\n"
+        + "\n".join(lines)
+    )
+    options.system_prompt = (options.system_prompt or "") + block
+    _record_ddd_inject("injected")
+    logger.info("DDD injected: project=%s signal=%s sections=%d",
+                project, signal, len(ddd_hits))
 
 
 def _get_access_hint(ext: str, filename: str) -> str:
@@ -1896,6 +1992,7 @@ class SessionRouter:
                 user_message=_user_text,
                 options=options,
                 unit=unit,
+                editor_context=editor_context,
             )
 
         # G3 shadow recall REMOVED — recall is already live (wired into
