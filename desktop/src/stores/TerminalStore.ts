@@ -38,11 +38,30 @@ export interface OpenTerminalOptions {
   rows?: number;
 }
 
-// Default shell: on macOS/Linux use the login shell (-l) so .zprofile/.zshrc
-// PATH (brazil/swarm/toolbox) loads — the GUI-app-no-profile-env trap fix.
-// (Windows would use powershell.exe; the desktop app ships mac/linux first.)
-const DEFAULT_SHELL = '/bin/zsh';
-const DEFAULT_ARGS = ['-l'];
+// Default shell — platform-aware so the terminal works on all desktop targets
+// (macOS/Linux subprocess/Windows subprocess), not just Unix:
+//   - Windows → powershell.exe (no args; there is no `-l` login concept)
+//   - macOS/Linux → the user's login shell (-l) so .zprofile/.zshrc PATH
+//     (brazil/swarm/toolbox) loads — the GUI-app-no-profile-env trap fix.
+// Detected via navigator (zero-dep, works in the Tauri webview) — avoids
+// hardcoding /bin/zsh on Windows (which has no such path → spawn failure).
+function isWindows(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  // userAgentData.platform is the modern signal ("Windows"); userAgent is the
+  // fallback ("... (Windows NT 10.0; ...)"). Match "windows" specifically —
+  // NOT a bare /win/ which also matches "dar​win" (macOS!) and would spawn
+  // powershell on every Mac. (Caught by Gate-2 re-test — the loose regex was a
+  // fix-induced bug.)
+  const uaData = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData;
+  const p = uaData?.platform ?? navigator.userAgent ?? '';
+  return /windows|win32|win64/i.test(p);
+}
+
+function defaultShell(): { file: string; args: string[] } {
+  return isWindows()
+    ? { file: 'powershell.exe', args: [] }
+    : { file: '/bin/zsh', args: ['-l'] };
+}
 
 let _seq = 0;
 function nextId(): string {
@@ -88,7 +107,8 @@ class TerminalStore {
   /** Open a new terminal: spawn a PTY and register the tab. */
   openTerminal(opts: OpenTerminalOptions): TerminalTab {
     const id = nextId();
-    const pty = spawn(opts.file ?? DEFAULT_SHELL, opts.args ?? DEFAULT_ARGS, {
+    const sh = defaultShell();
+    const pty = spawn(opts.file ?? sh.file, opts.args ?? sh.args, {
       cols: opts.cols ?? 80,
       rows: opts.rows ?? 24,
       cwd: opts.cwd,

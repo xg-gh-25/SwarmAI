@@ -119,12 +119,14 @@ class TauriPty implements IPty {
         break;
       }
     }
+    // Clear data listeners BEFORE firing exit, so an onExit handler that
+    // (re)subscribes onData isn't immediately dropped by a late clear().
+    this._onData.clear();
     if (this.alive) {
       // Loop ended via EOF (not an explicit kill) — report exit.
       this.alive = false;
       void this.emitExit(pid);
     }
-    this._onData.clear();
   }
 
   private async emitExit(pid: number): Promise<void> {

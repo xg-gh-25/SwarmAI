@@ -42,6 +42,16 @@ describe('TerminalStore', () => {
     terminalStore.clear();
   });
 
+  it('AC4: openTerminal spawns the login shell with -l (Unix test env) for profile PATH', () => {
+    // In the jsdom/CI test env navigator is non-Windows → login shell + -l.
+    // This proves the platform-aware defaultShell() picks the login shell so
+    // brazil/swarm PATH loads (the Windows branch uses powershell.exe, no -l).
+    terminalStore.openTerminal({ cwd: '/tmp/proj' });
+    const [file, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(file).toBe('/bin/zsh');
+    expect(args).toEqual(['-l']);
+  });
+
   it('openTerminal spawns a pty and registers a tab', () => {
     const tab = terminalStore.openTerminal({ cwd: '/tmp/proj' });
     expect(spawnMock).toHaveBeenCalledTimes(1);

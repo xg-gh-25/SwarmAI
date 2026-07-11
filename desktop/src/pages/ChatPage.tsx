@@ -2160,6 +2160,12 @@ export default function ChatPage() {
         createDisconnectHandler(tabId),
       );
 
+      // P2 one-shot: clear attached terminal on the drain path too, so a
+      // queued message consumes the attachment exactly once (matches the
+      // primary send path clear). Without this the same buffer could ride a
+      // later drained message.
+      terminalContextRef.current = null;
+
       // Store abort function in tab map
       tabState.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;
       tabState.hasReceivedData = false;
