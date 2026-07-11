@@ -296,7 +296,11 @@ governs real repos. It is NOT a symlink (the No-symlinks rule still holds) — i
 **clone + code-intel index + a governance-as-DATA delivery contract**, all declared in
 a per-project `Projects/<name>/bindings.yaml`. A DDD may bind MANY repos.
 
-The lifecycle is **CREATE → BIND → PULL → codeIntel** (CREATE is the flow above).
+The full lifecycle is **CREATE → BIND → PULL → codeIntel → DEVELOP → SYNC-BACK**
+(CREATE is the flow above; DEVELOP + SYNC-BACK are Steps 4-5 below). A bound repo is
+not a dead-end index — it's a two-way channel: SwarmWS governs the repo (DEVELOP: cut
+a CR through `s_swarm-cr`), and engineer edits to the repo's own DDD docs flow back
+into SwarmWS for review (SYNC-BACK: `core.ddd_bindings.sync_back`).
 
 #### Step 1: Declare the binding in `Projects/<name>/bindings.yaml`
 
@@ -358,6 +362,57 @@ for b in doc.bindings:
 > "Bound **{repo}** to **{project}** — cloned to {worktree}, code-intel graph has {N} nodes.
 > Delivery contract: {remote_kind} via {review_path}, auto-send {auto_send}.
 > {deferred repos, if any}: declared, PULL deferred to the Brazil/Midway spike."
+
+#### Step 4: DEVELOP — cut a CR against a bound repo (delegate, don't hand-roll)
+
+Once a repo is bound with a `code-amazon-cr` delivery contract, developing a change +
+raising a review is **not this skill's job** — it belongs to **`s_swarm-cr`**. Hand off:
+
+- **Trigger:** "create CR", "发 CR", "cut a CR for <bound repo>".
+- **What it does:** resolves the checked-out worktree from `bindings.yaml`, develops +
+  `git commit`s the change **locally** (agent-automated), then hands the human
+  ready-to-run `brazil-build release` + `cr` commands.
+- **Why the split (the HITL boundary):** the agent does the local/no-auth half; the human
+  runs the steps that cross the **build-duration + ssh-agent auth walls** (`brazil-build`,
+  `cr`, approve). The agent **never** `git push`es an internal repo (CRUX auto-merge owns
+  the remote) and **never** calls `bind_repo` on the human's live worktree (it `rmtree`s).
+- Reviewing an *existing* CR is the sibling skill `s_swarm-code-reviewer`.
+
+#### Step 5: SYNC-BACK — reflow engineer edits from the repo's DDD back into SwarmWS
+
+An engineer may edit the bound repo's **own** DDD docs (e.g. `AGENTS.md`). SYNC-BACK
+surfaces those edits back into SwarmWS for review — the reverse of BIND. Opt-in per
+binding via a `sync_back` map `{repo-relative-doc → SwarmWS-relative-target}`; absent =
+no-op. Call the helper — never diff by hand:
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && source backend/.venv/bin/activate
+python3 -c "
+from pathlib import Path
+from core.ddd_bindings import load_bindings, sync_back
+from jobs.paths import PROJECTS_DIR
+doc = load_bindings(PROJECTS_DIR / 'AIDLC' / 'bindings.yaml')
+for b in doc.bindings:
+    # worktree_root = the ALREADY-PULLED worktree (pull it first — see below); ws_root = SwarmWS root.
+    # Use Path.home(), NOT a literal '~' string — Path('~/..').resolve() does NOT expand the tilde.
+    out = sync_back(b, worktree_root=Path.home()/'.swarm-ai'/'bindings'/b.repo, ws_root=str(PROJECTS_DIR.parent))
+    for d in out['deltas']:
+        print(f\"{d['repo_doc']} -> {d['ws_target']}: {d['status']}\")
+    if out['report_path']:
+        print('Review delta:', out['report_path'])
+    print('Pull first (HITL):', out['pull_command'])
+"
+```
+
+- **Non-destructive:** `sync_back` **only READS** the SwarmWS targets (to diff) and WRITES a
+  reviewable delta report to `Projects/<repo>/.artifacts/sync-back/<ts>.md`. It **NEVER**
+  mutates the live DDD docs — they carry cultivation edits a blind overwrite would destroy.
+- **`git pull` is HITL:** `sync_back` performs **no** network/git call. It returns a
+  `pull_command` string for the human to run (the ssh-agent auth wall lives on the human
+  side, same as DEVELOP). Pull the worktree first, *then* `sync_back` diffs it.
+- **Delta statuses:** `changed` (with a unified diff), `unchanged`, `new-in-repo`,
+  `missing-in-repo`, `binary`, `too-large` (>1 MB, diff skipped). Review the report, then
+  apply anything worth keeping into the live DDD by hand (or via `s_persist`).
 
 ---
 
