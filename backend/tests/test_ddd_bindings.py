@@ -42,7 +42,7 @@ VALID_DOC = {
             "delivery_contract": {
                 "remote_kind": "github-pr",
                 "branch": "main",
-                "review_path": "s_swarm-code-reviewer",
+                "review_path": "s_internal-crux-review",
                 "auto_send": "on-clean-review",
             },
         },
@@ -57,7 +57,7 @@ VALID_DOC = {
                 "build_system": "brazil",
                 "branch": "mainline",
                 "version_set": "GCRAIDLCPreset/development",
-                "review_path": "s_swarm-code-reviewer",
+                "review_path": "s_internal-crux-review",
                 "auto_send": "on-clean-review",
             },
         },
@@ -189,7 +189,7 @@ def test_bind_repo_clones_and_indexes(local_git_repo: Path, tmp_path: Path):
         clone=str(local_git_repo),  # local path — git clone handles it offline
         delivery_contract=DeliveryContract(
             remote_kind="github-pr", branch="main",
-            review_path="s_swarm-code-reviewer", auto_send="on-clean-review",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
         ),
     )
     worktree_root = tmp_path / "bindings"
@@ -205,7 +205,7 @@ def test_bind_repo_is_idempotent(local_git_repo: Path, tmp_path: Path):
         repo="srcrepo", kind="external", clone=str(local_git_repo),
         delivery_contract=DeliveryContract(
             remote_kind="github-pr", branch="main",
-            review_path="s_swarm-code-reviewer", auto_send="on-clean-review",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
         ),
     )
     worktree_root = tmp_path / "bindings"
@@ -224,7 +224,7 @@ def test_bind_repo_rejects_absolute_worktree_escape(tmp_path: Path):
         worktree=str(victim),  # absolute path OUTSIDE the bindings root
         delivery_contract=DeliveryContract(
             remote_kind="github-pr", branch="main",
-            review_path="s_swarm-code-reviewer", auto_send="on-clean-review",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
         ),
     )
     with pytest.raises(ValueError) as ei:
@@ -239,7 +239,7 @@ def test_bind_repo_rejects_traversal_in_repo(tmp_path: Path):
         repo="../../etc", kind="external", clone="https://example.com/x.git",
         delivery_contract=DeliveryContract(
             remote_kind="github-pr", branch="main",
-            review_path="s_swarm-code-reviewer", auto_send="on-clean-review",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
         ),
     )
     with pytest.raises(ValueError):
@@ -253,7 +253,7 @@ def test_bind_repo_internal_brazil_is_deferred(tmp_path: Path):
         clone="brazil ws create --name GCRAIDLCPreset",
         delivery_contract=DeliveryContract(
             remote_kind="code-amazon-cr", build_system="brazil", branch="mainline",
-            review_path="s_swarm-code-reviewer", auto_send="on-clean-review",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
         ),
     )
     with pytest.raises(NotImplementedError):

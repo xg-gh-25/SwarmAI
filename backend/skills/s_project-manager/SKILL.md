@@ -299,7 +299,7 @@ a per-project `Projects/<name>/bindings.yaml`. A DDD may bind MANY repos.
 The full lifecycle is **CREATE → BIND → PULL → codeIntel → DEVELOP → SYNC-BACK**
 (CREATE is the flow above; DEVELOP + SYNC-BACK are Steps 4-5 below). A bound repo is
 not a dead-end index — it's a two-way channel: SwarmWS governs the repo (DEVELOP: cut
-a CR through `s_swarm-cr`), and engineer edits to the repo's own DDD docs flow back
+a CR through `s_internal-crux-cr`), and engineer edits to the repo's own DDD docs flow back
 into SwarmWS for review (SYNC-BACK: `core.ddd_bindings.sync_back`).
 
 #### Step 1: Declare the binding in `Projects/<name>/bindings.yaml`
@@ -318,7 +318,7 @@ bindings:
       build_system: none           # none | brazil  (ORTHOGONAL to remote_kind)
       branch: main
       version_set: null
-      review_path: s_swarm-code-reviewer
+      review_path: s_internal-crux-review
       auto_send: on-clean-review   # pipeline reaches CR-READY → reviewer → auto-send if clean
 ```
 
@@ -366,7 +366,7 @@ for b in doc.bindings:
 #### Step 4: DEVELOP — cut a CR against a bound repo (delegate, don't hand-roll)
 
 Once a repo is bound with a `code-amazon-cr` delivery contract, developing a change +
-raising a review is **not this skill's job** — it belongs to **`s_swarm-cr`**. Hand off:
+raising a review is **not this skill's job** — it belongs to **`s_internal-crux-cr`**. Hand off:
 
 - **Trigger:** "create CR", "发 CR", "cut a CR for <bound repo>".
 - **What it does:** resolves the checked-out worktree from `bindings.yaml`, develops +
@@ -376,7 +376,7 @@ raising a review is **not this skill's job** — it belongs to **`s_swarm-cr`**.
   runs the steps that cross the **build-duration + ssh-agent auth walls** (`brazil-build`,
   `cr`, approve). The agent **never** `git push`es an internal repo (CRUX auto-merge owns
   the remote) and **never** calls `bind_repo` on the human's live worktree (it `rmtree`s).
-- Reviewing an *existing* CR is the sibling skill `s_swarm-code-reviewer`.
+- Reviewing an *existing* CR is the sibling skill `s_internal-crux-review`.
 
 #### Step 5: SYNC-BACK — reflow engineer edits from the repo's DDD back into SwarmWS
 

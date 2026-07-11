@@ -113,9 +113,12 @@ backend/skills/s_cmhk-*/
 backend/skills/_shared/
 Services/cmhk-quick-mcp/
 
-# Internal-only skills — Amazon-internal tooling (CRUX/builder-mcp/CriticService),
-# must NOT ship to the public GitHub repo. Local-only, like the CMHK skills above.
-backend/skills/s_swarm-code-reviewer/
+# Internal-only skills — Amazon-internal tooling (CRUX / Brazil / builder-mcp /
+# CriticService). Must NEVER ship to the public GitHub repo. Local-only, like the
+# CMHK skills above. ONE glob by naming convention (s_internal-*) so this can't
+# drift the way per-skill lines did — every Amazon-internal skill is named
+# s_internal-* and is caught here automatically (leak-fix root cause, 2026-07-12).
+backend/skills/s_internal-*/
 
 # Test-leak guard: a mock whose .db_path/.path attr auto-vivifies to a MagicMock
 # gets its repr written as a filename when passed to open()/Path. 0-byte junk.

@@ -24,7 +24,7 @@ _DC = {
     "remote_kind": "code-amazon-cr",
     "build_system": "none",
     "branch": "mainline",
-    "review_path": "s_swarm-code-reviewer",
+    "review_path": "s_internal-crux-review",
     "auto_send": "on-clean-review",
 }
 
@@ -51,7 +51,7 @@ def test_binding_parses_with_sync_back(tmp_path):
         "    sync_back:\n      AGENTS.md: Projects/DemoRepo/AGENTS.md\n"
         "    delivery_contract:\n      remote_kind: code-amazon-cr\n"
         "      build_system: none\n      branch: mainline\n"
-        "      review_path: s_swarm-code-reviewer\n      auto_send: on-clean-review\n"
+        "      review_path: s_internal-crux-review\n      auto_send: on-clean-review\n"
     )
     doc = load_bindings(y)
     assert doc.bindings[0].sync_back == {"AGENTS.md": "Projects/DemoRepo/AGENTS.md"}
