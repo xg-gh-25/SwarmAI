@@ -9,12 +9,14 @@
  * is not in the tree (e.g. in isolated component tests).
  */
 
-import { useContext, useState, useEffect, useRef, useCallback } from 'react';
+import { useContext, useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { HealthContext } from '../../contexts/HealthContext';
 import { useSessionMeta } from '../../contexts/LayoutContext';
 import { isDesktop } from '../../services/tauri';
 import { getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
 import { CodeGraph } from '../code-intel/CodeGraph';
+import { terminalStore } from '../../stores/TerminalStore';
+import { TERMINAL_TOGGLE_EVENT } from '../../contexts/TerminalContext';
 
 // ── Code Intel Popover ───────────────────────────────────────────────────────
 
@@ -103,6 +105,16 @@ export function BottomBar() {
         .then(d => setAppVersion(d.version || ''))
         .catch(() => {});
     }
+  }, []);
+
+  // Integrated-terminal count — subscribe directly to the module-level store
+  // (no provider dependence; BottomBar is a sibling of TerminalProvider).
+  const terminalCount = useSyncExternalStore(
+    (cb) => terminalStore.subscribe(cb),
+    () => terminalStore.count(),
+  );
+  const toggleTerminal = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(TERMINAL_TOGGLE_EVENT));
   }, []);
 
   // Code Intel state
@@ -227,6 +239,24 @@ export function BottomBar() {
             )}
           </div>
         )}
+        {/* Integrated terminal toggle + open-count badge (⌘` also toggles). */}
+        <button
+          onClick={toggleTerminal}
+          className="flex items-center gap-1 hover:opacity-100 opacity-70 transition-opacity cursor-pointer text-[var(--color-text-muted)]"
+          title="Toggle terminal (⌘`)"
+          data-testid="terminal-toggle"
+        >
+          <span className="text-[11px]">⌘</span>
+          <span>Terminal</span>
+          {terminalCount > 0 && (
+            <span
+              className="ml-0.5 px-1 rounded-[7px] bg-[var(--color-accent,#2f81f7)] text-white text-[8px] font-semibold leading-[1.4]"
+              data-testid="terminal-badge"
+            >
+              {terminalCount}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Spacer */}
@@ -256,6 +286,10 @@ export function BottomBar() {
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;1-9</kbd>
           <span>tab</span>
+        </span>
+        <span className="flex items-center gap-1">
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;`</kbd>
+          <span>terminal</span>
         </span>
       </div>
     </div>

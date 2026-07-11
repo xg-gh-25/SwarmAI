@@ -353,6 +353,18 @@ export default function ChatPage() {
     return () => window.removeEventListener('swarm:editor-file-changed', handler);
   }, []);
 
+  // P2: attached terminal output — set once when the user clicks "Attach to
+  // chat" on a terminal, consumed on the NEXT send, then cleared (one-shot, so
+  // stale build logs don't ride every subsequent turn).
+  const terminalContextRef = useRef<{ bufferTail: string; cwd: string } | null>(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      terminalContextRef.current = (e as CustomEvent).detail ?? null;
+    };
+    window.addEventListener('swarm:attach-terminal', handler);
+    return () => window.removeEventListener('swarm:attach-terminal', handler);
+  }, []);
+
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
     : selectedAgent?.allowedSkills
@@ -1970,6 +1982,7 @@ export default function ChatPage() {
         enableSkills,
         enableMCP,
         ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         clientId,  // Correlation ID for optimistic message dedup
       },
       wrappedCreateStreamHandler(assistantMessageId),
@@ -1977,6 +1990,10 @@ export default function ChatPage() {
       createCompleteHandler(activeTabIdRef.current ?? undefined),
       createDisconnectHandler(activeTabIdRef.current ?? undefined),
     );
+
+    // P2 one-shot: an attached terminal rides exactly ONE turn, then clears so
+    // a stale build log doesn't silently attach to every subsequent message.
+    terminalContextRef.current = null;
 
     // Store abort function in the tab map for per-tab stop isolation.
     // Only the .abort() method is used by handleStop — no signal needed.
@@ -1990,6 +2007,7 @@ export default function ChatPage() {
         enableSkills,
         enableMCP,
         ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        ...(terminalContextRef.current ? { terminalContext: terminalContextRef.current } : {}),
       };
       const capturedTabIdForRetry = currentActiveTabId;
       const retryStreamFn = () => {
@@ -2134,6 +2152,7 @@ export default function ChatPage() {
           enableSkills,
           enableMCP,
           ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+          ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         },
         createStreamHandler(assistantMessageId, tabId),
         createErrorHandler(assistantMessageId, tabId),

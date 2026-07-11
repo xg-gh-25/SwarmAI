@@ -5,6 +5,9 @@ import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/Layo
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
+import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
+import TerminalPanel from '../terminal/TerminalPanel';
+import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 import FileEditorModal from '../common/FileEditorModal';
 import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
@@ -438,6 +441,21 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, settingsTab } = useLayout();
   const { addToast } = useToast();
 
+  // Integrated terminal: panel visibility + global Ctrl/Cmd-` toggle (AC5).
+  const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal, openTerminal } = useTerminal();
+  useTerminalHotkey(toggleTerminal);
+
+  // Explorer right-click "Open terminal here" → open a terminal cwd'd into the
+  // directory (AC3). Bridged via a window event (same idiom as attach/ask).
+  useEffect(() => {
+    const onOpenTerminal = (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string }>).detail;
+      if (detail?.path) openTerminal({ cwd: detail.path });
+    };
+    window.addEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
+    return () => window.removeEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
+  }, [openTerminal]);
+
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
 
@@ -756,6 +774,11 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           )}
         </div>
 
+        {/* Integrated terminal panel — flex sibling BELOW chat, ABOVE the status
+            bar (Gate-1 C3: shrinks chat by its height, never overlays). Only
+            rendered when open; the Ctrl/Cmd-` hotkey toggles it. */}
+        {terminalPanelOpen && <TerminalPanel />}
+
         {/* Bottom status bar */}
         <BottomBar />
       </ExplorerProvider>
@@ -805,7 +828,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 export default function ThreeColumnLayout({ children }: ThreeColumnLayoutProps) {
   return (
     <LayoutProvider>
-      <ThreeColumnLayoutInner>{children}</ThreeColumnLayoutInner>
+      <TerminalProvider>
+        <ThreeColumnLayoutInner>{children}</ThreeColumnLayoutInner>
+      </TerminalProvider>
     </LayoutProvider>
   );
 }

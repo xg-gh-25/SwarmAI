@@ -294,6 +294,9 @@ export interface ChatRequest {
   enableMCP?: boolean;
   /** Currently open file in the editor panel — injected as agent context */
   editorContext?: { filePath: string; fileName: string };
+  /** Attached integrated-terminal output (P2) — read-only context for the agent.
+   *  Set only when the user explicitly attaches a terminal (terminal → session). */
+  terminalContext?: { bufferTail: string; cwd: string };
   /** Correlation ID for optimistic message dedup — echoed in result event */
   clientId?: string;
 }

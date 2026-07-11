@@ -3,6 +3,7 @@ import type { FileTreeItem } from './FileTreeNode';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { copyToClipboard } from '../../utils/clipboard';
 import api from '../../services/api';
+import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 
 /**
  * FileContextMenu component - right-click context menu for file operations
@@ -201,6 +202,16 @@ export default function FileContextMenu({
     onClose();
   }, [item, onAskAbout, onClose]);
 
+  // Handle "Open terminal here" (directories only) — dispatch a window event
+  // that ThreeColumnLayout listens for and turns into openTerminal({cwd}).
+  // Uses the same event-bridge idiom as attach/ask (no prop threading).
+  const handleOpenTerminal = useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent(EXPLORER_OPEN_TERMINAL, { detail: { path: item.path } }),
+    );
+    onClose();
+  }, [item, onClose]);
+
   // Handle "New File" (directories only)
   const handleNewFile = useCallback(() => {
     onNewFile?.(item);
@@ -270,6 +281,12 @@ export default function FileContextMenu({
       label: 'New Folder',
       icon: 'create_new_folder',
       action: handleNewFolder,
+    });
+    menuItems.push({
+      id: 'open-terminal',
+      label: 'Open terminal here',
+      icon: 'terminal',
+      action: handleOpenTerminal,
       dividerAfter: true,
     });
   }

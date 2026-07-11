@@ -546,6 +546,7 @@ async def chat_stream(request: Request):
                 enable_skills=chat_request.enable_skills,
                 enable_mcp=chat_request.enable_mcp,
                 editor_context=chat_request.editor_context.model_dump() if chat_request.editor_context else None,
+                terminal_context=chat_request.terminal_context.model_dump() if chat_request.terminal_context else None,
                 client_id=chat_request.client_id,
             ):
                 if captured_session_id is None:

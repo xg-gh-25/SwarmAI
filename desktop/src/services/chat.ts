@@ -435,6 +435,12 @@ export const chatService = {
           file_name: request.editorContext.fileName,
         },
       }),
+      ...(request.terminalContext && {
+        terminal_context: {
+          buffer_tail: request.terminalContext.bufferTail,
+          cwd: request.terminalContext.cwd,
+        },
+      }),
       // Correlation ID for optimistic message dedup (AC2/AC3)
       ...(request.clientId && { client_id: request.clientId }),
     };

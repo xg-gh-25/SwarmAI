@@ -1706,6 +1706,7 @@ class SessionRouter:
         enable_mcp: bool = False,
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
+        terminal_context: Optional[dict] = None,
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
@@ -2001,6 +2002,7 @@ class SessionRouter:
             session_context=unit._hook_session_context,
             channel_context=channel_context,
             editor_context=editor_context,
+            terminal_context=terminal_context,
             extra_mcps=unit._extra_mcps or None,
         )
 

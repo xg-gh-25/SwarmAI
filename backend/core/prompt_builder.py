@@ -624,6 +624,7 @@ class PromptBuilder:
         working_directory: str,
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
+        terminal_context: Optional[dict] = None,
         context_percent_used: float = 0.0,
     ) -> Any:
         """Build the system prompt with centralized context directory.
@@ -879,6 +880,25 @@ class PromptBuilder:
                         f"The user has `{file_name}` open in the editor "
                         f"(`{file_path}`). Consider this file as relevant "
                         f"context when responding."
+                    )
+
+            # ── Terminal context injection (P2 — observable terminal) ──
+            # When the user explicitly attaches a terminal's output (a human
+            # action in the terminal panel), the session gets a READ-ONLY view
+            # of that terminal's recent output + cwd, so "why did this build
+            # fail?" works without copy-paste. Single direction: terminal →
+            # session. The session never writes to the terminal (P3 deferred).
+            if terminal_context:
+                buffer_tail = terminal_context.get("buffer_tail", "")
+                term_cwd = terminal_context.get("cwd", "")
+                if buffer_tail:
+                    cwd_note = f" (cwd `{term_cwd}`)" if term_cwd else ""
+                    context_text += (
+                        f"\n\n## Attached Terminal Output{cwd_note}\n"
+                        f"The user attached recent output from an integrated "
+                        f"terminal. Treat it as relevant context (e.g. a build "
+                        f"log or command result) when responding:\n\n"
+                        f"```\n{buffer_tail}\n```"
                     )
 
             # ── Deferred MCP list (Lazy MCP Loading) ──
@@ -1292,6 +1312,7 @@ class PromptBuilder:
         session_context: Optional[dict] = None,
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
+        terminal_context: Optional[dict] = None,
         extra_mcps: Optional[set[str]] = None,
     ) -> "ClaudeAgentOptions":
         """Orchestrate helper methods to assemble ClaudeAgentOptions.
@@ -1308,6 +1329,9 @@ class PromptBuilder:
             session_context: Optional session context dict for hook tracking.
             channel_context: Optional channel context for channel-based execution.
             editor_context: Optional editor context with file_path/file_name of the open file.
+            terminal_context: Optional attached-terminal context (P2) with
+                buffer_tail/cwd — a read-only view of an integrated terminal the
+                user explicitly attached. Single direction: terminal → session.
 
         Returns:
             A fully assembled ``ClaudeAgentOptions`` instance.
@@ -1454,6 +1478,7 @@ class PromptBuilder:
         # 8. Build system prompt (reads context files — stays per-session)
         system_prompt_config = await self.build_system_prompt(
             agent_config, working_directory, channel_context, editor_context,
+            terminal_context=terminal_context,
         )
 
         # Assemble final options

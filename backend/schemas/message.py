@@ -38,6 +38,18 @@ class EditorContext(BaseModel):
     file_name: str = Field(..., max_length=256)
 
 
+class TerminalContext(BaseModel):
+    """Read-only view of an integrated terminal the user explicitly attached (P2).
+
+    Single direction: terminal → session. Lets the agent see recent terminal
+    output (e.g. a build log) without copy-paste. buffer_tail is capped to keep
+    the injected context bounded.
+    """
+
+    buffer_tail: str = Field(..., max_length=16000)
+    cwd: str = Field("", max_length=1024)
+
+
 class ChatRequest(BaseModel):
     """Request model for chat.
 
@@ -53,6 +65,7 @@ class ChatRequest(BaseModel):
     enable_skills: bool = False
     enable_mcp: bool = False
     editor_context: EditorContext | None = None  # Currently open file in editor panel
+    terminal_context: TerminalContext | None = None  # Attached terminal output (P2)
     client_id: str | None = None  # Correlation ID for optimistic message dedup
 
 
