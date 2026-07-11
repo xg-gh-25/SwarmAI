@@ -284,6 +284,83 @@ If the user didn't mention it: skip this step silently (don't ask every time).
 
 ---
 
+### Bind a Repo to a Project (DDD-as-Agent-Brain — BIND lifecycle)
+
+User says something like:
+- "Bind GCRAIDLCPreset to AIDLC"
+- "Add repo github.com/awslabs/aidlc-workflows to the AIDLC project"
+- "Pull the bound repos for AIDLC and build code intel"
+
+**What BIND is (and is NOT):** BIND turns a DDD from "4 markdown docs" into a DDD that
+governs real repos. It is NOT a symlink (the No-symlinks rule still holds) — it is a
+**clone + code-intel index + a governance-as-DATA delivery contract**, all declared in
+a per-project `Projects/<name>/bindings.yaml`. A DDD may bind MANY repos.
+
+The lifecycle is **CREATE → BIND → PULL → codeIntel** (CREATE is the flow above).
+
+#### Step 1: Declare the binding in `Projects/<name>/bindings.yaml`
+
+The schema is frozen (canonical §2c). `bindings` is an ARRAY; each entry:
+
+```yaml
+bindings:
+  - repo: adlc-workflows           # short repo name
+    kind: external                 # external (github) | internal (code.amazon.com/Brazil)
+    clone: "https://github.com/awslabs/aidlc-workflows.git"   # git URL/path, OR a brazil command for internal
+    worktree: null                 # null → ~/.swarm-ai/bindings/<repo> (outside git-tracked SwarmWS)
+    code_intel: null               # null → alongside the worktree
+    delivery_contract:             # governance-as-DATA (decision 7) — NEVER put this in STEERING
+      remote_kind: github-pr       # github-pr | code-amazon-cr
+      build_system: none           # none | brazil  (ORTHOGONAL to remote_kind)
+      branch: main
+      version_set: null
+      review_path: s_swarm-code-reviewer
+      auto_send: on-clean-review   # pipeline reaches CR-READY → reviewer → auto-send if clean
+```
+
+**Delivery policy lives in the binding, not STEERING.** Opening a bound external repo
+for development does NOT mean piling repo-specific rules into global STEERING — each
+repo declares its own delivery contract here (decision 7).
+
+#### Step 2: PULL + build codeIntel (call the helper — never hand-roll)
+
+Validate the doc and bind each git-clonable repo by calling `core.ddd_bindings`
+(the buildable core — do NOT hand-assemble clone/index logic):
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && source backend/.venv/bin/activate
+python3 -c "
+from core.ddd_bindings import load_bindings, bind_repo
+from jobs.paths import PROJECTS_DIR
+doc = load_bindings(PROJECTS_DIR / 'AIDLC' / 'bindings.yaml')   # raises ValueError naming any bad field
+for b in doc.bindings:
+    try:
+        r = bind_repo(b)   # clones OUTSIDE git-tracked SwarmWS + builds code_intel via parse_repo+bulk_insert
+        print(f'{b.repo}: worktree={r.worktree} nodes={r.node_count}')
+    except NotImplementedError as e:
+        print(f'{b.repo}: DEFERRED — {e}')   # internal/brazil bindings wait for the pre-Run-2 Midway spike
+    except (ValueError, RuntimeError) as e:
+        print(f'{b.repo}: FAILED — {e}')     # bad binding OR clone/index failure — surfaced, not swallowed
+"
+```
+
+- `load_bindings(path)` — parses + validates; raises `ValueError` naming the offending field.
+- `bind_repo(binding)` — clones a **git-clonable** target into a worktree OUTSIDE the
+  git-tracked SwarmWS workspace (so a cloned repo never pollutes workspace git), then
+  builds a codeIntel graph by reusing the existing indexer. Idempotent (re-bind is safe).
+- **Internal / Brazil bindings** (e.g. GCRAIDLCPreset via `brazil ws create`) raise
+  `NotImplementedError` — their PULL needs Brazil + Midway headless auth and is deferred
+  to the pre-Run-2 spike. Declaring them in `bindings.yaml` is fine; PULLing them is not
+  yet wired.
+
+#### Step 3: Confirm
+
+> "Bound **{repo}** to **{project}** — cloned to {worktree}, code-intel graph has {N} nodes.
+> Delivery contract: {remote_kind} via {review_path}, auto-send {auto_send}.
+> {deferred repos, if any}: declared, PULL deferred to the Brazil/Midway spike."
+
+---
+
 ### List Projects
 
 User says: "List my projects", "What projects do I have?", "Show projects"
