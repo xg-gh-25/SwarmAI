@@ -108,6 +108,10 @@ function TopBar() {
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
+  // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
+  // so it reads the real panelOpen (for the active indicator) and shares the SAME
+  // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
+  const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal } = useTerminal();
 
   // Skills and MCP now open Settings with the corresponding tab pre-selected
   // Toggle: if already on that tab, close the modal
@@ -174,6 +178,16 @@ function LeftSidebar() {
             data-testid={`nav-${item.target}`}
           />
         ))}
+        {/* Integrated terminal — third entry point (alongside the bottom-panel
+            ⌘` toggle and the explorer right-click). isActive reflects real panel
+            open-state; onClick shares the SAME togglePanel so all entries sync. */}
+        <NavIconButton
+          icon="terminal"
+          label="Terminal (⌘`)"
+          isActive={terminalPanelOpen}
+          onClick={toggleTerminal}
+          data-testid="nav-terminal"
+        />
 
         {/* Group separator — inset rule with extra vertical breathing room
             to visually distinguish the Tools group from the Insights group. */}
@@ -354,6 +368,15 @@ function NavSvgIcon({ name }: { name: string }) {
           <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
           <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+        </svg>
+      );
+    case 'terminal':
+      // Terminal — window frame with a `>` prompt caret and command line.
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" ry="2" />
+          <polyline points="7 9 10 12 7 15" />
+          <line x1="12.5" y1="15" x2="17" y2="15" />
         </svg>
       );
     case 'tune':
