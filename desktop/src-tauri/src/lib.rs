@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
+
+/// Integrated-terminal PTY commands (app-level, not a plugin). See terminal.rs.
+mod terminal;
+use terminal::TerminalState;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
@@ -2082,6 +2086,7 @@ pub fn run() {
 
     builder
         .manage(Arc::new(Mutex::new(BackendState::default())))
+        .manage(TerminalState::default())
         .invoke_handler(tauri::generate_handler![
             start_backend,
             stop_backend,
@@ -2091,6 +2096,14 @@ pub fn run() {
             check_nodejs_version,
             check_python_version,
             check_git_bash_path,
+            // Integrated terminal (app-level PTY commands — see terminal.rs)
+            terminal::pty_spawn,
+            terminal::pty_write,
+            terminal::pty_read,
+            terminal::pty_resize,
+            terminal::pty_kill,
+            terminal::pty_exitstatus,
+            terminal::pty_get_all_pids,
         ])
         .setup(|app| {
             // Backend will be started by frontend via initializeBackend()
@@ -2174,6 +2187,13 @@ pub fn run() {
                     if let tauri::WindowEvent::Destroyed = event {
                         // Best-effort: emit before block_on freezes event loop
                         let _ = app_handle.emit("shutdown-started", ());
+                        // Reap any live integrated-terminal PTY children (AC6 backstop
+                        // for a hard window close where the frontend beforeunload
+                        // closeAll didn't run). Runs before the backend shutdown.
+                        let term_state = app_handle.state::<TerminalState>();
+                        tauri::async_runtime::block_on(terminal::reap_all_ptys(
+                            term_state.inner(),
+                        ));
                         // Graceful shutdown: send POST /shutdown, wait, then force-kill
                         let state = app_handle.state::<SharedBackendState>();
                         graceful_shutdown_and_kill(state.inner().clone(), "window_destroy");
