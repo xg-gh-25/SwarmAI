@@ -240,6 +240,25 @@ Once all sub-agent reports are back:
 4. **Produce exit evidence checklist** (check 15 below) — every check has evidence
 5. **Single verdict** — GO (advance to TEST) or BLOCK (fix findings first)
 
+> **Two axes, never merged (mattpocock non-merging insight; provenance:
+> `Knowledge/Reports/2026-07-12-mattpocock-skills-deep-research.md` S1).** The
+> dedup/cross-reference above applies ONLY within the fan-out quality findings
+> (code-quality / security / ux). The **spec_compliance verdict is a SEPARATE
+> axis** — it answers "does the code do what the spec asked?", not "is the code
+> well-built?". A change can pass one axis and fail the other (clean code
+> implementing the wrong thing = quality-PASS / spec-FAIL; right feature violating
+> conventions = spec-PASS / quality-FAIL). Merging lets one axis mask the other —
+> the exact failure the separation prevents.
+>
+> **This governs REPORTING, not gate topology.** The spec axis is already gated
+> UPSTREAM: the Spec Compliance Gate (above) runs before fan-out, and a spec BLOCK
+> returns to BUILD *before* the quality sub-agents ever spawn — so it never reaches
+> this merge. When Phase B runs, the spec verdict is therefore PASS or WARNING (a
+> WARNING injects EXTRA findings for visibility). Record the spec_compliance verdict
+> alongside the merged quality verdict as two un-cross-ranked axes — never fold spec
+> into the quality dedup. A quality-axis BLOCK here still blocks the stage; the spec
+> axis has already had its say upstream.
+
 ### When to Skip Fan-Out
 
 Fall back to single-pass review (all checks inline) when ALL are true:

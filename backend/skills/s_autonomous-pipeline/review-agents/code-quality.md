@@ -17,12 +17,66 @@ or UX — other agents handle those.
    - Dead orphan detection: old function with 0 remaining callers
    - Control-flow preservation: moved code executes at same point
    - Duplicate detection: grep for same method name in same file
-4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP49.
+4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP50.
    For each applicable pattern, explicitly verify. Silence = unchecked.
 5. **Depth & Seam Analysis** — For each new file:
    - Deep (small interface, significant hidden implementation) = good
    - Shallow (interface ~ implementation) = flag for potential inlining
    - Count adapters per new interface (0 = dead, 1 = hypothetical seam)
+6. **Fowler Smell Baseline** — the fixed static-design checklist below. Match the
+   diff against each of the 12; name any you spot.
+
+## Fowler Smell Baseline (fixed standards checklist)
+
+> Adopted from mattpocock/skills `code-review` (Fowler, _Refactoring_ ch.3).
+> Provenance: `Knowledge/Reports/2026-07-12-mattpocock-skills-deep-research.md` (S2).
+> This is the standards-axis vocabulary — it complements, and never restates,
+> the RP1-RP50 runtime/operational/security-boundary patterns (Scope #4). RP =
+> *runtime/operational* traps; Fowler = *static design* smells. Disjoint by
+> construction.
+>
+> **Report each finding ONCE, under the most specific check.** Three of the 12
+> smells overlap existing scope items — when you spot one there, file it under the
+> existing check, do NOT double-count: *Speculative Generality* ≈ RP29 (YAGNI /
+> unnecessary abstraction) and Scope #5's deletion test; *Duplicated Code* ≈ Scope
+> #3's duplicate detection; *Middle Man* ≈ Scope #5's shallow-module inlining. The
+> other nine smells are genuinely new vocabulary this baseline adds.
+
+**Three binding rules (read before applying):**
+1. **The repo overrides.** A documented repo standard (TECH.md convention) always
+   wins — where it endorses something the baseline would flag, suppress the smell.
+2. **Every smell is a judgement call, never a hard violation.** Report as a labelled
+   heuristic ("possible Feature Envy"), not a BLOCK. Only a documented-standard
+   breach can be hard; a bare baseline smell is always a suggestion.
+3. **Skip anything tooling enforces.** If a linter/formatter/type-checker already
+   catches it, don't spend a finding on it.
+
+Each smell reads *what it is* → *how to fix*; match against the diff:
+
+- **Mysterious Name** — a function/variable/type whose name doesn't reveal what it
+  does or holds. → rename it; if no honest name comes, the design is murky.
+- **Duplicated Code** — the same logic shape appears in more than one hunk/file in
+  the change. → extract the shared shape, call it from both.
+- **Feature Envy** — a method that reaches into another object's data more than its
+  own. → move the method onto the data it envies.
+- **Data Clumps** — the same few fields/params keep travelling together (a type
+  wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession** — a primitive or string standing in for a domain concept
+  that deserves its own type. → give the concept its own small type.
+- **Repeated Switches** — the same `switch`/`if`-cascade on the same type recurs
+  across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery** — one logical change forces scattered edits across many files
+  in the diff. → gather what changes together into one module.
+- **Divergent Change** — one file/module is edited for several unrelated reasons.
+  → split so each module changes for one reason.
+- **Speculative Generality** — abstraction, params, or hooks added for needs the
+  spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains** — long `a.b().c().d()` navigation the caller shouldn't depend
+  on. → hide the walk behind one method on the first object.
+- **Middle Man** — a class/function that mostly just delegates onward. → cut it,
+  call the real target direct.
+- **Refused Bequest** — a subclass/implementer that ignores or overrides most of
+  what it inherits. → drop the inheritance, use composition.
 
 ## Output Format
 
