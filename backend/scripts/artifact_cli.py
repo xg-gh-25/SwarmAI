@@ -3281,6 +3281,7 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
     test_failed = 0
     build_files_changed = 0
     build_tests_generated = 0
+    _deliver_artifact_ar = None  # arena-feed fallback (artifact-only adversarial_review)
 
     for s in stages:
         art_id = s.get("artifact_id")
@@ -3303,6 +3304,11 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
         elif stage_name == "deliver":
             ar = data.get("adversarial_review", {})
             if isinstance(ar, dict):
+                # Arena feed fallback source: when the deliver STAGE RECORD omits
+                # adversarial_review (recorded only in the artifact), reuse this
+                # already-loaded artifact copy — no extra read (run_4db42c78).
+                if isinstance(ar.get("findings"), list) and ar.get("findings"):
+                    _deliver_artifact_ar = ar
                 findings = ar.get("findings", [])
                 adversarial_findings = len(findings)
                 # Count HIGH+CRITICAL, case-insensitive — consistent with the
@@ -3352,7 +3358,65 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
         except (ValueError, TypeError):
             pass
 
-    return {
+    # --- Arena feed (Gate-2 → evolution, SCOPE B, run_4db42c78) ---
+    # Auto-derive an adversarial_patterns block from the deliver stage RECORD
+    # (run_state), NOT the artifact — so the environment-labeled verification
+    # signal is captured at the completion gate without an artifact re-read
+    # (Gate-1 fix: ACTION context is sourced from run_state stages).
+    #
+    # ACTION (what the agent CHOSE) is kept structurally separate from LABEL
+    # (what the environment VERIFIED) — the authorship trap (CLASS A) defused at
+    # the data layer. This path NEVER writes corrections.jsonl / correction_tracker
+    # / auto_seed (AC6): it only reads run_state and returns a metrics dict.
+    #
+    # v1 keys by SEVERITY, not category — persisted findings carry `severity` but
+    # NOT `category` (verified: 0 of 223 adversarial_review blocks have it), so a
+    # category-keyed rollup is deferred to a future run that persists category.
+    adversarial_patterns = None
+    _deliver_rec = next((s for s in stages if s.get("stage") == "deliver"), None)
+    if _deliver_rec is not None:
+        # Prefer the stage-record adversarial_review; fall back to the
+        # artifact copy loaded in the deliver branch above (some runs record it
+        # only in the artifact — run_4db42c78 SMOKE). No extra read either way.
+        _ar = _deliver_rec.get("adversarial_review")
+        if not (isinstance(_ar, dict) and _ar.get("findings")):
+            _ar = _deliver_artifact_ar
+        _findings = _ar.get("findings", []) if isinstance(_ar, dict) else []
+        if isinstance(_findings, list) and _findings:
+            def _sev(f):
+                return str(f.get("severity", "")).strip().upper() if isinstance(f, dict) else ""
+            _high = sum(1 for f in _findings if _sev(f) in ("HIGH", "CRITICAL"))
+            _med = sum(1 for f in _findings if _sev(f) in ("MED", "MEDIUM"))
+            _low = sum(1 for f in _findings if _sev(f) == "LOW")
+            # `other` = findings with an unrecognized/missing severity (INFO, "",
+            # non-dict). Making it explicit keeps the partition TOTAL — a consumer
+            # can rely on high+med+low+other == len(findings) (Gate-2 MED: unknown
+            # severities used to vanish silently, breaking that invariant).
+            _other = len(_findings) - _high - _med - _low
+            _resolved = sum(1 for f in _findings
+                            if isinstance(f, dict) and f.get("resolved"))
+            _conv = _deliver_rec.get("convergence", {})
+            _conv_iters = _conv.get("iterations", 0) if isinstance(_conv, dict) else 0
+            # ACTION context from run_state stage records (no artifact re-read).
+            # `next(..., {})` on the FIRST deliver rec — the pipeline is a linear
+            # single-deliver flow; if retry-driven multi-deliver ever lands, revisit
+            # (the artifact fallback would then track the last, not this first).
+            _eval_rec = next((s for s in stages if s.get("stage") == "evaluate"), {})
+            _think_rec = next((s for s in stages if s.get("stage") == "think"), {})
+            adversarial_patterns = {
+                "by_severity": {"high": _high, "med": _med, "low": _low, "other": _other},
+                "resolved": _resolved,
+                "first_pass_high": _high,
+                "convergence_iterations": _conv_iters,
+                "action": {
+                    "profile": profile,
+                    "scope": _eval_rec.get("scope", ""),
+                    "approach": _think_rec.get("approach_chosen", ""),
+                },
+                "verifier_confidence": "structured",  # never a re-judged LLM score
+            }
+
+    _metrics = {
         "run_id": run_id,
         "project": project,
         "profile": profile,
@@ -3389,6 +3453,11 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Only present when Gate-2 caught findings this run (no findings → no key,
+    # so a clean run produces no arena signal — label-variance protection).
+    if adversarial_patterns is not None:
+        _metrics["adversarial_patterns"] = adversarial_patterns
+    return _metrics
 
 
 def _load_artifact_for_metrics(project: str, artifact_id: str) -> dict | None:
@@ -3758,6 +3827,14 @@ def cmd_run_observe(args, reg: ArtifactRegistry) -> None:
             "rp_violations": json.loads(args.rp_violations) if args.rp_violations else [],
             "findings_fixed": int(args.fixed) if args.fixed else 0,
             "findings_dismissed": int(args.dismissed) if args.dismissed else 0,
+            # Arena feed (Gate-2 → evolution, run_4db42c78): the ACTION context
+            # (what the agent chose) kept separate from the LABEL (what the
+            # verifier caught). Additive + optional — existing emitters omit them.
+            "action": json.loads(args.action) if args.action else {},
+            "first_pass_high": int(args.first_pass_high) if args.first_pass_high else 0,
+            "convergence_iterations": (
+                int(args.convergence_iterations) if args.convergence_iterations else 0
+            ),
         }
 
     elif event == "review_gap":
@@ -4069,6 +4146,9 @@ def main() -> None:
     p_observe.add_argument("--rp-violations", default=None, help="JSON array of RP patterns violated")
     p_observe.add_argument("--fixed", default=None, help="Adversarial findings fixed count")
     p_observe.add_argument("--dismissed", default=None, help="Adversarial findings dismissed count")
+    p_observe.add_argument("--action", default=None, help="JSON of the pipeline ACTION context (profile/scope/approach) — arena feed")
+    p_observe.add_argument("--first-pass-high", default=None, help="Count of HIGH/CRITICAL findings caught at first adversarial pass")
+    p_observe.add_argument("--convergence-iterations", default=None, help="Quality-convergence iteration count (credit-assignment signal)")
     p_observe.add_argument("--review-count", default=None, help="Review findings count")
     p_observe.add_argument("--adversarial-count", default=None, help="Adversarial findings count")
     p_observe.add_argument("--overlap", default=None, help="Overlap count (review ∩ adversarial)")
