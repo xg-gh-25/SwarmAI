@@ -39,6 +39,19 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  // Mirror of the `active` prop readable from inside the creation effect's
+  // safeFit closure WITHOUT re-running that effect (its deps are [tab.id,
+  // tab.pty]). Updated every render below.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  // One-shot autofocus guard (AC1). term.focus() must fire exactly once when
+  // the surface first becomes active AND sized — the [active] effect alone
+  // misses it because on first panel-open the tab mounts active=true in the
+  // SAME commit the flex panel mounts, so getBoundingClientRect() is height 0
+  // and the height-gated focus is skipped; the ResizeObserver/safeFit settle
+  // path must then focus. Gated so safeFit (which runs on EVERY resize tick)
+  // does NOT re-focus and steal focus from chat on later resizes.
+  const focusedRef = useRef(false);
 
   // Create xterm + wire to the (store-owned) PTY once per tab.id.
   useEffect(() => {
@@ -68,6 +81,15 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         try {
           fit.fit();
           tab.pty.resize(term.cols, term.rows);
+          // AC1: focus exactly once, when this tab is active AND now sized.
+          // This is the recovery path for the first-mount height-0 race — the
+          // [active] effect's own focus was skipped because the container had
+          // no size yet. The focusedRef gate keeps it one-shot so subsequent
+          // resize ticks never steal focus.
+          if (activeRef.current && !focusedRef.current) {
+            term.focus();
+            focusedRef.current = true;
+          }
         } catch {
           /* fit can throw mid-layout; ignore and retry on next resize */
         }
@@ -109,10 +131,16 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       tab.getBuffer = undefined;
       termRef.current = null;
       fitRef.current = null;
+      // Re-arm the one-shot autofocus for a genuine remount (StrictMode
+      // mount→cleanup→mount, or a real teardown). Reset lives ONLY here (the
+      // creation effect, deps [tab.id,tab.pty]) — NOT in the [active] effect —
+      // so switching tabs does not re-arm it; tab-switch refocus is owned by
+      // the [active] effect's own term.focus() below.
+      focusedRef.current = false;
     };
   }, [tab.id, tab.pty]);
 
-  // When this tab becomes active (revealed), fit to the now-sized container.
+  // When this tab becomes active (revealed), fit + focus the now-sized container.
   useEffect(() => {
     if (!active) return;
     const host = hostRef.current;
@@ -124,10 +152,21 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       try {
         fit.fit();
         tab.pty.resize(term.cols, term.rows);
+        // Focus on tab-switch reveal. Mark focused so the safeFit one-shot
+        // (which shares focusedRef) doesn't then double-focus on the resize
+        // tick this fit triggers.
         term.focus();
+        focusedRef.current = true;
       } catch {
         /* ignore */
       }
+    } else {
+      // Not laid out yet (display:none→block on switch-back, or first mount at
+      // height 0). Re-arm the one-shot so the ResizeObserver/safeFit settle path
+      // focuses on the next tick — otherwise a switch-back that reads height 0
+      // here would leave the tab unfocused with no recovery (focusedRef stuck
+      // true from the prior activation). (Adversarial: MED switch-back gap.)
+      focusedRef.current = false;
     }
   }, [active, tab.pty]);
 

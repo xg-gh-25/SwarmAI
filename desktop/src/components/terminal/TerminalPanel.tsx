@@ -11,8 +11,9 @@
  * shrinks by exactly the panel height, so both coexist (AC5). When
  * `panelOpen` is false the parent renders nothing (height 0).
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTerminal } from '../../contexts/TerminalContext';
+import { terminalStore } from '../../stores/TerminalStore';
 import TerminalTab from './TerminalTab';
 
 const MIN_HEIGHT = 120;
@@ -33,6 +34,23 @@ export default function TerminalPanel() {
   const [attached, setAttached] = useState<string | null>(null);
   const dragState = useRef<{ startY: number; startH: number } | null>(null);
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+
+  // Auto-open ONE terminal when the panel first opens with no terminals, so the
+  // user sees a ready shell (VSCode/Kiro behavior) instead of an empty "click ＋"
+  // placeholder. Guarded on terminalStore.count() — the LIVE registry size,
+  // which reflects openTerminal's synchronous Map write immediately — NOT the
+  // `tabs` snapshot from useSyncExternalStore, whose value is stale within a
+  // React commit. Under StrictMode the mount effect runs twice against the same
+  // commit; a `tabs.length===0` guard would read 0 both times and spawn TWO
+  // shells, but count() reads 1 on the second invocation → exactly one opens.
+  useEffect(() => {
+    if (terminalStore.count() === 0) {
+      openTerminal({});
+    }
+    // Mount-only: opening a terminal is a one-time "reveal" action, not a
+    // reaction to tab changes. openTerminal is stable (useCallback).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {

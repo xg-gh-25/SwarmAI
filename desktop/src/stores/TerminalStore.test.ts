@@ -106,4 +106,44 @@ describe('TerminalStore', () => {
     const noCwd = terminalStore.openTerminal({});
     expect(noCwd.title.length).toBeGreaterThan(0); // some sensible default
   });
+
+  it('AC4: untitled (no-cwd) terminals get distinct numbered titles (zsh, zsh 2, zsh 3)', () => {
+    const a = terminalStore.openTerminal({});
+    const b = terminalStore.openTerminal({});
+    const c = terminalStore.openTerminal({});
+    expect([a.title, b.title, c.title]).toEqual(['zsh', 'zsh 2', 'zsh 3']);
+  });
+
+  it('AC4: cwd-named tabs do not consume untitled slot numbers', () => {
+    const a = terminalStore.openTerminal({}); // zsh
+    const proj = terminalStore.openTerminal({ cwd: '/x/Projects/AIDLC' }); // AIDLC
+    const b = terminalStore.openTerminal({}); // zsh 2 (proj didn't take a slot)
+    expect(a.title).toBe('zsh');
+    expect(proj.title).toBe('AIDLC');
+    expect(b.title).toBe('zsh 2');
+  });
+
+  it('AC4: a cwd tab basenamed "zsh" does NOT perturb untitled numbering (structural !cwd filter)', () => {
+    // Adversarial LOW: numbering must key off cwd-absence, not a title regex —
+    // a cwd ending in /zsh yields title "zsh" but must NOT collide with the
+    // untitled slot sequence.
+    const a = terminalStore.openTerminal({}); // untitled → zsh (slot 1)
+    const proj = terminalStore.openTerminal({ cwd: '/x/zsh' }); // cwd basename "zsh"
+    const b = terminalStore.openTerminal({}); // untitled → must be zsh 2, not zsh 3
+    expect(a.title).toBe('zsh');
+    expect(proj.title).toBe('zsh'); // basename, but it's a cwd tab
+    expect(b.title).toBe('zsh 2'); // the cwd "zsh" did not consume slot 1
+  });
+
+  it('AC4: closing a middle untitled tab never produces a duplicate label (max-slot+1)', () => {
+    const a = terminalStore.openTerminal({}); // zsh   (slot 1)
+    const b = terminalStore.openTerminal({}); // zsh 2 (slot 2)
+    const c = terminalStore.openTerminal({}); // zsh 3 (slot 3)
+    expect([a.title, b.title, c.title]).toEqual(['zsh', 'zsh 2', 'zsh 3']);
+    terminalStore.closeTerminal(b.id); // remove slot 2 → {zsh, zsh 3}
+    const d = terminalStore.openTerminal({}); // must be zsh 4, NOT a second zsh 3
+    expect(d.title).toBe('zsh 4');
+    const titles = terminalStore.list().map((t) => t.title);
+    expect(new Set(titles).size).toBe(titles.length); // all distinct
+  });
 });

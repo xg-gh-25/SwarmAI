@@ -71,13 +71,43 @@ function nextId(): string {
   return `term-${_seq}`;
 }
 
-function titleFromCwd(cwd?: string): string {
+/**
+ * Yields the SLOT number of an UNTITLED (no-cwd) tab's title:
+ * "zsh" → slot 1, "zsh 2" → slot 2, ... Returns 0 if the title doesn't parse.
+ *
+ * IMPORTANT: only ever call this on tabs that are actually untitled (no cwd) —
+ * the caller filters by `!tab.cwd`, NOT by matching this regex against the
+ * title. That structural filter is what prevents a cwd tab whose basename is
+ * literally "zsh" (cwd ending in /zsh) from colliding with the untitled slot
+ * numbering. (Adversarial: LOW title-collision finding.)
+ */
+const UNTITLED_RE = /^zsh(?: (\d+))?$/;
+function untitledSlot(title: string): number {
+  const m = UNTITLED_RE.exec(title);
+  if (!m) return 0;
+  return m[1] ? parseInt(m[1], 10) : 1; // bare "zsh" is slot 1
+}
+
+/**
+ * Title for a new tab. A cwd tab uses the dir basename. An untitled (no-cwd)
+ * tab gets a distinct numbered title like VSCode/Kiro: slot 1 renders "zsh",
+ * slot N≥2 renders "zsh N". The new tab takes (highest existing slot) + 1.
+ * Using max-slot+1 (not a live count) means closing a middle tab never
+ * produces a duplicate label: with {zsh, zsh 3} open (slots 1,3) the next is
+ * "zsh 4", not a colliding second "zsh 3". The Rust side still launches a
+ * no-cwd shell in $HOME/.swarm-ai/SwarmWS (resolve_default_cwd) — the generic
+ * numbered title is intentional and does NOT show that default's basename.
+ *
+ * `maxSlot` = highest untitled slot currently in use, or 0 if there are none.
+ */
+function titleFromCwd(cwd: string | undefined, maxSlot: number): string {
   if (cwd) {
     const parts = cwd.replace(/\/+$/, '').split('/');
     const base = parts[parts.length - 1];
     if (base) return base;
   }
-  return 'zsh';
+  const slot = maxSlot + 1;
+  return slot === 1 ? 'zsh' : `zsh ${slot}`;
 }
 
 class TerminalStore {
@@ -113,9 +143,17 @@ class TerminalStore {
       rows: opts.rows ?? 24,
       cwd: opts.cwd,
     });
+    // Highest untitled slot in use, so a new no-cwd tab gets the next distinct
+    // number (VSCode/Kiro behavior). max-slot+1 avoids duplicate labels when a
+    // middle tab was closed. Filter by `!t.cwd` (structural "is untitled"), NOT
+    // by title regex — so a cwd tab basenamed "zsh" can't perturb the numbering.
+    const maxSlot = Array.from(this.tabs.values()).reduce(
+      (mx, t) => (t.cwd ? mx : Math.max(mx, untitledSlot(t.title))),
+      0,
+    );
     const tab: TerminalTab = {
       id,
-      title: titleFromCwd(opts.cwd),
+      title: titleFromCwd(opts.cwd, maxSlot),
       cwd: opts.cwd,
       pty,
       status: 'running',

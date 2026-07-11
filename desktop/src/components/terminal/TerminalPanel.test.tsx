@@ -6,8 +6,9 @@
  * render, +opens, per-tab close, active switching. TerminalTab is mocked to a
  * stub so we don't drag xterm into the render.
  */
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Mock PTY service so the store's openTerminal doesn't spawn a real shell.
 let spawnCount = 0;
@@ -47,51 +48,79 @@ describe('TerminalPanel', () => {
     terminalStore.clear();
   });
 
-  it('shows empty state with no tabs and a + button', () => {
+  it('AC2: auto-opens exactly ONE terminal when the panel opens with no tabs', () => {
     renderPanel();
-    expect(screen.getByText(/No terminals/i)).toBeInTheDocument();
+    // No "No terminals" placeholder — a ready shell is auto-opened instead.
+    expect(screen.queryByText(/No terminals/i)).not.toBeInTheDocument();
+    const surfaces = screen.getAllByTestId(/^tab-surface-/);
+    expect(surfaces.length).toBe(1);
+    expect(terminalStore.count()).toBe(1);
     expect(screen.getByTestId('terminal-new')).toBeInTheDocument();
   });
 
-  it('AC5: clicking + opens a new terminal tab (chip + surface appear)', () => {
-    renderPanel();
-    fireEvent.click(screen.getByTestId('terminal-new'));
-    // one tab chip + one surface now exist
-    const surfaces = screen.getAllByTestId(/^tab-surface-/);
-    expect(surfaces.length).toBe(1);
-    expect(surfaces[0].getAttribute('data-active')).toBe('true');
+  it('AC2: StrictMode double-mount still auto-opens exactly ONE terminal (count guard, not stale snapshot)', () => {
+    // The mount effect runs twice under StrictMode against the same commit; a
+    // `tabs.length===0` guard would read stale 0 both times and spawn TWO
+    // shells. The terminalStore.count() guard reads the live registry → one.
+    render(
+      <StrictMode>
+        <TerminalProvider>
+          <TerminalPanel />
+        </TerminalProvider>
+      </StrictMode>,
+    );
+    expect(terminalStore.count()).toBe(1);
+    expect(screen.getAllByTestId(/^tab-surface-/).length).toBe(1);
   });
 
-  it('AC5: opening multiple terminals renders multiple chips; newest is active', () => {
+  it('AC2: does NOT auto-open a second terminal when one already exists (e.g. explorer opened a cwd tab first)', () => {
+    // Simulate the explorer right-click path: a cwd terminal exists before the
+    // panel mounts. Auto-open must skip (count()===1), not add an empty 2nd tab.
+    terminalStore.openTerminal({ cwd: '/x/Projects/AIDLC' });
     renderPanel();
-    fireEvent.click(screen.getByTestId('terminal-new'));
+    expect(terminalStore.count()).toBe(1);
+    expect(terminalStore.list()[0].title).toBe('AIDLC');
+  });
+
+  it('AC5: clicking + opens an additional terminal tab (auto-opened 1 + clicked 1 = 2)', () => {
+    renderPanel(); // auto-opens 1
     fireEvent.click(screen.getByTestId('terminal-new'));
     const surfaces = screen.getAllByTestId(/^tab-surface-/);
     expect(surfaces.length).toBe(2);
+    // the newest (just-clicked) is active
+    expect(surfaces.filter((s) => s.getAttribute('data-active') === 'true').length).toBe(1);
+  });
+
+  it('AC5: opening multiple terminals renders multiple chips; newest is active', () => {
+    renderPanel(); // auto-opens 1
+    fireEvent.click(screen.getByTestId('terminal-new'));
+    fireEvent.click(screen.getByTestId('terminal-new'));
+    const surfaces = screen.getAllByTestId(/^tab-surface-/);
+    expect(surfaces.length).toBe(3); // 1 auto + 2 clicked
     // exactly one active
     expect(surfaces.filter((s) => s.getAttribute('data-active') === 'true').length).toBe(1);
   });
 
-  it('AC6: per-tab close button removes that tab', () => {
-    renderPanel();
-    fireEvent.click(screen.getByTestId('terminal-new'));
+  it('AC6: per-tab close button removes that tab; closing the last shows the placeholder', () => {
+    renderPanel(); // auto-opens 1
     const tab = terminalStore.list()[0];
     fireEvent.click(screen.getByTestId(`terminal-close-${tab.id}`));
     expect(screen.queryByTestId(`tab-surface-${tab.id}`)).not.toBeInTheDocument();
+    // Closing the last terminal falls back to the placeholder (auto-open is
+    // mount-only, so it does not re-fire on close).
     expect(screen.getByText(/No terminals/i)).toBeInTheDocument();
   });
 
   it('clicking a non-active tab chip activates it', () => {
-    renderPanel();
+    renderPanel(); // auto-opens 1
     fireEvent.click(screen.getByTestId('terminal-new'));
-    fireEvent.click(screen.getByTestId('terminal-new'));
-    const [first, second] = terminalStore.list();
-    // second is active (newest). Click first chip.
+    const tabs = terminalStore.list();
+    const first = tabs[0];
+    const last = tabs[tabs.length - 1];
+    // last is active (newest). Click the first chip to activate it.
     fireEvent.click(screen.getByTestId(`terminal-tab-${first.id}`));
-    const firstSurface = screen.getByTestId(`tab-surface-${first.id}`);
-    const secondSurface = screen.getByTestId(`tab-surface-${second.id}`);
-    expect(firstSurface.getAttribute('data-active')).toBe('true');
-    expect(secondSurface.getAttribute('data-active')).toBe('false');
+    expect(screen.getByTestId(`tab-surface-${first.id}`).getAttribute('data-active')).toBe('true');
+    expect(screen.getByTestId(`tab-surface-${last.id}`).getAttribute('data-active')).toBe('false');
   });
 
   it('collapse button hides the panel (setPanelOpen false persists)', () => {

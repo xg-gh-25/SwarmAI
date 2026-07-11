@@ -43,6 +43,43 @@ use tauri::async_runtime::{Mutex, RwLock};
 /// Opaque handle for one PTY session (monotonic, process-local).
 pub type PtyHandler = u32;
 
+/// Resolve the working directory for a new PTY.
+///
+/// When the caller supplies a non-empty `cwd` (e.g. the WorkspaceExplorer
+/// right-click "Open terminal here" passes a project dir), that path always
+/// wins. When it is absent or empty (the default bottom-panel / nav-icon
+/// "new terminal"), default to the daemon workspace `$HOME/.swarm-ai/SwarmWS`
+/// — the dir the Explorer is rooted at and the #1 use case (manage SwarmWS,
+/// build Swarm projects). Falls back to `.` only if `$HOME` is unset.
+///
+/// Resolved HERE in Rust (not the frontend) because Rust knows `$HOME`
+/// deterministically (same `env::var("HOME")` pattern the daemon deploy path
+/// uses) and it avoids an async round-trip on the frontend.
+fn resolve_default_cwd(cwd: Option<String>) -> String {
+    if let Some(c) = cwd {
+        if !c.trim().is_empty() {
+            return c;
+        }
+    }
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() => {
+            // Prefer the daemon workspace, but only if it EXISTS. portable-pty
+            // passes cwd to the child's chdir, which fails (ENOENT) on a missing
+            // dir — so a not-yet-created SwarmWS would make every default
+            // terminal fail to spawn. Fall back to $HOME (always present) when
+            // the workspace dir isn't there yet. (Adversarial: multi-specialist
+            // confirmed fresh-install ENOENT risk.)
+            let ws = format!("{home}/.swarm-ai/SwarmWS");
+            if std::path::Path::new(&ws).is_dir() {
+                ws
+            } else {
+                home
+            }
+        }
+        _ => ".".to_string(),
+    }
+}
+
 /// A single live PTY session: the pair, the child process, its killer, and the
 /// reader/writer handles onto the master side.
 struct Session {
@@ -92,9 +129,9 @@ pub async fn pty_spawn(
 
     let mut cmd = CommandBuilder::new(file);
     cmd.args(args);
-    if let Some(cwd) = cwd {
-        cmd.cwd(OsString::from(cwd));
-    }
+    // Default to $HOME/.swarm-ai/SwarmWS when no cwd is supplied (a passed
+    // non-empty cwd always wins). See resolve_default_cwd.
+    cmd.cwd(OsString::from(resolve_default_cwd(cwd)));
     for (k, v) in env.iter() {
         cmd.env(OsString::from(k), OsString::from(v));
     }
@@ -153,17 +190,35 @@ pub async fn pty_read(
         .get(&pid)
         .ok_or("Unavailable pid")?
         .clone();
-    let mut buf = vec![0u8; 4096];
-    let n = session
-        .reader
-        .lock()
+    // The PTY read is a BLOCKING syscall that parks until bytes arrive (an idle
+    // shell prompt blocks indefinitely). Running it directly in this async
+    // command would park a shared async-runtime worker for the whole idle time.
+    // Move it onto a dedicated blocking thread via spawn_blocking so the async
+    // workers stay free to schedule pty_write / pty_resize / other commands.
+    //
+    // `session` is Arc<Session> (Send + 'static) so it moves into the closure.
+    // `reader` is a tokio async Mutex; from a NON-async blocking thread we take
+    // it with `blocking_lock()` (the sanctioned tokio API for exactly this —
+    // it would PANIC inside an async context, but spawn_blocking runs off the
+    // async workers, so it is correct here). read() of one PTY serializes on
+    // this lock, which is the desired behavior (a PTY has one byte stream).
+    let read_result: Result<Vec<u8>, String> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut buf = vec![0u8; 4096];
+            let n = session
+                .reader
+                .blocking_lock()
+                .read(&mut buf)
+                .map_err(|e| e.to_string())?;
+            buf.truncate(n);
+            Ok(buf)
+        })
         .await
-        .read(&mut buf)
-        .map_err(|e| e.to_string())?;
-    if n == 0 {
+        .map_err(|e| e.to_string())?; // JoinError (blocking thread panicked/cancelled)
+    let buf = read_result?;
+    if buf.is_empty() {
         Err(String::from("EOF"))
     } else {
-        buf.truncate(n);
         Ok(tauri::ipc::Response::new(buf))
     }
 }
@@ -274,4 +329,73 @@ pub async fn reap_all_ptys(state: &TerminalState) {
         }
     }
     state.sessions.write().await.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_default_cwd;
+
+    // NOTE: these tests mutate the process-global HOME. `resolve_default_cwd`
+    // reads HOME, and cargo runs tests in PARALLEL threads by default, so a
+    // shared HOME would race. We serialize the HOME-dependent tests behind a
+    // mutex and each restores nothing (they set their own value under the lock).
+    use std::sync::Mutex;
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn passed_non_empty_cwd_wins() {
+        // No HOME dependency — a passed non-empty cwd short-circuits before HOME.
+        assert_eq!(
+            resolve_default_cwd(Some("/Users/x/Projects/AIDLC".to_string())),
+            "/Users/x/Projects/AIDLC"
+        );
+    }
+
+    #[test]
+    fn none_cwd_defaults_to_swarmws_when_it_exists() {
+        // AC3: a no-cwd terminal starts in $HOME/.swarm-ai/SwarmWS when that dir
+        // EXISTS. Create it under a unique temp HOME so the is_dir() check passes.
+        let _g = HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join("swarmws_test_home_exists");
+        let ws = home.join(".swarm-ai").join("SwarmWS");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::env::set_var("HOME", &home);
+        assert_eq!(
+            resolve_default_cwd(None),
+            ws.to_string_lossy().to_string()
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn empty_cwd_treated_as_absent() {
+        // Empty/whitespace cwd is treated as absent → resolves like None.
+        let _g = HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join("swarmws_test_home_empty");
+        let ws = home.join(".swarm-ai").join("SwarmWS");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::env::set_var("HOME", &home);
+        let expected = ws.to_string_lossy().to_string();
+        assert_eq!(resolve_default_cwd(Some("".to_string())), expected);
+        assert_eq!(resolve_default_cwd(Some("   ".to_string())), expected);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn falls_back_to_home_when_swarmws_missing() {
+        // Adversarial fix: if $HOME/.swarm-ai/SwarmWS does NOT exist (fresh
+        // machine), fall back to $HOME (always present) rather than returning a
+        // missing dir that portable-pty's chdir would reject with ENOENT.
+        let _g = HOME_LOCK.lock().unwrap();
+        let home = std::env::temp_dir().join("swarmws_test_home_missing");
+        std::fs::create_dir_all(&home).unwrap();
+        // Deliberately do NOT create .swarm-ai/SwarmWS under it.
+        let _ = std::fs::remove_dir_all(home.join(".swarm-ai"));
+        std::env::set_var("HOME", &home);
+        assert_eq!(
+            resolve_default_cwd(None),
+            home.to_string_lossy().to_string()
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
