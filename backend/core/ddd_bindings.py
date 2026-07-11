@@ -66,6 +66,10 @@ class Binding(BaseModel):
     worktree: Optional[str] = None
     code_intel: Optional[str] = None
     delivery_contract: DeliveryContract
+    # Optional REFLOW map (Run 5, sync-back): {repo-relative-doc -> SwarmWS-relative-target}.
+    # Declares WHICH DDD docs flow back from the bound repo into SwarmWS, and where.
+    # Absent (None) => sync_back is a no-op for this binding (opt-in, safe default).
+    sync_back: Optional[dict[str, str]] = None
 
 
 class BindingsDoc(BaseModel):
@@ -217,3 +221,130 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
         binding.repo, worktree, db_path, node_count,
     )
     return BindResult(worktree=str(worktree), code_intel_db=str(db_path), node_count=node_count)
+
+
+# ── SYNC-BACK (Run 5): the REVERSE of bind_repo — reflow repo DDD edits → SwarmWS ──────
+
+def _confine(base: Path, rel: str, label: str) -> Path:
+    """Resolve ``rel`` under ``base`` and REFUSE if it escapes (path-traversal guard,
+    same discipline as bind_repo's worktree confinement). ``rel`` from a binding is
+    user data — an absolute path or ``..`` must never read/write outside ``base``."""
+    candidate = (base / rel).resolve()
+    try:
+        candidate.relative_to(base.resolve())
+    except ValueError:
+        raise ValueError(
+            f"sync_back {label} path '{rel}' escapes its root '{base}' — "
+            "mapping paths must stay inside the worktree / workspace"
+        )
+    return candidate
+
+
+def _diff_doc(repo_doc: Path, ws_target: Path) -> tuple[str, str]:
+    """Return (status, unified_diff) comparing a repo doc to its SwarmWS target.
+
+    status ∈ {changed, unchanged, new-in-repo, missing-in-repo, binary, too-large}.
+    Every read is guarded — a missing/binary/oversized doc classifies, never crashes
+    (the gate must be robust; a huge doc must not OOM the diff — Gate-2 MED)."""
+    import difflib
+
+    # A DDD doc is prose (KB-scale). Cap reads so a mis-mapped huge/generated file can't
+    # allocate an unbounded in-memory diff (Gate-2 MED: DoS via a 100MB mapped file).
+    _MAX_DOC_BYTES = 1_000_000  # 1 MB — generous for any real DDD doc
+
+    def _too_big(p: Path) -> bool:
+        try:
+            return p.stat().st_size > _MAX_DOC_BYTES
+        except OSError:
+            return False
+
+    repo_exists, ws_exists = repo_doc.exists(), ws_target.exists()
+    if not repo_exists and ws_exists:
+        return "missing-in-repo", ""   # doc removed upstream — surface, don't act
+    if repo_exists and not ws_exists:
+        if _too_big(repo_doc):
+            return "too-large", ""
+        try:
+            repo_doc.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return "binary", ""
+        return "new-in-repo", ""
+    if not repo_exists and not ws_exists:
+        return "missing-in-repo", ""
+    if _too_big(repo_doc) or _too_big(ws_target):
+        return "too-large", ""   # skip diffing an oversized doc (never OOM)
+    try:
+        repo_lines = repo_doc.read_text(encoding="utf-8").splitlines(keepends=True)
+        ws_lines = ws_target.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (UnicodeDecodeError, OSError):
+        return "binary", ""
+    if repo_lines == ws_lines:
+        return "unchanged", ""
+    diff = "".join(difflib.unified_diff(
+        ws_lines, repo_lines,
+        fromfile=f"swarmws/{ws_target.name}", tofile=f"repo/{repo_doc.name}",
+    ))
+    return "changed", diff
+
+
+def sync_back(binding: Binding, worktree_root: str | Path, ws_root: str | Path,
+              now_iso: Optional[str] = None) -> dict:
+    """Reflow a bound repo's DDD edits back toward SwarmWS — the reverse of bind_repo.
+
+    For each entry in ``binding.sync_back`` {repo-doc -> ws-target}: diff the repo doc
+    (in the ALREADY-PULLED worktree) against its SwarmWS target and SURFACE a reviewable
+    delta. This function is **non-destructive**: it only READS the SwarmWS targets (for
+    diffing) and WRITES the delta report to ``Projects/<repo>/.artifacts/sync-back/`` —
+    it NEVER mutates the live DDD docs (they carry cultivation edits a blind overwrite
+    would destroy). The ``git pull`` is HITL: this returns the pull command for a human
+    to run; it performs no network/git call itself (the ssh-agent auth wall lives on the
+    human side, same as Run 2/3).
+
+    Returns ``{pull_command, deltas:[{repo_doc, ws_target, status, diff}], report_path}``.
+    A binding with no ``sync_back`` map returns an empty delta (opt-in no-op).
+    """
+    wt = Path(worktree_root).resolve()
+    ws = Path(ws_root).resolve()
+    pull_command = f"git -C {wt} pull"   # HITL — surfaced, never executed here
+
+    if not binding.sync_back:
+        return {"pull_command": pull_command, "deltas": [], "report_path": None}
+
+    deltas = []
+    for repo_rel, ws_rel in binding.sync_back.items():
+        repo_doc = _confine(wt, repo_rel, "repo-doc")
+        ws_target = _confine(ws, ws_rel, "ws-target")
+        status, diff = _diff_doc(repo_doc, ws_target)
+        deltas.append({
+            "repo_doc": repo_rel, "ws_target": ws_rel,
+            "status": status, "diff": diff,
+        })
+
+    # Surface the delta as a reviewable report — NEVER touch the live DDD docs.
+    report_path = None
+    changed = [d for d in deltas if d["status"] not in ("unchanged",)]
+    if changed:
+        ts = now_iso or _utc_now_iso()
+        safe_ts = ts.replace(":", "").replace("-", "").replace(".", "")
+        out_dir = _confine(ws, f"Projects/{binding.repo}/.artifacts/sync-back", "report-dir")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report_path = out_dir / f"{safe_ts}.md"
+        lines = [f"# Sync-back delta — {binding.repo} — {ts}", "",
+                 f"Pull first (HITL): `{pull_command}`", "",
+                 "Review each delta below; nothing was written to the live DDD docs.", ""]
+        for d in changed:
+            lines.append(f"## `{d['repo_doc']}` → `{d['ws_target']}`  [{d['status']}]")
+            if d["diff"]:
+                lines.append("```diff\n" + d["diff"] + "\n```")
+            lines.append("")
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info("sync_back: %s — %d changed doc(s) surfaced to %s",
+                    binding.repo, len(changed), report_path)
+
+    return {"pull_command": pull_command, "deltas": deltas,
+            "report_path": str(report_path) if report_path else None}
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
