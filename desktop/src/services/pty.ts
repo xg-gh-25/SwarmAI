@@ -56,6 +56,25 @@ export interface IPty {
   kill(): void;
 }
 
+/**
+ * Log a PTY invoke error — but stay SILENT for the two errors that are EXPECTED
+ * during normal operation, so we don't spam false alarms:
+ *   - "EOF": the child closed (normal read-loop termination).
+ *   - "Unavailable pid": the session was already removed (normal teardown —
+ *     e.g. a kill/write/resize that races a tab-close; Gate-1 flagged that a
+ *     blanket console.error here fires on every tab close).
+ * Any OTHER error is a real failure and IS surfaced (bare `.catch(()=>{})` used
+ * to swallow these, which is how the ArrayBuffer decode bug stayed invisible).
+ */
+function logPtyError(op: string, e: unknown): void {
+  const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
+  // Exact-match: the Rust side emits these as EXACT literals (terminal.rs
+  // `Err("EOF")` / `.ok_or("Unavailable pid")`). Substring-matching would wrongly
+  // silence a genuine read error whose text merely contains "EOF" (Gate-2 LOW).
+  if (msg === 'EOF' || msg === 'Unavailable pid') return;
+  console.error(`pty ${op} error:`, e);
+}
+
 /** Minimal listener registry backing an IEvent. */
 class Emitter<T> {
   private listeners = new Set<(arg: T) => void>();
@@ -78,9 +97,33 @@ class TauriPty implements IPty {
   private readonly decoder = new TextDecoder();
   private alive = true;
   private handleReady: Promise<number>;
+  // Latched terminal exit. Set ONCE when the pty exits (EOF, error, or spawn
+  // failure). The exit event can fire ~1 microtask after construction (spawn
+  // failure) — before an async consumer subscribes — so we replay it to any
+  // late subscriber instead of firing-into-the-void + clearing (Gate-2 MED race).
+  private _exit: { exitCode: number } | null = null;
 
   readonly onData = this._onData.event;
-  readonly onExit = this._onExit.event;
+  /**
+   * Subscribe to the exit event. If the pty has ALREADY exited (latched in
+   * _exit), replay it immediately to the new listener — so a subscriber that
+   * registers after a fast spawn-failure still learns the tab is dead.
+   */
+  readonly onExit: IEvent<{ exitCode: number }> = (listener) => {
+    if (this._exit) {
+      listener(this._exit);
+      return { dispose: () => {} };
+    }
+    return this._onExit.event(listener);
+  };
+
+  /** Fire the exit event exactly once and latch it for late subscribers. */
+  private fireExit(exitCode: number): void {
+    if (this._exit) return;
+    this._exit = { exitCode };
+    this._onExit.fire(this._exit);
+    this._onExit.clear();
+  }
 
   constructor(file: string, args: string[], opts: IPtyForkOptions) {
     this.handleReady = invoke<number>('pty_spawn', {
@@ -94,11 +137,19 @@ class TauriPty implements IPty {
       this.pid = pid;
       // If kill() was called before spawn resolved, kill now and don't poll.
       if (!this.alive) {
-        void invoke('pty_kill', { pid }).catch(() => {});
+        void invoke('pty_kill', { pid }).catch((e) => logPtyError('kill', e));
         return pid;
       }
       void this.readLoop(pid);
       return pid;
+    }).catch((e) => {
+      // pty_spawn itself failed (bad shell, chdir ENOENT, etc.) — the terminal
+      // will never produce output. Surface it (was an unhandled rejection) and
+      // fire onExit so the tab shows as exited instead of a silent blank.
+      logPtyError('spawn', e);
+      this.alive = false;
+      this.fireExit(-1);
+      return -1;
     });
   }
 
@@ -106,16 +157,27 @@ class TauriPty implements IPty {
   private async readLoop(pid: number): Promise<void> {
     while (this.alive) {
       try {
-        // Rust returns a binary IPC Response → arrives as number[]/Uint8Array.
-        const chunk = await invoke<Uint8Array | number[]>('pty_read', { pid });
+        // Rust's pty_read returns a `tauri::ipc::Response` of raw bytes, which
+        // arrives in the webview as an **ArrayBuffer** (not number[]/Uint8Array).
+        const chunk = await invoke<ArrayBuffer | Uint8Array | number[]>('pty_read', { pid });
         if (!this.alive) break;
-        const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+        // `new Uint8Array(chunk)` is UNIVERSAL across every shape Tauri may
+        // deliver: an ArrayBuffer becomes a view (len=byteLength), a number[]
+        // is copied, an existing Uint8Array is copied. This is the upstream
+        // form (Tnze/tauri-plugin-pty). ⚠️ Do NOT use `Uint8Array.from(chunk)`:
+        // `Uint8Array.from(anArrayBuffer)` returns an EMPTY array (ArrayBuffer
+        // is not iterable/array-like), so every byte is dropped and the terminal
+        // renders NOTHING — the exact bug this replaced (verified: from(AB)→len 0).
+        const bytes = new Uint8Array(chunk as ArrayBufferLike);
         if (bytes.length > 0) {
           // stream:true keeps a partial multi-byte char buffered across chunks.
           this._onData.fire(this.decoder.decode(bytes, { stream: true }));
         }
-      } catch {
-        // pty_read rejects with "EOF" (or any error) → child closed. Stop.
+      } catch (e) {
+        // pty_read rejects with "EOF" (child closed) → normal stop, silent.
+        // Any OTHER error is a real read failure — surface it (it used to be
+        // swallowed, which is how the decode bug stayed invisible).
+        logPtyError('read', e);
         break;
       }
     }
@@ -132,22 +194,21 @@ class TauriPty implements IPty {
   private async emitExit(pid: number): Promise<void> {
     try {
       const code = await invoke<number>('pty_exitstatus', { pid });
-      this._onExit.fire({ exitCode: code });
+      this.fireExit(code);
     } catch {
-      this._onExit.fire({ exitCode: -1 });
+      this.fireExit(-1);
     }
-    this._onExit.clear();
   }
 
   write(data: string): void {
     void this.handleReady.then((pid) => {
-      if (this.alive) void invoke('pty_write', { pid, data }).catch(() => {});
+      if (this.alive) void invoke('pty_write', { pid, data }).catch((e) => logPtyError('write', e));
     });
   }
 
   resize(cols: number, rows: number): void {
     void this.handleReady.then((pid) => {
-      if (this.alive) void invoke('pty_resize', { pid, cols, rows }).catch(() => {});
+      if (this.alive) void invoke('pty_resize', { pid, cols, rows }).catch((e) => logPtyError('resize', e));
     });
   }
 
@@ -156,7 +217,7 @@ class TauriPty implements IPty {
     this.alive = false;
     this._onData.clear();
     void this.handleReady.then((pid) => {
-      void invoke('pty_kill', { pid }).catch(() => {});
+      void invoke('pty_kill', { pid }).catch((e) => logPtyError('kill', e));
     });
   }
 }
