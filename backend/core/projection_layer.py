@@ -34,6 +34,57 @@ from core.skill_manager import SkillManager
 
 logger = logging.getLogger(__name__)
 
+# Directories inside a skill that are provisioned separately (npm) and must NOT
+# be walked for the freshness check — they are large, machine-generated, and
+# not part of the source-vs-dest content contract.
+_FRESHNESS_SKIP_DIRS = {"node_modules", "__pycache__", ".git"}
+
+
+def _skill_fingerprint(root: Path) -> tuple[frozenset[str], float]:
+    """Return (relative-file-path set, max file mtime) for a skill dir.
+
+    Walks FILES only (never stat's the dir itself — a directory's mtime is set
+    to copy-time by copytree and would always look "fresh"). node_modules et al.
+    are skipped (provisioned separately, huge, not part of the content contract).
+    An empty/absent tree returns (∅, -1.0).
+    """
+    paths: set[str] = set()
+    max_mtime = -1.0
+    if not root.exists():
+        return frozenset(), max_mtime
+    for p in root.rglob("*"):
+        if any(part in _FRESHNESS_SKIP_DIRS for part in p.relative_to(root).parts):
+            continue
+        if p.is_file():
+            paths.add(str(p.relative_to(root)))
+            m = p.stat().st_mtime
+            if m > max_mtime:
+                max_mtime = m
+    return frozenset(paths), max_mtime
+
+
+def _is_skill_fresh(src: Path, dst: Path) -> bool:
+    """True iff ``dst`` is a current copy of ``src`` (skip re-projection).
+
+    Fresh requires BOTH:
+      1. identical relative-file SET (catches added/deleted source files), AND
+      2. dst's max file-mtime >= src's max file-mtime (catches edits — copytree
+         uses copy2 which PRESERVES source mtime, so an edited source file is
+         strictly newer than its stale dest copy).
+
+    Fail-safe: a missing dst, an empty src, or any doubt → NOT fresh (re-copy).
+    Correctness (never ship a stale skill) is prioritised over the skip.
+    """
+    if not dst.exists():
+        return False
+    src_paths, src_mtime = _skill_fingerprint(src)
+    if not src_paths:
+        return False  # empty/unreadable source → don't trust a skip
+    dst_paths, dst_mtime = _skill_fingerprint(dst)
+    if src_paths != dst_paths:
+        return False  # a file was added to or removed from the source
+    return dst_mtime >= src_mtime
+
 
 class ProjectionLayer:
     """Project skill copies into a workspace for Claude SDK discovery.
@@ -134,6 +185,20 @@ class ProjectionLayer:
                     folder_name,
                     skill_path,
                 )
+                continue
+
+            # Skip-when-fresh (run_bf4cb46e): rmtree+copytree of every skill on
+            # every boot was an O(all-skills) filesystem churn that timed out the
+            # test TestClient fixture (221s) and slowed every daemon boot. If the
+            # existing copy is byte-current with the source (same file-set AND not
+            # older — copy2 preserves mtime), skip the whole re-copy + npm re-check.
+            # A legacy SYMLINK is never "fresh" (always re-materialised as a copy).
+            if (
+                link_path.exists()
+                and not link_path.is_symlink()
+                and _is_skill_fresh(skill_path.resolve(), link_path)
+            ):
+                logger.debug("Skill '%s' unchanged — skipping re-projection", folder_name)
                 continue
 
             # If entry already exists, remove and re-copy (clean re-copy
