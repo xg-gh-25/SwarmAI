@@ -1,5 +1,6 @@
 ---
 name: workspace-backup
+disable-model-invocation: true
 description: Backup and restore SwarmAI workspace (memory, knowledge, projects, config, conversations) to/from a private GitHub repository.
 tier: lazy
 platform: all

@@ -1,5 +1,6 @@
 ---
 name: hive-manager
+disable-model-invocation: true
 description: Deploy, update, manage, and monitor Hive cloud instances. Use when the user wants to create a new Hive, update an existing Hive to a new version, check Hive status, start/stop instances, reset passwords, or manage AWS accounts for Hive deployment.
 tier: lazy
 platform: desktop

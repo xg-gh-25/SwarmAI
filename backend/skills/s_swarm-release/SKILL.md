@@ -1,5 +1,6 @@
 ---
 name: swarm-release
+disable-model-invocation: true
 description: "Full SwarmAI release cycle: preflight checks, version bump, binary build, desktop package, smoke test, and GitHub publish. Supersedes s_release (which only does version bump + tag) by adding\
   \ build/package/smoke stages.\n  TRIGGER: \"release\", \"cut release\", \"ship it\", \"发版\".\n  NOT FOR: s_swarm-build, s_release, s_swarm-hive use cases."
 tier: lazy

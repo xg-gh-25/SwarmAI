@@ -1,5 +1,6 @@
 ---
 name: session-health-probe
+disable-model-invocation: true
 description: "Runtime daemon + live-session liveness probe (zero-LLM, deterministic): daemon up, sessions progressing (not wedged — RP41 double-signal), RSS under budget, no unrecovered failure events, deployed commit == expected. Snapshot now; runs as a 15-min job; red → Slack."
 trigger:
   - session health

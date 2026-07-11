@@ -1,5 +1,6 @@
 ---
 name: swarm-build
+disable-model-invocation: true
 description: "Build SwarmAI backend binary (PyInstaller), verify capabilities, deploy to daemon, and restart. Replaces ./prod.sh build with per-stage visibility.\n  TRIGGER: \"build\", \"build backend\"\
   , \"swarm build\", \"deploy binary\".\n  NOT FOR: s_swarm-release, s_swarm-dev use cases."
 tier: lazy

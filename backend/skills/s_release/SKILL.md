@@ -1,5 +1,6 @@
 ---
 name: release
+disable-model-invocation: true
 description: "Bump version across all package files, update CHANGELOG, create git tag, and publish GitHub Release. Ensures no file is missed during version bumps. SUPERSEDED BY: s_swarm-release (which includes\
   \ build + package + smoke test). Use this skill ONLY for version-bump-without-shipping scenarios.\n  TRIGGER: \"bump version only\", \"version bump\", \"just tag\".\n  NOT FOR: s_swarm-release, s_swarm-build\
   \ use cases."

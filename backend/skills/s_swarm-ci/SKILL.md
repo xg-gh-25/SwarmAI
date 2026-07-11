@@ -1,5 +1,6 @@
 ---
 name: swarm-ci
+disable-model-invocation: true
 description: "Check SwarmAI GitHub Actions CI status: list recent runs, diagnose failures, and summarize health. Replaces ad-hoc gh run commands with structured output.\n  TRIGGER: \"CI status\", \"check\
   \ CI\", \"is CI green\", \"CI failures\".\n  NOT FOR: pytest use cases."
 tier: lazy

@@ -1,5 +1,6 @@
 ---
 name: swarm-daemon
+disable-model-invocation: true
 description: "Manage the SwarmAI launchd daemon: status, stop, start, restart, deploy, logs, and health verification. Replaces manual launchctl and dev.sh daemon commands with structured per-step execution.\n\
   \  TRIGGER: \"daemon status\", \"restart daemon\", \"daemon logs\", \"stop daemon\".\n  NOT FOR: s_swarm-build, s_swarm-hive use cases."
 tier: lazy

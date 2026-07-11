@@ -1,5 +1,6 @@
 ---
 name: health-check
+disable-model-invocation: true
 description: Post-build verification of SwarmAI critical assumptions — streaming, context files, MCP, DailyActivity pipeline.
 trigger:
   - health check
