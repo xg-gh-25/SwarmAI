@@ -525,6 +525,17 @@ async def chat_stream(request: Request):
 
     async def message_generator():
         """Generate messages from the agent conversation."""
+        # For a NEW session the request carries session_id=None; the real id is
+        # assigned server-side and first arrives on the `session_start` event
+        # (streaming_orchestrator.py:594, camelCase `sessionId`). Capture it so a
+        # mid-stream client drop recovers the SERVER-created session — passing
+        # chat_request.session_id (None) here made recovery a no-op and left the
+        # new session stuck STREAMING (run_1c0a1da5).
+        # KNOWN RESIDUAL: a drop BEFORE session_start is yielded still leaves
+        # captured=None (the unit exists from get_or_create_unit but hasn't
+        # emitted its id yet). Follow-up: router-owned recovery keyed off the
+        # uuid it generates, so no caller ever passes None.
+        captured_session_id = chat_request.session_id
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
             async for msg in _get_router().run_conversation(
@@ -537,13 +548,16 @@ async def chat_stream(request: Request):
                 editor_context=chat_request.editor_context.model_dump() if chat_request.editor_context else None,
                 client_id=chat_request.client_id,
             ):
+                if captured_session_id is None:
+                    captured_session_id = msg.get("sessionId") or msg.get("session_id")
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
         except asyncio.CancelledError:
             logger.info("Chat stream cancelled (client disconnected)")
             # Transition session STREAMING → IDLE so the next send()
             # doesn't force-unstick and replay the previous turn via --resume.
-            _recover_streaming_on_disconnect(chat_request.session_id)
+            # Use the captured server-assigned id (not the request's None).
+            _recover_streaming_on_disconnect(captured_session_id)
             return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")

@@ -301,3 +301,69 @@ class TestSessionBusyErrorClass:
         """AUTO_RECOVER_STALL_THRESHOLD should be exported from session_unit."""
         from core.session_unit import AUTO_RECOVER_STALL_THRESHOLD
         assert AUTO_RECOVER_STALL_THRESHOLD == 180.0
+
+
+# ---------------------------------------------------------------------------
+# New-session disconnect recovery (run_1c0a1da5): a mid-stream client drop on
+# a NEW session (request session_id=None) must recover the SERVER-created
+# session, not no-op. The bug: chat.py:546 passed chat_request.session_id
+# (None for a new session) → _recover_streaming_on_disconnect(None) →
+# get_unit(None) → no-op → session stuck STREAMING. Fix: capture the
+# server-assigned sessionId from the session_start event and recover THAT.
+# ---------------------------------------------------------------------------
+
+
+class TestNewSessionDisconnectRecovery:
+    """message_generator must recover the server-assigned session id, not None."""
+
+    @pytest.mark.asyncio
+    async def test_recovery_uses_captured_server_id_when_request_id_is_none(self):
+        """A new-session (request id=None) mid-stream drop recovers the server id.
+
+        Drives the REAL chat_stream message_generator: patches run_conversation
+        to yield a session_start (carrying the server-assigned sessionId) then
+        raise CancelledError (the client drop), and asserts
+        _recover_streaming_on_disconnect is called with the SERVER id — not the
+        request's None. Mutation: revert chat.py:546 to chat_request.session_id
+        → recovery is called with None → this assertion fails.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import routers.chat as chat_mod
+
+        SERVER_ID = "srv-abc-123"
+        recovered_with: list = []
+
+        async def fake_run_conversation(**kwargs):
+            # First event carries the server-assigned id (session_start shape,
+            # streaming_orchestrator.py:593-594 uses camelCase 'sessionId').
+            yield {"type": "session_start", "sessionId": SERVER_ID}
+            # Client drops mid-stream → CancelledError propagates into the gen.
+            raise asyncio.CancelledError()
+
+        # Build a mock Request whose body is a NEW-session chat request.
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(return_value={
+            "agent_id": "default",
+            "message": "hi",
+            "session_id": None,   # ← the bug trigger: new session
+            "enable_skills": False,
+            "enable_mcp": False,
+        })
+
+        mock_router = MagicMock()
+        mock_router.run_conversation = fake_run_conversation
+
+        with patch.object(chat_mod, "_get_router", return_value=mock_router), \
+             patch.object(chat_mod, "agent_exists", new_callable=AsyncMock, return_value=True), \
+             patch.object(chat_mod, "_recover_streaming_on_disconnect",
+                          side_effect=lambda sid: recovered_with.append(sid)):
+            resp = await chat_mod.chat_stream(mock_request)
+            # Drive the underlying message_generator to exhaustion; the
+            # CancelledError is caught inside it and triggers recovery.
+            async for _ in resp.body_iterator:
+                pass
+
+        assert recovered_with == [SERVER_ID], (
+            f"recovery must use the captured server id {SERVER_ID!r}, "
+            f"got {recovered_with!r} (None = the bug: request id passed through)"
+        )
