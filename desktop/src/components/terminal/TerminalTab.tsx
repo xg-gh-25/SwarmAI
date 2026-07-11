@@ -27,12 +27,35 @@ interface TerminalTabProps {
   active: boolean;
 }
 
-// A dark theme aligned with the app's chrome variables.
+// A dark theme aligned with the app's chrome variables, WITH a full 16-color
+// ANSI palette. The palette is what makes command output legible + distinct:
+// once the shell has a color-capable $TERM (set in Rust pty_spawn), ls/git/errors
+// emit ANSI color codes, and these are the colors xterm renders them in. Tuned
+// for the #0a0d12 background (GitHub-dark-ish, high contrast, not muddy).
 const XTERM_THEME = {
   background: '#0a0d12',
   foreground: '#e6edf3',
-  cursor: '#e6edf3',
+  cursor: '#58a6ff',
+  cursorAccent: '#0a0d12',
   selectionBackground: '#2f5178',
+  // Normal
+  black: '#484f58',
+  red: '#ff7b72',
+  green: '#3fb950',
+  yellow: '#d29922',
+  blue: '#58a6ff',
+  magenta: '#bc8cff',
+  cyan: '#39c5cf',
+  white: '#b1bac4',
+  // Bright
+  brightBlack: '#6e7681',
+  brightRed: '#ffa198',
+  brightGreen: '#56d364',
+  brightYellow: '#e3b341',
+  brightBlue: '#79c0ff',
+  brightMagenta: '#d2a8ff',
+  brightCyan: '#56d4dd',
+  brightWhite: '#f0f6fc',
 };
 
 export default function TerminalTab({ tab, active }: TerminalTabProps) {
@@ -62,7 +85,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       cursorBlink: true,
       fontFamily:
         "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-      fontSize: 12.5,
+      fontSize: 12,
+      lineHeight: 1.3,
+      letterSpacing: 0,
+      fontWeight: 400,
+      fontWeightBold: 600,
       theme: XTERM_THEME,
       convertEol: false,
       scrollback: 10000,
@@ -174,7 +201,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     <div
       ref={hostRef}
       data-testid={`terminal-surface-${tab.id}`}
-      className="h-full w-full overflow-hidden px-2 py-1"
+      className="h-full w-full overflow-hidden pl-3 pr-2 py-1.5"
       style={{ display: active ? 'block' : 'none' }}
     />
   );

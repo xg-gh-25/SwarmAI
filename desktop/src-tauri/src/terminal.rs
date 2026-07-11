@@ -80,6 +80,34 @@ fn resolve_default_cwd(cwd: Option<String>) -> String {
     }
 }
 
+/// Build the environment overlay applied to a new PTY on top of the inherited
+/// base env (portable-pty seeds the child from this process's env).
+///
+/// - **TERM** is FORCE-set to `xterm-256color`: the terminal emulator (xterm.js)
+///   owns TERM, and a GUI-launched .app inherits no TERM — without it zsh/ls/git
+///   skip auto-coloring and the terminal is flat monochrome (the bug this fixes).
+/// - **COLORTERM=truecolor** advertises 24-bit color for tools that check it.
+/// - **LANG** is set to a UTF-8 locale ONLY IF the caller/base didn't provide one
+///   (don't clobber a user's own locale).
+/// - Caller-passed `env` entries are preserved; TERM/COLORTERM intentionally
+///   override (the emulator is authoritative for these), LANG defers to the caller.
+fn build_pty_env(mut env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    // Set a UTF-8 LANG only if NEITHER the caller NOR the inherited process env
+    // already provides one — so we never clobber a user's real locale (the
+    // inherited value is applied by portable-pty's base env; our insert would
+    // otherwise overwrite it by key). Gate-2: checking only the caller map made
+    // the "don't clobber" comment untrue for the base-env case.
+    if !env.contains_key("LANG") && std::env::var_os("LANG").is_none() {
+        env.insert("LANG".to_string(), "en_US.UTF-8".to_string());
+    }
+    // Force color-capable terminal identity (the emulator owns TERM — a stale
+    // inherited TERM, e.g. "dumb", must not win). portable-pty's env() dedups by
+    // key and overwrites the base entry, so these values are authoritative.
+    env.insert("TERM".to_string(), "xterm-256color".to_string());
+    env.insert("COLORTERM".to_string(), "truecolor".to_string());
+    env
+}
+
 /// A single live PTY session: the pair, the child process, its killer, and the
 /// reader/writer handles onto the master side.
 struct Session {
@@ -132,7 +160,13 @@ pub async fn pty_spawn(
     // Default to $HOME/.swarm-ai/SwarmWS when no cwd is supplied (a passed
     // non-empty cwd always wins). See resolve_default_cwd.
     cmd.cwd(OsString::from(resolve_default_cwd(cwd)));
-    for (k, v) in env.iter() {
+    // A Finder/Dock-launched macOS .app inherits the launchd GUI-session env,
+    // which has NO $TERM. portable-pty seeds the child env from THIS process's
+    // env (get_base_env → std::env::vars_os), so the shell inherits that
+    // TERM-less env → zsh/ls/git see no color-capable terminal and render
+    // everything flat monochrome (command vs output indistinguishable). Force a
+    // color-capable TERM here (the emulator owns TERM). See build_pty_env.
+    for (k, v) in build_pty_env(env).iter() {
         cmd.env(OsString::from(k), OsString::from(v));
     }
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -379,6 +413,43 @@ mod tests {
         assert_eq!(resolve_default_cwd(Some("".to_string())), expected);
         assert_eq!(resolve_default_cwd(Some("   ".to_string())), expected);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    use super::build_pty_env;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn build_pty_env_forces_color_term() {
+        // AC1: an empty caller env still yields a color-capable TERM so the shell
+        // (and ls/git) enable color → command vs output become distinguishable.
+        let _g = HOME_LOCK.lock().unwrap(); // serialize: this test reads/writes LANG env
+        let out = build_pty_env(BTreeMap::new());
+        assert_eq!(out.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(out.get("COLORTERM").map(String::as_str), Some("truecolor"));
+        // LANG is set to the UTF-8 default ONLY when neither caller nor the
+        // process env has one. Drive the process-env branch deterministically.
+        std::env::remove_var("LANG");
+        let out_no_lang = build_pty_env(BTreeMap::new());
+        assert_eq!(out_no_lang.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
+        std::env::set_var("LANG", "de_DE.UTF-8");
+        let out_inherited = build_pty_env(BTreeMap::new());
+        // inherited process LANG present → we do NOT inject our default (no clobber)
+        assert_eq!(out_inherited.get("LANG"), None);
+        std::env::remove_var("LANG");
+    }
+
+    #[test]
+    fn build_pty_env_preserves_caller_lang_but_forces_term() {
+        // LANG defers to the caller (don't clobber a user locale); TERM is forced
+        // (the emulator is authoritative — a stale inherited TERM must not win).
+        let mut input = BTreeMap::new();
+        input.insert("LANG".to_string(), "ja_JP.UTF-8".to_string());
+        input.insert("TERM".to_string(), "dumb".to_string());
+        input.insert("MY_VAR".to_string(), "keep".to_string());
+        let out = build_pty_env(input);
+        assert_eq!(out.get("LANG").map(String::as_str), Some("ja_JP.UTF-8"));
+        assert_eq!(out.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(out.get("MY_VAR").map(String::as_str), Some("keep"));
     }
 
     #[test]
