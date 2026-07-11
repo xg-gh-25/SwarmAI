@@ -298,9 +298,25 @@ a per-project `Projects/<name>/bindings.yaml`. A DDD may bind MANY repos.
 
 The full lifecycle is **CREATE → BIND → PULL → codeIntel → DEVELOP → SYNC-BACK**
 (CREATE is the flow above; DEVELOP + SYNC-BACK are Steps 4-5 below). A bound repo is
-not a dead-end index — it's a two-way channel: SwarmWS governs the repo (DEVELOP: cut
-a CR through `s_internal-crux-cr`), and engineer edits to the repo's own DDD docs flow back
-into SwarmWS for review (SYNC-BACK: `core.ddd_bindings.sync_back`).
+not a dead-end index — it's a two-way channel: SwarmWS governs the repo (DEVELOP:
+deliver a change through the binding's declared **delivery contract**), and engineer
+edits to the repo's own DDD docs flow back into SwarmWS for review (SYNC-BACK:
+`core.ddd_bindings.sync_back`).
+
+**Three project shapes — the lifecycle adapts; it is NOT internal/Brazil-only.**
+DEVELOP + SYNC-BACK are driven by the binding's `delivery_contract` (data, not a
+hardcoded path), so the SAME lifecycle serves all three:
+
+| Project shape | `bindings.yaml`? | BIND/PULL | DEVELOP path | SYNC-BACK |
+|---|---|---|---|---|
+| **Internal repo** (code.amazon.com / Brazil) | yes — `kind: internal` | PULL deferred (Midway/Brazil auth) | `s_internal-brazil` (build/release) → `s_internal-crux-cr` (CR) → `s_internal-crux-review` | yes (opt-in map) |
+| **External repo** (GitHub) | yes — `kind: external` | `bind_repo` clones + indexes | normal git branch + PR + `s_code-review` (NO CRUX, NO brazil) | yes (opt-in map) |
+| **No-repo project** (pure DDD docs) | **no** — never bound | N/A — stops at CREATE | N/A — DDD docs ARE the deliverable; edit them directly | N/A |
+
+The discriminator is the delivery contract's `remote_kind` (`code-amazon-cr` vs
+`github-pr`) × `build_system` (`brazil` vs `none`) — both already in the schema below.
+A no-repo project simply has no `bindings.yaml`; BIND/PULL/DEVELOP/SYNC-BACK don't
+apply and the CREATE flow (4 DDD docs) is the whole story.
 
 #### Step 1: Declare the binding in `Projects/<name>/bindings.yaml`
 
@@ -363,20 +379,33 @@ for b in doc.bindings:
 > Delivery contract: {remote_kind} via {review_path}, auto-send {auto_send}.
 > {deferred repos, if any}: declared, PULL deferred to the Brazil/Midway spike."
 
-#### Step 4: DEVELOP — cut a CR against a bound repo (delegate, don't hand-roll)
+#### Step 4: DEVELOP — deliver a change via the binding's delivery contract (delegate, don't hand-roll)
 
-Once a repo is bound with a `code-amazon-cr` delivery contract, developing a change +
-raising a review is **not this skill's job** — it belongs to **`s_internal-crux-cr`**. Hand off:
+Developing a change against a bound repo is **not this skill's job** — it routes to a
+delivery skill chosen by the binding's `delivery_contract`. **Read `remote_kind` +
+`build_system` and branch — do NOT assume CRUX/Brazil:**
 
-- **Trigger:** "create CR", "发 CR", "cut a CR for <bound repo>".
-- **What it does:** resolves the checked-out worktree from `bindings.yaml`, develops +
-  `git commit`s the change **locally** (agent-automated), then hands the human
-  ready-to-run `brazil-build release` + `cr` commands.
-- **Why the split (the HITL boundary):** the agent does the local/no-auth half; the human
-  runs the steps that cross the **build-duration + ssh-agent auth walls** (`brazil-build`,
-  `cr`, approve). The agent **never** `git push`es an internal repo (CRUX auto-merge owns
-  the remote) and **never** calls `bind_repo` on the human's live worktree (it `rmtree`s).
-- Reviewing an *existing* CR is the sibling skill `s_internal-crux-review`.
+**A) `remote_kind: code-amazon-cr` (internal — code.amazon.com):**
+- If `build_system: brazil` → **`s_internal-brazil`** first (HITL build/release/workspace-sync:
+  the agent detects the build system, commits locally, and diagnoses failures; the human
+  runs the multi-minute `brazil-build release` + Midway/ssh-agent-walled `brazil ws sync`).
+- Then **`s_internal-crux-cr`** to create the CR (agent commits locally + assembles the
+  `cr` command; human runs it — `git.amazon.com` needs the ssh-agent cert). Review an
+  existing CR with **`s_internal-crux-review`**.
+- The agent **never** `git push`es (CRUX auto-merge owns the remote), never runs
+  `cr --auto-merge`/approve, never calls `bind_repo` on the live worktree (it `rmtree`s).
+
+**B) `remote_kind: github-pr` (external — GitHub):**
+- Normal git flow: branch, commit, `git push` to a fork/branch, open a PR. This is the
+  ordinary public-git path — **no CRUX, no Brazil, no `s_internal-*` skills.**
+- Review with **`s_code-review`** (PR/diff review), not `s_internal-crux-review`.
+
+**C) No-repo project (no `bindings.yaml`):** DEVELOP does not apply — there is no repo to
+deliver to. The 4 DDD docs ARE the deliverable; edit them directly (or via `s_persist`).
+
+**Why the internal split is HITL:** for A, the agent does the local/no-auth half; the
+human runs the steps crossing the **build-duration + ssh-agent auth walls**. B crosses
+no such wall (public git), so the agent can run the whole PR flow.
 
 #### Step 5: SYNC-BACK — reflow engineer edits from the repo's DDD back into SwarmWS
 
@@ -408,8 +437,11 @@ for b in doc.bindings:
   reviewable delta report to `Projects/<repo>/.artifacts/sync-back/<ts>.md`. It **NEVER**
   mutates the live DDD docs — they carry cultivation edits a blind overwrite would destroy.
 - **`git pull` is HITL:** `sync_back` performs **no** network/git call. It returns a
-  `pull_command` string for the human to run (the ssh-agent auth wall lives on the human
-  side, same as DEVELOP). Pull the worktree first, *then* `sync_back` diffs it.
+  `pull_command` string for the human to run, then `sync_back` diffs the pulled worktree.
+  (For an internal `code-amazon-cr` binding the pull crosses the ssh-agent/Midway wall —
+  human-only; for an external `github-pr` binding it's ordinary public git — the human
+  runs it either way since `sync_back` never touches the network.) SYNC-BACK itself is
+  delivery-contract-agnostic: it only diffs + surfaces, regardless of repo kind.
 - **Delta statuses:** `changed` (with a unified diff), `unchanged`, `new-in-repo`,
   `missing-in-repo`, `binary`, `too-large` (>1 MB, diff skipped). Review the report, then
   apply anything worth keeping into the live DDD by hand (or via `s_persist`).
