@@ -32,6 +32,7 @@ import {
   useEffect,
   useRef,
   useMemo,
+  useDeferredValue,
   startTransition,
   type ReactNode,
 } from 'react';
@@ -323,6 +324,10 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
 
   // ── Search state ────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
+  // Deferred copy of the query: React lets this lag behind during rapid typing so
+  // the expensive full-tree findMatches walk runs once when typing settles, not
+  // once per keystroke. Snapshot/restore logic still keys off the immediate query.
+  const deferredQuery = useDeferredValue(searchQuery);
   const [matchedPaths, setMatchedPaths] = useState<Set<string>>(() => new Set());
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(() => new Set());
 
@@ -337,6 +342,14 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   // an empty dep array and would otherwise capture the mount-time empty Set) can
   // read the current expansion state when merging lazy-loaded children.
   const expandedPathsRef = useRef<Set<string>>(expandedPaths);
+
+  // Latest treeData, mirrored into a ref so toggleExpand can read the current
+  // tree WITHOUT closing over treeData. Closing over it made toggleExpand a new
+  // function on every 200 poll (treeData gets a fresh array reference), which
+  // churned SelectionContext identity → a full re-render of every visible tree
+  // row every 30s. Reading via the ref keeps toggleExpand referentially stable
+  // (deps [injectChildren] only) while still finding nodes in the latest tree.
+  const treeDataRef = useRef<TreeNode[]>(treeData);
 
   // ── Fetch tree data on mount ───────────────────────────────────────────
   const fetchTree = useCallback(async () => {
@@ -449,14 +462,23 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       return;
     }
 
-    // Snapshot expandedPaths before the first search keystroke
+    // Snapshot expandedPaths before the first search keystroke (immediate — keyed
+    // on searchQuery, not the deferred value, so the snapshot is taken the instant
+    // the user starts typing).
     if (preSearchExpandedPaths.current === null) {
       preSearchExpandedPaths.current = new Set(expandedPaths);
     }
 
+    // Defer the expensive full-tree walk: while the user is typing rapidly,
+    // deferredQuery lags behind searchQuery, so they are unequal and we skip the
+    // walk entirely — findMatches runs ONCE when typing settles (deferred catches
+    // up), instead of once per keystroke. Also avoids a clobber-on-clear race:
+    // when searchQuery becomes '', the empty-branch above returns before this walk.
+    if (deferredQuery !== searchQuery) return;
+
     // Use startTransition to avoid blocking UI during large-tree traversals
     startTransition(() => {
-      const { matched, ancestors } = findMatches(treeData, searchQuery);
+      const { matched, ancestors } = findMatches(treeData, deferredQuery);
       setMatchedPaths(matched);
 
       if (matched.size === 0) {
@@ -476,7 +498,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   // expandedPaths is intentionally omitted — we only snapshot it on the first
   // search keystroke via preSearchExpandedPaths ref, not on every expand/collapse.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, treeData]);
+  }, [searchQuery, deferredQuery, treeData]);
 
   // ── Expand / collapse actions ──────────────────────────────────────────
 
@@ -495,6 +517,10 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
 
   /** Set of paths currently being lazy-loaded (prevents duplicate fetches). */
   const loadingPaths = useRef<Set<string>>(new Set());
+
+  // Keep the treeData ref current on every render so toggleExpand (which reads
+  // the ref, not a closure) always sees the latest tree without being recreated.
+  treeDataRef.current = treeData;
 
   const toggleExpand = useCallback((path: string) => {
     setExpandedPaths((prev) => {
@@ -520,7 +546,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       return null;
     };
 
-    const node = findNode(treeData, path);
+    const node = findNode(treeDataRef.current, path);
     if (node && node.type === 'directory' && node.children === null && !loadingPaths.current.has(path)) {
       loadingPaths.current.add(path);
       workspaceService.expandDirectory(path).then((children) => {
@@ -539,7 +565,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
         loadingPaths.current.delete(path);
       });
     }
-  }, [treeData, injectChildren]);
+  }, [injectChildren]);
 
   const expandAll = useCallback(() => {
     const allPaths = collectAllDirectoryPaths(treeData);

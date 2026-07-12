@@ -54,6 +54,15 @@ import CommentPopover from './CommentPopover';
  */
 export const HIGHLIGHT_MAX_CHARS = 100_000;
 
+/**
+ * Debounce (ms) for the syntax-highlight overlay. hljs.highlight runs over the
+ * full file synchronously; without a debounce it re-ran on every keystroke,
+ * causing typing lag on medium files (40-99K chars, under the freeze ceiling).
+ * 150ms is below the "done typing" perception threshold — the colored overlay
+ * settles a beat after you pause; the textarea text/caret is never delayed.
+ */
+export const HIGHLIGHT_DEBOUNCE_MS = 150;
+
 /** Whether synchronous main-thread text processing (highlight/diff/search) is
  *  safe for content of this length. Pure — exported for testing. */
 export function shouldProcessSync(contentLength: number): boolean {
@@ -427,6 +436,7 @@ function SearchBar({
   onNext,
   onPrevious,
   onClose,
+  disabled = false,
 }: {
   searchQuery: string;
   onSearchChange: (query: string) => void;
@@ -435,6 +445,8 @@ function SearchBar({
   onNext: () => void;
   onPrevious: () => void;
   onClose: () => void;
+  /** True when search is unavailable (file too large for sync scan). */
+  disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -455,9 +467,11 @@ function SearchBar({
     }
   };
 
-  const matchDisplay = totalMatches > 0
-    ? `${currentMatch + 1} of ${totalMatches}`
-    : '0 of 0';
+  const matchDisplay = disabled
+    ? 'search disabled (large file)'
+    : totalMatches > 0
+      ? `${currentMatch + 1} of ${totalMatches}`
+      : '0 of 0';
 
   return (
     <div
@@ -534,6 +548,9 @@ export default function FileEditorCore({
   const [savedContent, setSavedContent] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
+  // True when the unsaved-warning modal was opened by the Reload button (vs Close).
+  // Distinguishes the modal's forward action: reload-from-disk vs revert-and-close.
+  const [reloadPending, setReloadPending] = useState(false);
   const [showDiff, setShowDiff] = useState(initialShowDiff ?? false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [showSvgPreview, setShowSvgPreview] = useState(false);
@@ -550,8 +567,17 @@ export default function FileEditorCore({
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const lastFetchRef = useRef(Date.now());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Debounce timer for the syntax-highlight overlay (distinct from the changed-line
+  // decoration timer above). hljs.highlight is O(content-length) and ran synchronously
+  // on every keystroke → typing lag on medium files. We debounce so it runs on a
+  // typing pause; the textarea (which owns the caret + shows real text) is never
+  // debounced, so input stays responsive.
+  const highlightDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Clear pending highlight timer on unmount (covers reload button's setTimeout)
-  useEffect(() => () => { clearTimeout(highlightTimerRef.current); }, []);
+  useEffect(() => () => {
+    clearTimeout(highlightTimerRef.current);
+    clearTimeout(highlightDebounceRef.current);
+  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -878,26 +904,34 @@ export default function FileEditorCore({
 
   // Syntax highlighting
   useEffect(() => {
-    if (highlightRef.current && !showDiff) {
-      // Large files: skip synchronous hljs.highlight (O(n), blocks the main
-      // thread on every content change) and render plaintext instead.
-      if (!shouldProcessSync(content.length)) {
-        highlightRef.current.textContent = content + '\n';
-        return;
-      }
+    if (!highlightRef.current || showDiff) return;
 
+    // Large files: skip synchronous hljs.highlight (O(n), blocks the main
+    // thread on every content change) and render plaintext instead — immediate,
+    // no debounce needed (it's cheap).
+    if (!shouldProcessSync(content.length)) {
+      highlightRef.current.textContent = content + '\n';
+      return;
+    }
+
+    // Debounce the expensive hljs pass so rapid typing doesn't re-tokenize the
+    // whole file per keystroke. Cancel any pending run first.
+    clearTimeout(highlightDebounceRef.current);
+    highlightDebounceRef.current = setTimeout(() => {
+      if (!highlightRef.current) return;
       const escaped = content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-
       try {
         const highlighted = hljs.highlight(escaped, { language }).value;
         highlightRef.current.innerHTML = highlighted + '\n';
       } catch {
         highlightRef.current.textContent = content + '\n';
       }
-    }
+    }, HIGHLIGHT_DEBOUNCE_MS);
+
+    return () => clearTimeout(highlightDebounceRef.current);
   }, [content, language, showDiff, showMarkdownPreview]);
 
   // Focus-gate helper: in panel mode, only handle keyboard events that
@@ -966,17 +1000,59 @@ export default function FileEditorCore({
 
   const handleDiscardChanges = useCallback(() => {
     setShowUnsavedWarning(false);
-    setContent(initialContent);
+    // Revert to the last-saved baseline (savedContent) if there was an in-session
+    // save, else the mount content — matches the hasUnsavedEdits baseline so a
+    // prior save isn't visually lost on discard.
+    setContent(savedContent ?? initialContent);
     onClose();
-  }, [initialContent, onClose]);
+  }, [savedContent, initialContent, onClose]);
 
   const handleContinueEditing = useCallback(() => {
     setShowUnsavedWarning(false);
+    setReloadPending(false);
   }, []);
+
+  /** Refetch the file from disk and apply it (with changed-line highlight).
+   *  Shared by the Reload button and its unsaved-edits confirm path. */
+  const doReload = useCallback(async () => {
+    try {
+      const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
+      const fresh = resp.data.content;
+      if (fresh !== contentRef.current) {
+        const oldLines = (contentRef.current || '').split('\n');
+        const newLines = fresh.split('\n');
+        const changed = new Set<number>();
+        for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
+          if (oldLines[i] !== newLines[i]) changed.add(i + 1);
+        }
+        setContent(fresh);
+        setSavedContent(fresh);
+        onContentChange?.(fresh);
+        if (changed.size > 0) {
+          setHighlightedLines(changed);
+          clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
+        }
+      }
+    } catch { /* file gone — ignore */ }
+  }, [filePath, onContentChange]);
+
+  /** Discard unsaved edits AND reload from disk (Reload button's confirm path).
+   *  Distinct from handleDiscardChanges (Close's path), which reverts + closes. */
+  const handleDiscardAndReload = useCallback(async () => {
+    setShowUnsavedWarning(false);
+    setReloadPending(false);
+    await doReload();
+  }, [doReload]);
 
   // --- Computed ---
 
   const lineCount = content.split('\n').length;
+
+  // True when the file is too large for synchronous highlight/diff/search — those
+  // features degrade silently, so the UI surfaces this flag as an explicit notice
+  // (a matching search otherwise shows a misleading "0 of 0").
+  const syncDisabled = !shouldProcessSync(content.length);
 
   const searchMatches = useMemo(() => {
     if (!searchQuery) return [];
@@ -1151,25 +1227,16 @@ export default function FileEditorCore({
             {/* Reload button — refetch file from disk */}
             <button
               onClick={async () => {
-                try {
-                  const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
-                  const fresh = resp.data.content;
-                  if (fresh !== contentRef.current) {
-                    const oldLines = (contentRef.current || '').split('\n');
-                    const newLines = fresh.split('\n');
-                    const changed = new Set<number>();
-                    for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
-                      if (oldLines[i] !== newLines[i]) changed.add(i + 1);
-                    }
-                    setContent(fresh);
-                    setSavedContent(fresh);
-                    onContentChange?.(fresh);
-                    if (changed.size > 0) {
-                      setHighlightedLines(changed);
-                      clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
-                    }
-                  }
-                } catch { /* file gone — ignore */ }
+                // Guard unsaved edits, mirroring the SSE + visibility auto-refresh
+                // paths. Without this, an explicit Reload silently overwrites the
+                // user's pending edits with disk content. Open the warning in
+                // RELOAD mode so its confirm action reloads-from-disk (not close).
+                if (hasUnsavedEditsRef.current) {
+                  setReloadPending(true);
+                  setShowUnsavedWarning(true);
+                  return;
+                }
+                await doReload();
               }}
               className="flex items-center px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
               title="Reload file from disk"
@@ -1335,6 +1402,7 @@ export default function FileEditorCore({
               onSearchChange={(q) => { setSearchQuery(q); setCurrentMatchIndex(0); }}
               currentMatch={currentMatchIndex}
               totalMatches={searchMatches.length}
+              disabled={syncDisabled}
               onNext={handleSearchNext}
               onPrevious={handleSearchPrevious}
               onClose={handleSearchClose}
@@ -1594,6 +1662,15 @@ export default function FileEditorCore({
                 {language}
               </span>
             )}
+            {syncDisabled && (
+              <span
+                className="px-2 py-1 rounded bg-[var(--color-hover)] text-[var(--color-warning,#d97706)]"
+                title="Syntax highlighting, search, and diff are disabled on large files to keep the editor responsive."
+                data-testid="large-file-notice"
+              >
+                Large file — highlighting & search disabled
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1635,7 +1712,10 @@ export default function FileEditorCore({
               </h3>
             </div>
             <p className="text-[var(--color-text-muted)] mb-6">
-              You have unsaved changes in <strong>{fileName}</strong>. Do you want to discard them?
+              You have unsaved changes in <strong>{fileName}</strong>.{' '}
+              {reloadPending
+                ? 'Discard them and reload the file from disk?'
+                : 'Do you want to discard them?'}
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -1649,10 +1729,10 @@ export default function FileEditorCore({
               <Button
                 variant="danger"
                 size="sm"
-                onClick={handleDiscardChanges}
+                onClick={reloadPending ? handleDiscardAndReload : handleDiscardChanges}
                 data-testid="unsaved-warning-discard"
               >
-                Discard Changes
+                {reloadPending ? 'Discard & Reload' : 'Discard Changes'}
               </Button>
             </div>
           </div>
