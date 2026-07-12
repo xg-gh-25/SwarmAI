@@ -396,6 +396,36 @@ def _recall_ddd(query: str, project: Optional[str],
         for section, score in _ddd_section_scores(query, text).items():
             scored.append((doc, section, score))
 
+    # ② KNOWLEDGE deep-reference leg: s_ddd-persist routes "reference material →
+    # Projects/<X>/Knowledge/" — without this scan that write target is unrecallable
+    # (the write/read-mismatch bug class, same as the pollinate one). Knowledge files
+    # are whole-file blobs (no ## sections), so they're scored WHOLE-file via _bm25
+    # ({rel_path: text}), NOT _ddd_section_scores (which no-ops on section-less docs).
+    # BOUNDED (hot path — _recall_ddd runs on every recall_all fan-out): cap file count
+    # + skip large files, so a big Knowledge/ tree can't blow up recall I/O.
+    kdir = base / "Knowledge"
+    if kdir.is_dir():
+        from core import memory_index
+        _K_MAX_FILES = 60          # AIDLC has ~45; cap keeps the hot path bounded
+        _K_MAX_BYTES = 64 * 1024   # skip an oversized note (belongs in the Library, not here)
+        kdocs: dict[str, str] = {}
+        for kp in sorted(kdir.rglob("*.md"))[:_K_MAX_FILES]:
+            try:
+                if kp.stat().st_size > _K_MAX_BYTES:
+                    continue
+                kdocs[str(kp.relative_to(base))] = kp.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        if kdocs:
+            raw = memory_index._bm25_scores(query, kdocs)
+            # Downweight: Knowledge/ is a SEPARATELY-normalized corpus, so its top file
+            # also hits ~1.0 and would crowd out the 4 judgment docs at a low max_sections.
+            # The 4 docs (product/tech/lesson/decision judgment) are primary; deep-reference
+            # material is supporting — bias the pooled ranking toward the docs. (Gate-2 #3.)
+            _K_WEIGHT = 0.7
+            for rel, score in memory_index._normalize_bm25_scores(raw).items():
+                scored.append((rel, "(whole file)", score * _K_WEIGHT))
+
     if not scored:
         return hits, "none"
     scored.sort(key=lambda t: t[2], reverse=True)

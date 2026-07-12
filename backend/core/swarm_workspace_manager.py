@@ -408,6 +408,11 @@ SECTION_DIRS: tuple[str, ...] = (
     "gates",                      # ③ executable judgment (accretes)
     "gates/context/includes",     # ③ denylist DATA home (accretes)
     "skills",                     # ④ portable capabilities (accretes)
+    "Knowledge",                  # ② deep reference material (accretes; spec §3.6
+                                  #    "② KNOWLEDGE = 4 docs + Knowledge/"). s_ddd-persist
+                                  #    routes reference/spec here; _recall_ddd scans it.
+                                  #    (locked_write self-creates it too, but the skeleton
+                                  #    must reflect the canonical structure — Q1 Gate-0.)
 )
 
 # ④ DEFAULT DDD-NATIVE SKILLS — the official, maintained set that is COPIED INTO
