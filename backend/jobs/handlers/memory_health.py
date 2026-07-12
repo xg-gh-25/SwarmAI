@@ -325,7 +325,17 @@ def run_memory_health(dry_run: bool = False) -> dict:
     nl = head.rfind("\n")
     if nl > 0:
         head = head[:nl]
+    # Cap the appended section too (line-boundary trimmed): Open Threads is
+    # effectively append-only, so an uncapped append is the one unbounded token
+    # input here — every sibling read (head, EVOLUTION, git, daily) is [:8000]
+    # capped. Keep this bounded so the prompt budget stays predictable as the
+    # section grows. The oldest tail items truncate first; active P1/P2 threads
+    # (which is what resolved_threads reasons over) sit at the top.
     open_threads = _extract_section(full_memory, "Open Threads")
+    if open_threads and len(open_threads) > 8000:
+        cut = open_threads[:8000]
+        nl2 = cut.rfind("\n")
+        open_threads = cut[:nl2] if nl2 > 0 else cut
     if open_threads and open_threads not in head:
         memory_md = head + "\n\n" + open_threads
     else:

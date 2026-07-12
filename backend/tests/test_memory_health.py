@@ -501,6 +501,47 @@ class TestExtractSection:
         assert _extract_section("## Only\nbody\n", "Open Threads") == ""
 
 
+class TestOpenThreadsInputCapped:
+    """Meta-review MED: the appended Open Threads section must be bounded so it
+    can't grow unbounded as the (append-only) section bloats."""
+
+    def test_bloated_open_threads_is_capped_in_phase2_input(self, tmp_path):
+        from jobs.handlers.memory_health import run_memory_health
+
+        head = "## Recent Context\n\n" + ("- filler\n" * 900)
+        # A bloated Open Threads section >> 8000 chars.
+        top_marker = "TOP_OT_MARKER"
+        bottom_marker = "BOTTOM_OT_MARKER_SHOULD_BE_TRUNCATED"
+        ot_body = (
+            f"- 🟡 **{top_marker}** — active top item\n"
+            + ("- 🟡 **filler open thread line to bloat the section** — x\n" * 400)
+            + f"- 🟡 **{bottom_marker}** — far past 8000 chars into the section\n"
+        )
+        assert len(ot_body) > 8000
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(head + "\n## Open Threads\n\n" + ot_body)
+        daily_dir = tmp_path / "da"
+        daily_dir.mkdir()
+
+        captured = {}
+
+        def fake_build_prompt(memory_md, evolution_md, git_log, daily_activity):
+            captured["memory_md"] = memory_md
+            return "PROMPT"
+
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path), \
+             patch("jobs.handlers.memory_health.DAILY_DIR", daily_dir), \
+             patch("jobs.handlers.memory_health.SWARMWS", tmp_path), \
+             patch("jobs.handlers.memory_health._build_prompt", side_effect=fake_build_prompt), \
+             patch("jobs.handlers.memory_health._call_llm", return_value={"summary": "ok"}):
+            run_memory_health()
+
+        md = captured["memory_md"]
+        assert "## Open Threads" in md
+        assert top_marker in md, "top (active) Open Threads items must be included"
+        assert bottom_marker not in md, "bloated tail must be truncated by the cap"
+
+
 class TestPhase2SeesOpenThreads:
     """Defect 1: Phase 2 LLM input must contain the tail Open Threads section,
     not just full_memory[:8000]."""
