@@ -448,6 +448,9 @@ function NavIconButton({ icon, label, isActive, onClick, accent, 'data-testid': 
   // for hover/active bg+ring+icon+bar. Omitted accent → CSS falls back to the
   // accent primary (footer buttons: Settings, GitHub-as-button use no accent).
   const style = accent ? ({ '--ac': accent } as CSSProperties) : undefined;
+  // Accent-bearing (nav-group) buttons are toned by DEFAULT via .nav-btn--tinted;
+  // footer buttons (no accent) stay neutral grey until hover.
+  const tinted = accent ? ' nav-btn--tinted' : '';
   return (
     <button
       onClick={onClick}
@@ -455,7 +458,7 @@ function NavIconButton({ icon, label, isActive, onClick, accent, 'data-testid': 
       data-testid={testId}
       aria-pressed={isActive}
       style={style}
-      className="nav-btn relative flex items-center justify-center w-8 h-8 rounded-lg"
+      className={`nav-btn${tinted} relative flex items-center justify-center w-8 h-8 rounded-lg`}
     >
       {/* Active indicator bar — always present (layout-shift-free, GUI10):
           visible only when active, transparent otherwise. Color from --ac. */}

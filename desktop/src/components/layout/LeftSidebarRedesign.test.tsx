@@ -105,4 +105,17 @@ describe('LeftSidebar redesign — B2 group tint', () => {
     // inline style custom property survives Tailwind JIT purge
     expect(btn.style.getPropertyValue('--ac').trim()).toBe(color);
   });
+
+  // B (default-tint, 2026-07-12): accent-bearing nav-group icons are toned by
+  // DEFAULT (not grey-until-hover) via the .nav-btn--tinted marker class; the
+  // footer Settings button (no accent) stays neutral grey.
+  it.each(EXPECTED)('%s is tinted by default (.nav-btn--tinted)', (testid) => {
+    renderSidebar();
+    expect(screen.getByTestId(testid).classList.contains('nav-btn--tinted')).toBe(true);
+  });
+
+  it('footer Settings is NOT default-tinted (stays neutral grey)', () => {
+    renderSidebar();
+    expect(screen.getByTestId('nav-settings').classList.contains('nav-btn--tinted')).toBe(false);
+  });
 });

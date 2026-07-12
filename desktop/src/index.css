@@ -335,6 +335,13 @@ body {
     color 0.15s ease,
     box-shadow 0.15s ease;
 }
+/* Default-tint (B, 2026-07-12): accent-bearing nav-group icons show a toned
+   group color at rest (~72% --ac blended toward the neutral sidebar grey) so the
+   four groups read as colored without shouting; hover/active升到 full --ac below.
+   Footer buttons (no .nav-btn--tinted) keep the neutral grey resting color. */
+.nav-btn--tinted {
+  color: color-mix(in srgb, var(--ac) 72%, var(--color-sidebar-icon));
+}
 .nav-btn:hover {
   background-color: color-mix(in srgb, var(--ac) 12%, transparent);
   color: var(--ac);
