@@ -254,7 +254,7 @@ def _should_include(
     return True
 
 
-def _get_git_status(workspace_root: Path) -> dict[str, str]:
+def _get_git_status(workspace_root: Path, pathspec: str | None = None) -> dict[str, str]:
     """Run ``git status --porcelain -z`` and return a dict of {relative_path: status}.
 
     Uses ``-z`` for NUL-separated output to avoid quoting of paths with spaces
@@ -262,6 +262,13 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
 
     Status values match the GitStatus type on the frontend:
     - 'added', 'modified', 'deleted', 'renamed', 'untracked', 'conflicting'
+
+    *pathspec* (optional): when provided, git scopes the scan to that
+    workspace-relative path (``git status ... -- <pathspec>``) instead of the
+    whole repo. Returned keys stay workspace-relative regardless — git always
+    reports paths relative to the repo root, not to the pathspec — so
+    ``_build_tree`` prefix-matching is unaffected. Used by the lazy-expand
+    endpoint to avoid an O(whole-repo) scan on every directory expand.
 
     Returns an empty dict if the workspace is not a git repo or git fails.
     """
@@ -275,8 +282,13 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
         # expensive on large repos (100ms+).  -unormal shows untracked
         # *directories* as a single entry, which is sufficient for the
         # explorer's change indicators and costs ~5ms instead.
+        cmd = ["git", "status", "--porcelain", "-z", "-unormal"]
+        if pathspec:
+            # Everything after ``--`` is a pathspec, not a flag — safe even if
+            # the path begins with a dash. Scopes the scan to this subtree.
+            cmd += ["--", pathspec]
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-z", "-unormal"],
+            cmd,
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
@@ -657,7 +669,12 @@ async def expand_tree_directory(
     if not target.is_dir():
         raise HTTPException(status_code=404, detail=f"Directory not found: {path}")
 
-    git_status = await asyncio.to_thread(_get_git_status, workspace_root)
+    # Scope the git-status scan to the target subtree only. The full-repo scan
+    # (~230ms on a large repo) dominated per-expand latency, yet the expand
+    # response only contains this subtree — ancestor status propagation (the
+    # reason the full-tree endpoint scans everything) does not apply here.
+    # Keys stay workspace-relative, so _build_tree prefix-matching is unaffected.
+    git_status = await asyncio.to_thread(_get_git_status, workspace_root, path)
 
     # Local subrepo cache for this request (mirrors the closure in _compute_etag_and_tree_sync)
     subrepo_cache: dict[str, dict[str, str]] = {}
@@ -807,7 +824,7 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
     workspace IF reached through a trusted symlink (e.g.,
     ``Projects/SwarmAI → ~/Desktop/SwarmAI-Workspace/swarmai``).  This is a
     deliberate security surface expansion required for the project-linking
-    feature (``s_ddd-manager``).  The trust boundary is:
+    feature (``s_project-manager``).  The trust boundary is:
 
     1. The symlink itself must live inside the workspace (not injected from outside).
     2. The final resolved target must be a descendant of the symlink's resolved

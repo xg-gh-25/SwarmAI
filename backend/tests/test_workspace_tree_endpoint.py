@@ -22,8 +22,62 @@ from uuid import uuid4
 import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
 
-from routers.workspace_api import _build_tree, _should_include
+from routers.workspace_api import _build_tree, _get_git_status, _should_include
 from tests.helpers import PROPERTY_SETTINGS
+
+
+# ---------------------------------------------------------------------------
+# Fix ②: _get_git_status pathspec scoping (run_500b576e)
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo_with_dirty_subtree(root: Path) -> None:
+    """Create a git repo under *root* with a committed baseline and one dirty
+    file inside a subdirectory, plus a dirty file OUTSIDE that subdirectory."""
+    import subprocess
+
+    def run(*args: str) -> None:
+        subprocess.run(
+            list(args), cwd=str(root), check=True,
+            capture_output=True, text=True,
+        )
+
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@t.t")
+    run("git", "config", "user.name", "t")
+    (root / "sub").mkdir()
+    (root / "other").mkdir()
+    (root / "sub" / "committed.txt").write_text("v1\n")
+    (root / "other" / "committed.txt").write_text("v1\n")
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "baseline")
+    # Now dirty one file in each dir
+    (root / "sub" / "committed.txt").write_text("v2-modified\n")
+    (root / "other" / "committed.txt").write_text("v2-modified\n")
+    (root / "sub" / "untracked.txt").write_text("new\n")
+
+
+def test_get_git_status_full_scan_sees_all_dirty(tmp_path: Path) -> None:
+    """Without a pathspec, _get_git_status reports dirty files across the whole
+    repo (baseline behavior — must be preserved)."""
+    _init_git_repo_with_dirty_subtree(tmp_path)
+    status = _get_git_status(tmp_path)
+    assert status.get("sub/committed.txt") == "modified"
+    assert status.get("other/committed.txt") == "modified"
+    # keys are workspace-relative, forward-slashed
+    assert all("\\" not in k for k in status)
+
+
+def test_get_git_status_pathspec_scopes_to_subtree(tmp_path: Path) -> None:
+    """With a pathspec, _get_git_status only reports files under that path, and
+    keys remain workspace-relative (so _build_tree prefix-matching still works)."""
+    _init_git_repo_with_dirty_subtree(tmp_path)
+    status = _get_git_status(tmp_path, pathspec="sub")
+    # The subtree's dirty + untracked files are present, workspace-relative keys
+    assert status.get("sub/committed.txt") == "modified"
+    assert status.get("sub/untracked.txt") == "untracked"
+    # The OUT-OF-SCOPE dirty file is NOT reported (this is the scoping win)
+    assert "other/committed.txt" not in status
 
 
 
