@@ -38,6 +38,28 @@ import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
 import CommentPopover from './CommentPopover';
 
+/**
+ * Character-count ceiling above which O(n) main-thread text work is skipped to
+ * avoid freezing the UI. `hljs.highlight`, `computeLineDiff`, and
+ * `findAllMatches` all run synchronously over the full content on the render
+ * path; on a large file (e.g. a 379K-char doc) each blocks the main thread for
+ * hundreds of ms — on every keystroke while editing. Above this threshold the
+ * editor degrades gracefully (plaintext, diff/search disabled) rather than hang.
+ *
+ * 100K chars: a typical source file is well under (fast to highlight); the files
+ * that froze the UII in practice were far above. `content.length` (not line
+ * count) is the right metric — hljs/diff/search cost scales with total
+ * characters, and a single-line minified/base64 blob freezes just as hard as a
+ * many-line file of the same size.
+ */
+export const HIGHLIGHT_MAX_CHARS = 100_000;
+
+/** Whether synchronous main-thread text processing (highlight/diff/search) is
+ *  safe for content of this length. Pure — exported for testing. */
+export function shouldProcessSync(contentLength: number): boolean {
+  return contentLength <= HIGHLIGHT_MAX_CHARS;
+}
+
 export interface FileEditorCoreProps {
   filePath: string;
   fileName: string;
@@ -669,9 +691,11 @@ export default function FileEditorCore({
     [review],
   );
 
-  // Compute diff lines — declared early because callbacks and memos below depend on it
+  // Compute diff lines — declared early because callbacks and memos below depend on it.
+  // Skip on large files: computeLineDiff is an O(n) LCS that blocks the main thread.
   const diffLines = useMemo(() => {
     if (!showDiff) return [];
+    if (!shouldProcessSync(content.length) || !shouldProcessSync(originalContent.length)) return [];
     return computeLineDiff(originalContent, content);
   }, [showDiff, originalContent, content]);
 
@@ -855,6 +879,13 @@ export default function FileEditorCore({
   // Syntax highlighting
   useEffect(() => {
     if (highlightRef.current && !showDiff) {
+      // Large files: skip synchronous hljs.highlight (O(n), blocks the main
+      // thread on every content change) and render plaintext instead.
+      if (!shouldProcessSync(content.length)) {
+        highlightRef.current.textContent = content + '\n';
+        return;
+      }
+
       const escaped = content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -949,6 +980,8 @@ export default function FileEditorCore({
 
   const searchMatches = useMemo(() => {
     if (!searchQuery) return [];
+    // Skip on large files: findAllMatches is an O(n) per-line scan on every keystroke.
+    if (!shouldProcessSync(content.length)) return [];
     return findAllMatches(content, searchQuery);
   }, [content, searchQuery]);
 
