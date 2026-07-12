@@ -1,34 +1,45 @@
-# s_ddd-pipeline — Full Stage Protocol (file-state, portable)
+# s_ddd-pipeline — Full Stage Protocol (engine-driven, portable)
 
-You ARE the pipeline. Execute each stage inline. State is plain files under the DDD's
-own `.artifacts/` — no `data.db`, no `artifact_cli.py`. Runs on ANY runtime (Kiro /
-Claude Code / AIM package / SwarmAI) because it depends only on the filesystem + the
-DDD's own docs.
+You drive the pipeline through the **bundled engine** at `engine/artifact_cli.py` — a
+copied-and-decoupled build of SwarmAI's real engine, with NO `data.db` and NO dependency
+on a SwarmAI `core` package (proven: all 12 engine modules import with `core/` absent).
+It runs on ANY runtime (Kiro / Claude Code / AIM package / SwarmAI) — filesystem only.
 
-## Locate the DDD
+## Locate the DDD + point the engine at it
 
 The DDD is the directory containing `AGENTS.md` + `PRODUCT/TECH/IMPROVEMENT/PROJECT.md`.
-All state is relative to it: `<ddd>/.artifacts/runs/<run_id>/`.
+The engine resolves its workspace from `$SWARM_WORKSPACE` (fallback: cwd). Set it to the
+workspace root that holds `Projects/<ddd>/`. All state lives at
+`<workspace>/Projects/<ddd>/.artifacts/runs/<run_id>/`.
+
+```bash
+ENG=<this-skill>/engine
+export SWARM_WORKSPACE=<workspace-root>       # holds Projects/<ddd>/
+py() { PYTHONPATH="$ENG" python "$ENG/artifact_cli.py" "$@"; }
+```
 
 ## INIT
 
-1. Parse requirement + pick profile (full / bugfix / trivial / goal / docs / research).
-2. Create `<ddd>/.artifacts/runs/<run_id>/run.json`:
-   ```json
-   {"run_id":"run_<slug>","requirement":"...","profile":"full","stages":[]}
-   ```
+```bash
+py run-create --project <ddd> --requirement "..." --profile full   # → run_<id>
+```
+Profiles: full / bugfix / trivial / goal / docs / research (immutable after EVALUATE).
 
 ## STAGE LOOP
 
 For each stage in the profile, in order:
 1. **Read** this DDD's stage-relevant docs (EVALUATE→all 4; BUILD→TECH+PROJECT; …).
-2. **Execute** the stage behavior inline.
-3. **Write** the stage artifact as a sibling file (`evaluate.json`, `design_doc.json`,
-   `changeset.json`, `review.json`, `test_report.json`, `delivery.json`).
-4. **Append** `{"stage":"build","status":"completed","artifact":"changeset.json"}` to
-   `run.json.stages`.
-5. **Resume** = read `run.json`, skip `completed` stages, continue from the first
-   non-completed one.
+2. **Execute** the stage behavior inline (you are the reasoning; the engine is the state
+   machine + gates).
+3. **Publish** the stage artifact + mark the stage complete via the engine:
+   ```bash
+   py run-update --project <ddd> --run-id <id> \
+     --stage-json '{"stage":"build","status":"completed","stage_doc_consumed":true}'
+   ```
+   The engine enforces mechanical gates (e.g. `stage_doc_consumed:true` is REQUIRED — no
+   bypass) and tracks token budget.
+4. **Resume** = `py run-get --project <ddd> --run-id <id>` → skip `completed` stages,
+   continue from the first non-completed one. `py run-status` = cross-run dashboard.
 
 | Stage | Reads | Writes |
 |-------|-------|--------|
@@ -55,7 +66,15 @@ Commit is FORBIDDEN while any HIGH/CRITICAL `findings_remaining > 0`. No sub-age
 primitive (Quick/ChatGPT) → surface an explicit adversarial-review step to the human.
 Never silently skip.
 
-**养成 ladder (REFLECT).** Write new pitfalls to ② `IMPROVEMENT.md`. A recurring pitfall
+**养成 ladder (REFLECT).** Write the reflect lessons into the reflect stage record, then
+let the engine's cultivation trio route them into THIS DDD's ② docs:
+```bash
+py run-update --project <ddd> --run-id <id> \
+  --stage-json '{"stage":"reflect","status":"completed","stage_doc_consumed":true,"lessons":["..."]}'
+py run-cultivate --project <ddd> --run-id <id>    # reads reflect lessons → quality-gate → route → write
+```
+`run-cultivate` runs the REAL cultivation engine (quality gate + dedup + section routing +
+auto-heal of a missing whitelisted section) — not a naive append. A recurring pitfall
 climbs: prose → rule → (3× recurrence) an executable ③ gate under `gates/` with a
 knockout test (exit-2 = BLOCK).
 
@@ -64,8 +83,22 @@ knockout test (exit-2 = BLOCK).
 Stop at PUSH-READY. Push / CR / deploy are user-initiated post-pipeline actions. Never
 auto-push.
 
-## Why file-state
+## Why engine-in-the-skill (not a hand-written shell)
 
-A single DDD needs no cross-project SQLite index. `run.json` + sibling artifacts ARE the
-state — that is what lets the pipeline ride to Kiro / Claude Code / an AIM package
-unchanged. The machine room stayed behind in SwarmAI; the brain + method traveled.
+The engine is COPIED, not re-authored — so the moat (real adversarial gate wiring, the
+cultivation trio's quality-gate/dedup/routing, the mechanical stage gates) travels intact.
+What was decoupled: the `data.db` Radar side-effect (dropped) and the hardcoded SwarmAI
+workspace (now `$SWARM_WORKSPACE`). `run.json` + sibling artifacts ARE the state, so a
+single DDD needs no cross-project SQLite index. The machine room was rebuilt inside the
+skill; the brain + method + engine all travel to Kiro / Claude Code / an AIM package.
+
+## Decouple invariants (do not regress)
+
+- `grep -rE 'sqlite3|data\.db|\.execute\(' engine/*.py` → only docstring mentions (0 live).
+- `grep -rEn '^\s*(from|import) (core|config|utils|jobs)\b' engine/*.py` → 0 top-level
+  (off-path SwarmAI imports — ddd_health / ddd_entry_lifecycle / adversarial_meta — are
+  try/except fail-soft ONLY, inside a function, never at module top).
+- `grep -rn '\.swarm-ai' engine/*.py | grep -vE '^\S+:[0-9]+:\s*#|"""'` → 0 hardcoded
+  paths in live code (workspace resolves from `$SWARM_WORKSPACE` / cwd; docstring/comment
+  mentions are fine).
+- All 12 `engine/*.py` import with `core/` off `sys.path` (the portability proof — run it).

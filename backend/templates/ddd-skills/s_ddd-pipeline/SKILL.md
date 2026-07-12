@@ -1,33 +1,45 @@
 ---
 name: ddd-pipeline
-description: "DDD-native autonomous dev loop — judge→execute→reflect on a SINGLE DDD using file-based .artifacts/ state (no data.db, no artifact_cli). Retains the moat: Gate-2 adversarial-before-commit + the 养成 ladder. DDD-native rewrite of SwarmAI's s_autonomous-pipeline.\n  TRIGGER: \"ddd pipeline\", \"run the ddd loop\", \"build in this ddd\".\n  NOT FOR: SwarmAI's own multi-project pipeline (that's the native s_autonomous-pipeline)."
+description: "DDD-native autonomous dev loop — judge→execute→reflect on a SINGLE DDD via a bundled, decoupled engine (engine/artifact_cli.py, file-based .artifacts/ state, NO data.db, NO SwarmAI backend). Retains the moat: Gate-2 adversarial-before-commit + the 养成 ladder. DDD-native decouple of SwarmAI's s_autonomous-pipeline engine.\n  TRIGGER: \"ddd pipeline\", \"run the ddd loop\", \"build in this ddd\".\n  NOT FOR: SwarmAI's own multi-project pipeline (that's the native s_autonomous-pipeline)."
 tier: lazy
 ---
 # DDD-Native Pipeline (s_ddd-pipeline)
 
 The **judge→execute→reflect** dev loop a DDD carries so it gets smarter with use —
-on any runtime, without SwarmAI's backend. Same quality moat, zero SwarmAI-infra coupling.
+on any runtime, without SwarmAI's backend. Same quality moat; no SwarmAI package is
+required to import or run the engine (the few off-path SwarmAI imports are try/except
+fail-soft and only touch advisory DDD-maintenance subcommands).
 
-> **DDD-native rewrite of SwarmAI's `s_autonomous-pipeline`.** The original stores run
-> state in `data.db` and drives every stage through `artifact_cli.py`. A DDD shipped to
-> Kiro / Claude Code / an AIM package has neither. This keeps the discipline and drops
-> the machine room — run state is **plain files** under the DDD's own `.artifacts/`.
+> **DDD-native decouple of SwarmAI's `s_autonomous-pipeline` engine.** The original's
+> `artifact_cli.py` binds to `data.db` (a Radar-todo side-effect) and `core.*` modules.
+> A DDD shipped to Kiro / Claude Code / an AIM package has neither. This bundles the REAL
+> engine — `engine/artifact_cli.py` + validator + registry + the cultivation trio, all
+> copied and decoupled — so run state is **plain files** under the DDD's own `.artifacts/`
+> and the engine imports with SwarmAI's `core/` completely absent (proven: 12/12 modules).
 
-## The decoupling
+## The decoupling (real engine, not a hand-written shell)
+
+`engine/` holds the copied-and-decoupled machine (~10.8K lines): `artifact_cli.py`,
+`pipeline_validator.py`, `artifact_registry.py`, `pipeline_profiles.py`, `file_lock.py`,
+the 4 pipeline scripts, and the **cultivation trio** (`ddd_cultivation` + `persist_routing`
++ `ddd_auto_approval`) that powers a real REFLECT→DDD write (not a naive append).
 
 | Concern | s_autonomous-pipeline (SwarmAI) | s_ddd-pipeline (portable) |
 |---------|----------------------------------|---------------------------|
-| Run state | `data.db` + `artifact_cli.py` | **plain JSON** in `<ddd>/.artifacts/runs/<run_id>/run.json` |
-| Multi-project index | SQLite `data.db` | none — **one DDD, one `.artifacts/`** |
+| Engine | `backend/scripts/artifact_cli.py` + `core.*` | **`engine/artifact_cli.py`** (co-located, decoupled) |
+| Run state | `data.db` Radar row + `run.json` | **`run.json`** only — sqlite side-effect dropped |
+| Workspace | `~/.swarm-ai/SwarmWS` (hardcoded) | `$SWARM_WORKSPACE` or cwd — portable |
 | DDD docs read | `Projects/<P>/*.md` | THIS DDD's own 4 docs (co-located) |
 | The moat | Gate-2 adversarial + 养成 ladder | **identical — retained, non-negotiable** |
 
-## Stages (same shape, file-backed)
+## Stages (same shape, engine-driven)
 
 `EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT`
 
-Each stage writes a sibling JSON artifact; `run.json` tracks stage status. A fresh agent
-on any runtime resumes by reading `run.json` — no CLI, no DB. See INSTRUCTIONS.md.
+Drive via `engine/artifact_cli.py` (`run-create`, `run-update`, `run-cultivate`, …) with
+`SWARM_WORKSPACE=<ddd-workspace>`. The engine enforces the same mechanical gates
+(stage_doc_consumed, push-ready) standalone. A fresh agent resumes by reading `run.json`.
+See INSTRUCTIONS.md.
 
 ## THE MOAT (non-negotiable — what beats an empty workflow)
 
