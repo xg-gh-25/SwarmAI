@@ -457,9 +457,46 @@ def _load_ddd_native_skill_templates() -> dict[str, dict[str, str]]:
             continue
         files: dict[str, str] = {}
         for f in sorted(skill_dir.rglob("*")):
-            if f.is_file():
-                files[str(f.relative_to(skill_dir))] = f.read_text(encoding="utf-8")
+            if not f.is_file():
+                continue
+            # Skip build cruft that must never ship in a skill template. The
+            # engine/ template dir has an __init__.py (importable), so running
+            # it in place generates __pycache__/*.pyc — reading a .pyc as UTF-8
+            # raised UnicodeDecodeError (0xcb = bytecode magic) and crashed
+            # module import, breaking the whole backend. A template ships text
+            # only; treat a non-text file as cruft to skip, never as fatal.
+            if "__pycache__" in f.parts or f.suffix in {".pyc", ".pyo"}:
+                continue
+            rel = str(f.relative_to(skill_dir))
+            try:
+                files[rel] = f.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # Binary cruft (a non-.pyc binary that slipped past the suffix
+                # skip) — expected to skip, not fatal.
+                logger.warning(
+                    "Skipping non-text file in DDD-native skill template %s: %s",
+                    skill, rel,
+                )
+            except OSError as e:
+                # A LEGIT text file we wanted failed to read (permission /
+                # transient IO) — the skill will be incomplete. Loud (ERROR),
+                # distinct from expected binary skips, so it doesn't hide as
+                # "non-text cruft". (Gate-2 LOW.)
+                logger.error(
+                    "Failed to read DDD-native skill template %s/%s: %s — skill will be incomplete",
+                    skill, rel, e,
+                )
         if files:
+            # Completeness guard: a skill without its SKILL.md manifest is a
+            # corrupt template — it would ship a headless skill dir whose failure
+            # surfaces far downstream (parse_skill_md "missing SKILL.md"). Make
+            # the specific corruption loud at load time. Still fail-soft (we ship
+            # what survived), just no longer silent. (Gate-2 LOW.)
+            if "SKILL.md" not in files:
+                logger.error(
+                    "DDD-native skill %s loaded WITHOUT SKILL.md (%d other files) — template corrupt",
+                    skill, len(files),
+                )
             result[skill] = files
     return result
 
