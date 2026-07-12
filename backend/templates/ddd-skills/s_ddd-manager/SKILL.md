@@ -1,19 +1,18 @@
 ---
 name: ddd-manager
-description: "Provision and manage DDD (Domain-Driven Design) projects that conform to the canonical six-section structure. The self-propagation seed: a DDD carries this so it can create MORE spec-compliant DDDs on any runtime, without SwarmAI. DDD-native rewrite of SwarmAI's s_project-manager (file-based, no backend).\n  TRIGGER: \"create ddd\", \"new ddd project\", \"add a domain\", \"provision ddd\".\n  NOT FOR: SwarmAI's own project CRUD (that's the native s_project-manager)."
+description: "Provision and manage DDD projects that conform to the canonical six-section structure — the self-propagation seed. Full lifecycle: CREATE (with context-extraction from a codebase, NOT blank templates), BIND a repo (⑤ delivery contract), LIST / EDIT / RENAME. Pure filesystem, no SwarmAI backend — a DDD carries this so it can create MORE spec-compliant DDDs on Kiro / Claude Code.\n  TRIGGER: \"create ddd\", \"new ddd project\", \"add a domain\", \"bind repo to ddd\", \"provision ddd\".\n  NOT FOR: SwarmAI's own project CRUD (native s_project-manager); code (that's s_ddd-pipeline)."
 tier: lazy
 ---
 # DDD Manager (s_ddd-manager) — the self-propagation seed
 
-Provision a NEW spec-compliant DDD (the canonical six-section structure), and manage
-existing ones. This is the **self-propagation seed**: because every DDD carries
-`s_ddd-manager`, a DDD can create more DDDs — the ①–⑥ spec spreads to Kiro / Claude
-Code / any runtime **without needing SwarmAI's backend**.
+Provision a NEW spec-compliant DDD (the canonical six-section structure), and manage the
+lifecycle of existing ones. Because every DDD carries `s_ddd-manager`, a DDD can create
+more DDDs — the ①–⑥ spec spreads to Kiro / Claude Code / any runtime **without SwarmAI's
+backend**.
 
-> **DDD-native rewrite of SwarmAI's `s_project-manager`.** Learned from the original,
-> re-designed to be portable: pure filesystem, no `data.db`, no `artifact_cli`, no
-> SwarmAI services. Ships INSIDE every DDD (copied from the official template at
-> provision time) so it travels with the package.
+> **DDD-native decouple of SwarmAI's `s_project-manager`.** Same CREATE-with-extraction +
+> BIND lifecycle discipline, re-homed to pure filesystem: no `data.db`, no `artifact_cli`,
+> no SwarmAI services. Ships INSIDE every DDD (copied from the official template at CREATE).
 
 ## The canonical six-section structure this provisions
 
@@ -26,37 +25,119 @@ Code / any runtime **without needing SwarmAI's backend**.
 ├── bindings.yaml                                              # ⑤ Delivery contract (on BIND)
 └── REFRESHER.md                                              # ⑥ Code-intel refresher
 ```
+The 5 ④ skills: `s_ddd-manager` `s_ddd-persist` `s_ddd-pipeline` `s_ddd-pollinate`
+`s_ai-ready-repo` — copied in at CREATE. Do NOT scaffold `agents/`/`agent-sops/` (AIM-export
+form, generated at export, not native).
 
-## Create a new DDD
+## Lifecycle: CREATE → BIND → PULL → DEVELOP → SYNC-BACK
 
-1. Get the name (PascalCase preferred) + optional bound-repo path.
-2. Materialize the skeleton (only-if-absent, idempotent):
-   - `.project.json` with `ddd_spec_version` stamped
-   - ① manifests: `aim.json` (declares the 5 native skills), `AGENTS.md` (the ONE
-     unified README documenting all six sections), `.crux_template.md`
-   - ② the 4 DDD docs + `Knowledge/`
-   - ③ `gates/` + `gates/context/includes/` (empty, `.gitkeep`)
-   - ④ `skills/` with the 5 DDD-native skills copied in (`s_ddd-manager`,
-     `s_ddd-persist`, `s_ddd-pipeline`, `s_ddd-pollinate`, `s_ai-ready-repo`)
-   - ⑥ `REFRESHER.md` marker
-3. Do NOT scaffold `agents/` or `agent-sops/` — those are AIM-export-form, generated
-   at export, not part of the native skeleton.
-4. `bindings.yaml` (⑤) is added later by BIND, when a repo is attached.
+CREATE is below. BIND+ apply only to a repo-bound DDD (a no-repo DDD stops at CREATE — its
+4 docs ARE the deliverable).
 
-## Manage / backfill
+## CREATE a new DDD
 
-- **List** DDDs, **rename**, **edit** the 4 docs (or via `s_ddd-persist`).
-- **Backfill** a pre-spec project idempotently: write `.project.json` (stable id, never
-  a fresh uuid), prune legacy over-build (content-gated — never delete human content),
-  fill the skeleton only-if-absent.
+### Step 1 — name + optional codebase path
+PascalCase preferred; if not PascalCase, note the convention but accept the user's choice.
+Path (optional) is an existing codebase to extract context FROM (recorded in TECH.md — never
+a symlink).
+
+### Step 2 — validate
+`test -e "Projects/<Name>"` → refuse duplicates; `<Name>` == a reserved default is refused.
+
+### Step 3 — GATHER CONTEXT before writing (CRITICAL: never write blank templates)
+
+Populate the docs from real sources, in priority order:
+
+**3a. This session's conversation (highest priority):** architecture/stack/audience decisions
+→ the docs; non-goals → PRODUCT; past failures → IMPROVEMENT; work items → PROJECT.
+
+**3b. The codebase (if a path was given)** — read the first ~50-80 lines of each, skip if absent:
+```bash
+cat {path}/package.json {path}/pyproject.toml {path}/Cargo.toml {path}/go.mod 2>/dev/null   # → Stack
+cat {path}/README.md 2>/dev/null                                                            # → Vision, description
+ls {path}/docs/*.md 2>/dev/null; cat {path}/docs/{design,architecture}.md 2>/dev/null       # → Architecture
+cat {path}/CLAUDE.md {path}/AGENTS.md {path}/.cursorrules 2>/dev/null                        # → Conventions (merge)
+cat {path}/Makefile {path}/justfile 2>/dev/null; ls {path}/.github/workflows/*.yml 2>/dev/null  # → Dev Commands
+cat {path}/LICENSE 2>/dev/null | head -3                                                     # → license note
+test -d {path}/.git && git -C {path} log --oneline -10                                       # → Current Focus
+```
+
+**3c. Parse → route to the right doc:**
+
+| Source | Extract → | Target |
+|--------|-----------|--------|
+| README first paragraph / features | description, capabilities | PRODUCT § Vision / Strategic Priorities |
+| package.json deps+scripts / pyproject | frameworks, dev/test/build cmds | TECH § Stack / Dev Commands |
+| docs/design.md, docs/architecture.md | system overview | TECH § Architecture |
+| CLAUDE.md / AGENTS.md / .cursorrules | conventions (merge, don't overwrite) | TECH § Conventions |
+| .github/workflows, Makefile | CI + build commands | TECH § Dev Commands |
+| LICENSE | license type | PRODUCT (note) |
+| git log -10 | recent activity | PROJECT § Current Focus |
+| session conversation | decisions, goals, blockers | all 4 docs |
+
+### Step 4 — write POPULATED docs (extracted content where found, placeholder only where not)
+
+The 4 ② doc skeletons (fill extracted fields, keep the `_italic placeholder_` for unknowns):
+
+- **PRODUCT.md** — `## Vision` · `## Strategic Priorities` · `## Success Criteria` · `## Non-Goals`
+- **TECH.md** — `## Architecture` · `## Stack` · `## Codebase Location` · `## Dev Commands` · `## Conventions` · `## Runtime Traps` · `## Key Files`
+- **IMPROVEMENT.md** — `## What Worked` · `## What Failed` · `## What to Watch For` · `## Known Issues`
+- **PROJECT.md** — `## Current Focus` · `## Open Items` · `## Recent Decisions` · `## Blocked By`
+
+Then the skeleton: ① `.project.json` (stamp `ddd_spec_version`) + `aim.json` (declares the 5
+native skills) + `AGENTS.md` (the ONE unified README covering all six sections); ③ `gates/` +
+`gates/context/includes/` (`.gitkeep`); ④ `skills/` with the 5 native skills; ⑥ `REFRESHER.md`.
+
+## BIND a repo (⑤ DELIVERY CONTRACT) — turns 4 docs into a DDD that governs a real repo
+
+BIND is NOT a symlink — it's a clone + code-intel index + a **governance-as-DATA delivery
+contract** declared in `Projects/<name>/bindings.yaml`. A DDD may bind many repos.
+
+**Three shapes (the lifecycle adapts — NOT internal-only):**
+
+| Shape | bindings.yaml | DEVELOP path | SYNC-BACK |
+|---|---|---|---|
+| **External** (GitHub) | `kind: external` | branch + PR + `s_code-review` (no CRUX/Brazil) | opt-in |
+| **Internal** (code.amazon.com/Brazil) | `kind: internal` | `s_internal-brazil` → `s_internal-crux-cr` → `s_internal-crux-review` | opt-in |
+| **No-repo** (pure DDD) | none | docs ARE the deliverable — edit directly | n/a |
+
+`bindings.yaml` (⑤, `DDD_SPEC_VERSION 1.0`) — `bindings` is an ARRAY; each entry:
+```yaml
+bindings:
+  - repo: my-repo
+    kind: external                 # external | internal
+    clone: "https://github.com/org/my-repo.git"   # git URL (or a brazil command for internal)
+    worktree: null                 # null → clone OUTSIDE the DDD tree (never pollute DDD git)
+    delivery_contract:             # governance-as-DATA — NEVER hoist into a global rule file
+      remote_kind: github-pr       # github-pr | code-amazon-cr
+      build_system: none           # none | brazil  (orthogonal to remote_kind)
+      branch: main
+      review_path: s_code-review   # s_code-review (github) | s_internal-crux-review (internal)
+      refresh_policy: on-develop   # when the ⑥ refresher regenerates code-intel
+```
+- **Delivery policy lives in the binding, not a global rule file** — each repo carries its own.
+- **PULL + index:** clone the repo into a worktree OUTSIDE the DDD tree, then run the ⑥
+  refresher (`s_ai-ready-repo`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
+  binding member — it's a DERIVED projection (§3.6), regenerated locally, gitignored.
+- **DEVELOP:** read `remote_kind` + `build_system` and route — never assume CRUX/Brazil. The
+  agent never `git push`es an internal CR remote (CRUX auto-merge owns it).
+
+## MANAGE — List / Edit / Rename
+
+- **List** — enumerate `Projects/*/` that have `.project.json`; show name + spec version + bound repos.
+- **Edit** — the 4 ② docs are edited via `s_ddd-persist` (routing + locked write), never a blind overwrite.
+- **Rename** — `git mv Projects/<old> Projects/<new>`, update `.project.json.name` + `aim.json`,
+  grep for the old name in the DDD's own docs. Never rename the reserved default.
+- **Backfill** a pre-spec project idempotently: write `.project.json` (stable id, never a fresh
+  uuid), fill the skeleton only-if-absent, content-gate any prune (never delete human content).
 
 ## Spec versioning (anti-drift)
 
-`s_ddd-manager` declares which `DDD_SPEC_VERSION` it implements. Because a DDD creates
-more DDDs, the structure is a VERSIONED spec — declaring the version is what keeps
-propagated DDDs from drifting. Bump it when the six-section structure changes.
+`s_ddd-manager` declares which `DDD_SPEC_VERSION` it implements. Because a DDD creates more
+DDDs, the structure is a VERSIONED spec — declaring the version keeps propagated DDDs from
+drifting. Bump it when the six-section structure changes.
 
 ## Portability
 
-No SwarmAI backend. State is the filesystem. That is what lets a DDD, once packaged via
-`aim`, create and manage sibling DDDs directly inside Kiro / Claude Code.
+No SwarmAI backend. State is the filesystem. That is what lets a DDD, packaged via `aim`,
+create + manage + bind sibling DDDs directly inside Kiro / Claude Code.
