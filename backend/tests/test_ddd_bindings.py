@@ -38,7 +38,6 @@ VALID_DOC = {
             "kind": "external",
             "clone": "https://github.com/example/adlc-workflows.git",
             "worktree": None,
-            "code_intel": None,
             "delivery_contract": {
                 "remote_kind": "github-pr",
                 "branch": "main",
@@ -51,7 +50,6 @@ VALID_DOC = {
             "kind": "internal",
             "clone": "brazil ws create --name GCRAIDLCPreset",
             "worktree": None,
-            "code_intel": None,
             "delivery_contract": {
                 "remote_kind": "code-amazon-cr",
                 "build_system": "brazil",
@@ -272,3 +270,117 @@ def test_aidlc_bindings_yaml_is_valid():
         pytest.skip("AIDLC/bindings.yaml not yet written")
     doc = load_bindings(p)
     assert len(doc.bindings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Run 2 — Delivery Contract expansion (deploy_pipeline + refresh_policy) and
+# code_intel field removal (DDD-agent-brain spec §3.6 ⑤ + derived-projection rule)
+# ---------------------------------------------------------------------------
+
+def test_delivery_contract_new_fields_default_none():
+    """AC1: DeliveryContract gains deploy_pipeline + refresh_policy — both Optional,
+    default None. A minimal contract (no new fields) must still construct and leave
+    both at None (backward-compat: a v1 bindings.yaml omits them)."""
+    dc = DeliveryContract(
+        remote_kind="github-pr", branch="main",
+        review_path="s_internal-crux-review", auto_send="on-clean-review",
+    )
+    assert dc.deploy_pipeline is None, "deploy_pipeline must default None when omitted"
+    assert dc.refresh_policy is None, "refresh_policy must default None when omitted"
+    # version_set is KEPT (frozen §2c schema member + ⑤ field) — asserting its
+    # continued existence guards against an accidental symmetric removal.
+    assert dc.version_set is None
+
+
+def test_delivery_contract_new_fields_roundtrip(tmp_path: Path):
+    """AC1: the two new ⑤ pointer fields load from yaml and are readable as data."""
+    import yaml
+
+    doc = {
+        "bindings": [{
+            "repo": "x", "kind": "internal", "clone": "brazil ws create",
+            "delivery_contract": {
+                "remote_kind": "code-amazon-cr", "build_system": "brazil",
+                "branch": "mainline", "version_set": "X/development",
+                "deploy_pipeline": "pipelines.amazon.com/pipelines/GCRAIDLCPreset",
+                "refresh_policy": "on-develop",
+                "review_path": "s_internal-crux-review", "auto_send": "on-clean-review",
+            },
+        }]
+    }
+    p = tmp_path / "b.yaml"
+    p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    loaded = load_bindings(p)
+    dc = loaded.bindings[0].delivery_contract
+    assert dc.deploy_pipeline == "pipelines.amazon.com/pipelines/GCRAIDLCPreset"
+    assert dc.refresh_policy == "on-develop"
+    assert dc.version_set == "X/development"  # unchanged, still carried
+
+
+def test_legacy_code_intel_field_is_ignored(tmp_path: Path):
+    """AC2: code_intel is REMOVED from the Binding schema (derived-projection rule
+    §3.6 — the projection is NOT a binding member). A legacy bindings.yaml that
+    still lists `code_intel: null` must STILL load (pydantic extra='ignore' default),
+    and the loaded Binding must NOT expose a code_intel attribute."""
+    import yaml
+
+    legacy = {
+        "bindings": [{
+            "repo": "adlc-workflows", "kind": "external",
+            "clone": "https://github.com/example/x.git",
+            "worktree": None,
+            "code_intel": None,   # ← legacy field, must be ignored, not rejected
+            "delivery_contract": {
+                "remote_kind": "github-pr", "branch": "main",
+                "review_path": "s_internal-crux-review", "auto_send": "on-clean-review",
+            },
+        }]
+    }
+    p = tmp_path / "legacy.yaml"
+    p.write_text(yaml.safe_dump(legacy), encoding="utf-8")
+    doc = load_bindings(p)  # must NOT raise
+    b = doc.bindings[0]
+    assert not hasattr(b, "code_intel"), (
+        "code_intel must be gone from the Binding model (derived-projection rule) — "
+        "a legacy yaml carrying it loads via extra-ignore, but the field is not a member"
+    )
+
+
+def test_bind_repo_db_path_derived_from_worktree_only(local_git_repo: Path, tmp_path: Path):
+    """AC2: with code_intel removed, bind_repo derives db_path solely from the worktree
+    (worktree.parent/<repo>.code_intel.db) — no per-binding override path exists."""
+    binding = Binding(
+        repo="srcrepo", kind="external", clone=str(local_git_repo),
+        delivery_contract=DeliveryContract(
+            remote_kind="github-pr", branch="main",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
+        ),
+    )
+    worktree_root = tmp_path / "bindings"
+    result = bind_repo(binding, worktree_root)
+    # db lands beside the worktree, named after the repo — the sole derivation.
+    assert Path(result.code_intel_db).name == "srcrepo.code_intel.db"
+    assert Path(result.code_intel_db).parent == Path(result.worktree).parent
+
+
+def test_bind_repo_rejects_traversal_in_repo_even_with_worktree_set(tmp_path: Path):
+    """Gate-2 LOW (run_f8ef133b): binding.repo is used to build db_path
+    (worktree.parent/<repo>.code_intel.db), so a '..' in repo must be rejected
+    UNCONDITIONALLY — not only when worktree is unset. Before the fix, an explicit
+    worktree bypassed the bare-name check and db_path could escape the bindings root."""
+    victim_parent = tmp_path / "outside"
+    victim_parent.mkdir()
+    binding = Binding(
+        repo="../outside/pwn",          # '..' — must be rejected before any db write
+        kind="external", clone="https://example.com/x.git",
+        worktree="legit-worktree",      # worktree SET — the branch that used to skip the check
+        delivery_contract=DeliveryContract(
+            remote_kind="github-pr", branch="main",
+            review_path="s_internal-crux-review", auto_send="on-clean-review",
+        ),
+    )
+    with pytest.raises(ValueError) as ei:
+        bind_repo(binding, tmp_path / "bindings")
+    assert "bare name" in str(ei.value)
+    # no escaped db file was created outside the root
+    assert not (victim_parent / "pwn.code_intel.db").exists()

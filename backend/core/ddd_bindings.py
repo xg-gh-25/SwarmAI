@@ -43,28 +43,50 @@ _DEFAULT_BINDINGS_ROOT = Path.home() / ".swarm-ai" / "bindings"
 # ── Schema (frozen canonical §2c) ──────────────────────────────────────────
 
 class DeliveryContract(BaseModel):
-    """How a bound repo takes delivery — governance-as-DATA (decision 7).
+    """How a bound repo takes delivery — governance-as-DATA (decision 7, generalized).
+
+    This is section ⑤ of the canonical DDD structure (DDD-agent-brain spec §3.6): the
+    product's FULL delivery 全貌 per bound repo, recorded as DATA/pointers. The DDD
+    GOVERNs the physical delivery (指+治) — it never CONTAINS the code nor EXECUTES the
+    pipeline (不含+不跑). Every field here is a pointer/policy the ④ capabilities act on
+    (``brazil-build``/``cr``/pipeline API); the deploy pipeline itself runs on Amazon infra.
 
     ``build_system`` is ORTHOGONAL to ``remote_kind``: a Brazil package is still
     reviewed via a code.amazon.com CR, so both are recorded independently.
+
+    ``deploy_pipeline`` + ``refresh_policy`` (§3.6 ⑤ field list) are pointer DATA:
+    ``deploy_pipeline`` names/refs the physical deploy pipeline (e.g. a pipelines.amazon.com
+    id) the DDD GOVERNs but never runs; ``refresh_policy`` names when the ⑥ code-intel
+    refresher regenerates the (derived, non-member) projection. Both Optional — a v1
+    bindings.yaml that omits them still loads (backward-compat).
     """
 
     remote_kind: Literal["github-pr", "code-amazon-cr"]
     build_system: Literal["brazil", "none"] = "none"
     branch: str
     version_set: Optional[str] = None
+    deploy_pipeline: Optional[str] = None  # ⑤ pointer: physical deploy pipeline ref/id (GOVERNed, never run here)
+    refresh_policy: Optional[str] = None   # ⑤ policy: when ⑥ regenerates the derived code-intel projection
     review_path: str
     auto_send: str
 
 
 class Binding(BaseModel):
-    """One DDD↔repo binding entry."""
+    """One DDD↔repo binding entry.
+
+    NOTE: there is deliberately NO ``code_intel`` field. Per the derived-projection
+    rule (DDD-agent-brain spec §3.6), ``code-intel.json`` is a machine-generated
+    projection of the code — NOT a DDD/binding member. It lives in a derived zone
+    (regenerated locally by the ⑥ refresher, gitignored, never PR-flows-back), so a
+    binding never records a projection path. ``bind_repo`` derives the local codeIntel
+    db path solely from the worktree. (A legacy bindings.yaml that still lists
+    ``code_intel:`` loads fine — pydantic's default ``extra='ignore'`` drops it.)
+    """
 
     repo: str
     kind: Literal["internal", "external"]
     clone: str  # a git-clonable URL/path OR a build-system command (e.g. "brazil ws create ...")
     worktree: Optional[str] = None
-    code_intel: Optional[str] = None
     delivery_contract: DeliveryContract
     # Optional REFLOW map (Run 5, sync-back): {repo-relative-doc -> SwarmWS-relative-target}.
     # Declares WHICH DDD docs flow back from the bound repo into SwarmWS, and where.
@@ -148,17 +170,24 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
 
     root = (Path(worktree_root) if worktree_root is not None else _DEFAULT_BINDINGS_ROOT).resolve()
 
+    # binding.repo must ALWAYS be a bare name (no path separators / '..') — it is used
+    # BOTH as the default worktree dir AND to build db_path below. Validating it only
+    # in the worktree-unset branch left db_path (worktree.parent/<repo>.code_intel.db)
+    # open to a '..' escape when binding.worktree was explicitly set (Gate-2 LOW,
+    # run_f8ef133b). Check unconditionally so the invariant "binding.repo is bare" holds
+    # on every path — this is what makes the db_path derivation safe (comment below).
+    if "/" in binding.repo or "\\" in binding.repo or binding.repo in ("", ".", ".."):
+        raise ValueError(
+            f"invalid binding.repo '{binding.repo}': must be a bare name "
+            "(no path separators) — it names a directory / db file under the bindings root"
+        )
+
     # Confine the worktree under root BEFORE any rmtree (Gate-2 HIGH: path-injection →
-    # arbitrary-dir deletion). An absolute binding.worktree or a repo containing '..' /
-    # a path separator is rejected — the destructive rmtree may only ever touch root/*.
+    # arbitrary-dir deletion). An absolute binding.worktree is rejected — the destructive
+    # rmtree may only ever touch root/*.
     if binding.worktree:
         candidate = (root / binding.worktree).resolve()
     else:
-        if "/" in binding.repo or "\\" in binding.repo or binding.repo in ("", ".", ".."):
-            raise ValueError(
-                f"invalid binding.repo '{binding.repo}': must be a bare name "
-                "(no path separators) — it names a directory under the bindings root"
-            )
         candidate = (root / binding.repo).resolve()
     try:
         candidate.relative_to(root)
@@ -169,19 +198,11 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
         )
     worktree = candidate
 
-    # db_path confinement — validated BEFORE any clone I/O (meta-review MED: a traversal
-    # in binding.code_intel should fail fast, not after a wasted network clone). Default
-    # lands beside the confined worktree; binding.repo was already validated bare above.
-    if binding.code_intel:
-        db_path = (root / binding.code_intel).resolve()
-        try:
-            db_path.relative_to(root)
-        except ValueError:
-            raise ValueError(
-                f"binding.code_intel '{db_path}' escapes the bindings root '{root}'"
-            )
-    else:
-        db_path = worktree.parent / f"{binding.repo}.code_intel.db"
+    # db_path is derived SOLELY from the confined worktree — the code-intel projection
+    # is a derived artifact, never a binding-recorded path (derived-projection rule,
+    # §3.6). It lands beside the confined worktree; binding.repo was already validated
+    # bare above, and worktree is already confined under root, so this stays inside root.
+    db_path = worktree.parent / f"{binding.repo}.code_intel.db"
 
     worktree.parent.mkdir(parents=True, exist_ok=True)  # Gate-1 blocker 4
 
