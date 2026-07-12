@@ -10,17 +10,25 @@
  *
  * For each path it: (1) resolves it to a canonical path
  * (/workspace/file/resolve — a no-op for an absolute path, needed for a
- * repo-relative one), then (2) fetches the committed (HEAD) content
- * (/workspace/file/committed). Empty committed → 'new' (untracked), non-empty →
- * 'upd' (modified). If resolve OR committed fails (a path git genuinely can't
- * locate), the file is simply omitted from the map → no badge (fail-soft, never
- * a crash, never a wrong badge).
+ * repo-relative one), then (2) fetches the committed (HEAD) info
+ * (/workspace/file/committed). The badge is driven by the `in_head`
+ * discriminator, NOT by content length:
+ *   - in_head === false → 'new'  (definitively untracked / not in HEAD)
+ *   - in_head === true  → 'upd'  (tracked — INCLUDING a tracked binary or a
+ *                                  genuinely-empty tracked file, both of which
+ *                                  return empty content but are still modified)
+ *   - in_head == null   → null   (undetermined: resolver-rejected / no git repo
+ *                                  / git error) → no badge
+ * Keying off content length was wrong: a tracked binary or an empty tracked
+ * file returns "" yet is 'upd', not 'new' (run_46e7b94c). If resolve OR
+ * committed fails, the file is omitted from the map → no badge (fail-soft,
+ * never a crash, never a wrong badge).
  *
  * Fetches are debounced (the written list mutates as tools run) and run in
  * parallel per batch.
  *
  * @exports useChangeStatus
- * @exports classifyCommitted — pure empty→new / non-empty→upd (unit-tested)
+ * @exports classifyCommitted — pure in_head→status (unit-tested)
  * @exports ChangeStatus
  */
 import { useState, useEffect } from 'react';
@@ -30,10 +38,12 @@ export type ChangeStatus = 'new' | 'upd';
 
 const DEBOUNCE_MS = 300;
 
-/** Pure classification: an empty committed (HEAD) content means the file is
- *  untracked → NEW; any committed content means it exists in HEAD → UPD. */
-export function classifyCommitted(committedContent: string): ChangeStatus {
-  return committedContent.length === 0 ? 'new' : 'upd';
+/** Pure classification from the committed endpoint's `in_head` discriminator:
+ *  not-in-HEAD → NEW (untracked); in-HEAD → UPD (modified, even if the tracked
+ *  content is empty/binary); undetermined (null) → no badge (return null). */
+export function classifyCommitted(inHead: boolean | null | undefined): ChangeStatus | null {
+  if (inHead === null || inHead === undefined) return null;
+  return inHead ? 'upd' : 'new';
 }
 
 /**
@@ -48,10 +58,11 @@ async function statusForPath(path: string): Promise<ChangeStatus | null> {
     });
     const resolved = r.data?.resolved_path;
     if (!resolved) return null;
-    const c = await api.get<{ content: string }>('/workspace/file/committed', {
-      params: { path: resolved },
-    });
-    return classifyCommitted(c.data?.content ?? '');
+    const c = await api.get<{ content: string; in_head?: boolean | null }>(
+      '/workspace/file/committed',
+      { params: { path: resolved } },
+    );
+    return classifyCommitted(c.data?.in_head);
   } catch {
     return null; // fail-soft: unresolvable/untraceable → no badge
   }

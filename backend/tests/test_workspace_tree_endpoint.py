@@ -560,3 +560,169 @@ class TestHiddenDirsFilter:
         assert _should_include("README.md", is_root=False, is_dir=False) is True
         assert _should_include(".DS_Store", is_root=False, is_dir=False) is True
         assert _should_include("notes.txt", is_root=False, is_dir=False) is True
+
+
+# ---------------------------------------------------------------------------
+# committed endpoint fail-open (run_46e7b94c)
+# GET /workspace/file/committed is a best-effort diff BASELINE. When it cannot
+# produce one (path outside home, traversal, or binary/non-UTF-8 content) the
+# correct answer is {"content": ""} (no baseline) — the SAME fail-open as the
+# untracked / git-error / OSError branches — NOT an HTTP 400 the frontend must
+# catch and log as a resource error. The shared _resolve_file_path guard is
+# NOT weakened: real read/write endpoints still 400 (AC3).
+# ---------------------------------------------------------------------------
+
+
+def _call_committed(path: str, workspace_root: Path):
+    """Drive the async committed endpoint synchronously with a tmp workspace."""
+    import asyncio
+    import routers.workspace_api as wa
+
+    async def _run():
+        orig = wa._get_workspace_path
+        wa._get_workspace_path = lambda: _async_return(str(workspace_root))
+        try:
+            return await wa.get_workspace_file_committed(path=path)
+        finally:
+            wa._get_workspace_path = orig
+
+    return asyncio.run(_run())
+
+
+async def _async_return(value):
+    return value
+
+
+def test_committed_binary_file_fails_open(tmp_path: Path, monkeypatch) -> None:
+    """A tracked binary/non-UTF-8 file returns {content:''}, not HTTP 400.
+
+    pytest's tmp_path lives under /private/var (outside home), so the shared
+    _resolve_file_path home-guard would reject it FIRST and we'd never reach the
+    UnicodeDecodeError branch. Bypass ONLY the guard (return the real target) so
+    this test genuinely exercises the git-show + decode binary branch.
+    """
+    import subprocess
+    import routers.workspace_api as wa
+
+    def run(*args: str) -> None:
+        subprocess.run(list(args), cwd=str(tmp_path), check=True,
+                       capture_output=True, text=True)
+
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@t.t")
+    run("git", "config", "user.name", "t")
+    # A committed file with invalid UTF-8 bytes (0x80 is a lone continuation byte).
+    (tmp_path / "blob.bin").write_bytes(b"\x80\x81\x82 not utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "add binary")
+
+    blob = (tmp_path / "blob.bin").resolve()
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (blob, True))
+
+    result = _call_committed(str(blob), tmp_path)
+    # fail-open on binary decode, NOT a 400 — but the file IS in HEAD (tracked),
+    # so in_head=True keeps its badge "modified", not "new".
+    assert result == {"content": "", "in_head": True}
+
+
+def test_committed_outside_home_fails_open(tmp_path: Path, monkeypatch) -> None:
+    """A resolvable path the security guard rejects (outside home) returns
+    {content:''} from THIS endpoint — the observed /private/tmp/*.json 400."""
+    from fastapi import HTTPException
+    import routers.workspace_api as wa
+
+    real_file = tmp_path / "payload.json"
+    real_file.write_text('{"k": 1}\n')
+
+    # Force _resolve_file_path to reject as the real outside-home guard would.
+    def _reject(path, workspace_root):
+        raise HTTPException(status_code=400, detail="Absolute path must be under user home directory")
+    monkeypatch.setattr(wa, "_resolve_file_path", _reject)
+
+    result = _call_committed(str(real_file), tmp_path)
+    # fail-open, NOT a 400 — resolver rejected before git, so tracked-ness is
+    # undetermined → in_head=None (caller renders no badge).
+    assert result == {"content": "", "in_head": None}
+
+
+def test_committed_tracked_utf8_returns_head_content(tmp_path: Path, monkeypatch) -> None:
+    """Regression: a normal tracked UTF-8 file still returns its HEAD content.
+
+    tmp_path is outside home; bypass ONLY the home-guard so the real git-show
+    path runs (otherwise the fix would fail-open this valid file to '').
+    """
+    import subprocess
+    import routers.workspace_api as wa
+
+    def run(*args: str) -> None:
+        subprocess.run(list(args), cwd=str(tmp_path), check=True,
+                       capture_output=True, text=True)
+
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@t.t")
+    run("git", "config", "user.name", "t")
+    (tmp_path / "hello.txt").write_text("committed-v1\n")
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "baseline")
+    (tmp_path / "hello.txt").write_text("dirty-v2\n")  # working copy differs
+
+    hello = (tmp_path / "hello.txt").resolve()
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (hello, True))
+
+    result = _call_committed(str(hello), tmp_path)
+    # HEAD version, not working copy; tracked text file → in_head=True.
+    assert result == {"content": "committed-v1\n", "in_head": True}
+
+
+def test_committed_untracked_file_is_in_head_false(tmp_path: Path, monkeypatch) -> None:
+    """An untracked file (not in HEAD) returns in_head=False → a 'new' badge.
+
+    This is the discriminator's whole point: distinguish untracked (in_head
+    False → 'new') from a tracked binary (in_head True → 'upd'). Both return
+    empty content; only in_head tells them apart (run_46e7b94c). Guards the
+    Gate-2 MED: keying the badge off content-length mis-labeled both as 'new'.
+    """
+    import subprocess
+    import routers.workspace_api as wa
+
+    def run(*args: str) -> None:
+        subprocess.run(list(args), cwd=str(tmp_path), check=True,
+                       capture_output=True, text=True)
+
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "t@t.t")
+    run("git", "config", "user.name", "t")
+    (tmp_path / "seed.txt").write_text("seed\n")  # need ≥1 commit so HEAD exists
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "baseline")
+    (tmp_path / "brand_new.txt").write_text("not committed\n")  # untracked
+
+    newf = (tmp_path / "brand_new.txt").resolve()
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (newf, True))
+
+    result = _call_committed(str(newf), tmp_path)
+    # git show HEAD:brand_new.txt fails (rc!=0) → definitively not in HEAD.
+    assert result == {"content": "", "in_head": False}
+
+
+def test_get_workspace_file_still_rejects_outside_home(tmp_path: Path) -> None:
+    """AC3: the SHARED _resolve_file_path guard is NOT weakened — a real
+    read endpoint still 400s on an outside-home absolute path."""
+    from fastapi import HTTPException
+    import routers.workspace_api as wa
+    import asyncio
+
+    # /tmp resolves outside /Users/<me> — the guard must still fire.
+    outside = "/private/tmp/swarm_test_not_under_home.json"
+
+    async def _run():
+        orig = wa._get_workspace_path
+        wa._get_workspace_path = lambda: _async_return(str(tmp_path))
+        try:
+            return await wa.get_workspace_file(path=outside)
+        finally:
+            wa._get_workspace_path = orig
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_run())
+    assert exc.value.status_code == 400  # guard intact

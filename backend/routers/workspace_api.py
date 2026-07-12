@@ -1204,14 +1204,42 @@ async def get_workspace_file_committed(
     Finds the containing git repo automatically — works for both workspace
     files and external source files.
 
-    Returns ``{"content": "<committed text>"}`` for tracked files.
-    Returns ``{"content": ""}`` for untracked files (no committed version).
-    Returns 400 for binary files or relative path traversal attempts.
-    Returns 404 if the file doesn't exist on disk.
+    Returns ``{"content": "<committed text>", "in_head": True}`` for tracked
+    text files (the diff baseline).
+
+    Fail-open (no 400) for every case where a text baseline cannot be produced,
+    with an ``in_head`` discriminator so callers can tell WHY the content is
+    empty (a bare ``{"content": ""}`` conflated three distinct states and caused
+    a wrong git-status badge — run_46e7b94c):
+
+    - ``in_head: True``  — file IS in HEAD but has no usable text baseline
+      (binary/non-UTF-8). It is TRACKED, so a "modified" badge is correct.
+    - ``in_head: False`` — file is definitively NOT in HEAD (git reports it
+      untracked). A "new" badge is correct.
+    - ``in_head: None``  — cannot be determined (path rejected by the resolver's
+      security guard, no containing git repo, or a git error/timeout). Callers
+      should render NO badge rather than guess.
+
+    This is a best-effort DIFF BASELINE endpoint, so "no baseline available" is a
+    normal answer — NOT an HTTP error the frontend only catches and logs. The
+    shared ``_resolve_file_path`` security guard is intentionally NOT weakened
+    here: real read/write endpoints still 400 on a rejected path; only this
+    derivative baseline endpoint swallows it (verified by
+    test_get_workspace_file_still_rejects_outside_home).
+    Returns 404 if the file doesn't exist on disk (a genuinely missing path is
+    distinct from an un-diffable one — the caller asked for a file that is not
+    there, which is a real not-found, not a "no baseline" case).
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target, _is_ext = _resolve_file_path(path, workspace_root)
+    try:
+        target, _is_ext = _resolve_file_path(path, workspace_root)
+    except HTTPException:
+        # Path rejected by the shared guard (outside home / traversal). This
+        # endpoint has no baseline to offer for such a path — fail open, don't
+        # surface a 400 the caller only wants to swallow anyway. Can't determine
+        # tracked-ness (never reached git) → in_head=None (caller shows no badge).
+        return {"content": "", "in_head": None}
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -1219,13 +1247,13 @@ async def get_workspace_file_committed(
     # Find the git repo containing this file
     git_root = _find_git_root(target)
     if git_root is None:
-        return {"content": ""}
+        return {"content": "", "in_head": None}  # no repo → can't determine
 
     # Compute path relative to the git root
     try:
         git_relative = str(target.resolve().relative_to(git_root))
     except ValueError:
-        return {"content": ""}
+        return {"content": "", "in_head": None}  # can't relativize → undetermined
 
     try:
         result = subprocess.run(
@@ -1235,19 +1263,23 @@ async def get_workspace_file_committed(
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return {"content": ""}
+        return {"content": "", "in_head": None}  # git failed → can't determine
 
     if result.returncode != 0:
-        # File is untracked or not in HEAD — return empty string
-        return {"content": ""}
+        # git could not show HEAD:<path> → file is untracked / not in HEAD.
+        # This is a DEFINITIVE answer: not in head → a "new" badge is correct.
+        return {"content": "", "in_head": False}
 
-    # Decode manually to catch binary files
+    # Decode manually — a binary/non-UTF-8 file IS in HEAD (tracked) but has no
+    # text baseline to diff against, so fail open like the branches above rather
+    # than raise a 400 the frontend only catches-and-ignores. in_head=True keeps
+    # its badge "modified" (it is tracked), not "new".
     try:
         content = result.stdout.decode("utf-8")
     except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text (binary file)")
+        return {"content": "", "in_head": True}
 
-    return {"content": content}
+    return {"content": content, "in_head": True}
 
 
 @router.put("/workspace/file")
