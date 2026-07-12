@@ -158,6 +158,61 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     };
     safeFit();
 
+    // ⚠️ TEMPORARY DIAGNOSTIC (run_6a148449, remove after root-cause found).
+    // Selection drift persists after the fonts.ready re-measure + zoom ruled out
+    // (zoom=1.0). Capture the ground truth from the RUNNING app: xterm's measured
+    // cell metrics vs a directly-measured glyph, DPR, and the screen element's
+    // offset. Read back from localStorage (like the zoom probe). No behavior
+    // change — pure observation.
+    setTimeout(() => {
+      try {
+        // xterm's internal measured dimensions (what selection mapping divides by).
+        const core = (term as unknown as { _core?: any })._core;
+        const dims = core?._renderService?.dimensions;
+        const charSvc = core?._charSizeService;
+        // Ground-truth glyph width: measure 32 monospace 'W' the same way xterm's
+        // DomMeasureStrategy does (offsetWidth/32) — with the EXACT font xterm uses.
+        const probe = document.createElement('span');
+        probe.style.cssText =
+          "position:absolute;visibility:hidden;font-family:'JetBrains Mono','SF Mono',Menlo,Monaco,'Courier New',monospace;font-size:11px;line-height:1;white-space:pre;";
+        probe.textContent = 'W'.repeat(32);
+        host.appendChild(probe);
+        const trueCharW = probe.offsetWidth / 32;
+        const trueCharH = probe.offsetHeight;
+        host.removeChild(probe);
+        const screenEl = host.querySelector('.xterm-screen') as HTMLElement | null;
+        const hostRect = host.getBoundingClientRect();
+        const screenRect = screenEl?.getBoundingClientRect();
+        const snap = {
+          ts: new Date().toISOString(),
+          dpr: window.devicePixelRatio,
+          fontsReady: (document as any).fonts?.status,
+          xterm_css_cell_w: dims?.css?.cell?.width,
+          xterm_css_cell_h: dims?.css?.cell?.height,
+          xterm_device_cell_w: dims?.device?.cell?.width,
+          xterm_device_cell_h: dims?.device?.cell?.height,
+          charSvc_w: charSvc?.width,
+          charSvc_h: charSvc?.height,
+          true_glyph_w: trueCharW,
+          true_glyph_h: trueCharH,
+          cols: term.cols,
+          rows: term.rows,
+          host_left: hostRect.left,
+          host_top: hostRect.top,
+          screen_left: screenRect?.left,
+          screen_top: screenRect?.top,
+          screen_offset_x: screenRect ? screenRect.left - hostRect.left : null,
+          screen_offset_y: screenRect ? screenRect.top - hostRect.top : null,
+          fontFamily: term.options.fontFamily,
+        };
+        localStorage.setItem('swarm-term-diag', JSON.stringify(snap, null, 2));
+        // eslint-disable-next-line no-console
+        console.log('[term-diag]', snap);
+      } catch (e) {
+        localStorage.setItem('swarm-term-diag', 'ERROR: ' + String(e));
+      }
+    }, 800);
+
     // PTY output → terminal (service already decodes Uint8Array→string, H2).
     const dataSub = tab.pty.onData((chunk) => term.write(chunk));
     // Terminal input (keystrokes) → PTY stdin (AC2 interactivity).
