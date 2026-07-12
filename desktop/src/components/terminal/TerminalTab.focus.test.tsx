@@ -136,6 +136,46 @@ describe('TerminalTab — AC1 focus race', () => {
     expect(focusSpy).not.toHaveBeenCalled();
   });
 
+  it('async font preload: terminal wires up (fit+focus) only AFTER document.fonts.load resolves', async () => {
+    // Gate-2 MEDIUM: jsdom has no document.fonts, so every other test exercises
+    // the SYNCHRONOUS collapse of init(). This test stubs an ASYNC fonts.load
+    // that resolves on a later task — the real-browser path — and proves:
+    //   (a) init() does NOT construct the terminal until the font resolves
+    //       (no Terminal, no ResizeObserver callback, before resolution), and
+    //   (b) once resolved, the terminal is built + the settle path focuses.
+    // This is the whole point of the drift fix (measure the cell with JBM
+    // loaded), so the async ordering must be pinned, not left to jsdom's no-op.
+    let resolveFont!: () => void;
+    const fontGate = new Promise<void>((r) => { resolveFont = r; });
+    const loadSpy = vi.fn(() => fontGate.then(() => []));
+    vi.stubGlobal('document', document); // keep real document
+    (document as unknown as { fonts: unknown }).fonts = { load: loadSpy };
+
+    try {
+      rectSize = { width: 800, height: 300 }; // sized from the start
+      render(<TerminalTab tab={makeTab()} active={true} />);
+
+      // Before the font resolves: init() is parked on the await → NO terminal,
+      // NO ResizeObserver wired, NO focus.
+      await Promise.resolve();
+      expect(loadSpy).toHaveBeenCalledWith("11px 'JetBrains Mono'");
+      expect(lastTerm).toBeNull();
+      expect(resizeCb).toBeNull();
+      expect(focusSpy).not.toHaveBeenCalled();
+
+      // Font resolves → init() resumes, constructs the terminal, wires RO, and
+      // safeFit focuses the active+sized surface.
+      resolveFont();
+      await fontGate;
+      await Promise.resolve(); // let init()'s continuation run
+      expect(lastTerm).not.toBeNull();
+      expect(resizeCb).toBeTypeOf('function');
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (document as unknown as { fonts?: unknown }).fonts;
+    }
+  });
+
   it('re-focuses on switch-back even if the [active] effect reads height 0 (re-arm)', () => {
     // Adversarial MED: after the first focus, switching away and back must
     // re-focus. If the [active] effect on re-activation reads height 0 (layout

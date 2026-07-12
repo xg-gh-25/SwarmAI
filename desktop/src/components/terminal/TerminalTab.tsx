@@ -75,201 +75,147 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   // path must then focus. Gated so safeFit (which runs on EVERY resize tick)
   // does NOT re-focus and steal focus from chat on later resizes.
   const focusedRef = useRef(false);
-  // One-shot guard for the webfont cell re-measure. The cell width/height is
-  // measured at open() with whatever font is resolved THEN — usually a fallback,
-  // because JetBrains Mono is an async webfont. A wrong cell width drifts mouse
-  // selection across the row. We force a re-measure once the font is loaded AND
-  // the surface is visible+sized. Why BOTH triggers (fonts.ready AND reveal):
-  // xterm's DomMeasureStrategy fallback reads offsetWidth, which is 0 while the
-  // tab is display:none — so a fonts.ready that lands while this tab is inactive
-  // no-ops on that path. Re-nudging on reveal (when the tab is sized) makes the
-  // fix robust across both measure strategies (Gate-2 MEDIUM).
-  const remeasuredRef = useRef(false);
-
-  // Force xterm to re-measure the character cell with the currently-loaded font.
-  // xterm's CharSizeService only re-measures on a CHANGED fontFamily value, so
-  // nudge it (append a space → distinct value → change event, then restore →
-  // second change event → measure runs). Idempotent via remeasuredRef.
-  const remeasureCellOnce = (term: Terminal, fit: FitAddon, host: HTMLDivElement) => {
-    if (remeasuredRef.current) return;
-    const rect = host.getBoundingClientRect();
-    // DOM measure strategy needs a laid-out (sized) surface; skip until visible.
-    if (rect.width <= 0 || rect.height <= 0) return;
-    const base = term.options.fontFamily ?? '';
-    term.options.fontFamily = base + ' ';
-    term.options.fontFamily = base;
-    remeasuredRef.current = true;
-    try {
-      fit.fit();
-      tab.pty.resize(term.cols, term.rows);
-    } catch {
-      /* fit can throw mid-layout; ignore */
-    }
-  };
 
   // Create xterm + wire to the (store-owned) PTY once per tab.id.
+  //
+  // FONT IS PRELOADED BEFORE THE TERMINAL IS CONSTRUCTED — this is the fix for
+  // mouse-selection drift. xterm measures the character cell exactly once, at
+  // construction, with whatever font is resolved at that instant; selection
+  // hit-testing then maps mouse-x → column by dividing by that measured cell
+  // width. JetBrains Mono is an async webfont (@fontsource, main.tsx), so
+  // constructing xterm before it loads measures a FALLBACK (Menlo) cell.
+  // Measured from the running app (diagnostic probe, run_6a148449): xterm's
+  // charSize width was 6.6226px (Menlo) while glyphs render at 6.4688px (JBM) —
+  // a 0.153px/column error that accumulates across the row (col 100 ≈ 15px ≈
+  // 2.4 chars off), the exact "越往右越不准" the user saw. Awaiting
+  // document.fonts.load() first makes that single measurement use JBM → grid
+  // matches glyphs, zero drift, no re-measure race. (This REPLACES a prior
+  // fontFamily-nudge re-measure whose probe proved it never corrected the
+  // metric — charSize stayed 6.62 even after fonts.ready fired.)
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
-    const term = new Terminal({
-      cursorBlink: true,
-      fontFamily:
-        "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-      // Terminal is an auxiliary panel with little vertical space — pack it
-      // densely. fontSize 11 + lineHeight 1.0 (was 12 / 1.3, which wasted ~30%
-      // of every row to leading) fits noticeably more rows in the same height.
-      fontSize: 11,
-      lineHeight: 1.0,
-      letterSpacing: 0,
-      fontWeight: 400,
-      fontWeightBold: 600,
-      theme: XTERM_THEME,
-      convertEol: false,
-      scrollback: 10000,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    termRef.current = term;
-    fitRef.current = fit;
-
-    // Fit only when the container actually has size (guards the 0-height race
-    // when the panel is collapsed on first mount).
-    const safeFit = () => {
-      const rect = host.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        try {
-          fit.fit();
-          tab.pty.resize(term.cols, term.rows);
-          // AC1: focus exactly once, when this tab is active AND now sized.
-          // This is the recovery path for the first-mount height-0 race — the
-          // [active] effect's own focus was skipped because the container had
-          // no size yet. The focusedRef gate keeps it one-shot so subsequent
-          // resize ticks never steal focus.
-          if (activeRef.current && !focusedRef.current) {
-            term.focus();
-            focusedRef.current = true;
-          }
-        } catch {
-          /* fit can throw mid-layout; ignore and retry on next resize */
-        }
-      }
-    };
-    safeFit();
-
-    // ⚠️ TEMPORARY DIAGNOSTIC (run_6a148449, remove after root-cause found).
-    // Selection drift persists after the fonts.ready re-measure + zoom ruled out
-    // (zoom=1.0). Capture the ground truth from the RUNNING app: xterm's measured
-    // cell metrics vs a directly-measured glyph, DPR, and the screen element's
-    // offset. Read back from localStorage (like the zoom probe). No behavior
-    // change — pure observation.
-    setTimeout(() => {
-      try {
-        // xterm's internal measured dimensions (what selection mapping divides by).
-        const core = (term as unknown as { _core?: any })._core;
-        const dims = core?._renderService?.dimensions;
-        const charSvc = core?._charSizeService;
-        // Ground-truth glyph width: measure 32 monospace 'W' the same way xterm's
-        // DomMeasureStrategy does (offsetWidth/32) — with the EXACT font xterm uses.
-        const probe = document.createElement('span');
-        probe.style.cssText =
-          "position:absolute;visibility:hidden;font-family:'JetBrains Mono','SF Mono',Menlo,Monaco,'Courier New',monospace;font-size:11px;line-height:1;white-space:pre;";
-        probe.textContent = 'W'.repeat(32);
-        host.appendChild(probe);
-        const trueCharW = probe.offsetWidth / 32;
-        const trueCharH = probe.offsetHeight;
-        host.removeChild(probe);
-        const screenEl = host.querySelector('.xterm-screen') as HTMLElement | null;
-        const hostRect = host.getBoundingClientRect();
-        const screenRect = screenEl?.getBoundingClientRect();
-        const snap = {
-          ts: new Date().toISOString(),
-          dpr: window.devicePixelRatio,
-          fontsReady: (document as any).fonts?.status,
-          xterm_css_cell_w: dims?.css?.cell?.width,
-          xterm_css_cell_h: dims?.css?.cell?.height,
-          xterm_device_cell_w: dims?.device?.cell?.width,
-          xterm_device_cell_h: dims?.device?.cell?.height,
-          charSvc_w: charSvc?.width,
-          charSvc_h: charSvc?.height,
-          true_glyph_w: trueCharW,
-          true_glyph_h: trueCharH,
-          cols: term.cols,
-          rows: term.rows,
-          host_left: hostRect.left,
-          host_top: hostRect.top,
-          screen_left: screenRect?.left,
-          screen_top: screenRect?.top,
-          screen_offset_x: screenRect ? screenRect.left - hostRect.left : null,
-          screen_offset_y: screenRect ? screenRect.top - hostRect.top : null,
-          fontFamily: term.options.fontFamily,
-        };
-        localStorage.setItem('swarm-term-diag', JSON.stringify(snap, null, 2));
-        // eslint-disable-next-line no-console
-        console.log('[term-diag]', snap);
-      } catch (e) {
-        localStorage.setItem('swarm-term-diag', 'ERROR: ' + String(e));
-      }
-    }, 800);
-
-    // PTY output → terminal (service already decodes Uint8Array→string, H2).
-    const dataSub = tab.pty.onData((chunk) => term.write(chunk));
-    // Terminal input (keystrokes) → PTY stdin (AC2 interactivity).
-    const inputSub = term.onData((data) => tab.pty.write(data));
-
-    // Expose the visible buffer text for the P2 "attach to chat" action.
-    // Reads the last min(buffer.length, 200) lines of the active xterm buffer.
-    tab.getBuffer = () => {
-      const buf = term.buffer.active;
-      const lines: string[] = [];
-      const maxLines = Math.min(buf.length, 200);
-      const start = buf.length - maxLines;
-      for (let i = start; i < buf.length; i++) {
-        const line = buf.getLine(i);
-        if (line) lines.push(line.translateToString(true));
-      }
-      return lines.join('\n').replace(/\n+$/, '');
-    };
-
-    // Expose focus() so TerminalPanel can focus the active terminal when the
-    // panel is REVEALED (collapse→reopen keeps `active` unchanged, so the
-    // [active] effect below doesn't re-fire — without this the reopened terminal
-    // is sized but not focused, and the user must click before typing).
-    tab.focus = () => {
-      if (termRef.current === term) term.focus();
-    };
-
-    // Re-fit when the container resizes (panel open/resize/window resize).
-    const ro = new ResizeObserver(() => safeFit());
-    ro.observe(host);
-
-    // Re-measure the character cell once the terminal webfont has loaded (see
-    // remeasureCellOnce above). This is the fonts.ready TRIGGER; the [active]
-    // effect below is the reveal trigger. Whichever fires first with the surface
-    // visible+sized wins (remeasuredRef makes it one-shot). Guarded on `disposed`
-    // so a font resolving after unmount doesn't touch a disposed terminal.
+    // These are captured for cleanup; they stay null if the effect is torn down
+    // while the font preload is still awaiting (StrictMode / fast tab close).
     let disposed = false;
-    if (typeof document !== 'undefined' && document.fonts?.ready) {
-      document.fonts.ready
-        .then(() => {
-          if (disposed || termRef.current !== term) return;
-          remeasureCellOnce(term, fit, host);
-        })
-        .catch(() => {
-          /* fonts.ready never rejects in practice; ignore if it does */
-        });
-    }
+    let term: Terminal | null = null;
+    let ro: ResizeObserver | null = null;
+    let dataSub: { dispose: () => void } | null = null;
+    let inputSub: { dispose: () => void } | null = null;
+
+    const init = async () => {
+      // Preload the exact faces xterm will measure (regular 400 + bold 600) so
+      // its one-shot cell measurement uses JetBrains Mono, not a fallback.
+      // Best-effort: if the API is missing or rejects, fall through and build
+      // anyway (worst case = the pre-fix fallback metric — never block the
+      // terminal on a font).
+      try {
+        const fonts = (document as unknown as { fonts?: FontFaceSet }).fonts;
+        if (fonts?.load) {
+          // Preload ONLY the regular (400) face — that is the one xterm measures
+          // for its cell metric (the drift fix). Do NOT wait on 600: main.tsx
+          // imports only the 400/500 @fontsource faces, so a 600 request just
+          // weight-selects the 400 face (resolves, but waits on nothing real);
+          // bold text synth-bolds at render regardless. (Gate-2 MEDIUM.)
+          await fonts.load("11px 'JetBrains Mono'");
+        }
+      } catch {
+        /* font preload is best-effort; construct with fallback if it fails */
+      }
+      // The effect may have been cleaned up while we awaited the font.
+      if (disposed || !hostRef.current) return;
+
+      const t = new Terminal({
+        cursorBlink: true,
+        fontFamily:
+          "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
+        // Terminal is an auxiliary panel with little vertical space — pack it
+        // densely. fontSize 11 + lineHeight 1.0 (was 12 / 1.3, which wasted ~30%
+        // of every row to leading) fits noticeably more rows in the same height.
+        fontSize: 11,
+        lineHeight: 1.0,
+        letterSpacing: 0,
+        fontWeight: 400,
+        fontWeightBold: 600,
+        theme: XTERM_THEME,
+        convertEol: false,
+        scrollback: 10000,
+      });
+      const f = new FitAddon();
+      t.loadAddon(f);
+      t.open(host);
+      term = t;
+      termRef.current = t;
+      fitRef.current = f;
+
+      // Fit only when the container actually has size (guards the 0-height race
+      // when the panel is collapsed on first mount).
+      const safeFit = () => {
+        const rect = host.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          try {
+            f.fit();
+            tab.pty.resize(t.cols, t.rows);
+            // AC1: focus exactly once, when this tab is active AND now sized.
+            // Recovery path for the first-mount height-0 race — the [active]
+            // effect's own focus was skipped because the container had no size
+            // yet. The focusedRef gate keeps it one-shot so later resize ticks
+            // never steal focus.
+            if (activeRef.current && !focusedRef.current) {
+              t.focus();
+              focusedRef.current = true;
+            }
+          } catch {
+            /* fit can throw mid-layout; ignore and retry on next resize */
+          }
+        }
+      };
+      safeFit();
+
+      // PTY output → terminal (service already decodes Uint8Array→string, H2).
+      dataSub = tab.pty.onData((chunk) => t.write(chunk));
+      // Terminal input (keystrokes) → PTY stdin (AC2 interactivity).
+      inputSub = t.onData((data) => tab.pty.write(data));
+
+      // Expose the visible buffer text for the P2 "attach to chat" action.
+      // Reads the last min(buffer.length, 200) lines of the active xterm buffer.
+      tab.getBuffer = () => {
+        const buf = t.buffer.active;
+        const lines: string[] = [];
+        const maxLines = Math.min(buf.length, 200);
+        const start = buf.length - maxLines;
+        for (let i = start; i < buf.length; i++) {
+          const line = buf.getLine(i);
+          if (line) lines.push(line.translateToString(true));
+        }
+        return lines.join('\n').replace(/\n+$/, '');
+      };
+
+      // Expose focus() so TerminalPanel can focus the active terminal when the
+      // panel is REVEALED (collapse→reopen keeps `active` unchanged, so the
+      // [active] effect below doesn't re-fire — without this the reopened
+      // terminal is sized but not focused, and the user must click before typing).
+      tab.focus = () => {
+        if (termRef.current === t) t.focus();
+      };
+
+      // Re-fit when the container resizes (panel open/resize/window resize).
+      ro = new ResizeObserver(() => safeFit());
+      ro.observe(host);
+    };
+    void init();
 
     return () => {
       // M1: dispose all listeners + the xterm instance. The PTY is NOT killed
       // here — its lifecycle is owned by TerminalStore.closeTerminal, so a
-      // StrictMode remount re-attaches to the same live shell (C1).
+      // StrictMode remount re-attaches to the same live shell (C1). Everything
+      // is null-guarded: cleanup can run before init() finished awaiting fonts.
       disposed = true;
-      ro.disconnect();
-      dataSub.dispose();
-      inputSub.dispose();
-      term.dispose();
+      ro?.disconnect();
+      dataSub?.dispose();
+      inputSub?.dispose();
+      term?.dispose();
       tab.getBuffer = undefined;
       tab.focus = undefined;
       termRef.current = null;
@@ -280,11 +226,6 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       // so switching tabs does not re-arm it; tab-switch refocus is owned by
       // the [active] effect's own term.focus() below.
       focusedRef.current = false;
-      // Re-arm the one-shot cell re-measure for a genuine remount (a fresh xterm
-      // instance must re-measure against the loaded font). Like focusedRef, this
-      // reset lives ONLY in the creation effect ([tab.id,tab.pty]) — NOT in the
-      // [active] effect — so a tab-SWITCH doesn't re-nudge fontFamily every time.
-      remeasuredRef.current = false;
     };
   }, [tab.id, tab.pty]);
 
@@ -298,11 +239,9 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     const rect = host.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       try {
-        // Reveal-time cell re-measure (one-shot). If the webfont loaded while
-        // this tab was inactive (display:none → offsetWidth 0), the fonts.ready
-        // trigger no-op'd on xterm's DOM measure strategy; now that the surface
-        // is visible+sized, force the measure so selection maps correctly.
-        remeasureCellOnce(term, fit, host);
+        // The cell metric is already correct — the font is preloaded before the
+        // terminal is constructed (see creation effect), so no reveal-time
+        // re-measure is needed. Just refit the now-sized container + focus.
         fit.fit();
         tab.pty.resize(term.cols, term.rows);
         // Focus on tab-switch reveal. Mark focused so the safeFit one-shot
