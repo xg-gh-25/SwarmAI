@@ -110,7 +110,9 @@ function TopBar() {
 // group WITHOUT a Tailwind class (arbitrary-color classes risk JIT purge; an
 // inline custom property never does — matches the existing color-mix convention
 // in index.css). 4 groups: 做事(Terminal) / 能力(Skills,MCP) / 观测(CodeIntel,
-// Engine,OSEval) / 知识(Memory,Signals). Footer (Settings/GitHub) keeps amber.
+// Engine,OSEval) / 知识(Memory,Signals). Footer (Settings) passes NO accent →
+// .nav-btn falls back to the user's --color-primary accent (app-chrome follows
+// the accent system, not a fixed group color); GitHub is a plain <a>, untouched.
 const NAV_GROUP_COLOR = {
   do: '#60a5fa', // blue — 做事 (Terminal, the active tool)
   power: '#a78bfa', // purple — 能力 (Skills, MCP)
