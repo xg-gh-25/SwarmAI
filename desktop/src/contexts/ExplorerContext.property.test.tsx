@@ -20,9 +20,79 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
-import { findMatches, substringMatch, saveSessionState, loadSessionState } from './ExplorerContext';
+import { findMatches, substringMatch, saveSessionState, loadSessionState, mergeExpandedChildren } from './ExplorerContext';
 import type { ExplorerSessionState } from './ExplorerContext';
 import type { TreeNode } from '../types';
+
+// ── mergeExpandedChildren (Fix ①: poll-reset of lazy-expanded children) ──
+// The 30s ETag poll refetches a depth-limited tree; lazy-expanded dirs come
+// back children:null while their paths stay in expandedPaths, rendering them
+// as expanded-but-empty. mergeExpandedChildren restores the injected children.
+
+function dir(path: string, children: TreeNode[] | null): TreeNode {
+  const name = path.split('/').pop() ?? path;
+  return { name, path, type: 'directory', children };
+}
+function file(path: string): TreeNode {
+  const name = path.split('/').pop() ?? path;
+  return { name, path, type: 'file', children: undefined };
+}
+
+describe('mergeExpandedChildren (Fix ① — poll-reset)', () => {
+  it('restores lazy-expanded children truncated by a poll (the core bug)', () => {
+    // prev: Projects was expanded + its children injected
+    const prev: TreeNode[] = [dir('Projects', [file('Projects/a.md'), file('Projects/b.md')])];
+    // fresh poll: Projects came back depth-truncated (children: null)
+    const fresh: TreeNode[] = [dir('Projects', null)];
+    const merged = mergeExpandedChildren(fresh, prev, new Set(['Projects']));
+    expect(merged[0].children).not.toBeNull();
+    expect(merged[0].children?.map((c) => c.path)).toEqual(['Projects/a.md', 'Projects/b.md']);
+  });
+
+  it('restores a DEEPER lazy-expanded node when the poll sent shallow levels (recursion — Case 2)', () => {
+    // Server default depth sends Projects + Projects/AIDLC WITH children, but a
+    // deeper lazy-expanded dir (Projects/AIDLC/gates) comes back null. prev holds
+    // its injected children. A shallow merge (only patching top-level nulls) would
+    // MISS this — the null is nested under fresh children the server DID send.
+    const prev: TreeNode[] = [
+      dir('Projects', [
+        dir('Projects/AIDLC', [dir('Projects/AIDLC/gates', [file('Projects/AIDLC/gates/g.yaml')])]),
+      ]),
+    ];
+    const fresh: TreeNode[] = [
+      dir('Projects', [
+        dir('Projects/AIDLC', [dir('Projects/AIDLC/gates', null)]), // deep node truncated
+      ]),
+    ];
+    const merged = mergeExpandedChildren(fresh, prev, new Set(['Projects', 'Projects/AIDLC', 'Projects/AIDLC/gates']));
+    const aidlc = merged[0].children?.find((c) => c.path === 'Projects/AIDLC');
+    const gates = aidlc?.children?.find((c) => c.path === 'Projects/AIDLC/gates');
+    // recursion into fresh children must find & restore the deep truncated node
+    expect(gates?.children?.map((c) => c.path)).toEqual(['Projects/AIDLC/gates/g.yaml']);
+  });
+
+  it('does NOT re-inject children for a folder deleted on disk (no deletion masking)', () => {
+    // prev had Old/ with children; fresh poll dropped it (deleted on disk)
+    const prev: TreeNode[] = [dir('Old', [file('Old/gone.md')]), dir('Keep', null)];
+    const fresh: TreeNode[] = [dir('Keep', null)]; // Old absent
+    const merged = mergeExpandedChildren(fresh, prev, new Set(['Old', 'Keep']));
+    // Old must not reappear — we walk the FRESH tree
+    expect(merged.map((n) => n.path)).toEqual(['Keep']);
+  });
+
+  it('does NOT overwrite children the server DID send (only patches null)', () => {
+    const prev: TreeNode[] = [dir('Projects', [file('Projects/stale.md')])];
+    const fresh: TreeNode[] = [dir('Projects', [file('Projects/fresh.md')])];
+    const merged = mergeExpandedChildren(fresh, prev, new Set(['Projects']));
+    expect(merged[0].children?.map((c) => c.path)).toEqual(['Projects/fresh.md']);
+  });
+
+  it('leaves the tree unchanged when prevTree is null or nothing expanded', () => {
+    const fresh: TreeNode[] = [dir('Projects', null)];
+    expect(mergeExpandedChildren(fresh, null, new Set(['Projects']))).toBe(fresh);
+    expect(mergeExpandedChildren(fresh, [dir('Projects', [file('Projects/a.md')])], new Set())).toBe(fresh);
+  });
+});
 
 // ── Pure toggle logic (mirrors ExplorerProvider.toggleExpand) ─────────────
 // The actual toggleExpand in ExplorerContext uses setExpandedPaths with a

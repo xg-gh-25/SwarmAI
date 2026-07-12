@@ -170,6 +170,84 @@ function collectAllDirectoryPaths(nodes: TreeNode[]): string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Poll-merge helper (exported for testing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Merge lazy-expanded children from a previous tree into a fresh tree.
+ *
+ * The 30s ETag poll refetches the tree at the server's default depth. Any
+ * directory that was lazily expanded past that depth (its children injected
+ * client-side via ``injectChildren``) comes back in the fresh tree with
+ * ``children: null`` (depth-truncated), while its path remains in
+ * ``expandedPaths``. Without this merge, ``flattenChildren`` renders those
+ * directories as expanded-but-EMPTY until the user collapses and re-expands.
+ *
+ * This walks the FRESH tree (never the previous one), so a directory that was
+ * DELETED on disk is simply absent from ``newTree`` and never gets stale
+ * children re-injected — deletions are honored, not masked. Recursion descends
+ * into re-injected subtrees so nested expansions (e.g. ``Projects`` AND
+ * ``Projects/AIDLC`` both expanded) are all restored, not just the top level.
+ *
+ * A node is only patched when the fresh node has ``children === null`` AND the
+ * previous tree had a non-null children array for the same path — i.e. we only
+ * restore what the poll truncated, never overwrite children the server did send.
+ *
+ * Caveat: re-injected children carry the git_status they had at expand time
+ * (the poll did not refetch them). This is inherent to lazy loading and is
+ * strictly better than the alternative (the whole subtree vanishing); the next
+ * manual expand or refresh refetches fresh status.
+ *
+ * Pure function — no side effects. Returns a new tree; unaffected nodes are
+ * referentially reused.
+ */
+export function mergeExpandedChildren(
+  newTree: TreeNode[],
+  prevTree: TreeNode[] | null,
+  expandedPaths: Set<string>,
+): TreeNode[] {
+  if (!prevTree || expandedPaths.size === 0) return newTree;
+
+  // Index the previous tree's directory nodes by path for O(1) lookup.
+  const prevByPath = new Map<string, TreeNode>();
+  const indexPrev = (nodes: TreeNode[]): void => {
+    for (const n of nodes) {
+      if (n.type === 'directory') {
+        prevByPath.set(n.path, n);
+        if (n.children) indexPrev(n.children);
+      }
+    }
+  };
+  indexPrev(prevTree);
+
+  const walk = (nodes: TreeNode[]): TreeNode[] =>
+    nodes.map((node) => {
+      if (node.type !== 'directory') return node;
+
+      // Case 1: fresh node was truncated (children === null) but the path is
+      // expanded and we have prior children → restore them, then recurse into
+      // the restored subtree so nested expansions are also honored.
+      if (node.children === null && expandedPaths.has(node.path)) {
+        const prev = prevByPath.get(node.path);
+        if (prev && prev.children) {
+          return { ...node, children: walk(prev.children) };
+        }
+        return node;
+      }
+
+      // Case 2: fresh node has its own children → recurse (a descendant may be
+      // truncated even when this level was sent).
+      if (node.children) {
+        return { ...node, children: walk(node.children) };
+      }
+
+      return node;
+    });
+
+  return walk(newTree);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Search helpers (exported for property testing)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -255,6 +333,11 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   // ── Polling ref (declared early so fetchTree/refreshTree can seed it) ──
   const lastTreeRef = useRef<TreeNode[] | null>(null);
 
+  // Latest expandedPaths, mirrored into a ref so the 30s poll effect (which has
+  // an empty dep array and would otherwise capture the mount-time empty Set) can
+  // read the current expansion state when merging lazy-loaded children.
+  const expandedPathsRef = useRef<Set<string>>(expandedPaths);
+
   // ── Fetch tree data on mount ───────────────────────────────────────────
   const fetchTree = useCallback(async () => {
     setIsLoading(true);
@@ -309,15 +392,16 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
         // On 304, getTree() returns the same _cachedTree reference (setCachedTree keeps it in sync).
         // Only update state when the reference differs (actual filesystem change → 200 response).
         if (tree !== lastTreeRef.current) {
-          // TODO: When depth=3 tree arrives from a 200 response, it lacks children that
-          // were lazily expanded. A proper fix would merge expanded children from
-          // lastTreeRef into the new tree. For now, the 200 path resets expanded dirs.
-          // This is acceptable because: (1) setCachedTree prevents the 304 case (most polls),
-          // (2) 200 only fires on actual filesystem changes (infrequent),
-          // (3) user can re-expand with one click.
-          lastTreeRef.current = tree;
-          workspaceService.setCachedTree(tree);
-          setTreeData(tree);
+          // A depth-limited 200 response lacks children that were lazily
+          // expanded past the server's default depth. Merge those back from the
+          // previous tree so expanded folders don't collapse to empty on every
+          // filesystem change (which happens frequently in an active workspace).
+          // mergeExpandedChildren walks the FRESH tree, so on-disk deletions are
+          // honored (absent nodes get nothing re-injected).
+          const merged = mergeExpandedChildren(tree, lastTreeRef.current, expandedPathsRef.current);
+          lastTreeRef.current = merged;
+          workspaceService.setCachedTree(merged);
+          setTreeData(merged);
         }
       } catch {
         // Silently ignore polling errors — manual refresh still works
@@ -345,6 +429,8 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
 
   // ── Persist session state on change ────────────────────────────────────
   useEffect(() => {
+    // Mirror into the ref so the empty-dep poll effect sees the latest set.
+    expandedPathsRef.current = expandedPaths;
     saveSessionState({
       expandedPaths: Array.from(expandedPaths),
     });
