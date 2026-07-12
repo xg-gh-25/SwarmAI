@@ -342,6 +342,13 @@ body {
 .nav-btn--tinted {
   color: color-mix(in srgb, var(--ac) 72%, var(--color-sidebar-icon));
 }
+/* Light theme: dial the accent weight DOWN to 40% so more of the darker light-mode
+   grey (#5b6573) survives — keeps all 4 group colors ≥3:1 against the light chrome
+   (#eef1f5), the WCAG UI-component bar this file sets at line ~24. At 72% (dark's
+   value) teal/amber fall to ~2:1 on light. Dark theme keeps 72% (already 6–8:1). */
+:root:not(.dark) .nav-btn--tinted {
+  color: color-mix(in srgb, var(--ac) 40%, var(--color-sidebar-icon));
+}
 .nav-btn:hover {
   background-color: color-mix(in srgb, var(--ac) 12%, transparent);
   color: var(--ac);
