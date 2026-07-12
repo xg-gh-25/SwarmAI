@@ -2,7 +2,7 @@
 
 This is the buildable core of the DDD-as-Agent-Brain "BIND" lifecycle: it turns a
 DDD project from "4 plain markdown docs" into a DDD that BINDS real repos and builds
-codeIntel over them. `s_ddd-manager` (SKILL.md) orchestrates by calling this.
+codeIntel over them. `s_project-manager` (SKILL.md) orchestrates by calling this.
 
 Two responsibilities, deliberately separable:
   1. SCHEMA (pure, unit-testable) — Pydantic models encode the frozen canonical schema

@@ -276,13 +276,13 @@ class TestProjectCRUDRoundTrip:
 # source of truth (SECTION_SCAFFOLD.keys() = ①⑥ files; SECTION_DIRS = ③④ dirs),
 # NOT a hand-maintained literal that drifts. ② (4 docs + Knowledge/) is covered
 # by the scaffold test above; ⑤ bindings is provisioned by BIND, not CREATE.
-from core.swarm_workspace_manager import SECTION_SCAFFOLD, SECTION_DIRS
+from core.swarm_workspace_manager import (
+    SECTION_SCAFFOLD, SECTION_DIRS, DDD_NATIVE_SKILLS, INTERNAL_DDD_SKILLS,
+)
 
-# The 5 default DDD-native skills a provisioned aim.json must declare (D3).
-EXPECTED_NATIVE_SKILLS = {
-    "s_ddd-manager", "s_persist", "s_ddd-pipeline",
-    "s_ddd-pollinate", "s_ai-ready-repo",
-}
+# The 5 default DDD-native skills — SSOT from the code constant, so the test can
+# never drift from what provisioning actually copies (D3/D6).
+EXPECTED_NATIVE_SKILLS = set(DDD_NATIVE_SKILLS)
 
 
 class TestSixSectionScaffold:
@@ -342,6 +342,48 @@ class TestSixSectionScaffold:
         assert declared == EXPECTED_NATIVE_SKILLS, (
             f"aim.json must declare the 5 native skills (D3), got: {declared}"
         )
+
+        # ★ THE CORE FIX: the 5 native skills must PHYSICALLY EXIST in skills/ —
+        # not merely be declared in aim.json. "declared a name" != "skill exists".
+        # This is what makes the DDD self-養成 after `aim` export to Kiro/Claude Code.
+        for skill in DDD_NATIVE_SKILLS:
+            skill_md = pdir / "skills" / skill / "SKILL.md"
+            assert skill_md.exists(), (
+                f"DDD-native skill '{skill}' must be COPIED into skills/ at create "
+                f"(declared in aim.json but missing on disk = the bug this fixes)"
+            )
+            body = skill_md.read_text(encoding="utf-8")
+            assert body.strip(), f"{skill}/SKILL.md must have real content"
+            assert body.startswith("---"), f"{skill}/SKILL.md must have frontmatter"
+
+        # A NON-internal project must NOT get the internal toolchain skills.
+        for skill in INTERNAL_DDD_SKILLS:
+            assert not (pdir / "skills" / skill).exists(), (
+                f"non-internal DDD must NOT carry internal skill '{skill}'"
+            )
+
+    @pytest.mark.asyncio
+    async def test_internal_ddd_gets_internal_skills_and_gate(self, tmp_path: Path):
+        """An internal DDD (Brazil/CRUX-bound) gets the 3 internal toolchain skills
+        + the no_git_push gate COPIED IN, on top of the 5 native skills (D5)."""
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        pdir = ws / "Projects" / "IntProj"
+        pdir.mkdir()
+        manager = SwarmWorkspaceManager()
+        await manager.migrate_project_to_six_section(
+            "IntProj", workspace_path=str(ws), internal=True)
+
+        # 5 native + 3 internal skills all physically present
+        for skill in DDD_NATIVE_SKILLS + INTERNAL_DDD_SKILLS:
+            assert (pdir / "skills" / skill / "SKILL.md").exists(), (
+                f"internal DDD must carry skill '{skill}'"
+            )
+        # the no_git_push gate + its test copied in (③ moat seed)
+        assert (pdir / "gates" / "no_git_push.py").exists(), \
+            "internal DDD must get the no_git_push gate"
+        assert (pdir / "gates" / "test_no_git_push.py").exists(), \
+            "the gate must ship with its knockout test"
 
     @pytest.mark.asyncio
     async def test_provision_is_idempotent(self, tmp_path: Path):
@@ -407,12 +449,13 @@ class TestSixSectionScaffold:
 
 
 class TestDddNativeSkills:
-    """D4: the 2 greenfield DDD-native skills (s_ddd-pipeline, s_ddd-pollinate)
-    exist, are DECOUPLED (no data.db / artifact_cli hard-dependency), and RETAIN
-    the moat (Gate-2 adversarial + 养成 ladder). These are the self-養成 /
-    value-expression halves of the default native-skill set."""
+    """D4: the DDD-native skill TEMPLATES (the official maintained source at
+    backend/templates/ddd-skills/) are DECOUPLED (no data.db / artifact_cli
+    hard-dependency) and RETAIN the moat (Gate-2 adversarial + 养成 ladder).
+    These are the templates copied INTO each DDD's skills/ at provision — NOT
+    SwarmAI-native skills (those live in backend/skills/ and are never touched)."""
 
-    SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+    SKILLS_DIR = Path(__file__).resolve().parent.parent / "templates" / "ddd-skills"
 
     @pytest.mark.parametrize("skill", ["s_ddd-pipeline", "s_ddd-pollinate"])
     def test_native_skill_exists(self, skill: str):

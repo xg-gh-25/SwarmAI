@@ -83,7 +83,7 @@ DEFAULT_PROJECT_NAME = "SwarmAI"
 # Version of the canonical six-section DDD structure (DDD-agent-brain spec §3.6)
 # that this provisioner scaffolds. Stamped into every new project's .project.json
 # so propagated DDDs are version-traceable (§3.7 anti-drift) — the machine-readable
-# counterpart to the DDD_SPEC_VERSION declared in s_ddd-manager/SKILL.md prose.
+# counterpart to the DDD_SPEC_VERSION declared in s_project-manager/SKILL.md prose.
 # Bump when the six-section structure changes in a way propagated DDDs must track.
 DDD_SPEC_VERSION = "1.0"
 
@@ -309,13 +309,13 @@ _Nothing currently blocking._
 # ⑤ DELIVERY CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE.
 SECTION_SCAFFOLD: dict[str, str] = {
     # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
-    # aim.json.plugins declares the 5 default DDD-native skills (D3). These are
-    # REFERENCED by name (not copied) — a DDD is self-propagating + self-養成
-    # because it carries the ability to create more DDDs (s_ddd-manager),
-    # sediment its own docs (s_persist), run its own dev-loop (s_ddd-pipeline),
-    # express its value (s_ddd-pollinate), and refresh its ⑥ code-intel
-    # projection (s_ai-ready-repo). This is inert export-manifest data in
-    # SwarmWS; it becomes an AIM plugin namespace on export.
+    # aim.json.plugins declares the 5 default DDD-native skills (D3) — the SAME
+    # skills that are physically COPIED INTO skills/ at provision (DDD_NATIVE_SKILLS).
+    # A DDD is self-propagating + self-養成 because it carries the ability to
+    # create more DDDs (s_ddd-manager), sediment its own docs (s_ddd-persist), run
+    # its own dev-loop (s_ddd-pipeline), express its value (s_ddd-pollinate), and
+    # refresh its ⑥ code-intel projection (s_ai-ready-repo). On AIM export this
+    # becomes the plugin namespace; the skill FILES ship alongside it.
     "aim.json": """{
   "name": "{project_name}",
   "ddd_spec_version": "1.0",
@@ -323,7 +323,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
   "plugins": {
     "native_skills": [
       "s_ddd-manager",
-      "s_persist",
+      "s_ddd-persist",
       "s_ddd-pipeline",
       "s_ddd-pollinate",
       "s_ai-ready-repo"
@@ -354,9 +354,9 @@ deploy pipeline (指+治, 不含+不跑).
 | ⑤ | Delivery Contract | GOVERN | `bindings.yaml` | full per-repo delivery 全貌 (build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND. |
 | ⑥ | Code-Intel Refresher | GOVERN | `REFRESHER.md` | a self-contained mechanism that REGENERATES `code-intel.json` from code. Ships the refresher, not the projection. Activates on BIND. |
 
-## Default native skills (the self-養成 / self-propagation set — ④, referenced in `aim.json`)
+## Default native skills (the self-養成 / self-propagation set — ④, copied into `skills/`)
 - **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
-- **s_persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
+- **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
 - **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
 - **s_ddd-pollinate** — express this product's value to audiences.
 - **s_ai-ready-repo** — the ⑥ refresher: regenerate `code-intel.json` from code.
@@ -409,6 +409,62 @@ SECTION_DIRS: tuple[str, ...] = (
     "gates/context/includes",     # ③ denylist DATA home (accretes)
     "skills",                     # ④ portable capabilities (accretes)
 )
+
+# ④ DEFAULT DDD-NATIVE SKILLS — the official, maintained set that is COPIED INTO
+# every DDD's skills/ at CREATE (the same mechanism that copies the 4 DDD docs).
+# These are DDD-NATIVE rewrites of SwarmAI's own skills — learned from the
+# originals but re-designed to be portable (file-based .artifacts state, no
+# SwarmAI backend) so that after `aim` export they run directly in Kiro /
+# Claude Code. SOURCE OF TRUTH: backend/templates/ddd-skills/s_ddd-*/ (we, the
+# official maintainer, keep them there and version them). This is DISTINCT from
+# the SwarmAI-native skills in backend/skills/ (s_project-manager, s_persist,
+# s_autonomous-pipeline, s_pollinate, s_ai-ready-repo, s_internal-*) which are
+# how SwarmAI itself operates and are NEVER modified for DDD work.
+DDD_NATIVE_SKILLS: tuple[str, ...] = (
+    "s_ddd-manager",     # ← learned from s_project-manager (self-propagation seed)
+    "s_ddd-persist",     # ← learned from s_persist (sediment DDD docs)
+    "s_ddd-pipeline",    # ← learned from s_autonomous-pipeline (judge→execute→reflect)
+    "s_ddd-pollinate",   # ← learned from s_pollinate (express value)
+    "s_ai-ready-repo",   # ← the ⑥ code-intel refresher (portable as-is)
+)
+
+# Internal-DDD extra capabilities (bound to a Brazil/CRUX repo, e.g. AIDLC): the
+# internal toolchain skills + the no-git-push gate. Copied in ADDITION to the 5
+# native skills when a DDD is internal. These are copied FROM the SwarmAI-native
+# backend/skills/ (they are already portable HITL wrappers), not from templates.
+INTERNAL_DDD_SKILLS: tuple[str, ...] = (
+    "s_internal-brazil",
+    "s_internal-crux-cr",
+    "s_internal-crux-review",
+)
+
+
+def _load_ddd_native_skill_templates() -> dict[str, dict[str, str]]:
+    """Load the 5 default DDD-native skill templates from
+    backend/templates/ddd-skills/s_ddd-*/. Returns {skill_name: {relpath: content}}.
+
+    Mirrors _load_swarmai_ddd_templates: maintained as standalone files for
+    readability/diffability, copied verbatim into each DDD's skills/ at provision.
+    Fails soft (logs) if a template dir is missing — a DDD without a native skill
+    is degraded but not broken.
+    """
+    templates_dir = Path(__file__).parent.parent / "templates" / "ddd-skills"
+    result: dict[str, dict[str, str]] = {}
+    for skill in DDD_NATIVE_SKILLS:
+        skill_dir = templates_dir / skill
+        if not skill_dir.is_dir():
+            logger.warning("DDD-native skill template missing: %s", skill_dir)
+            continue
+        files: dict[str, str] = {}
+        for f in sorted(skill_dir.rglob("*")):
+            if f.is_file():
+                files[str(f.relative_to(skill_dir))] = f.read_text(encoding="utf-8")
+        if files:
+            result[skill] = files
+    return result
+
+
+DDD_NATIVE_SKILL_TEMPLATES: dict[str, dict[str, str]] = _load_ddd_native_skill_templates()
 
 # Default SwarmAI project DDD content (richer than templates, serves as
 # example for users).
@@ -822,17 +878,21 @@ class SwarmWorkspaceManager:
         logger.info("Ensured default project '%s' at %s", DEFAULT_PROJECT_NAME, project_dir)
 
     async def provision_project_ddd(
-        self, project_name: str, workspace_path: str = None
+        self, project_name: str, workspace_path: str = None,
+        internal: bool = False,
     ) -> list[str]:
-        """Create DDD document templates for a project.
+        """Create DDD document templates + six-section skeleton for a project.
 
-        Writes PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md and
-        ``.artifacts/manifest.json`` into the project directory.  Only
-        writes files that don't already exist (preserves user edits).
+        Writes the ② 4 docs, ① manifests, ③④ section dirs, ⑥ marker, and COPIES
+        the 5 default DDD-native skills into ``skills/``.  Only writes files that
+        don't already exist (preserves user edits).
 
         Args:
             project_name: Name of the project (must already exist under Projects/).
             workspace_path: Workspace root.  If None, uses default.
+            internal: If True, this DDD is bound to an internal Brazil/CRUX repo
+                (e.g. AIDLC) — ALSO copy the internal toolchain skills
+                (s_internal-brazil/crux-cr/crux-review) + the no_git_push gate.
 
         Returns:
             List of filenames that were created (empty list if all existed).
@@ -885,6 +945,46 @@ class SwarmWorkspaceManager:
                     keep.write_text("", encoding="utf-8")
                     created.append(f"{reldir}/.gitkeep")
 
+            # ④ COPY the 5 default DDD-native skills into skills/ (only-if-absent).
+            # This is the fix for "aim.json declared names but no skill existed":
+            # the skills must be PHYSICALLY in the DDD so that after `aim` export
+            # they run directly in Kiro / Claude Code. Source of truth is the
+            # official maintained template set (backend/templates/ddd-skills/).
+            skills_root = project_dir / "skills"
+            for skill_name, files in DDD_NATIVE_SKILL_TEMPLATES.items():
+                for relpath, content in files.items():
+                    target = skills_root / skill_name / relpath
+                    if not target.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(content, encoding="utf-8")
+                        created.append(f"skills/{skill_name}/{relpath}")
+
+            # INTERNAL DDD (Brazil/CRUX-bound, e.g. AIDLC): ALSO copy the internal
+            # toolchain skills + the no_git_push ③ gate. These are copied from the
+            # SwarmAI-native backend/skills/ (already-portable HITL wrappers) +
+            # the gate from an internal reference. only-if-absent.
+            if internal:
+                import shutil
+                native_skills_src = Path(__file__).parent.parent / "skills"
+                for skill_name in INTERNAL_DDD_SKILLS:
+                    src = native_skills_src / skill_name
+                    dst = skills_root / skill_name
+                    if src.is_dir() and not dst.exists():
+                        # ignore build/cache junk so a DDD never ships bytecode
+                        shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
+                            "__pycache__", "*.pyc", ".DS_Store"))
+                        created.append(f"skills/{skill_name}/ (internal)")
+                # ③ gate: no_git_push (+ test) — copy from the bundled internal
+                # gate reference if present; the gate is pure-stdlib + portable.
+                gate_src_dir = Path(__file__).parent.parent / "templates" / "ddd-gates"
+                for gate_file in ("no_git_push.py", "test_no_git_push.py"):
+                    gsrc = gate_src_dir / gate_file
+                    gdst = project_dir / "gates" / gate_file
+                    if gsrc.exists() and not gdst.exists():
+                        gdst.parent.mkdir(parents=True, exist_ok=True)
+                        gdst.write_text(gsrc.read_text(encoding="utf-8"), encoding="utf-8")
+                        created.append(f"gates/{gate_file} (internal)")
+
             # Ensure .artifacts/ with manifest.json
             artifacts_dir = project_dir / ".artifacts"
             artifacts_dir.mkdir(exist_ok=True)
@@ -928,9 +1028,13 @@ class SwarmWorkspaceManager:
         return created
 
     async def migrate_project_to_six_section(
-        self, project_name: str, workspace_path: str = None
+        self, project_name: str, workspace_path: str = None,
+        internal: bool = False,
     ) -> dict:
         """Backfill an EXISTING project to the six-section canonical structure.
+
+        ``internal=True`` also copies the internal Brazil/CRUX toolchain skills +
+        the no_git_push gate (for a repo-bound internal DDD like AIDLC).
 
         Idempotent + non-destructive. For a project that predates this scaffold
         (e.g. AIDLC — created before the metadata system, so it has no
@@ -1054,7 +1158,7 @@ class SwarmWorkspaceManager:
 
         metadata_created = await anyio.to_thread.run_sync(_ensure_metadata)
         pruned = await anyio.to_thread.run_sync(_prune_legacy_scaffold)
-        scaffolded = await self.provision_project_ddd(project_name, workspace_path)
+        scaffolded = await self.provision_project_ddd(project_name, workspace_path, internal=internal)
         await self.refresh_projects_index(workspace_path)
         logger.info(
             "Migrated project '%s' to six-section structure (metadata_created=%s, pruned=%d, scaffolded=%d items)",

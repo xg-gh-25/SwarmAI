@@ -2371,7 +2371,7 @@ class ContextHealthHook:
 
         A DDD project has 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT). A project
         with SOME but not ALL is half-created — usually because it was made
-        outside standard `s_ddd-manager` provisioning. That silently breaks
+        outside standard `s_project-manager` provisioning. That silently breaks
         cross-project index refs (PROJECTS.md points at files that don't exist)
         and leaves the pipeline's EVALUATE stage without a PRODUCT/TECH base.
 
@@ -2398,7 +2398,7 @@ class ContextHealthHook:
                         f"{len(present)}/4 standard DDD docs — missing "
                         f"{', '.join(missing)}. Half-created projects break "
                         f"cross-project index refs + leave pipeline EVALUATE "
-                        f"without a PRODUCT/TECH base. Backfill via s_ddd-manager."
+                        f"without a PRODUCT/TECH base. Backfill via s_project-manager."
                     )
         except Exception as e:  # noqa: BLE001 — fail-open by design
             findings.append(

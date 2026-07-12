@@ -38,7 +38,7 @@ ALWAYS_TIER_SKILLS = frozenset([
     "memory-distill",
     "workspace-finder",
     "workspace-git",
-    "ddd-manager",
+    "project-manager",
     "radar-todo",
     "evaluate",
     "deliver",
