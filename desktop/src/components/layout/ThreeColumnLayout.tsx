@@ -395,22 +395,27 @@ function NavSvgIcon({ name }: { name: string }) {
         </svg>
       );
     case 'book':
-      // Book icon for Memory
+      // Memory — book with a bookmark ribbon hanging from the top edge (2026-07-12
+      // tweak: the ribbon reads as "saved knowledge" and disambiguates from a plain
+      // notebook at 19px).
       return (
         <svg {...svgProps} aria-hidden="true">
           <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
           <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+          <path d="M11 2v8l3-2.2L17 10V2" />
         </svg>
       );
     case 'radio':
-      // Radio/antenna icon for Signals
+      // Signals — symmetric broadcast waves radiating from a center dot (2026-07-12
+      // tweak: replaced the off-balance antenna arcs with a clean concentric-wave
+      // pair on each side, mirrored around the dot — reads clearly at 19px).
       return (
         <svg {...svgProps} aria-hidden="true">
-          <circle cx="12" cy="12" r="2" />
-          <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
-          <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-          <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+          <circle cx="12" cy="12" r="1.6" />
+          <path d="M8.5 8.5a5 5 0 0 0 0 7" />
+          <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+          <path d="M5.6 5.6a9 9 0 0 0 0 12.8" />
+          <path d="M18.4 5.6a9 9 0 0 1 0 12.8" />
         </svg>
       );
     case 'terminal':
@@ -508,8 +513,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, settingsTab } = useLayout();
   const { addToast } = useToast();
 
-  // Integrated terminal: panel visibility + global Ctrl/Cmd-` toggle (AC5).
-  const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal, openTerminal } = useTerminal();
+  // Integrated terminal: global Ctrl/Cmd-` toggle (AC5). The panel is now always
+  // mounted and self-hides on panelOpen, so this scope no longer needs the
+  // panelOpen flag for a conditional render — only the toggle + cwd-open.
+  const { togglePanel: toggleTerminal, openTerminal } = useTerminal();
   useTerminalHotkey(toggleTerminal);
 
   // Explorer right-click "Open terminal here" → open a terminal cwd'd into the
@@ -842,9 +849,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         </div>
 
         {/* Integrated terminal panel — flex sibling BELOW chat, ABOVE the status
-            bar (Gate-1 C3: shrinks chat by its height, never overlays). Only
-            rendered when open; the Ctrl/Cmd-` hotkey toggles it. */}
-        {terminalPanelOpen && <TerminalPanel />}
+            bar (Gate-1 C3: shrinks chat by its height, never overlays). ALWAYS
+            mounted; it self-hides via display:none when collapsed (see
+            TerminalPanel's own panelOpen style). Mounted-not-conditional so
+            collapse/reopen preserves xterm scrollback + live PTYs instead of
+            unmount → term.dispose() → history loss. The Ctrl/Cmd-` hotkey / ▾
+            button flip panelOpen, which drives the self-hide. */}
+        <TerminalPanel />
 
         {/* Bottom status bar */}
         <BottomBar />
