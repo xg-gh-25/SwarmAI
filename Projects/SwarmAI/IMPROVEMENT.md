@@ -1,4 +1,8 @@
 
+### 2026-07-12: CSS refactor that moves active-styling class→CSS silently breaks class-literal test assertions (run_70ad47bc, trivial)
+<!-- ref:0 | last:none | decay:active | source:manual -->
+**What to Watch For:** A visual refactor that moves active-state styling OUT of inline Tailwind class literals (`bg-[var(--color-primary)]/15`, `ring-1`) INTO a CSS class rule (`.nav-btn[aria-pressed=true]` reading a `--ac` group-color var) silently breaks any unit/property test that asserted the OLD className literals. My BUILD-stage same-file R7 scan **missed 4** such stale assertions in `ThreeColumnLayout.property.test.tsx`; only the TEST stage caught them (9 red → fixed → 80/80). **Rule:** when styling moves class→CSS, `grep ALL test files for the removed class literal BEFORE running the suite`, not after. The correct post-refactor assertion is `aria-pressed` + the stable class name — because **jsdom does not apply CSS attribute-selector rules**, so active-vs-inactive *visual* distinction is no longer unit-testable (needs a Playwright/visual test if it matters). Companion win: Gate-2 adversarial earned its keep on a "trivial" CSS-only change — caught a lying comment (claimed "footer keeps amber"; code correctly falls back to `--color-primary` accent) = R7 docstring-drift describing the mockup default, not shipped behavior.
+
 ### 2026-07-01: MILESTONE — "reliability + self-eval" 三周攻坚告一段落 (v1.23.0 shipped)
 <!-- ref:0 | last:none | decay:active | source:manual -->
 **What:** 三周 refactor 的主线不是功能堆料，而是把系统从"看着好了"逼到"真的好了" —— 结构性根治了三类"骗过自己"的失败模式，每一类的共性都是"表面绿/看着活但实际错"（authorship-trap / 假信号的家族）：
