@@ -302,32 +302,43 @@ def parse_skill_md(
 
 
 def format_skill_md(
-    name: str,
-    description: str,
-    version: str,
+    meta: dict | None,
     content: str,
 ) -> str:
-    """Format skill metadata and content into a valid SKILL.md string.
+    """Format skill frontmatter + content into a valid SKILL.md string.
 
-    Produces a file with YAML frontmatter (``name``, ``description``,
-    ``version``) followed by the markdown body.
+    Takes the **full** frontmatter dict and re-emits it verbatim, so ALL
+    keys survive a round-trip — ``tier``, ``platform``,
+    ``disable-model-invocation``, ``project_scope``, ``trigger``,
+    ``do_not_use``, ``consumes_artifacts``, ``produces_artifact``, and any
+    future key. The only normalization applied is name-lowercasing (the SDK
+    matches slash commands case-sensitively, and users type lowercase).
+
+    Callers override ``name``/``description``/``version`` by setting them on
+    ``meta`` before calling; nothing else is touched. Key order is preserved
+    (``sort_keys=False`` + dict insertion order), so an update writes the file
+    back in the same shape it was read.
 
     Args:
-        name: Human-readable skill name.
-        description: Short description of the skill.
-        version: Semantic version string.
+        meta: The complete frontmatter mapping to emit. ``None``/empty is
+            treated as an empty mapping (a body-only SKILL.md).
         content: Markdown body after the frontmatter.
 
     Returns:
         A complete SKILL.md string ready to be written to disk.
+
+    Note:
+        Previously this hardcoded ``meta={name, description, version}`` and
+        thus DROPPED every other frontmatter key on ``update_skill``
+        write-back (run_3467799d). The fix preserves the full dict.
     """
-    # Enforce lowercase — SDK matches slash commands case-sensitively
-    name = name.lower()
-    meta = {
-        "name": name,
-        "description": description,
-        "version": version,
-    }
+    meta = dict(meta) if meta else {}
+
+    # Enforce lowercase name — SDK matches slash commands case-sensitively.
+    # Preserve the key's original position (reassignment keeps order).
+    if meta.get("name") is not None:
+        meta["name"] = str(meta["name"]).lower()
+
     frontmatter = yaml.dump(
         meta,
         default_flow_style=False,
@@ -769,10 +780,13 @@ class SkillManager:
         skill_dir.mkdir(parents=True, exist_ok=False)
 
         skill_md_path = skill_dir / "SKILL.md"
+        # Fresh skill: no prior frontmatter to preserve — a 3-key meta.
         md_content = format_skill_md(
-            name=name,
-            description=description,
-            version="1.0.0",
+            meta={
+                "name": name,
+                "description": description,
+                "version": "1.0.0",
+            },
             content=content,
         )
         skill_md_path.write_text(md_content, encoding="utf-8")
@@ -847,23 +861,35 @@ class SkillManager:
                 status_code=400, detail="Invalid path: traversal detected"
             )
 
-        # Read current SKILL.md to get existing values
-        current = parse_skill_md(
-            path=cached.path / "SKILL.md",
-            folder_name=folder_name,
-            source_tier="user",
-            load_content=True,
-        )
+        # Read current SKILL.md — parse_frontmatter returns the FULL meta dict
+        # so every existing key survives the write-back (tier, platform,
+        # disable-model-invocation, project_scope, trigger, …). Reading via
+        # parse_skill_md alone would only recover the curated SkillInfo view
+        # and silently drop the rest (run_3467799d).
+        raw_meta, raw_body = parse_frontmatter(cached.path / "SKILL.md")
+        merged_meta = dict(raw_meta)
 
-        # Merge: only override non-None fields
-        merged_name = name if name is not None else current.name
-        merged_desc = description if description is not None else current.description
-        merged_content = content if content is not None else (current.content or "")
+        # Override ONLY the three user-editable fields, in place (preserving
+        # each key's original position; format_skill_md re-lowercases name).
+        if name is not None:
+            merged_meta["name"] = name
+        if description is not None:
+            merged_meta["description"] = description
+        # version is not user-editable here; keep whatever the file had.
+
+        # Self-heal required keys if the on-disk file omitted them, mirroring
+        # the fallbacks parse_skill_md used to materialize. Without this, the
+        # raw parse_frontmatter path would write a name/description/version-less
+        # file back — which fails scripts/lint_skills.py (name + description are
+        # CI-required). setdefault preserves any present value + key order.
+        merged_meta.setdefault("name", folder_name)
+        merged_meta.setdefault("description", f"Skill: {folder_name}")
+        merged_meta.setdefault("version", "1.0.0")
+
+        merged_content = content if content is not None else raw_body
 
         md_text = format_skill_md(
-            name=merged_name,
-            description=merged_desc,
-            version=current.version,
+            meta=merged_meta,
             content=merged_content,
         )
         (cached.path / "SKILL.md").write_text(md_text, encoding="utf-8")

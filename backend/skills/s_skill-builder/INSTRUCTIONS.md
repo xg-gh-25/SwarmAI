@@ -399,6 +399,39 @@ Work systematically:
 4. Create supporting files as needed
 5. Add quality sections (Troubleshooting, Quick Start)
 
+> [!IMPORTANT]
+> **When improving an EXISTING skill, preserve EVERY existing frontmatter key —
+> edit the frontmatter in place, never regenerate it.** (This applies to Mode 3
+> Improve only. Mode 1 Create still authors files with the Write tool — Step 4 —
+> because a new skill has no prior frontmatter to preserve.)
+>
+> - **Positive rule:** Read the current frontmatter first, then use the **Edit
+>   tool** to change ONLY the specific keys you're improving (e.g. `description`,
+>   `tier`). Keep every other key exactly as it was — preserve **all** of them,
+>   not just the ones you recognize.
+> - **Why:** frontmatter carries load-bearing keys beyond name/description/version
+>   that change runtime behavior — e.g. `tier`, `platform`,
+>   `disable-model-invocation`, `project_scope`, `trigger`, `do_not_use`,
+>   `consumes_artifacts`, `produces_artifact`, `version`, `tags`, `input_type`,
+>   `output_type` (platform filtering, model-invocation gating, artifact routing).
+>   **This list is examples, not exhaustive** — treating it as a whitelist and
+>   re-typing "the keys that matter" is exactly how keys get dropped. Preserve
+>   whatever is present.
+>
+> **Hard constraint (backstop):** NEVER regenerate or Write-replace the
+> **frontmatter block** from scratch during an improve — that silently drops any
+> key you didn't re-type. Scope note: a large **body** restructure is fine when
+> Step 8.3 (progressive disclosure) calls for it — you may rewrite the markdown
+> body — but the `---`-delimited frontmatter block must survive byte-for-byte
+> except the keys you are intentionally changing. If you rename the skill, Edit
+> the `name` line and rename the folder (don't delete-and-recreate), and keep any
+> duplicated keys in `manifest.yaml`/supporting files in sync.
+>
+> _Provenance: this exact silent-drop bug was fixed on the API edit path
+> (`skill_manager.py::update_skill`, run_3467799d) after the
+> disable-model-invocation adoption; this guardrail closes the same gap on the
+> direct-Edit path that `s_skill-builder` uses (which does not go through that API)._
+
 ### Step 9: Run Eval Loop (Trigger Accuracy Test)
 
 > [!IMPORTANT]
@@ -464,6 +497,7 @@ Before declaring complete:
 - [ ] Structure matches complexity (not over-engineered)
 - [ ] Examples show concrete input/output
 - [ ] Consistent terminology throughout
+- [ ] **(Improve only)** frontmatter edited in place — every pre-existing key preserved, no whole-block regenerate (Step 8)
 
 Full checklist: **CHECKLIST.md**
 
