@@ -116,11 +116,24 @@ bindings:
       refresh_policy: on-develop   # when the ⑥ refresher regenerates code-intel
 ```
 - **Delivery policy lives in the binding, not a global rule file** — each repo carries its own.
+- **After writing bindings.yaml → RECONCILE the project's class (SSOT).** A DDD's class is
+  DERIVED from its bindings (no bindings = `none`; any `kind:internal` = `internal`; else
+  `external`) — never a stored flag. Binding an **internal** repo means the project now needs
+  the internal toolchain (`s_internal-*` skills + `no_git_push` ③ gate). Trigger the reconcile
+  so they're provisioned at BIND (idempotent — no-op for external/no-repo or if already present):
+  ```python
+  from core.swarm_workspace_manager import SwarmWorkspaceManager
+  await SwarmWorkspaceManager().sync_internal_provisioning("<project>")
+  # → {"classification": "internal", "provisioned": [...]}  (reads classify_project, fires
+  #    provision(internal=True) only when internal). On Kiro/no-SwarmAI: skip — an internal
+  #    DDD there already carries its skills from a prior SwarmAI provision or the export.
+  ```
 - **PULL + index:** clone the repo into a worktree OUTSIDE the DDD tree, then run the ⑥
   refresher (`s_ai-ready-repo`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
   binding member — it's a DERIVED projection (§3.6), regenerated locally, gitignored.
-- **DEVELOP:** read `remote_kind` + `build_system` and route — never assume CRUX/Brazil. The
-  agent never `git push`es an internal CR remote (CRUX auto-merge owns it).
+- **DEVELOP:** read the project's class (`classify_project`) + the binding's `remote_kind` +
+  `build_system` and route — never assume CRUX/Brazil. The agent never `git push`es an internal
+  CR remote (CRUX auto-merge owns it).
 
 ## MANAGE — List / Edit / Rename
 

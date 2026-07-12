@@ -23,6 +23,7 @@ from core.ddd_bindings import (
     BindingsDoc,
     DeliveryContract,
     bind_repo,
+    classify_project,
     load_bindings,
 )
 
@@ -384,3 +385,44 @@ def test_bind_repo_rejects_traversal_in_repo_even_with_worktree_set(tmp_path: Pa
     assert "bare name" in str(ei.value)
     # no escaped db file was created outside the root
     assert not (victim_parent / "pwn.code_intel.db").exists()
+
+
+# ---------------------------------------------------------------------------
+# classify_project — the single-source-of-truth for DDD class (derive-on-read)
+# ---------------------------------------------------------------------------
+
+def _write_bindings(project_dir: Path, doc: dict) -> None:
+    import yaml
+    (project_dir / "bindings.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+
+def test_classify_no_repo_when_no_bindings(tmp_path: Path):
+    """No bindings.yaml → 'none' (pure-DDD; docs ARE the deliverable)."""
+    assert classify_project(tmp_path) == "none"
+
+
+def test_classify_external_when_all_external(tmp_path: Path):
+    _write_bindings(tmp_path, {"bindings": [{
+        "repo": "gh", "kind": "external",
+        "clone": "https://github.com/o/gh.git", "worktree": None,
+        "delivery_contract": {"remote_kind": "github-pr", "branch": "main",
+                              "review_path": "s_code-review", "auto_send": "on-clean-review"},
+    }]})
+    assert classify_project(tmp_path) == "external"
+
+
+def test_classify_internal_wins_on_mixed(tmp_path: Path):
+    """ANY internal binding → 'internal' (needs s_internal-* + no_git_push gate)."""
+    _write_bindings(tmp_path, VALID_DOC)  # mixed: external adlc + internal GCRAIDLCPreset
+    assert classify_project(tmp_path) == "internal"
+
+
+def test_classify_malformed_bindings_is_none_failsafe(tmp_path: Path):
+    """A syntactically broken bindings.yaml → 'none', never a crash, never 'internal'."""
+    (tmp_path / "bindings.yaml").write_text("this: is: not: valid: yaml", encoding="utf-8")
+    assert classify_project(tmp_path) == "none"
+
+
+def test_classify_empty_bindings_list_is_none(tmp_path: Path):
+    _write_bindings(tmp_path, {"bindings": []})
+    assert classify_project(tmp_path) == "none"

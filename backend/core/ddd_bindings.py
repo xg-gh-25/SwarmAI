@@ -142,6 +142,42 @@ def load_bindings(path: str | Path) -> BindingsDoc:
         ) from exc
 
 
+def classify_project(project_dir: str | Path) -> str:
+    """The SINGLE SOURCE OF TRUTH for a DDD's class — derived, never stored.
+
+    A DDD's class is NOT a persisted attribute (repo shape is unknown at CREATE, and
+    a DDD may bind MANY repos of mixed kinds — any stored scalar would drift). It is a
+    pure FUNCTION of the binding set, computed on read from ``<project>/bindings.yaml``:
+
+    - ``"none"``     — no ⑤ bindings.yaml (or empty/unreadable) → pure-DDD, docs ARE the
+                       deliverable; ⑥ code-intel + ⑤ delivery are no-ops.
+    - ``"internal"`` — ANY binding is ``kind: internal`` (Amazon Brazil/CRUX). Internal
+                       wins on a mixed set: the project needs the s_internal-* toolchain
+                       + no_git_push gate the moment ONE internal repo is bound.
+    - ``"external"`` — has bindings, none internal (GitHub/PR).
+
+    Both provisioning (which skills/gate to copy) and delivery routing read THIS — no
+    second source. (run_2acb67e1: replaces the disconnected create-time ``internal``
+    flag that never fired.)
+    """
+    p = Path(project_dir) / "bindings.yaml"
+    if not p.exists():
+        return "none"
+    try:
+        doc = load_bindings(p)
+    except Exception:
+        # Unreadable/empty/malformed bindings (FileNotFoundError, ValueError, or a raw
+        # yaml.YAMLError from a syntactically broken doc) → treat as no-repo. Fail-safe:
+        # never mis-classify a broken doc as internal and provision CRUX skills spuriously,
+        # and never let a bad bindings.yaml crash provisioning/routing.
+        return "none"
+    if not doc.bindings:
+        return "none"
+    if any(b.kind == "internal" for b in doc.bindings):
+        return "internal"
+    return "external"
+
+
 # ── PULL + codeIntel ─────────────────────────────────────────────────────────
 
 def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> BindResult:

@@ -1225,6 +1225,36 @@ class SwarmWorkspaceManager:
             "id": f"{project_name.lower()}-ddd",
         }
 
+    async def sync_internal_provisioning(
+        self, project_name: str, workspace_path: str = None,
+    ) -> dict:
+        """Reconcile a DDD's ④ skills/③ gates to its CURRENT class — call at BIND time.
+
+        The single-source-of-truth for a DDD's class is `classify_project` (derived on
+        read from bindings.yaml — NOT a stored flag, which would drift). This closes the
+        historical gap where `internal` was a create-time param that no caller ever set,
+        so internal DDDs never got the s_internal-* toolchain + no_git_push gate.
+
+        Trigger: after a binding is written (BIND step in s_ddd-manager), call this. If
+        the project now classifies `internal` (any binding is kind:internal), it copies
+        the internal skills+gate (idempotent — provision is only-if-absent, so re-bind /
+        already-internal is a safe no-op). An external or no-repo project is a no-op.
+
+        Returns {"classification": <none|external|internal>, "provisioned": [...]}.
+        """
+        from core.ddd_bindings import classify_project
+
+        ws = Path(workspace_path) if workspace_path else get_swarmws()
+        project_dir = ws / "Projects" / project_name
+        classification = classify_project(project_dir)
+        provisioned: list[str] = []
+        if classification == "internal":
+            # Idempotent: provision_project_ddd's internal copy is not-if-absent.
+            provisioned = await self.provision_project_ddd(
+                project_name, workspace_path, internal=True,
+            )
+        return {"classification": classification, "provisioned": provisioned}
+
     # ── TECH.md auto-population from codebase scan ─────────────────────
 
     async def scan_and_populate_tech(
