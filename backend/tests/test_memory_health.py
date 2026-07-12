@@ -627,3 +627,25 @@ class TestResolveNonEmojiThread:
         content = memory.read_text()
         assert "✅" in content
         assert "auto-resolved" in content
+
+    def test_scoping_prevents_false_positive_outside_open_threads(self, tmp_path):
+        """Gate-2 BLOCKER#2 guard: a same-titled bold bullet OUTSIDE the
+        Open Threads section must NOT be resolved — the match is scoped."""
+        from jobs.handlers.memory_health import _resolve_open_thread
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Recent Context\n\n"
+            "- **Widget refactor** — a decision note that merely mentions the title\n"
+            "\n## Open Threads\n\n"
+            "- 🟡 **Some other open thread** — still open\n"
+            "\n### Resolved (archive)\n"
+        )
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            result = _resolve_open_thread("Widget refactor")
+        # The bold bullet lives in ## Recent Context, NOT Open Threads → no match.
+        assert result is False
+        content = memory.read_text()
+        # It must stay put in Recent Context, not be moved to Resolved.
+        recent_idx = content.index("## Recent Context")
+        ot_idx = content.index("## Open Threads")
+        assert "Widget refactor" in content[recent_idx:ot_idx]
