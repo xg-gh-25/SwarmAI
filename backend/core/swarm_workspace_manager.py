@@ -281,6 +281,114 @@ _Nothing currently blocking._
 """,
 }
 
+# Canonical six-section DDD structure — SKELETON (dirs + purpose READMEs + ①
+# identity manifests) materialized at CREATE (option A, XG decision 2026-07-12).
+# The skeleton is concrete so SwarmAI-maintenance FOLLOWS the standard and AIM
+# export is low-variance; section CONTENT (real gates/skills/agent-specs) still
+# ACCRETES as the project grows. Mirrors the DDD_TEMPLATES idiom: a flat
+# {relpath: content} map, {project_name}-templated, written only-if-absent.
+#
+# Members here cover ① IDENTITY (aim.json/AGENTS.md/.crux_template.md),
+# ③ GATES (gates/ + context/includes/), ④ CAPABILITIES (skills/agents/agent-sops/),
+# and ⑥ REFRESHER (a shape-neutral marker — see its body). ② KNOWLEDGE is the 4
+# DDD_TEMPLATES docs + Knowledge/ (handled above/by the workspace); ⑤ DELIVERY
+# CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE (repo shape is
+# unknown at create time). Every README states the section's purpose + what
+# belongs + the accretion rule — a legible standard, never a bare empty dir.
+SECTION_SCAFFOLD: dict[str, str] = {
+    # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
+    "aim.json": """{
+  "name": "{project_name}",
+  "ddd_spec_version": "1.0",
+  "description": "DDD package for {project_name} (six-section canonical structure).",
+  "plugins": {}
+}
+""",
+    "AGENTS.md": """# {project_name} — Agent Guide (① Identity)
+
+Repo-level guide for any AI agent operating on **{project_name}**. This is section
+① of the canonical six-section DDD structure (DDD-agent-brain spec §3.6).
+
+## What this DDD is
+{project_name}'s domain **brain / control plane** — it OWNs cognition (①-④) and
+GOVERNs the physical repo (⑤-⑥). It never contains source code and never runs a
+pipeline (指+治, 不含+不跑).
+
+## The six sections
+- ① Identity & Manifest — this file, `aim.json`, `.crux_template.md`
+- ② Knowledge — `PRODUCT/TECH/IMPROVEMENT/PROJECT.md` + `Knowledge/`
+- ③ Gates — `gates/` (executable judgment; accretes as pitfalls mature)
+- ④ Capabilities — `skills/`, `agents/`, `agent-sops/` (accretes as capabilities are bound)
+- ⑤ Delivery Contract — `bindings.yaml` (added by BIND when a repo is bound)
+- ⑥ Code-Intel Refresher — `REFRESHER.md` (activates on BIND)
+
+## Non-section directories (sanctioned, not part of ①-⑥)
+`assets/` (diagrams, decks, generators — referenced by path, do NOT relocate),
+`templates/` (project doc templates), `.artifacts/` (pipeline run outputs).
+""",
+    ".crux_template.md": """## Summary
+_One-line summary of the change to {project_name}._
+
+## Description
+_What changed and why._
+
+## Testing
+- [ ] _How this was verified._
+""",
+    # ── ③ GATES (the moat) ───────────────────────────────────────────────────
+    "gates/README.md": """# ③ Gates — executable judgment (the moat)
+
+Section ③ of {project_name}'s DDD. **Content ACCRETES**: a gate is born as prose
+in ② Knowledge (a pitfall / rule), matures via the 养成 ladder, and is compiled
+HERE as an executable check (`<gate>.py|sh` + `test_<gate>.*`) wired into an ④
+agent-spec's hooks. Empty until the first judgment matures — that is correct.
+
+**What belongs here:** deterministic PreToolUse/commit-time gate scripts that a
+runtime cannot silently ignore (exit-2 = BLOCK). Denylist DATA lives in
+`context/includes/*_denied_commands.json`.
+""",
+    "gates/context/includes/README.md": """# ③ Gate denylist data
+
+Judgment-as-DATA consumed by ③ gate scripts + shell allow/deny config
+(decision-7 generalized). Add `*_denied_commands.json` here as gates accrete.
+Empty until the first gate needs a denylist.
+""",
+    # ── ④ CAPABILITIES ───────────────────────────────────────────────────────
+    "skills/README.md": """# ④ Capabilities — skills
+
+Section ④ of {project_name}'s DDD. **Content ACCRETES** as validated, portable
+capabilities are bound. What belongs: `agentskills.io`-standard skill dirs
+(`s_<name>/SKILL.md`) — project-increment skills the DDD distributes. Empty until
+the first capability is bound — that is correct (a superset section, not a checklist).
+""",
+    "agents/README.md": """# ④ Capabilities — agent specs
+
+Per-agent config (`*.agent-spec.json`: name/systemPrompt/model/dependencies;
+③ gates wire into an agent-spec's hooks here). **Content ACCRETES.** Empty until
+{project_name} defines its first agent.
+""",
+    "agent-sops/README.md": """# ④ Capabilities — agent SOPs
+
+Procedural workflows (`*.sop.md`) for {project_name}. **Content ACCRETES.**
+Empty until the first SOP is authored.
+""",
+    # ── ⑥ CODE-INTEL REFRESHER (shape-neutral marker) ────────────────────────
+    "REFRESHER.md": """# ⑥ Code-Intel Refresher — {project_name}
+
+Section ⑥ GOVERNs the physical repo's code-intel projection. It is a
+**self-contained mechanism that REGENERATES `code-intel.json` from code** — it
+ships the refresher (capability), never the projection (derived data).
+
+**Status: NOT-YET-BUILT (planned = `s_ai-ready-repo` narrow refresh mode).**
+
+**Activation:** ⑥ activates when a repo is BOUND (see ⑤ `bindings.yaml`). For a
+**no-repo project it is a no-op** — there is no code to refresh, so this file is
+just a placeholder honoring the canonical structure. Once a repo is bound and a
+dev-consumer profile pulls this DDD, the refresher regenerates the projection
+LOCALLY (never PR-flowed-back — the derived-projection rule, spec §3.6).
+""",
+}
+
 # Default SwarmAI project DDD content (richer than templates, serves as
 # example for users).
 def _load_swarmai_ddd_templates() -> dict[str, str]:
@@ -728,6 +836,20 @@ class SwarmWorkspaceManager:
                     )
                     created.append(filename)
 
+            # Six-section skeleton (①③④⑥): scaffold dirs + purpose READMEs +
+            # identity manifests, only-if-absent (idempotent — never clobbers
+            # hand-authored content; re-provision is a safe no-op). ② is the 4
+            # docs above; ⑤ bindings.yaml is provisioned by BIND, not here.
+            for relpath, template in SECTION_SCAFFOLD.items():
+                target = project_dir / relpath
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(
+                        template.replace("{project_name}", project_name),
+                        encoding="utf-8",
+                    )
+                    created.append(relpath)
+
             # Ensure .artifacts/ with manifest.json
             artifacts_dir = project_dir / ".artifacts"
             artifacts_dir.mkdir(exist_ok=True)
@@ -769,6 +891,75 @@ class SwarmWorkspaceManager:
                 project_name, ", ".join(created),
             )
         return created
+
+    async def migrate_project_to_six_section(
+        self, project_name: str, workspace_path: str = None
+    ) -> dict:
+        """Backfill an EXISTING project to the six-section canonical structure.
+
+        Idempotent + non-destructive. For a project that predates this scaffold
+        (e.g. AIDLC — created before the metadata system, so it has no
+        ``.project.json`` and is invisible to ``list_projects``):
+
+          1. Write ``.project.json`` DIRECTLY (only-if-absent) with a DELIBERATE,
+             stable id — NEVER via ``create_project`` (that mints a fresh uuid and
+             raises on the name-collision guard). A non-uuid id is valid (cf. the
+             shipped ``swarmai-default``); the ``<name>-`` prefix avoids any future
+             uuid4 collision.
+          2. Call ``provision_project_ddd`` to fill the ①③④⑥ skeleton — every
+             write is only-if-absent, so the project's hand-authored ② docs /
+             ``Knowledge/`` / ⑤ ``bindings.yaml`` are preserved byte-for-byte.
+
+        Returns ``{"metadata_created": bool, "scaffolded": [...], "id": str}``.
+        Other projects lacking ``.project.json`` can be backfilled the same way
+        (safe idempotent re-run) — done per-project on demand, not big-bang.
+        """
+        workspace_path = self._resolve_workspace_path(workspace_path)
+        project_dir = Path(workspace_path) / "Projects" / project_name
+        if not project_dir.exists():
+            raise ValueError(f"Project directory not found: {project_dir}")
+
+        def _ensure_metadata() -> bool:
+            meta_file = project_dir / ".project.json"
+            if meta_file.exists():
+                return False
+            now = datetime.now(timezone.utc).isoformat()
+            metadata = {
+                # Deliberate stable id (NOT uuid4) — safe per _rebuild_uuid_index
+                # (string→path map, no uuid parsing) and mirrors "swarmai-default".
+                "id": f"{project_name.lower()}-ddd",
+                "name": project_name,
+                "description": "",
+                "created_at": now,
+                "updated_at": now,
+                "status": "active",
+                "tags": [],
+                "priority": None,
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "ddd_spec_version": DDD_SPEC_VERSION,
+                "version": 1,
+                "update_history": [{
+                    "version": 1, "timestamp": now,
+                    "action": "created", "changes": {},
+                    "source": "migration",
+                }],
+            }
+            self._write_project_metadata(project_dir, metadata)
+            self._uuid_index[metadata["id"]] = project_dir
+            return True
+
+        metadata_created = await anyio.to_thread.run_sync(_ensure_metadata)
+        scaffolded = await self.provision_project_ddd(project_name, workspace_path)
+        await self.refresh_projects_index(workspace_path)
+        logger.info(
+            "Migrated project '%s' to six-section structure (metadata_created=%s, scaffolded=%d items)",
+            project_name, metadata_created, len(scaffolded),
+        )
+        return {
+            "metadata_created": metadata_created,
+            "scaffolded": scaffolded,
+            "id": f"{project_name.lower()}-ddd",
+        }
 
     # ── TECH.md auto-population from codebase scan ─────────────────────
 
@@ -2100,13 +2291,18 @@ class SwarmWorkspaceManager:
     ) -> dict:
         """Create a new project under Projects/.
 
-        Scaffolds sections ①+② of the canonical six-section DDD structure
-        (spec §3.6): the project dir + ``.project.json`` metadata (① identity,
-        stamped with ``ddd_spec_version``) and the 4 DDD docs
-        (PRODUCT/TECH/IMPROVEMENT/PROJECT.md, ② knowledge) via
-        ``provision_project_ddd``, plus ``.artifacts/`` for pipeline outputs.
-        Sections ③–⑥ (Gates/Capabilities/DeliveryContract/Refresher) accrete
-        later as the project grows — they are NOT provisioned empty.
+        Scaffolds the SKELETON of the canonical six-section DDD structure
+        (spec §3.6; option A, XG decision 2026-07-12): the project dir +
+        ``.project.json`` (① identity, stamped with ``ddd_spec_version``), the ①
+        manifests (``aim.json``/``AGENTS.md``/``.crux_template.md``), the 4 DDD
+        docs (② knowledge), and the ③④⑥ section skeleton (``gates/``,
+        ``skills/``/``agents/``/``agent-sops/``, ``REFRESHER.md`` — each dir with a
+        purpose README) via ``provision_project_ddd``, plus ``.artifacts/`` for
+        pipeline outputs. The skeleton is concrete so SwarmAI-maintenance follows
+        the standard and AIM export is low-variance; section CONTENT (real gates,
+        skills, agent-specs, a live refresher) ACCRETES as the project grows. Only
+        ⑤ ``bindings.yaml`` waits — it is provisioned by BIND (repo shape is unknown
+        at create). All writes are only-if-absent (idempotent, non-destructive).
 
         Args:
             project_name: Display name for the project (used as directory name).

@@ -263,3 +263,93 @@ class TestProjectCRUDRoundTrip:
         # ── GET after delete raises ValueError ───────────────────────
         with pytest.raises(ValueError):
             await manager.get_project(project_id, workspace_path=ws)
+
+
+# ---------------------------------------------------------------------------
+# Six-section canonical DDD structure (DDD-agent-brain spec §3.6) — physical
+# scaffold. Fixed project name (NOT Hypothesis) to keep the path-assertion
+# oracle unambiguous (Gate-0 E: a generated name equal to a section dir would
+# make "is there a skills/ dir" ambiguous).
+# ---------------------------------------------------------------------------
+
+# ① IDENTITY manifests + ③④⑥ section skeleton that provisioning must scaffold.
+# ② (4 docs + Knowledge/) is covered by the scaffold test above; ⑤ bindings is
+# provisioned by BIND, not CREATE — deliberately absent here.
+EXPECTED_SIX_SECTION_FILES = {
+    "aim.json",                       # ①
+    "AGENTS.md",                      # ①
+    ".crux_template.md",              # ①
+    "gates/README.md",                # ③
+    "gates/context/includes/README.md",  # ③ denylist-data home
+    "skills/README.md",               # ④
+    "agents/README.md",               # ④
+    "agent-sops/README.md",           # ④
+    "REFRESHER.md",                   # ⑥ (marker: activates on BIND, no-op for no-repo)
+}
+
+
+class TestSixSectionScaffold:
+    """The canonical six-section DDD structure is physically materialized at
+    CREATE (option A, XG decision 2026-07-12): the SKELETON (dirs + purpose
+    READMEs) is concrete so SwarmAI-maintenance follows the standard and AIM
+    export is low-variance. Section CONTENT still accretes."""
+
+    @pytest.mark.asyncio
+    async def test_create_scaffolds_six_section_skeleton(self, tmp_path: Path):
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        manager = SwarmWorkspaceManager()
+        await manager.create_project(project_name="SixSecProj", workspace_path=str(ws))
+        pdir = ws / "Projects" / "SixSecProj"
+
+        for rel in EXPECTED_SIX_SECTION_FILES:
+            p = pdir / rel
+            assert p.exists(), f"six-section scaffold missing: {rel}"
+            assert p.is_file(), f"{rel} should be a file"
+            body = p.read_text(encoding="utf-8")
+            assert body.strip(), f"{rel} must not be empty (legible standard, not cargo-cult)"
+
+        # Every scaffolded README must state its purpose (AC5: not a bare empty dir).
+        for readme_rel in [r for r in EXPECTED_SIX_SECTION_FILES if r.endswith("README.md")]:
+            body = (pdir / readme_rel).read_text(encoding="utf-8").lower()
+            assert ("belongs" in body or "accrete" in body or "purpose" in body), (
+                f"{readme_rel} must explain the section's purpose / what belongs / accretion rule"
+            )
+
+        # {project_name} templating actually applied (not a literal placeholder).
+        agents_md = (pdir / "AGENTS.md").read_text(encoding="utf-8")
+        assert "{project_name}" not in agents_md, "template placeholder left unfilled"
+        assert "SixSecProj" in agents_md, "project name not templated into AGENTS.md"
+
+        # ① aim.json must be VALID JSON after templating (Gate-2 CRITICAL: a
+        # {{}}-vs-.replace brace mismatch shipped a manifest with literal braces
+        # that failed json.loads). Parse it + assert the templated name landed.
+        aim = json.loads((pdir / "aim.json").read_text(encoding="utf-8"))
+        assert aim["name"] == "SixSecProj"
+        assert aim["ddd_spec_version"] == "1.0"
+
+    @pytest.mark.asyncio
+    async def test_provision_is_idempotent(self, tmp_path: Path):
+        """Re-provisioning writes nothing new (AC3) — never clobbers hand-authored content."""
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        manager = SwarmWorkspaceManager()
+        await manager.create_project(project_name="IdemProj", workspace_path=str(ws))
+        # second provision pass over the now-populated project → zero new files
+        created_second = await manager.provision_project_ddd("IdemProj", workspace_path=str(ws))
+        assert created_second == [], f"re-provision must be a no-op, got: {created_second}"
+
+    @pytest.mark.asyncio
+    async def test_refresher_marks_bind_activation(self, tmp_path: Path):
+        """⑥ REFRESHER.md is a shape-neutral marker: it must state it activates on
+        BIND and is a no-op for a no-repo project (Gate-0/Gate-1 F reconciliation —
+        the skeleton is concrete but the semantics honor GOVERN-a-physical-repo)."""
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        manager = SwarmWorkspaceManager()
+        await manager.create_project(project_name="RefProj", workspace_path=str(ws))
+        body = (ws / "Projects" / "RefProj" / "REFRESHER.md").read_text(encoding="utf-8").lower()
+        assert "bind" in body, "REFRESHER must explain it activates when a repo is bound (⑤)"
+        assert ("no-op" in body or "no repo" in body or "not-yet-built" in body), (
+            "REFRESHER must state it's a no-op without a bound repo"
+        )
