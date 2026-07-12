@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { LayoutProvider } from '../../contexts/LayoutContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
+import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
 
 // Mock the pty service boundary — a panel toggle spawns nothing, but this keeps
@@ -35,11 +36,13 @@ vi.mock('../../services/pty', () => ({
 
 function renderSidebar() {
   return render(
-    <LayoutProvider>
-      <TerminalProvider>
-        <LeftSidebar />
-      </TerminalProvider>
-    </LayoutProvider>,
+    <ToastProvider>
+      <LayoutProvider>
+        <TerminalProvider>
+          <LeftSidebar />
+        </TerminalProvider>
+      </LayoutProvider>
+    </ToastProvider>,
   );
 }
 

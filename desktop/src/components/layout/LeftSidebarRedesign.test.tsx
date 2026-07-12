@@ -20,6 +20,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, within } from '@testing-library/react';
 import { LayoutProvider } from '../../contexts/LayoutContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
+import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
 
 vi.mock('../../services/pty', () => ({
@@ -41,11 +42,13 @@ const AMBER = '#fbbf24';
 
 function renderSidebar() {
   return render(
-    <LayoutProvider>
-      <TerminalProvider>
-        <LeftSidebar />
-      </TerminalProvider>
-    </LayoutProvider>,
+    <ToastProvider>
+      <LayoutProvider>
+        <TerminalProvider>
+          <LeftSidebar />
+        </TerminalProvider>
+      </LayoutProvider>
+    </ToastProvider>,
   );
 }
 

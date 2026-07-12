@@ -120,9 +120,24 @@ const NAV_GROUP_COLOR = {
   know: '#fbbf24', // amber — 知识 (Memory, Signals)
 } as const;
 
+/** Pure resolution core for the Signals nav click (exported for test).
+ *  Given the /workspace/tree/expand children of Knowledge/Signals, return the
+ *  path of the newest digest — names are YYYY-MM-DD-digest.md so the lexical max
+ *  IS the chronological latest. *-weekly.md (same dir) is excluded. null if none. */
+export function pickLatestDigest(children: Array<{ name?: string; path?: string }>): string | null {
+  let best: { name: string; path: string } | null = null;
+  for (const c of children) {
+    if (!c?.name || !c?.path) continue;
+    if (!c.name.endsWith('-digest.md')) continue;
+    if (best === null || c.name > best.name) best = { name: c.name, path: c.path };
+  }
+  return best?.path ?? null;
+}
+
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
+  const { addToast } = useToast();
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
@@ -151,10 +166,26 @@ function LeftSidebar() {
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
   };
 
-  // Open today's signal digest (falls back to most recent signal file)
-  const handleSignalsClick = () => {
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `Knowledge/Signals/${today}-digest.md` } }));
+  // Open the LATEST signal digest. The digest is written by a scheduled job, so
+  // today's file often doesn't exist yet (esp. early in the day / weekends) —
+  // hardcoding `<today>-digest.md` produced a file-not-found (run_a73566c4). We
+  // list Knowledge/Signals via the existing tree/expand endpoint and open the
+  // newest *-digest.md. Graceful toast on empty/failure — never a dead click.
+  const handleSignalsClick = async () => {
+    try {
+      const resp = await api.get<Array<{ name?: string; path?: string }>>(
+        '/workspace/tree/expand',
+        { params: { path: 'Knowledge/Signals', depth: 1 } },
+      );
+      const latest = pickLatestDigest(resp.data ?? []);
+      if (latest) {
+        document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: latest } }));
+      } else {
+        addToast({ severity: 'info', message: 'No signal digest available yet.', autoDismiss: true });
+      }
+    } catch {
+      addToast({ severity: 'warning', message: 'Could not load signals.', autoDismiss: true });
+    }
   };
 
   // Tools group nav items
