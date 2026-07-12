@@ -159,6 +159,9 @@ def reindex_projects(full: bool = False) -> dict:
             graph.rebuild_fts()
             if freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
+            # Reclaim WAL disk space after the batch (store_file_nodes_edges +
+            # rebuild_fts bypass incremental_update, so checkpoint here — Gate-2 finding E).
+            graph.checkpoint_truncate()
 
             results.append({
                 "project": project_name,

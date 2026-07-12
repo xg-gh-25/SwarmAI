@@ -121,10 +121,39 @@ class GraphStore:
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
+        # Bound the WAL's auto-reset cadence. NOTE: autocheckpoint (PASSIVE) resets
+        # the WAL *header* so frames are reused, but it NEVER shrinks the WAL FILE on
+        # disk — after a large re-index the file stays multi-GB forever (observed
+        # 2.73GB vs a 64MB DB). Only an explicit TRUNCATE checkpoint reclaims the
+        # file; see checkpoint_truncate(), called at the tail of every bulk write.
+        self._conn.execute("PRAGMA wal_autocheckpoint=2000")
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
 
     # ── lifecycle ────────────────────────────────────────────────────────
+
+    def checkpoint_truncate(self) -> None:
+        """Checkpoint the WAL and TRUNCATE the on-disk WAL file to reclaim space.
+
+        Data-safe and online: TRUNCATE first flushes all committed WAL frames into
+        the main DB, then shrinks the ``-wal`` file to zero. Called at the tail of
+        bulk writes (``bulk_insert`` / ``incremental_update``) because those are the
+        ops that balloon the WAL; per-commit checkpointing would throttle throughput.
+
+        Non-fatal: if a concurrent reader holds the WAL, TRUNCATE reports ``busy!=0``
+        and leaves the file — that is fine, the next bulk write retries. A failure
+        here must NEVER break indexing, so all errors are swallowed with a debug log
+        (the WAL merely stays large; correctness is unaffected).
+        """
+        if not self._conn:
+            return
+        try:
+            row = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            # row = (busy, log_pages, checkpointed_pages); busy=1 → a reader blocked it
+            if row and row[0]:
+                logger.debug("WAL checkpoint(TRUNCATE) busy — reader held WAL, will retry next bulk write")
+        except Exception as e:
+            logger.debug("WAL checkpoint(TRUNCATE) skipped: %s", e)
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""
@@ -810,6 +839,10 @@ class GraphStore:
         except Exception as e:
             logger.debug("Orphan edge cleanup skipped: %s", e)
 
+        # Full rebuild wrote the whole graph into the WAL — reclaim it now so the
+        # -wal file doesn't stay multi-GB on disk (the 2.73GB-bloat root cause).
+        self.checkpoint_truncate()
+
     def incremental_update(
         self,
         repo_root: str | Path,
@@ -866,6 +899,10 @@ class GraphStore:
 
         # Record the update timestamp.
         self.set_meta("last_incremental_update", str(time.time()))
+
+        # Reclaim WAL disk space after the batch of writes (non-fatal if a reader
+        # holds the WAL — retried on the next update).
+        self.checkpoint_truncate()
 
         return {
             "updated": updated,

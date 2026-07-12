@@ -647,6 +647,10 @@ class ContextHealthHook:
             graph.rebuild_fts()
             if freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
+            # Reclaim WAL disk space — this incremental path writes via
+            # store_file_nodes_edges + rebuild_fts (not incremental_update), so it
+            # must checkpoint too, else the -wal file re-bloats (Gate-2 finding E).
+            graph.checkpoint_truncate()
 
             logger.info(
                 "code_intel %s: incremental update — %d files refreshed",
