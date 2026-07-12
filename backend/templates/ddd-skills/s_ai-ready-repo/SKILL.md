@@ -1,6 +1,6 @@
 ---
 name: ai-ready-repo
-description: "The ⑥ Code-Intel Refresher for a DDD — regenerate code-intel.json from the ⑤-bound repo's source (narrow refresh mode: NEVER touch the 4 DDD docs). Ships the refresher (capability), never the projection (derived data). Portable indexer, no SwarmAI backend.\n  TRIGGER: \"refresh code intel\", \"regenerate code graph\", \"ddd refresher\".\n  NOT FOR: generating the 4 DDD docs (that's a full ai-ready-repo run / s_ddd-manager)."
+description: "The ⑥ Code-Intel Refresher for a DDD — regenerate code-intel.json from the ⑤-bound repo's source via the BUNDLED engine (scripts/refresh_code_intel.py + ai_ready_helpers.py, pure-stdlib + git, no SwarmAI backend). Narrow refresh mode: NEVER touch the 4 DDD docs. Ships the refresher (capability), never the projection (derived data).\n  TRIGGER: \"refresh code intel\", \"regenerate code graph\", \"ddd refresher\".\n  NOT FOR: generating the 4 DDD docs (that's a full ai-ready-repo run / s_ddd-manager)."
 tier: lazy
 ---
 # AI-Ready-Repo — the DDD's ⑥ Code-Intel Refresher
@@ -9,10 +9,24 @@ Section ⑥ of a DDD GOVERNs the bound repo's **code-intel projection**. This sk
 self-contained mechanism that **REGENERATES `code-intel.json` from code** — it ships the
 refresher (the capability), never the projection (derived, gitignored data).
 
-> **Portable as-is (spec §433).** The underlying indexer (`extract_import_graph`) is
-> pure-regex, zero SwarmAI-core dependency, `platform: all` — so it runs identically
-> inside Kiro / Claude Code after `aim` export. This DDD-native SKILL scopes it to the
-> **narrow ⑥ refresh mode**.
+> **Bundled engine (copied + decoupled, not a stub).** `scripts/ai_ready_helpers.py`
+> (the `extract_import_graph` indexer — pure-regex, zero SwarmAI-core dependency) +
+> `scripts/refresh_code_intel.py` (the runnable ⑥ CLI) ship INSIDE the DDD, so ⑥ runs
+> identically inside Kiro / Claude Code after `aim` export. The only SwarmAI coupling
+> (a `~/.swarm-ai` output path) was decoupled → resolves from `$SWARM_WORKSPACE`, else
+> repo-adjacent.
+
+## Run it (the ⑥ refresh)
+
+```bash
+python scripts/refresh_code_intel.py <bound-repo-path>
+# → writes code-intel.json (v2) under $SWARM_WORKSPACE/.artifacts/ai-ready/… (or repo-adjacent)
+# exit 0 = written · exit 1 = not a git repo · exit 2 = 0 edges (language-detection miss, loud)
+```
+
+Every `depends_on`/`depended_by` edge is a REAL `git ls-files`-scanned import with a
+file:line citation — never guessed. Verified: imports + runs with SwarmAI's `core/`
+completely off `sys.path`.
 
 ## The ⑥ contract (narrow refresh mode)
 
