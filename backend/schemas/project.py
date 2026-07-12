@@ -62,6 +62,11 @@ class ProjectMetadata(BaseModel):
     tags: list[str] = Field(default_factory=list)
     priority: Optional[ProjectPriority] = None
     schema_version: str = Field(default="1.0.0")
+    # Canonical six-section DDD structure version this project was scaffolded under
+    # (DDD-agent-brain spec §3.6/§3.7 anti-drift). Distinct from schema_version
+    # (which versions THIS metadata shape). Default "1.0" keeps pre-stamp projects
+    # valid over the API. Source of truth for new projects: swarm_workspace_manager.DDD_SPEC_VERSION.
+    ddd_spec_version: str = Field(default="1.0")
     version: int = Field(default=1)
     update_history: list[ProjectHistoryEntry] = Field(default_factory=list)
 

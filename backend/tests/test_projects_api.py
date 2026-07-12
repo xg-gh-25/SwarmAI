@@ -86,6 +86,10 @@ class TestCreateProject:
         assert data["priority"] is None
         assert data["description"] == ""
         assert data["schema_version"] == "1.0.0"
+        # DDD six-section spec version must be VISIBLE over the API (not just on disk):
+        # ProjectResponse drops any field it doesn't declare (pydantic extra='ignore'),
+        # so this locks the API surface for the version-traceability stamp (§3.7).
+        assert data["ddd_spec_version"] == "1.0"
         assert data["version"] == 1
         assert isinstance(data["created_at"], str)
         assert isinstance(data["updated_at"], str)

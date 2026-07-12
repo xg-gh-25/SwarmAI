@@ -80,6 +80,13 @@ PROJECT_SYSTEM_FOLDERS: set[str] = set()
 # docs but cannot delete or rename the project itself.
 DEFAULT_PROJECT_NAME = "SwarmAI"
 
+# Version of the canonical six-section DDD structure (DDD-agent-brain spec §3.6)
+# that this provisioner scaffolds. Stamped into every new project's .project.json
+# so propagated DDDs are version-traceable (§3.7 anti-drift) — the machine-readable
+# counterpart to the DDD_SPEC_VERSION declared in s_project-manager/SKILL.md prose.
+# Bump when the six-section structure changes in a way propagated DDDs must track.
+DDD_SPEC_VERSION = "1.0"
+
 # Default job system config (provisioned on first startup).
 # Feed definitions are user-customizable; system job definitions live in code.
 _DEFAULT_JOB_CONFIG = """\
@@ -670,6 +677,7 @@ class SwarmWorkspaceManager:
                     "tags": ["default", "self-building"],
                     "priority": "high",
                     "schema_version": CURRENT_SCHEMA_VERSION,
+                    "ddd_spec_version": DDD_SPEC_VERSION,
                     "version": 1,
                     "update_history": [{
                         "version": 1, "timestamp": now,
@@ -2092,8 +2100,13 @@ class SwarmWorkspaceManager:
     ) -> dict:
         """Create a new project under Projects/.
 
-        Sets up the full project scaffold including metadata file, context
-        files, instructions, and system folders (chats/, research/, reports/).
+        Scaffolds sections ①+② of the canonical six-section DDD structure
+        (spec §3.6): the project dir + ``.project.json`` metadata (① identity,
+        stamped with ``ddd_spec_version``) and the 4 DDD docs
+        (PRODUCT/TECH/IMPROVEMENT/PROJECT.md, ② knowledge) via
+        ``provision_project_ddd``, plus ``.artifacts/`` for pipeline outputs.
+        Sections ③–⑥ (Gates/Capabilities/DeliveryContract/Refresher) accrete
+        later as the project grows — they are NOT provisioned empty.
 
         Args:
             project_name: Display name for the project (used as directory name).
@@ -2133,6 +2146,7 @@ class SwarmWorkspaceManager:
             "tags": [],
             "priority": None,
             "schema_version": CURRENT_SCHEMA_VERSION,
+            "ddd_spec_version": DDD_SPEC_VERSION,
             "version": 1,
             "update_history": [
                 {

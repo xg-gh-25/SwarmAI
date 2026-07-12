@@ -146,6 +146,11 @@ class TestProjectCreationScaffold:
         assert metadata["priority"] is None
         assert metadata["version"] == 1
         assert metadata["schema_version"] == CURRENT_SCHEMA_VERSION
+        # DDD six-section spec version stamp (§3.7 anti-drift): a provisioned project
+        # must record which DDD spec version it was scaffolded under, so propagated
+        # DDDs are version-traceable. Sourced from the DDD_SPEC_VERSION module constant.
+        from core.swarm_workspace_manager import DDD_SPEC_VERSION
+        assert metadata["ddd_spec_version"] == DDD_SPEC_VERSION
 
         # UUID is a non-empty string
         assert isinstance(metadata["id"], str) and len(metadata["id"]) > 0
