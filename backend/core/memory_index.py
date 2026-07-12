@@ -105,6 +105,55 @@ def _recall_safe_aliases(full_title: str, capped_title: str,
         lost.append(tok)
     return aliases + lost
 
+
+# Pure ISO date (YYYY-MM-DD). Anchored: only a token that IS a bare date, never
+# a date embedded in a longer token (e.g. a hypothetical "2026-06-27-fix" stays).
+_PURE_DATE_RE = re.compile(r"^20\d\d-\d\d-\d\d$")
+
+
+def _compress_aliases(aliases: list[str]) -> list[str]:
+    """Recall-neutral shrink of a Memory Index alias list (run_2f4d92da).
+
+    Applied to the FINAL alias list at every index-emission site (after
+    ``_recall_safe_aliases`` has already added back any title-cap-dropped
+    tokens). Removes ONLY tokens that provably contribute nothing to recall
+    SECTION-SELECTION (the only thing the index aliases feed —
+    ``_keyword_section_scores`` → ``keyword_relevance``):
+
+    1. **Date tokens** (``20\\d\\d-\\d\\d-\\d\\d``) — dropped unconditionally.
+       A bare-date alias is measured NOISE at the section-selection layer, not a
+       recall key: a bare-date query lights up 6/8 sections (verified run_2f4d92da),
+       i.e. it fails to discriminate. On MIXED date+content queries the date token
+       adds ZERO sections beyond the content tokens (``date_adds=nothing`` on the
+       live corpus) — content drives selection. On the auto-recall path the query
+       side already strips dates (``_extract_query_keywords``), so the alias is
+       unreachable there. True date-scoped recall happens at the ENTRY/BM25 body
+       layer (entry text carries the date stamp), which this does not touch.
+       Removing date aliases therefore does not lose recall — and it slightly
+       SHARPENS section selection by not dragging unrelated sections in on a date.
+    2. **Within-list duplicates** — case-insensitive, order-preserving; first wins.
+
+    DELIBERATELY PRESERVED (M3-skeptic verified load-bearing, run_e787c746):
+    ``run_xxx`` ids (they ARE live recall query keys — 443 entries; a
+    ``run_002eca4c`` query must still hit), every non-date/non-dup token, and
+    CJK phrases (``keyword_relevance`` matches CJK by substring/prefix, so an
+    exact-equality prune would silently drop a distinct match surface).
+
+    Pure function, no state — idempotent by construction (a compressed list has
+    no dates and no dups, so a second pass is a no-op).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases:
+        if _PURE_DATE_RE.match(alias):
+            continue  # date aliases are section-selection noise (see docstring)
+        key = alias.lower()
+        if key in seen:
+            continue  # within-list duplicate (first spelling wins)
+        seen.add(key)
+        out.append(alias)
+    return out
+
 # ── Section definitions: imported from single source of truth ─────────
 from .ddd_entry_lifecycle import (
     MEMORY_PERMANENT_SECTIONS,
@@ -438,6 +487,9 @@ def generate_memory_index(content: str) -> str:
             # Gate-2 F1: keep section-selection lossless — recover keyword tokens
             # the cap dropped from the title into the aliases tail.
             aliases = _recall_safe_aliases(entry["title"], title, aliases)
+            # Safe shrink: drop recall-neutral date aliases + within-list dups
+            # (run-ids/CJK/title-recovery tokens preserved — run_2f4d92da).
+            aliases = _compress_aliases(aliases)
             alias_str = ", ".join(aliases) if aliases else ""
             refs = _extract_refs(entry["full_text"], key)
             line = f"- [{key}] {date_prefix}{title}"
@@ -470,6 +522,8 @@ def generate_memory_index(content: str) -> str:
             # Gate-2 F1: keep section-selection lossless — recover keyword tokens
             # the cap dropped from the title into the aliases tail.
             aliases = _recall_safe_aliases(entry["title"], title, aliases)
+            # Safe shrink (run_2f4d92da) — see permanent-tier comment above.
+            aliases = _compress_aliases(aliases)
             alias_str = ", ".join(aliases) if aliases else ""
             refs = _extract_refs(entry["full_text"], key)
 
@@ -495,6 +549,9 @@ def generate_memory_index(content: str) -> str:
         # OT title keeps the same match surface. (OT is always-loaded, so this is
         # belt-and-suspenders, but keeps all 3 emitters consistent.)
         lost = _recall_safe_aliases(entry["title"], title, [])
+        # Safe shrink (run_2f4d92da) — same recall-neutral prune as the other
+        # two emitters; keeps all 3 title-emitters consistent.
+        lost = _compress_aliases(lost)
         tail = f" | {', '.join(lost)}" if lost else ""
         ot_lines.append(f"- [{key}] {title}{tail}")
 

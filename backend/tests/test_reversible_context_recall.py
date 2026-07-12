@@ -151,6 +151,48 @@ def test_ac3_recall_returns_scoped_section_not_whole_file():
     assert len(res.content) < len(mem)
 
 
+def test_bare_date_query_falls_back_to_body_bm25():
+    """run_2f4d92da (B + Gate-2 F1 fix): date aliases are dropped from the index
+    as section-selection noise, so a PURE bare-date query scores 0 at the section
+    layer. recall_context must FALL BACK to entry-body BM25 (where the date lives)
+    rather than return nothing. Simulates the post-refresh index (no date aliases)
+    with the date present only in the body."""
+    from core.context_recall import recall_context
+
+    pad = ("lorem ipsum dolor sit amet " * 80 + "\n")
+    # Index with NO date aliases (the post-compression shape).
+    index = (
+        "## Memory Index\n"
+        "<!-- MEMORY_INDEX_START -->\n"
+        "- [COE05] exit code sigkill oom | sigkill, oom, exit-code\n"
+        "- [DEC01] a decision about caching | cache, prefix\n"
+        "<!-- MEMORY_INDEX_END -->\n"
+    )
+    # Body carries the date stamp (as real MEMORY entries do).
+    mem = index + "\n" + "\n\n".join([
+        "## COE Registry\n- 2026-03-17: **COE05 exit code -9** — sigkill oom\n" + pad * 40,
+        "## Decisions\n- 2026-05-01: **caching decision** — prefix cache\n" + pad * 40,
+        "## Open Threads\n- one open thread\n",
+    ])
+
+    # Pure bare-date query: section-selection scores 0 (no date aliases) → fallback.
+    res = recall_context("MEMORY.md", "2026-03-17", memory_content=mem, max_sections=3)
+    assert res.allowed is True
+    assert res.hit_layer == "date_body_fallback"
+    assert "2026-03-17" in res.content  # the date-stamped entry surfaced
+    assert ContextDirectoryLoader.estimate_tokens(res.content) < 2000  # still scoped
+
+    # Mixed date+content query must NOT trip the fallback — content tokens drive
+    # normal section-selection.
+    mixed = recall_context("MEMORY.md", "caching 2026-05-01", memory_content=mem)
+    assert mixed.hit_layer != "date_body_fallback"
+
+    # A non-date miss must NOT trip the fallback (stays empty, no dump).
+    miss = recall_context("MEMORY.md", "zzz_no_such_token_xyz", memory_content=mem)
+    assert miss.hit_layer == "none"
+    assert miss.content == ""
+
+
 # ── AC4: recall_context HARD-DENIES policy-excluded files (privacy gate) ───
 
 def test_ac4_recall_denies_policy_excluded_file():

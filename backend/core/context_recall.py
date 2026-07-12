@@ -24,6 +24,7 @@ doesn't know the session type.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -33,6 +34,13 @@ logger = logging.getLogger(__name__)
 
 # Hard ceiling on a recall response so it can never re-inject a whole file.
 RECALL_MAX_TOKENS = 2000
+
+# A query that is EXACTLY a bare ISO date (optionally surrounded by whitespace).
+# Such a query no longer matches at the index section-selection layer (date
+# aliases were dropped as noise — run_2f4d92da); it falls back to entry-body BM25
+# where the date genuinely lives. Anchored so "reconcile 2026-06-27" (a mixed
+# query, which section-selection handles via its content tokens) does NOT trip it.
+_BARE_DATE_QUERY_RE = re.compile(r"^\s*20\d\d-\d\d-\d\d\s*$")
 
 
 def _basename_key(name: str) -> str:
@@ -224,6 +232,18 @@ def recall_context(
         # caller compatibility but is now INERT (no embed path exists to gate).
         scores = memory_index._keyword_section_scores(query, index_block, superseded)
         hit_layer = "keyword" if scores else "none"
+
+        # Bare-date fallback (run_2f4d92da): date aliases were dropped from the
+        # index as section-selection noise (a bare-date query used to light up
+        # ~5/8 sections — a dump, not recall). So a PURE date query now scores
+        # zero at the section layer. But the date DOES live in entry BODY text,
+        # where BM25 can match it precisely. When section-selection is empty AND
+        # the query is a bare ISO date, rank ALL sections equally and let the
+        # entry-level BM25 slice below surface the date-stamped entries — this is
+        # strictly better than the old noise-dump, and keeps the index savings.
+        if not scores and _BARE_DATE_QUERY_RE.match(query.strip()):
+            scores = {name: 1.0 for name in sections}
+            hit_layer = "date_body_fallback"
     except Exception as exc:  # noqa: BLE001 — fail-safe: structured result, no leak
         return RecallResult(
             allowed=True, content="",

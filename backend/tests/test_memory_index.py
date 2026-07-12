@@ -633,6 +633,112 @@ class TestCJKKeywordExtraction:
         assert any(ord(c) > 127 for t in tokens for c in t)
 
 
+class TestCompressAliases:
+    """_compress_aliases: safe index-size reduction (run_2f4d92da).
+
+    Removes ONLY provably recall-neutral alias tokens:
+      1. Pure-date tokens (20\\d\\d-\\d\\d-\\d\\d) — dropped UNCONDITIONALLY. A
+         bare-date alias is measured NOISE at the section-selection layer (a
+         bare-date query lights up 6/8 sections; on mixed date+content queries the
+         date adds 0 sections beyond content — run_2f4d92da). Auto-recall strips
+         dates from the query anyway; true date-scoped recall lives at the
+         entry/BM25 body layer, untouched here.
+      2. Within-list case-insensitive duplicates (order-preserving).
+
+    DELIBERATELY PRESERVES (M3-skeptic verified as load-bearing recall keys):
+      - run_xxx ids (443 entries carry them; they ARE live recall query keys —
+        `run_002eca4c` is a real, reachable query that must still hit)
+      - every non-date, non-duplicate token, including title-recovery tokens
+        added by _recall_safe_aliases and CJK phrases.
+    """
+
+    def test_strips_all_pure_date_tokens(self):
+        from core.memory_index import _compress_aliases
+
+        out = _compress_aliases(["2026-06-27", "reconcile", "2026-07-03", "streaming"])
+        assert "2026-06-27" not in out
+        assert "2026-07-03" not in out
+        assert out == ["reconcile", "streaming"]
+
+    def test_strips_date_even_when_only_in_alias(self):
+        """Date is section-selection noise regardless of where it lives — a
+        date-only alias adds no discriminating recall (run_2f4d92da B decision)."""
+        from core.memory_index import _compress_aliases
+
+        out = _compress_aliases(["2026-06-27", "eviction"])
+        assert out == ["eviction"]
+
+    def test_date_embedded_in_compound_token_preserved(self):
+        """Only a BARE date token is stripped; a date inside a longer token stays."""
+        from core.memory_index import _compress_aliases
+
+        out = _compress_aliases(["2026-06-27-fix", "foo"])
+        assert out == ["2026-06-27-fix", "foo"]
+
+    def test_preserves_run_ids(self):
+        """run-ids are LIVE recall keys — must survive compression (skeptic Hole 1)."""
+        from core.memory_index import _compress_aliases
+
+        out = _compress_aliases(["run_002eca4c", "2026-06-27", "eviction"])
+        assert "run_002eca4c" in out
+        assert "2026-06-27" not in out
+
+    def test_dedup_case_insensitive_order_preserving(self):
+        from core.memory_index import _compress_aliases
+
+        out = _compress_aliases(["Reconcile", "streaming", "reconcile", "RECONCILE", "tab"])
+        # first spelling wins, order preserved, later case-variants dropped
+        assert out == ["Reconcile", "streaming", "tab"]
+
+    def test_preserves_cjk_and_non_date_tokens(self):
+        """CJK phrases and ordinary tokens are never dropped (skeptic Hole 2)."""
+        from core.memory_index import _compress_aliases
+
+        aliases = ["落地成内部生产系统", "single-writer", "gate-2"]
+        out = _compress_aliases(aliases)
+        assert out == aliases  # nothing removed — none are dates/dups
+
+    def test_empty_and_all_dates(self):
+        from core.memory_index import _compress_aliases
+
+        assert _compress_aliases([]) == []
+        # an all-date list collapses to empty (all section-selection noise)
+        assert _compress_aliases(["2026-01-01", "2026-01-02"]) == []
+
+    def test_idempotent(self):
+        """Calling twice yields the same result (pure function, no state)."""
+        from core.memory_index import _compress_aliases
+
+        once = _compress_aliases(["run_abc123", "2026-06-27", "foo", "Foo"])
+        twice = _compress_aliases(once)
+        assert once == twice == ["run_abc123", "foo"]
+
+    def test_generated_index_drops_date_aliases_keeps_run_ids(self):
+        """End-to-end: generate_memory_index emits no bare-date alias tokens,
+        but still emits run-id aliases (integration of the helper at all 3 sites)."""
+        import re
+        from core.memory_index import (
+            generate_memory_index,
+            extract_index_from_memory,
+            MEMORY_INDEX_START,
+            MEMORY_INDEX_END,
+        )
+
+        raw = generate_memory_index(SAMPLE_MEMORY)
+        # Parse each entry line's alias tail (after the last '|' that is not refs).
+        date_alias_hits = 0
+        for line in raw.splitlines():
+            if not line.startswith("- ["):
+                continue
+            # alias tail = everything after title, excluding a 'refs:' segment
+            segs = [s.strip() for s in line.split("|")[1:] if not s.strip().startswith("refs:")]
+            for seg in segs:
+                for tok in (t.strip() for t in seg.split(",")):
+                    if re.fullmatch(r"20\d\d-\d\d-\d\d", tok):
+                        date_alias_hits += 1
+        assert date_alias_hits == 0, f"date tokens leaked into aliases: {date_alias_hits}"
+
+
 class TestDuplicateMemoryIndex:
     """F1: extract_body_without_index must strip both marker-wrapped AND bare '## Memory Index' duplicates."""
 
