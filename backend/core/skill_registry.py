@@ -37,7 +37,7 @@ SKILL_CATEGORIES: dict[str, list[str]] = {
     "Writing": ["narrative-writing", "humanize", "translate", "pptx", "docx", "xlsx", "pdf"],
     "Integrations": ["slack", "outlook-assistant", "google-workspace", "apple-reminders", "sonos"],
     "Automation": ["autonomous-pipeline", "browser-agent", "peekaboo", "tmux", "scheduler", "job-manager"],
-    "Workspace": ["workspace-finder", "workspace-git", "workspace-organizer", "ws-context-init", "project-manager"],
+    "Workspace": ["workspace-finder", "workspace-git", "workspace-organizer", "ws-context-init", "ddd-manager"],
     "Ops": ["radar-todo", "system-health", "health-check", "chat-brain-check", "deliver", "evaluate", "custom-agents"],
     "Content": ["image-gen", "video-gen", "podcast-gen", "weather", "finance"],
     "UI": ["frontend-design", "web-design-review", "wireframe"],

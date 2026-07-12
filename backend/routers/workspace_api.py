@@ -807,7 +807,7 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
     workspace IF reached through a trusted symlink (e.g.,
     ``Projects/SwarmAI → ~/Desktop/SwarmAI-Workspace/swarmai``).  This is a
     deliberate security surface expansion required for the project-linking
-    feature (``s_project-manager``).  The trust boundary is:
+    feature (``s_ddd-manager``).  The trust boundary is:
 
     1. The symlink itself must live inside the workspace (not injected from outside).
     2. The final resolved target must be a descendant of the symlink's resolved

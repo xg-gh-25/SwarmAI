@@ -1,7 +1,7 @@
 ---
-name: project-manager
-description: "Create, list, edit, rename, and delete projects with DDD (Domain-Driven Design) structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) and an\
-  \ .artifacts/ directory for pipeline outputs.\n  TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\".\n  NOT FOR: radar-todo use cases."
+name: ddd-manager
+description: "Create, list, edit, rename, and delete DDD projects (Domain-Driven Design) — provisions the canonical six-section DDD structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) and an\
+  \ .artifacts/ directory for pipeline outputs.\n  TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\", \"create DDD\".\n  NOT FOR: radar-todo use cases."
 tier: always
 ---
 # Project Manager
@@ -36,7 +36,7 @@ the DDD structure.
 ## The Canonical DDD Structure — six sections (DDD-agent-brain spec §3.6)
 
 > **`DDD_SPEC_VERSION: 1.0`** — this skill provisions DDDs conforming to spec version
-> 1.0 (the six-section canonical structure). Because a DDD can carry `s_project-manager`
+> 1.0 (the six-section canonical structure). Because a DDD can carry `s_ddd-manager`
 > to create MORE DDDs (self-propagation), the structure is a VERSIONED spec: declaring
 > the version here is what keeps propagated DDDs from drifting. Source of truth:
 > `Projects/AIDLC/Knowledge/Designs/2026-07-11-ddd-agent-brain-paradigm-design.md` §3.6.
@@ -60,7 +60,7 @@ sections, not a competing structure. The full canonical shape:
 | ① | **IDENTITY & MANIFEST** | OWN | project dir + `.project.json`, `aim.json`, `AGENTS.md`, `.crux_template.md` | ✅ dir + `.project.json` + the 3 manifests |
 | ② | **KNOWLEDGE** | OWN | **the 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT.md) + `Knowledge/`** — 冷启动 + judgment BORN here as prose | ✅ the 4 docs |
 | ③ | **GATES** (the moat) | OWN | `gates/<gate>.py|sh` + tests + `gates/context/includes/*denied*.json` — executable terminus of matured judgment | ✅ `gates/` + `context/includes/` skeleton (READMEs); **content accretes** as judgment matures (养成 ladder) |
-| ④ | **CAPABILITIES** | OWN | `skills/`, `agents/*.agent-spec.json`, `agent-sops/`, distributed portable capabilities (s_ai-ready-repo, s_persist, s_project-manager) | ✅ `skills/`+`agents/`+`agent-sops/` skeleton (READMEs); **content accretes** as capabilities are bound |
+| ④ | **CAPABILITIES** | OWN | `skills/`, `agents/*.agent-spec.json`, `agent-sops/`, distributed portable capabilities (s_ai-ready-repo, s_persist, s_ddd-manager) | ✅ `skills/`+`agents/`+`agent-sops/` skeleton (READMEs); **content accretes** as capabilities are bound |
 | ⑤ | **DELIVERY CONTRACT** | GOVERN | **`bindings.yaml`** — full delivery 全貌 per repo: build_system · version_set · branch · deploy_pipeline (ref) · review_path · refresh_policy · auto_send (all DATA) | ⬜ by **BIND**, not CREATE (repo shape is unknown at create) |
 | ⑥ | **CODE-INTEL REFRESHER** | GOVERN | a self-contained mechanism that REGENERATES the code-intel projection from code (ship the refresher, not the projection) | ✅ `REFRESHER.md` marker (shape-neutral: states it activates on BIND, no-op for a no-repo project); **live refresher accretes** |
 
