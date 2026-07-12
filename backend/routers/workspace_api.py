@@ -495,6 +495,32 @@ def _collect_subrepo_status_cached(
             pass
 
 
+def _tree_fingerprint(nodes: list[dict]) -> str:
+    """Derive a deterministic structure fingerprint from an ALREADY-BUILT tree.
+
+    Replaces the old ``_fs_fingerprint`` second filesystem walk: ``_build_tree``
+    has already visited (and filtered + sorted) every included entry, so the tree
+    it returns encodes the exact same visible structure. Walking it in-memory
+    costs zero extra ``iterdir()`` syscalls.
+
+    Encodes ``name:type`` per node (so a file↔directory type-flip at the same name
+    changes the fingerprint) and recurses into children. A depth-truncated dir
+    (``children is None``) contributes its own ``name:type`` — its presence is the
+    signal — and recursion stops there, exactly where the fs walk stopped at its
+    depth bound. Detects adds/deletes (name set changes), renames (name changes),
+    and type-flips (type token changes). ETag value need not match the old scheme —
+    ETags are opaque and reset on deploy; only determinism + change-sensitivity matter.
+    """
+    parts: list[str] = []
+    for n in nodes:
+        token = f"{n['name']}:{n['type']}"
+        children = n.get("children")
+        if isinstance(children, list):
+            token += "(" + _tree_fingerprint(children) + ")"
+        parts.append(token)
+    return ",".join(parts)
+
+
 def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, bytes]:
     """Compute ETag + serialised tree JSON in a worker thread.
 
@@ -536,37 +562,18 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
         pass
     git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
 
-    # Filesystem fingerprint — scan up to 5 levels deep for the ETag.
-    # Must cover the typical project depth (Projects/MyApp/src/components/)
-    # so that file adds/deletes at depth 4-5 are detected.  Deeper levels
-    # (6-8) are rare and will be caught on the next TTL expiry (5s).
-    _FINGERPRINT_DEPTH = min(depth, 5)
-
-    def _fs_fingerprint(root: Path, max_depth: int, *, at_root: bool = False) -> str:
-        if max_depth <= 0 or not root.is_dir():
-            return ""
-        try:
-            entries = list(root.iterdir())
-        except OSError:
-            return ""
-        # Apply same filtering as _build_tree so fingerprint only reflects visible items
-        names = sorted(
-            e.name for e in entries
-            if _should_include(e.name, is_root=at_root, is_dir=e.is_dir())
-        )
-        parts = [",".join(names)]
-        for name in names:
-            child = root / name
-            if child.is_dir() and max_depth > 1:
-                parts.append(f"{name}:{_fs_fingerprint(child, max_depth - 1)}")
-        return "|".join(parts)
-
-    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, _FINGERPRINT_DEPTH, at_root=True).encode()).hexdigest()[:8]
-    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
-    etag_value = f'"{etag}"'
-
+    # Build the tree ONCE, then derive the structure fingerprint from the
+    # in-memory result — no second filesystem walk. _build_tree has already
+    # filtered + sorted every visible entry, so _tree_fingerprint(tree) reflects
+    # the same structure the old _fs_fingerprint fs-walk did, at zero extra
+    # iterdir() cost. (Previously this function walked the FS twice per cache
+    # miss: once for the fingerprint, once for the tree.)
     tree = _build_tree(workspace_root, workspace_root, depth, git_status, _get_subrepo_status_cached)
     body = json.dumps(tree).encode()
+
+    fs_hash = hashlib.md5(_tree_fingerprint(tree).encode()).hexdigest()[:8]
+    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
+    etag_value = f'"{etag}"'
 
     return etag_value, body
 

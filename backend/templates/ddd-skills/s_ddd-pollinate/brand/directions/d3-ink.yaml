@@ -1,0 +1,86 @@
+# D3: Ink (水墨)
+# Mood: 东方意境 — "收到一封手写信"
+# Use for: 哲学思考、个人品牌、文化表达、引用/名言、仪式感
+# Key trait: Serif headlines (宋体), ivory background, vermillion accent, NO gradients
+
+id: d3
+name: Ink
+name_cn: 水墨
+mood: "收到一封手写信"
+
+# ─── Semantic Tokens ───────────────────────────────────────
+tokens:
+  bg-deep: "#F5F0E8"                     # 宣纸色 (warm ivory)
+  bg-elevated: "#FFFDF7"                  # Slightly brighter
+  bg-surface: "rgba(139,69,19,0.03)"     # Sepia tint
+  border: "rgba(0,0,0,0.08)"             # Soft ink line
+  accent: "#C0392B"                      # 朱红 (Vermillion)
+  accent-dim: "rgba(192,57,43,0.08)"     # Red at low opacity
+  accent-glow: "none"                    # NO glow in this direction
+  text-primary: "#1A1410"               # Ink black (warm)
+  text-secondary: "rgba(26,20,16,0.7)"  # Faded ink
+  text-muted: "rgba(26,20,16,0.4)"      # Ghost ink
+  accent-secondary: "#C0392B"            # Same as accent (single-accent direction)
+
+# ─── Typography ────────────────────────────────────────────
+typography:
+  headline-font: "STSongti-SC"           # 宋体 for headlines
+  headline-weight: 600
+  body-font: "PingFang SC"              # Sans for body readability
+  body-weight: 400
+  code-font: "SF Mono"
+  en-display: "Playfair Display"         # Serif for English titles
+  en-display-weight: 700
+
+# ─── Visual Elements ───────────────────────────────────────
+visual_elements:
+  - "Ink brush stroke dividers (SVG, subtle, 40% opacity)"
+  - "印章 seal stamp for brand mark (accent on bg-deep, 48px)"
+  - "Vertical text option for short Chinese phrases (≤8 chars)"
+  - "Inner border frame (请柬式 invitation frame, 1px, border color)"
+  - "NO gradient backgrounds — flat colors or paper texture ONLY"
+
+# ─── Divider Alternation ──────────────────────────────────
+dividers:
+  - type: brush_stroke
+    spec: "SVG ink stroke, 80px wide, accent at 20% opacity"
+  - type: space
+    spec: "96px vertical spacing with subtle paper texture"
+
+# ─── Card Variety ──────────────────────────────────────────
+card_styles:
+  1: "Invitation frame — inner border, generous padding"
+  2: "Seal marked — 印章 in corner, minimal content"
+  3: "Vertical phrase — short Chinese text rotated 90deg"
+  4: "Quote card — large serif quote, attribution below"
+  5: "Ink wash — subtle SVG background texture"
+  6: "Statement — single centered line, maximum weight"
+
+# ─── Content Affinity ─────────────────────────────────────
+content_triggers:
+  strong:
+    - "is_philosophical"
+    - "is_personal_values"
+    - "has_quotes_as_core"
+  moderate:
+    - "needs_ceremony_weight"
+    - "is_cultural_expression"
+    - "is_brand_manifesto"
+  weak:
+    - "is_data_driven"
+    - "has_code_blocks"
+
+# ─── CSS Quick Reference ──────────────────────────────────
+css_snippet: |
+  :root {
+    --bg-deep: #F5F0E8;
+    --bg-elevated: #FFFDF7;
+    --bg-surface: rgba(139,69,19,0.03);
+    --border: rgba(0,0,0,0.08);
+    --accent: #C0392B;
+    --accent-dim: rgba(192,57,43,0.08);
+    --accent-glow: none;
+    --text-primary: #1A1410;
+    --text-secondary: rgba(26,20,16,0.7);
+    --text-muted: rgba(26,20,16,0.4);
+  }

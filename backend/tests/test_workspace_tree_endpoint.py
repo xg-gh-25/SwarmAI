@@ -22,8 +22,60 @@ from uuid import uuid4
 import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
 
-from routers.workspace_api import _build_tree, _get_git_status, _should_include
+from routers.workspace_api import _build_tree, _get_git_status, _should_include, _tree_fingerprint
 from tests.helpers import PROPERTY_SETTINGS
+
+
+# ---------------------------------------------------------------------------
+# Fix C: _tree_fingerprint — single-pass fingerprint from the in-memory tree
+# (replaces the redundant _fs_fingerprint filesystem walk). run_f5ab71b5
+# ---------------------------------------------------------------------------
+
+
+def _node(name: str, ntype: str, children=None) -> dict:
+    n: dict = {"name": name, "path": name, "type": ntype, "children": children}
+    return n
+
+
+def test_tree_fingerprint_is_deterministic() -> None:
+    tree = [_node("a", "directory", [_node("a/x", "file")]), _node("b", "file")]
+    assert _tree_fingerprint(tree) == _tree_fingerprint(tree)
+
+
+def test_tree_fingerprint_changes_on_add() -> None:
+    before = [_node("a", "directory", [_node("a/x", "file")])]
+    after = [_node("a", "directory", [_node("a/x", "file"), _node("a/y", "file")])]
+    assert _tree_fingerprint(before) != _tree_fingerprint(after)
+
+
+def test_tree_fingerprint_changes_on_delete() -> None:
+    before = [_node("a", "directory", [_node("a/x", "file"), _node("a/y", "file")])]
+    after = [_node("a", "directory", [_node("a/x", "file")])]
+    assert _tree_fingerprint(before) != _tree_fingerprint(after)
+
+
+def test_tree_fingerprint_changes_on_rename() -> None:
+    before = [_node("a", "directory", [_node("a/x", "file")])]
+    after = [_node("a", "directory", [_node("a/renamed", "file")])]
+    assert _tree_fingerprint(before) != _tree_fingerprint(after)
+
+
+def test_tree_fingerprint_changes_on_type_flip() -> None:
+    # Same name AND same children shape (both None) — ONLY the type token differs.
+    # This isolates the type discriminator: a file and a depth-truncated dir both
+    # have children=None, so if the fingerprint ignored `type`, these would collide.
+    # (The M3 skeptic's exact edge case: same-name file↔dir must change the hash.)
+    before = [_node("README", "file", None)]
+    after = [_node("README", "directory", None)]
+    assert _tree_fingerprint(before) != _tree_fingerprint(after)
+
+
+def test_tree_fingerprint_stable_when_children_null_boundary_unchanged() -> None:
+    # A depth-truncated dir (children=None) contributes its presence; two identical
+    # trees with a null boundary must hash equal.
+    t1 = [_node("deep", "directory", None)]
+    t2 = [_node("deep", "directory", None)]
+    assert _tree_fingerprint(t1) == _tree_fingerprint(t2)
 
 
 # ---------------------------------------------------------------------------
