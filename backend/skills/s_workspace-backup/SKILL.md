@@ -15,7 +15,7 @@ and can be restored on a new machine.
 TRIGGER: "backup workspace", "backup now", "restore workspace", "backup status",
 "configure backup", "when was last backup", "备份", "恢复workspace".
 DO NOT USE: for git operations on the swarmai codebase (use workspace-git),
-for file search (use workspace-finder), or for project CRUD (use project-manager).
+for file search (use workspace-finder), or for project CRUD (use ddd-manager).
 
 ## Commands
 

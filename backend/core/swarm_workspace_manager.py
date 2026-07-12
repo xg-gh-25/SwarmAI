@@ -281,50 +281,98 @@ _Nothing currently blocking._
 """,
 }
 
-# Canonical six-section DDD structure — SKELETON (dirs + purpose READMEs + ①
-# identity manifests) materialized at CREATE (option A, XG decision 2026-07-12).
+# Canonical six-section DDD structure — SKELETON materialized at CREATE
+# (option A, XG decision 2026-07-12; refined 2026-07-12 to remove over-build).
 # The skeleton is concrete so SwarmAI-maintenance FOLLOWS the standard and AIM
 # export is low-variance; section CONTENT (real gates/skills/agent-specs) still
-# ACCRETES as the project grows. Mirrors the DDD_TEMPLATES idiom: a flat
-# {relpath: content} map, {project_name}-templated, written only-if-absent.
+# ACCRETES as the project grows.
 #
-# Members here cover ① IDENTITY (aim.json/AGENTS.md/.crux_template.md),
-# ③ GATES (gates/ + context/includes/), ④ CAPABILITIES (skills/agents/agent-sops/),
-# and ⑥ REFRESHER (a shape-neutral marker — see its body). ② KNOWLEDGE is the 4
-# DDD_TEMPLATES docs + Knowledge/ (handled above/by the workspace); ⑤ DELIVERY
-# CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE (repo shape is
-# unknown at create time). Every README states the section's purpose + what
-# belongs + the accretion rule — a legible standard, never a bare empty dir.
+# TWO layers (why this is not one flat map):
+#   • SECTION_SCAFFOLD — FILES written only-if-absent ({project_name}-templated):
+#       ① aim.json (manifest, declares the 5 default native skills) + AGENTS.md
+#         (the ONE unified README covering all six sections) + .crux_template.md
+#       ⑥ REFRESHER.md (shape-neutral marker)
+#   • SECTION_DIRS — the ③④ section DIRECTORIES that must exist in the skeleton
+#     but carry NO prose README (D2: AGENTS.md is the single README). A flat
+#     {relpath:content} map cannot create an empty dir (mkdir only fires on a
+#     file write — Gate-1 B3), so these are created explicitly with a .gitkeep
+#     dir-presence marker. Content accretes: real gates/skills fill them later.
+#
+# Design corrections baked in (2026-07-12, DoD D1/D2/D3):
+#   D1: NO agents/ or agent-sops/ here — those are AIM-EXPORT-form members
+#       (§555), NOT the SwarmWS-native DDD; they accrete on-demand at export /
+#       when a real agent-spec is authored, never pre-scaffolded empty.
+#   D2: ONE unified AGENTS.md README, NOT five per-section README stubs.
+#   D3: aim.json.plugins declares the 5 default DDD-native skills.
+#
+# ② KNOWLEDGE (4 DDD_TEMPLATES docs + Knowledge/) is handled by the workspace;
+# ⑤ DELIVERY CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE.
 SECTION_SCAFFOLD: dict[str, str] = {
     # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
+    # aim.json.plugins declares the 5 default DDD-native skills (D3). These are
+    # REFERENCED by name (not copied) — a DDD is self-propagating + self-養成
+    # because it carries the ability to create more DDDs (s_ddd-manager),
+    # sediment its own docs (s_persist), run its own dev-loop (s_ddd-pipeline),
+    # express its value (s_ddd-pollinate), and refresh its ⑥ code-intel
+    # projection (s_ai-ready-repo). This is inert export-manifest data in
+    # SwarmWS; it becomes an AIM plugin namespace on export.
     "aim.json": """{
   "name": "{project_name}",
   "ddd_spec_version": "1.0",
   "description": "DDD package for {project_name} (six-section canonical structure).",
-  "plugins": {}
+  "plugins": {
+    "native_skills": [
+      "s_ddd-manager",
+      "s_persist",
+      "s_ddd-pipeline",
+      "s_ddd-pollinate",
+      "s_ai-ready-repo"
+    ]
+  }
 }
 """,
-    "AGENTS.md": """# {project_name} — Agent Guide (① Identity)
+    # AGENTS.md is the SINGLE unified README (D2) — covers all six sections +
+    # the 5 native skills. No per-section README stubs.
+    "AGENTS.md": """# {project_name} — DDD Agent Guide (① Identity & unified README)
 
-Repo-level guide for any AI agent operating on **{project_name}**. This is section
-① of the canonical six-section DDD structure (DDD-agent-brain spec §3.6).
+The ONE README for **{project_name}**'s DDD. This IS section ① and it explains
+the whole canonical six-section structure (DDD-agent-brain spec §3.6) — there are
+no per-section READMEs; every section is documented here.
 
 ## What this DDD is
 {project_name}'s domain **brain / control plane** — it OWNs cognition (①-④) and
 GOVERNs the physical repo (⑤-⑥). It never contains source code and never runs a
-pipeline (指+治, 不含+不跑).
+deploy pipeline (指+治, 不含+不跑).
 
 ## The six sections
-- ① Identity & Manifest — this file, `aim.json`, `.crux_template.md`
-- ② Knowledge — `PRODUCT/TECH/IMPROVEMENT/PROJECT.md` + `Knowledge/`
-- ③ Gates — `gates/` (executable judgment; accretes as pitfalls mature)
-- ④ Capabilities — `skills/`, `agents/`, `agent-sops/` (accretes as capabilities are bound)
-- ⑤ Delivery Contract — `bindings.yaml` (added by BIND when a repo is bound)
-- ⑥ Code-Intel Refresher — `REFRESHER.md` (activates on BIND)
+| # | Section | OWN/GOVERN | Members | What belongs / accretion rule |
+|---|---------|-----------|---------|-------------------------------|
+| ① | Identity & Manifest | OWN | this file, `aim.json`, `.crux_template.md` | the DDD's identity + export manifest |
+| ② | Knowledge | OWN | `PRODUCT/TECH/IMPROVEMENT/PROJECT.md` + `Knowledge/` | 冷启动 + judgment BORN here as prose |
+| ③ | Gates (the moat) | OWN | `gates/<gate>.py\\|sh` + tests + `gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the 养成 ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
+| ④ | Capabilities | OWN | `skills/` (portable `s_<name>/SKILL.md`) | validated portable skills the DDD distributes. Accretes as capabilities are bound. |
+| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` | full per-repo delivery 全貌 (build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND. |
+| ⑥ | Code-Intel Refresher | GOVERN | `REFRESHER.md` | a self-contained mechanism that REGENERATES `code-intel.json` from code. Ships the refresher, not the projection. Activates on BIND. |
 
-## Non-section directories (sanctioned, not part of ①-⑥)
-`assets/` (diagrams, decks, generators — referenced by path, do NOT relocate),
-`templates/` (project doc templates), `.artifacts/` (pipeline run outputs).
+## Default native skills (the self-養成 / self-propagation set — ④, referenced in `aim.json`)
+- **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
+- **s_persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
+- **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
+- **s_ddd-pollinate** — express this product's value to audiences.
+- **s_ai-ready-repo** — the ⑥ refresher: regenerate `code-intel.json` from code.
+
+Together they make a DDD **get smarter with use, on any runtime, without SwarmAI**.
+
+## NOT a DDD member (derived / physical zone)
+`code-intel.json` (machine projection — regenerated by ⑥, never PR-flows-back),
+`code_intel.db` (local query engine), the product source repos (GOVERNed via ⑤,
+never contained), the deploy pipeline (referenced in ⑤, never executed here).
+AIM-export-only members (`agents/*.agent-spec.json`, `agent-sops/`, `context/`)
+are generated at export — they are NOT part of the SwarmWS-native skeleton.
+
+## Non-section directories (sanctioned, at project root)
+`assets/` (diagrams/decks/generators — referenced by path, do NOT relocate),
+`templates/` (doc templates), `.artifacts/` (pipeline run outputs).
 """,
     ".crux_template.md": """## Summary
 _One-line summary of the change to {project_name}._
@@ -335,51 +383,14 @@ _What changed and why._
 ## Testing
 - [ ] _How this was verified._
 """,
-    # ── ③ GATES (the moat) ───────────────────────────────────────────────────
-    "gates/README.md": """# ③ Gates — executable judgment (the moat)
-
-Section ③ of {project_name}'s DDD. **Content ACCRETES**: a gate is born as prose
-in ② Knowledge (a pitfall / rule), matures via the 养成 ladder, and is compiled
-HERE as an executable check (`<gate>.py|sh` + `test_<gate>.*`) wired into an ④
-agent-spec's hooks. Empty until the first judgment matures — that is correct.
-
-**What belongs here:** deterministic PreToolUse/commit-time gate scripts that a
-runtime cannot silently ignore (exit-2 = BLOCK). Denylist DATA lives in
-`context/includes/*_denied_commands.json`.
-""",
-    "gates/context/includes/README.md": """# ③ Gate denylist data
-
-Judgment-as-DATA consumed by ③ gate scripts + shell allow/deny config
-(decision-7 generalized). Add `*_denied_commands.json` here as gates accrete.
-Empty until the first gate needs a denylist.
-""",
-    # ── ④ CAPABILITIES ───────────────────────────────────────────────────────
-    "skills/README.md": """# ④ Capabilities — skills
-
-Section ④ of {project_name}'s DDD. **Content ACCRETES** as validated, portable
-capabilities are bound. What belongs: `agentskills.io`-standard skill dirs
-(`s_<name>/SKILL.md`) — project-increment skills the DDD distributes. Empty until
-the first capability is bound — that is correct (a superset section, not a checklist).
-""",
-    "agents/README.md": """# ④ Capabilities — agent specs
-
-Per-agent config (`*.agent-spec.json`: name/systemPrompt/model/dependencies;
-③ gates wire into an agent-spec's hooks here). **Content ACCRETES.** Empty until
-{project_name} defines its first agent.
-""",
-    "agent-sops/README.md": """# ④ Capabilities — agent SOPs
-
-Procedural workflows (`*.sop.md`) for {project_name}. **Content ACCRETES.**
-Empty until the first SOP is authored.
-""",
     # ── ⑥ CODE-INTEL REFRESHER (shape-neutral marker) ────────────────────────
     "REFRESHER.md": """# ⑥ Code-Intel Refresher — {project_name}
 
 Section ⑥ GOVERNs the physical repo's code-intel projection. It is a
 **self-contained mechanism that REGENERATES `code-intel.json` from code** — it
-ships the refresher (capability), never the projection (derived data).
-
-**Status: NOT-YET-BUILT (planned = `s_ai-ready-repo` narrow refresh mode).**
+ships the refresher (capability), never the projection (derived data). The
+default refresher is `s_ai-ready-repo` (narrow refresh mode; see `aim.json`
+native_skills).
 
 **Activation:** ⑥ activates when a repo is BOUND (see ⑤ `bindings.yaml`). For a
 **no-repo project it is a no-op** — there is no code to refresh, so this file is
@@ -388,6 +399,16 @@ dev-consumer profile pulls this DDD, the refresher regenerates the projection
 LOCALLY (never PR-flowed-back — the derived-projection rule, spec §3.6).
 """,
 }
+
+# ③④ section DIRECTORIES that exist in the skeleton but carry no prose README
+# (D2: AGENTS.md is the single README). Created explicitly with a .gitkeep
+# marker because a flat file-map cannot materialize an empty dir (Gate-1 B3).
+# NO agents/ or agent-sops/ — those are AIM-export-form, not SwarmWS-native (D1).
+SECTION_DIRS: tuple[str, ...] = (
+    "gates",                      # ③ executable judgment (accretes)
+    "gates/context/includes",     # ③ denylist DATA home (accretes)
+    "skills",                     # ④ portable capabilities (accretes)
+)
 
 # Default SwarmAI project DDD content (richer than templates, serves as
 # example for users).
@@ -836,10 +857,11 @@ class SwarmWorkspaceManager:
                     )
                     created.append(filename)
 
-            # Six-section skeleton (①③④⑥): scaffold dirs + purpose READMEs +
-            # identity manifests, only-if-absent (idempotent — never clobbers
-            # hand-authored content; re-provision is a safe no-op). ② is the 4
-            # docs above; ⑤ bindings.yaml is provisioned by BIND, not here.
+            # Six-section skeleton (①⑥): scaffold ① identity manifests
+            # (aim.json/AGENTS.md/.crux_template.md) + ⑥ REFRESHER.md, only-if-
+            # absent (idempotent — never clobbers hand-authored content;
+            # re-provision is a safe no-op). ② is the 4 docs above; ③④ dirs are
+            # created below (SECTION_DIRS); ⑤ bindings.yaml is by BIND, not here.
             for relpath, template in SECTION_SCAFFOLD.items():
                 target = project_dir / relpath
                 if not target.exists():
@@ -849,6 +871,19 @@ class SwarmWorkspaceManager:
                         encoding="utf-8",
                     )
                     created.append(relpath)
+
+            # ③④ section DIRECTORIES (SECTION_DIRS): a flat file-map cannot
+            # materialize an empty dir (mkdir only fires on a file write), so
+            # create them explicitly with a .gitkeep marker (NOT a prose README —
+            # D2: AGENTS.md is the single README). Content accretes: real
+            # gates/skills fill these later; the empty dir keeps the skeleton
+            # legible. only-if-absent → idempotent.
+            for reldir in SECTION_DIRS:
+                keep = project_dir / reldir / ".gitkeep"
+                if not keep.exists():
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    keep.write_text("", encoding="utf-8")
+                    created.append(f"{reldir}/.gitkeep")
 
             # Ensure .artifacts/ with manifest.json
             artifacts_dir = project_dir / ".artifacts"
@@ -906,11 +941,17 @@ class SwarmWorkspaceManager:
              raises on the name-collision guard). A non-uuid id is valid (cf. the
              shipped ``swarmai-default``); the ``<name>-`` prefix avoids any future
              uuid4 collision.
-          2. Call ``provision_project_ddd`` to fill the ①③④⑥ skeleton — every
-             write is only-if-absent, so the project's hand-authored ② docs /
-             ``Knowledge/`` / ⑤ ``bindings.yaml`` are preserved byte-for-byte.
+          2. **Prune legacy over-build** — a project scaffolded by the PRIOR
+             (over-built) version has ``agents/README.md`` / ``agent-sops/README.md``
+             and per-section README stubs that the corrected structure no longer
+             uses (D1/D2). ``provision_project_ddd`` is only-if-absent so it would
+             NEVER remove them — an explicit, SURGICAL prune of the known-legacy set
+             is required (Gate-1 B1). It touches ONLY that closed set; ② docs,
+             ``Knowledge/``, ⑤ ``bindings.yaml``, ③④ real content are never touched.
+          3. Call ``provision_project_ddd`` to fill the ①⑥ skeleton + ③④ dirs — every
+             write is only-if-absent, so hand-authored content is preserved byte-for-byte.
 
-        Returns ``{"metadata_created": bool, "scaffolded": [...], "id": str}``.
+        Returns ``{"metadata_created": bool, "pruned": [...], "scaffolded": [...], "id": str}``.
         Other projects lacking ``.project.json`` can be backfilled the same way
         (safe idempotent re-run) — done per-project on demand, not big-bang.
         """
@@ -948,15 +989,80 @@ class SwarmWorkspaceManager:
             self._uuid_index[metadata["id"]] = project_dir
             return True
 
+        def _prune_legacy_scaffold() -> list[str]:
+            """Remove ONLY prior-version over-build artifacts that are still the
+            SHIPPED legacy stub — never human-authored content (Gate-2 CRITICAL,
+            2026-07-12: an unconditional unlink of gates/README.md silently deleted
+            a human-written README). Two safety gates:
+              • per-section README: unlink ONLY if its content is CONTENT-GATED to
+                the known legacy stub (a signature substring the old template
+                emitted). A human-edited README diverges → NOT the stub → KEPT.
+              • agents/agent-sops dir: rmtree ONLY if it holds nothing but ignorable
+                dotfiles (.gitkeep/.DS_Store). A .gitkeep alone must NOT block
+                pruning (Gate-2 HIGH: else migrate leaves a D1-violating half-state),
+                but any REAL file (an agent-spec, a SOP) → KEPT for human review."""
+            import shutil
+            pruned: list[str] = []
+            kept: list[str] = []
+            # A legacy README stub is identifiable by the marker phrases the OLD
+            # SECTION_SCAFFOLD template emitted. If the file no longer contains its
+            # marker, a human rewrote it → it is NOT a stub → never delete.
+            _LEGACY_README_MARKERS = {
+                "gates/README.md": "Gates — executable judgment (the moat)",
+                "gates/context/includes/README.md": "Gate denylist data",
+                "skills/README.md": "Capabilities — skills",
+                "agents/README.md": "Capabilities — agent specs",
+                "agent-sops/README.md": "Capabilities — agent SOPs",
+            }
+            _ACCRETION_MARKER = "ACCRETES"  # every legacy stub carried this word
+            for rel, marker in _LEGACY_README_MARKERS.items():
+                p = project_dir / rel
+                if not (p.exists() and p.is_file()):
+                    continue
+                body = p.read_text(encoding="utf-8", errors="replace")
+                if marker in body and _ACCRETION_MARKER in body:
+                    p.unlink()
+                    pruned.append(rel)
+                else:
+                    kept.append(rel)  # human-edited — never delete
+                    logger.warning(
+                        "migrate: %s/%s kept — content diverges from the legacy "
+                        "stub (looks human-authored); not pruned", project_name, rel,
+                    )
+            # legacy AIM-export-form dirs that must NOT be SwarmWS-native (D1).
+            # rmtree ONLY if nothing but ignorable dotfiles remain — a .gitkeep must
+            # not create a permanent half-state, but a real agent-spec/SOP is kept.
+            _IGNORABLE = {".gitkeep", ".DS_Store"}
+            for reldir in ("agents", "agent-sops"):
+                d = project_dir / reldir
+                if not d.is_dir():
+                    continue
+                real_files = [
+                    x for x in d.rglob("*")
+                    if x.is_file() and x.name not in _IGNORABLE
+                ]
+                if not real_files:
+                    shutil.rmtree(d)
+                    pruned.append(f"{reldir}/")
+                else:
+                    kept.append(f"{reldir}/")
+                    logger.warning(
+                        "migrate: %s/%s not pruned — contains %d real file(s), "
+                        "left for human review", project_name, reldir, len(real_files),
+                    )
+            return pruned
+
         metadata_created = await anyio.to_thread.run_sync(_ensure_metadata)
+        pruned = await anyio.to_thread.run_sync(_prune_legacy_scaffold)
         scaffolded = await self.provision_project_ddd(project_name, workspace_path)
         await self.refresh_projects_index(workspace_path)
         logger.info(
-            "Migrated project '%s' to six-section structure (metadata_created=%s, scaffolded=%d items)",
-            project_name, metadata_created, len(scaffolded),
+            "Migrated project '%s' to six-section structure (metadata_created=%s, pruned=%d, scaffolded=%d items)",
+            project_name, metadata_created, len(pruned), len(scaffolded),
         )
         return {
             "metadata_created": metadata_created,
+            "pruned": pruned,
             "scaffolded": scaffolded,
             "id": f"{project_name.lower()}-ddd",
         }
@@ -2292,17 +2398,22 @@ class SwarmWorkspaceManager:
         """Create a new project under Projects/.
 
         Scaffolds the SKELETON of the canonical six-section DDD structure
-        (spec §3.6; option A, XG decision 2026-07-12): the project dir +
-        ``.project.json`` (① identity, stamped with ``ddd_spec_version``), the ①
-        manifests (``aim.json``/``AGENTS.md``/``.crux_template.md``), the 4 DDD
-        docs (② knowledge), and the ③④⑥ section skeleton (``gates/``,
-        ``skills/``/``agents/``/``agent-sops/``, ``REFRESHER.md`` — each dir with a
-        purpose README) via ``provision_project_ddd``, plus ``.artifacts/`` for
-        pipeline outputs. The skeleton is concrete so SwarmAI-maintenance follows
-        the standard and AIM export is low-variance; section CONTENT (real gates,
-        skills, agent-specs, a live refresher) ACCRETES as the project grows. Only
-        ⑤ ``bindings.yaml`` waits — it is provisioned by BIND (repo shape is unknown
-        at create). All writes are only-if-absent (idempotent, non-destructive).
+        (spec §3.6; option A, XG decision 2026-07-12, refined same day to remove
+        the over-build): the project dir + ``.project.json`` (① identity, stamped
+        with ``ddd_spec_version``), the ① manifests (``aim.json`` — declaring the
+        5 default native skills — / ``AGENTS.md`` — the SINGLE unified README —
+        / ``.crux_template.md``), the 4 DDD docs (② knowledge), the ⑥
+        ``REFRESHER.md`` marker, and the ③④ section DIRECTORIES (``gates/``,
+        ``gates/context/includes/``, ``skills/`` — created via a ``.gitkeep`` marker,
+        NOT a per-section README; AGENTS.md is the one README) via
+        ``provision_project_ddd``, plus ``.artifacts/`` for pipeline outputs.
+        Deliberately NOT scaffolded: ``agents/`` and ``agent-sops/`` — those are
+        AIM-export-form members (generated at export), not the SwarmWS-native
+        skeleton. The skeleton is concrete so SwarmAI-maintenance follows the
+        standard and AIM export is low-variance; section CONTENT (real gates,
+        skills) ACCRETES as the project grows. Only ⑤ ``bindings.yaml`` waits — it
+        is provisioned by BIND (repo shape is unknown at create). All writes are
+        only-if-absent (idempotent, non-destructive).
 
         Args:
             project_name: Display name for the project (used as directory name).
