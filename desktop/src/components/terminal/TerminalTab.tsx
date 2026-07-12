@@ -75,6 +75,37 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   // path must then focus. Gated so safeFit (which runs on EVERY resize tick)
   // does NOT re-focus and steal focus from chat on later resizes.
   const focusedRef = useRef(false);
+  // One-shot guard for the webfont cell re-measure. The cell width/height is
+  // measured at open() with whatever font is resolved THEN — usually a fallback,
+  // because JetBrains Mono is an async webfont. A wrong cell width drifts mouse
+  // selection across the row. We force a re-measure once the font is loaded AND
+  // the surface is visible+sized. Why BOTH triggers (fonts.ready AND reveal):
+  // xterm's DomMeasureStrategy fallback reads offsetWidth, which is 0 while the
+  // tab is display:none — so a fonts.ready that lands while this tab is inactive
+  // no-ops on that path. Re-nudging on reveal (when the tab is sized) makes the
+  // fix robust across both measure strategies (Gate-2 MEDIUM).
+  const remeasuredRef = useRef(false);
+
+  // Force xterm to re-measure the character cell with the currently-loaded font.
+  // xterm's CharSizeService only re-measures on a CHANGED fontFamily value, so
+  // nudge it (append a space → distinct value → change event, then restore →
+  // second change event → measure runs). Idempotent via remeasuredRef.
+  const remeasureCellOnce = (term: Terminal, fit: FitAddon, host: HTMLDivElement) => {
+    if (remeasuredRef.current) return;
+    const rect = host.getBoundingClientRect();
+    // DOM measure strategy needs a laid-out (sized) surface; skip until visible.
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const base = term.options.fontFamily ?? '';
+    term.options.fontFamily = base + ' ';
+    term.options.fontFamily = base;
+    remeasuredRef.current = true;
+    try {
+      fit.fit();
+      tab.pty.resize(term.cols, term.rows);
+    } catch {
+      /* fit can throw mid-layout; ignore */
+    }
+  };
 
   // Create xterm + wire to the (store-owned) PTY once per tab.id.
   useEffect(() => {
@@ -85,8 +116,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       cursorBlink: true,
       fontFamily:
         "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-      fontSize: 12,
-      lineHeight: 1.3,
+      // Terminal is an auxiliary panel with little vertical space — pack it
+      // densely. fontSize 11 + lineHeight 1.0 (was 12 / 1.3, which wasted ~30%
+      // of every row to leading) fits noticeably more rows in the same height.
+      fontSize: 11,
+      lineHeight: 1.0,
       letterSpacing: 0,
       fontWeight: 400,
       fontWeightBold: 600,
@@ -143,19 +177,46 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       return lines.join('\n').replace(/\n+$/, '');
     };
 
+    // Expose focus() so TerminalPanel can focus the active terminal when the
+    // panel is REVEALED (collapse→reopen keeps `active` unchanged, so the
+    // [active] effect below doesn't re-fire — without this the reopened terminal
+    // is sized but not focused, and the user must click before typing).
+    tab.focus = () => {
+      if (termRef.current === term) term.focus();
+    };
+
     // Re-fit when the container resizes (panel open/resize/window resize).
     const ro = new ResizeObserver(() => safeFit());
     ro.observe(host);
+
+    // Re-measure the character cell once the terminal webfont has loaded (see
+    // remeasureCellOnce above). This is the fonts.ready TRIGGER; the [active]
+    // effect below is the reveal trigger. Whichever fires first with the surface
+    // visible+sized wins (remeasuredRef makes it one-shot). Guarded on `disposed`
+    // so a font resolving after unmount doesn't touch a disposed terminal.
+    let disposed = false;
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready
+        .then(() => {
+          if (disposed || termRef.current !== term) return;
+          remeasureCellOnce(term, fit, host);
+        })
+        .catch(() => {
+          /* fonts.ready never rejects in practice; ignore if it does */
+        });
+    }
 
     return () => {
       // M1: dispose all listeners + the xterm instance. The PTY is NOT killed
       // here — its lifecycle is owned by TerminalStore.closeTerminal, so a
       // StrictMode remount re-attaches to the same live shell (C1).
+      disposed = true;
       ro.disconnect();
       dataSub.dispose();
       inputSub.dispose();
       term.dispose();
       tab.getBuffer = undefined;
+      tab.focus = undefined;
       termRef.current = null;
       fitRef.current = null;
       // Re-arm the one-shot autofocus for a genuine remount (StrictMode
@@ -164,6 +225,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
       // so switching tabs does not re-arm it; tab-switch refocus is owned by
       // the [active] effect's own term.focus() below.
       focusedRef.current = false;
+      // Re-arm the one-shot cell re-measure for a genuine remount (a fresh xterm
+      // instance must re-measure against the loaded font). Like focusedRef, this
+      // reset lives ONLY in the creation effect ([tab.id,tab.pty]) — NOT in the
+      // [active] effect — so a tab-SWITCH doesn't re-nudge fontFamily every time.
+      remeasuredRef.current = false;
     };
   }, [tab.id, tab.pty]);
 
@@ -177,6 +243,11 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
     const rect = host.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       try {
+        // Reveal-time cell re-measure (one-shot). If the webfont loaded while
+        // this tab was inactive (display:none → offsetWidth 0), the fonts.ready
+        // trigger no-op'd on xterm's DOM measure strategy; now that the surface
+        // is visible+sized, force the measure so selection maps correctly.
+        remeasureCellOnce(term, fit, host);
         fit.fit();
         tab.pty.resize(term.cols, term.rows);
         // Focus on tab-switch reveal. Mark focused so the safeFit one-shot
@@ -198,11 +269,15 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   }, [active, tab.pty]);
 
   return (
+    // Visibility is owned by the PARENT wrapper (TerminalPanel toggles the
+    // `absolute inset-0` wrapper's display), which is the click-hit-test surface.
+    // This inner host is always block inside its wrapper — a single source of
+    // visibility truth (Gate-2: removed the redundant inner display toggle that
+    // duplicated the wrapper's, which risked the two diverging).
     <div
       ref={hostRef}
       data-testid={`terminal-surface-${tab.id}`}
-      className="h-full w-full overflow-hidden pl-3 pr-2 py-1.5"
-      style={{ display: active ? 'block' : 'none' }}
+      className="h-full w-full overflow-hidden pl-2 pr-1 py-0.5"
     />
   );
 }

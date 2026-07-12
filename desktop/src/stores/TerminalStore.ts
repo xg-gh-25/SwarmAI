@@ -25,6 +25,11 @@ export interface TerminalTab {
    *  buffer text (last N lines) for the P2 "attach to chat" action. Null until
    *  the surface has mounted. */
   getBuffer?: () => string;
+  /** Set by the mounted TerminalTab component — focuses this tab's xterm so the
+   *  user can type immediately. Used when the panel is REVEALED (collapse→reopen
+   *  doesn't change `active`, so the [active] focus effect doesn't re-fire).
+   *  Null until the surface has mounted. */
+  focus?: () => void;
 }
 
 /** Options for opening a terminal. */

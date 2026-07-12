@@ -24,6 +24,7 @@ export default function TerminalPanel() {
   const {
     tabs,
     activeTabId,
+    panelOpen,
     openTerminal,
     closeTerminal,
     setActiveTab,
@@ -35,7 +36,7 @@ export default function TerminalPanel() {
   const dragState = useRef<{ startY: number; startH: number } | null>(null);
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
-  // Auto-open ONE terminal when the panel first opens with no terminals, so the
+  // Auto-open ONE terminal when the panel is OPEN and has no terminals, so the
   // user sees a ready shell (VSCode/Kiro behavior) instead of an empty "click ＋"
   // placeholder. Guarded on terminalStore.count() — the LIVE registry size,
   // which reflects openTerminal's synchronous Map write immediately — NOT the
@@ -43,14 +44,36 @@ export default function TerminalPanel() {
   // React commit. Under StrictMode the mount effect runs twice against the same
   // commit; a `tabs.length===0` guard would read 0 both times and spawn TWO
   // shells, but count() reads 1 on the second invocation → exactly one opens.
+  //
+  // ⚠️ MUST gate on `panelOpen` (not mount): this component is now ALWAYS
+  // mounted (hidden via CSS when collapsed) so that collapse/reopen preserves
+  // xterm scrollback + live PTYs instead of unmounting → term.dispose() →
+  // history loss. But an always-mounted panel means a bare mount-effect would
+  // auto-spawn a shell at APP STARTUP even when the user never opened the
+  // terminal (and openTerminal force-reveals the panel) — the exact regression
+  // the adversarial gate caught. Gating on panelOpen spawns only when the panel
+  // is actually shown; re-opening a panel whose PTYs survived does NOT re-spawn
+  // (count()>0), so history is intact.
   useEffect(() => {
-    if (terminalStore.count() === 0) {
+    if (panelOpen && terminalStore.count() === 0) {
       openTerminal({});
     }
-    // Mount-only: opening a terminal is a one-time "reveal" action, not a
-    // reaction to tab changes. openTerminal is stable (useCallback).
+    // openTerminal is stable (useCallback); re-run only when panelOpen flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [panelOpen]);
+
+  // Focus the active terminal when the panel is REVEALED. On collapse→reopen the
+  // tab's `active` prop doesn't change, so TerminalTab's [active] focus effect
+  // doesn't re-fire — without this the reopened terminal is sized (ResizeObserver
+  // refits it) but not focused, so the user would have to click before typing.
+  // rAF waits for the display:none→flex layout so the surface is focusable.
+  useEffect(() => {
+    if (!panelOpen || !activeTabId) return;
+    const raf = requestAnimationFrame(() => {
+      terminalStore.get(activeTabId)?.focus?.();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [panelOpen, activeTabId]);
 
   const onDragStart = useCallback(
     (e: React.MouseEvent) => {
@@ -80,7 +103,13 @@ export default function TerminalPanel() {
     <div
       data-testid="terminal-panel"
       className="flex flex-col flex-shrink-0 border-t-2 border-[var(--color-accent,#2f81f7)] bg-[#0a0d12]"
-      style={{ height }}
+      // display:none when collapsed (NOT unmount): the panel stays mounted so
+      // xterm scrollback + live PTYs survive collapse/reopen. display:none takes
+      // the element out of flow → chat reclaims the full height (no leftover
+      // height box, no 2px border-t seam), exactly like a conditional unmount
+      // would — but without destroying the terminals. (height:0 was rejected: it
+      // leaves the border-t-2 as a visible seam. Gate-checked.)
+      style={{ height, display: panelOpen ? 'flex' : 'none' }}
     >
       {/* drag-to-resize handle */}
       <div
@@ -178,11 +207,29 @@ export default function TerminalPanel() {
             No terminals — click ＋ to open one
           </div>
         ) : (
-          tabs.map((tab) => (
-            <div key={tab.id} className="absolute inset-0">
-              <TerminalTab tab={tab} active={tab.id === activeTabId} />
-            </div>
-          ))
+          tabs.map((tab) => {
+            const isActive = tab.id === activeTabId;
+            return (
+              // The wrapper — NOT just the inner TerminalTab — must be hidden when
+              // inactive. All tab wrappers are `absolute inset-0` and stack in DOM
+              // order (last-opened on top). If only the inner surface toggled
+              // display, an inactive tab's wrapper would remain a full-size,
+              // transparent, click-catching overlay covering the active terminal —
+              // so opening a 2nd tab made the 1st tab unclickable / unselectable /
+              // unfocusable (mousedown landed on the empty overlay, never reaching
+              // the active xterm). display:none on the wrapper removes it from
+              // hit-testing entirely. Background PTY streaming is unaffected — the
+              // read loop lives in the pty service, not the DOM, and xterm buffers
+              // output while hidden (same as the inner div's prior display toggle).
+              <div
+                key={tab.id}
+                className="absolute inset-0"
+                style={{ display: isActive ? 'block' : 'none' }}
+              >
+                <TerminalTab tab={tab} active={isActive} />
+              </div>
+            );
+          })
         )}
       </div>
     </div>
