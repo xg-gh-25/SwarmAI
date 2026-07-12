@@ -468,3 +468,162 @@ class TestBriefingIntegration:
         lines = _get_health_highlights(str(tmp_path))
         gap_lines = [l for l in lines if "[gap/" in l]
         assert len(gap_lines) == 3  # Capped at 3 in briefing
+
+
+# ── Phase 2 input truncation + Open Threads write-back (run_473a0b7c) ──
+
+
+class TestExtractSection:
+    """_extract_section: slice a `## <name>` section from a MEMORY.md string."""
+
+    def test_extracts_named_section_to_next_h2(self):
+        from jobs.handlers.memory_health import _extract_section
+        text = (
+            "## Alpha\nalpha body\n\n"
+            "## Open Threads\n\n"
+            "### P1\n- 🟡 **Thing** — detail\n\n"
+            "## Trailer\ntrailer body\n"
+        )
+        section = _extract_section(text, "Open Threads")
+        assert section.startswith("## Open Threads")
+        assert "**Thing**" in section  # includes ### subsections
+        assert "trailer body" not in section  # stops at next ## header
+        assert "alpha body" not in section  # doesn't leak the prior section
+
+    def test_extracts_to_eof_when_last_section(self):
+        from jobs.handlers.memory_health import _extract_section
+        text = "## Head\nx\n\n## Open Threads\n- item A\n- item B\n"
+        section = _extract_section(text, "Open Threads")
+        assert "item A" in section and "item B" in section
+
+    def test_missing_section_returns_empty(self):
+        from jobs.handlers.memory_health import _extract_section
+        assert _extract_section("## Only\nbody\n", "Open Threads") == ""
+
+
+class TestPhase2SeesOpenThreads:
+    """Defect 1: Phase 2 LLM input must contain the tail Open Threads section,
+    not just full_memory[:8000]."""
+
+    def test_open_threads_included_when_beyond_8k(self, tmp_path):
+        from jobs.handlers.memory_health import run_memory_health
+
+        # Build a MEMORY.md where Open Threads lives WELL past char 8000.
+        marker = "UNIQUE_OT_MARKER_ZzZ"
+        head = "## Recent Context\n\n" + ("- filler line padding\n" * 900)
+        assert len(head) > 8000
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            head
+            + "\n## Open Threads\n\n"
+            + f"- 🟡 **{marker}** — an open thread far past the 8000 char cap\n"
+        )
+        daily_dir = tmp_path / "da"
+        daily_dir.mkdir()
+
+        captured = {}
+
+        def fake_build_prompt(memory_md, evolution_md, git_log, daily_activity):
+            captured["memory_md"] = memory_md
+            return "PROMPT"
+
+        # Stop after prompt is built — we only need to inspect the input.
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path), \
+             patch("jobs.handlers.memory_health.DAILY_DIR", daily_dir), \
+             patch("jobs.handlers.memory_health.SWARMWS", tmp_path), \
+             patch("jobs.handlers.memory_health._build_prompt", side_effect=fake_build_prompt), \
+             patch("jobs.handlers.memory_health._call_llm", return_value={"summary": "ok"}):
+            run_memory_health()
+
+        assert "memory_md" in captured, "_build_prompt was not called"
+        assert "## Open Threads" in captured["memory_md"]
+        assert marker in captured["memory_md"], (
+            "Open Threads section past 8000 chars must be fed to the LLM"
+        )
+
+
+class TestResolveNonEmojiThread:
+    """Defect 2 + neighbors: _resolve_open_thread must match an emoji-LESS
+    bold-title thread, carry its trailing metadata comment, and return a bool."""
+
+    def test_resolves_non_emoji_bold_thread(self, tmp_path):
+        from jobs.handlers.memory_health import _resolve_open_thread
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Open Threads\n\n"
+            "### P1 — Important (prod-verify pending)\n\n"
+            " **DEAD-resume race — FIXED + DEPLOYED + VERIFIED:** all done, 0 recurrence.\n"
+            "  <!-- ref:0 | last:none | decay:active | source:manual -->\n"
+            "- 🟡 **Other thread** — still open\n"
+            "\n### Resolved (archive)\n"
+        )
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            result = _resolve_open_thread("DEAD-resume race")
+
+        assert result is True, "must return True on a real match"
+        content = memory.read_text()
+        # The item moved into the Resolved section with a ✅ marker.
+        resolved_idx = content.index("### Resolved (archive)")
+        assert "DEAD-resume race" in content[resolved_idx:], "moved to Resolved"
+        assert "✅" in content[resolved_idx:], "resolved entry carries ✅ marker"
+        assert "auto-resolved" in content[resolved_idx:]
+        # The trailing metadata comment is carried WITH it, not orphaned above.
+        assert "source:manual" in content[resolved_idx:], "metadata carried to Resolved"
+        assert content[:resolved_idx].count("source:manual") == 0, (
+            "no orphaned metadata comment left in Open Threads"
+        )
+        # The other (emoji) thread stays open.
+        assert "Other thread" in content[:resolved_idx]
+
+    def test_returns_false_when_no_match(self, tmp_path):
+        from jobs.handlers.memory_health import _resolve_open_thread
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Open Threads\n\n"
+            "- 🟡 **Real thread** — open\n"
+            "\n### Resolved (archive)\n"
+        )
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            result = _resolve_open_thread("Nonexistent thread title")
+        assert result is False
+
+    def test_apply_report_logs_honest_not_matched(self, tmp_path):
+        from jobs.handlers.memory_health import _apply_report
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Open Threads\n\n"
+            "- 🟡 **Real thread** — open\n"
+            "\n### Resolved (archive)\n"
+        )
+        report = {
+            "stale_memories": [],
+            "resolved_threads": [{"title": "Ghost thread", "evidence": "n/a"}],
+            "archived_capabilities": [],
+            "stale_decisions": [],
+            "summary": "x",
+        }
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            actions = _apply_report(report, memory.read_text(), "")
+        assert any("not matched" in a.lower() for a in actions), (
+            "unmatched thread must log a not-matched action, not a false success"
+        )
+        assert not any(a.startswith("Resolved thread:") for a in actions), (
+            "must NOT log false success for an unmatched thread"
+        )
+
+    def test_emoji_thread_still_resolves(self, tmp_path):
+        """Regression: the original emoji-case path must keep working."""
+        from jobs.handlers.memory_health import _resolve_open_thread
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Open Threads\n\n"
+            "- 🔵 **Signal fetcher service** — not built yet\n"
+            "\n### Resolved (archive)\n"
+            "- ✅ Old resolved item\n"
+        )
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            result = _resolve_open_thread("Signal fetcher service")
+        assert result is True
+        content = memory.read_text()
+        assert "✅" in content
+        assert "auto-resolved" in content

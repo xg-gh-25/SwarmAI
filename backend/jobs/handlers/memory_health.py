@@ -315,7 +315,21 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
     # ── Phase 2: LLM-powered maintenance ───────────────────────────
 
-    memory_md = full_memory[:8000]  # Cap for LLM prompt
+    # Head cap for token budget, but ALWAYS append the evergreen tail sections
+    # the LLM must reason over. `## Open Threads` lives at the very end of a
+    # ~330K-char MEMORY.md — a raw [:8000] head never reaches it, so
+    # resolved_threads was structurally always empty for those items (a
+    # truncation blind spot, not a judgment call). Trim the head to a line
+    # boundary so we don't feed a garbled half-line to the LLM.
+    head = full_memory[:8000]
+    nl = head.rfind("\n")
+    if nl > 0:
+        head = head[:nl]
+    open_threads = _extract_section(full_memory, "Open Threads")
+    if open_threads and open_threads not in head:
+        memory_md = head + "\n\n" + open_threads
+    else:
+        memory_md = head
     evolution_md = _read_context_file("EVOLUTION.md")
     git_log = _get_recent_git_log(days=7)
     daily_activity = _get_recent_daily_activity(days=7)
@@ -378,6 +392,36 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
 
 # ── Input Gathering ─────────────────────────────────────────────────
+
+
+def _extract_section(text: str, section_name: str) -> str:
+    """Slice a top-level ``## <section_name>`` section out of a markdown string.
+
+    Returns the section from its ``## <name>`` header up to (but not including)
+    the next top-level ``## `` header, or EOF if it is the last section. Any
+    ``### `` subsections belong to the section and are included. Returns ``""``
+    if the section is absent.
+
+    Used to feed the evergreen tail sections (e.g. ``## Open Threads``) to the
+    Phase-2 LLM even when they sit far past the head token-budget cap — the head
+    cap alone would never reach them (they live at the end of a ~330K-char file).
+    """
+    lines = text.split("\n")
+    header = f"## {section_name}"
+    start = None
+    for i, line in enumerate(lines):
+        if line.rstrip() == header:
+            start = i
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        # Next TOP-LEVEL header (## ) ends the section; ### subsections stay in.
+        if lines[j].startswith("## "):
+            end = j
+            break
+    return "\n".join(lines[start:end]).rstrip()
 
 
 def _read_context_file(filename: str) -> str:
@@ -556,8 +600,10 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
         for thread in resolved[:3]:  # Cap at 3 per run
             title = thread.get("title", "")
             if title:
-                _resolve_open_thread(title)
-                actions.append(f"Resolved thread: {title}")
+                if _resolve_open_thread(title):
+                    actions.append(f"Resolved thread: {title}")
+                else:
+                    actions.append(f"Thread not matched (no such Open Thread line): {title}")
 
     # 3. Archive stale Evolution entries (remove from EVOLUTION.md)
     archived = report.get("archived_capabilities", [])
@@ -903,14 +949,41 @@ def _remove_memory_entry(entry_prefix: str) -> bool:
             fd.close()
 
 
-def _resolve_open_thread(title: str) -> None:
+def _is_open_thread_line(line: str, title: str) -> bool:
+    """True if `line` is an Open-Threads THREAD line matching `title`.
+
+    A thread line is a bold-titled item (``- **X**`` / ``**X**`` / a bulleted
+    emoji item ``- 🟡 **X**``). We require the title substring AND a thread-line
+    shape (emoji OR a bold ``**`` marker) so a bare prose mention of the title
+    elsewhere does not match. Scoping to the Open Threads section (the caller)
+    is the primary guard; this shape check is the secondary one.
+    """
+    if title.lower() not in line.lower():
+        return False
+    has_emoji = "🔵" in line or "🟡" in line or "🔴" in line
+    stripped = line.lstrip(" -")
+    is_bold = stripped.startswith("**") or "- **" in line
+    return has_emoji or is_bold
+
+
+def _resolve_open_thread(title: str) -> bool:
     """Move an Open Thread to the Resolved section in MEMORY.md.
 
+    Matches an Open-Threads item by title — whether it carries a status emoji
+    (🔵/🟡/🔴) OR is an emoji-less bold-titled item (e.g. the DEAD-resume race
+    entry) — moves it into the ``### Resolved`` section marking it ✅, and
+    carries its immediately-following ``<!-- ... -->`` metadata comment line
+    with it so no orphan is left behind. The match is SCOPED to the
+    ``## Open Threads`` section so a title mention elsewhere in MEMORY.md cannot
+    be falsely resolved.
+
+    Returns True iff a thread was matched and moved; False otherwise (so the
+    caller can log an honest "not matched" instead of a false success).
     Uses flock for safe concurrent access.
     """
     memory_path = CONTEXT_DIR / "MEMORY.md"
     if not memory_path.exists():
-        return
+        return False
 
     lock_path = memory_path.with_suffix(".md.lock")
     fd = None
@@ -920,43 +993,92 @@ def _resolve_open_thread(title: str) -> None:
         flock_exclusive(fd)
 
         content = memory_path.read_text(encoding="utf-8")
-
-        # Find the thread line (fuzzy match on title)
         lines = content.split("\n")
-        new_lines = []
-        resolved_entry = None
 
-        for line in lines:
-            if title.lower() in line.lower() and ("🔵" in line or "🟡" in line or "🔴" in line):
-                today = datetime.now(timezone.utc).strftime("%m/%d")
-                resolved_entry = line.replace("🔵", "✅").replace("🟡", "✅").replace("🔴", "✅")
-                resolved_entry = resolved_entry.rstrip() + f" (auto-resolved {today})"
-            else:
-                new_lines.append(line)
-
-        if resolved_entry:
-            inserted = False
-            for i, line in enumerate(new_lines):
-                if "### Resolved" in line:
-                    # Dedup: skip if this entry already exists in Resolved
-                    if resolved_entry not in new_lines:
-                        new_lines.insert(i + 1, resolved_entry)
-                    inserted = True
+        # Scope the match to the `## Open Threads` section only.
+        ot_start = None
+        for i, line in enumerate(lines):
+            if line.rstrip() == "## Open Threads":
+                ot_start = i
+                break
+        ot_end = len(lines)
+        if ot_start is not None:
+            for j in range(ot_start + 1, len(lines)):
+                if lines[j].startswith("## "):
+                    ot_end = j
                     break
 
-            if not inserted:
-                # No "### Resolved" section — append one at the end of
-                # the Open Threads area so the entry isn't silently dropped.
-                new_lines.append("")
-                new_lines.append("### Resolved")
-                new_lines.append(resolved_entry)
+        # When `## Open Threads` is absent (minimal fixtures, or a MEMORY laid
+        # out differently), fall back to whole-file scope — the thread-line
+        # shape check still guards against prose false-positives. In production
+        # the evergreen `## Open Threads` header always exists, so scoping is
+        # active there (the BLOCKER-#2 false-positive guard).
+        scoped = ot_start is not None
 
-            memory_path.write_text(
-                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
-            )
-            logger.info("Resolved thread: %s", title)
+        new_lines: list[str] = []
+        resolved_entry = None
+        i = 0
+        n = len(lines)
+        while i < n:
+            line = lines[i]
+            in_scope = (ot_start <= i < ot_end) if scoped else True
+            if (
+                resolved_entry is None
+                and in_scope
+                and _is_open_thread_line(line, title)
+            ):
+                today = datetime.now(timezone.utc).strftime("%m/%d")
+                entry = line.replace("🔵", "✅").replace("🟡", "✅").replace("🔴", "✅")
+                # No emoji to swap → prepend a ✅ marker for the Resolved convention.
+                if "✅" not in entry:
+                    entry = "- ✅ " + entry.lstrip(" -")
+                resolved_entry = entry.rstrip() + f" (auto-resolved {today})"
+                # Carry the immediately-following metadata comment line, if any,
+                # so it isn't orphaned in Open Threads.
+                if i + 1 < n and lines[i + 1].strip().startswith("<!--") \
+                        and lines[i + 1].strip().endswith("-->"):
+                    resolved_meta = lines[i + 1]
+                    i += 2
+                    resolved_entry = (resolved_entry, resolved_meta)
+                    continue
+                i += 1
+                continue
+            new_lines.append(line)
+            i += 1
+
+        if resolved_entry is None:
+            logger.debug("No Open Thread matched: %s", title[:60])
+            return False
+
+        # Normalize to (entry, meta_or_None)
+        if isinstance(resolved_entry, tuple):
+            entry_line, meta_line = resolved_entry
+        else:
+            entry_line, meta_line = resolved_entry, None
+        to_insert = [entry_line] + ([meta_line] if meta_line else [])
+
+        inserted = False
+        for k, line in enumerate(new_lines):
+            if "### Resolved" in line:
+                if entry_line not in new_lines:  # dedup
+                    new_lines[k + 1:k + 1] = to_insert
+                inserted = True
+                break
+
+        if not inserted:
+            # No "### Resolved" section — append one so the entry isn't dropped.
+            new_lines.append("")
+            new_lines.append("### Resolved")
+            new_lines.extend(to_insert)
+
+        memory_path.write_text(
+            _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
+        )
+        logger.info("Resolved thread: %s", title)
+        return True
     except Exception as e:
         logger.warning("Failed to resolve thread: %s", e)
+        return False
     finally:
         if fd:
             fd.close()
