@@ -20,7 +20,7 @@ from compile_gate_wiring import (
 _REPO_ROOT = Path(__file__).resolve().parents[2]  # backend/scripts -> repo root
 _LIVE_SETTINGS = _REPO_ROOT / ".claude" / "settings.json"
 
-# The real Run-3 Kiro entry (from GCRAIDLCPreset/agents/aidlc-autonomous-executor.agent-spec.json).
+# A representative Kiro agent-spec preToolUse entry (the shape a bound internal DDD emits).
 KIRO_ENTRY = {
     "matcher": "shell",
     "command": "python3 {{aim:filepath:gates/no_git_push.py}}",

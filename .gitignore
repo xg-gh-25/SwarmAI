@@ -120,6 +120,13 @@ Services/cmhk-quick-mcp/
 # s_internal-* and is caught here automatically (leak-fix root cause, 2026-07-12).
 backend/skills/s_internal-*/
 
+# Internal-only DDD gates — the ③ gate templates copied into an INTERNAL DDD at
+# provision (currently no_git_push: Amazon CRUX "git push forbidden, auto-merge owns
+# the remote"). Amazon-internal workflow — must NEVER ship to the public repo. Kept
+# on disk (provisioning reads templates/ddd-gates/), tracked nowhere. External DDDs
+# get no gate from here. (leak-fix: these 2 files were git-tracked, run_d0216c92.)
+backend/templates/ddd-gates/
+
 # Test-leak guard: a mock whose .db_path/.path attr auto-vivifies to a MagicMock
 # gets its repr written as a filename when passed to open()/Path. 0-byte junk.
 *MagicMock name=*

@@ -433,10 +433,22 @@ DDD_NATIVE_SKILLS: tuple[str, ...] = (
     "s_ai-ready-repo",   # ← the ⑥ code-intel refresher (portable as-is)
 )
 
+# ── EXTERNAL vs INTERNAL provisioning sources — the git-tracking boundary ──────
+# This repo is PUBLIC. The rule: EXTERNAL provisioning sources are tracked + ship;
+# INTERNAL ones (Amazon CRUX/Brazil) are gitignored + local-only, copied into a DDD
+# ONLY when internal=True. Keep the two source trees separate so internal never leaks:
+#   EXTERNAL (tracked, public):  templates/ddd-skills/s_ddd-*  (the 5 native skills)
+#   INTERNAL (gitignored, local): backend/skills/s_internal-*/  (.gitignore glob)
+#                                 templates/ddd-gates/          (.gitignore dir — CRUX no-push gate)
+# Provisioning reads external from templates/ddd-skills, internal from the two ignored
+# trees above — only under `if internal:`. (leak-fix run_d0216c92: templates/ddd-gates
+# was git-tracked in the public repo; now gitignored. A future internal source MUST land
+# in an already-ignored path, never in templates/ddd-skills.)
+#
 # Internal-DDD extra capabilities (bound to a Brazil/CRUX repo, e.g. AIDLC): the
 # internal toolchain skills + the no-git-push gate. Copied in ADDITION to the 5
-# native skills when a DDD is internal. These are copied FROM the SwarmAI-native
-# backend/skills/ (they are already portable HITL wrappers), not from templates.
+# native skills when a DDD is internal. Copied FROM the SwarmAI-native (gitignored)
+# backend/skills/s_internal-* (already portable HITL wrappers), not from templates.
 INTERNAL_DDD_SKILLS: tuple[str, ...] = (
     "s_internal-brazil",
     "s_internal-crux-cr",
