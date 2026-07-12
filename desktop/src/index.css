@@ -322,6 +322,32 @@ body {
   backdrop-filter: blur(10px);
 }
 
+/* LeftSidebar nav button — B2 group-tint (2026-07-12).
+   Each button sets `--ac` inline to its group brand color (falls back to the
+   accent primary). Hover/active tint bg + ring + icon + active-bar from --ac via
+   color-mix — no Tailwind arbitrary-color class (JIT-safe). Layout-shift-free:
+   the active-bar is always present and only toggles opacity (GUI10). */
+.nav-btn {
+  --ac: var(--color-primary);
+  color: var(--color-sidebar-icon);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.nav-btn:hover {
+  background-color: color-mix(in srgb, var(--ac) 12%, transparent);
+  color: var(--ac);
+}
+.nav-btn[aria-pressed='true'] {
+  background-color: color-mix(in srgb, var(--ac) 15%, transparent);
+  color: var(--ac);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 32%, transparent);
+}
+.nav-btn .nav-active-bar {
+  background-color: var(--ac);
+}
+
 :root:not(.dark) .glass-effect {
   background: rgba(255, 255, 255, 0.8);
 }

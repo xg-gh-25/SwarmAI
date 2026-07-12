@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { ReactNode, useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
@@ -105,6 +105,19 @@ function TopBar() {
   );
 }
 
+// Group brand colors (B2 group-tint, 2026-07-12). Passed to each NavIconButton
+// as the inline `--ac` CSS custom property so hover/active bg+ring+bar tint by
+// group WITHOUT a Tailwind class (arbitrary-color classes risk JIT purge; an
+// inline custom property never does — matches the existing color-mix convention
+// in index.css). 4 groups: 做事(Terminal) / 能力(Skills,MCP) / 观测(CodeIntel,
+// Engine,OSEval) / 知识(Memory,Signals). Footer (Settings/GitHub) keeps amber.
+const NAV_GROUP_COLOR = {
+  do: '#60a5fa', // blue — 做事 (Terminal, the active tool)
+  power: '#a78bfa', // purple — 能力 (Skills, MCP)
+  observe: '#2dd4bf', // teal — 观测 (Code Intel, Engine, OS Eval)
+  know: '#fbbf24', // amber — 知识 (Memory, Signals)
+} as const;
+
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
@@ -165,44 +178,52 @@ function LeftSidebar() {
         <SwarmAILogo />
       </button>
 
-      {/* Navigation icons */}
+      {/* Navigation icons — B ordering (2026-07-12): 4 groups top-to-bottom,
+          most-active tool first. 做事 → 能力 → 观测 → 知识. Each button carries
+          its group's `accent` (→ inline --ac) for B2 group-tint hover/active. */}
       <nav className="flex-1 pt-2.5 pb-1 space-y-1.5 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
-        {/* Tools group */}
-        {toolItems.map((item) => (
-          <NavIconButton
-            key={item.target}
-            icon={item.icon}
-            label={item.label}
-            isActive={activeModal === 'settings' && settingsTab === (item.target === 'mcp' ? 'mcp-servers' : item.target)}
-            onClick={() => handleNavClick(item.target)}
-            data-testid={`nav-${item.target}`}
-          />
-        ))}
-        {/* Integrated terminal — third entry point (alongside the bottom-panel
-            ⌘` toggle and the explorer right-click). isActive reflects real panel
-            open-state; onClick shares the SAME togglePanel so all entries sync. */}
+        {/* 做事 — Integrated terminal (also reachable via ⌘` + explorer right-click).
+            isActive reflects real panel open-state; onClick shares the SAME
+            togglePanel so all three entries stay in sync. Placed first: it is the
+            primary active tool, not a config surface. */}
         <NavIconButton
           icon="terminal"
           label="Terminal (⌘`)"
+          accent={NAV_GROUP_COLOR.do}
           isActive={terminalPanelOpen}
           onClick={toggleTerminal}
           data-testid="nav-terminal"
         />
 
-        {/* Group separator — inset rule with extra vertical breathing room
-            to visually distinguish the Tools group from the Insights group. */}
-        <div className="w-4 my-1 border-t border-[var(--color-border)]" aria-hidden="true" />
+        <NavGroupSeparator />
 
-        {/* Insights group */}
+        {/* 能力 — Tools (Skills, MCP Servers) */}
+        {toolItems.map((item) => (
+          <NavIconButton
+            key={item.target}
+            icon={item.icon}
+            label={item.label}
+            accent={NAV_GROUP_COLOR.power}
+            isActive={activeModal === 'settings' && settingsTab === (item.target === 'mcp' ? 'mcp-servers' : item.target)}
+            onClick={() => handleNavClick(item.target)}
+            data-testid={`nav-${item.target}`}
+          />
+        ))}
+
+        <NavGroupSeparator />
+
+        {/* 观测 — Insights (Code Intelligence, Engine Metrics, OS Eval) */}
         <NavIconButton
           icon="graph"
           label="Code Intelligence"
+          accent={NAV_GROUP_COLOR.observe}
           onClick={handleCodeIntelClick}
           data-testid="nav-code-intel"
         />
         <NavIconButton
           icon="activity"
           label="Engine Metrics"
+          accent={NAV_GROUP_COLOR.observe}
           isActive={activeModal === 'settings' && settingsTab === 'engine'}
           onClick={() => handleNavClick('engine')}
           data-testid="nav-engine"
@@ -210,6 +231,7 @@ function LeftSidebar() {
         <NavIconButton
           icon="heartbeat"
           label="OS Eval"
+          accent={NAV_GROUP_COLOR.observe}
           isActive={activeModal === 'eval'}
           onClick={() => {
             if (activeModal === 'eval') {
@@ -220,15 +242,21 @@ function LeftSidebar() {
           }}
           data-testid="nav-eval"
         />
+
+        <NavGroupSeparator />
+
+        {/* 知识 — Knowledge (Memory, Signals) */}
         <NavIconButton
           icon="book"
           label="Memory"
+          accent={NAV_GROUP_COLOR.know}
           onClick={handleMemoryClick}
           data-testid="nav-memory"
         />
         <NavIconButton
           icon="radio"
           label="Signals"
+          accent={NAV_GROUP_COLOR.know}
           onClick={handleSignalsClick}
           data-testid="nav-signals"
         />
@@ -280,12 +308,27 @@ function SwarmAILogo() {
   );
 }
 
+// Inset group separator between nav groups (B ordering, 2026-07-12).
+// data-testid lets the redesign test count groups (4 groups → 3 separators).
+function NavGroupSeparator() {
+  return (
+    <div
+      className="w-4 my-1 border-t border-[var(--color-border)]"
+      aria-hidden="true"
+      data-testid="nav-group-sep"
+    />
+  );
+}
+
 // Navigation icon button component
 interface NavIconButtonProps {
   icon: string;
   label: string;
   isActive?: boolean;
   onClick?: () => void;
+  /** Group brand color (B2 group-tint). Drives hover/active bg+ring+bar via the
+   *  inline `--ac` CSS custom property. Defaults to the accent primary. */
+  accent?: string;
   'data-testid'?: string;
 }
 
@@ -393,25 +436,26 @@ function NavSvgIcon({ name }: { name: string }) {
   }
 }
 
-function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }: NavIconButtonProps) {
+function NavIconButton({ icon, label, isActive, onClick, accent, 'data-testid': testId }: NavIconButtonProps) {
+  // Group tint (B2): expose the group color as --ac; the .nav-btn CSS reads it
+  // for hover/active bg+ring+icon+bar. Omitted accent → CSS falls back to the
+  // accent primary (footer buttons: Settings, GitHub-as-button use no accent).
+  const style = accent ? ({ '--ac': accent } as CSSProperties) : undefined;
   return (
     <button
       onClick={onClick}
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
-      className={`relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
-        isActive
-          ? 'bg-[var(--color-primary)]/15 text-[var(--color-sidebar-icon-active)] ring-1 ring-[var(--color-primary)]/30'
-          : 'text-[var(--color-sidebar-icon)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-      }`}
+      style={style}
+      className="nav-btn relative flex items-center justify-center w-8 h-8 rounded-lg"
     >
       {/* Active indicator bar — always present (layout-shift-free, GUI10):
-          visible only when active, transparent otherwise. */}
+          visible only when active, transparent otherwise. Color from --ac. */}
       <span
         data-testid="active-bar"
         aria-hidden="true"
-        className={`pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-[var(--color-primary)] transition-opacity ${
+        className={`nav-active-bar pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full transition-opacity ${
           isActive ? 'opacity-100' : 'opacity-0'
         }`}
       />
