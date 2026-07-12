@@ -873,9 +873,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: Clicked button SHALL have aria-pressed="true"
           expect(activeButton.getAttribute('aria-pressed')).toBe('true');
 
-          // Property: Active button SHALL have visual indicator classes
-          expect(activeButton.classList.contains('bg-[var(--color-primary)]/15') ||
-                 activeButton.className.includes('color-primary')).toBe(true);
+          // Property: Active button SHALL carry the .nav-btn class (active
+          // bg+ring+bar are now CSS-driven via .nav-btn[aria-pressed=true] +
+          // the --ac group color, no longer inline Tailwind classes — 2026-07-12
+          // B2 redesign). The behavioral contract is aria-pressed + .nav-btn.
+          expect(activeButton.classList.contains('nav-btn')).toBe(true);
 
           unmount();
         }),
@@ -1099,13 +1101,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             const buttonClasses = button.className;
 
             if (item === activeItem) {
-              // Active button should have primary color styling
-              expect(buttonClasses.includes('color-primary') ||
-                     buttonClasses.includes('ring-1')).toBe(true);
+              // Active button: styling is CSS-driven via .nav-btn[aria-pressed=true]
+              // (bg+ring+bar from --ac), so assert the class + the pressed state
+              // rather than a stale inline color-primary/ring-1 literal (2026-07-12).
+              expect(button.classList.contains('nav-btn')).toBe(true);
+              expect(button.getAttribute('aria-pressed')).toBe('true');
             } else {
-              // Inactive buttons should have muted/hover styling
-              expect(buttonClasses.includes('color-sidebar-icon') ||
-                     buttonClasses.includes('hover:')).toBe(true);
+              // Inactive buttons: same .nav-btn class, muted default + hover tint
+              // both live in .nav-btn CSS; the distinguishing signal is aria-pressed.
+              expect(button.classList.contains('nav-btn')).toBe(true);
+              expect(button.getAttribute('aria-pressed')).toBe('false');
             }
           }
 
@@ -1126,10 +1131,18 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // Expected navigation items in exact order
+    // Expected navigation items in exact order (B ordering, 2026-07-12):
+    // 做事(Terminal) → 能力(Skills,MCP) → 观测(CodeIntel,Engine,OSEval) → 知识(Memory,Signals).
+    // Settings + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
+      { testId: 'nav-terminal', label: 'Terminal (⌘`)' },
       { testId: 'nav-skills', label: 'Skills' },
       { testId: 'nav-mcp', label: 'MCP Servers' },
+      { testId: 'nav-code-intel', label: 'Code Intelligence' },
+      { testId: 'nav-engine', label: 'Engine Metrics' },
+      { testId: 'nav-eval', label: 'OS Eval' },
+      { testId: 'nav-memory', label: 'Memory' },
+      { testId: 'nav-signals', label: 'Signals' },
     ] as const;
 
     const validWindowWidthArb = fc.integer({ min: 320, max: 2000 });
@@ -1751,12 +1764,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: The navigation item SHALL display active visual state
           expect(navButton.getAttribute('aria-pressed')).toBe('true');
 
-          // Property: Active button SHALL have visual indicator classes
-          expect(
-            navButton.classList.contains('bg-[var(--color-primary)]/15') ||
-            navButton.className.includes('color-primary') ||
-            navButton.className.includes('ring-1')
-          ).toBe(true);
+          // Property: Active button carries the .nav-btn class — its active
+          // bg+ring+bar are CSS-driven via .nav-btn[aria-pressed=true] + --ac
+          // (2026-07-12 B2 redesign), no longer inline Tailwind literals.
+          expect(navButton.classList.contains('nav-btn')).toBe(true);
 
           unmount();
         }),
@@ -1998,14 +2009,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             navButton.click();
           });
 
-          // Property: Active button SHALL have highlighted background color using primary color
-          // Property: Active button SHALL have ring border indicator
-          const buttonClasses = navButton.className;
-          expect(
-            buttonClasses.includes('color-primary') ||
-            buttonClasses.includes('ring-1') ||
-            buttonClasses.includes('bg-')
-          ).toBe(true);
+          // Property: Active button carries the .nav-btn class + aria-pressed=true.
+          // Highlighted bg + ring are CSS-driven via .nav-btn[aria-pressed=true]
+          // reading the --ac group color (2026-07-12 B2 redesign), not inline classes.
+          expect(navButton.classList.contains('nav-btn')).toBe(true);
+          expect(navButton.getAttribute('aria-pressed')).toBe('true');
 
           unmount();
         }),
