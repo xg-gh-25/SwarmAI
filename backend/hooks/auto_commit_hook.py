@@ -77,11 +77,52 @@ class WorkspaceAutoCommitHook:
     async def execute(self, context: HookContext) -> None:
         """Analyze changes and commit with a smart message."""
         ws_path = initialization_manager.get_cached_workspace_path()
+        # R29 fix: files another LIVE session is mid-edit must NOT be swept into
+        # THIS session's commit (DEC30). Computed here (async ctx) so _smart_commit
+        # stays a pure thread body.
+        exclude = self._other_live_sessions_touched(context.session_id)
         if self._git_lock:
             async with self._git_lock:
-                await asyncio.to_thread(self._smart_commit, ws_path)
+                await asyncio.to_thread(self._smart_commit, ws_path, exclude)
         else:
-            await asyncio.to_thread(self._smart_commit, ws_path)
+            await asyncio.to_thread(self._smart_commit, ws_path, exclude)
+
+    @staticmethod
+    def _other_live_sessions_touched(current_session_id: str) -> set[str]:
+        """Absolute paths currently being edited by OTHER live sessions.
+
+        Reads each live SessionUnit's stable hook-context dict
+        (``_hook_session_context['_files_touched']`` — populated by the
+        file_tracker PostToolUse hook, session_router.py:1993). These are the
+        paths a sibling session has Read/Edit/Written this turn; committing them
+        from THIS session would sweep a sibling's in-flight work (R29/DEC30).
+
+        FAIL-SAFE: any error (registry not ready, attr missing) → empty set, so
+        the caller falls back to plain ``git add -A`` — never crashes the commit.
+        """
+        try:
+            from core import session_registry
+            router = session_registry.session_router
+            if router is None:
+                return set()
+            others: set[str] = set()
+            mine: set[str] = set()
+            for sid, unit in list(getattr(router, "_units", {}).items()):
+                ctx = getattr(unit, "_hook_session_context", None)
+                if not ctx:
+                    continue
+                touched = ctx.get("_files_touched")
+                if not touched:
+                    continue
+                bucket = mine if sid == current_session_id else others
+                bucket.update(str(p) for p in touched)
+            # Gate-2 finding B: subtract MY OWN touched paths. A file BOTH this
+            # session and a sibling edited must stay committed here (dropping it
+            # would silently lose my own legitimate change to a shared file).
+            return others - mine
+        except Exception as e:
+            logger.debug("auto_commit: could not compute sibling-touched set: %s", e)
+            return set()
 
     @staticmethod
     def _cleanup_stale_git_lock(ws_path: str) -> None:
@@ -106,12 +147,44 @@ class WorkspaceAutoCommitHook:
         except Exception as e:
             logger.warning("Failed to check/clean stale git lock: %s", e)
 
-    def _smart_commit(self, ws_path: str) -> None:
+    def _unstage_paths(self, ws_path: str, exclude: set[str]) -> None:
+        """`git reset` the excluded paths (unstage only — working tree untouched).
+
+        Paths are made relative to ``ws_path``; ones outside the repo are dropped.
+        Batched to respect argv limits. Fail-safe: errors are logged, not raised.
+        """
+        rels: list[str] = []
+        ws = os.path.realpath(ws_path)
+        for p in exclude:
+            try:
+                rp = os.path.relpath(os.path.realpath(p), ws)
+            except (ValueError, OSError):
+                continue
+            if rp.startswith(".."):  # outside the workspace repo — ignore
+                continue
+            rels.append(rp)
+        if not rels:
+            return
+        try:
+            for i in range(0, len(rels), 100):  # batch to stay under argv limits
+                subprocess.run(
+                    ["git", "reset", "-q", "--", *rels[i:i + 100]],
+                    cwd=ws_path, capture_output=True, timeout=self.GIT_TIMEOUT,
+                )
+            logger.info("auto_commit: unstaged %d sibling-session path(s) (R29)", len(rels))
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("auto_commit: unstage of sibling paths failed (non-fatal): %s", e)
+
+    def _smart_commit(self, ws_path: str, exclude: set[str] | None = None) -> None:
         """Run git operations in a background thread.
 
         All subprocess calls use ``GIT_TIMEOUT`` to fail fast on lock
         contention rather than hanging.  A ``TimeoutExpired`` aborts the
         commit attempt — the changes will be picked up next time.
+
+        ``exclude``: absolute paths another live session is mid-edit — unstaged
+        after the bulk add so a sibling's in-flight work is never swept into this
+        session's commit (R29/DEC30). Empty/None → prior ``git add -A`` behavior.
         """
         # 0. Clean stale lock from previous crash
         self._cleanup_stale_git_lock(ws_path)
@@ -135,6 +208,15 @@ class WorkspaceAutoCommitHook:
             if add_result.returncode != 0:
                 logger.warning("git add failed: %s", add_result.stderr)
                 return
+
+            # 2b. R29: unstage paths a sibling session is actively editing, so this
+            # commit carries THIS session's work + auto-generated files (DailyActivity/
+            # EVOLUTION/index — never in any _files_touched set) but NOT a sibling's
+            # in-flight edits. `git reset` only unstages (working tree untouched), so
+            # the sibling's changes stay on disk for ITS own commit. Fail-safe: a reset
+            # error is logged, not fatal — worst case is the prior sweep behavior.
+            if exclude:
+                self._unstage_paths(ws_path, exclude)
 
             # 3. Analyze staged changes
             diff_stat = subprocess.run(
