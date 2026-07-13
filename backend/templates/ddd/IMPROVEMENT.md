@@ -27,6 +27,12 @@ _This document captures what worked, what failed, and what to watch for when dev
 - **Sync wrappers around async cleanup** -- Async cleanup needs async callers. No shortcuts. The "convenience" sync wrapper leaked 3 file descriptors per crash.
 - **Workspace scripts drift from codebase** -- Building features in `Services/` (workspace) instead of `backend/` (codebase) means new users don't get them, and the workspace version drifts. The slack-bot grew to 1,093 lines in workspace while the codebase adapter was a different 363-line implementation. Rule: prototype in workspace, productize in codebase within the same sprint.
 
+## What to Watch For
+
+_Risks, recurring patterns, and "keep an eye on this" observations that aren't outright failures yet. DDD cultivation routes watch-for/risk lessons here — this section MUST exist in the scaffold or cultivation auto-creates it per-project (template drift)._
+
+_No entries yet. Swarm will add entries as risks and patterns are observed._
+
 ## Known Issues
 
 _These are known architectural decisions or technical debt, not bugs. They're documented so Swarm and contributors know about them._

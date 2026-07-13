@@ -230,6 +230,12 @@ desktop/src/
 - **Testing:** Property-based (Hypothesis/fast-check) preferred over example-based. All new code needs tests.
 - **Modules >500 lines:** Strangler fig pattern for refactoring. No big-bang rewrites.
 
+## Runtime Traps
+
+_Environment-specific gotchas, non-obvious failure modes, and "it works locally but not X" traps. DDD cultivation routes technical trap/daemon/env/path lessons here — this section MUST exist in the scaffold or cultivation auto-creates it per-project (template drift)._
+
+_No entries yet. Swarm will add entries as runtime traps are discovered._
+
 ## Environment Notes
 
 - Backend port is **random each launch** (Tauri portpicker). Never hardcode ports.
