@@ -804,6 +804,37 @@ class TestLessonQualityGate:
             "acting on them, because the verdict can be right while a cited number is wrong."
         ) is True
 
+    def test_first_person_narration_rejected(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # The EXACT conversational fragments that leaked into IMPROVEMENT.md via
+        # improvement_writeback_hook keyword-matching (run_d7cb3941). Process-chatter
+        # that keyword-matches ("root cause", "diagnose") but teaches nothing.
+        assert is_quality_lesson("I have enough to diagnose the root cause with confidence") is False
+        assert is_quality_lesson("This crosses your threshold → I'll diagnose root cause, then open a fix run") is False
+        assert is_quality_lesson("I'll diagnose the root cause and open a fix run") is False
+        assert is_quality_lesson("Let me check the root cause of this regression") is False
+        assert is_quality_lesson("Now I'll verify the failed assertion") is False
+
+    def test_plural_imperative_lessons_accepted(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # Gate-2 finding C: "We should/need …" is a LEGITIMATE lesson voice, NOT
+        # narration — must NOT be rejected (silent knowledge-loss > filtered noise).
+        assert is_quality_lesson("We should always validate input at the boundary layer") is True
+        assert is_quality_lesson("We need to add a lock spanning the whole read-modify-write") is True
+
+    def test_real_root_cause_lesson_still_accepted(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # MUST NOT false-negative a genuine root-cause lesson (narration guard is
+        # anchored at the START, so a factual claim about a root cause still passes).
+        assert is_quality_lesson(
+            "Root cause: the WAL file never shrinks because no code path runs "
+            "wal_checkpoint(TRUNCATE); PASSIVE autocheckpoint only resets the header."
+        ) is True
+        assert is_quality_lesson(
+            "The regression broke because the mapper dropped a backend field, "
+            "silently disabling the downstream visibility filter."
+        ) is True
+
     def test_authoritative_zone_blocks_autocultivation(self):
         from core.ddd_cultivation import is_protected_zone
         # NEGATIVE: auto-cultivation must be structurally blocked from these

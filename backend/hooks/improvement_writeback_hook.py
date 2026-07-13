@@ -262,8 +262,15 @@ class ImprovementWritebackHook:
             if any(kw in sentence.lower() for kw in keywords.get(category, [])):
                 # Clean up: remove markdown formatting, truncate
                 clean = sentence.replace("**", "").replace("`", "").strip()
-                if clean and not clean.startswith("#"):
-                    return clean[:150]
+                if not clean or clean.startswith("#"):
+                    continue
+                # M2 quality gate (reuse, don't reinvent — R25): reject instance-logs
+                # and first-person narration ("I have enough to diagnose the root
+                # cause") that keyword-match but carry no durable lesson.
+                from core.ddd_cultivation import is_quality_lesson
+                if not is_quality_lesson(clean):
+                    continue
+                return clean[:150]
 
         return None
 

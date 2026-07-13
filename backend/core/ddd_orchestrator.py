@@ -632,7 +632,15 @@ class DddCultivationOrchestrator:
         if not projects_dir.is_dir() or not knowledge_path.exists():
             return []
 
-        # Build DDD summary
+        # Build DDD summary — structure-aware (six-section) + classification-aware.
+        # classify_project derives none/external/internal from bindings.yaml (the
+        # SSOT, run_2acb67e1); the index reflects the REAL structure so a reader can
+        # tell an internal repo-bound DDD (skills+gates+bindings) from a pure-DDD one.
+        try:
+            from core.ddd_bindings import classify_project
+        except Exception:  # pragma: no cover - defensive import
+            classify_project = None  # type: ignore[assignment]
+
         lines = ["### Active Projects & DDD\n", "\n"]
         ddd_names = {"PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"}
         found_any = False
@@ -640,9 +648,38 @@ class DddCultivationOrchestrator:
             if not d.is_dir() or d.name.startswith("."):
                 continue
             ddd_files = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
-            if ddd_files:
-                lines.append(f"- **{d.name}** — {', '.join(ddd_files)}\n")
-                found_any = True
+            if not ddd_files:
+                continue
+
+            # Classification (fail-safe: unknown → omit tag, never crash the index).
+            cls = None
+            if classify_project is not None:
+                try:
+                    cls = classify_project(d)
+                except Exception:
+                    cls = None
+
+            # Six-section structure markers actually present on disk.
+            extras = []
+            skills_dir = d / "skills"
+            if skills_dir.is_dir():
+                n_skills = sum(
+                    1 for s in skills_dir.iterdir()
+                    if s.is_dir() and s.name.startswith("s_")
+                )
+                if n_skills:
+                    extras.append(f"{n_skills} skills")
+            if (d / "gates").is_dir():
+                extras.append("gates")
+            if (d / "Knowledge").is_dir():
+                extras.append("Knowledge/")
+            if (d / "bindings.yaml").is_file():
+                extras.append("bindings")
+
+            tag = f" `[{cls}]`" if cls else ""
+            suffix = f" · {', '.join(extras)}" if extras else ""
+            lines.append(f"- **{d.name}**{tag} — {', '.join(ddd_files)}{suffix}\n")
+            found_any = True
 
         if not found_any:
             return []

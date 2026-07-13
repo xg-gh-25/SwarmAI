@@ -156,6 +156,27 @@ _INSTANCE_LOG_RE = re.compile(
     re.IGNORECASE,
 )
 
+# First-person-SINGULAR / meta-cognition NARRATION — process-chatter, not a lesson.
+# The session transcript is full of "I'll diagnose…", "let me check…", "now I'll…"
+# — these keyword-match a lesson extractor but carry zero transferable knowledge.
+# A real lesson states a fact/rule ("X breaks because Y"), not the author's intent.
+#
+# DELIBERATELY NARROW (Gate-2 finding C, run_d7cb3941): only first-person-SINGULAR
+# intent + explicit meta-chatter. We do NOT reject "we should/need …" — plural
+# imperatives are a legitimate, common lesson voice ("We should validate at the
+# boundary"), and silent knowledge-loss is worse than the noise we filter (this
+# module errs toward ACCEPTING). Anchored at START (a lesson may quote "…so I'll
+# never do X again" mid-sentence; the tell is a fragment OPENING with narrator intent).
+_NARRATION_RE = re.compile(
+    r"^\s*(?:-\s*)?"
+    r"(?:i['’]?(?:ll|m| will| have| need| think| want)\b"   # "I'll / I'm / I have / I need / I think / I want" (singular intent)
+    r"|let me\b|let['’]?s\b"                                 # "let me / let's"
+    r"|this crosses\b|enough to\b|now (?:i|let)\b"           # transcript chatter
+    r"|(?:ok|okay|alright|great|perfect)[,!. ]"             # filler openers
+    r"|going to\b|about to\b)",                             # "I'm going to / about to" leads
+    re.IGNORECASE,
+)
+
 
 def is_protected_zone(target_doc: str, target_section: str) -> bool:
     """True if (doc, section) is an authoritative zone auto-cultivation must not touch."""
@@ -180,6 +201,11 @@ def is_quality_lesson(lesson: str) -> bool:
         return False
     # Reject instance-logs / slips outright.
     if _INSTANCE_LOG_RE.search(stripped):
+        return False
+    # Reject first-person / meta-cognition narration (process-chatter, not a lesson).
+    # e.g. "I have enough to diagnose the root cause", "This crosses your threshold →
+    # I'll diagnose…" — these keyword-match a lesson extractor but teach nothing.
+    if _NARRATION_RE.search(stripped):
         return False
     # Require at least one "sentence": >= 5 words AND ends like prose OR is long.
     # A bare fragment ("done", "tests pass") has < 5 words and no sentence shape.
@@ -661,6 +687,12 @@ def cultivate_from_corrections(
         if len(stripped) < MIN_LESSON_LENGTH:
             continue
         if NOISE_PATTERNS.match(stripped):
+            continue
+        # M2 quality gate on the PE-1 fallback too (Gate-2 finding D, run_d7cb3941):
+        # this fallback writes straight to "What Failed" — without this it was a THIRD
+        # unguarded writer (alongside the keyword path + writeback hook) through which
+        # first-person narration / instance-logs could still reach IMPROVEMENT.md.
+        if not is_quality_lesson(stripped):
             continue
         # Skip if already classified by keyword path
         if stripped in classified_contents:
