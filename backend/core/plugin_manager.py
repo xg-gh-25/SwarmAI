@@ -8,6 +8,11 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+# Single source of truth for the "never ship bytecode into .claude/skills/" ignore
+# set (run_6eaee58a). Same convention project_skills uses at copy time — reused here
+# so plugin install can't leak __pycache__/*.pyc into the skills dir (Q3.2 class).
+from core.projection_layer import COPY_IGNORE
+
 logger = logging.getLogger(__name__)
 
 
@@ -626,7 +631,7 @@ class PluginManager:
 
                     if dest.exists():
                         shutil.rmtree(dest)
-                    shutil.copytree(skill_src, dest)
+                    shutil.copytree(skill_src, dest, ignore=COPY_IGNORE)
                     installed_skills.append(skill_name)
                     logger.info(f"Installed skill from marketplace.json: {skill_name}")
                 else:
@@ -759,7 +764,7 @@ class PluginManager:
                 dest = self.skills_dir / plugin_name
                 if dest.exists():
                     shutil.rmtree(dest)
-                shutil.copytree(plugin_dir, dest)
+                shutil.copytree(plugin_dir, dest, ignore=COPY_IGNORE)
                 installed_skills.append(plugin_name)
                 logger.info(f"Installed standalone skill: {plugin_name}")
 
@@ -788,7 +793,7 @@ class PluginManager:
                         dest = self.skills_dir / skill_subdir.name
                         if dest.exists():
                             shutil.rmtree(dest)
-                        shutil.copytree(skill_subdir, dest)
+                        shutil.copytree(skill_subdir, dest, ignore=COPY_IGNORE)
                         installed_skills.append(skill_subdir.name)
                         logger.info(f"Installed skill: {skill_subdir.name}")
 

@@ -39,6 +39,54 @@ logger = logging.getLogger(__name__)
 # not part of the source-vs-dest content contract.
 _FRESHNESS_SKIP_DIRS = {"node_modules", "__pycache__", ".git"}
 
+# Bytecode + OS cruft that must never be COPIED into the projected .claude/skills/
+# tree — a source skill's __pycache__/*.pyc would otherwise land in the workspace
+# and trip chat-brain-check Q3.2's "binary in skills" gate (run_6eaee58a). Matches
+# the house convention at swarm_workspace_manager.py:1028 ("a DDD never ships
+# bytecode"). Scoped to bytecode+.DS_Store only — never source (.py/.md/.yaml).
+# NOTE: this excludes __pycache__ at COPY time; the freshness check
+# (_skill_fingerprint) independently excludes __pycache__ from BOTH src+dst walks,
+# so the two are symmetric and a real source edit still re-projects.
+# PUBLIC (no leading underscore): shared cross-module — plugin_manager imports it
+# for its own skill-install copytree sites, so it carries a stability contract.
+COPY_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store")
+
+# Bytecode artifacts that must not linger in a PROJECTED skill dir. Used by the
+# freshness check to self-heal installs projected BEFORE COPY_IGNORE existed: a
+# stale __pycache__/*.pyc in dst is invisible to the file-set fingerprint (which
+# skips __pycache__), so without this a pre-fix bytecode leak would survive every
+# boot (the exact Q3.2 recurrence). If dst carries bytecode, it is NOT fresh →
+# rmtree + re-copy (now COPY_IGNORE-filtered) purges it. (run_6eaee58a, MED-8)
+_BYTECODE_SUFFIXES = (".pyc", ".pyo")
+
+# Dirs to prune while HUNTING bytecode in a projected dst. This is
+# _FRESHNESS_SKIP_DIRS MINUS __pycache__ — we must NOT prune __pycache__ here
+# (that's exactly where .pyc lives, the thing we're hunting), but we DO prune
+# node_modules/.git so the scan stays O(skill source) not O(node_modules) on
+# every boot (run_6eaee58a, MED meta-review: perf + walker consistency).
+_BYTECODE_SCAN_SKIP_DIRS = _FRESHNESS_SKIP_DIRS - {"__pycache__"}
+
+
+def _dst_has_bytecode(dst: Path) -> bool:
+    """True iff a projected skill dir still contains bytecode.
+
+    Prunes node_modules/.git (``_BYTECODE_SCAN_SKIP_DIRS``) so the scan stays
+    O(skill source) not O(node_modules) on every boot — a skill like s_pollinate
+    ships a large node_modules that must not be walked here (run_6eaee58a, MED
+    meta-review: perf). Critically does NOT prune __pycache__ — that is exactly
+    where .pyc lives, the thing being hunted. Short-circuits on first hit.
+    """
+    try:
+        for root, dirnames, filenames in os.walk(dst):
+            # Prune node_modules/.git in place (NOT __pycache__ — see above).
+            dirnames[:] = [d for d in dirnames if d not in _BYTECODE_SCAN_SKIP_DIRS]
+            for fn in filenames:
+                if fn.endswith(_BYTECODE_SUFFIXES):
+                    return True
+    except OSError:
+        return False  # can't scan → don't force a re-copy on an IO error
+    return False
+
 
 def _skill_fingerprint(root: Path) -> tuple[frozenset[str], float]:
     """Return (relative-file-path set, max file mtime) for a skill dir.
@@ -76,6 +124,13 @@ def _is_skill_fresh(src: Path, dst: Path) -> bool:
     Correctness (never ship a stale skill) is prioritised over the skip.
     """
     if not dst.exists():
+        return False
+    # Self-heal (run_6eaee58a, MED-8): a dst projected before COPY_IGNORE existed
+    # may carry stale __pycache__/*.pyc that the fingerprint can't see (it skips
+    # __pycache__). Treat any bytecode in dst as NOT fresh → forces a clean,
+    # COPY_IGNORE-filtered re-copy that purges it. Without this the pre-fix leak
+    # survives forever (the Q3.2 recurrence this change must actually stop).
+    if _dst_has_bytecode(dst):
         return False
     src_paths, src_mtime = _skill_fingerprint(src)
     if not src_paths:
@@ -223,6 +278,7 @@ class ProjectionLayer:
                     str(skill_path.resolve()),
                     str(link_path),
                     dirs_exist_ok=True,
+                    ignore=COPY_IGNORE,
                 )
             except OSError as exc:
                 logger.error(
@@ -260,7 +316,9 @@ class ProjectionLayer:
             if shared_dest.exists():
                 shutil.rmtree(shared_dest)
             try:
-                shutil.copytree(str(shared_source), str(shared_dest))
+                shutil.copytree(
+                    str(shared_source), str(shared_dest), ignore=COPY_IGNORE
+                )
             except OSError as exc:
                 logger.warning("Failed to project _shared/: %s", exc)
 
