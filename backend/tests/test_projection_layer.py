@@ -11,6 +11,7 @@ the path-set → re-copies. Only a byte-for-byte-fresh skill is skipped.
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -218,3 +219,89 @@ class TestProjectionExcludesBytecode:
         # (c) a clean dir has no bytecode.
         d3 = _mkskill(tmp_path, "d3", {"m.py": "x", "SKILL.md": "# s"})
         assert _dst_has_bytecode(d3) is False, "clean dir has no bytecode"
+
+
+class TestUntrustedCopyIgnore:
+    """make_untrusted_copy_ignore(root): drop symlinks whose realpath ESCAPES the
+    source root (host-file exfil via an untrusted plugin), keep internal symlinks
+    + regular files, and still exclude bytecode (COPY_IGNORE composition).
+    run_0e5f1969 — pre-existing plugin_manager copytree(symlinks=False) deref leak.
+    """
+
+    def _copy(self, tmp_path, build):
+        """Build a src via `build(src)`, copytree it through the untrusted ignore,
+        return the dst Path."""
+        import shutil
+        from core.projection_layer import make_untrusted_copy_ignore
+        src = tmp_path / "plugin"
+        src.mkdir()
+        build(src)
+        dst = tmp_path / "projected"
+        shutil.copytree(str(src), str(dst), ignore=make_untrusted_copy_ignore(src))
+        return dst
+
+    def test_escaping_symlink_is_not_dereferenced_into_dst(self, tmp_path):
+        # An untrusted plugin ships a symlink escaping to a host secret. The fix
+        # must NOT copy the target's content into the discoverable tree.
+        # RED without the escape-drop: copytree(symlinks=False) derefs it → dst/leak
+        # becomes a real file containing SECRET.
+        secret = tmp_path / "outside_secret.txt"
+        secret.write_text("SENSITIVE-KEY-MATERIAL")
+
+        def build(src):
+            (src / "SKILL.md").write_text("# ok")
+            os.symlink(str(secret), str(src / "leak"))  # escapes the plugin dir
+
+        dst = self._copy(tmp_path, build)
+        assert (dst / "SKILL.md").exists(), "regular files must still copy"
+        leak = dst / "leak"
+        # Neither present as a deref'd file NOR as a live symlink to the secret.
+        assert not leak.exists(), (
+            "escaping symlink was projected (exfil): "
+            f"exists={leak.exists()} is_symlink={leak.is_symlink()}"
+        )
+
+    def test_internal_symlink_is_preserved(self, tmp_path):
+        # W2 positive case: an intra-plugin symlink (target inside the source root)
+        # must be KEPT — blocks an over-broad "drop ALL symlinks" mutation.
+        def build(src):
+            (src / "real.py").write_text("x = 1\n")
+            os.symlink("real.py", str(src / "alias.py"))  # relative, internal
+
+        dst = self._copy(tmp_path, build)
+        assert (dst / "real.py").exists(), "internal target must copy"
+        alias = dst / "alias.py"
+        assert alias.exists(), "internal symlink must be preserved (not dropped)"
+
+    def test_bytecode_still_excluded_via_composition(self, tmp_path):
+        # The untrusted ignore must ALSO honor COPY_IGNORE (bytecode) — a plugin
+        # has both concerns at once.
+        def build(src):
+            (src / "SKILL.md").write_text("# ok")
+            pyc = src / "scripts" / "__pycache__" / "m.cpython-312.pyc"
+            pyc.parent.mkdir(parents=True)
+            pyc.write_text("\x00\x00fake")
+
+        dst = self._copy(tmp_path, build)
+        assert (dst / "SKILL.md").exists()
+        assert _projected_bytecode(dst) == [], (
+            f"bytecode leaked despite COPY_IGNORE composition: {_projected_bytecode(dst)}"
+        )
+
+    def test_nested_escaping_symlink_is_dropped(self, tmp_path):
+        # copytree recurses + calls ignore per-dir → an escaping symlink nested
+        # several levels deep must also be dropped (not just top-level).
+        secret = tmp_path / "deep_secret.txt"
+        secret.write_text("DEEP-SECRET")
+
+        def build(src):
+            deep = src / "a" / "b" / "c"
+            deep.mkdir(parents=True)
+            (deep / "keep.py").write_text("k")
+            os.symlink(str(secret), str(deep / "leak_deep"))
+
+        dst = self._copy(tmp_path, build)
+        assert (dst / "a" / "b" / "c" / "keep.py").exists()
+        assert not (dst / "a" / "b" / "c" / "leak_deep").exists(), (
+            "nested escaping symlink was projected (exfil)"
+        )

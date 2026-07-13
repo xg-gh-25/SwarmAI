@@ -8,10 +8,11 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Single source of truth for the "never ship bytecode into .claude/skills/" ignore
-# set (run_6eaee58a). Same convention project_skills uses at copy time — reused here
-# so plugin install can't leak __pycache__/*.pyc into the skills dir (Q3.2 class).
-from core.projection_layer import COPY_IGNORE
+# Skill-install copy filter. Plugins are UNTRUSTED (marketplace/git), so use the
+# escaping-symlink-dropping variant (run_0e5f1969): it excludes bytecode (Q3.2
+# class, run_6eaee58a) AND drops symlinks whose target escapes the plugin dir —
+# blocking host-file exfil that copytree(symlinks=False) would dereference.
+from core.projection_layer import make_untrusted_copy_ignore
 
 logger = logging.getLogger(__name__)
 
@@ -631,7 +632,7 @@ class PluginManager:
 
                     if dest.exists():
                         shutil.rmtree(dest)
-                    shutil.copytree(skill_src, dest, ignore=COPY_IGNORE)
+                    shutil.copytree(skill_src, dest, ignore=make_untrusted_copy_ignore(skill_src))
                     installed_skills.append(skill_name)
                     logger.info(f"Installed skill from marketplace.json: {skill_name}")
                 else:
@@ -764,7 +765,7 @@ class PluginManager:
                 dest = self.skills_dir / plugin_name
                 if dest.exists():
                     shutil.rmtree(dest)
-                shutil.copytree(plugin_dir, dest, ignore=COPY_IGNORE)
+                shutil.copytree(plugin_dir, dest, ignore=make_untrusted_copy_ignore(plugin_dir))
                 installed_skills.append(plugin_name)
                 logger.info(f"Installed standalone skill: {plugin_name}")
 
@@ -793,7 +794,7 @@ class PluginManager:
                         dest = self.skills_dir / skill_subdir.name
                         if dest.exists():
                             shutil.rmtree(dest)
-                        shutil.copytree(skill_subdir, dest, ignore=COPY_IGNORE)
+                        shutil.copytree(skill_subdir, dest, ignore=make_untrusted_copy_ignore(skill_subdir))
                         installed_skills.append(skill_subdir.name)
                         logger.info(f"Installed skill: {skill_subdir.name}")
 

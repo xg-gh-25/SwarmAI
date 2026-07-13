@@ -49,7 +49,44 @@ _FRESHNESS_SKIP_DIRS = {"node_modules", "__pycache__", ".git"}
 # so the two are symmetric and a real source edit still re-projects.
 # PUBLIC (no leading underscore): shared cross-module — plugin_manager imports it
 # for its own skill-install copytree sites, so it carries a stability contract.
-COPY_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store")
+_COPY_IGNORE_PATTERNS = ("__pycache__", "*.pyc", "*.pyo", ".DS_Store")
+COPY_IGNORE = shutil.ignore_patterns(*_COPY_IGNORE_PATTERNS)
+
+
+def make_untrusted_copy_ignore(source_root):
+    """A ``shutil.copytree`` ``ignore`` callable for copying an UNTRUSTED tree.
+
+    Composes ``COPY_IGNORE`` (bytecode/cruft) with an escaping-symlink drop:
+    any entry that is a symlink whose ``realpath`` resolves OUTSIDE
+    ``source_root`` is excluded, so an untrusted plugin cannot smuggle a symlink
+    (e.g. ``leak -> ~/.ssh/id_rsa``) that ``copytree(symlinks=False)`` would
+    dereference — copying host-file CONTENT into the agent-discoverable
+    ``.claude/skills`` tree (run_0e5f1969, empirically reproduced exfil).
+
+    INTERNAL symlinks (target inside ``source_root``, e.g. ``node_modules/.bin``)
+    are preserved — a blanket symlink ban would break legitimate skills. This is
+    for the UNTRUSTED plugin-install path ONLY; trusted built-in projection keeps
+    plain ``COPY_IGNORE`` (s_persist relies on an escaping symlink being deref'd).
+
+    Fail-closed: an unresolvable ``realpath`` (OSError) → treat as escaping (drop).
+    """
+    real_root = Path(os.path.realpath(source_root))
+    base = shutil.ignore_patterns(*_COPY_IGNORE_PATTERNS)
+
+    def _ignore(dirpath, names):
+        ignored = set(base(dirpath, names))
+        for name in names:
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                try:
+                    target = Path(os.path.realpath(full))
+                    if not target.is_relative_to(real_root):
+                        ignored.add(name)  # escapes the tree → drop (exfil guard)
+                except OSError:
+                    ignored.add(name)  # can't resolve → fail-closed, drop
+        return ignored
+
+    return _ignore
 
 # Bytecode artifacts that must not linger in a PROJECTED skill dir. Used by the
 # freshness check to self-heal installs projected BEFORE COPY_IGNORE existed: a
