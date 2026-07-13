@@ -26,9 +26,8 @@
  *
  * Validates: Requirements 1.1, 2.1
  */
-import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, memo, Profiler } from 'react';
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { isTabSwitchProfileEnabled } from '../../../utils/diagFlags';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
 import { useStreamingActivity } from '../../../hooks/useStreamingActivity';
@@ -144,33 +143,6 @@ function TabViewImpl({
 }: TabViewProps) {
   const { t } = useTranslation();
 
-  // ── TEMPORARY tab-switch render profiler (run_63172130) ────────────
-  // Measures the runtime fact static code-trace couldn't settle: on a tab
-  // switch, how many MessageBubbles re-render and how long is the React commit?
-  // Fully inert unless isTabSwitchProfileEnabled(). The onRender fires per commit
-  // for THIS tab's subtree; we log commit duration + the bubble-render count
-  // accumulated since the last commit, then reset the counter. Only logs the
-  // active tab (a background commit is not a switch). Removed once diagnosed.
-  const profileOn = isTabSwitchProfileEnabled();
-  // messageCountRef is updated at render time (below, once `messages` is
-  // computed) so the Profiler callback can report list size without depending
-  // on render-order or re-creating the callback each render.
-  const messageCountRef = useRef(0);
-  const onProfilerRender = useCallback(
-    (_id: string, phase: string, actualDuration: number) => {
-      if (!profileOn || !isActive) return;
-      const probe = typeof window !== 'undefined' ? window.__tabSwitchProbe : undefined;
-      const bubbleRenders = probe?.bubbleRenders ?? 0;
-      console.log(
-        `[TABSWITCH_PROFILE] tab=${tabId.slice(0, 8)} phase=${phase} ` +
-        `commit=${actualDuration.toFixed(1)}ms bubblesRendered=${bubbleRenders} ` +
-        `totalMessages=${messageCountRef.current}`,
-      );
-      probe?.reset();
-    },
-    [profileOn, isActive, tabId],
-  );
-
   // ── Per-tab store subscription — primary render source ─────────────
   // The rendered list is driven by this tab's own MessageStore subscription
   // (`useMessageStore(tabId)`). Every keep-mounted TabView (active AND
@@ -269,9 +241,6 @@ function TabViewImpl({
   } else {
     messages = storeMsgs;
   }
-  // Profiler-only: record list size for the tab-switch diagnostic (inert unless
-  // the flag is on; does not affect render behavior).
-  if (profileOn) messageCountRef.current = messages.length;
 
   // ── Per-tab scroll (Migration Step 5.1) ────────────────────────────
   // Each keep-mounted TabView owns its OWN scroll container + bottom anchor and
@@ -613,14 +582,7 @@ function TabViewImpl({
     </div>
   );
 
-  // Profiler is transparent (renders no DOM). When the flag is off we return the
-  // body directly — zero wrapper, zero behavior change on the normal path (I9).
-  if (!profileOn) return body;
-  return (
-    <Profiler id={`tabview-${tabId}`} onRender={onProfilerRender}>
-      {body}
-    </Profiler>
-  );
+  return body;
 }
 
 /**

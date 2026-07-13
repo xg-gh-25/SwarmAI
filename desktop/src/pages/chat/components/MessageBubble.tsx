@@ -24,27 +24,6 @@ import type { Message } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { UserMessageView } from './UserMessageView';
 import { AssistantMessageView } from './AssistantMessageView';
-import { isTabSwitchProfileEnabled } from '../../../utils/diagFlags';
-
-// TEMPORARY tab-switch profiler (run_63172130): a module-level counter bumped on
-// every MessageBubbleImpl render. window.__tabSwitchProbe.reset() is called by
-// TabView's Profiler onRender just before a commit is attributed, so the count
-// isolates "how many bubbles re-rendered in THIS commit". Gated + inert unless
-// isTabSwitchProfileEnabled(). Removed once the bottleneck is identified.
-declare global {
-  interface Window {
-    __tabSwitchProbe?: { bubbleRenders: number; reset: () => void };
-  }
-}
-function bumpBubbleRenderCount(): void {
-  if (typeof window === 'undefined') return;
-  const p = window.__tabSwitchProbe ?? {
-    bubbleRenders: 0,
-    reset() { this.bubbleRenders = 0; },
-  };
-  p.bubbleRenders += 1;
-  window.__tabSwitchProbe = p;
-}
 
 export interface MessageBubbleProps {
   message: Message;
@@ -77,7 +56,6 @@ function MessageBubbleImpl({
   onCancelQueued,
   onContinue,
 }: MessageBubbleProps) {
-  if (isTabSwitchProfileEnabled()) bumpBubbleRenderCount();
   if (message.role === 'user') {
     return (
       <UserMessageView
