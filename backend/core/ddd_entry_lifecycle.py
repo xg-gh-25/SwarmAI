@@ -64,6 +64,33 @@ MEMORY_PERMANENT_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v
 MEMORY_ACTIVE_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["layer"] in ("cognitive", "operational"))
 MEMORY_PREFIX_MAP = {k: v["prefix"] for k, v in MEMORY_SECTIONS.items()}
 MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
+
+# ── KNOWLEDGE.md Evergreen Sections ───────────────────────────────────────────
+#
+# UNLIKE MEMORY (which accumulates disposable operational churn — GUI/PIT — that
+# SHOULD decay), KNOWLEDGE.md is almost ENTIRELY load-bearing reference: the
+# runtime Self-Identity Anchor, context-file assembly specs, hook/pipeline/schema
+# architecture. Those entries are typed `guideline`/`pitfall` (not a keep-TYPE),
+# so is_keep_class would NOT protect them — reclaim would archive+strip
+# mission-critical facts after dormancy (Gate-1 CRITICAL, run_a1ec08e7: verified
+# ~23 reference entries were strip-eligible). This frozenset protects EVERY real
+# reference section by name; only genuinely disposable non-reference sections
+# (e.g. scratch notes) and the auto-managed "Knowledge Index" fall through to
+# reclaim. Section names are matched by their FULL header text (incl. any
+# `[model]`/`[guideline]` tag suffix), as parse_entries records `section`.
+# When a new reference section is added to KNOWLEDGE.md, add it here.
+KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
+    "Architecture Overview [model]",
+    "The 11 Context Files [model]",
+    "Claude Code CLI Hidden Defaults [constraint]",
+    "Code Documentation Standards [guideline]",
+    "Codebase Navigation [model]",
+    "Frontend Architecture [model]",
+    "Database Schema [model]",
+    "Hook System [model]",
+    "Pipeline — What It Is & How To Check State [model]",
+    "Job System [model]",
+})
 # PRIMARY insertion target per type. When multiple sections share a type
 # (e.g. "guideline" → Guidelines AND Standing Preferences), this gives the
 # default destination for new entries. Explicitly defined, not computed.

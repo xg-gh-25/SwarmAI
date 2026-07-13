@@ -665,27 +665,34 @@ class DddCultivationOrchestrator:
         lines.append("\n")
         new_section = "".join(lines)
 
-        content = knowledge_path.read_text(encoding="utf-8")
-        section_marker = "### Active Projects & DDD"
-        insert_before = "## The 11 Context Files"
+        # Under the shared KNOWLEDGE.md.lock: this DDD-section writer must
+        # serialize with the context_health_hook writers (index refresh, Active
+        # Projects refresh, decay reclaim) — all KNOWLEDGE.md writers hold the
+        # same lock, else this read-modify-write clobbers a concurrent strip
+        # (run_a1ec08e7). Blocking + idempotent (byte-identical section builder).
+        from utils.file_lock import md_lock
+        with md_lock(knowledge_path, blocking=True):
+            content = knowledge_path.read_text(encoding="utf-8")
+            section_marker = "### Active Projects & DDD"
+            insert_before = "## The 11 Context Files"
 
-        if section_marker in content:
-            start = content.find(section_marker)
-            rest = content[start + len(section_marker):]
-            end_match = re.search(r"\n#{2,3} ", rest)
-            if end_match:
-                end_pos = start + len(section_marker) + end_match.start()
-            elif insert_before in rest:
-                end_pos = start + len(section_marker) + rest.find(insert_before)
+            if section_marker in content:
+                start = content.find(section_marker)
+                rest = content[start + len(section_marker):]
+                end_match = re.search(r"\n#{2,3} ", rest)
+                if end_match:
+                    end_pos = start + len(section_marker) + end_match.start()
+                elif insert_before in rest:
+                    end_pos = start + len(section_marker) + rest.find(insert_before)
+                else:
+                    return []
+                content = content[:start] + new_section + content[end_pos:]
+            elif insert_before in content:
+                content = content.replace(insert_before, new_section + insert_before)
             else:
                 return []
-            content = content[:start] + new_section + content[end_pos:]
-        elif insert_before in content:
-            content = content.replace(insert_before, new_section + insert_before)
-        else:
-            return []
 
-        knowledge_path.write_text(content, encoding="utf-8")
+            knowledge_path.write_text(content, encoding="utf-8")
         logger.info(
             "ddd_orchestrator: injected DDD summary into KNOWLEDGE.md (%d projects)",
             sum(1 for ln in lines if ln.startswith("- ")),

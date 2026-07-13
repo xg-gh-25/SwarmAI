@@ -573,21 +573,26 @@ class ContextHealthHook:
         # Build new section content
         new_section = "### Active Projects & DDD\n\n" + "\n".join(project_lines) + "\n"
 
-        # Replace existing section in KNOWLEDGE.md
-        content = knowledge_file.read_text()
-        # Match from "### Active Projects & DDD" to next ### or ## heading
-        pattern = r"### Active Projects & DDD\n.*?(?=\n###|\n##[^#]|\Z)"
-        if re.search(pattern, content, re.DOTALL):
-            content = re.sub(pattern, new_section.rstrip(), content, count=1, flags=re.DOTALL)
-        else:
-            # Section doesn't exist yet — insert before "## The 11 Context Files" or at end
-            insert_before = "## The 11 Context Files"
-            if insert_before in content:
-                content = content.replace(insert_before, new_section + "\n\n" + insert_before)
+        # Replace existing section in KNOWLEDGE.md — under the shared
+        # KNOWLEDGE.md.lock (run_a1ec08e7: all KNOWLEDGE writers must serialize,
+        # else this read-modify-write clobbers the decay reclaim or the DDD
+        # orchestrator's write of this same section). Blocking, idempotent.
+        from utils.file_lock import md_lock
+        with md_lock(knowledge_file, blocking=True):
+            content = knowledge_file.read_text()
+            # Match from "### Active Projects & DDD" to next ### or ## heading
+            pattern = r"### Active Projects & DDD\n.*?(?=\n###|\n##[^#]|\Z)"
+            if re.search(pattern, content, re.DOTALL):
+                content = re.sub(pattern, new_section.rstrip(), content, count=1, flags=re.DOTALL)
             else:
-                content += "\n\n" + new_section
+                # Section doesn't exist yet — insert before "## The 11 Context Files" or at end
+                insert_before = "## The 11 Context Files"
+                if insert_before in content:
+                    content = content.replace(insert_before, new_section + "\n\n" + insert_before)
+                else:
+                    content += "\n\n" + new_section
 
-        knowledge_file.write_text(content)
+            knowledge_file.write_text(content)
         logger.info("context_health: KNOWLEDGE.md Active Projects section refreshed")
 
     def _refresh_code_intel(self, root: Path) -> None:
@@ -1326,35 +1331,41 @@ class ContextHealthHook:
         if not index_lines:
             return
 
-        # Replace Knowledge Index section in KNOWLEDGE.md
+        # Replace Knowledge Index section in KNOWLEDGE.md — under the shared
+        # KNOWLEDGE.md.lock so this read-modify-write serializes with the decay
+        # reclaim + the DDD-section writers (a file lock protects a doc only if
+        # ALL writers hold it — run_a1ec08e7). Blocking (mirror _refresh_memory_index):
+        # the section refresh is idempotent + must not lose to a racing writer.
         try:
-            content = context_file.read_text(encoding="utf-8")
-            marker = "## Knowledge Index"
-            if marker not in content:
-                return  # No section to replace
+            from utils.file_lock import md_lock
+            with md_lock(context_file, blocking=True):
+                content = context_file.read_text(encoding="utf-8")
+                marker = "## Knowledge Index"
+                if marker not in content:
+                    return  # No section to replace
 
-            before = content.split(marker)[0]
-            # Find the next ## section after Knowledge Index
-            after_marker = content.split(marker, 1)[1]
-            next_section_idx = after_marker.find("\n## ")
-            if next_section_idx >= 0:
-                after = after_marker[next_section_idx:]
-            else:
-                after = "\n\n---\n\n_Auto-refreshed on startup from Knowledge/ directories._\n"
+                before = content.split(marker)[0]
+                # Find the next ## section after Knowledge Index
+                after_marker = content.split(marker, 1)[1]
+                next_section_idx = after_marker.find("\n## ")
+                if next_section_idx >= 0:
+                    after = after_marker[next_section_idx:]
+                else:
+                    after = "\n\n---\n\n_Auto-refreshed on startup from Knowledge/ directories._\n"
 
-            # Structural cap: prevent Knowledge Index from growing unboundedly
-            non_empty_lines = [l for l in index_lines if l.strip()]
-            if len(non_empty_lines) > self._INDEX_LINE_CAP:
-                logger.warning(
-                    "context_health: Knowledge Index has %d lines (cap=%d). "
-                    "Truncating to cap. Consider archiving old knowledge files.",
-                    len(non_empty_lines), self._INDEX_LINE_CAP,
-                )
-                # Truncate: keep the structure but cut excess entries
-                index_lines = index_lines[:self._INDEX_LINE_CAP * 2]  # rough cut on raw lines
+                # Structural cap: prevent Knowledge Index from growing unboundedly
+                non_empty_lines = [l for l in index_lines if l.strip()]
+                if len(non_empty_lines) > self._INDEX_LINE_CAP:
+                    logger.warning(
+                        "context_health: Knowledge Index has %d lines (cap=%d). "
+                        "Truncating to cap. Consider archiving old knowledge files.",
+                        len(non_empty_lines), self._INDEX_LINE_CAP,
+                    )
+                    # Truncate: keep the structure but cut excess entries
+                    index_lines = index_lines[:self._INDEX_LINE_CAP * 2]  # rough cut on raw lines
 
-            new_content = before + marker + "\n" + "\n".join(index_lines) + "\n" + after
-            context_file.write_text(new_content, encoding="utf-8")
+                new_content = before + marker + "\n" + "\n".join(index_lines) + "\n" + after
+                context_file.write_text(new_content, encoding="utf-8")
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
 
@@ -1929,63 +1940,92 @@ class ContextHealthHook:
             lock_fd.close()
 
     def _run_knowledge_lifecycle(self, root: Path) -> None:
-        """Run DDD lifecycle engine on KNOWLEDGE.md: decay-state persist (Gap #5).
+        """Run DDD lifecycle engine on KNOWLEDGE.md: decay + archive + strip.
 
-        Same engine as MEMORY.md. Extends ddd_entry_lifecycle to KNOWLEDGE.md
-        entries. assess_decay computes transitions; this method APPLIES them to
-        the entry objects so the state persists (previously computed-but-dropped —
-        the same missing-apply bug fixed in _run_memory_lifecycle). NON-destructive
-        only: it persists active→dormant, it does NOT archive or strip (KNOWLEDGE
-        has no reclaim pass and no lock, so a destructive strip here would be
-        unsafe). (The old prose ref-bump was removed in R2-prime — honest ref comes
-        from the id-based producer, so `bumped` is always 0 here.)
+        Same engine + machinery as MEMORY.md. assess_decay computes transitions;
+        this method APPLIES them (mirror _run_memory_lifecycle) then runs
+        reclaim_noise_entries to archive+strip dormant NON-evergreen entries
+        (KNOWLEDGE-archive.md + dated .bak). KNOWLEDGE is almost entirely
+        load-bearing reference, so KNOWLEDGE_EVERGREEN_SECTIONS protects every
+        reference section by name — only genuinely disposable sections decay
+        (Gate-1 CRITICAL, run_a1ec08e7: without this the runtime Self-Identity /
+        arch / pipeline facts would be stripped).
+
+        Concurrency: the whole read-modify-write is under md_lock(KNOWLEDGE.md.lock,
+        blocking=False) — a file lock protects a doc ONLY if EVERY writer holds it,
+        so the 3 section-refresh writers (_refresh_knowledge_sync,
+        _refresh_knowledge_projects_section, ddd_orchestrator._ch_inject_knowledge)
+        take the SAME lock (blocking). Non-blocking here (skip-if-busy) mirrors
+        _run_memory_lifecycle: a destructive strip must never wait on a held lock
+        inside the <30s hook. (The old prose ref-bump was removed in R2-prime —
+        honest ref comes from the id-based producer, so `bumped` is always 0.)
         """
         from core.ddd_entry_lifecycle import (
+            KNOWLEDGE_EVERGREEN_SECTIONS,
             assess_decay,
             inject_entry_metadata,
             parse_entries,
+            reclaim_noise_entries,
         )
+        from utils.file_lock import md_lock
 
         knowledge_path = root / ".context" / "KNOWLEDGE.md"
         if not knowledge_path.exists():
             return
 
-        content = knowledge_path.read_text(encoding="utf-8")
-        entries = parse_entries(content)
-        if not entries:
-            return
+        evergreen = KNOWLEDGE_EVERGREEN_SECTIONS
+        with md_lock(knowledge_path, blocking=False) as got_lock:
+            if not got_lock:
+                logger.debug("context_health: KNOWLEDGE.md lock busy, skipping lifecycle")
+                return
 
-        today = date.today()
+            content = knowledge_path.read_text(encoding="utf-8")
+            entries = parse_entries(content)
+            if not entries:
+                return
 
-        # Ref bump: REMOVED (R2-prime, run_e50621b6) — same toxic prose-substring
-        # signal as MEMORY.md (see _run_memory_lifecycle). Honest ref comes from
-        # the id-based producer, not DailyActivity prose coincidence.
-        bumped = 0
+            today = date.today()
+            bumped = 0
 
-        # Decay: assess state transitions (no evergreen sections for KNOWLEDGE)
-        transitions = assess_decay(entries, today)
+            # Decay: evergreen reference sections are immune (Gate-1 CRITICAL).
+            transitions = assess_decay(
+                entries, today, evergreen_sections=evergreen
+            )
 
-        # APPLY transitions to entry objects before inject (same missing-apply
-        # bug as MEMORY — assess_decay returns transitions but does not mutate
-        # entries, so without this loop the dormant state is never persisted).
-        # SCOPE: KNOWLEDGE only PERSISTS the decay STATE (active→dormant). It does
-        # NOT archive or strip — unlike MEMORY, the KNOWLEDGE path has no
-        # reclaim_noise_entries pass and no MEMORY.md.lock-equivalent, so doing a
-        # destructive archive+strip here would be unsafe (a concurrent distillation
-        # write could race a read-modify-write, and there is no dated .bak). Marking
-        # entries dormant is non-destructive and idempotent (inject only annotates,
-        # never removes). If KNOWLEDGE ever needs true reclaim, add it with the same
-        # lock + archive + dated-bak machinery MEMORY uses — do NOT strip here.
-        for t in transitions:
-            t.entry.decay_state = t.new_state
+            # APPLY transitions to entry objects before inject (same missing-apply
+            # bug fixed in _run_memory_lifecycle — assess_decay returns transitions
+            # but does not mutate entries). We do NOT archive here; reclaim below is
+            # the SINGLE archive+strip authority (avoids the double-archive that a
+            # separate archive_entries would cause — inject can't strip a bullet, so
+            # reclaim would re-archive it).
+            for t in transitions:
+                t.entry.decay_state = t.new_state
 
-        if bumped > 0 or transitions:
-            updated = inject_entry_metadata(content, entries)
-            knowledge_path.write_text(updated, encoding="utf-8")
-            if transitions:
+            if bumped > 0 or transitions:
+                updated = inject_entry_metadata(content, entries)
+                knowledge_path.write_text(updated, encoding="utf-8")
+                content = updated  # reclaim operates on the latest content
+                if transitions:
+                    logger.info(
+                        "context_health: KNOWLEDGE.md lifecycle — %d bumped, %d transitions",
+                        bumped, len(transitions),
+                    )
+
+            # CLEAN: archive+strip dormant NON-evergreen operational entries.
+            # source_path gives the dated .bak; no reindex (KNOWLEDGE has no
+            # MEMORY_INDEX block — the ## Knowledge Index nav is rebuilt by
+            # _refresh_knowledge_sync, a separate writer under the same lock).
+            reclaim_report = reclaim_noise_entries(
+                content, today, knowledge_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="KNOWLEDGE-archive.md",
+                source_path=knowledge_path,
+                dry_run=False,
+            )
+            if reclaim_report.new_content is not None:
                 logger.info(
-                    "context_health: KNOWLEDGE.md lifecycle — %d bumped, %d transitions",
-                    bumped, len(transitions),
+                    "context_health: KNOWLEDGE.md reclaim — %d archived+stripped, %d protected",
+                    reclaim_report.archived, reclaim_report.kept_protected,
                 )
 
     def _expire_stale_proposals(self, root: Path) -> None:

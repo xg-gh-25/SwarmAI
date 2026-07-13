@@ -1809,18 +1809,28 @@ class SwarmWorkspaceManager:
             index_content, total = _build_index()
             return preserved + index_content, total
 
-        result = await anyio.to_thread.run_sync(lambda: _generate())
-        content, total = result
+        # The read-modify-write (generate reads existing KNOWLEDGE.md to preserve
+        # everything above the index marker; write replaces it) must be ATOMIC
+        # under the shared KNOWLEDGE.md.lock — every KNOWLEDGE.md writer holds it
+        # (run_a1ec08e7), else this provisioning-time index refresh could clobber a
+        # concurrent decay-strip (context_health_hook._run_knowledge_lifecycle) and
+        # resurrect stripped entries. Hold the lock across BOTH generate + write in
+        # one worker thread (blocking — mirror the section-refresh writers).
+        from utils.file_lock import md_lock
 
-        if content is None:
+        def _locked_rmw():
+            with md_lock(context_file, blocking=True):
+                content, total = _generate()
+                if content is None:
+                    return None
+                context_file.parent.mkdir(parents=True, exist_ok=True)
+                context_file.write_text(content, encoding="utf-8")
+                return total
+
+        total = await anyio.to_thread.run_sync(_locked_rmw)
+        if total is None:
             logger.debug("KNOWLEDGE.md not found, skipping index refresh")
             return
-
-        def _write():
-            context_file.parent.mkdir(parents=True, exist_ok=True)
-            context_file.write_text(content, encoding="utf-8")
-
-        await anyio.to_thread.run_sync(_write)
         logger.info("Refreshed KNOWLEDGE.md index with %d files", total)
 
     # ── Git initialization ─────────────────────────────────────────────

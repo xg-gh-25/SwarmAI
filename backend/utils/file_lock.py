@@ -37,6 +37,8 @@ For non-blocking (try-lock) semantics::
 from __future__ import annotations
 
 import platform
+from contextlib import contextmanager
+from pathlib import Path
 
 _IS_WINDOWS = platform.system() == "Windows"
 
@@ -98,3 +100,51 @@ def flock_unlock(fd) -> None:
             pass
     else:
         fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def md_lock(md_path: "Path | str", *, blocking: bool = True):
+    """Serialize read-modify-write of a markdown context file across ALL its
+    writers on a single ``<md>.md.lock`` sidecar (the sibling-fd flock pattern
+    MEMORY.md uses across _refresh_memory_index + _run_memory_lifecycle).
+
+    A file lock only excludes OTHER lock-holders — so it protects a doc ONLY if
+    EVERY writer of that doc wraps its read→write in this same lock. Locking one
+    writer while others write unlocked is theater (Gate-1, run_a1ec08e7).
+
+    Yields ``True`` when the lock is held, ``False`` when ``blocking=False`` and
+    the lock was already held by someone else (caller MUST check and skip). A
+    blocking acquire only ever yields ``True`` (or waits). The lock fd is always
+    released + closed in ``finally``.
+
+        # blocking (section refreshers — mirror _refresh_memory_index):
+        with md_lock(path) as _got:            # always True
+            content = path.read_text(); path.write_text(mutate(content))
+
+        # non-blocking (destructive lifecycle strip — mirror _run_memory_lifecycle):
+        with md_lock(path, blocking=False) as got:
+            if not got:
+                return                          # someone else is writing; skip
+            ...read-modify-write...
+    """
+    md_path = Path(md_path)
+    lock_path = md_path.with_suffix(md_path.suffix + ".lock")
+    fd = None
+    got = False
+    try:
+        fd = open(lock_path, "w")  # noqa: SIM115 — released in finally
+        if blocking:
+            flock_exclusive(fd)
+            got = True
+        else:
+            try:
+                flock_exclusive_nb(fd)
+                got = True
+            except (BlockingIOError, OSError):
+                got = False
+        yield got
+    finally:
+        if fd is not None:
+            if got:
+                flock_unlock(fd)
+            fd.close()
