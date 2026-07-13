@@ -144,7 +144,13 @@ _IMPROVEMENT_KEYWORDS = re.compile(
 )
 
 _PRODUCT_KEYWORDS = re.compile(
-    r"\b(priority|non-goal|scope|strategic|user.facing|phase|milestone|"
+    # NOTE: 'scope'/'phase'/'milestone' were REMOVED (2026-07-13, run_eba5fc53) —
+    # they are process/pipeline vocabulary, not product-doc vocabulary. Reflect-stage
+    # lessons ("Scope discipline held", "Phase-1-of-3 rollout") tripped the PRODUCT
+    # branch → product_priority catch-all → PRODUCT.md#Strategic Priorities (a protected
+    # zone that can't auto-apply) → escalations piled up. Only genuine product-doc words
+    # (priority/non-goal/strategic/roadmap/vision/defer/user-facing) belong here.
+    r"\b(priority|non-goal|strategic|user.facing|"
     r"defer|roadmap|vision)\b",
     re.IGNORECASE,
 )

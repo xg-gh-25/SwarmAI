@@ -120,6 +120,65 @@ class TestClassifyContent:
         assert 0.0 <= result["confidence"] <= 1.0
 
 
+class TestReflectLessonNotMisroutedToStrategicPriorities:
+    """Regression: reflect-stage process lessons must NOT route to PRODUCT.md#Strategic
+    Priorities (a protected zone that can't auto-apply). Root cause was
+    `_PRODUCT_KEYWORDS` containing process-vocab (scope/phase/milestone), which made
+    pipeline lessons trip the PRODUCT branch and pile up as escalations.
+
+    Mutation check: re-add scope|phase|milestone to _PRODUCT_KEYWORDS → these 3
+    real-sample assertions go RED (back to Strategic Priorities).
+    """
+
+    # 3 REAL misrouted proposal contents pulled from disk (escalated, Strategic Priorities)
+    REAL_MISROUTED = [
+        "Phase-1-of-3 rollout (F14): shipping dormant primitives + schema first, "
+        "with zero behavior change verified by grep, correct C037/COE10 mitigation",
+        "Scope discipline held: when the RTH category re-tag created a cross-system "
+        "inconsistency, I REVERTED to surgical scope rather than expand into the "
+        "pre-existing category drift.",
+        "The honest re-scope was BETTER than the original ask: XG wanted usage "
+        "decay-weighting; the real wiring makes used knowledge survive reclaim and "
+        "resurface higher in injection.",
+    ]
+
+    def test_real_process_lessons_route_to_improvement_not_product(self):
+        from core.persist_routing import classify_content
+        for text in self.REAL_MISROUTED:
+            result = classify_content(text, project="SwarmAI")
+            assert result["doc"] == "IMPROVEMENT.md", (
+                f"process lesson misrouted to {result['doc']}#{result['section']}: {text[:60]}"
+            )
+            assert result["section"] != "Strategic Priorities"
+
+    def test_process_lessons_are_safe_auto(self):
+        """The whole point: IMPROVEMENT routing is safe_auto → no escalation pile-up."""
+        from core.persist_routing import classify_content
+        for text in self.REAL_MISROUTED:
+            result = classify_content(text, project="SwarmAI")
+            assert result["safe_auto"] is True
+
+    def test_genuine_strategic_statement_still_routes_to_product(self):
+        """False-negative guard: real strategic content MUST stay in PRODUCT."""
+        from core.persist_routing import classify_content
+        for text in (
+            "Strategic priority: focus on self-evolution over features",
+            "User-facing latency is the top priority this quarter",
+            "The product roadmap centers on cross-project memory",
+        ):
+            result = classify_content(text, project="SwarmAI")
+            assert result["doc"] == "PRODUCT.md", f"strategic content dropped: {text}"
+
+    def test_nongoal_and_vision_branches_unchanged(self):
+        from core.persist_routing import classify_content
+        assert classify_content(
+            "Non-goal: we will never support multi-model routing", project="SwarmAI"
+        )["doc"] == "PRODUCT.md"
+        assert classify_content(
+            "Vision: SwarmAI is a self-evolving Agent OS", project="SwarmAI"
+        )["doc"] == "PRODUCT.md"
+
+
 class TestRoutingTable:
     """The ROUTING_TABLE constant is well-formed."""
 
