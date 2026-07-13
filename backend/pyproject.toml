@@ -1,6 +1,6 @@
 [project]
 name = "swarmai-backend"
-version = "1.24.1"
+version = "1.25.0"
 description = "SwarmAI Backend - Human directs. AI delivers."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
