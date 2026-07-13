@@ -2355,10 +2355,13 @@ export function useChatStreamingLifecycle(
         // A terminal human-in-the-loop prompt (cmd_permission_request /
         // ask_user_question) is emitted by the backend ONLY when a PreToolUse
         // hook is CURRENTLY BLOCKED awaiting the user's decision — the
-        // orchestrator checks has_live_waiter (streaming_orchestrator.py:495)
-        // right before yielding, so an emitted HITL prompt always had a live
-        // blocked hook at emit time. Such a prompt is NEVER "stale cross-turn
-        // bleed": the hook cannot proceed until the button is answered.
+        // orchestrator checks has_live_waiter right before yielding
+        // (streaming_orchestrator.py:495 for cmd_permission_request via
+        // _pm_live; :457 for ask_user_question via _aqm), so an emitted HITL
+        // prompt always had a live blocked hook at emit time. A dead/superseded
+        // waiter is dropped at EMIT and never reaches here — so this exemption
+        // has no frontend backstop behind it and needs none. Such a prompt is
+        // NEVER "stale cross-turn bleed": the hook cannot proceed until answered.
         //
         // The gen-guard below discarded it because latestStreamGen advanced
         // (queued sends bumping the gen while the hook sat blocked — see the

@@ -617,6 +617,83 @@ describe('useChatStreamingLifecycle', () => {
       // EXEMPTED → processed → the approve/deny button can render (no hang).
       expect(result.current.pendingPermissionRequestId).toBe('perm-hitl-1');
     });
+
+    // Discriminator (non-vacuity): the HITL exemption must NOT be a blanket
+    // "process everything after a gen advance" — that would re-open the
+    // cross-turn bleed the guard exists to stop. A NON-HITL stale event on the
+    // same superseded handler MUST still be discarded.
+    it('P0 discriminator: a non-HITL stale event on a superseded handler is STILL discarded', () => {
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      act(() => {
+        initTestTab('tab-hitl-disc');
+        testActiveTabIdRef.current = 'tab-hitl-disc';
+        result.current.setIsStreaming(true);
+        result.current.setMessages([
+          makeMessage({ id: 'm-disc', role: 'assistant', content: [] }),
+        ]);
+      });
+      const staleHandler = result.current.createStreamHandler('m-disc', 'tab-hitl-disc');
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createStreamHandler('m-disc-2', 'tab-hitl-disc'); // advance latestStreamGen
+
+      // A non-HITL tail event (context_warning) from the superseded handler is
+      // NOT exempt → must be discarded (contextWarning stays null). If this were
+      // rendered, the exemption would be too broad (bleed regression).
+      act(() => {
+        staleHandler({
+          type: 'context_warning', sessionId: 'sess-disc',
+          level: 'critical', pct: 99, tokensEst: 200000, message: 'stale — must not render',
+        } as unknown as StreamEvent);
+      });
+      expect(result.current.contextWarning).toBeNull();
+    });
+
+    // Cross-tab (adversarial follow-up): the gen-exemption is NOT tab-scoped —
+    // it applies to any HITL event. Tab-isolation is enforced downstream by the
+    // isActiveTab gate. This locks that gate: a cmd_permission_request on a
+    // BACKGROUND tab (arriving through the exempt path, gen advanced) must NOT
+    // set the FOREGROUND pendingPermissionRequestId. If a future refactor of the
+    // exemption bypassed isActiveTab, this goes RED.
+    it('P0 cross-tab: a background-tab cmd_permission_request (gen-exempt) does NOT touch foreground state', () => {
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      const bgMsgId = 'bg-perm-msg';
+      const bgMsg = makeMessage({ id: bgMsgId, role: 'assistant', content: [] });
+      act(() => {
+        testTabMap.set('tab-bg-perm', {
+          id: 'tab-bg-perm', title: 'BG', agentId: 'default', isNew: false,
+          messages: [bgMsg], sessionId: 'sess-bg-perm', pendingQuestion: null,
+          abortController: null, isStreaming: false,
+          streamState: { mode: 'idle', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamGen: 0, status: 'streaming',
+        });
+        initTestTab('tab-fg-perm');
+        testActiveTabIdRef.current = 'tab-fg-perm'; // tab-bg-perm is BACKGROUND
+        messageStoreRegistry.getOrCreate('tab-bg-perm', { sessionId: 'sess-bg-perm' }).replace([bgMsg]);
+      });
+
+      const bgHandler = result.current.createStreamHandler(bgMsgId, 'tab-bg-perm');
+      // Advance the bg tab's gen so the perm event goes through the EXEMPT path.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createStreamHandler('bg-perm-msg-2', 'tab-bg-perm');
+
+      act(() => {
+        bgHandler({
+          type: 'cmd_permission_request', sessionId: 'sess-bg-perm',
+          requestId: 'perm-bg-1', toolName: 'Bash',
+          toolInput: { command: 'rm -rf /tmp/x' },
+          reason: 'Matches dangerous command pattern', options: ['approve', 'deny'],
+        } as unknown as StreamEvent);
+      });
+
+      // Foreground pendingPermissionRequestId must NOT be set by the bg event.
+      expect(result.current.pendingPermissionRequestId).toBeNull();
+      // But the bg tab's OWN tabState carries the pending id (so switch-back shows it).
+      expect(testTabMap.get('tab-bg-perm')?.pendingPermissionRequestId).toBe('perm-bg-1');
+    });
   });
 
   describe('createCompleteHandler', () => {
