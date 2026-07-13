@@ -138,6 +138,28 @@ _sdk_types_mock = MagicMock(**{
 })
 
 
+def _make_real_options(model: str = "test-model", system_prompt: str = "test"):
+    """A REAL ClaudeAgentOptions (not MagicMock) for scenarios that route through
+    ``session_unit._build_retry_options``.
+
+    That function does ``dict(vars(original_options))`` then reconstructs via the
+    REAL ``ClaudeAgentOptions`` (re-imported inside the function — the module-level
+    stub at the top of this file does NOT intercept it). A bare ``MagicMock()``
+    leaks ``_mock_*`` internals into ``vars()`` → ``TypeError: __init__() got an
+    unexpected keyword argument '_mock_return_value'``. A real options object
+    round-trips cleanly. Only ``system_prompt``/``mcp_servers`` are read by the
+    warm/resume path, but a real object also satisfies the retry reconstruction.
+    """
+    from claude_agent_sdk import ClaudeAgentOptions
+    opts = ClaudeAgentOptions()
+    opts.system_prompt = system_prompt
+    try:
+        opts.model = model
+    except Exception:
+        pass  # model may not be a settable field on all SDK versions — non-fatal
+    return opts
+
+
 # ---------------------------------------------------------------------------
 # Fake SDK client
 # ---------------------------------------------------------------------------
@@ -422,9 +444,16 @@ class TestScenario2_WarmSend:
         unit._client = fake_client
         unit._wrapper = MagicMock()
         unit._sdk_session_id = "sdk-session-warm"
+        # Simulate a genuinely-clean warm session: without this, send()'s
+        # resume-poison guard (fail-closed, PIT01) sees _last_turn_clean=False on a
+        # fresh unit, recycles the warm client, and re-spawns via the stubbed SDK
+        # (AsyncMock) → receive_response() returns a coroutine → the whole warm-reuse
+        # assertion breaks. A real warm IDLE session that ended cleanly has this True.
+        unit._last_turn_clean = True
 
-        mock_options = MagicMock()
-        mock_options.model = "test-model"
+        # Real options: the warm-send path reconstructs via _build_retry_options,
+        # which a MagicMock would poison with _mock_* attrs (see _make_real_options).
+        mock_options = _make_real_options()
 
         events = []
         async for event in unit.send(
@@ -440,6 +469,42 @@ class TestScenario2_WarmSend:
         assert unit.state == SessionState.IDLE
         # Client should have been reused (same object)
         assert unit._client is fake_client or unit._client is not None
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_dirty_warm_send_recycles_before_reuse(self, _reset_session_infrastructure):
+        """Warm IDLE session whose last turn did NOT end clean → send() MUST recycle
+        (poison-guard, PIT01) before reuse: _crash_to_cold_async(clear_identity=False)
+        fires so the next spawn is fresh WITH --resume. This is the sibling of the
+        clean-warm fast path above — the recycle branch that has real user impact
+        (a soft-interrupt/SSE-drop leaves the CLI in corrupt turn-state; reusing it
+        returns an instant zombie error). Covers the branch Scenario2's happy path
+        deliberately skips (Gate-2 finding B, run_2bda6845)."""
+        from core.session_unit import SessionUnit, SessionState
+        from unittest.mock import AsyncMock
+
+        unit = SessionUnit(session_id="test-dirty-warm", agent_id="default")
+        unit._transition(SessionState.IDLE)
+        unit._client = FakeSDKClient()
+        unit._wrapper = MagicMock()
+        unit._sdk_session_id = "sdk-session-dirty"
+        unit._last_turn_clean = False  # last turn did NOT end clean → guard MUST fire
+
+        recycle = AsyncMock()
+        unit._crash_to_cold_async = recycle  # observe the recycle, don't drive respawn
+
+        # Stop after the guard by aborting the spawn that follows (we only assert the
+        # guard fired, not the full re-stream — spawn wiring is Scenario6's job).
+        with patch.object(unit, "_ensure_spawned") as spawn:
+            async def _abort(*a, **k):
+                yield {"_abort": True}
+            spawn.side_effect = _abort
+            events = []
+            async for event in unit.send(query_content="dirty", options=_make_real_options()):
+                events.append(event)
+
+        # The poison-guard recycled before reuse, preserving --resume identity.
+        recycle.assert_awaited_once()
+        assert recycle.await_args.kwargs.get("clear_identity") is False
 
 
 # ---------------------------------------------------------------------------
@@ -486,9 +551,11 @@ class TestScenario3_StopThenNewMessage:
         unit._client = fake_client
         unit._wrapper = MagicMock()
         unit._sdk_session_id = "sdk-session-stop"
+        unit._last_turn_clean = True  # clean warm session — skip poison-guard recycle
 
-        mock_options = MagicMock()
-        mock_options.model = "test-model"
+        # Real options (see _make_real_options): warm/resume path reconstructs via
+        # _build_retry_options, which a MagicMock poisons with _mock_* attrs.
+        mock_options = _make_real_options()
 
         events = []
         async for event in unit.send(
@@ -582,9 +649,11 @@ class TestScenario5_ResumeWithinTTL:
         unit._client = fake_client
         unit._wrapper = MagicMock()
         unit._sdk_session_id = "sdk-session-ttl"
+        unit._last_turn_clean = True  # clean warm session — skip poison-guard recycle
 
-        mock_options = MagicMock()
-        mock_options.model = "test-model"
+        # Real options (see _make_real_options): resume path reconstructs via
+        # _build_retry_options, which a MagicMock poisons with _mock_* attrs.
+        mock_options = _make_real_options()
 
         events = []
         async for event in unit.send(
