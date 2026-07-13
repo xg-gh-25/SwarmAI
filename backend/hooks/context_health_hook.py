@@ -1858,6 +1858,29 @@ class ContextHealthHook:
                 entries, today, evergreen_sections=evergreen, dormant_days=45
             )
 
+            # APPLY the transitions to the entry objects. assess_decay RETURNS
+            # transitions but does NOT mutate entries — without this loop the
+            # persisted metadata keeps the stale "active" state, so a
+            # dormant/archived transition is logged but never written, and reclaim
+            # (which requires decay∈{dormant,archived}) can never select the entry.
+            # This was the root cause of MEMORY.md never shrinking (9 transitions
+            # logged, 0 persisted).
+            #
+            # We do NOT archive here (unlike ddd_orchestrator, which lacks a
+            # guaranteed reclaim pass). The MEMORY path ALWAYS runs
+            # reclaim_noise_entries below, and reclaim archives+strips BOTH
+            # dormant AND archived entries (_NOISY_DECAY_STATES) via
+            # _archive_and_strip. So we persist EVERY transitioned state (incl.
+            # archived) through inject_entry_metadata — which only annotates,
+            # never removes (verified: an entry excluded from the list keeps its
+            # OLD metadata in the body) — and let reclaim be the SINGLE archive+
+            # strip authority. This avoids the double-archive that a separate
+            # archive_entries here would cause (archive_entries has no dedup, and
+            # inject can't strip the just-archived bullet, so reclaim would archive
+            # it a second time).
+            for t in transitions:
+                t.entry.decay_state = t.new_state
+
             # Only write if something changed
             if bumped > 0 or transitions:
                 updated = inject_entry_metadata(content, entries)
@@ -1884,6 +1907,19 @@ class ContextHealthHook:
             )
             if reclaim_report.new_content is not None:
                 # reclaim wrote memory_path + dated .bak (source_path given).
+                # REBUILD the Memory Index AFTER the strip so it never references
+                # a stripped/archived entry. _light_refresh runs
+                # _refresh_memory_index BEFORE this lifecycle, so without this
+                # in-loop rebuild the index would point at entries this run just
+                # removed until the NEXT session — a stale-index window. Rebuild
+                # from the in-memory stripped content (reclaim already wrote it to
+                # disk); inject_index_into_memory is a pure content transform, so
+                # this is safe under the lock we already hold. Only write if the
+                # index block actually changed (idempotent no-op otherwise).
+                from core.memory_index import inject_index_into_memory
+                reindexed = inject_index_into_memory(reclaim_report.new_content)
+                if reindexed != reclaim_report.new_content:
+                    memory_path.write_text(reindexed, encoding="utf-8")
                 logger.info(
                     "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
                     reclaim_report.archived, reclaim_report.kept_protected,
@@ -1893,10 +1929,16 @@ class ContextHealthHook:
             lock_fd.close()
 
     def _run_knowledge_lifecycle(self, root: Path) -> None:
-        """Run DDD lifecycle engine on KNOWLEDGE.md: ref bump + decay (Gap #5).
+        """Run DDD lifecycle engine on KNOWLEDGE.md: decay-state persist (Gap #5).
 
         Same engine as MEMORY.md. Extends ddd_entry_lifecycle to KNOWLEDGE.md
-        entries. Bumps refs from recent DailyActivity, decays unreferenced.
+        entries. assess_decay computes transitions; this method APPLIES them to
+        the entry objects so the state persists (previously computed-but-dropped —
+        the same missing-apply bug fixed in _run_memory_lifecycle). NON-destructive
+        only: it persists active→dormant, it does NOT archive or strip (KNOWLEDGE
+        has no reclaim pass and no lock, so a destructive strip here would be
+        unsafe). (The old prose ref-bump was removed in R2-prime — honest ref comes
+        from the id-based producer, so `bumped` is always 0 here.)
         """
         from core.ddd_entry_lifecycle import (
             assess_decay,
@@ -1922,6 +1964,20 @@ class ContextHealthHook:
 
         # Decay: assess state transitions (no evergreen sections for KNOWLEDGE)
         transitions = assess_decay(entries, today)
+
+        # APPLY transitions to entry objects before inject (same missing-apply
+        # bug as MEMORY — assess_decay returns transitions but does not mutate
+        # entries, so without this loop the dormant state is never persisted).
+        # SCOPE: KNOWLEDGE only PERSISTS the decay STATE (active→dormant). It does
+        # NOT archive or strip — unlike MEMORY, the KNOWLEDGE path has no
+        # reclaim_noise_entries pass and no MEMORY.md.lock-equivalent, so doing a
+        # destructive archive+strip here would be unsafe (a concurrent distillation
+        # write could race a read-modify-write, and there is no dated .bak). Marking
+        # entries dormant is non-destructive and idempotent (inject only annotates,
+        # never removes). If KNOWLEDGE ever needs true reclaim, add it with the same
+        # lock + archive + dated-bak machinery MEMORY uses — do NOT strip here.
+        for t in transitions:
+            t.entry.decay_state = t.new_state
 
         if bumped > 0 or transitions:
             updated = inject_entry_metadata(content, entries)
