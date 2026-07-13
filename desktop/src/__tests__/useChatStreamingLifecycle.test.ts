@@ -571,6 +571,52 @@ describe('useChatStreamingLifecycle', () => {
       // The stale (pct:99) event was discarded → contextWarning stays at Half A's 55.
       expect(result.current.contextWarning?.pct).toBe(55);
     });
+
+    it('P0 (run_3e404199): a cmd_permission_request survives a latestStreamGen advance — HITL exemption prevents the approval hang', () => {
+      // THE HANG: dangerous_command_gate blocks in PreToolUse awaiting approve/
+      // deny. While it blocks, queued sends bump latestStreamGen (daemon log:
+      // session_busy_pending seq=5-8). The blocked handler's gen is now BEHIND
+      // the live gen, so the gen-guard discarded the cmd_permission_request →
+      // the button never rendered → hook blocked → MESSAGE_TIMEOUT → session
+      // force-killed. A HITL prompt from a live-blocked hook is NEVER stale, so
+      // the guard must EXEMPT it. Without the exemption this test RED (the perm
+      // event is discarded, pendingPermissionRequestId stays null).
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      act(() => {
+        initTestTab('tab-hitl');
+        testActiveTabIdRef.current = 'tab-hitl';
+        result.current.setIsStreaming(true);
+        result.current.setMessages([
+          makeMessage({ id: 'm-hitl', role: 'assistant', content: [] }),
+        ]);
+      });
+
+      // The blocked handler captured the current gen at creation.
+      const blockedHandler = result.current.createStreamHandler('m-hitl', 'tab-hitl');
+
+      // A queued send advances latestStreamGen while the hook sits blocked —
+      // this is what pushed capturedStreamGen behind the live gen.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createStreamHandler('m-hitl-2', 'tab-hitl'); // stamps a NEW latestStreamGen
+
+      // The blocked hook now yields its permission prompt on the OLD gen.
+      act(() => {
+        blockedHandler({
+          type: 'cmd_permission_request',
+          sessionId: 'sess-hitl',
+          requestId: 'perm-hitl-1',
+          toolName: 'Bash',
+          toolInput: { command: 'rm -rf /tmp/x' },
+          reason: 'Matches dangerous command pattern',
+          options: ['approve', 'deny'],
+        } as unknown as StreamEvent);
+      });
+
+      // EXEMPTED → processed → the approve/deny button can render (no hang).
+      expect(result.current.pendingPermissionRequestId).toBe('perm-hitl-1');
+    });
   });
 
   describe('createCompleteHandler', () => {

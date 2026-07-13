@@ -2351,6 +2351,34 @@ export function useChatStreamingLifecycle(
           return; // side-channel handled; never falls through to stream logic
         }
 
+        // ── HITL exemption (P0 run_3e404199) ─────────────────────────────
+        // A terminal human-in-the-loop prompt (cmd_permission_request /
+        // ask_user_question) is emitted by the backend ONLY when a PreToolUse
+        // hook is CURRENTLY BLOCKED awaiting the user's decision — the
+        // orchestrator checks has_live_waiter (streaming_orchestrator.py:495)
+        // right before yielding, so an emitted HITL prompt always had a live
+        // blocked hook at emit time. Such a prompt is NEVER "stale cross-turn
+        // bleed": the hook cannot proceed until the button is answered.
+        //
+        // The gen-guard below discarded it because latestStreamGen advanced
+        // (queued sends bumping the gen while the hook sat blocked — see the
+        // session_busy_pending seq in the daemon log), leaving capturedStreamGen
+        // (the blocked handler's gen) behind the live gen. Discarding = the
+        // approve/deny button never renders → the hook blocks until
+        // MESSAGE_TIMEOUT (~10min) → wait_for_permission_decision CANCELLED →
+        // session force-killed to COLD. That is the reported hang.
+        //
+        // Exempt these two event types from the gen-discard. Worst case (the
+        // waiter died between emit and render): the rendered button's approve
+        // routes to chat.py which returns a graceful "No pending permission
+        // request" error — strictly better than a silent 10-min hang. This is
+        // same-tab only (the guard is keyed on capturedTabId); cross-tab
+        // isolation is enforced separately by the isActiveTab setMessages gate.
+        const _isTerminalHITL = (
+          event.type === 'cmd_permission_request'
+          || event.type === 'ask_user_question'
+        );
+
         // Generation guard: discard events from a previous stream.
         // This prevents cross-turn bleed where stale SSE events from an
         // interrupted response arrive after a new stream has started.
@@ -2367,7 +2395,7 @@ export function useChatStreamingLifecycle(
           // stamped eagerly at handler creation above, so on the live turn it
           // always equals capturedStreamGen.
           const liveStreamGen = currentTabState?.latestStreamGen;
-          if (currentTabState && (liveStreamGen === undefined || liveStreamGen !== capturedStreamGen)) {
+          if (currentTabState && !_isTerminalHITL && (liveStreamGen === undefined || liveStreamGen !== capturedStreamGen)) {
             // OT01 diag (AC5): a discarded event is the smoking gun for a lost
             // terminal event (isStreaming pins true). console.warn (NOT debug) so
             // logForwarder persists it to frontend.log. Fields per Gate-1 Q4:
@@ -2394,7 +2422,7 @@ export function useChatStreamingLifecycle(
             }
             return; // stale event — discard silently
           }
-        } else if (streamGenRef.current !== capturedStreamGen) {
+        } else if (!_isTerminalHITL && streamGenRef.current !== capturedStreamGen) {
           console.warn('[OT01-GenGuard] discard stale stream event (null-tab global path)', {
             eventType: event.type, capturedTabId: null,
             activeTab: activeTabIdRef.current,
