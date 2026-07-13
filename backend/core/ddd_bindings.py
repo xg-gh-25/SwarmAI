@@ -405,3 +405,75 @@ def sync_back(binding: Binding, worktree_root: str | Path, ws_root: str | Path,
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+# Canonical DDD doc names, in display order.
+_DDD_DOC_NAMES = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+
+
+def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:
+    """Freshness label from the most-recent DDD doc mtime (today / Nd ago / Nd stale)."""
+    import time
+    mtimes = [(project_dir / f).stat().st_mtime for f in docs if (project_dir / f).is_file()]
+    days_ago = int((time.time() - max(mtimes)) / 86400) if mtimes else 999
+    if days_ago == 0:
+        return "today"
+    if days_ago <= 7:
+        return f"{days_ago}d ago"
+    return f"**{days_ago}d stale**"
+
+
+def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = None) -> str | None:
+    """THE single source of truth for one 'Active Projects & DDD' index line.
+
+    Both writers of the KNOWLEDGE.md section — ``context_health_hook.
+    _refresh_knowledge_projects_section`` (per Projects/ mtime change) and
+    ``ddd_orchestrator._ch_inject_knowledge`` (30-min maintenance drain +
+    SESSION_CLOSE) — MUST call this so their output is BYTE-IDENTICAL and cannot
+    clobber/churn each other (run_99b70b3c: two live writers on different cadences
+    with divergent formats rewrote the section back and forth every cycle).
+
+    Format: ``- **Name** `[cls]` — DOC, DOC, … , extra, extra (updated <freshness>)``
+      - ``[cls]`` from classify_project (none/external/internal); omitted if unknown.
+      - structure extras (N skills / gates / Knowledge/ / bindings) present on disk.
+      - ``(updated <freshness>)`` ALWAYS appended — freshness is computed from doc
+        mtime when the caller does not supply it, so BOTH writers emit the suffix
+        identically (a caller passing None no longer produces a divergent line).
+
+    Returns None if the project has none of the 4 canonical DDD docs (skip it).
+    Fail-safe: classify_project errors → no tag, never raises.
+    """
+    d = Path(project_dir)
+    docs = [f for f in _DDD_DOC_NAMES if (d / f).is_file()]
+    if not docs:
+        return None
+
+    if freshness is None:
+        try:
+            freshness = _compute_ddd_freshness(d, docs)
+        except Exception:
+            freshness = None
+
+    cls = None
+    try:
+        cls = classify_project(d)
+    except Exception:
+        cls = None
+
+    extras = []
+    skills_dir = d / "skills"
+    if skills_dir.is_dir():
+        n_skills = sum(1 for s in skills_dir.iterdir() if s.is_dir() and s.name.startswith("s_"))
+        if n_skills:
+            extras.append(f"{n_skills} skills")
+    if (d / "gates").is_dir():
+        extras.append("gates")
+    if (d / "Knowledge").is_dir():
+        extras.append("Knowledge/")
+    if (d / "bindings.yaml").is_file():
+        extras.append("bindings")
+
+    tag = f" `[{cls}]`" if cls else ""
+    struct = f", {', '.join(extras)}" if extras else ""
+    suffix = f" (updated {freshness})" if freshness else ""
+    return f"- **{d.name}**{tag} — {', '.join(docs)}{struct}{suffix}"

@@ -1278,3 +1278,63 @@ class TestCognitiveAdmissionGate:
         # 4-arg call (no run_qualified) — exercises the default=True path
         hook._extract_lessons_to_memory(ws, [g], "run_z", "Proj")
         assert "read the live gauge" in mem.read_text()
+
+
+class TestKnowledgeProjectsSectionClassification:
+    """run_99b70b3c: the LIVE writer of 'Active Projects & DDD' must be
+    classification-aware ([none|external|internal]) + structure-aware (six-section
+    markers), NOT the stale 4-doc-only format that clobbered the index post-deploy.
+    """
+
+    def _make_ws(self, tmp_path):
+        ws = tmp_path / "SwarmWS"
+        (ws / ".context").mkdir(parents=True)
+        (ws / ".context" / "KNOWLEDGE.md").write_text(
+            "# KNOWLEDGE\n\n### Active Projects & DDD\n\n- old\n\n## The 11 Context Files\n\nx\n"
+        )
+        projects = ws / "Projects"
+        # internal project: bindings.yaml kind:internal + six-section extras
+        intp = projects / "IntProj"
+        intp.mkdir(parents=True)
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (intp / doc).write_text(f"# {doc}\n")
+        (intp / "skills" / "s_internal-brazil").mkdir(parents=True)
+        (intp / "gates").mkdir()
+        (intp / "Knowledge").mkdir()
+        (intp / "bindings.yaml").write_text(
+            'version: 1\nbindings:\n  - repo: P\n    kind: internal\n'
+            '    clone: "brazil ws create --name P"\n'
+            '    delivery_contract:\n      remote_kind: code-amazon-cr\n'
+            '      branch: mainline\n      review_path: cr\n      auto_send: "false"\n'
+        )
+        # none project: pure DDD
+        nonep = projects / "NoneProj"
+        nonep.mkdir(parents=True)
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (nonep / doc).write_text(f"# {doc}\n")
+        return ws
+
+    def _run(self, hook, ws):
+        hook._refresh_knowledge_projects_section(ws)
+        return (ws / ".context" / "KNOWLEDGE.md").read_text()
+
+    def test_classification_and_structure(self, hook, tmp_path):
+        ws = self._make_ws(tmp_path)
+        content = self._run(hook, ws)
+        int_line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
+        assert "`[internal]`" in int_line
+        assert "1 skills" in int_line and "gates" in int_line
+        assert "Knowledge/" in int_line and "bindings" in int_line
+        # freshness suffix preserved
+        assert "(updated" in int_line
+
+        none_line = next(ln for ln in content.splitlines() if "**NoneProj**" in ln)
+        assert "`[none]`" in none_line
+        assert "bindings" not in none_line
+
+    def test_all_four_docs_still_listed(self, hook, tmp_path):
+        ws = self._make_ws(tmp_path)
+        content = self._run(hook, ws)
+        int_line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            assert doc in int_line

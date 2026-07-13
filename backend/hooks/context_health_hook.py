@@ -529,7 +529,19 @@ class ContextHealthHook:
         if not projects_dir.is_dir():
             return
 
-        # Discover current projects with freshness info
+        # THE single-source line builder lives in ddd_bindings.describe_project_ddd_line
+        # (run_99b70b3c R25 convergence): the SESSION_CLOSE orchestrator channel
+        # (ddd_orchestrator._ch_inject_knowledge) writes the SAME section and MUST
+        # produce byte-identical output, else the two writers clobber/churn each other.
+        # This writer owns the freshness suffix (computed from doc mtime); it passes
+        # the freshness string in, the shared helper handles tag + structure markers.
+        try:
+            from core.ddd_bindings import describe_project_ddd_line
+        except Exception:  # pragma: no cover - defensive import
+            describe_project_ddd_line = None  # type: ignore[assignment]
+        if describe_project_ddd_line is None:
+            return
+
         ddd_files = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
         project_lines = []
         now = time.time()
@@ -537,19 +549,23 @@ class ContextHealthHook:
             if not d.is_dir() or d.name.startswith("."):
                 continue
             docs = [f for f in ddd_files if (d / f).exists()]
-            if docs:
-                # Compute freshness from most recent DDD doc mtime
-                mtimes = [(d / f).stat().st_mtime for f in docs if (d / f).exists()]
-                days_ago = int((now - max(mtimes)) / 86400) if mtimes else 999
-                if days_ago == 0:
-                    freshness = "today"
-                elif days_ago <= 7:
-                    freshness = f"{days_ago}d ago"
-                else:
-                    freshness = f"**{days_ago}d stale**"
-                project_lines.append(
-                    f"- **{d.name}** — {', '.join(docs)} (updated {freshness})"
-                )
+            if not docs:
+                continue
+            # Freshness from most recent DDD doc mtime (this writer's contribution).
+            mtimes = [(d / f).stat().st_mtime for f in docs if (d / f).exists()]
+            days_ago = int((now - max(mtimes)) / 86400) if mtimes else 999
+            if days_ago == 0:
+                freshness = "today"
+            elif days_ago <= 7:
+                freshness = f"{days_ago}d ago"
+            else:
+                freshness = f"**{days_ago}d stale**"
+            try:
+                line = describe_project_ddd_line(d, freshness=freshness)
+            except Exception:
+                line = None
+            if line:
+                project_lines.append(line)
 
         if not project_lines:
             return

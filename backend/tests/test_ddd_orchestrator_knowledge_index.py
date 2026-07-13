@@ -89,3 +89,24 @@ class TestKnowledgeIndex:
         line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
         for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
             assert doc in line
+
+
+class TestWriterConvergence:
+    """run_99b70b3c: the two live writers of 'Active Projects & DDD' (the health-hook
+    per-mtime writer + the orchestrator SESSION_CLOSE channel) MUST emit byte-identical
+    lines via the shared describe_project_ddd_line, else they clobber/churn each other.
+    """
+
+    def test_both_call_styles_are_byte_identical(self, workspace):
+        # orchestrator style (freshness=None → helper computes it) vs health-hook
+        # style (explicit freshness) must produce the SAME line for the same project.
+        from core.ddd_bindings import (
+            describe_project_ddd_line, _compute_ddd_freshness, _DDD_DOC_NAMES,
+        )
+        d = workspace / "Projects" / "IntProj"
+        orch = describe_project_ddd_line(d, freshness=None)
+        docs = [f for f in _DDD_DOC_NAMES if (d / f).is_file()]
+        hh = describe_project_ddd_line(d, freshness=_compute_ddd_freshness(d, docs))
+        assert orch == hh
+        assert orch.endswith("(updated today)")  # suffix present in BOTH now
+        assert "`[internal]`" in orch

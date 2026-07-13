@@ -752,17 +752,38 @@ class SelfLoopsHealthEngine:
         ]
 
     def _fix_ddd_injection(self):
-        """Inject DDD section into KNOWLEDGE.md."""
+        """Repair-only: inject the DDD section into KNOWLEDGE.md if it's MISSING.
+
+        Uses the shared describe_project_ddd_line so a repaired section matches the
+        two live writers' format byte-for-byte (run_99b70b3c R25 — this dormant
+        repair path must not reintroduce the old tag-less/freshness-less format if it
+        ever fires). Falls back to a minimal line only if the helper can't be imported
+        (standalone-script path edge case)."""
         if not PROJECTS_DIR.is_dir():
             return
-        lines = ["### Active Projects & DDD\n", "\n"]
+        try:
+            if str(SWARMAI_DIR / "backend") not in sys.path:
+                sys.path.insert(0, str(SWARMAI_DIR / "backend"))
+            from core.ddd_bindings import describe_project_ddd_line
+        except Exception:
+            describe_project_ddd_line = None
+
         ddd_names = {"PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"}
+        lines = ["### Active Projects & DDD\n", "\n"]
         for d in sorted(PROJECTS_DIR.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
-            ddd = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
-            if ddd:
-                lines.append(f"- **{d.name}** — {', '.join(ddd)}\n")
+            line = None
+            if describe_project_ddd_line is not None:
+                try:
+                    line = describe_project_ddd_line(d, freshness=None)
+                except Exception:
+                    line = None
+            if line is None:  # fallback: minimal format (helper unavailable)
+                ddd = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
+                line = f"- **{d.name}** — {', '.join(ddd)}" if ddd else None
+            if line:
+                lines.append(line + "\n")
         lines.append("\n")
         new_section = "".join(lines)
 
