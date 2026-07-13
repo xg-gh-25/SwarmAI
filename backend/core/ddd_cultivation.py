@@ -9,8 +9,9 @@ Zero LLM calls — pure keyword heuristic filtering.
 
 Public API:
     CultivationProposal  — data model for a single proposal
-    filter_lessons_for_ddd(lessons, run_id, project) → List[CultivationProposal]
+    filter_lessons_for_ddd(lessons, run_id, project[, project_dir]) → List[CultivationProposal]
     apply_to_ddd(proposal, project_dir) → str (applied|duplicate|section_not_found|not_safe|doc_missing|locked)
+    apply_retire_proposal(proposal, project_dir) → str (retired|rewritten|no_target|doc_missing|retire_failed:…)
     log_application(proposal, project_dir) → None
     write_proposal(proposal, project_dir) → Path  (escalation path only)
     read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
@@ -73,6 +74,16 @@ class CultivationProposal:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     ttl_days: int = 14
     status: str = "pending"  # pending | applied | rejected | expired | escalated
+    # ── Evidence-driven DELETE/REWRITE (run_b8f10185) ─────────────────────────
+    # change_type discriminates the "out" side of the knowledge layer from the
+    # default append. "retire"/"rewrite" NEVER auto-apply (is_safe_append→False,
+    # + apply_to_ddd hard-refuses) — they ALWAYS escalate to the human queue and
+    # apply ONLY via approve → apply_retire_proposal → retire_entry (archive+bak+
+    # strip, reversible). Defaults to "append" everywhere for backward-compat.
+    change_type: str = "append"  # "append" | "retire" | "rewrite"
+    target_title: str = ""  # exact EntryMetadata.title of the entry to retire/rewrite
+    evidence: str = ""  # verbatim quote proving the target is falsified/superseded
+    replacement_content: str = ""  # rewrite only — new entry text (unused for retire)
 
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
@@ -87,11 +98,20 @@ class CultivationProposal:
             "created_at": self.created_at,
             "ttl_days": self.ttl_days,
             "status": self.status,
+            "change_type": self.change_type,
+            "target_title": self.target_title,
+            "evidence": self.evidence,
+            "replacement_content": self.replacement_content,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "CultivationProposal":
-        """Deserialize from dict."""
+        """Deserialize from dict.
+
+        change_type/target_title/evidence/replacement_content default to the
+        append-shape on OLD proposal JSON (pre-run_b8f10185) that lacks the keys —
+        so any existing on-disk proposal round-trips as a plain append (AC6).
+        """
         return cls(
             id=data["id"],
             target_doc=data["target_doc"],
@@ -103,6 +123,10 @@ class CultivationProposal:
             created_at=data["created_at"],
             ttl_days=data.get("ttl_days", 14),
             status=data.get("status", "pending"),
+            change_type=data.get("change_type", "append"),
+            target_title=data.get("target_title", ""),
+            evidence=data.get("evidence", ""),
+            replacement_content=data.get("replacement_content", ""),
         )
 
     def is_expired(self) -> bool:
@@ -121,7 +145,11 @@ class CultivationProposal:
 
         M2: authoritative zones (Architecture/Vision/Non-Goals/SELF.md) are NEVER
         auto-applied — they fall through to escalation (or full block for SELF.md).
+        run_b8f10185: retire/rewrite are DESTRUCTIVE and NEVER safe-append — they
+        always escalate (the human proposal queue is the only apply path).
         """
+        if self.change_type != "append":
+            return False  # retire/rewrite are destructive — never auto-apply
         if is_protected_zone(self.target_doc, self.target_section):
             return False  # authoritative zone — escalate, never auto-apply
         allowed = SAFE_APPEND_SECTIONS.get(self.target_doc)
@@ -247,12 +275,23 @@ def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
 
 
 def filter_lessons_for_ddd(
-    lessons: List[str], run_id: str, project: str
+    lessons: List[str],
+    run_id: str,
+    project: str,
+    project_dir: "Path | None" = None,
 ) -> List[CultivationProposal]:
     """Filter pipeline REFLECT lessons into DDD cultivation proposals.
 
-    Pure function — no side effects, no I/O, no LLM calls.
-    Returns at most MAX_PROPOSALS_PER_RUN proposals.
+    Returns at most MAX_PROPOSALS_PER_RUN proposals. Classification is pure; the
+    ONLY I/O is the optional supersession locator (reads the target doc to find
+    the entry a superseding lesson refutes). Pass project_dir to enable evidence-
+    driven retire proposals; omit it (or None) for the pure append-only behavior
+    (backward-compatible with all existing callers).
+
+    run_b8f10185: a lesson carrying explicit supersession language (_detect_
+    supersession) whose target entry can be located (_locate_target_entry) becomes
+    a change_type='retire' proposal — it will ESCALATE (never auto-apply) and
+    retire the located entry only on human approve. Everything else → append.
     """
     proposals = []
 
@@ -266,12 +305,28 @@ def filter_lessons_for_ddd(
 
         target_doc, target_section, confidence = classification
 
+        # Evidence-driven retire (conservative, human-gated): explicit supersession
+        # language AND a locatable target entry. Fail-safe — no project_dir, no
+        # supersession marker, or no confident target → plain append.
+        change_type = "append"
+        target_title = ""
+        evidence = ""
+        if project_dir is not None and _detect_supersession(lesson):
+            located = _locate_target_entry(lesson, target_doc, project_dir)
+            if located is not None:
+                target_title, target_section = located
+                change_type = "retire"
+                evidence = lesson.strip()
+
         proposal = CultivationProposal(
             target_doc=target_doc,
             target_section=target_section,
             content=lesson.strip(),
             source_run_id=run_id,
             confidence=confidence,
+            change_type=change_type,
+            target_title=target_title,
+            evidence=evidence,
         )
         proposals.append(proposal)
 
@@ -327,6 +382,14 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     section is auto-created rather than treated as a drop. The drift is still
     observable via the "created_section" status (logged by callers).
     """
+    # Defense-in-depth (run_b8f10185 HIGH-3): apply_to_ddd is the APPEND applier
+    # only. A retire/rewrite must NEVER land here (it would append instead of
+    # deleting). is_safe_append() already returns False for non-append, but this
+    # hard refusal makes the invariant independent of that classifier — belt +
+    # suspenders for AC5 ("no autonomous delete"). Retire/rewrite apply solely via
+    # apply_retire_proposal on the approve path.
+    if proposal.change_type != "append":
+        return "not_safe"
     if not proposal.is_safe_append():
         return "not_safe"
 
@@ -418,6 +481,217 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             lock_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+# ── Evidence-driven supersession detection + retire (run_b8f10185) ───────────
+# The "out" side of cultivation: when a lesson explicitly says a PRIOR entry is
+# now false/superseded, PROPOSE retiring that entry (human-gated) instead of only
+# appending a contradicting bullet. Conservative by construction: fires ONLY on
+# explicit supersession LANGUAGE (never similarity/embeddings — "do-not-delete-on-
+# guesses"), locates the target by EXACT parsed (title, section), and always
+# escalates (retire never auto-applies).
+#
+# Scope (run_b8f10185 BLOCKER-2, verified): supersession detection is wired ONLY
+# into the filter_lessons_for_ddd (reflect/correction/decision-lesson) path. The
+# other 5 CultivationProposal producers (signal_ddd_bridge, code_intel_feed,
+# code_change_feed, ddd_orchestrator, conversation) stay append-only — they never
+# get retire detection. This is deliberate: the reflect path is where a human-
+# authored "X was wrong, now Y" lesson arrives; the feed producers emit additive
+# drift signals, not supersession claims.
+#
+# Target format (run_b8f10185 BLOCKER-1, verified): retire_entry matches entries
+# with a **bold title** (_ENTRY_RE / _ENTRY_RE_PROSE). It therefore can retire
+# human/distill-authored **Title** entries and curated prose bullets — NOT the
+# plain-bullet entries apply_to_ddd itself writes (those have no bold title and are
+# invisible to parse_entries). _locate_target_entry uses parse_entries(include_
+# prose=True) so it returns the SAME exact (title, section) retire_entry will match.
+
+# Explicit supersession/contradiction language. Anchored to whole words; requires
+# an explicit "this replaces/invalidates prior knowledge" signal, NOT mere novelty.
+_SUPERSESSION_RE = re.compile(
+    r"(?i)("
+    r"\bno longer\b|\bused to\b|"
+    r"\breplaces?\b|\bsupersed(?:e|es|ed)\b|\bobsoletes?\b|\bwas wrong\b|"
+    r"\bpreviously .*\bnow\b|"
+    r"\bdeprecat(?:e|es|ed)\b|\bcontradicts?\b|"
+    r"不再|已废弃|取代|已过时|已失效|之前.*现在"
+    r")"
+    # Gate-2 MED (run_b8f10185): the bare "now (does|is|uses|instead)" branch was
+    # REMOVED — it false-positived on benign additive prose ("the parser now does
+    # full validation", "the API now is stricter"). Supersession requires an
+    # EXPLICIT prior-referent (no longer / replaces / was wrong / superseded),
+    # not mere present-tense novelty. "previously … now …" is kept (explicit
+    # prior-vs-now contrast).
+)
+
+
+def _detect_supersession(lesson: str) -> bool:
+    """True iff the lesson carries EXPLICIT supersession/contradiction language.
+
+    Conservative: this is the ONLY trigger for a retire proposal. Additive lessons
+    (no supersession marker) → False → normal append path (AC4). Zero LLM, zero
+    similarity — a lesson must SAY it invalidates prior knowledge, not merely look
+    similar to an existing entry.
+    """
+    if not lesson or not isinstance(lesson, str):
+        return False
+    return _SUPERSESSION_RE.search(lesson) is not None
+
+
+def _locate_target_entry(
+    lesson: str, target_doc: str, project_dir: Path
+) -> "tuple[str, str] | None":
+    """Locate the existing entry a superseding lesson refutes.
+
+    Returns the EXACT (title, section) parsed from the target doc — the same
+    identity retire_entry matches on — or None if no confident candidate.
+
+    Scoring: keyword overlap between the lesson and each parsed entry's title
+    (title carries the entry's topic). Uses parse_entries(include_prose=True) so
+    both **bold** entries and curated prose bullets are candidates (matching
+    retire_entry's own include_prose=True). Fail-safe: no doc / no entries / no
+    non-trivial overlap → None → the caller falls back to append (never guesses).
+    """
+    doc_path = project_dir / target_doc
+    if not doc_path.exists():
+        return None
+    try:
+        from core.ddd_entry_lifecycle import parse_entries
+        content = doc_path.read_text(encoding="utf-8")
+    except (OSError, ImportError, UnicodeDecodeError):
+        return None
+
+    entries = parse_entries(content, include_prose=True)
+    if not entries:
+        return None
+
+    # Tokenize into lowercase word-stems ≥4 chars (Latin) or ≥2 chars (CJK),
+    # MINUS generic DDD/engineering vocabulary that co-occurs across unrelated
+    # entries. Gate-2 HIGH (run_b8f10185): without this filter, a lesson about
+    # topic A retires an entry about topic B on 2 shared structural words (e.g.
+    # "recovery"+"pattern", "fix"+"works"). These carry no topic identity.
+    _GENERIC = frozenset({
+        "pattern", "patterns", "recovery", "approach", "works", "worked",
+        "fix", "fixes", "fixed", "issue", "issues", "problem", "problems",
+        "code", "test", "tests", "session", "sessions", "error", "errors",
+        "gate", "check", "checks", "path", "paths", "case", "cases", "data",
+        "system", "state", "value", "values", "call", "calls", "func", "function",
+        "method", "class", "field", "fields", "change", "changes", "update",
+        "using", "used", "when", "with", "that", "this", "from", "into", "must",
+        "should", "would", "never", "always", "before", "after", "than", "then",
+    })
+
+    def _tokens(text: str) -> set[str]:
+        return {
+            w for w in re.findall(r"[a-zA-Z_]{4,}|[一-鿿]{2,}", text.lower())
+            if w not in _GENERIC
+        }
+
+    lesson_tokens = _tokens(lesson)
+    if not lesson_tokens:
+        return None
+
+    best: "tuple[str, str] | None" = None
+    best_score = 0
+    best_ratio = 0.0
+    for e in entries:
+        title_tokens = _tokens(e.title)
+        if not title_tokens:
+            continue
+        overlap = len(lesson_tokens & title_tokens)
+        # Ratio guards against a long lesson coincidentally overlapping a short
+        # title on a couple of topic words: at least HALF the entry's topic
+        # tokens must be present in the lesson.
+        ratio = overlap / len(title_tokens)
+        if overlap > best_score or (overlap == best_score and ratio > best_ratio):
+            best_score = overlap
+            best_ratio = ratio
+            best = (e.title, e.section)
+
+    # Require ≥2 NON-GENERIC overlapping topic tokens AND ≥50% of the target
+    # entry's topic tokens present — a weak/partial overlap is too thin to justify
+    # targeting an entry for deletion. Below threshold → None → append
+    # (conservative: never retire on a weak guess). Gate-2 HIGH tightening.
+    if best_score >= 2 and best_ratio >= 0.5:
+        return best
+    return None
+
+
+def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> str:
+    """Apply an APPROVED retire/rewrite proposal via the reversible retire_entry
+    machinery (archive → dated .bak → identity-strip). The sibling of apply_to_ddd
+    for the "out" side. Called ONLY from the approve router (never autonomous).
+
+    Returns a status string (parallel to apply_to_ddd):
+      - "retired"      — the named (title, section) entry was archived + stripped
+      - "rewritten"    — retired, then replacement_content appended (rewrite)
+      - "not_retire"   — proposal.change_type is not retire/rewrite (guard)
+      - "no_target"    — target_title empty (locator found nothing — never retire)
+      - "doc_missing"  — target document file does not exist
+      - "retire_failed:<reason>" — retire_entry raised RetireError (fail-loud:
+                         no match / ambiguous duplicate / keep-class refused)
+      - "rewrite_partial:<status>" — retire succeeded but replacement append didn't
+                         (original recoverable from archive + .bak)
+
+    For rewrite the replacement is a NEW append (not a cross-file move): we retire
+    the stale entry, then append the replacement via apply_to_ddd. If the append
+    fails the retire already archived the original (recoverable), so no
+    unrecoverable loss — but we surface the partial status.
+    """
+    if proposal.change_type not in ("retire", "rewrite"):
+        return "not_retire"
+    if not proposal.target_title:
+        return "no_target"  # locator found nothing — refuse to guess
+
+    doc_path = project_dir / proposal.target_doc
+    if not doc_path.exists():
+        return "doc_missing"
+
+    from core.ddd_entry_lifecycle import retire_entry, RetireError
+
+    # Archive to the doc-matched archive (BLOCKER-1: retire_entry defaults to
+    # IMPROVEMENT-archive.md; a TECH.md retire must archive to TECH-archive.md).
+    stem = Path(proposal.target_doc).stem  # "IMPROVEMENT" | "TECH" | ...
+    archive_name = f"{stem}-archive.md"
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return f"retire_failed:read_error {type(e).__name__}"
+
+    try:
+        retire_entry(
+            content,
+            proposal.target_title,
+            proposal.target_section,
+            project_dir,
+            archive_name=archive_name,
+            source_path=doc_path,
+            dry_run=False,
+        )
+    except RetireError as e:
+        # Fail-loud: no match / ambiguous / keep-class refused. Surface, don't strip.
+        return f"retire_failed:{str(e)[:120]}"
+
+    if proposal.change_type == "rewrite" and proposal.replacement_content.strip():
+        # Append the corrected entry via the normal safe-append applier. Build an
+        # append-shaped proposal so is_safe_append + the change_type guard pass.
+        replacement = CultivationProposal(
+            target_doc=proposal.target_doc,
+            target_section=proposal.target_section,
+            content=proposal.replacement_content.strip(),
+            source_run_id=proposal.source_run_id,
+            confidence=proposal.confidence,
+            source_stage=proposal.source_stage,
+            change_type="append",
+        )
+        append_status = apply_to_ddd(replacement, project_dir)
+        if append_status in ("applied", "created_section"):
+            return "rewritten"
+        # Retire succeeded but append didn't — original is in archive + .bak.
+        return f"rewrite_partial:{append_status}"
+
+    return "retired"
 
 
 def log_application(
@@ -649,7 +923,7 @@ def cultivate_from_reflect(
     Returns:
         {"applied": N, "escalated": M, "rejected": K}
     """
-    proposals = filter_lessons_for_ddd(lessons, run_id, project)
+    proposals = filter_lessons_for_ddd(lessons, run_id, project, project_dir)
     return _cultivate_proposals(proposals, project_dir)
 
 
@@ -674,7 +948,7 @@ def cultivate_from_corrections(
     Returns:
         {"applied": N, "escalated": M, "rejected": K}
     """
-    proposals = filter_lessons_for_ddd(corrections, session_id, project)
+    proposals = filter_lessons_for_ddd(corrections, session_id, project, project_dir)
 
     # PE-1: Corrections that fail keyword classification still deserve DDD entry.
     # They're pre-curated by the extraction LLM — existence = relevance.
@@ -728,7 +1002,7 @@ def cultivate_from_decisions(
     Returns:
         {"applied": N, "escalated": M, "rejected": K}
     """
-    proposals = filter_lessons_for_ddd(decisions, session_id, project)
+    proposals = filter_lessons_for_ddd(decisions, session_id, project, project_dir)
     for p in proposals:
         p.source_stage = "decision"
     return _cultivate_proposals(proposals, project_dir)

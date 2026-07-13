@@ -23,6 +23,7 @@ from core.ddd_cultivation import (
     CultivationProposal,
     read_pending_proposals,
     apply_to_ddd,
+    apply_retire_proposal,
     log_application,
 )
 
@@ -85,23 +86,41 @@ async def approve_proposal(
     if target_section:
         proposal.target_section = target_section
 
-    # Apply to DDD document (returns a status string, not a bool).
-    # "applied" and "created_section" both mean the lesson landed successfully
-    # (created_section = the whitelisted heading was absent and auto-created).
-    status = apply_to_ddd(proposal, project_dir)
-    if status not in ("applied", "created_section"):
+    # Dispatch on change_type (run_b8f10185): append → apply_to_ddd (the additive
+    # path); retire/rewrite → apply_retire_proposal (reversible retire_entry:
+    # archive + dated .bak + identity-strip). This is the ONLY apply path for a
+    # destructive change — approval is the human gate (retire never auto-applies).
+    if proposal.change_type in ("retire", "rewrite"):
+        status = apply_retire_proposal(proposal, project_dir)
+        success_states = ("retired", "rewritten")
+    else:
+        # Apply to DDD document (returns a status string, not a bool).
+        # "applied" and "created_section" both mean the lesson landed successfully
+        # (created_section = the whitelisted heading was absent and auto-created).
+        status = apply_to_ddd(proposal, project_dir)
+        success_states = ("applied", "created_section")
+    if status not in success_states:
         # Rich diagnostic goes to the SERVER log (includes doc/section names);
         # the client gets a generic message so the API does not disclose the
         # internal DDD filesystem structure / section taxonomy to callers — the
         # cultivation router has no auth dependency (adversarial security MED).
         logger.warning(
-            "Cultivation approve failed: proposal %s → %s#%s (status: %s)",
-            proposal_id, proposal.target_doc, proposal.target_section, status,
+            "Cultivation approve failed: proposal %s → %s#%s (change_type: %s, status: %s)",
+            proposal_id, proposal.target_doc, proposal.target_section,
+            proposal.change_type, status,
         )
         client_detail = {
             "duplicate": "Proposal content is already present (duplicate).",
+            "no_target": "Retire proposal has no located target entry.",
         }.get(status, f"Could not apply proposal (status: {status}).")
-        raise HTTPException(status_code=500, detail=client_detail)
+        # Gate-2 LOW (run_b8f10185): client-correctable retire outcomes (fail-loud
+        # no-match / ambiguous / keep-class refused / missing target) are 422, not
+        # 500 — they reflect a bad proposal the caller can fix, not a server fault.
+        client_correctable = status == "no_target" or status.startswith("retire_failed:")
+        raise HTTPException(
+            status_code=422 if client_correctable else 500,
+            detail=client_detail,
+        )
     if status == "created_section":
         logger.warning(
             "Cultivation approve auto-created missing section: %s#%s (proposal %s)",

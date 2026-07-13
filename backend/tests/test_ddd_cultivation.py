@@ -872,3 +872,279 @@ class TestLessonQualityGate:
             target_doc="TECH.md", target_section="Architecture",
             content="x" * 40, source_run_id="r", confidence=0.9)
         assert p.is_safe_append() is False
+
+
+class TestEvidenceDrivenRetire:
+    """run_b8f10185 — evidence-driven DELETE/REWRITE: supersession detection,
+    entry-locator, retire proposal, apply_retire_proposal, backward-compat.
+
+    All tests drive the REAL functions (no mock of the code under change) —
+    _detect_supersession/_locate_target_entry are pure; apply_retire_proposal
+    exercises the real retire_entry against a real temp doc (PIT13/GUI32: prove
+    the behavior, don't assert a mocked shape).
+    """
+
+    # ── AC1: supersession language → change_type='retire', not append ──────────
+    def test_detect_supersession_positive(self):
+        from core.ddd_cultivation import _detect_supersession
+        assert _detect_supersession("The vector recall leg is no longer used — torn out")
+        assert _detect_supersession("This replaces the old hybrid scorer entirely")
+        assert _detect_supersession("The 0.7 threshold claim was wrong; it's actually 0.15")
+        assert _detect_supersession("recall 现在不再使用 vector leg,已废弃")
+        assert _detect_supersession("This supersedes the prior COE06 diagnosis")
+
+    def test_detect_supersession_negative(self):
+        from core.ddd_cultivation import _detect_supersession
+        # Additive lessons — no supersession marker → False (AC4)
+        assert not _detect_supersession("Adversarial sub-agent caught a race condition")
+        assert not _detect_supersession("Gate-1 plan-attack found 2 blockers before code")
+        assert not _detect_supersession("")
+        assert not _detect_supersession(None)
+
+    # ── AC2: locator returns the EXACT parsed (title, section) ─────────────────
+    def test_locate_target_entry_finds_real_entry(self, tmp_path):
+        from core.ddd_cultivation import _locate_target_entry
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text(
+            "## What Worked\n\n"
+            "- [guideline] **Vector recall hybrid scorer works well** — the 0.6v+0.4k blend\n\n"
+            "- [guideline] **Session resume race condition fixed** — DEAD idempotent recovery\n\n"
+            "## What Failed\n\n"
+            "- [pitfall] **Unrelated topic here** — something about frontend rendering\n",
+            encoding="utf-8",
+        )
+        # Lesson refutes the vector recall entry — ≥2 topic tokens overlap.
+        located = _locate_target_entry(
+            "The vector recall hybrid scorer is no longer used — torn out",
+            "IMPROVEMENT.md", tmp_path,
+        )
+        assert located is not None
+        title, section = located
+        assert "Vector recall hybrid scorer" in title
+        assert section == "What Worked"
+
+    def test_locate_target_entry_weak_overlap_returns_none(self, tmp_path):
+        """<2 token overlap → None → append (never retire on a weak guess)."""
+        from core.ddd_cultivation import _locate_target_entry
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text(
+            "## What Worked\n\n- [guideline] **Frontend reconcile race fix** — store authority\n",
+            encoding="utf-8",
+        )
+        located = _locate_target_entry(
+            "Something totally unrelated about database indexing performance now replaces old",
+            "IMPROVEMENT.md", tmp_path,
+        )
+        assert located is None
+
+    def test_locate_target_entry_no_doc_returns_none(self, tmp_path):
+        from core.ddd_cultivation import _locate_target_entry
+        assert _locate_target_entry("x replaces y no longer", "NOPE.md", tmp_path) is None
+
+    # ── AC1+AC2+AC4: full filter path produces retire vs append ────────────────
+    def test_filter_produces_retire_proposal(self, tmp_path):
+        from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text(
+            "## What Worked\n\n"
+            "- [guideline] **Adversarial gate scorer approach worked** — caught race conditions\n",
+            encoding="utf-8",
+        )
+        # Lesson must (a) classify to a doc/section (routing keyword 'adversarial'
+        # → IMPROVEMENT) AND (b) carry supersession language AND (c) share ≥2 topic
+        # tokens with the seeded entry title. Precondition-assert (a) so the test
+        # can't silently go vacuous if routing changes.
+        lesson = ("The adversarial gate scorer approach is no longer used — "
+                  "the old approach was wrong, superseded by mutation testing")
+        assert _classify_lesson(lesson, project="SwarmAI") is not None
+        proposals = filter_lessons_for_ddd([lesson], "run_test", "SwarmAI", tmp_path)
+        assert len(proposals) == 1
+        p = proposals[0]
+        assert p.change_type == "retire"
+        assert p.target_title  # non-empty located title
+        assert "Adversarial gate scorer approach" in p.target_title
+        assert p.evidence  # verbatim lesson captured
+
+    def test_filter_additive_lesson_stays_append(self, tmp_path):
+        """AC4: no supersession marker → append even with project_dir passed."""
+        from core.ddd_cultivation import filter_lessons_for_ddd
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("## What Worked\n\n- [guideline] **Some entry** — text\n", encoding="utf-8")
+        lessons = ["Adversarial Gate-2 caught a CRITICAL data-loss bug that unit tests missed"]
+        proposals = filter_lessons_for_ddd(lessons, "run_test", "SwarmAI", tmp_path)
+        assert len(proposals) == 1
+        assert proposals[0].change_type == "append"
+        assert proposals[0].target_title == ""
+
+    def test_filter_no_project_dir_never_retires(self, tmp_path):
+        """Backward-compat: omitting project_dir → pure append behavior even on
+        supersession language (no locator without a doc to read)."""
+        from core.ddd_cultivation import filter_lessons_for_ddd
+        lessons = ["The old approach is no longer valid and was wrong, superseded entirely"]
+        proposals = filter_lessons_for_ddd(lessons, "run_test", "SwarmAI")
+        assert all(p.change_type == "append" for p in proposals)
+
+    # ── AC5: retire proposal is NEVER safe-append + apply_to_ddd refuses it ─────
+    def test_retire_proposal_never_safe_append(self):
+        from core.ddd_cultivation import CultivationProposal
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="x" * 40, source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="Some Entry",
+        )
+        # Even in an otherwise safe-append section, retire is never auto-applicable.
+        assert p.is_safe_append() is False
+
+    def test_apply_to_ddd_hard_refuses_retire_independent_of_is_safe_append(self):
+        """HIGH-3 defense-in-depth: apply_to_ddd's change_type guard refuses a
+        non-append EVEN IF is_safe_append were (wrongly) True. This ISOLATES the
+        belt from the suspenders — we force is_safe_append→True so ONLY the HIGH-3
+        guard can produce 'not_safe'. Mutation-proven: removing the guard line at
+        apply_to_ddd makes this go RED (Gate-2 caught the earlier vacuous version
+        that also passed via is_safe_append)."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="x" * 40, source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="X",
+        )
+        # Force the suspenders open — is_safe_append lies True. The ONLY thing
+        # standing between a retire and an append-to-doc is now the HIGH-3 guard.
+        object.__setattr__(p, "is_safe_append", lambda: True)
+        assert apply_to_ddd(p, Path("/nonexistent")) == "not_safe"
+
+    def test_retire_never_safe_append_via_real_gate(self, tmp_path):
+        """The is_safe_append guard (suspenders) independently refuses retire."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("## What Worked\n\n- **X** — y\n", encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="x" * 40, source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="X",
+        )
+        assert apply_to_ddd(p, tmp_path) == "not_safe"
+
+    def test_cultivate_retire_always_escalates_never_applies(self, tmp_path):
+        """AC5 end-to-end: a retire proposal returned from the cultivate path is
+        ESCALATED (written to queue), never auto-applied to the doc."""
+        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
+        doc = tmp_path / "IMPROVEMENT.md"
+        original = "## What Worked\n\n- [guideline] **Target entry title here** — body text\n"
+        doc.write_text(original, encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="Target entry title here is no longer true — was wrong",
+            source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="Target entry title here",
+            evidence="ev",
+        )
+        result = _cultivate_proposals([p], tmp_path)
+        assert result["escalated"] == 1
+        assert result["applied"] == 0
+        # Doc unchanged — retire did NOT auto-apply.
+        assert doc.read_text(encoding="utf-8") == original
+        # Proposal written to the escalation queue.
+        proposals_dir = tmp_path / ".artifacts" / "proposals"
+        assert proposals_dir.exists()
+        assert list(proposals_dir.glob("*.json"))
+
+    # ── AC3: apply_retire_proposal archives + strips + .bak (REAL retire_entry) ─
+    def test_apply_retire_proposal_archives_and_strips(self, tmp_path):
+        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text(
+            "## What Failed\n\n"
+            "- [pitfall] **Stale caliber residue in query templates** — the fbr_flag drift\n\n"
+            "- [pitfall] **Keep this one** — unrelated surviving entry\n",
+            encoding="utf-8",
+        )
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Failed",
+            content="superseded", source_run_id="r", confidence=0.9,
+            change_type="retire",
+            target_title="Stale caliber residue in query templates",
+            evidence="proven false",
+        )
+        status = apply_retire_proposal(p, tmp_path)
+        assert status == "retired", f"got {status}"
+        after = doc.read_text(encoding="utf-8")
+        # Entry stripped from source
+        assert "Stale caliber residue" not in after
+        # Sibling preserved (identity strip, not title-only)
+        assert "Keep this one" in after
+        # Archived to doc-matched archive (BLOCKER-1: not IMPROVEMENT default when TECH)
+        archive = tmp_path / "IMPROVEMENT-archive.md"
+        assert archive.exists()
+        assert "Stale caliber residue" in archive.read_text(encoding="utf-8")
+        # Dated .bak snapshot of pre-strip state
+        baks = list(tmp_path.glob("IMPROVEMENT.md.*.bak"))
+        assert baks, "expected a dated .bak snapshot"
+        assert "Stale caliber residue" in baks[0].read_text(encoding="utf-8")
+
+    def test_apply_retire_no_target_refuses(self, tmp_path):
+        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("## What Failed\n\n- **X** — y\n", encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Failed",
+            content="c", source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="",  # locator found nothing
+        )
+        assert apply_retire_proposal(p, tmp_path) == "no_target"
+
+    def test_apply_retire_no_match_fails_loud(self, tmp_path):
+        """retire_entry is fail-loud: a title with no match → retire_failed, never
+        a silent zero-strip (data-loss guard)."""
+        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
+        doc = tmp_path / "IMPROVEMENT.md"
+        original = "## What Failed\n\n- [pitfall] **Real entry** — body\n"
+        doc.write_text(original, encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Failed",
+            content="c", source_run_id="r", confidence=0.9,
+            change_type="retire", target_title="Nonexistent title never present",
+        )
+        status = apply_retire_proposal(p, tmp_path)
+        assert status.startswith("retire_failed:")
+        # Doc untouched — nothing stripped on a failed match.
+        assert doc.read_text(encoding="utf-8") == original
+
+    def test_apply_retire_refuses_append_type(self, tmp_path):
+        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="c", source_run_id="r", confidence=0.9,
+            change_type="append",
+        )
+        assert apply_retire_proposal(p, tmp_path) == "not_retire"
+
+    # ── AC6: backward-compatible serialization ─────────────────────────────────
+    def test_from_dict_old_json_defaults_to_append(self):
+        """OLD proposal JSON (no change_type key) → change_type='append'."""
+        from core.ddd_cultivation import CultivationProposal
+        old = {
+            "id": "proposal_abc123", "target_doc": "IMPROVEMENT.md",
+            "target_section": "What Worked", "content": "x" * 40,
+            "source_run_id": "run_old", "confidence": 0.8,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        p = CultivationProposal.from_dict(old)
+        assert p.change_type == "append"
+        assert p.target_title == ""
+        assert p.evidence == ""
+        assert p.replacement_content == ""
+
+    def test_new_fields_roundtrip(self):
+        from core.ddd_cultivation import CultivationProposal
+        p = CultivationProposal(
+            target_doc="TECH.md", target_section="Runtime Traps",
+            content="x" * 40, source_run_id="r", confidence=0.7,
+            change_type="retire", target_title="Some Title",
+            evidence="verbatim quote", replacement_content="new text",
+        )
+        p2 = CultivationProposal.from_dict(p.to_dict())
+        assert p2.change_type == "retire"
+        assert p2.target_title == "Some Title"
+        assert p2.evidence == "verbatim quote"
+        assert p2.replacement_content == "new text"
