@@ -266,7 +266,28 @@ def classify_content(
 
     # Project-scoped classification
     # Priority: PRODUCT (most specific keywords) > TECH > IMPROVEMENT (default)
-    if product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits:
+    #
+    # PRODUCT-branch ENTRY BAR (run_dca69c87): a SINGLE incidental product word
+    # (a lone priority/strategic/roadmap that shows up in a process lesson —
+    # "roadmap kill-path", "priority chain matters", "the strategic core") is NOT
+    # strategic content. It used to fire the product_priority catch-all → PRODUCT.md
+    # #Strategic Priorities (a protected zone that can't auto-apply) → escalations
+    # piled up. Genuine strategy carries either >=2 product words OR an explicit-intent
+    # phrase (non-goal/vision/defer/mission/thesis). A lone incidental word now falls
+    # through to the existing IMPROVEMENT/TECH selector below — no keyword duplication,
+    # worked/failed/watch nuance preserved for free. (Gate-1 F6; NOT a source-aware
+    # cap in ddd_cultivation — source is unknown at classify time for 3/4 callers.)
+    # NOTE: 'defer' is deliberately NOT a single-hit intent word (Gate-2 F2, run_dca69c87):
+    # "defer the retry/fix/cleanup" is a process idiom, not a product Non-Goal — as a lone
+    # trigger it dumped task-deferral lessons into the protected PRODUCT#Non-Goals zone.
+    # It stays in the product_non_goal SUB-branch below, so a defer with >=2 product hits
+    # (a genuine "defer <feature>" strategic call) still routes correctly.
+    _product_intent = any(
+        w in lower for w in ("non-goal", "not going to", "won't",
+                             "vision", "mission", "thesis")
+    )
+    if (product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits
+            and (product_hits >= 2 or _product_intent)):
         # PRODUCT.md — product keywords are specific (non-goal, vision, strategic)
         if any(w in lower for w in ("non-goal", "not going to", "won't", "defer")):
             route_key = "product_non_goal"

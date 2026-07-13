@@ -266,7 +266,22 @@ def classify_content(
 
     # Project-scoped classification
     # Priority: PRODUCT (most specific keywords) > TECH > IMPROVEMENT (default)
-    if product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits:
+    #
+    # PRODUCT-branch ENTRY BAR (run_dca69c87): a SINGLE incidental product word
+    # (a lone priority/strategic/roadmap in a process lesson) is NOT strategic content.
+    # Genuine strategy carries >=2 product words OR an explicit-intent phrase
+    # (non-goal/vision/defer/mission/thesis); a lone incidental word falls through to
+    # the IMPROVEMENT/TECH selector below. Prevents the product_priority catch-all from
+    # dumping process lessons into PRODUCT.md#Strategic Priorities (protected zone).
+    # NOTE: 'defer' is deliberately NOT a single-hit intent word (Gate-2 F2, run_dca69c87):
+    # "defer the retry/fix" is a process idiom, not a product Non-Goal. Stays in the
+    # product_non_goal sub-branch so a defer with >=2 product hits still routes correctly.
+    _product_intent = any(
+        w in lower for w in ("non-goal", "not going to", "won't",
+                             "vision", "mission", "thesis")
+    )
+    if (product_hits > 0 and product_hits >= tech_hits and product_hits >= improvement_hits
+            and (product_hits >= 2 or _product_intent)):
         # PRODUCT.md — product keywords are specific (non-goal, vision, strategic)
         if any(w in lower for w in ("non-goal", "not going to", "won't", "defer")):
             route_key = "product_non_goal"
