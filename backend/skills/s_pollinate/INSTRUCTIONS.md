@@ -454,7 +454,7 @@ The delivery output is designed for the USER, not for the developer. The user wa
 - **Platform Matrix is the delivery.** User sees: each platform → its asset + its copy. Like a publishing dashboard.
 - **Quality gates are invisible when passing.** One-line trust signal, not a table.
 - **Copy is naked and ready to paste.** Zero preamble, zero markdown, zero instructions mixed in.
-- **Images shown inline.** Read tool on .png. User SEES the poster — no file paths.
+- **Images shown inline via markdown, NOT the Read tool.** Embed the poster with an ABSOLUTE-path markdown image — `![poster](/abs/path/to/poster.png)` — which the chat renders directly via the workspace raw-file endpoint. The user SEES the poster at ZERO model-context cost. Do NOT `Read` the .png to "show" it — Read pulls the full image payload (tens of thousands of tokens) into context and displays nothing extra. Reserve `Read` on a .png ONLY for genuine visual-QA (inspecting rendered pixels to judge layout), at most once per image version.
 - **User picks direction FIRST, then gets the full platform matrix for that direction.**
 
 **Structure: Direction Selection → Platform Matrix**
@@ -482,7 +482,7 @@ The output has two phases:
 ```
 
 Rules:
-- Images inline (Read tool on .png)
+- Images inline via absolute-path markdown `![alt](/abs/path.png)` (NOT the Read tool — Read burns tokens and shows nothing extra)
 - ONE line for quality + CTA combined
 - Nothing else. No file paths, no gate tables, no numbered menus.
 - Wait for user to pick.
@@ -743,7 +743,7 @@ Direction: {D# name} applied consistently
 
 1. **Only show sections for confirmed tracks.** If run only produced deck + pdf, omit tracks G/H/I/J/K sections entirely.
 
-2. **Inline images where possible.** Track I hero image, Track F preview PNG — show them inline via Read tool. User SEES the result.
+2. **Inline images where possible.** Track I hero image, Track F preview PNG — show them inline with an ABSOLUTE-path markdown image `![alt](/abs/path.png)` (the chat renders it via the raw-file endpoint). User SEES the result at zero context cost. Do NOT use the Read tool to display — it injects the full image payload into context for no display benefit.
 
 3. **File paths are actionable.** Each track section ends with the output file path — user can open directly.
 
@@ -858,8 +858,10 @@ Two properties of this engine are deliberate, not defects to "fix":
 1. **Deliverable block is non-negotiable.** Every DELIVER stage outputs the full
    block in chat. User should never have to ask "where's my output?"
 
-2. **Inline images when possible.** Poster PNGs should be shown inline (via Read
-   tool on the .png file). If too large, show path + thumbnail description.
+2. **Inline images when possible.** Poster PNGs should be shown inline with an
+   ABSOLUTE-path markdown image `![poster](/abs/path.png)` (rendered by the chat's
+   raw-file endpoint, zero context cost) — NOT via the Read tool, which injects the
+   full image payload into model context and shows the user nothing extra.
 
 3. **Copy-paste ready.** Text in the deliverable block must be EXACTLY what the
    user pastes to the platform. No markdown formatting that breaks on paste. No

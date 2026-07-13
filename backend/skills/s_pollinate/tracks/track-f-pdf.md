@@ -285,7 +285,7 @@ python3 "$PDF_SCRIPTS/convert_pdf_to_images.py" \
   --dpi 150
 ```
 
-Show the preview inline in chat (Read tool on the PNG).
+Show the preview inline in chat with an absolute-path markdown image `![preview](/abs/path/preview.png)` (rendered by the chat's raw-file endpoint, zero context cost) — NOT the Read tool, which injects the full image payload into model context for no display benefit.
 
 ---
 

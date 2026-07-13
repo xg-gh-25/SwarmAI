@@ -1410,6 +1410,108 @@ async def bash_syntax_guard(
 
 
 # ---------------------------------------------------------------------------
+# Image-read dedup guard — PreToolUse(Read), per-session token-bloat backstop
+# ---------------------------------------------------------------------------
+
+# Image extensions the Read tool pulls into model context as a (large) vision
+# payload. A single hi-DPI slide can cost tens of thousands of tokens, and the
+# same unchanged image re-Read N times re-injects that payload N times
+# (observed: s8.png/s9.png each read 5×, prompt 155K→235-596K). Dedup is by
+# IDENTITY (path + mtime), never content — no whack-a-mole string matching.
+_IMAGE_READ_EXTS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".svg"}
+)
+
+
+def create_image_read_dedup_guard(
+    session_context: dict[str, Any] | None = None,
+) -> Callable[..., Any]:
+    """Factory: returns a PreToolUse(Read) hook that dedupes redundant image reads.
+
+    The returned closure owns a private ``{abspath: st_mtime_ns}`` cache. Because
+    ``build_hooks`` runs once per session (``prompt_builder.build_system_prompt``),
+    a fresh closure per session means the cache is per-session BY CONSTRUCTION —
+    it can never false-deny a different session's first read (no module-global
+    mutable state, no manual session keying). Mirrors ``create_dangerous_command_gate``.
+
+    Behavior (fail-SAFE — anything uncertain is approved, never denied):
+      • non-Read tool / no file_path / non-image extension → approve
+      • path cannot be stat'd (missing/permission) → approve (can't dedup what we
+        can't identify; never crash, never false-deny)
+      • Read carries an ``offset`` or ``limit`` param → approve. This is the
+        ESCAPE VALVE: a deliberate partial/forced re-read (e.g. the agent can no
+        longer see an image evicted by soft-compaction) is never blocked.
+      • image seen before at the SAME mtime → DENY with an informative stub. The
+        ``permissionDecisionReason`` IS the substitute output — the SDK forwards
+        it to the model (types.py "that reason is forwarded"), and the first
+        read's payload is already above in the conversation.
+      • image not seen, or seen at a DIFFERENT mtime (regenerated) → record + approve.
+
+    Why deny (not "return a stub") — a PreToolUse hook cannot synthesize a fake
+    tool result; it can only allow/deny/ask. Deny + reason achieves the goal: the
+    model gets the reason instead of the ~tens-of-K payload, having already seen
+    the image once. Token-bloat is structurally bounded, not politely requested.
+    """
+    _seen: dict[str, int] = {}
+
+    async def image_read_dedup_guard(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Read":
+            return {"decision": "approve"}
+        tool_input = input_data.get("tool_input", {}) or {}
+        file_path = tool_input.get("file_path") or tool_input.get("path", "")
+        if not file_path:
+            return {"decision": "approve"}
+
+        # Escape valve: a deliberate partial/forced re-read is never deduped.
+        if tool_input.get("offset") is not None or tool_input.get("limit") is not None:
+            return {"decision": "approve"}
+
+        # Image extension only — everything else passes untouched.
+        try:
+            ext = Path(file_path).suffix.lower()
+        except (TypeError, ValueError):
+            return {"decision": "approve"}
+        if ext not in _IMAGE_READ_EXTS:
+            return {"decision": "approve"}
+
+        # Identity = (resolved abspath, mtime_ns). Unstat-able → fail-safe approve.
+        # ValueError guards an embedded-null-byte path (Path() + .suffix succeed,
+        # but .resolve()/os.stat raise ValueError, not OSError) — without it the
+        # hook would crash instead of failing safe (Gate-2 operational HIGH).
+        try:
+            abspath = str(Path(file_path).resolve())
+            mtime_ns = os.stat(abspath).st_mtime_ns
+        except (OSError, ValueError):
+            return {"decision": "approve"}
+
+        if _seen.get(abspath) == mtime_ns:
+            logger.info("[DEDUP] redundant image re-read denied: %s", abspath[:80])
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "This image was already read earlier in THIS conversation and "
+                        "has not changed since — it is still visible above. Re-reading "
+                        "it re-injects the full image payload (often tens of thousands "
+                        "of tokens) for zero new information. Refer to the copy above. "
+                        "If you genuinely can no longer see it (e.g. it scrolled out of "
+                        "context), re-read with an explicit offset/limit param to force it."
+                    ),
+                }
+            }
+
+        _seen[abspath] = mtime_ns
+        return {"decision": "approve"}
+
+    return image_read_dedup_guard
+
+
+# ---------------------------------------------------------------------------
 # Governance file gate — Three-Layer Governance enforcement
 # ---------------------------------------------------------------------------
 

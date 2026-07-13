@@ -29,6 +29,7 @@ from .security_hooks import (
     eval_command_guard,
     release_publish_guard,
     bash_syntax_guard,
+    create_image_read_dedup_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
@@ -291,6 +292,18 @@ async def build_hooks(
     registry.register(
         "PreToolUse", bash_syntax_guard,
         "bash_syntax_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: image-read dedup guard (Read-scoped) ─────
+    # Deny a redundant re-read of an UNCHANGED image (same path+mtime) within a
+    # session — the deny reason tells the model the image is already above, so it
+    # is not re-injected as a fresh ~tens-of-K vision payload. Root-fix for the
+    # observed prompt bloat (s8/s9.png each read 5×, 155K→235-596K). Fail-safe
+    # (approve all else); offset/limit param is an explicit escape valve for a
+    # compaction-evicted image. Per-session by construction (closure-local cache).
+    registry.register(
+        "PreToolUse", create_image_read_dedup_guard(),
+        "image_read_dedup_guard", matcher="Read",
     )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────
