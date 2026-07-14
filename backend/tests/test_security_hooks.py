@@ -626,3 +626,67 @@ class TestAskQuestionGate:
         # Reason must mark it as expired/timed-out so the agent can re-ask.
         reason = hso.get("permissionDecisionReason", "")
         assert "timeout" in reason.lower() or "超时" in reason or "expired" in reason.lower() or "过期" in reason
+
+
+class TestTagDeleteCarveOut:
+    """AC3 (run_1141ea02): deleting a remote TAG is reversible (re-push the tag)
+    and must NOT be gated as irreversible — while branch delete / force / mirror /
+    prune / bare-name delete STAY gated. A naive prefix check is bypassable, so
+    the carve-out must (a) require an explicit `refs/tags/` prefix with a non-empty
+    tag name, (b) reject `..` path-traversal segments, (c) use `continue` not an
+    early return so a mixed tag+branch refspec is still gated by the branch half.
+    """
+
+    def test_tag_delete_is_allowed(self):
+        from core.security_hooks import _is_irreversible_external_op as f
+        for cmd in [
+            "git push origin :refs/tags/v1.25.0",          # colon-refspec tag delete
+            "git push origin --delete refs/tags/v1.25.0",  # flag-form tag delete
+            "git push origin -d refs/tags/v1",
+            "git -C /repo push origin :refs/tags/v2.0.0",  # with global -C flag
+        ]:
+            assert f(cmd) is False, f"tag delete must be ALLOWED (reversible): {cmd!r}"
+
+    def test_non_tag_deletes_stay_gated(self):
+        from core.security_hooks import _is_irreversible_external_op as f
+        for cmd in [
+            "git push origin :refs/heads/main",            # branch delete via colon
+            "git push origin :oldbranch",                  # bare-name delete (ambiguous)
+            "git push origin --delete refs/heads/main",    # branch delete via flag
+            "git push origin --delete oldbranch",          # bare-name flag delete
+            "git push --force origin main",
+            "git push --mirror origin",
+            "git push --prune origin",
+            "git push origin :refs/tags/../heads/main",     # path-traversal bypass attempt
+            "git push origin :refs/tags/",                  # empty tag name
+        ]:
+            assert f(cmd) is True, f"non-tag/spoofed delete must STAY gated: {cmd!r}"
+
+    def test_mixed_refspec_stays_gated(self):
+        """A single command deleting BOTH a tag and a branch must stay gated —
+        the tag carve-out must not un-gate the branch half (Gate-1 R2)."""
+        from core.security_hooks import _is_irreversible_external_op as f
+        assert f("git push origin :refs/tags/v1 :refs/heads/main") is True
+        assert f("git push origin :refs/heads/main :refs/tags/v1") is True
+
+    def test_gate2_order_independent_and_failclosed(self):
+        """Gate-2 findings (run_1141ea02): delete decision must be order-independent
+        and fail-closed. git getopt interleaves flags/operands, so a delete flag
+        AFTER the ref is still a delete; a bare delete with no operand must gate."""
+        from core.security_hooks import _is_irreversible_external_op as f
+        # HIGH: flag-after-ref branch delete must STAY gated (was fail-open)
+        assert f("git push origin mybranch --delete") is True
+        assert f("git push origin main -d") is True
+        # tag delete with flag-after-ref stays REVERSIBLE (order-independent both ways)
+        assert f("git push origin refs/tags/v1 --delete") is False
+        # MED: bare --delete / -d with no ref operand → fail closed (gated)
+        assert f("git push origin --delete") is True
+        assert f("git push origin -d") is True
+        # mixed under one --delete, flag-after-ref ordering → branch half gates
+        assert f("git push origin refs/tags/v1 refs/heads/main --delete") is True
+        # security LOW-1: embedded ':' / whitespace in a "tag" is NOT a tag → gated
+        assert f("git push origin :refs/tags/v1:refs/heads/main") is True
+        # normal non-delete pushes unaffected (remote positional not misread)
+        assert f("git push origin main") is False
+        assert f("git push origin src:dst") is False
+        assert f("git push origin refs/tags/v1.0.0") is False  # a normal (non-delete) tag push

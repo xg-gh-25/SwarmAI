@@ -35,6 +35,7 @@ from .security_hooks import (
     create_skill_access_checker,
 )
 from .ask_question_manager import ask_question_manager
+from .permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
 from .agent_defaults import expand_allowed_skills_with_plugins
 
 logger = logging.getLogger(__name__)
@@ -105,23 +106,37 @@ class HookRegistry:
         result: dict[str, list] = defaultdict(list)
 
         for (event, matcher), hooks in self._hooks.items():
+            # A (event, matcher) group that contains ANY no_timeout=True hook is a
+            # long-blocking HITL gate (dangerous_command_gate / ask_question_gate).
+            # Forward a per-matcher `timeout` so the CLI does NOT cancel the blocking
+            # hook at its ~600s default (run_1141ea02: the CLI applies
+            # HookMatcher.timeout*1000 as setTimeout(abort) on the hook_callback wait,
+            # uncapped on that path — proven against the CLI binary + SDK
+            # client.py→query.py serialization). Fast-guard-only groups carry NO
+            # timeout (None) → the CLI default stands, so a genuinely hung fast guard
+            # is NOT granted a 4h window.
+            group_timeout = (
+                PERMISSION_ANSWER_TIMEOUT_SECONDS
+                if any(no_timeout for _n, _fn, no_timeout in hooks)
+                else None
+            )
+
             if len(hooks) == 1:
                 # Solo hook: bare-registered with NO wait_for wrapper (this is
                 # already how a solo long-blocking hook like ask_question_gate
-                # escapes the 5s timeout). no_timeout is irrelevant here — discard
-                # it — but the 3-tuple MUST still be unpacked or this crashes.
+                # escapes the 5s timeout). no_timeout drives group_timeout above.
                 name, fn, _no_timeout = hooks[0]
-                hm = HookMatcher(hooks=[fn])
-                if matcher:
-                    hm = HookMatcher(matcher=matcher, hooks=[fn])
-                result[event].append(hm)
+                the_hook = fn
             else:
                 # Chain multiple hooks into a single callable
-                chained = self._build_chain(hooks)
-                hm = HookMatcher(hooks=[chained])
-                if matcher:
-                    hm = HookMatcher(matcher=matcher, hooks=[chained])
-                result[event].append(hm)
+                the_hook = self._build_chain(hooks)
+
+            hm_kwargs: dict[str, Any] = {"hooks": [the_hook]}
+            if matcher:
+                hm_kwargs["matcher"] = matcher
+            if group_timeout is not None:
+                hm_kwargs["timeout"] = group_timeout
+            result[event].append(HookMatcher(**hm_kwargs))
 
         return dict(result)
 
@@ -321,10 +336,17 @@ async def build_hooks(
     )
     # no_timeout=True: this gate blocks up to 4h (PERMISSION_ANSWER_TIMEOUT_SECONDS)
     # in wait_for_permission_decision awaiting the user's approve/deny. It shares the
-    # Bash matcher slot with 4 fast guards → it gets chained → without this flag the
-    # chain's 5s timeout cancels the live approval prompt at 5s (run_6e780e00
-    # approve-into-void root cause). Its own 4h internal bound (< the 4h05m lifecycle
-    # WAITING_INPUT watchdog) is the real backstop, so exemption cannot hang.
+    # Bash matcher slot with the fast guards → chained → without this flag the chain's
+    # 5s timeout cancels the live approval prompt at 5s (run_6e780e00 approve-into-void
+    # root cause). TWO timeouts must be aligned to the 4h window, not one:
+    #   (1) the 5s CHAIN timeout — exempted here via no_timeout (build's _build_chain).
+    #   (2) the CLI's ~600s HOOK-CALLBACK timeout — the ACTUAL prior ceiling. The CLI
+    #       cancels the blocking hook at ITS default (~600s) unless we forward a
+    #       per-matcher `timeout`; build_sdk_hooks() now does (any-no_timeout-in-group
+    #       → HookMatcher.timeout=PERMISSION_ANSWER_TIMEOUT_SECONDS). Before that fix
+    #       the prompt died at ~600s (NOT the 4h05m WAITING_INPUT watchdog — that
+    #       watchdog only reaps AFTER the CLI already cancelled + the waiter went
+    #       dead; it was never the real ceiling). run_1141ea02.
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash", no_timeout=True)
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 

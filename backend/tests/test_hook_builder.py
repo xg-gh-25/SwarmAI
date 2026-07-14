@@ -387,3 +387,95 @@ class TestHookRegistry:
         result = await chained({}, None, MagicMock())
         assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
         assert ran_after["v"] is False, "deny must short-circuit — later hook must NOT run (dc9fba77)"
+
+
+# ---------------------------------------------------------------------------
+# HITL matcher timeout — align CLI hook-cancel with our 4h HITL window
+# (run_1141ea02). The CLI cancels a blocking PreToolUse hook at its ~600s
+# default unless we forward a per-matcher `timeout`; SDK HookMatcher.timeout
+# is that field. A (event,matcher) group containing ANY no_timeout hook must
+# carry timeout=PERMISSION_ANSWER_TIMEOUT_SECONDS; a fast-guard-only group
+# must NOT (keep the CLI default).
+# ---------------------------------------------------------------------------
+
+class TestHITLMatcherTimeout:
+    """AC1/AC2: no_timeout-containing matcher groups get the 4h CLI timeout."""
+
+    def test_no_timeout_group_gets_hitl_timeout_solo(self):
+        """AC1: a SOLO no_timeout hook's HookMatcher carries the 4h timeout."""
+        from core.hook_builder import HookRegistry
+        from core.permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
+
+        async def hitl_gate(input_data, tool_use_id, context):
+            return {}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", hitl_gate, "ask_gate",
+                          matcher="AskUserQuestion", no_timeout=True)
+        hm = registry.build_sdk_hooks()["PreToolUse"][0]
+        assert hm.timeout == PERMISSION_ANSWER_TIMEOUT_SECONDS, (
+            "solo no_timeout matcher must carry the 4h CLI timeout")
+
+    def test_no_timeout_group_gets_hitl_timeout_chained(self):
+        """AC2: a CHAINED group (fast guards + one no_timeout gate) carries 4h."""
+        from core.hook_builder import HookRegistry
+        from core.permission_manager import PERMISSION_ANSWER_TIMEOUT_SECONDS
+
+        async def fast_guard(input_data, tool_use_id, context):
+            return {}
+
+        async def danger_gate(input_data, tool_use_id, context):
+            return {}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", fast_guard, "bash_syntax", matcher="Bash")
+        registry.register("PreToolUse", danger_gate, "dangerous_command_gate",
+                          matcher="Bash", no_timeout=True)
+        hm = registry.build_sdk_hooks()["PreToolUse"][0]
+        assert hm.timeout == PERMISSION_ANSWER_TIMEOUT_SECONDS, (
+            "chained group with a no_timeout gate must carry the 4h CLI timeout")
+
+    def test_fast_only_group_has_no_hitl_timeout(self):
+        """AC1: a group with ONLY fast guards must NOT get the 4h timeout
+        (keep the CLI default — a hung fast guard must not sit for 4h)."""
+        from core.hook_builder import HookRegistry
+
+        async def fast_a(input_data, tool_use_id, context):
+            return {}
+
+        async def fast_b(input_data, tool_use_id, context):
+            return {}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", fast_a, "pytest_guard", matcher="Bash")
+        registry.register("PreToolUse", fast_b, "eval_guard", matcher="Bash")
+        hm = registry.build_sdk_hooks()["PreToolUse"][0]
+        assert hm.timeout is None, (
+            "fast-guard-only matcher must keep the CLI default (timeout=None)")
+
+    def test_real_build_hooks_bash_and_ask_carry_timeout(self):
+        """AC2 (integration): the REAL build_hooks() output gives the Bash and
+        AskUserQuestion matchers the 4h timeout, and no other matcher does."""
+        import asyncio
+        from core.hook_builder import build_hooks
+        from core.permission_manager import (
+            permission_manager, PERMISSION_ANSWER_TIMEOUT_SECONDS,
+        )
+
+        hooks, _skills, _allow_all = asyncio.get_event_loop().run_until_complete(
+            build_hooks(
+                agent_config={"id": "default"},
+                enable_skills=False,
+                enable_mcp=False,
+                resume_session_id="test-sess",
+                session_context={"sdk_session_id": "test-sess"},
+                permission_manager=permission_manager,
+            )
+        )
+        pre = hooks.get("PreToolUse", [])
+        by_matcher = {hm.matcher: hm for hm in pre}
+        assert by_matcher["Bash"].timeout == PERMISSION_ANSWER_TIMEOUT_SECONDS
+        assert by_matcher["AskUserQuestion"].timeout == PERMISSION_ANSWER_TIMEOUT_SECONDS
+        # A fast-only matcher (e.g. Read image-dedup) must NOT carry the 4h timeout
+        if "Read" in by_matcher:
+            assert by_matcher["Read"].timeout is None

@@ -356,29 +356,99 @@ def _segment_is_irreversible(tokens: list[str]) -> bool:
         if k >= len(tokens) or tokens[k] != "push":
             return False
         args = tokens[k + 1:]
+        # A --delete / -d push deletes whatever refs follow it. If EVERY such ref
+        # is an explicit tag (refs/tags/<name>), the delete is REVERSIBLE (re-push
+        # the tag) and NOT gated — but a mixed set (a tag AND a branch) stays gated
+        # by the non-tag ref. (run_1141ea02, Gate-1 R1/R2.)
+        #
+        # TWO-PASS so the decision is ORDER-INDEPENDENT: git's getopt interleaves
+        # options and operands, so `git push origin mybranch --delete` is a valid
+        # BRANCH delete (flag AFTER the ref). A single-pass "gate only once the
+        # delete flag was already seen" fails OPEN on that ordering (Gate-2 HIGH,
+        # run_1141ea02). Pass 1: scan ALL tokens for force/mirror/prune (→ gate
+        # immediately) and whether a delete flag is present anywhere. Pass 2: judge
+        # the ref operands knowing delete-intent regardless of position.
+        delete_flag_seen = False
         for tok in args:
-            if tok.startswith("--"):
-                if tok in ("--force", "--force-with-lease", "--delete",
-                           "--mirror", "--prune"):
-                    return True
-                if tok.startswith("--force-with-lease="):
-                    return True
-            elif tok.startswith("-") and tok != "-":
+            if tok in ("--force", "--force-with-lease", "--mirror", "--prune"):
+                return True
+            if tok.startswith("--force-with-lease="):
+                return True
+            if tok == "--delete":
+                delete_flag_seen = True
+            elif tok.startswith("-") and not tok.startswith("--") and tok != "-":
                 # short flags, possibly bundled (-uf, -fd). 'f'=force, 'd'=delete.
                 short = tok[1:]
-                if "f" in short or "d" in short:
+                if "f" in short:
                     return True
-            else:
-                # operand refspec. Leading ':' = remote-branch delete (empty
-                # left side); leading '+' = forced ref update. "src:dst" and an
-                # SSH URL "git@host:repo" have a non-empty left side → safe.
-                if tok.startswith(":") and len(tok) > 1:
-                    return True
-                if tok.startswith("+") and len(tok) > 1:
-                    return True
+                if "d" in short:
+                    delete_flag_seen = True
+
+        # Pass 2: ref operands. Positional layout is `git push [opts] <remote>
+        # <refspec>...` — the FIRST bare operand is the remote (skip it), the rest
+        # are refspecs. A ':<ref>' colon-delete or '+<ref>' forced update is a
+        # refspec regardless of position and never consumes the remote slot.
+        remote_consumed = False
+        saw_ref_operand = False
+        for tok in args:
+            if tok.startswith("-"):
+                continue  # flag, already handled in Pass 1
+            if tok.startswith("+") and len(tok) > 1:
+                return True  # forced ref update — history rewrite, always gated
+            if tok.startswith(":") and len(tok) > 1:
+                # colon-refspec delete. TAG delete is reversible → skip (a later
+                # branch refspec in the same command must still gate). Else gate.
+                saw_ref_operand = True
+                if _is_tag_ref(tok[1:]):
+                    continue
+                return True
+            # a plain bare operand (no leading -, :, +)
+            if not remote_consumed:
+                remote_consumed = True  # the <remote> positional — not a ref
+                continue
+            if ":" in tok:
+                continue  # a src:dst update-refspec (non-empty left side) — safe
+            if delete_flag_seen:
+                # a bare ref operand under --delete/-d. Tag → reversible, skip;
+                # anything else (branch, bare name, path-traversal) → gate.
+                saw_ref_operand = True
+                if _is_tag_ref(tok):
+                    continue
+                return True
+
+        # A --delete/-d with NO explicit ref operand (e.g. `git push origin
+        # --delete`) is NOT provably an all-tags delete → fail closed (the operand
+        # could resolve to a branch via push config). Gate it. (Gate-2 MED.)
+        if delete_flag_seen and not saw_ref_operand:
+            return True
         return False
 
     return False
+
+
+def _is_tag_ref(ref: str) -> bool:
+    """True iff *ref* is an explicit, well-formed tag ref (``refs/tags/<name>``).
+
+    Fail-closed (mirrors ``_is_dangerous_rm``'s posture): requires the literal
+    ``refs/tags/`` prefix AND a non-empty tag name AND no ``..`` path-traversal
+    segment (``refs/tags/../heads/main`` must NOT read as a tag — it resolves
+    toward a branch). A bare name (``oldbranch``) or a ``refs/heads/`` branch ref
+    is NOT a tag → returns False → stays gated. run_1141ea02, Gate-1 R1.
+    """
+    if not ref.startswith("refs/tags/"):
+        return False
+    name = ref[len("refs/tags/"):]
+    if not name:
+        return False
+    if ".." in name.split("/"):
+        return False
+    # Reject a ':' or whitespace in the name (Gate-2 security LOW-1): a
+    # 'refs/tags/v1:refs/heads/main' or a space-bearing spec is not a plain tag
+    # ref — git itself rejects it, but the predicate must be self-sufficient and
+    # not classify it as a reversible tag. Fail closed.
+    if ":" in name or any(c.isspace() for c in ref):
+        return False
+    return True
 
 
 def load_dangerous_patterns() -> list[str]:
