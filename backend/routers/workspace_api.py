@@ -560,7 +560,7 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
                     pass
     except OSError:
         pass
-    git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
+    git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode(), usedforsecurity=False).hexdigest()
 
     # Build the tree ONCE, then derive the structure fingerprint from the
     # in-memory result — no second filesystem walk. _build_tree has already
@@ -571,8 +571,8 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
     tree = _build_tree(workspace_root, workspace_root, depth, git_status, _get_subrepo_status_cached)
     body = json.dumps(tree).encode()
 
-    fs_hash = hashlib.md5(_tree_fingerprint(tree).encode()).hexdigest()[:8]
-    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
+    fs_hash = hashlib.md5(_tree_fingerprint(tree).encode(), usedforsecurity=False).hexdigest()[:8]
+    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode(), usedforsecurity=False).hexdigest()
     etag_value = f'"{etag}"'
 
     return etag_value, body

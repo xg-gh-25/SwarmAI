@@ -1532,7 +1532,7 @@ def _parse_failed_patterns(improvement_text: str) -> list[str]:
 def _compute_doc_checksum(text: str) -> str:
     """Compute a stable checksum for DDD document content (ignores whitespace variance)."""
     normalized = re.sub(r"\s+", " ", text.strip())
-    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+    return hashlib.md5(normalized.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def check_ddd_consistency(project: str, context_text: str | None = None) -> dict[str, Any]:
