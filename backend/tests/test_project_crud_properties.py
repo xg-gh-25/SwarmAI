@@ -490,18 +490,30 @@ class TestDddNativeSkills:
         assert "product.md" in low, "must source value from the DDD's own ② PRODUCT.md (portable)"
 
     def test_ddd_pollinate_shared_files_track_the_source(self):
-        """The html-deck shared runtime files (deck-stage.js, viewport-base.css,
-        export-pdf.sh) are copies of the s_pollinate source-of-truth — they carry no
-        DDD-specific adaptation and MUST stay byte-identical. export-pdf.sh silently
-        drifted a full generation behind (base64+page.pdf() vs screenshot+pdf-lib) and
-        nothing caught it for months (run_ff9db326). This guard makes drift fail loudly."""
+        """EVERY html-deck shared/ runtime file is a copy of the s_pollinate
+        source-of-truth — they carry no DDD-specific adaptation and MUST stay
+        byte-identical. export-pdf.sh silently drifted a full generation behind
+        (base64+page.pdf() vs screenshot+pdf-lib) and nothing caught it for months
+        (run_ff9db326). This guard is DIRECTORY-DRIVEN (not a hardcoded file list) so a
+        NEW shared file is auto-covered, and a file present in one tree but not the
+        other is also caught — both are drift."""
         src = (Path(__file__).resolve().parent.parent / "skills" / "s_pollinate"
                / "templates" / "html-deck" / "shared")
         dst = self.SKILLS_DIR / "s_ddd-pollinate" / "templates" / "html-deck" / "shared"
-        for name in ("export-pdf.sh", "deck-stage.js", "viewport-base.css"):
+        assert src.is_dir(), f"source shared dir missing: {src}"
+        assert dst.is_dir(), f"ddd-pollinate shared dir missing: {dst}"
+        # Union of both trees' files → catches presence-mismatch, not just content drift.
+        src_files = {p.name for p in src.iterdir() if p.is_file()}
+        dst_files = {p.name for p in dst.iterdir() if p.is_file()}
+        assert src_files == dst_files, (
+            "shared/ file SET diverges between the two trees — "
+            f"only in source: {sorted(src_files - dst_files)}; "
+            f"only in ddd-pollinate: {sorted(dst_files - src_files)}. "
+            f"Re-sync the directory: rsync -a '{src}/' '{dst}/'"
+        )
+        assert src_files, "source shared/ is empty — path wrong?"
+        for name in sorted(src_files):
             s, b = src / name, dst / name
-            assert s.is_file(), f"source shared/{name} missing"
-            assert b.is_file(), f"ddd-pollinate shared/{name} missing"
             assert s.read_bytes() == b.read_bytes(), (
                 f"shared/{name} drifted from the s_pollinate source-of-truth — "
                 f"re-sync: cp '{s}' '{b}' (these files carry no DDD-specific adaptation)"
