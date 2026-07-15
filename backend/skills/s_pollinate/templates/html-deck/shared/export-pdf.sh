@@ -126,18 +126,35 @@ HTML_FILENAME=$(basename "$INPUT_HTML")
 cat > "$TEMP_SCRIPT" << 'EXPORT_SCRIPT'
 // export-slides.mjs — Playwright script to export HTML slides to PDF
 //
-// How it works:
-// 1. Starts a local HTTP server (needed for fonts/assets to load)
-// 2. Opens the presentation in a headless browser at 1920x1080
-// 3. Counts the total number of slides
-// 4. Screenshots each slide one by one
-// 5. Generates a PDF with all slides as landscape pages
+// Handles TWO deck architectures:
+//   • <deck-stage> web-component decks (slides are slotted <section>s; navigation
+//     via the component's own _go(i) / public `length` getter). This is the current
+//     Pollinate html-deck output. The legacy `.slide` path does NOT work on these —
+//     querySelectorAll('.slide') returns 0 → the old script hard-exited (unusable).
+//   • Legacy `.slide` decks (older generated presentations) — kept as a fallback.
+//
+// Pipeline:
+//   1. Local HTTP server (fonts/assets need HTTP).
+//   2. Navigate to each slide (deck-stage._go, or .slide show/hide).
+//   3. Screenshot each slide at design size (pixel-perfect fidelity).
+//   4. BEFORE each screenshot, capture the visible http <a> link rects on that slide.
+//   5. Assemble the PDF with pdf-lib: one image page per slide + a clickable /Link
+//      URI annotation overlaid at each captured rect (screenshots are raster and
+//      would otherwise flatten every hyperlink → "PDF links all dead").
+//   6. Self-validate (page count == slide count, link-annot count == captured) and
+//      exit nonzero on any mismatch, so a silent regression fails loudly.
+//
+// NOTE (verified empirically run_8546727e): the "native" `page.pdf()` print path
+// does NOT work for <deck-stage> — its slides stack at inset:0 inside a scaled
+// canvas and the shadow-DOM @media print rules do not flatten them into the print
+// flow, yielding a PDF with only the first slide painted. Screenshot+overlay is the
+// reliable path and is what preserves BOTH content and clickable links.
 
 import { chromium } from 'playwright';
 import { createServer } from 'http';
-import { readFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
-import { join, extname, resolve } from 'path';
-import { execSync } from 'child_process';
+import { readFileSync, mkdirSync, unlinkSync } from 'fs';
+import { join, extname } from 'path';
+import { PDFDocument, PDFName, PDFString, PDFArray, PDFNumber } from 'pdf-lib';
 
 const SERVE_DIR = process.argv[2];
 const HTML_FILE = process.argv[3];
@@ -150,26 +167,16 @@ const VP_HEIGHT = parseInt(process.argv[7]) || 1080;
 // (We need HTTP so that Google Fonts and relative assets load correctly)
 
 const MIME_TYPES = {
-  '.html': 'text/html',
-  '.css': 'text/css',
-  '.js': 'application/javascript',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.eot': 'application/vnd.ms-fontobject',
+  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+  '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf', '.eot': 'application/vnd.ms-fontobject',
 };
 
 const server = createServer((req, res) => {
-  // Decode URL-encoded characters (e.g., %20 → space) so filenames with spaces resolve correctly
   const decodedUrl = decodeURIComponent(req.url);
-  let filePath = join(SERVE_DIR, decodedUrl === '/' ? HTML_FILE : decodedUrl);
+  const filePath = join(SERVE_DIR, decodedUrl === '/' ? HTML_FILE : decodedUrl);
   try {
     const content = readFileSync(filePath);
     const ext = extname(filePath).toLowerCase();
@@ -181,164 +188,186 @@ const server = createServer((req, res) => {
   }
 });
 
-// Find a free port
 const port = await new Promise((resolve) => {
   server.listen(0, () => resolve(server.address().port));
 });
-
 console.log(`  Local server on port ${port}`);
 
-// ─── Screenshot each slide ────────────────────────────────
+// A landscape screenshot is captured at design size; the PDF page is built at the
+// SAME pixel dimensions (1 pt == 1 screenshot px), so link rects need only a Y-flip,
+// no scale reconciliation. We therefore force deck-stage into `noscale` mode below
+// (scale factor exactly 1.0) so getBoundingClientRect() coords == screenshot coords.
 
 const browser = await chromium.launch();
-const page = await browser.newPage({
-  viewport: { width: VP_WIDTH, height: VP_HEIGHT },
-});
-
-// Load the presentation
+const page = await browser.newPage({ viewport: { width: VP_WIDTH, height: VP_HEIGHT } });
 await page.goto(`http://localhost:${port}/`, { waitUntil: 'networkidle' });
-
-// Wait for fonts to load
 await page.evaluate(() => document.fonts.ready);
 
-// Extra wait for animations to settle on the first slide
-await page.waitForTimeout(1500);
+// ─── Detect deck architecture (deck-stage primary, .slide fallback) ───
+// Readiness gate: <deck-stage> populates _slides on slotchange (async). Wait on the
+// PUBLIC `length` getter, never an immediate _slides read — else we'd re-hit the
+// 0-slide bug in a new disguise. If no deck-stage, fall back to .slide count.
+const isDeckStage = await page.evaluate(() => !!document.querySelector('deck-stage'));
 
-// Count slides
+if (isDeckStage) {
+  // Force noscale so DOM geometry == screenshot geometry (scale = 1.0), esp. --compact.
+  await page.evaluate(() => {
+    const ds = document.querySelector('deck-stage');
+    ds.setAttribute('noscale', '');
+  });
+  await page.waitForFunction(
+    () => { const d = document.querySelector('deck-stage'); return d && d.length > 0; },
+    { timeout: 10000 },
+  ).catch(() => {});
+}
+
 const slideCount = await page.evaluate(() => {
+  const ds = document.querySelector('deck-stage');
+  if (ds) return ds.length || 0;                 // public getter (reflects _slides.length)
   return document.querySelectorAll('.slide').length;
 });
-
-console.log(`  Found ${slideCount} slides`);
+console.log(`  Found ${slideCount} slides (${isDeckStage ? 'deck-stage' : 'legacy .slide'})`);
 
 if (slideCount === 0) {
-  console.error('  ERROR: No .slide elements found in the presentation.');
-  console.error('  Make sure your HTML uses <div class="slide"> or <section class="slide">.');
-  await browser.close();
-  server.close();
+  console.error('  ERROR: No slides found (<deck-stage> with slotted <section>s, or .slide elements).');
+  await browser.close(); server.close();
   process.exit(1);
 }
 
-// Screenshot each slide
+// Warn on collapse regions — the PDF captures the COLLAPSED state only.
+const detailsCount = await page.evaluate(() => document.querySelectorAll('details').length);
+if (detailsCount > 0) {
+  console.warn(`  ⚠ ${detailsCount} <details> collapse region(s) detected — the PDF captures`);
+  console.warn('    only the COLLAPSED state; expandable content + its links live in the HTML.');
+}
+
+// ─── Screenshot each slide + capture its visible http link rects ───
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 const screenshotPaths = [];
+const slideLinks = [];   // per slide: [{href,x,y,w,h}, ...] in screenshot px
 
 for (let i = 0; i < slideCount; i++) {
-  // Navigate to slide by simulating the presentation's navigation
-  // Most frontend-slides presentations use a currentSlide index and show/hide
+  // Navigate. deck-stage: _go(i) + hide overlay chrome. legacy: show/hide .slide.
   await page.evaluate((index) => {
-    const slides = document.querySelectorAll('.slide');
-
-    // Try multiple navigation strategies used by frontend-slides:
-
-    // Strategy 1: Direct slide manipulation (most common in generated decks)
-    slides.forEach((slide, idx) => {
-      if (idx === index) {
-        slide.style.display = '';
-        slide.style.opacity = '1';
-        slide.style.visibility = 'visible';
-        slide.style.position = 'relative';
-        slide.style.transform = 'none';
-        slide.classList.add('active');
-      } else {
-        slide.style.display = 'none';
-        slide.classList.remove('active');
-      }
-    });
-
-    // Strategy 2: If there's a SlidePresentation class instance, use it
-    if (window.presentation && typeof window.presentation.goToSlide === 'function') {
-      window.presentation.goToSlide(index);
-    }
-
-    // Strategy 3: Scroll-based (some decks use scroll snapping)
-    slides[index]?.scrollIntoView({ behavior: 'instant' });
-  }, i);
-
-  // Wait for any slide transition animations to finish
-  await page.waitForTimeout(300);
-
-  // Wait for intersection observer animations to trigger
-  await page.waitForTimeout(200);
-
-  // Force all .reveal elements on the current slide to be visible
-  // (animations normally trigger on scroll/intersection, but we need them visible now)
-  await page.evaluate((index) => {
-    const slides = document.querySelectorAll('.slide');
-    const currentSlide = slides[index];
-    if (currentSlide) {
-      currentSlide.querySelectorAll('.reveal').forEach(el => {
+    const ds = document.querySelector('deck-stage');
+    if (ds) {
+      ds._go(index, 'pdf');
+      const root = ds.shadowRoot;
+      if (root) root.querySelectorAll('.overlay, .tapzones').forEach(e => { e.style.display = 'none'; });
+      // Force the current slide's .reveal entrance animations to their FINISHED
+      // state. Reveals fade opacity 0→1 over ~0.6s (staggered); a screenshot taken
+      // mid-transition captures a dimmed/washed slide. Setting the end-state (and
+      // killing the transition) makes the capture deterministic regardless of timing.
+      const cur = ds._slides && ds._slides[index];
+      if (cur) cur.querySelectorAll('.reveal').forEach(el => {
+        el.style.transition = 'none';
         el.style.opacity = '1';
         el.style.transform = 'none';
-        el.style.visibility = 'visible';
+      });
+    } else {
+      const slides = document.querySelectorAll('.slide');
+      slides.forEach((slide, idx) => {
+        if (idx === index) {
+          slide.style.display = ''; slide.style.opacity = '1';
+          slide.style.visibility = 'visible'; slide.style.position = 'relative';
+          slide.style.transform = 'none'; slide.classList.add('active');
+        } else { slide.style.display = 'none'; slide.classList.remove('active'); }
+      });
+      if (window.presentation && typeof window.presentation.goToSlide === 'function') {
+        window.presentation.goToSlide(index);
+      }
+      slides[index]?.querySelectorAll('.reveal').forEach(el => {
+        el.style.opacity = '1'; el.style.transform = 'none'; el.style.visibility = 'visible';
       });
     }
   }, i);
 
-  await page.waitForTimeout(100);
+  // Wait for a COMMITTED paint (double-rAF) rather than a fixed guess.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.waitForTimeout(150);
+
+  // Capture visible http links scoped to the CURRENT slide element (skip collapsed
+  // <details>, off-canvas, and zero-size). deck-stage slides are light-DOM slotted.
+  const links = await page.evaluate((index) => {
+    const ds = document.querySelector('deck-stage');
+    const slide = ds ? ds._slides[index] : document.querySelectorAll('.slide')[index];
+    if (!slide) return [];
+    const out = [];
+    slide.querySelectorAll('a[href^="http"]').forEach((a) => {
+      const details = a.closest('details');
+      if (details && !details.open) return;      // collapsed → not visible in the shot
+      const r = a.getBoundingClientRect();
+      if (r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < window.innerHeight &&
+          r.right > 0 && r.left < window.innerWidth) {
+        out.push({ href: a.href, x: r.left, y: r.top, w: r.width, h: r.height });
+      }
+    });
+    return out;
+  }, i);
+  slideLinks.push(links);
 
   const screenshotPath = join(SCREENSHOT_DIR, `slide-${String(i + 1).padStart(3, '0')}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   screenshotPaths.push(screenshotPath);
-  console.log(`  Captured slide ${i + 1}/${slideCount}`);
+  console.log(`  Captured slide ${i + 1}/${slideCount} (${links.length} link${links.length === 1 ? '' : 's'})`);
 }
 
 await browser.close();
 server.close();
 
-// ─── Combine screenshots into PDF ─────────────────────────
-// Use a second Playwright page to generate a PDF from the screenshots
+// ─── Assemble PDF with pdf-lib: image page per slide + clickable link annotations ───
+console.log('  Assembling PDF (with clickable links)...');
 
-console.log('  Assembling PDF...');
+const pdfDoc = await PDFDocument.create();
+let totalLinks = 0;
 
-const browser2 = await chromium.launch();
-const pdfPage = await browser2.newPage();
+for (let i = 0; i < screenshotPaths.length; i++) {
+  const pngBytes = readFileSync(screenshotPaths[i]);
+  const png = await pdfDoc.embedPng(pngBytes);
+  // Page in points == screenshot pixels (1:1), so a link rect only needs a Y-flip.
+  const page = pdfDoc.addPage([png.width, png.height]);
+  page.drawImage(png, { x: 0, y: 0, width: png.width, height: png.height });
 
-// Build an HTML page with all screenshots, one per page
-const imagesHtml = screenshotPaths.map((p) => {
-  const imgData = readFileSync(p).toString('base64');
-  return `<div class="page"><img src="data:image/png;base64,${imgData}" /></div>`;
-}).join('\n');
-
-const pdfHtml = `<!DOCTYPE html>
-<html>
-<head>
-<style>
-  * { margin: 0; padding: 0; }
-  @page { size: ${VP_WIDTH}px ${VP_HEIGHT}px; margin: 0; }
-  .page {
-    width: ${VP_WIDTH}px;
-    height: ${VP_HEIGHT}px;
-    page-break-after: always;
-    overflow: hidden;
+  const scaleX = png.width / VP_WIDTH;    // 1.0 for a full-size shot; robust if compact
+  const scaleY = png.height / VP_HEIGHT;
+  const annots = [];
+  for (const l of slideLinks[i]) {
+    const x0 = l.x * scaleX;
+    const x1 = (l.x + l.w) * scaleX;
+    const y1 = png.height - l.y * scaleY;               // PDF origin is bottom-left
+    const y0 = png.height - (l.y + l.h) * scaleY;
+    const annot = pdfDoc.context.obj({
+      Type: 'Annot', Subtype: 'Link',
+      Rect: [x0, y0, x1, y1],
+      Border: [0, 0, 0],
+      A: { Type: 'Action', S: 'URI', URI: PDFString.of(l.href) },
+    });
+    annots.push(pdfDoc.context.register(annot));
+    totalLinks++;
   }
-  .page:last-child { page-break-after: auto; }
-  img {
-    width: ${VP_WIDTH}px;
-    height: ${VP_HEIGHT}px;
-    display: block;
-    object-fit: contain;
-  }
-</style>
-</head>
-<body>${imagesHtml}</body>
-</html>`;
+  if (annots.length) page.node.set(PDFName.of('Annots'), pdfDoc.context.obj(annots));
+}
 
-await pdfPage.setContent(pdfHtml, { waitUntil: 'load' });
-await pdfPage.pdf({
-  path: OUTPUT_PDF,
-  width: `${VP_WIDTH}px`,
-  height: `${VP_HEIGHT}px`,
-  printBackground: true,
-  margin: { top: 0, right: 0, bottom: 0, left: 0 },
-});
+const pdfBytes = await pdfDoc.save();
+const { writeFileSync } = await import('fs');
+writeFileSync(OUTPUT_PDF, pdfBytes);
+screenshotPaths.forEach((p) => unlinkSync(p));
 
-await browser2.close();
+// ─── Self-validate: fail loudly instead of shipping a broken PDF ───
+const captured = slideLinks.reduce((n, ls) => n + ls.length, 0);
+const producedPages = pdfDoc.getPageCount();
+let ok = true;
+if (producedPages !== slideCount) {
+  console.error(`  ✗ VALIDATION: ${producedPages} PDF pages != ${slideCount} slides`);
+  ok = false;
+}
+if (captured > 0 && totalLinks !== captured) {
+  console.error(`  ✗ VALIDATION: overlaid ${totalLinks} link annots != ${captured} captured`);
+  ok = false;
+}
+if (!ok) process.exit(1);
 
-// Clean up screenshots
-screenshotPaths.forEach(p => unlinkSync(p));
-
-console.log(`  ✓ PDF saved to: ${OUTPUT_PDF}`);
+console.log(`  ✓ PDF saved: ${OUTPUT_PDF} (${producedPages} pages, ${totalLinks} clickable links)`);
 EXPORT_SCRIPT
 
 # ─── Step 3: Install Playwright in temp directory ──────────
@@ -356,10 +385,12 @@ cat > "$TEMP_DIR/package.json" << 'PKG'
 { "name": "slide-export", "private": true, "type": "module" }
 PKG
 
-# Install Playwright into the temp directory
-npm install playwright &>/dev/null || {
-    err "Failed to install Playwright."
-    err "Try running: npm install playwright"
+# Install Playwright + pdf-lib into the temp directory.
+# pdf-lib (pure-JS) assembles the image-per-slide PDF AND overlays the clickable
+# /Link annotations — no python/pypdf dependency, keeps this script self-contained.
+npm install playwright pdf-lib &>/dev/null || {
+    err "Failed to install Playwright + pdf-lib."
+    err "Try running: npm install playwright pdf-lib"
     rm -rf "$TEMP_DIR"
     exit 1
 }

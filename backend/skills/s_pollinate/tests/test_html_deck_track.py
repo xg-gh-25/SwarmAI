@@ -185,3 +185,42 @@ def test_ac6_render_scale():
             return c?getComputedStyle(c).transform:'NONE';}""")
         b.close()
     assert transform not in ("none", "NONE", None), f"deck-stage did not scale: {transform}"
+
+
+# ---------- export-pdf.sh: deck-stage support + clickable links (run_8546727e) ----------
+
+def _export_script_text() -> str:
+    return (DATA / "shared" / "export-pdf.sh").read_text(encoding="utf-8")
+
+
+def test_export_pdf_supports_deck_stage_nav():
+    """Regression: export-pdf.sh MUST navigate <deck-stage> decks via the component's
+    own API (_go / _slides / public length getter), not ONLY the legacy .slide class.
+    The old script did `querySelectorAll('.slide').length` → 0 on a deck-stage deck →
+    hard exit (unusable). Both branches must exist (deck-stage primary, .slide fallback)."""
+    s = _export_script_text()
+    assert "deck-stage" in s, "export-pdf.sh has no <deck-stage> detection — 0-slide exit bug"
+    assert "_go(" in s or "goTo(" in s, "no deck-stage navigation call (_go/goTo)"
+    assert ".slide" in s, "legacy .slide fallback removed — would regress old decks"
+
+
+def test_export_pdf_preserves_clickable_links():
+    """Regression: the PDF MUST carry clickable link annotations, not raster-only.
+    The old script screenshot→base64 img→page.pdf() flattened all <a href> to pixels
+    ('PDF links all dead'). The fix captures visible http links + overlays /Link annots
+    via pdf-lib."""
+    s = _export_script_text()
+    assert "pdf-lib" in s, "pdf-lib not used — links cannot be overlaid (raster-only PDF)"
+    assert "href" in s and "getBoundingClientRect" in s, \
+        "no per-slide link-rect capture (href + getBoundingClientRect)"
+    assert "pdf-lib" in s and "npm install" in s and re.search(r"npm install[^\n]*pdf-lib", s), \
+        "pdf-lib not added to the temp npm install line"
+
+
+def test_export_pdf_self_validates():
+    """Regression: script MUST self-validate after export (page count vs slide count,
+    link-annotation count) and exit nonzero on mismatch — so a silent 'first-page-only'
+    or 'links dropped' regression fails loudly instead of shipping a broken PDF."""
+    s = _export_script_text()
+    assert "process.exit(1)" in s, "no nonzero-exit self-validation guard"
+    assert "<details>" in s or "details" in s, "no <details> collapse-region warning"
