@@ -33,6 +33,9 @@
 
 import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
+// Import the REAL exported classifier (NOT a local re-implementation) so that
+// reverting the production classifyHealth turns these tests RED (no test-theater).
+import { classifyHealth } from './BackendStartupOverlay';
 
 // ============== Shared Type Definitions ==============
 
@@ -518,5 +521,67 @@ describe('BackendStartupOverlay - Property-Based Tests', () => {
       expect(state.reason).toBe('timeout');
       expect(state.elapsedMs).toBeGreaterThanOrEqual(DEFAULT_TIMEOUT_MS);
     });
+  });
+});
+
+/**
+ * classifyHealth — the 3-way health classifier (run_e3dbc009).
+ *
+ * Tests the REAL exported function (imported above), so a regression in the
+ * production classifyHealth logic makes these RED. Core invariant of the
+ * false-fatal fix: an alive-but-not-healthy backend must classify as `alive`
+ * (keep waiting), NOT `no_response` (count toward give-up).
+ */
+describe('classifyHealth (3-way, run_e3dbc009 false-fatal fix)', () => {
+  it('status=healthy → ready', () => {
+    expect(classifyHealth({ data: { status: 'healthy', version: '1.0' } })).toBe('ready');
+  });
+
+  it('status=initializing → alive (keep waiting, NOT give-up)', () => {
+    expect(classifyHealth({ data: { status: 'initializing' } })).toBe('alive');
+  });
+
+  it('any other structured JSON reply → alive (process is up)', () => {
+    expect(classifyHealth({ data: { status: 'degraded' } })).toBe('alive');
+    expect(classifyHealth({ data: { foo: 'bar' } })).toBe('alive');
+    expect(classifyHealth({ data: {} })).toBe('alive');
+  });
+
+  it('thrown network error → no_response (the only give-up signal)', () => {
+    expect(classifyHealth({ error: new Error('ECONNREFUSED') })).toBe('no_response');
+    expect(classifyHealth({ error: { code: 'ETIMEDOUT' } })).toBe('no_response');
+  });
+
+  it('SPA-fallback HTML string → no_response (request never reached backend)', () => {
+    expect(classifyHealth({ data: '<!DOCTYPE html><html></html>' })).toBe('no_response');
+  });
+
+  // Property: a live JSON reply is NEVER no_response — this is the invariant that
+  // prevents false-killing a slow-but-alive backend.
+  it('property: any non-healthy JSON object reply classifies as alive, never no_response', () => {
+    fc.assert(
+      fc.property(
+        fc.dictionary(
+          fc.string(),
+          fc.oneof(fc.string(), fc.integer(), fc.boolean()),
+        ).filter((o) => (o as { status?: unknown }).status !== 'healthy'),
+        (obj) => {
+          const r = classifyHealth({ data: obj });
+          return r === 'alive'; // structured reply, not healthy, not HTML → alive
+        },
+      ),
+      { numRuns: 50 },
+    );
+  });
+
+  // Property: a healthy status always wins → ready.
+  it('property: status=healthy always → ready regardless of other fields', () => {
+    fc.assert(
+      fc.property(fc.dictionary(fc.string(), fc.string()), (extra) => {
+        const r = classifyHealth({ data: { ...extra, status: 'healthy' } });
+        return r === 'ready';
+      }),
+      { numRuns: 30 },
+    );
   });
 });

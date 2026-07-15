@@ -592,6 +592,278 @@ async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u1
     probe_daemon_health_with_progress(max_attempts, interval_secs, None).await
 }
 
+// ── Adaptive first-launch / cold-start probe ────────────────────────────────
+//
+// Why this exists (run_e3dbc009): a fixed max_attempts×interval cap false-kills a
+// slow-but-ALIVE backend on a new user's first launch. During the cold-start
+// window (deploy ~500MB onedir + Python cold start + DB migration + workspace
+// init) the daemon PROCESS is alive but has not yet bound the port, so /health
+// returns connection-refused — indistinguishable, to the fixed-cap probe, from a
+// dead daemon. The daemon's own {status:"initializing"} HTTP branch is
+// unreachable here: uvicorn only serves AFTER lifespan startup completes
+// (main.py:1049 sets _startup_complete=True before it yields), so during boot the
+// only reachable signal is the OS process, not HTTP.
+//
+// The fix reads the real alive/dead discriminator — the launchd-managed daemon
+// PROCESS — and keeps waiting while it is alive (bounded by an absolute ceiling as
+// the O030 disaster-recovery backstop), failing FAST only when the process is
+// genuinely gone. SLOW keeps waiting; a true HANG is bounded; a DEAD daemon fails
+// fast.
+
+// macOS-only: these tune the daemon cold-start adaptive probe, which exists only
+// on the macOS launchd-daemon deployment (Win/Linux use the subprocess path).
+/// Absolute ceiling for the adaptive cold-start wait (O030 disaster-recovery
+/// backstop). Worst realistic first-launch cold start is ~35-70s; 300s gives
+/// generous headroom while still bounding a genuine lifespan deadlock.
+#[cfg(target_os = "macos")]
+const COLD_START_CEILING_SECS: u64 = 300;
+/// Consecutive no-process observations before declaring the daemon truly dead.
+/// Must exceed the plist `ThrottleInterval` (10s) so a legitimate KeepAlive
+/// respawn window (process momentarily absent) does not trip fail-fast. Set to 8
+/// (× PROBE_INTERVAL_SECS(2) = 16s) rather than the bare minimum 6/12s, to leave
+/// margin for launchctl's own latency in reporting the new pid after a respawn
+/// (adversarial-review hardening: don't assume launchctl updates pid instantly).
+#[cfg(target_os = "macos")]
+const COLD_START_DEAD_STREAK: u32 = 8;
+/// Poll cadence for the adaptive probe.
+#[cfg(target_os = "macos")]
+const PROBE_INTERVAL_SECS: u64 = 2;
+
+/// Outcome of a single health probe attempt, combining the HTTP result with
+/// daemon process liveness. Pure classification — unit-tested.
+/// macOS-only: consumed by `probe_daemon_health_adaptive` (the daemon cold-start
+/// path exists only on macOS; Win/Linux use the subprocess spawn path).
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ProbeOutcome {
+    /// /health returned status=healthy — backend is up and serving.
+    Ready,
+    /// /health not healthy yet, but the daemon PROCESS is alive (still booting).
+    Alive,
+    /// /health not healthy AND no daemon process — genuinely down.
+    Dead,
+}
+
+/// Pure classifier: given the HTTP health result and whether the daemon process
+/// is alive, decide the probe outcome. `http_healthy` wins — a serving backend is
+/// Ready regardless of anything else; otherwise process liveness distinguishes
+/// "still booting" (Alive) from "dead".
+#[cfg(target_os = "macos")]
+fn classify_probe_outcome(http_healthy: bool, pid_present: bool) -> ProbeOutcome {
+    if http_healthy {
+        ProbeOutcome::Ready
+    } else if pid_present {
+        ProbeOutcome::Alive
+    } else {
+        ProbeOutcome::Dead
+    }
+}
+
+/// Decision for the adaptive probe loop after one attempt. Pure — captures ALL
+/// loop-termination logic so it is unit-testable without network/launchctl/sleep.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum LoopDecision {
+    /// Backend is serving — return Some(port).
+    Succeed,
+    /// Daemon process has been gone for >= dead-streak checks — fail fast.
+    FailDead,
+    /// Absolute ceiling reached while still not serving — bounded give-up.
+    FailCeiling,
+    /// Keep waiting (sleep one interval, probe again).
+    Continue,
+}
+
+/// Pure loop-decision function. `consecutive_dead` is the number of consecutive
+/// Dead outcomes INCLUDING the current attempt (caller increments before calling,
+/// resets to 0 on any non-Dead outcome). `ever_alive` is true once the daemon
+/// process has been observed alive at least once during this probe.
+///
+/// **Dead-streak fail-fast is GATED on `ever_alive`** (meta-review HIGH fix):
+/// - "Was alive, now gone for N checks" (`ever_alive=true`) → a genuine crash /
+///   respawn-loop → fail FAST (don't wait the full ceiling).
+/// - "Never seen a pid yet" (`ever_alive=false`) → we are still inside the
+///   launchd bootstrap→spawn window (on a disk-pressured first launch, launchctl
+///   can report the registered service with NO `pid=` for >16s while the 500MB
+///   onedir is still being paged in). Failing fast here would re-introduce the
+///   EXACT false-fatal this change fixes. So a not-yet-started daemon keeps
+///   waiting until the ceiling — the O030 backstop bounds a never-starts install.
+///
+/// Ordering note: an Alive process keeps waiting until the ceiling (SLOW is not a
+/// failure; only a genuine hang is bounded by the ceiling).
+#[cfg(target_os = "macos")]
+fn probe_loop_decision(
+    outcome: ProbeOutcome,
+    elapsed_secs: u64,
+    consecutive_dead: u32,
+    ceiling_secs: u64,
+    max_dead_streak: u32,
+    ever_alive: bool,
+) -> LoopDecision {
+    match outcome {
+        ProbeOutcome::Ready => LoopDecision::Succeed,
+        ProbeOutcome::Dead => {
+            if ever_alive && consecutive_dead >= max_dead_streak {
+                // Was alive, now gone → real death. Fail fast.
+                LoopDecision::FailDead
+            } else if elapsed_secs >= ceiling_secs {
+                // Never-started (still bootstrapping) OR streak not yet reached →
+                // bounded only by the absolute ceiling.
+                LoopDecision::FailCeiling
+            } else {
+                LoopDecision::Continue
+            }
+        }
+        ProbeOutcome::Alive => {
+            if elapsed_secs >= ceiling_secs {
+                LoopDecision::FailCeiling
+            } else {
+                LoopDecision::Continue
+            }
+        }
+    }
+}
+
+/// Check whether the launchd-managed daemon PROCESS is currently alive, given a
+/// pre-resolved `uid` (resolve once per probe, not per attempt — the caller loops).
+///
+/// MECHANISM: `launchctl print gui/<uid>/com.swarmai.backend` prints a `pid = N`
+/// line iff the service has a running process. The PID populates at exec() (before
+/// the port binds), so this is a true "alive during boot" signal, not a
+/// "serving" signal.
+/// VERIFY: same call + `pid = ` parse already used in production at the
+/// bootout-PID-capture path (see `sync_daemon_version`).
+#[cfg(target_os = "macos")]
+fn daemon_pid_present(uid: &str) -> bool {
+    let service_target = format!("gui/{}/com.swarmai.backend", uid);
+    match std::process::Command::new("launchctl")
+        .args(["print", &service_target])
+        .output()
+    {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout
+                .lines()
+                .any(|l| l.trim_start().starts_with("pid = "))
+        }
+        Err(_) => false,
+    }
+}
+
+/// Resolve the current uid via `id -u` once (empty string on failure → the
+/// launchctl target will simply never match, classified as no-pid).
+#[cfg(target_os = "macos")]
+fn current_uid() -> String {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Adaptive cold-start probe: keep waiting while the daemon PROCESS is alive
+/// (bounded by `COLD_START_CEILING_SECS`), fail fast after `COLD_START_DEAD_STREAK`
+/// consecutive no-process observations. Emits the same `backend-starting-progress`
+/// events as the fixed probe. Returns Some(port) once /health is healthy, None on
+/// dead-streak or ceiling.
+///
+/// Used for BOTH cold-start paths (first-install in `start_backend` and post-swap
+/// verify in `sync_daemon_version`) — same false-fatal bug class (R25).
+#[cfg(target_os = "macos")]
+async fn probe_daemon_health_adaptive(app_handle: Option<&tauri::AppHandle>) -> Option<u16> {
+    let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    // Resolve uid ONCE — it is invariant for the process lifetime, so there is no
+    // need to spawn `id -u` on every probe miss (adversarial-review perf fix).
+    let uid = current_uid();
+
+    let mut elapsed_secs: u64 = 0;
+    let mut consecutive_dead: u32 = 0;
+    // Whether we've observed the daemon process alive at least once this probe.
+    // Gates dead-streak fail-fast: "never started yet" (bootstrap window) must NOT
+    // fail fast, only "was alive, now gone" (crash) may. See probe_loop_decision.
+    let mut ever_alive = false;
+
+    loop {
+        // Emit progress (elapsed / ceiling) so the frontend overlay can show a
+        // real cold-start message instead of a stalled bar.
+        if let Some(handle) = app_handle {
+            let _ = handle.emit(
+                "backend-starting-progress",
+                serde_json::json!({
+                    "elapsedSecs": elapsed_secs,
+                    "totalSecs": COLD_START_CEILING_SECS,
+                    "adaptive": true,
+                }),
+            );
+        }
+
+        let http_healthy = match client.get(&probe_url).send().await {
+            Ok(resp) => match resp.text().await {
+                Ok(body) => {
+                    let (healthy, _, _) = parse_health_response(&body);
+                    healthy
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
+
+        // Only shell out to launchctl when HTTP is not yet healthy (the boot
+        // window) — a serving backend is Ready without a liveness check.
+        let outcome = if http_healthy {
+            ProbeOutcome::Ready
+        } else {
+            classify_probe_outcome(false, daemon_pid_present(&uid))
+        };
+
+        if outcome == ProbeOutcome::Dead {
+            consecutive_dead += 1;
+        } else {
+            consecutive_dead = 0;
+            // Ready OR Alive both prove the process exists (Ready = serving,
+            // Alive = booting) — latch that we've seen it up.
+            ever_alive = true;
+        }
+
+        match probe_loop_decision(
+            outcome,
+            elapsed_secs,
+            consecutive_dead,
+            COLD_START_CEILING_SECS,
+            COLD_START_DEAD_STREAK,
+            ever_alive,
+        ) {
+            LoopDecision::Succeed => return Some(DAEMON_PORT),
+            LoopDecision::FailDead => {
+                println!(
+                    "[Tauri] Adaptive probe: daemon process gone for {} consecutive checks — failing fast at {}s",
+                    consecutive_dead, elapsed_secs
+                );
+                return None;
+            }
+            LoopDecision::FailCeiling => {
+                println!(
+                    "[Tauri] Adaptive probe: reached {}s ceiling while daemon alive but not serving — giving up",
+                    elapsed_secs
+                );
+                return None;
+            }
+            LoopDecision::Continue => {
+                tokio::time::sleep(tokio::time::Duration::from_secs(PROBE_INTERVAL_SECS)).await;
+                elapsed_secs += PROBE_INTERVAL_SECS;
+            }
+        }
+    }
+}
+
 /// Probe daemon health with optional progress events emitted to the frontend.
 /// Each attempt emits `backend-starting-progress` with `{ attempt, max_attempts, elapsed_secs }`.
 async fn probe_daemon_health_with_progress(
@@ -850,8 +1122,10 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         .args(["bootstrap", &gui_target, &plist_path])
         .output();
 
-    // Step 6: Verify new version (cold start after binary swap can take 30-60s)
-    if let Some(_port) = probe_daemon_health_with_progress(30, 2, Some(app)).await {
+    // Step 6: Verify new version. Adaptive cold-start probe (same false-fatal
+    // class as first-install, R25): a post-swap cold start can exceed a fixed 60s
+    // cap while the daemon process is alive — wait while alive, bounded by ceiling.
+    if let Some(_port) = probe_daemon_health_adaptive(Some(app)).await {
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
@@ -1644,17 +1918,22 @@ async fn start_backend(
             ));
         }
 
-        // Wait for daemon to come up (cold start after rebuild can take 45-60s)
-        if let Some(_port) = probe_daemon_health_with_progress(30, 2, Some(&app)).await {
+        // Wait for daemon to come up. Adaptive: a new user's first launch does a
+        // slow cold start (deploy ~500MB onedir + Python cold start + DB migration
+        // + workspace init) that routinely exceeds a fixed 60s cap — but the daemon
+        // PROCESS is alive throughout. Keep waiting while it's alive (bounded by
+        // COLD_START_CEILING_SECS); fail fast only if the process is truly gone.
+        if let Some(_port) = probe_daemon_health_adaptive(Some(&app)).await {
             println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
             let port = connect_daemon(&state, &app).await;
             return Ok(port);
         }
 
         return Err(format!(
-            "Daemon installed but not responding on port {} after 60s. \
+            "Daemon installed but did not become healthy on port {} (process not \
+             running, or still not serving after {}s). \
              Check logs: ~/.swarm-ai/logs/backend-stderr.log",
-            DAEMON_PORT,
+            DAEMON_PORT, COLD_START_CEILING_SECS,
         ));
     }
 
@@ -2227,4 +2506,93 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+// ── Tests: adaptive cold-start probe decision logic ─────────────────────────
+// These exercise the REAL pure functions used by probe_daemon_health_adaptive
+// (classify_probe_outcome + probe_loop_decision) — no local re-derivation of the
+// prod logic (avoids test-theater: reverting the prod fn must turn these RED).
+#[cfg(all(test, target_os = "macos"))]
+mod adaptive_probe_tests {
+    use super::*;
+
+    // AC1: classify_probe_outcome maps the 4 (healthy,pid) combinations correctly.
+    #[test]
+    fn classify_healthy_is_ready_regardless_of_pid() {
+        assert_eq!(classify_probe_outcome(true, true), ProbeOutcome::Ready);
+        assert_eq!(classify_probe_outcome(true, false), ProbeOutcome::Ready);
+    }
+
+    #[test]
+    fn classify_not_healthy_but_pid_present_is_alive() {
+        assert_eq!(classify_probe_outcome(false, true), ProbeOutcome::Alive);
+    }
+
+    #[test]
+    fn classify_not_healthy_no_pid_is_dead() {
+        assert_eq!(classify_probe_outcome(false, false), ProbeOutcome::Dead);
+    }
+
+    // AC5: a Ready outcome always succeeds, even far past the old 60s boundary —
+    // the false-fatal is gone (a slow backend that becomes healthy late still wins).
+    #[test]
+    fn ready_late_still_succeeds_past_old_60s_cap() {
+        let d = probe_loop_decision(ProbeOutcome::Ready, 120, 0, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
+        assert_eq!(d, LoopDecision::Succeed);
+    }
+
+    // AC2: an Alive process keeps waiting well past 60s (adaptive, not fixed cap)...
+    #[test]
+    fn alive_keeps_waiting_past_60s_until_ceiling() {
+        let d = probe_loop_decision(ProbeOutcome::Alive, 90, 0, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
+        assert_eq!(d, LoopDecision::Continue);
+    }
+
+    // ...but is bounded: an Alive process still not serving at the ceiling gives up
+    // (O030 disaster-recovery backstop for a genuine lifespan deadlock).
+    #[test]
+    fn alive_at_ceiling_fails_ceiling() {
+        let d = probe_loop_decision(ProbeOutcome::Alive, COLD_START_CEILING_SECS, 0, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
+        assert_eq!(d, LoopDecision::FailCeiling);
+    }
+
+    // AC3: a truly-dead daemon (that WAS alive, then crashed) fails FAST once the
+    // dead streak is reached — well under the ceiling.
+    #[test]
+    fn dead_streak_fails_fast_before_ceiling() {
+        // ever_alive=true (was up, now gone) + streak reached → FailDead
+        let d = probe_loop_decision(ProbeOutcome::Dead, 20, COLD_START_DEAD_STREAK, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
+        assert_eq!(d, LoopDecision::FailDead);
+        // sanity: dead streak * interval is far below the ceiling
+        assert!((COLD_START_DEAD_STREAK as u64) * PROBE_INTERVAL_SECS < COLD_START_CEILING_SECS);
+    }
+
+    // AC3 edge: a SINGLE transient no-process observation (below the streak) does
+    // NOT fail — rides over a KeepAlive respawn (ThrottleInterval=10s < streak*interval).
+    #[test]
+    fn dead_below_streak_keeps_waiting() {
+        let d = probe_loop_decision(ProbeOutcome::Dead, 4, 1, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
+        assert_eq!(d, LoopDecision::Continue);
+        // the streak window must exceed the plist ThrottleInterval (10s) so a
+        // legitimate respawn gap can't trip fail-fast
+        assert!((COLD_START_DEAD_STREAK as u64) * PROBE_INTERVAL_SECS > 10);
+    }
+
+    // META-REVIEW HIGH regression guard: a daemon that has NEVER been seen alive
+    // (ever_alive=false — still inside the launchd bootstrap→spawn window on a
+    // disk-pressured first launch) must NOT fail fast even past the dead streak.
+    // Failing fast here would re-introduce the exact false-fatal this change fixes.
+    #[test]
+    fn never_started_does_not_fail_fast_below_ceiling() {
+        // streak far exceeded, but ever_alive=false and below ceiling → keep waiting
+        let d = probe_loop_decision(ProbeOutcome::Dead, 40, COLD_START_DEAD_STREAK * 3, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, false);
+        assert_eq!(d, LoopDecision::Continue);
+    }
+
+    // ...and a never-started daemon is still bounded by the absolute ceiling.
+    #[test]
+    fn never_started_fails_ceiling_not_deadstreak() {
+        let d = probe_loop_decision(ProbeOutcome::Dead, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK * 5, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, false);
+        assert_eq!(d, LoopDecision::FailCeiling);
+    }
 }

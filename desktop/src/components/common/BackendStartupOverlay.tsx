@@ -28,8 +28,16 @@ import logo from '../../assets/swarm-avatar.svg';
 
 const TIMING = {
   healthCheckTimeout: 3000,
-  maxHealthAttempts: 60,
-  readinessTimeout: 60000,
+  // Consecutive no_response polls before giving up. no_response = backend truly
+  // unreachable (network error / SPA-fallback), NOT merely "still booting" — so
+  // this is a genuine-failure cap, not a cold-start clock. An `alive` reply does
+  // NOT count toward it (see pollHealth). Kept modest: on desktop the Rust probe
+  // is the primary cold-start gate; this only fires when the backend never answers.
+  maxNoResponse: 60,
+  // Absolute ceiling for the whole readiness wait (O030 disaster-recovery backstop),
+  // matching the Rust COLD_START_CEILING_SECS. A slow-but-alive backend keeps
+  // waiting up to here instead of the old fixed 60s; only a genuine hang is bounded.
+  readinessTimeout: 300000,
   pollInterval: 1000,
   stepAnimationDelay: 100,   // 100ms per step (was 150ms)
   fadeOutDelay: 200,          // 200ms delay before fade (was 500ms)
@@ -154,6 +162,46 @@ export function checkReadiness(systemStatus: SystemStatus): ReadinessCheckResult
 /** Get the log directory path — same for all platforms. */
 function getLogPath(): string {
   return '~/.swarm-ai/logs/';
+}
+
+/**
+ * Three-way health classification (pure — unit-tested).
+ *
+ * `ready`       — /health returned status=healthy; backend up and serving.
+ * `alive`       — backend responded (any HTTP/JSON reply that isn't the SPA-fallback
+ *                 HTML) but is not yet healthy; it is up and still booting → keep waiting.
+ * `no_response` — no usable reply: a thrown network error (connection refused /
+ *                 timeout), OR the Tauri asset-protocol SPA-fallback HTML (which
+ *                 means the request never reached the real backend). Only this
+ *                 counts toward giving up.
+ *
+ * Why this exists (run_e3dbc009): the old checkHealth collapsed everything except
+ * `healthy` into a single failure signal, so a slow-but-alive backend on a new
+ * user's first launch was indistinguishable from a dead one and was false-killed
+ * at a fixed 60s cap. Distinguishing `alive` from `no_response` lets the overlay
+ * keep waiting while the backend is genuinely booting.
+ *
+ * @param result - either the parsed response body (`{data}`) or a thrown error (`{error}`)
+ */
+export function classifyHealth(
+  result: { data: unknown } | { error: unknown },
+): 'ready' | 'alive' | 'no_response' {
+  if ('error' in result) {
+    return 'no_response';
+  }
+  const data = result.data;
+  // SPA-fallback HTML string → request hit the Tauri asset protocol, not the
+  // real backend (v1.9.0 bug class) → treat as no_response, not alive.
+  if (typeof data === 'string' && data.includes('<!')) {
+    return 'no_response';
+  }
+  const status = (data as { status?: unknown } | null)?.status;
+  if (status === 'healthy') {
+    return 'ready';
+  }
+  // Any other structured reply (e.g. {status:"initializing"}, or any JSON the
+  // backend served while booting) proves the process is up → alive, keep waiting.
+  return 'alive';
 }
 
 // ============================================================================
@@ -281,28 +329,30 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     return () => clearTimeout(timer);
   }, [status, initSteps, visibleStepCount, onReady]);
 
-  const checkHealth = useCallback(async (): Promise<{ healthy: boolean; version?: string }> => {
+  const checkHealth = useCallback(async (): Promise<{
+    outcome: 'ready' | 'alive' | 'no_response';
+    version?: string;
+  }> => {
     try {
       const apiBase = getApiBaseUrl();
       console.log(`[Health Check] Checking health at ${apiBase || '(same-origin)'}/health...`);
       const response = await axios.get(`${apiBase}/health`, {
         timeout: TIMING.healthCheckTimeout,
       });
-      // Detect SPA fallback: if response is a string containing HTML, the
-      // request hit the Tauri asset protocol instead of the real backend.
-      // This is the v1.9.0 bug class (isDesktop()=false → same-origin → HTML).
-      if (typeof response.data === 'string' && response.data.includes('<!')) {
+      const outcome = classifyHealth({ data: response.data });
+      if (outcome === 'no_response' && typeof response.data === 'string') {
+        // SPA-fallback HTML — request hit the Tauri asset protocol, not the real
+        // backend. This is the v1.9.0 bug class (isDesktop()=false → same-origin → HTML).
         console.error(`[Health Check] FATAL: got HTML instead of JSON — API base URL is wrong. isDesktop()=${isDesktop()}, url=${apiBase || '(same-origin)'}/health`);
-        return { healthy: false };
       }
-      console.log(`[Health Check] Response:`, response.data);
+      console.log(`[Health Check] Response (${outcome}):`, response.data);
       return {
-        healthy: response.data?.status === 'healthy',
-        version: response.data?.version as string | undefined,
+        outcome,
+        version: (response.data as { version?: string } | null)?.version,
       };
     } catch (error) {
       console.error(`[Health Check] Failed:`, error);
-      return { healthy: false };
+      return { outcome: classifyHealth({ error }) };
     }
   }, []);
 
@@ -319,7 +369,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   }, []);
 
   useEffect(() => {
-    let healthAttempts = 0;
+    let noResponseStreak = 0;
     let timeoutId: ReturnType<typeof setTimeout>;
     let mounted = true;
 
@@ -369,7 +419,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       const healthResult = await checkHealth();
       if (!mounted) return;
 
-      if (healthResult.healthy) {
+      if (healthResult.outcome === 'ready') {
         // Capture app version from health response
         if (healthResult.version) {
           setAppVersion(healthResult.version);
@@ -407,13 +457,21 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
             }
           }, TIMING.fadeOutDuration);
         }
+      } else if (healthResult.outcome === 'alive') {
+        // Backend responded but is still booting — it is ALIVE, so keep waiting
+        // WITHOUT counting toward the give-up cap. This is the false-fatal fix:
+        // a slow-but-alive backend must never be declared "failed to start".
+        // Reset the no-response streak: any live reply means it's not dead.
+        noResponseStreak = 0;
+        timeoutId = setTimeout(pollHealth, TIMING.pollInterval);
       } else {
-        healthAttempts++;
-        if (healthAttempts >= TIMING.maxHealthAttempts) {
+        // no_response — backend genuinely unreachable (network error / SPA-fallback).
+        noResponseStreak++;
+        if (noResponseStreak >= TIMING.maxNoResponse) {
           const apiBase = getApiBaseUrl();
-          console.error(`[Health Check] Exhausted ${healthAttempts} attempts. apiBase=${apiBase || '(same-origin)'}, isDesktop=${isDesktop()}, port=${getBackendPort()}`);
+          console.error(`[Health Check] Exhausted ${noResponseStreak} consecutive no-response attempts. apiBase=${apiBase || '(same-origin)'}, isDesktop=${isDesktop()}, port=${getBackendPort()}`);
           setStatus('error');
-          setErrorMessage(`Backend service failed to start within 60 seconds (${apiBase || 'same-origin'}, ${healthAttempts} attempts)`);
+          setErrorMessage(`Backend service is not responding (${apiBase || 'same-origin'}, ${noResponseStreak} attempts with no reply). Check logs at ~/.swarm-ai/logs/`);
         } else {
           timeoutId = setTimeout(pollHealth, TIMING.pollInterval);
         }
