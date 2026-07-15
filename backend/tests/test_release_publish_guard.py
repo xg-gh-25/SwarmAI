@@ -94,17 +94,56 @@ class TestPublishGatedOnMarker:
         assert "release-gate" in reason or "HEAD" in reason
 
 
+class TestEditFlipGated:
+    """The real publish action is now `gh release edit --draft=false` (flip a
+    CI-created draft to published), NOT `gh release create`. run_900bb839: the guard
+    gated only `create`, so the edit-flip published on an unvalidated HEAD unchecked.
+    The guard must gate the edit-flip on the SAME CI-green marker."""
+
+    # gh's --draft is a boolean pflag (verified gh 2.88.1): value attaches ONLY via
+    # `=`, and Go strconv.ParseBool's false-set is EXACTLY {false,f,0} (case-insensitive).
+    # ALL of these publish, so ALL must be gated. NOT here: `--draft false` (space form,
+    # a hard gh arg error) and `--draft=no`/`=n`/`=yes` (gh rejects as invalid ParseBool
+    # — never publish); gating those would be dead weight against commands gh aborts.
+    @pytest.mark.parametrize("cmd", [
+        "gh release edit v1.25.0 --draft=false",                    # canonical
+        "gh release edit v1.25.0 --draft=FALSE",                    # case-insensitive
+        "gh release edit v1.25.0 --draft=0",                        # ParseBool false — was a BYPASS
+        "gh release edit v1.25.0 --draft=f",                        # ParseBool false — was a BYPASS
+        "gh release edit v1.25.0 --draft=false --latest",           # with --latest
+        "gh release edit --draft=false --latest v1.25.0",           # flag order independent
+        'gh release edit v1.25.0 --draft=false --notes "ship it"',  # flip + notes together
+    ])
+    def test_deny_edit_flip_without_marker(self, cmd, marker_env):
+        # no marker written → fail-closed DENY (this is the bug being fixed: was ALLOW)
+        assert _is_deny(_run(cmd)), f"draft->published flip must be GATED: {cmd!r}"
+
+    def test_allow_edit_flip_when_marker_matches(self, marker_env):
+        write_marker, HEAD = marker_env
+        write_marker(HEAD)
+        assert not _is_deny(_run("gh release edit v1.25.0 --draft=false --latest"))
+
+    def test_force_bypasses_edit_flip(self, marker_env, monkeypatch):
+        monkeypatch.setenv("SWARM_RELEASE_GATE_FORCE", "1")
+        assert not _is_deny(_run("gh release edit v1.25.0 --draft=false"))
+
+
 class TestNonPublishApproved:
-    """Fail-safe: only `gh release create` is gated; everything else passes."""
+    """Fail-safe: only publish actions (create + edit-flip) are gated; else passes."""
 
     @pytest.mark.parametrize("cmd", [
         "gh release view v1.24.0 --json tagName",     # view is not publish
         "gh release list",                             # list is not publish
         "gh release download v1.24.0",                 # download is not publish
+        "gh release edit v1.25.0 --notes 'updated'",   # metadata-only edit, NOT a flip
+        "gh release edit v1.25.0 --draft=true",        # re-drafting (reverse) is NOT publish
+        "gh release edit v1.25.0 --draft=1",           # ParseBool TRUE — reverse, NOT publish
+        "gh release delete v1.24.0",                   # delete owned by C041 gate, not here
         "git push origin main",
         "python scripts/artifact_cli.py release-gate --poll",
         "gh run list --branch main",
         'git commit -m "docs: describe gh release create flow"',  # quoted → not a real create
+        'git commit -m "note: run gh release edit --draft=false to publish"',  # quoted → not real
     ])
     def test_non_publish_approved(self, cmd, marker_env):
         assert not _is_deny(_run(cmd)), f"non-publish command must be APPROVED: {cmd!r}"

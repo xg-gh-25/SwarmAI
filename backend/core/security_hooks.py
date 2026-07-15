@@ -1206,10 +1206,47 @@ async def eval_command_guard(
 # release's HEAD) → DENY. Escape hatch for a legit manual re-publish:
 # SWARM_RELEASE_GATE_FORCE=1 (env) — logged, deliberate, never the default.
 
-# `gh release create` at a command-word boundary (the ONLY publish verb we gate;
-# `gh release view/list/download/delete` are not publish and pass through — delete
-# is separately handled by the C041 irreversible-op gate).
+# The publish actions we gate — TWO verbs, because release became CI-driven
+# (run_900bb839, 2026-07-15):
+#   (a) `gh release create`  — the legacy one-shot create+publish.
+#   (b) `gh release edit … --draft=false`  — the CURRENT publish path. CI
+#       (release.yml) creates the Release as a DRAFT on tag push; the human/agent
+#       flips it to published with `gh release edit --draft=false`. This flip is the
+#       real "goes public" moment and MUST clear the same CI-green marker. The gate
+#       used to match only (a), so the (b) flip published on an unvalidated HEAD
+#       completely unchecked (observed live during the v1.25.0 release).
+# NOT gated: `gh release view/list/download` (not publish), `gh release edit --notes`
+# WITHOUT a draft-flip (metadata-only on an already-public release), `--draft=true`
+# (re-drafting = the REVERSE of publish), and `gh release delete` (owned by the C041
+# irreversible-op gate). `_strip_quoted` removes quoted spans first so a --draft=false
+# inside a --notes string / commit message is not a false match.
 _GH_RELEASE_CREATE_RE = re.compile(r"\bgh\s+release\s+create\b", re.IGNORECASE)
+_GH_RELEASE_EDIT_RE = re.compile(r"\bgh\s+release\s+edit\b", re.IGNORECASE)
+# draft-flip token. gh's `--draft` is a BOOLEAN pflag (verified against gh 2.88.1):
+#   • a value ONLY attaches via `=` — `--draft false` (space) is a HARD gh error
+#     ("accepts 1 arg(s), received 2"), it never publishes, so we do NOT match it.
+#   • the value is parsed by Go strconv.ParseBool → the FALSE set is EXACTLY
+#     {false, f, 0} (case-insensitive; `no`/`n`/`yes` are NOT ParseBool tokens — gh
+#     rejects them as "invalid syntax" and publishes nothing). Matching only the
+#     literal "false" was a bypass (`--draft=0`/`--draft=f` published unchecked —
+#     Gate-2 run_900bb839, verified live against gh).
+# So: `--draft=` + a ParseBool-false token. `=true/t/1` (re-draft) does NOT match.
+_DRAFT_FALSE_RE = re.compile(r"--draft=(?:false|f|0)\b", re.IGNORECASE)
+
+
+def _is_release_publish(command: str) -> bool:
+    """True IFF the command PUBLISHES a GitHub Release (goes public):
+      - `gh release create …`, OR
+      - `gh release edit …` carrying a `--draft=<false>` flip (false-token = {false,f,0}).
+    Quoted spans are stripped first (a --draft=false inside --notes/commit text is
+    not a publish). `--draft=true` (re-draft) and metadata-only edits are NOT publish.
+    """
+    stripped = _strip_quoted(command)
+    if _GH_RELEASE_CREATE_RE.search(stripped):
+        return True
+    if _GH_RELEASE_EDIT_RE.search(stripped) and _DRAFT_FALSE_RE.search(stripped):
+        return True
+    return False
 
 
 def _release_marker_authorizes_head() -> tuple[bool, str]:
@@ -1258,18 +1295,24 @@ async def release_publish_guard(
     tool_use_id: str | None,
     context: Any,
 ) -> dict[str, Any]:
-    """PreToolUse (Bash): DENY `gh release create` unless CI is green on the current
-    HEAD (marker written by `artifact_cli.py release-gate --poll`).
+    """PreToolUse (Bash): DENY a GitHub Release PUBLISH unless CI is green on the
+    current HEAD (marker written by `artifact_cli.py release-gate --poll`).
 
-    The code-enforced half of s_swarm-release Stage 7b (run_9fec1fb1). Prose said
-    "wait for CI green before publish" and was structurally unenforced; this gate
-    makes publishing-before-green impossible without an explicit logged override.
-    Fail-safe: non-Bash / non-`gh release create` commands approve untouched.
+    Publish = `gh release create` OR `gh release edit --draft=<false-token>` (the
+    draft→published flip — the current CI-driven publish path; the false-token set is
+    gh's boolean-flag ParseBool false values {false,f,0,no,n}, see `_is_release_publish`).
+
+    The code-enforced half of s_swarm-release Stage 7b (run_9fec1fb1; extended to the
+    edit-flip verb run_900bb839). Prose said "wait for CI green before publish" and was
+    structurally unenforced; this gate makes publishing-before-green impossible without
+    an explicit logged override. Fail-safe: non-Bash / non-publish commands approve
+    untouched (view/list/download, metadata-only `edit --notes`, `--draft=true`
+    re-draft, and `gh release delete` — the last owned by the C041 gate).
 
     Accepted residuals (adversarial run_9fec1fb1, both by-design not defects):
     - Indirect invocation (`bash -c "gh release create …"`) is NOT caught: `_strip_quoted`
       removes the quoted span before the regex (same documented residual as
-      pytest_command_guard). The release skill types a BARE `gh release create` (7c),
+      pytest_command_guard). The release skill types a BARE publish verb (7a/7c),
       never wrapped — this is a contrived-attack surface, not a flow-hit. LOW.
     - The marker is a plaintext file the agent could `echo >` to forge a green.
       Threat model here is "stop CLASS-A skip-verification," not a malicious agent;
@@ -1279,7 +1322,7 @@ async def release_publish_guard(
     if input_data.get("tool_name") != "Bash":
         return {"decision": "approve"}
     command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-    if not command or not _GH_RELEASE_CREATE_RE.search(_strip_quoted(command)):
+    if not command or not _is_release_publish(command):
         return {"decision": "approve"}
 
     if os.environ.get("SWARM_RELEASE_GATE_FORCE") == "1":
@@ -1292,13 +1335,13 @@ async def release_publish_guard(
         logger.info("[release-gate] publish allowed — %s", reason)
         return {"decision": "approve"}
 
-    logger.warning("[BLOCKED] gh release create without CI-green marker: %s", reason)
+    logger.warning("[BLOCKED] GitHub Release publish without CI-green marker: %s", reason)
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                f"`gh release create` → DENY: {reason}. "
+                f"GitHub Release publish (`gh release create` / `edit --draft=false`) → DENY: {reason}. "
                 "发布 GitHub Release(tag+DMG,有 star/下载不可逆副作用)前,CI 必须在**当前 HEAD** 上绿。 "
                 "先跑 `python backend/scripts/artifact_cli.py release-gate --poll`(agent 驱动轮询,一次一 call)"
                 "直到 state=PASS 写下 marker,再发布。CI 红 → 修 → push → 重新 poll,绝不在红的 HEAD 上发。 "
