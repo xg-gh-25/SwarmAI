@@ -456,13 +456,17 @@ class TestHITLMatcherTimeout:
     def test_real_build_hooks_bash_and_ask_carry_timeout(self):
         """AC2 (integration): the REAL build_hooks() output gives the Bash and
         AskUserQuestion matchers the 4h timeout, and no other matcher does."""
-        import asyncio
         from core.hook_builder import build_hooks
         from core.permission_manager import (
             permission_manager, PERMISSION_ANSWER_TIMEOUT_SECONDS,
         )
 
-        hooks, _skills, _allow_all = asyncio.get_event_loop().run_until_complete(
+        # Use asyncio.run (not get_event_loop().run_until_complete): the latter
+        # raises "There is no current event loop" on Py3.12+ in a thread with no
+        # running loop (CI's non-DB isolated run had no pytest-asyncio loop
+        # installed → green locally, red on CI). asyncio.run creates + closes its
+        # own loop, so it works regardless of the ambient loop state.
+        hooks, _skills, _allow_all = asyncio.run(
             build_hooks(
                 agent_config={"id": "default"},
                 enable_skills=False,
