@@ -224,3 +224,100 @@ def test_export_pdf_self_validates():
     s = _export_script_text()
     assert "process.exit(1)" in s, "no nonzero-exit self-validation guard"
     assert "<details>" in s or "details" in s, "no <details> collapse-region warning"
+
+
+# ---------- export-pdf.sh: advisory text-overlap check (run_ff9db326, Path A) ----------
+# Implements the READ side of the data-om-validate contract that deck-stage.js:56
+# WRITES ('no_overflowing_text,no_overlapping_text,slide_sized_text') but nothing reads.
+# ADVISORY per INSTRUCTIONS.md:801 — warn, never hard-fail.
+
+def test_export_pdf_reads_om_validate_contract():
+    """The overlap probe MUST read the data-om-validate contract deck-stage.js writes,
+    and honor the per-slide opt-out. Without this the check is not wired to the
+    already-declared contract (GUI08 write->read mismatch)."""
+    s = _export_script_text()
+    assert "data-om-validate" in s, \
+        "overlap probe does not read data-om-validate — contract read side missing"
+    assert "no_overlapping_text" in s, \
+        "overlap probe does not gate on the no_overlapping_text contract token"
+
+
+def test_export_pdf_overlap_check_is_advisory():
+    """The overlap check MUST be ADVISORY (console.warn, exit 0) — never a hard gate.
+    INSTRUCTIONS.md:801 deliberately keeps this false-positive-prone check class advisory.
+    Regression guard: the overlap-warning block must NOT contain a process.exit."""
+    s = _export_script_text()
+    lines = s.splitlines()
+    # Locate the advisory overlap-warning SUMMARY block by its distinctive marker
+    # comment ("ADVISORY: report ...") — not the array-decl or probe comments.
+    idx = next((i for i, ln in enumerate(lines)
+                if "ADVISORY: report" in ln), None)
+    assert idx is not None, \
+        "no 'ADVISORY: report' summary marker — advisory overlap summary not implemented"
+    # Anchor to the block END (next PDF-saved console.log or EOF) rather than a magic
+    # line count — so the no-process.exit guard cannot silently rot if the block grows.
+    end = next((j for j in range(idx + 1, len(lines)) if "PDF saved" in lines[j]), len(lines))
+    block = "\n".join(lines[idx:end])
+    assert "console.warn" in block or "console.error" in block, \
+        "advisory overlap block does not warn (no console.warn/error)"
+    assert "process.exit" not in block, \
+        "advisory overlap block contains process.exit — it must NOT hard-fail (INSTRUCTIONS.md:801)"
+
+
+def _extract_overlap_probe() -> str:
+    """Pull the exact overlap `page.evaluate((index) => {...}, i)` body out of the
+    live export-pdf.sh so the behavioral test drives the REAL probe (not a copy)."""
+    s = _export_script_text()
+    m = re.search(r"const overlap = await page\.evaluate\((\(index\) => \{.*?\n  \}), i\);",
+                  s, re.S)
+    assert m, "could not extract the overlap probe from export-pdf.sh — did its shape change?"
+    return m.group(1)
+
+
+@pytest.mark.skipif(
+    not _HAS_PLAYWRIGHT,
+    reason="playwright not in this interpreter (probe geometry is a runtime concern)",
+)
+def test_overlap_probe_behavior_live():
+    """BEHAVIORAL (live, gated, mutation-sensitive): drive the REAL extracted overlap
+    probe in chromium against 3 synthetic deck-stage slides — a clean slide, a slide
+    with two boxes that overlap ~30px, and an overlapping slide that opts out via
+    data-om-validate='false'. Asserts: clean → no flag, overlap → flagged, opt-out →
+    skipped. Unlike the text-marker tests, this FAILS if the probe geometry
+    (`ix>4 && iy>4`) or the opt-out condition is mutated."""
+    from playwright.sync_api import sync_playwright  # type: ignore
+
+    probe = _extract_overlap_probe()
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        pg = b.new_page(viewport={"width": 1920, "height": 1080})
+        pg.set_content("<!doctype html><meta charset=utf-8><body></body>")
+        # Build 3 slides + a fake deck-stage._slides, then call the real probe per slide.
+        pg.evaluate(
+            """() => {
+              const de = document.createElement('deck-stage'); document.body.appendChild(de);
+              const mk = (attr, boxes) => { const s=document.createElement('div');
+                s.className='slide'; s.style.cssText='position:relative;width:1920px;height:1080px';
+                if(attr!==null) s.setAttribute('data-om-validate', attr);
+                boxes.forEach(([n,css])=>{const d=document.createElement('div');
+                  d.style.cssText='position:absolute;'+css; d.textContent='blk '+n; s.appendChild(d);});
+                document.body.appendChild(s); return s; };
+              const s0 = mk(null, [['c','left:100px;top:400px;width:300px;height:60px']]);
+              const s1 = mk(null, [['a','left:100px;top:100px;width:300px;height:60px'],
+                                   ['b','left:100px;top:130px;width:300px;height:60px']]);
+              const s2 = mk('false', [['a','left:100px;top:100px;width:300px;height:60px'],
+                                      ['b','left:100px;top:130px;width:300px;height:60px']]);
+              window.__ds = document.querySelector('deck-stage');
+              window.__ds._slides = [s0, s1, s2];
+            }"""
+        )
+        pg.evaluate("(p) => { window.__probe = p; }", probe)
+        res = [pg.evaluate("(i) => eval('('+window.__probe+')')(i)", i) for i in range(3)]
+        b.close()
+
+    assert res[0]["skipped"] is False and res[0]["overlaps"] == [], \
+        f"clean slide wrongly flagged: {res[0]}"
+    assert res[1]["skipped"] is False and len(res[1]["overlaps"]) >= 1, \
+        f"overlap NOT detected: {res[1]}"
+    assert res[2]["skipped"] is True, \
+        f"data-om-validate='false' slide NOT skipped: {res[2]}"

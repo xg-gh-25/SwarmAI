@@ -488,3 +488,21 @@ class TestDddNativeSkills:
         low = (d / "SKILL.md").read_text(encoding="utf-8").lower()
         assert "message" in low and "audience" in low, "must retain message-first/audience principle"
         assert "product.md" in low, "must source value from the DDD's own ② PRODUCT.md (portable)"
+
+    def test_ddd_pollinate_shared_files_track_the_source(self):
+        """The html-deck shared runtime files (deck-stage.js, viewport-base.css,
+        export-pdf.sh) are copies of the s_pollinate source-of-truth — they carry no
+        DDD-specific adaptation and MUST stay byte-identical. export-pdf.sh silently
+        drifted a full generation behind (base64+page.pdf() vs screenshot+pdf-lib) and
+        nothing caught it for months (run_ff9db326). This guard makes drift fail loudly."""
+        src = (Path(__file__).resolve().parent.parent / "skills" / "s_pollinate"
+               / "templates" / "html-deck" / "shared")
+        dst = self.SKILLS_DIR / "s_ddd-pollinate" / "templates" / "html-deck" / "shared"
+        for name in ("export-pdf.sh", "deck-stage.js", "viewport-base.css"):
+            s, b = src / name, dst / name
+            assert s.is_file(), f"source shared/{name} missing"
+            assert b.is_file(), f"ddd-pollinate shared/{name} missing"
+            assert s.read_bytes() == b.read_bytes(), (
+                f"shared/{name} drifted from the s_pollinate source-of-truth — "
+                f"re-sync: cp '{s}' '{b}' (these files carry no DDD-specific adaptation)"
+            )

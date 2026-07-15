@@ -245,6 +245,7 @@ if (detailsCount > 0) {
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
 const screenshotPaths = [];
 const slideLinks = [];   // per slide: [{href,x,y,w,h}, ...] in screenshot px
+const slideOverlaps = []; // per slide: {slide, skipped, overlaps:[{a,b,px}]} — ADVISORY only
 
 for (let i = 0; i < slideCount; i++) {
   // Navigate. deck-stage: _go(i) + hide overlay chrome. legacy: show/hide .slide.
@@ -306,6 +307,63 @@ for (let i = 0; i < slideCount; i++) {
   }, i);
   slideLinks.push(links);
 
+  // ── ADVISORY text-overlap probe (READ side of the data-om-validate contract) ──
+  // deck-stage.js WRITES data-om-validate="no_overflowing_text,no_overlapping_text,
+  // slide_sized_text" on every slide but nothing ever read it. Here we honor the
+  // no_overlapping_text token: detect two LEAF text blocks whose boxes intersect,
+  // using the real loaded fonts (reveals already forced above). This is ADVISORY
+  // only — we warn, never fail (INSTRUCTIONS.md:801: this check class is
+  // false-positive-prone and must not hard-block a genuine delivery). A slide may
+  // opt out with data-om-validate="false".
+  const overlap = await page.evaluate((index) => {
+    const ds = document.querySelector('deck-stage');
+    const slide = ds ? ds._slides[index] : document.querySelectorAll('.slide')[index];
+    if (!slide) return { slide: index + 1, skipped: true, overlaps: [] };
+    const attr = (slide.getAttribute('data-om-validate') || '').trim();
+    // Opt-out: explicit "false", or a token list that does not request the check.
+    if (attr === 'false' || (attr && !attr.split(',').map(t => t.trim()).includes('no_overlapping_text'))) {
+      return { slide: index + 1, skipped: true, overlaps: [] };
+    }
+    // Collect LEAF text blocks: element has non-empty text, all children are
+    // text/inline (not a wrapping container → avoids counting a parent that
+    // merely contains its own children), is visible, not rotated (matrix/rotate
+    // measurement artifact), and not zero-size.
+    const INLINE = new Set(['A','SPAN','EM','STRONG','B','I','U','CODE','SUP','SUB','SMALL','MARK','BR','WBR','ABBR','TIME','LABEL']);
+    const isLeafText = (el) => {
+      const txt = (el.textContent || '').trim();
+      if (!txt) return false;
+      for (const c of el.children) { if (!INLINE.has(c.tagName)) return false; }
+      const cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) === 0) return false;
+      const tf = cs.transform;
+      if (tf && tf !== 'none' && /matrix|rotate/.test(tf)) return false; // rotated → skip
+      const r = el.getBoundingClientRect();
+      return r.width > 2 && r.height > 2;
+    };
+    const blocks = [];
+    slide.querySelectorAll('*').forEach((el) => {
+      if (INLINE.has(el.tagName)) return;            // inline spans handled by their block parent
+      if (!isLeafText(el)) return;
+      const r = el.getBoundingClientRect();
+      blocks.push({ el, r, text: (el.textContent || '').trim().slice(0, 40) });
+    });
+    const overlaps = [];
+    for (let a = 0; a < blocks.length; a++) {
+      for (let b = a + 1; b < blocks.length; b++) {
+        const ra = blocks[a].r, rb = blocks[b].r;
+        // one is an ancestor of the other → not a real overlap, skip
+        if (blocks[a].el.contains(blocks[b].el) || blocks[b].el.contains(blocks[a].el)) continue;
+        const ix = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+        const iy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+        if (ix > 4 && iy > 4) {                       // >4px on BOTH axes (not a touching border)
+          overlaps.push({ a: blocks[a].text, b: blocks[b].text, px: Math.round(Math.min(ix, iy)) });
+        }
+      }
+    }
+    return { slide: index + 1, skipped: false, overlaps };
+  }, i);
+  slideOverlaps.push(overlap);
+
   const screenshotPath = join(SCREENSHOT_DIR, `slide-${String(i + 1).padStart(3, '0')}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   screenshotPaths.push(screenshotPath);
@@ -366,6 +424,21 @@ if (captured > 0 && totalLinks !== captured) {
   ok = false;
 }
 if (!ok) process.exit(1);
+
+// ─── ADVISORY: report text-overlap warnings (data-om-validate contract). ───
+// Non-blocking BY DESIGN (INSTRUCTIONS.md:801) — this warns and NEVER changes the
+// exit code. The exit-code gate above (page/link counts) is the ONLY hard gate;
+// keep this block strictly after it so overlaps can never affect exit status.
+const overlapSlides = slideOverlaps.filter((s) => !s.skipped && s.overlaps.length);
+if (overlapSlides.length) {
+  console.warn(`  ⚠ ADVISORY: text-overlap detected on ${overlapSlides.length} slide(s) (review; not a hard failure):`);
+  for (const s of overlapSlides) {
+    for (const o of s.overlaps) {
+      console.warn(`      slide ${s.slide}: "${o.a}" ⇄ "${o.b}" overlap ~${o.px}px`);
+    }
+  }
+  console.warn(`      (intentional? add data-om-validate="false" to that slide to opt out.)`);
+}
 
 console.log(`  ✓ PDF saved: ${OUTPUT_PDF} (${producedPages} pages, ${totalLinks} clickable links)`);
 EXPORT_SCRIPT

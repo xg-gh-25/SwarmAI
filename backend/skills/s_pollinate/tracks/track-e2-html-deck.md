@@ -151,9 +151,20 @@ Result: ONE `.html` that renders the full aesthetic (fonts fetched from CDN on o
 
 ## Step 3 — (optional) Export PDF
 
-Use `shared/export-pdf.sh` (Playwright chromium → `page.pdf()` at 1920×1080). It loads
-the page with `waitUntil: 'networkidle'`, so CDN fonts are fully loaded before the PDF
-snapshot. Playwright runs at export time only.
+Use `shared/export-pdf.sh`. It does NOT use `page.pdf()`. Instead, per slide it navigates
+via the `<deck-stage>` component (`_go(i)`), forces `.reveal` entrance animations to their
+finished state, screenshots at 1920×1080, then assembles the PDF with **pdf-lib** — one
+image page per slide **plus clickable `/Link` annotations** overlaid from the captured
+`<a href>` rects (so links stay clickable, not flattened to pixels). Capture uses the real
+loaded webfonts. It self-validates page-count vs slide-count and link-annotation count
+(hard-fails on mismatch), and prints an **ADVISORY text-overlap warning** (see Step 4).
+Playwright runs at export time only.
+
+> **Note:** the DDD-portable copy at
+> `backend/templates/ddd-skills/s_ddd-pollinate/templates/html-deck/shared/export-pdf.sh`
+> is an OLDER generation (base64 `<img>` + `page.pdf()`, which flattens links). It is
+> intentionally NOT kept byte-identical to this copy — a separate full-generation
+> catch-up would be needed to port the modern screenshot+pdf-lib architecture there.
 
 ## Step 4 — Verify (the litmus)
 
@@ -166,6 +177,11 @@ Before declaring done, render the assembled `.html` headless and confirm:
 - The design system's font `<link>` is present in `<head>` AND includes every Latin family
   its CSS names (fonts wired, not just CJK).
 - The field/background painted (not white) — confirms `--stage-bg`/`--slide-bg` were set.
+- **Overlap advisory:** if `export-pdf.sh` prints a `⚠ ADVISORY: text-overlap` line,
+  review those slides — text blocks visually collide (footer clash, stacked captions).
+  It is NOT a hard gate (this check is false-positive-prone). If an overlap is
+  intentional (decorative accent, ribbon), add `data-om-validate="false"` to that slide
+  to opt it out of the check.
 
 (See `backend/skills/s_pollinate/tests/test_html_deck_track.py::test_ac6_render_scale` for
 the exact Playwright probe — it asserts the stage scales.)
