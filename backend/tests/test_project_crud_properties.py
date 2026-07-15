@@ -518,3 +518,113 @@ class TestDddNativeSkills:
                 f"shared/{name} drifted from the s_pollinate source-of-truth — "
                 f"re-sync: cp '{s}' '{b}' (these files carry no DDD-specific adaptation)"
             )
+
+    # ─── Verbatim-copy manifest: ddd-skill file → its backend/ source-of-truth ───
+    # UNLIKE shared/ (100% verbatim, dir-driven above), the scripts/ + engine/ dirs are
+    # MIXED — some files are verbatim copies (must stay synced), others are DELIBERATE
+    # portability forks (_ddd_paths.py, artifact_cli.py, publish_to_pages.py, …) whose
+    # whole point is to differ. "verbatim vs adapted" is a human judgment that cannot be
+    # auto-derived, so this is a CURATED manifest, not directory-driven. Paths are
+    # relative to backend/templates/ddd-skills/ (key) and repo root (value).
+    # Generated + verified by hash-matching (run 2026-07-15). Coincidental empty/tiny
+    # matches (__init__.py) are pinned to their logical sibling source.
+    VERBATIM_PAIRS = {
+        # s_ddd-pipeline engine ← s_autonomous-pipeline scripts + core
+        "s_ddd-pipeline/engine/__init__.py": "backend/skills/s_autonomous-pipeline/scripts/__init__.py",
+        "s_ddd-pipeline/engine/confidence_score.py": "backend/skills/s_autonomous-pipeline/scripts/confidence_score.py",
+        "s_ddd-pipeline/engine/goal_metrics.py": "backend/skills/s_autonomous-pipeline/scripts/goal_metrics.py",
+        "s_ddd-pipeline/engine/pipeline_pr.py": "backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py",
+        "s_ddd-pipeline/engine/pipeline_profiles.py": "backend/core/pipeline_profiles.py",
+        "s_ddd-pipeline/engine/wtf_gate.py": "backend/skills/s_autonomous-pipeline/scripts/wtf_gate.py",
+        # s_ddd-pollinate scripts ← s_pollinate scripts
+        "s_ddd-pollinate/scripts/brand_chart.py": "backend/skills/s_pollinate/scripts/brand_chart.py",
+        "s_ddd-pollinate/scripts/check_rpv.py": "backend/skills/s_pollinate/scripts/check_rpv.py",
+        "s_ddd-pollinate/scripts/check_specs.py": "backend/skills/s_pollinate/scripts/check_specs.py",
+        "s_ddd-pollinate/scripts/cross_format_check.py": "backend/skills/s_pollinate/scripts/cross_format_check.py",
+        "s_ddd-pollinate/scripts/deck_notes_injector.py": "backend/skills/s_pollinate/scripts/deck_notes_injector.py",
+        "s_ddd-pollinate/scripts/evaluate_topic.py": "backend/skills/s_pollinate/scripts/evaluate_topic.py",
+        "s_ddd-pollinate/scripts/font_link_backfill.py": "backend/skills/s_pollinate/scripts/font_link_backfill.py",
+        "s_ddd-pollinate/scripts/format_recommend.py": "backend/skills/s_pollinate/scripts/format_recommend.py",
+        "s_ddd-pollinate/scripts/generate_tts.py": "backend/skills/s_pollinate/scripts/generate_tts.py",
+        "s_ddd-pollinate/scripts/geo_score.py": "backend/skills/s_pollinate/scripts/geo_score.py",
+        "s_ddd-pollinate/scripts/get_pref.py": "backend/skills/s_pollinate/scripts/get_pref.py",
+        "s_ddd-pollinate/scripts/migrate_prefs.py": "backend/skills/s_pollinate/scripts/migrate_prefs.py",
+        "s_ddd-pollinate/scripts/p2_scan.py": "backend/skills/s_pollinate/scripts/p2_scan.py",
+        "s_ddd-pollinate/scripts/pptx_to_deck.py": "backend/skills/s_pollinate/scripts/pptx_to_deck.py",
+        "s_ddd-pollinate/scripts/publish_dashboard.py": "backend/skills/s_pollinate/scripts/publish_dashboard.py",
+        "s_ddd-pollinate/scripts/resolve_backend.py": "backend/skills/s_pollinate/scripts/resolve_backend.py",
+        "s_ddd-pollinate/scripts/tts/__init__.py": "backend/skills/s_pollinate/scripts/tts/__init__.py",
+        "s_ddd-pollinate/scripts/tts/backends/__init__.py": "backend/skills/s_pollinate/scripts/tts/backends/__init__.py",
+        "s_ddd-pollinate/scripts/tts/backends/azure.py": "backend/skills/s_pollinate/scripts/tts/backends/azure.py",
+        "s_ddd-pollinate/scripts/tts/backends/base.py": "backend/skills/s_pollinate/scripts/tts/backends/base.py",
+        "s_ddd-pollinate/scripts/tts/backends/edge.py": "backend/skills/s_pollinate/scripts/tts/backends/edge.py",
+        "s_ddd-pollinate/scripts/tts/backends/polly.py": "backend/skills/s_pollinate/scripts/tts/backends/polly.py",
+        "s_ddd-pollinate/scripts/tts/phonemes.py": "backend/skills/s_pollinate/scripts/tts/phonemes.py",
+        "s_ddd-pollinate/scripts/tts/sections.py": "backend/skills/s_pollinate/scripts/tts/sections.py",
+        "s_ddd-pollinate/scripts/tts/srt.py": "backend/skills/s_pollinate/scripts/tts/srt.py",
+        "s_ddd-pollinate/scripts/tts/ssml.py": "backend/skills/s_pollinate/scripts/tts/ssml.py",
+        # s_ddd-pollinate html-deck shared ← s_pollinate (also covered by dir guard above)
+        "s_ddd-pollinate/templates/html-deck/shared/deck-stage.js": "backend/skills/s_pollinate/templates/html-deck/shared/deck-stage.js",
+        "s_ddd-pollinate/templates/html-deck/shared/export-pdf.sh": "backend/skills/s_pollinate/templates/html-deck/shared/export-pdf.sh",
+        "s_ddd-pollinate/templates/html-deck/shared/viewport-base.css": "backend/skills/s_pollinate/templates/html-deck/shared/viewport-base.css",
+    }
+
+    @pytest.mark.parametrize("rel", sorted(VERBATIM_PAIRS))
+    def test_ddd_verbatim_copy_tracks_source(self, rel: str):
+        """Every verbatim-copied ddd-skill file MUST stay byte-identical to its
+        backend/ source-of-truth. This generalizes the shared/ drift guard (run_ff9db326)
+        to the scripts/ + engine/ copies across ALL ddd-skills. Adapted portability
+        forks are intentionally NOT in the manifest — see test_ddd_verbatim_manifest_
+        is_complete for the guard that no verbatim copy silently escapes the manifest."""
+        repo = Path(__file__).resolve().parent.parent.parent
+        b = self.SKILLS_DIR / rel
+        s = repo / self.VERBATIM_PAIRS[rel]
+        assert s.is_file(), f"source-of-truth missing: {s}"
+        assert b.is_file(), f"ddd copy missing: {b}"
+        assert b.read_bytes() == s.read_bytes(), (
+            f"{rel} drifted from its source-of-truth — re-sync: cp '{s}' '{b}'. "
+            f"(If this file is meant to be an ADAPTED portability fork, remove it from "
+            f"VERBATIM_PAIRS instead.)"
+        )
+
+    def test_ddd_verbatim_manifest_is_complete(self):
+        """COMPLETENESS: no ddd-skill file may be a byte-identical copy of a backend/
+        source WITHOUT being in VERBATIM_PAIRS. Otherwise a new verbatim copy could be
+        added and silently drift, unwatched — the exact failure the manifest exists to
+        prevent. A hit here means: add the pair to VERBATIM_PAIRS (if it should track
+        the source) OR the collision is coincidental/adapted (then it won't be byte-
+        identical for long — but confirm). Empty/tiny files (<30B) are exempt (empty
+        __init__.py collides with every other empty file)."""
+        import hashlib
+        repo = Path(__file__).resolve().parent.parent.parent
+        # source pool: hash → path, over the trees ddd copies actually pull from
+        pool: dict[str, str] = {}
+        for base in ("backend/skills", "backend/core"):
+            for p in (repo / base).rglob("*"):
+                if not p.is_file() or "ddd-skills" in p.parts:
+                    continue
+                if any(x in p.parts for x in ("__pycache__", "node_modules", ".venv")):
+                    continue
+                if p.suffix not in (".py", ".sh", ".js", ".css"):
+                    continue
+                if p.stat().st_size < 30:
+                    continue
+                pool[hashlib.md5(p.read_bytes()).hexdigest()] = str(p.relative_to(repo))
+        known = set(self.VERBATIM_PAIRS)
+        unmanaged = []
+        for p in self.SKILLS_DIR.rglob("*"):
+            if not p.is_file() or "__pycache__" in p.parts:
+                continue
+            if p.suffix not in (".py", ".sh", ".js", ".css") or p.stat().st_size < 30:
+                continue
+            rel = str(p.relative_to(self.SKILLS_DIR))
+            if rel in known:
+                continue
+            h = hashlib.md5(p.read_bytes()).hexdigest()
+            if h in pool:
+                unmanaged.append(f"{rel}  (byte-identical to {pool[h]})")
+        assert not unmanaged, (
+            "ddd-skill file(s) are byte-identical to a backend/ source but NOT in "
+            "VERBATIM_PAIRS — add them so drift is caught, or confirm they are adapted:\n  "
+            + "\n  ".join(unmanaged)
+        )
