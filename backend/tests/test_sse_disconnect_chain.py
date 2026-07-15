@@ -17,6 +17,25 @@ import pytest
 from core.session_unit import SessionUnit, SessionState
 
 
+@pytest.fixture(autouse=True)
+def _redirect_pending_db(tmp_path, monkeypatch):
+    """Point session_pending's SQLite path at a throwaway tmp DB for every test.
+
+    Several tests mock the ``database.db`` singleton. Without this, any code that
+    resolves ``session_pending._get_db_path()`` -> ``str(db.messages.db_path)``
+    (the SESSION_BUSY -> mark_pending conversion AND the background drain worker's
+    claim_pending_batch) gets the MagicMock repr as the path, and
+    sqlite/aiosqlite ``connect()`` creates junk files literally named
+    ``<MagicMock name='db.messages.db_path' id='...'>`` in the CWD. Redirecting the
+    single ``_db_path_override`` seam covers all those paths at once and keeps the
+    worktree clean.
+    """
+    from core import session_pending
+    monkeypatch.setattr(
+        session_pending, "_db_path_override", str(tmp_path / "pending.db"), raising=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC1: Backend send() does NOT kill actively-streaming sessions (stall < 60s)
 # ---------------------------------------------------------------------------
@@ -196,9 +215,17 @@ class TestSessionBusyErrorEvent:
             # Make it an async generator
             yield  # pragma: no cover
 
+        # NOTE: mark_pending_by_id MUST be patched here. The SESSION_BUSY handler
+        # in run_conversation converts the persisted row to a pending message via
+        # session_pending.mark_pending_by_id, which resolves _get_db_path() ->
+        # str(db.messages.db_path). With database.db mocked, that string is the
+        # MagicMock repr and aiosqlite.connect() would create a junk file named
+        # "<MagicMock name='db.messages.db_path' ...>" in the CWD. This test only
+        # asserts the SESSION_BUSY event, so stub the pending conversion.
         with patch.object(unit, "send", side_effect=SessionBusyError(detail="actively streaming")), \
              patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock, return_value={"model": "test"}), \
              patch("database.db") as mock_db, \
+             patch("core.session_pending.mark_pending_by_id", new_callable=AsyncMock, return_value=1), \
              patch("core.session_manager.session_manager") as mock_sm:
             mock_sm.store_session = AsyncMock()
             mock_db.messages = MagicMock()
