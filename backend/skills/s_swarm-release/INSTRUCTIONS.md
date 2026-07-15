@@ -4,14 +4,25 @@ Full SwarmAI release pipeline: from pre-flight to GitHub Release.
 
 ## Co-Pilot Model
 
-This skill uses **human-in-the-loop** for long builds. Agent handles all fast
-steps (preflight, version bump, smoke, publish); user runs builds in their own
-terminal where they can't be killed by session management.
+This skill uses **human-in-the-loop** for the one long *local* step (backend
+build+deploy, which verifies the new binary boots before we ship). Everything
+else is Agent-driven. **The shipped multi-platform artifacts are built by CI, not
+locally** — pushing the `v*` tag triggers `.github/workflows/release.yml`, which
+builds macOS/Windows/Hive on GitHub runners and creates a **draft** GitHub Release.
+The only manual publish step is flipping that draft to published.
 
 ```
-Agent: PREFLIGHT → BUMP → USER: prod.sh build → Agent: SMOKE →
-USER: TAURI BUILD → Agent: VERIFY DMG → PUSH → [CI GREEN GATE] → PUBLISH
+Agent: PREFLIGHT → BUMP → USER: prod.sh build (local backend deploy+verify) →
+Agent: SMOKE → PUSH commit+tag  ─┬─▶ [tag push TRIGGERS release.yml:
+                                 │    CI builds all platforms + creates DRAFT release]
+Agent: [CI GREEN GATE] → verify DRAFT assets → FLIP draft→published
 ```
+
+> **Local build ≠ release artifact.** `prod.sh build` (Stage 3) and any local
+> `npm run tauri build` (Stage 5, now optional) only prove the app works on THIS
+> machine — they do NOT produce what ships. The DMG/exe/msi/tar.gz on the GitHub
+> Release are all CI-built by `release.yml`. `prod.sh build`/`release` never push a
+> tag and never create a GitHub Release.
 
 ---
 
@@ -224,52 +235,57 @@ Stage 4 SMOKE: PASS
 
 ---
 
-## Stage 5: TAURI BUILD (User, 3-5 min)
+## Stage 5: LOCAL DESKTOP SMOKE (User, OPTIONAL, 3-5 min)
 
-**NON-SKIPPABLE** unless user explicitly says "skip DMG" or "不用打包桌面".
+> **⚠️ This does NOT build the release artifact.** The shipped DMG/exe/msi are
+> built by CI (`release.yml`) at Stage 7a's tag push — NOT here. This stage is an
+> OPTIONAL local check that the desktop shell bundles + launches on this machine
+> before you push the tag. **Skip it freely** if Stage 4 (backend smoke) passed and
+> you trust the desktop shell — CI will build and verify the real artifacts anyway.
 
-Only reached after Stage 4 confirms the new backend binary runs correctly.
-
-Hand off to user:
+If you want the local desktop smoke, hand off to user:
 
 ```
-⏸️ YOUR TURN — 请在终端跑:
+⏸️ YOUR TURN (OPTIONAL) — 本地验证桌面壳,可跳过:
 ┌─────────────────────────────────────────────────────
 │ cd ~/Desktop/SwarmAI-Workspace/swarmai/desktop && npm run tauri build
 └─────────────────────────────────────────────────────
-完成后说 "好了"。
+完成后说 "好了",或说 "跳过" 直接进 Stage 7。
 ```
 
-Wait for user confirmation.
+The local DMG this produces is throwaway — it is NOT uploaded to the Release
+(Stage 7 flips the CI-built draft, which already contains all-platform assets).
 
 ---
 
-## Stage 6: VERIFY DMG (Agent, 5s)
+## Stage 6: (folded into Stage 7b) — CI builds + verifies the real artifacts
 
-```bash
-cd $SWARMAI_ROOT/desktop
-# DMG might be in bundle/dmg/ or bundle/macos/ depending on Tauri version
-find src-tauri/target/release/bundle -name "*.dmg" -newer src-tauri/Cargo.toml | head -3
-```
-
-**Pass:** DMG exists, >5MB. (Baseline: v1.18.0–v1.21.0 DMGs are all ~10.3MB.
-The PyInstaller backend ships separately via daemon auto-install — it is NOT
-bundled in the DMG, which is just the Rust Tauri shell. So >5MB is a broken/empty-
-build floor, not a "backend is included" check. Do NOT raise this toward 30MB.)
-**Fail:** No DMG found, or DMG <5MB → ask user to check build output.
+There is no separate local-DMG verification stage anymore. The artifacts that
+ship are the CI-built ones attached to the draft Release; they are verified in
+**Stage 7b** by inspecting `gh release view v${VERSION} --json assets` (all
+platforms present, fresh, from the current HEAD) — NOT by a local `find *.dmg`.
+A local `find` would only see the throwaway Stage-5 build and misses Windows/Hive
+entirely. See Stage 7b.
 
 ---
 
 ## Stage 7: PUBLISH (Agent, ~5-10min incl. CI gate)
 
-**R6 ORDER (non-negotiable):** push → **wait for CI green** → THEN publish. The push is
-FORMAL confirmation of an already-qualified HEAD; CI is the barrier BEFORE the Release
-object exists, never after. Splitting 7 into 7a→7b→7c is the structural fix for the
-v1.24.0 miss (published on HEAD `2d4a2ff2`, CI then went red on 3 stale artifacts —
-IMPROVEMENT.md 2026-07-04). The GitHub Release (tag + DMG) is the star/download-
-side-effect artifact — it MUST NOT be created until 7b is green.
+**R6 ORDER (non-negotiable):** push → **wait for CI green** → THEN publish (flip the
+draft). The push is FORMAL confirmation of an already-qualified HEAD; CI is the barrier
+BEFORE the Release goes public, never after. Splitting 7 into 7a→7b→7c is the structural
+fix for the v1.24.0 miss (published on HEAD `2d4a2ff2`, CI then went red on 3 stale
+artifacts — IMPROVEMENT.md 2026-07-04).
 
-### Stage 7a: PUSH (Agent, 30s)
+**How release actually happens (CI-driven — verified against `.github/workflows/release.yml`):**
+pushing the `v*` tag (7a) TRIGGERS `release.yml`, which builds macOS/Windows/Hive on
+GitHub runners and creates a **`draft: true`** GitHub Release with all-platform assets +
+auto-generated notes. So by the time you reach 7c the Release object ALREADY EXISTS as a
+draft — 7c is a **flip to published**, NOT a `gh release create`. The draft is
+star/download-invisible until flipped, so it is safe for the draft to exist pre-CI-green;
+what 7b gates is the **flip**.
+
+### Stage 7a: PUSH commit + tag (Agent, 30s) — the tag push triggers CI's release build
 
 ```bash
 cd $SWARMAI_ROOT
@@ -278,20 +294,61 @@ VERSION=$(cat VERSION)
 # Push commits (MUST succeed — no silent swallowing)
 git push origin main
 
-# Tag (safe to push before CI — a tag has no star/download side effect;
-# if 7b goes red, fix forward → HEAD advances → re-tag on the green HEAD)
+# Push the tag — THIS is the release trigger. Pushing v${VERSION} fires
+# release.yml, which builds all platforms + creates the DRAFT release.
+# (Safe pre-CI-green: the release lands as a draft, no star/download side effect.
+#  If 7b goes red, fix forward → HEAD advances → re-point the tag on the green HEAD;
+#  the re-push re-triggers release.yml and refreshes the draft assets.)
 git tag -a "v${VERSION}" -m "Release v${VERSION}" 2>/dev/null || true
 git push origin "v${VERSION}"
 ```
 
 If `git push` fails (auth, network): **STOP and report** — do NOT proceed.
 
-### Stage 7b: CI GREEN GATE (Agent, blocking, ~3-8min wall-clock) — the ONLY thing that unlocks 7c
+> **Re-pointing an existing tag** (batch grew after the tag was cut): delete the remote
+> tag first, then re-tag the new HEAD and push — `git push origin :refs/tags/v${VERSION}`
+> then `git tag -f -a … && git push origin v${VERSION}`. Deleting a tag whose Release is
+> still a **draft / 0-download** is safe (no star/download loss); a tag on a PUBLISHED
+> release is star-sensitive (C041) — never delete/re-point that without XG sign-off.
 
-**This gate is now CODE-ENFORCED** (run_9fec1fb1): `release-gate --poll` is the only thing
-that writes the CI-green marker, and the `release_publish_guard` PreToolUse hook DENIES
-`gh release create` unless that marker's `head_sha` == the current HEAD. You cannot skip
-to 7c — the hook blocks it. 7b is how you EARN the marker.
+### Stage 7b: CI GREEN GATE + verify draft assets (Agent, blocking, ~3-8min wall-clock)
+
+Two things gate the flip to published: (1) CI green on the current HEAD, (2) the CI-built
+draft carries all-platform assets from THIS HEAD.
+
+**CI-green marker** (run_9fec1fb1): `release-gate --poll` is the only thing that writes
+the CI-green marker; 7b is how you EARN it. ⚠️ The marker's *code enforcement* (the
+`release_publish_guard` hook) guards the **legacy `gh release create` verb** — which the
+new flow no longer uses. For the `gh release edit --draft=false` flip that 7c actually
+runs, the marker is **runbook-enforced, not code-enforced** (see the mismatch warning
+below). Treat "poll to PASS before flipping" as a discipline you must follow, not a hook
+that will catch you.
+
+> **⚠️ Known gate/verb mismatch (owned by a separate bugfix run, do NOT rely on the hook
+> here):** the `release_publish_guard` PreToolUse hook currently DENIES only the *legacy*
+> `gh release create` verb. But the real publish action is now `gh release edit
+> --draft=false` (7c) — which the hook does **NOT** intercept. So the code gate does NOT
+> actually block a premature flip today. Until that gap is fixed, **7b is enforced by
+> YOU following the runbook (poll to PASS before flipping), not by the hook.** Treat
+> the CI-green marker as the real precondition and verify it yourself.
+
+**Verify the draft's assets (replaces the old local `find *.dmg`):**
+```bash
+cd $SWARMAI_ROOT && VERSION=$(cat VERSION)
+gh release view "v${VERSION}" --json isDraft,targetCommitish,assets \
+  --jq '{isDraft, target:.targetCommitish, assets:[.assets[].name]}'
+```
+**Pass (required):** `isDraft=true`, and assets include a `.dmg` + `hive-*.tar.gz` +
+`checksums.txt`, freshly built for this HEAD. These are the load-bearing platforms —
+`release.yml`'s publish job requires `build-macos OR build-hive` to succeed (release.yml
+`if:` L219), so their absence means the CI build genuinely hasn't finished/failed.
+**Warn (not fail):** missing `-setup.exe` / `.msi` (Windows). Windows is **best-effort** —
+the publish job ships macOS+Hive even when `build-windows` fails (that's by design in
+release.yml). So absent Windows assets → WARN + note it in the release, do NOT block the
+flip. If you want Windows, re-run the failed `build-windows` job, don't hold the release.
+**Fail:** missing `.dmg` AND `hive-*.tar.gz`, or all assets older than the current
+release.yml run → the CI build hasn't finished (or fully failed); re-check the workflow
+before flipping.
 
 Poll via the CLI (one bounded call per invocation — **do NOT use `gh run watch` or wrap a
 `sleep`-loop in one bash call**; both are multi-minute single foreground calls that get
@@ -314,43 +371,49 @@ cd $SWARMAI_ROOT && python backend/scripts/artifact_cli.py release-gate --poll -
   source; sweep those first. Fix → push → **re-poll on the new HEAD** (the old marker,
   if any, no longer matches the new HEAD → still fail-closed). Do NOT create the Release.
 
-**No skip flag — code-enforced, not just runbook.** `release_publish_guard` blocks
-`gh release create` whenever the marker is absent / stale / HEAD-mismatched. Publishing
-before CI green is the exact "skip verification" hole this closes (CLASS A). A legit
-manual re-publish (e.g. re-uploading an asset to an already-CI-green tag) can set
-`SWARM_RELEASE_GATE_FORCE=1` — deliberate + logged, never the default.
+**Do not flip before the marker is PASS.** Publishing before CI green is the exact
+"skip verification" hole (CLASS A) 7b exists to close. A legit manual re-publish of an
+already-CI-green tag can set `SWARM_RELEASE_GATE_FORCE=1` on any gated command —
+deliberate + logged, never the default.
 
-### Stage 7c: PUBLISH RELEASE (Agent, 30s) — reached ONLY after 7b is green
+### Stage 7c: FLIP DRAFT → PUBLISHED (Agent, 30s) — reached ONLY after 7b is green
+
+The Release object already exists as a **draft** (CI created it at 7a's tag push, with
+all-platform assets). 7c does NOT create a release and does NOT upload a local DMG — it
+**flips the existing draft to published** and sets it latest.
 
 ```bash
 cd $SWARMAI_ROOT
 VERSION=$(cat VERSION)
 
-# Find the DMG
-DMG=$(find desktop/src-tauri/target/release/bundle -name "*.dmg" -newer desktop/src-tauri/Cargo.toml | sort -t. -k1,1 | tail -1)
-
-# Create GitHub Release with DMG (CI is green — this HEAD is qualified)
-gh release create "v${VERSION}" "$DMG" \
-  --title "v${VERSION}" \
+# Flip the CI-built draft to published + mark latest (assets already attached by CI).
+# NOTE: this uses `gh release edit --draft=false`, NOT `gh release create`. There is
+# no local DMG to upload — CI built and attached all platforms to the draft.
+gh release edit "v${VERSION}" --draft=false --latest \
   --notes "<release notes>"
 
-# Verify release actually exists
-gh release view "v${VERSION}" --json tagName,url
+# Verify it is actually published (not still a draft)
+gh release view "v${VERSION}" --json isDraft,isLatest,url \
+  --jq '{isDraft, isLatest, url}'
+# Expect: isDraft=false, isLatest=true
 
 # Consume the CI-green marker (one publish = one marker; prevents a stale marker
-# from authorizing a future accidental publish on the same HEAD)
+# from authorizing a future accidental flip on the same HEAD)
 python backend/scripts/artifact_cli.py release-gate --clear --project SwarmAI
 ```
 
 Release notes: summarize commits since last tag, grouped by type (feat/fix/improve/content).
+(CI also auto-generates notes via `generate_release_notes`; the `--notes` here overrides
+them with the curated summary.)
 
 **Report:**
 ```
 Stage 7 PUBLISH: PASS
   Tag: vX.Y.Z
   CI gate: GREEN (HEAD <sha>, run <id>)
+  Draft flipped → Published + Latest ✓
   Release: https://github.com/xg-gh-25/SwarmAI/releases/tag/vX.Y.Z
-  DMG: uploaded
+  Assets: macOS DMG · Windows exe+msi · Hive tar.gz · checksums (all CI-built)
 ```
 
 ---
@@ -360,10 +423,10 @@ Stage 7 PUBLISH: PASS
 ```
 RELEASE COMPLETE ✅ vX.Y.Z
   Commits: N (since vPREV)
-  Backend: verified (prod.sh build passed)
-  DMG: XX MB
+  Backend: verified (prod.sh build passed — local deploy)
+  Artifacts: CI-built (macOS DMG · Windows exe+msi · Hive tar.gz)
   Smoke: healthy, correct version
-  Published: GitHub Release
+  Published: GitHub Release (draft flipped → published + latest)
 ```
 
 ---
@@ -376,13 +439,13 @@ RELEASE COMPLETE ✅ vX.Y.Z
 | 1 Preflight | Agent | 30s | Block if R6 gate unmet or not on main |
 | 1.5 Convergence | Agent | 5s | Non-blocking |
 | 2 Version bump | Agent | 30s | No |
-| 3 Build+Deploy | **User** | 2-5 min | Yes — blocks release |
-| 4 Smoke | Agent | 15s | Yes — blocks release |
-| 5 Tauri build | **User** | 3-5 min | Yes |
-| 6 Verify DMG | Agent | 5s | Yes — blocks release |
-| 7a Push | Agent | 30s | Yes — stop if push fails |
-| 7b CI green gate | Agent | 3-8 min (blocking) | Yes — BLOCK publish if CI red; NO skip flag |
-| 7c Publish release | Agent | 30s | Rare — reached only after 7b green |
+| 3 Build+Deploy (local) | **User** | 2-5 min | Yes — blocks release |
+| 4 Smoke (local backend) | Agent | 15s | Yes — blocks release |
+| 5 Local desktop smoke | **User** | 3-5 min | **OPTIONAL** — skippable; NOT the release artifact |
+| 6 (folded into 7b) | — | — | CI builds the real artifacts; verified in 7b |
+| 7a Push commit+tag | Agent | 30s | Yes — tag push triggers release.yml (CI builds all platforms + drafts) |
+| 7b CI green gate + verify draft assets | Agent | 3-8 min (blocking) | Yes — do not flip if CI red or draft assets incomplete |
+| 7c Flip draft → published | Agent | 30s | Rare — `gh release edit --draft=false`, NOT `gh release create` |
 
 ---
 
@@ -392,13 +455,18 @@ At any stage, if failure occurs:
 1. Report which stage failed with error details
 2. Do NOT proceed to later stages
 3. Do NOT retry automatically
-4. If 7a push succeeded but 7c release-create failed: re-run 7c only (do NOT re-push).
+4. If 7a push succeeded but 7c flip (`gh release edit --draft=false`) failed: re-run 7c
+   only (do NOT re-push — the draft already exists from CI; just re-flip it).
 5. If 7b CI gate is red: HALT, list failing jobs, fix forward → push → re-run 7b on the
-   new HEAD. NEVER create the Release on a red HEAD, and NEVER skip 7b to publish faster.
+   new HEAD. NEVER flip the draft to published on a red HEAD, and NEVER skip 7b to publish faster.
 
 ---
 
 ## Why prod.sh build (not manual rsync)
+
+> **Local deploy only — NOT the shipped artifact.** This section is about Stage 3's
+> local backend deploy+verify. The DMG/exe/msi that ship are CI-built (`release.yml`);
+> see the Co-Pilot Model at the top.
 
 `prod.sh build` calls `_deploy_daemon_binary()` from `scripts/daemon-lib.sh` which:
 - Validates binary exists before deploy
