@@ -24,7 +24,12 @@ from ..paths import SWARMWS, PROJECTS_DIR, CONTEXT_DIR, DAILY_DIR, JOB_RESULTS_J
 
 logger = logging.getLogger("swarm.jobs.swarmai_monthly_report")
 
-DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# Run 0 (run_393e3dc1): single source of truth. Guarded import — job handlers
+# may run in a subprocess without core on path; literal fallback is identical.
+try:
+    from core.project_registry import DDD_CANONICAL_DOCS as DDD_DOCS
+except ImportError:  # pragma: no cover
+    DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
 
 
 def run_swarmai_monthly_report(config: dict | None = None) -> dict:

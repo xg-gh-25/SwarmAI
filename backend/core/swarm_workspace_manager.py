@@ -30,6 +30,7 @@ import subprocess
 
 from core.entity_extractor import extract_clean_description, extract_entities_from_ddd, format_entity_index, prune_entity_index
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 
 logger = logging.getLogger(__name__)
 
@@ -530,7 +531,7 @@ def _load_swarmai_ddd_templates() -> dict[str, str]:
     if template files are missing (e.g. PyInstaller bundle without templates).
     """
     templates_dir = Path(__file__).parent.parent / "templates" / "ddd"
-    ddd_files = ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]
+    ddd_files = list(DDD_CANONICAL_DOCS)
     result: dict[str, str] = {}
 
     for filename in ddd_files:
@@ -1455,7 +1456,7 @@ class SwarmWorkspaceManager:
                 _LARGE_DOC_THRESHOLD = 30_000  # bytes
                 ddd_docs = []
                 large_docs_toc: list[dict] = []  # [{doc, size_kb, sections}]
-                for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+                for doc in DDD_CANONICAL_DOCS:
                     doc_path = candidate / doc
                     if doc_path.exists():
                         doc_size = doc_path.stat().st_size

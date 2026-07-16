@@ -19,8 +19,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# DDD files to scan (order matters for display priority)
-_DDD_FILES = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# DDD files to scan (order matters for display priority).
+# Run 0 (run_393e3dc1): single source of truth — see project_registry.DDD_CANONICAL_DOCS.
+from core.project_registry import DDD_CANONICAL_DOCS as _DDD_FILES
 
 # Budget constants
 _MAX_REFS_PER_ENTITY = 3

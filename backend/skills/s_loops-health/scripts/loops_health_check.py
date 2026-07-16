@@ -765,10 +765,12 @@ class SelfLoopsHealthEngine:
             if str(SWARMAI_DIR / "backend") not in sys.path:
                 sys.path.insert(0, str(SWARMAI_DIR / "backend"))
             from core.ddd_bindings import describe_project_ddd_line
-        except Exception:
+            from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source
+        except ImportError:
             describe_project_ddd_line = None
+            DDD_CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
 
-        ddd_names = {"PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"}
+        ddd_names = set(DDD_CANONICAL_DOCS)
         lines = ["### Active Projects & DDD\n", "\n"]
         for d in sorted(PROJECTS_DIR.iterdir()):
             if not d.is_dir() or d.name.startswith("."):

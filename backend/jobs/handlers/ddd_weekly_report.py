@@ -23,8 +23,13 @@ from ..paths import SWARMWS, PROJECTS_DIR
 
 logger = logging.getLogger("swarm.jobs.ddd_weekly_report")
 
-# DDD documents we track
-DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# DDD documents we track. Run 0 (run_393e3dc1): single source of truth.
+# Guarded import — job handlers may run in a subprocess where core isn't on
+# the path; the literal fallback keeps the value identical if so.
+try:
+    from core.project_registry import DDD_CANONICAL_DOCS as DDD_DOCS
+except ImportError:  # pragma: no cover - subprocess without core on path
+    DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
 REPORT_WINDOW_DAYS = 7
 
 

@@ -408,7 +408,8 @@ def _utc_now_iso() -> str:
 
 
 # Canonical DDD doc names, in display order.
-_DDD_DOC_NAMES = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# Run 0 (run_393e3dc1): single source of truth — see project_registry.DDD_CANONICAL_DOCS.
+from core.project_registry import DDD_CANONICAL_DOCS as _DDD_DOC_NAMES
 
 
 def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:

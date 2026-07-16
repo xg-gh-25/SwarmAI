@@ -27,6 +27,8 @@ import re
 import tempfile as _tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from typing import Optional
 
 # Weights for composite score
@@ -282,7 +284,7 @@ def compute_section_health(project_dir: Path) -> dict:
         "docs": {},
     }
 
-    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+    for doc_name in DDD_CANONICAL_DOCS:
         doc_path = project_dir / doc_name
         if not doc_path.exists():
             continue

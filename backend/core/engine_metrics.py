@@ -24,6 +24,8 @@ import logging
 import re
 import subprocess
 from datetime import date, datetime, timedelta
+
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from pathlib import Path
 from typing import Any, Optional
 
@@ -493,7 +495,7 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
             # (compute_section_health only includes docs with parseable sections)
             raw_docs = result.get("docs", {})
             docs_normalized: dict[str, dict] = {}
-            for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            for doc_name in DDD_CANONICAL_DOCS:
                 if doc_name in raw_docs:
                     docs_normalized[doc_name] = {**raw_docs[doc_name], "exists": True}
                 else:
@@ -513,7 +515,7 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
             docs: dict[str, dict] = {}
-            for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            for doc_name in DDD_CANONICAL_DOCS:
                 doc_path = project_dir / doc_name
                 if doc_path.exists():
                     mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)

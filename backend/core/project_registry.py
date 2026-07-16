@@ -20,7 +20,24 @@ from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-_DDD_FILES = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# The four canonical DDD documents, in priority order. This is the SINGLE
+# SOURCE OF TRUTH — every loop that reads/indexes/checks-completeness of DDD
+# docs (recall, cultivation, bindings, health, reports, metrics) MUST import
+# this rather than hardcoding the tuple. A stray literal
+# ("PRODUCT.md","TECH.md","IMPROVEMENT.md","PROJECT.md") elsewhere is a bug —
+# guarded by tests/test_ddd_canonical_docs_single_source.py (grep gate).
+# Rationale: run_393e3dc1 (code-intel v3 Run 0). 22 hardcoded copies across
+# ~15 files were the GUI10/OT07 "add-a-doc → hunt-every-file" bug class.
+DDD_CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+
+# spec-details/ is a DERIVED PROJECTION directory (not a 5th canonical doc) —
+# it is deliberately NOT part of DDD_CANONICAL_DOCS so the completeness gate
+# (context_health_hook DDD-INCOMPLETE) never false-flags a project that has it.
+# Wiring spec-details INTO recall/cultivation is Run 3/4, not this constant.
+SPEC_DETAILS_DIR = "spec-details"
+
+# Backward-compat alias (pre-Run-0 name). New code uses DDD_CANONICAL_DOCS.
+_DDD_FILES = DDD_CANONICAL_DOCS
 
 # Well-known project names — used as defaults/fallbacks only.
 # The authoritative source is always filesystem discovery (list_projects()).

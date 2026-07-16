@@ -1622,10 +1622,11 @@ class PromptBuilder:
             task_budget=task_budget,
         )
 
-    # Canonical DDD doc set (single source: swarm_workspace_manager.py:287).
+    # Canonical DDD doc set — single source: project_registry.DDD_CANONICAL_DOCS (Run 0).
     # Only these four docs are ever shared to a non-owner — never CONTEXT.md,
-    # never .artifacts/, never archives.
-    _SHAREABLE_DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+    # never .artifacts/, never archives, NEVER spec-details/ (a derived projection,
+    # deliberately excluded from the canonical set → never in the shared lane).
+    from core.project_registry import DDD_CANONICAL_DOCS as _SHAREABLE_DDD_DOCS
 
     async def _collect_shareable_ddd_paths(self) -> list[str]:
         """Collect exact file paths of DDD docs for projects marked shareable.

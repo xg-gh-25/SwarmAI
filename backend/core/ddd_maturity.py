@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+
 
 # Valid maturity levels (ordered)
 LEVELS = ("sparse", "growing", "mature", "evergreen")
@@ -348,7 +350,7 @@ def evaluate_all_promotions(project_dir: Path) -> list[dict]:
     """
     promotions: list[dict] = []
 
-    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+    for doc_name in DDD_CANONICAL_DOCS:
         doc_path = project_dir / doc_name
         if not doc_path.is_file():
             continue
@@ -441,7 +443,7 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
     # because days_at_level needs refreshing for ALL sections.
     now = datetime.now(timezone.utc)
 
-    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+    for doc_name in DDD_CANONICAL_DOCS:
         doc_path = project_dir / doc_name
         if not doc_path.is_file():
             continue

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.initialization_manager import initialization_manager
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
@@ -542,7 +543,7 @@ class ContextHealthHook:
         if describe_project_ddd_line is None:
             return
 
-        ddd_files = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+        ddd_files = DDD_CANONICAL_DOCS
         project_lines = []
         now = time.time()
         for d in sorted(projects_dir.iterdir()):
@@ -1522,7 +1523,7 @@ class ContextHealthHook:
         from utils.file_lock import flock_exclusive_nb, flock_unlock
 
         any_doc_updated = False
-        for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md"):
+        for doc_name in DDD_CANONICAL_DOCS:
             doc_path = project_path / doc_name
             if not doc_path.exists():
                 continue
@@ -1568,7 +1569,7 @@ class ContextHealthHook:
         # If no docs were updated (all locked or no maturity states), still mark
         # to avoid re-scanning — but only if at least one doc was attempted.
         if any_doc_updated or not any(
-            (project_path / d).exists() for d in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md")
+            (project_path / d).exists() for d in DDD_CANONICAL_DOCS
         ):
             data["maturity_updated"] = True
             try:
@@ -2497,7 +2498,7 @@ class ContextHealthHook:
         Fail-open: any error is logged + returned as a finding, never raised —
         a health sub-item must not break the whole deep check or session start.
         """
-        DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+        DDD_DOCS = DDD_CANONICAL_DOCS
         findings: list[str] = []
         try:
             projects_dir = root / "Projects"

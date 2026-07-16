@@ -47,7 +47,11 @@ def count_ddd_sections() -> int:
     if not DDD_DIR.exists():
         return 0
     total = 0
-    for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+    try:  # Run 0: single source of truth (guarded — script may run standalone)
+        from core.project_registry import DDD_CANONICAL_DOCS as _docs
+    except ImportError:
+        _docs = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
+    for doc in _docs:
         path = DDD_DIR / doc
         if path.exists():
             total += len(re.findall(r"^##\s", path.read_text(), re.MULTILINE))

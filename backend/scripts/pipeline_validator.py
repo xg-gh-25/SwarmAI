@@ -57,6 +57,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.pipeline_profiles import get_profile_stages
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 
 # ---------------------------------------------------------------------------
 # Check outcome taxonomy (run_55710438)
@@ -1560,7 +1561,7 @@ def check_ddd_consistency(project: str, context_text: str | None = None) -> dict
 
     # Load DDD docs
     ddd_docs: dict[str, str] = {}
-    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+    for doc_name in DDD_CANONICAL_DOCS:
         doc_path = project_dir / doc_name
         if doc_path.exists():
             try:
@@ -1624,7 +1625,7 @@ def check_ddd_consistency(project: str, context_text: str | None = None) -> dict
             )
 
     # Check 3: Missing DDD docs (not blocking, just informational)
-    missing = [d for d in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+    missing = [d for d in DDD_CANONICAL_DOCS
                if d not in ddd_docs]
     if missing:
         warnings.append(

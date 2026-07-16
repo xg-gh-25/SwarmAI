@@ -384,8 +384,9 @@ def _recall_ddd(query: str, project: Optional[str],
     if not base.exists():
         return hits, "none"
 
+    from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
     scored: list[tuple[str, str, float]] = []  # (doc, section, score)
-    for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+    for doc in DDD_CANONICAL_DOCS:
         p = base / doc
         if not p.exists():
             continue

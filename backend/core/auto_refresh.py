@@ -23,6 +23,8 @@ import logging
 import os
 import re
 import subprocess
+
+from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -474,7 +476,7 @@ class MechanicalRefresher:
             for project_dir in projects_dir.iterdir():
                 if not project_dir.is_dir():
                     continue
-                for doc_name in ("TECH.md", "PRODUCT.md", "IMPROVEMENT.md", "PROJECT.md"):
+                for doc_name in DDD_CANONICAL_DOCS:
                     doc = project_dir / doc_name
                     if doc.exists():
                         files.append(doc)
