@@ -42,12 +42,12 @@ AI coding agents (Claude Code, Kiro, Codex) face a **cold-start problem** on eve
 
 | Signal | Source | Date |
 |--------|--------|------|
-| "Long-term memory and knowledge management" is top community question | #kiro-interest Slack | 2026-05-28 |
-| AI-Native Brownfield Bootstrapper received 15 reactions in 24 hours | #amazon-builder-genai-power-users | 2026-05-27 |
-| Dashboard sessions start at ~38% context consumed before user types anything | community channel | 2026-05-28 |
-| Multiple community-built memory solutions filling the gap | #kiro-interest, #q-command-line-interest | 2026-05-28 |
-| Claude Code plugins consume 333+ tokens each, always active — no on-demand loading | #claude-code-internal-interest | 2026-05-28 |
-| Brownfield Bootstrapper: "hand it a pipeline URL and it generates AGENTS.md, specs, test plans" | AINativeBrownfieldBootstrapper (@tommyb) | 2026-05-27 |
+| "Long-term memory and knowledge management" is a top community question | AI-IDE developer community | 2026-05 |
+| An internal brownfield-bootstrapper tool drew strong engagement in 24 hours | internal builder community | 2026-05 |
+| Dashboard sessions start at ~38% context consumed before the user types anything | community report | 2026-05 |
+| Multiple community-built memory solutions filling the gap | AI-IDE developer communities | 2026-05 |
+| Agent plugins consume 300+ tokens each, always active — no on-demand loading | AI-coding developer community | 2026-05 |
+| A brownfield bootstrapper: "hand it a pipeline URL and it generates AGENTS.md, specs, test plans" | internal tool | 2026-05 |
 
 ### 1.2 The deeper problem (human-facing): legacy nobody dares touch
 
@@ -63,7 +63,7 @@ Our own production lesson confirms the gap: *"module-level context is useless fo
 |---|---|---|
 | CLAUDE.md | Build commands, basic rules | Architecture, history, priorities, non-goals |
 | agents.md spec | Template for code navigation | No generation tooling, no refresh, single flat file |
-| Brownfield Bootstrapper | AGENTS.md + specs (Amazon-only) | No business-flow semantics, no self-maintenance, no IDE-native install |
+| Internal brownfield bootstrapper | AGENTS.md + specs (internal-only) | No business-flow semantics, no self-maintenance, no IDE-native install |
 | Kiro steering docs | User-written rules | No auto-generation from codebase analysis |
 | Understand-Anything (74K★) | Interactive knowledge-graph dashboard | Graph, not signable spec; no anti-spurious anchoring; no equivalence validation |
 
@@ -85,7 +85,7 @@ Judgment requires knowing:
   PROJECT.md     → "Currently migrating auth — don't touch identity module"
 ```
 
-This is DDD's 4-file structure — the same names, purpose, and philosophy SwarmAI uses internally across 8 active projects. Battle-tested over months with automated cultivation keeping docs alive. Research backing (Brownfield Bootstrapper team's internal study): context files beyond ~150 lines show diminishing returns on agent accuracy → **≤150-line entry point (AGENTS.md) + layered deep context (DDD), loaded on demand by task type.**
+This is DDD's 4-file structure — the same names, purpose, and philosophy SwarmAI uses internally across 8 active projects. Battle-tested over months with automated cultivation keeping docs alive. Research backing (an internal brownfield-tooling study): context files beyond ~150 lines show diminishing returns on agent accuracy → **≤150-line entry point (AGENTS.md) + layered deep context (DDD), loaded on demand by task type.**
 
 ### 2.2 The v3 addition — a business-semantic layer between skeleton and DDD
 
@@ -122,15 +122,15 @@ The correct model is **three layers by abstraction level**, each consumable by b
 
 | # | Principle | Source | Implementation |
 |---|-----------|--------|----------------|
-| 1 | **Detect, don't assume** | Brownfield Bootstrapper | Auto-detect stack, framework, patterns — LLM-driven, all languages Day 1 |
-| 2 | **≤150-line entry point** | Bootstrapper internal research | AGENTS.md is brief; deeper layers loaded on demand |
-| 3 | **Every line earns its place** | Bootstrapper | Filter: "Will the agent make a systemic mistake without this line?" |
-| 4 | **Two human touchpoints** | Bootstrapper | Input (what to analyze) + Enrich (answer targeted questions). Everything else autonomous |
+| 1 | **Detect, don't assume** | brownfield-bootstrapper practice | Auto-detect stack, framework, patterns — LLM-driven, all languages Day 1 |
+| 2 | **≤150-line entry point** | internal brownfield-tooling research | AGENTS.md is brief; deeper layers loaded on demand |
+| 3 | **Every line earns its place** | brownfield-bootstrapper practice | Filter: "Will the agent make a systemic mistake without this line?" |
+| 4 | **Two human touchpoints** | brownfield-bootstrapper practice | Input (what to analyze) + Enrich (answer targeted questions). Everything else autonomous |
 | 5 | **Zero-config, non-destructive install** | Our design | `install.sh` auto-detects IDE, one command, never overwrites existing config |
 | 6 | **Self-maintaining artifacts** | DDD Cultivation | Refresh skill + parser + decay markers — the IDE agent keeps artifacts alive |
 | 7 | **Knowledge has layers** | DDD philosophy | Different stakeholders review different docs; progressive disclosure for agents |
 | 8 | **Judgment > Description** | DDD | "Never call X directly" (judgment) beats "X exists" (description) |
-| 9 | **Evidence-grounded** | Bootstrapper + DDD | Tribal knowledge backed by commit hash/issue — if it can't be grounded, don't write it |
+| 9 | **Evidence-grounded** | brownfield-bootstrapper practice + DDD | Tribal knowledge backed by commit hash/issue — if it can't be grounded, don't write it |
 | 10 | **Entry-point grounding — never let the LLM invent business** | Understand-Anything + our design | Business flows are anchored to real triggers (routes/CLI/events/cron). A flow with no real entry-point anchor is dropped, not kept (§5.2) |
 | 11 | **Anti-spurious: every LLM assertion is anchored + `verified`** | Siala & Lano 2025 | A rule/precondition/exception without a `file:line` anchor is `verified:false` = `[llm-inferred]`, never presented as fact (§6) |
 | 12 | **Anti-false-negative: absence must be proven, not assumed** | Our production evidence (R16b) | A "does-not-exist" claim requires `absence_evidence` (a `grep=0` result), or generation BLOCKs. "I didn't see it" ≠ "it isn't there" (§6.2 guardrail 4) |
@@ -178,7 +178,7 @@ project-root/
 
 The rule (Principle 20, and the industry-consensus "trust boundary"): **run a real parser over the source FIRST, extract verified structural facts to symbol+line precision, then feed those facts to the LLM as grounding. Never let the model infer structure from raw text.**
 
-This is not our invention — it is the convergent design of every serious code→spec system. Amazon-internal **Spec Studio** states it verbatim as its official anti-hallucination thesis (system-overview REQ-043): *"run AST parsing over source first, feed the verified structural facts to the LLM as grounding — don't let the model infer structure from raw text."* And crucially, that claim moved from *inferred* to *source-read*: on 2026-07-16 the actual engine was located and read at source level (`StoreGenSpecGenerationCore/packages/code-graph`, TS `@amzn/storegen-code-graph`) — `analyze.ts:analyzeFile()` does genuine `parser.setLanguage(language); parser.parse(content)` tree-sitter parsing producing column-precise `CodeDefinition{start,end: Point{row,column}}` spans, with an LLM layer running strictly *on top of* those facts (`llm-analysis/*.ts`). This is the exact "推断 → 读到源码级" move: an earlier dive could only *infer* "AST-grade" from the column-precise output format; the follow-up located and read the parser code, sealing the inference into a source fact. (Verification-depth honesty, per the source dive's own boundaries: the py/ts paths were read line-by-line, the other-language query configs + the LLM-analysis layer at listing level, and no live generation was run — the AST-vs-LLM split is source-confirmed, the exact per-language query strings are not transcribed.) Honest boundary also preserved: Spec Studio has **two** engines — its legacy V1 `StoreGenSpecGenerator` is substring reference-counting with zero AST; only V2 is tree-sitter. The "AST grounding" claim describes V2. Do not cite V1 as an AST reference. See §22.
+This is not our invention — it is the convergent design of every serious code→spec system. A **large enterprise code→spec engine we studied** (referred to here as *the reference engine*; details anonymized) makes AST-first grounding its stated anti-hallucination principle: parse the source before the LLM sees it, and never let the model infer structure from raw text. That principle was confirmed by reading its parser code, not inferred from output: its current engine does standard tree-sitter parsing producing column-precise definition spans, with an LLM layer running strictly *on top of* those facts. This is the "inference → source-level read" move: an earlier look could only *infer* "AST-grade" from the output shape; reading the parser code sealed the inference into a fact. (Verification-depth honesty: the primary-language parser paths were read closely, the rest at listing level, and no live generation was run — the AST-vs-LLM split is source-confirmed, the exact query internals are not.) Honest boundary preserved: the reference engine has an older non-AST generation and a current tree-sitter one; the AST-grounding claim describes the current one only. See §22.
 
 **The distinction that matters for a legacy customer:** "the LLM read the file and summarized it" is NOT grounding — the model still chose what to believe. Grounding means a **deterministic parser** produced the facts (this symbol is defined at `file:19:13-24:2`, this dependency resolves to that real file), and the LLM is constrained to *classify and describe* those facts, never to assert structure that no parser emitted.
 
@@ -189,7 +189,8 @@ We implement the thesis as a strict, fail-closed pipeline. **Stages 1, 2, and 4 
 ```
 STAGE 1 — DETERMINISTIC READ (no LLM) — two deterministic extractors, both parser-grade:
   (a) tree-sitter AST over source → CodeNode/CodeEdge with line + sha256
-      (parser.py:107-127; 12+ langs, regex fallback per lang) → modules[], dependencies[], symbols
+      (CodeNode/CodeEdge dataclasses `parser.py:107-127`; LANGUAGE_MAP `:30-51`; parse logic
+       `parse_file`/`parse_repo` `:522-590`; 12+ langs, per-lang regex fallback) → modules[], dependencies[], symbols
   (b) deterministic REGEX route extraction (route_parser.py; framework-aware:
       FastAPI/Express/Next.js Day 1) → routes[], entry_points[]
   Both are deterministic (no LLM) and produce verified structural facts with file:line —
@@ -230,27 +231,27 @@ STAGE 4 — FAIL-CLOSED FINALIZE GATE (no LLM)
 
 Not every input is tree-sitter-parseable (COBOL, exotic DSLs, an unsupported extension). Two behaviors must be distinguished — the **design target** and the **current implementation gap**:
 
-- **Target state (the rule): degrade honestly, never pretend.** An unsupported file should fall to an LLM-only path (Spec Studio does exactly this — *"fully use LLMs … might yield worse results, but it will work"*), and its derived assertions inherit the weakest confidence — `verified:false` unless independently anchored, surfaced in the SME review queue (§6.2). A fact the parser could not verify is *labeled unverified*, never laundered into the confident-fact layer — same discipline as §7's `equivalence: unchecked` and §6's `[llm-inferred]`.
+- **Target state (the rule): degrade honestly, never pretend.** An unsupported file should fall to an LLM-only path (the reference engine does the same — accepting worse results in exchange for still producing output rather than dropping the file), and its derived assertions inherit the weakest confidence — `verified:false` unless independently anchored, surfaced in the SME review queue (§6.2). A fact the parser could not verify is *labeled unverified*, never laundered into the confident-fact layer — same discipline as §7's `equivalence: unchecked` and §6's `[llm-inferred]`.
 - **⚠️ Current gap (honest, verified in our code):** the deterministic graph layer (`parser.py`) does **NOT** yet have that fallback — a file whose extension is not in `LANGUAGE_MAP` is **silently skipped** (`if not lang: return`), no signal. So today an unknown format is a *silent coverage hole in the graph*, not a labeled-unverified fact. The LLM UNDERSTAND phase can still describe such a file (so it's not invisible to the human-facing spec), but it earns no AST anchor — it can only ever be `verified:false`. Closing this (route unknown extensions to an explicit LLM-fallback + emit a coverage-hole signal) is a tracked hardening item (§15.2). Stated plainly because "silently skipped" is exactly the silent-omission failure §11.1 exists to kill — and the graph layer does not yet enforce it for unknown formats.
 
 The distinction matters for PE review: the *anchor-and-label* discipline (§6/§7) is shipped and fail-closed; the *unknown-format graceful fallback* is target-state, and its absence is a named gap, not a claimed feature.
 
-> **How the precedent structures its LLM-fallback (source-verified, worth mirroring):** Spec Studio V2's LLM path is not free-text — `llm-analysis/dependencies.ts` uses a **cheap model** (`BedrockModelKey.NOVA`, not Claude) behind a LangChain `StructuredOutputParser` + Zod schema `{dependencies: string[], summary: string}`, and is **fail-soft** (parse error → `{dependencies: [], summary: "Error analyzing file"}`, never throws). Its LLM-extracted deps are then run through the *same* internal-path resolver as the static path, so AST-derived and LLM-derived edges land in one coordinate system. Two transferable disciplines: (a) the unparseable-file fallback should use a cheap model + schema-constrained output, not the expensive architectural model; (b) LLM and AST outputs must share one resolver so a mixed-language repo yields a single coherent graph.
+> **How the reference engine structures its LLM-fallback (worth mirroring):** its LLM dependency-analysis path is not free-text — it uses a cheap model behind a schema-constrained output (a dependency list + a summary field), and is **fail-soft** (parse error → empty deps + an error summary, never throws). Its LLM-extracted deps are then run through the *same* path resolver as the static path, so AST-derived and LLM-derived edges land in one coordinate system. Two transferable disciplines: (a) the unparseable-file fallback should use a cheap model + schema-constrained output, not the expensive architectural model; (b) LLM and AST outputs must share one resolver so a mixed-language repo yields a single coherent graph.
 
 ### 4.5.4 Why our engine is *more transparent* than the precedent (and where it isn't)
 
-| Property | Our engine | Spec Studio | 
+| Property | Our engine | The reference engine | 
 |---|---|---|
-| Parser | tree-sitter AST, `parser.py:107-127`, open + inspectable, 12+ langs + regex fallback | V2 tree-sitter (source now read); V1 substring (legacy, no AST) |
+| Parser | tree-sitter AST (`parser.py`: dataclasses `:107-127`, LANGUAGE_MAP `:30-51`, parse `:522-590`), open + inspectable, 12+ langs + per-lang regex fallback | current generation: tree-sitter (source-read); an earlier generation was non-AST |
 | Store / query | SQLite schema + FTS5 + recursive-CTE blast-radius (`graph_store.py`: schema `:42`, FTS5 `:71`, `blast_radius` CTE `:455`) | markdown + JSON artifact |
-| Grounding contract | closed anchor menu + 4 fail-closed finalize gates (reject, not warn) | AST facts + `[[REQ]]` traceability + `🔍 UNKNOWN` markers |
-| Coverage gate | fail-closed set-difference, ratio must = 1.0 or run fails (§11.1) | V1: 1150-file / 50KB caps + summarize-or-skip (lossy-but-logged); V2: 50KB/file + exclude-patterns, no hard file cap |
+| Grounding contract | closed anchor menu + 4 fail-closed finalize gates (reject, not warn) | AST facts + per-claim node-id traceability + explicit `UNKNOWN` markers |
+| Coverage gate | fail-closed set-difference, ratio must = 1.0 or run fails (§11.1) | legacy: hard file-count + per-file-size caps + summarize-or-skip (lossy-but-logged); current: per-file-size cap + exclude-patterns, no hard file cap |
 | Ambiguous-reference policy | **keep the edge, label it low-confidence** — every edge carries `confidence` (qualified `1.0` / Layer-2-resolved `0.8` / bare-ambiguous `0.5` / regex-fallback `0.6`, `parser.py:352,513`); orphan-cleanup then deletes edges to non-existent nodes (builtins/stdlib). Downstream can filter by confidence. | **discard the edge** — resolve only on a unique exact basename match; ambiguous → no edge. Zero false edges, at the cost of silent missed edges. |
 | Where they're ahead | — | bidirectional doc↔code adversarial (4-detector, §11.4) + org-level coverage (§11.7); cardinality-check sentinel vs grammar drift (§15.2); accuracy benchmark vs a ground-truth tool (§15.2) |
 
-**The ambiguous-reference trade-off is a genuine philosophical fork, worth stating explicitly** (it recurs in dead-code detection, below): Spec Studio optimizes for *"trustworthy enough to write into a signed document"* → **宁缺勿错** (when unsure, omit — 0 false edges, some silent misses). Our graph optimizes for *"a signal an agent can filter, never a silent failure"* → **宁留勿漏** (keep the ambiguous edge but score it low, so nothing vanishes silently). Neither is universally right; they follow from the consumer (human sign-off vs agent context). For the *spec-details sign-off* use case, our domain layer inherits Spec Studio's posture via the §6 anchoring gates (unverified ≠ fact); for the *code-graph blast-radius* use case, the low-confidence-but-present edge is the better default.
+**The ambiguous-reference trade-off is a genuine philosophical fork, worth stating explicitly** (it recurs in dead-code detection, below): the reference engine optimizes for *"trustworthy enough to write into a signed document"* → **宁缺勿错** (when unsure, omit — 0 false edges, some silent misses). Our graph optimizes for *"a signal an agent can filter, never a silent failure"* → **宁留勿漏** (keep the ambiguous edge but score it low, so nothing vanishes silently). Neither is universally right; they follow from the consumer (human sign-off vs agent context). For the *spec-details sign-off* use case, our domain layer inherits the omit-when-unsure posture via the §6 anchoring gates (unverified ≠ fact); for the *code-graph blast-radius* use case, the low-confidence-but-present edge is the better default.
 
-The net (honest): our **read→ground→gate** chain is stronger and more transparent than the precedent; their **verification of the resulting spec** (bidirectional adversarial) is ahead of ours, which is why §11.4 adopts it.
+The net (honest): our **read→ground→gate** chain is stronger and more transparent than the precedent; the reference engine's **verification of the resulting spec** (bidirectional adversarial) is ahead of ours, which is why §11.4 adopts it.
 
 ---
 
@@ -665,13 +666,13 @@ merge input (step 1 merge → steps 5/6 dedup, all layers):
 - **Goal: save tokens.** Domain-layer LLM analysis is the most expensive step; recomputing only affected flows is the main saving.
 - ⚠️ **Precondition not fully solved (open):** "which flows are affected by one file change" is an open precision problem (§15). Straw-man: a flow is affected if any step's `file_path` falls in the changed file's **reverse-dependency closure** (via v2 `dependencies`/imports edges). Until this precision lands, token-saving is a **goal, not a guarantee.**
 
-### 10.6 External validation — Spec Studio V2 ships the same incremental model (source-verified)
+### 10.6 External validation — the reference engine ships the same incremental model (source-verified)
 
-This design is not the only serious code→spec system to converge on "old graph as a reusable batch + keep-last merge." Amazon-internal Spec Studio's **V2** engine (`StoreGenSpecGenerationCore/packages/code-graph/src/graph.ts`, source read 2026-07-16) ships production incremental generation — independent confirmation the approach is right, and a reference impl to mirror:
+This design is not the only serious code→spec system to converge on "old graph as a reusable batch + keep-last merge." The enterprise reference engine's current code-graph engine (read at source level 2026-07-16) ships production incremental generation — independent confirmation the approach is right, and a reference impl to mirror:
 
-- `createCodeGraph()` takes a `progressiveGenerationContext = { changes: FileChange[], previousCodeGraph }`. `isFileChanged()` reuses the previous graph for unchanged files, re-analyzes only changed/new files, and **prunes removed files** (`removedFilesSet`) — the exact `batch-existing(-1) + only-rescan-changed` shape as §10.1.
-- Two things worth stealing beyond what we have: (a) explicit **removed-file pruning** (a domain/file deleted from code must drop out of the graph — our §10 keep-last overwrites but should assert we also prune; ties to the §9.4 decay/archive contract); (b) two cost-skip switches — `skipSummarization` (keep AST edges, drop the LLM summary pass) and `skipLlmAnalysis` (skip the LLM fallback for unparseable files) — for consumers that only need the dependency graph (e.g. our dead-code/orphan pass), avoiding one Bedrock call per file.
-- Architectural note reinforcing §4.5: V2's `evaluateStatic` populates the **full dependency graph via tree-sitter first**, then a *separate* LLM pass enriches **only** the human-readable `summary` field (its docstring: *"Dependency graph is fully populated by static analysis; the LLM pass only enriches summary"*). LLM never invents edges/definitions — the same "AST owns structure, LLM owns prose" trust boundary this design enforces (Principle 20).
+- Its incremental entry point takes a progressive-generation context `{ changes, previousCodeGraph }`, reuses the previous graph for unchanged files, re-analyzes only changed/new files, and **prunes removed files** — the exact `batch-existing(-1) + only-rescan-changed` shape as §10.1.
+- Two things worth stealing beyond what we have: (a) explicit **removed-file pruning** (a domain/file deleted from code must drop out of the graph — our §10 keep-last overwrites but should assert we also prune; ties to the §9.4 decay/archive contract); (b) two cost-skip switches — *skip-summarization* (keep AST edges, drop the LLM summary pass) and *skip-LLM-analysis* (skip the LLM fallback for unparseable files) — for consumers that only need the dependency graph (e.g. our dead-code/orphan pass), avoiding one model call per file.
+- Architectural note reinforcing §4.5: its static pass populates the **full dependency graph via tree-sitter first**, then a *separate* LLM pass enriches **only** the human-readable summary field (the dependency graph is fully populated by static analysis; the LLM pass adds no edges). LLM never invents edges/definitions — the same "AST owns structure, LLM owns prose" trust boundary this design enforces (Principle 20).
 
 ---
 
@@ -683,7 +684,7 @@ This design is not the only serious code→spec system to converge on "old graph
 > - **Coverage** = did every real code element get *accounted for* (documented OR explicitly parked with a reason)? Failure mode = silent omission — a route/behavior that simply isn't in the spec, invisible.
 > - **Quality/correctness** = is what the spec *says* true against the code? Failure mode = spurious (fabricated constraint) or false-promise (claim the code doesn't implement).
 >
-> The design frame is borrowed from Amazon-internal **Spec Studio** (a shipped code→spec system, source-level dive 2026-07-16 — its V2 tree-sitter engine `StoreGenSpecGenerationCore/packages/code-graph` was read at source level, §4.5.1; note its legacy V1 is substring-based, not AST) crossed with our own fail-closed anchor accounting. Where our approach is *stronger* (transparent AST engine + fail-closed accounting) and where Spec Studio is *ahead* (bidirectional adversarial verification, org-level coverage) is called out honestly per subsection.
+> The design frame is borrowed from a **large enterprise code→spec engine we studied** (referred to as *the reference engine*; internal identifiers anonymized — its current tree-sitter code-graph engine was read at source level, §4.5.1; an earlier generation was non-AST) crossed with our own fail-closed anchor accounting. Where our approach is *stronger* (transparent AST engine + fail-closed accounting) and where the reference engine is *ahead* (bidirectional adversarial verification, org-level coverage) is called out honestly per subsection.
 
 ### 11.0 Guarantee matrix — which guarantees are IN FORCE, by repo class (read this first)
 
@@ -722,7 +723,7 @@ GATE: any `missing` id → error → the run FAILS
 3. an anchor in **both** a flow and `unclassified` (double-accounting masks a real omission);
 4. routes present but **none carry ids** (the id-backfill was skipped) → surfaced loudly, never swallowed into a vacuous pass.
 
-**Why this beats Spec Studio's coverage model** (honest comparison): Spec Studio's V1 bounds coverage with a hard **1150-file cap + 50KB/file cap + summarize-or-skip** — lossy-but-honest (it logs what it skipped). That is a *volume* gate. Ours is a *completeness* gate: it does not cap and skip; it requires each anchor to be classified-or-reasoned, ratio gated to 1.0. The trade: our gate is stricter on *accounting* but inherits the same physical limits on very large repos (§15) — the difference is ours refuses to silently drop, theirs logs the drop.
+**Why this beats a volume-cap coverage model** (honest comparison): the reference engine's legacy generation bounds coverage with hard **file-count + per-file-size caps + summarize-or-skip** — lossy-but-honest (it logs what it skipped). That is a *volume* gate. Ours is a *completeness* gate: it does not cap and skip; it requires each anchor to be classified-or-reasoned, ratio gated to 1.0. The trade: our gate is stricter on *accounting* but inherits the same physical limits on very large repos (§15) — the difference is ours refuses to silently drop, theirs logs the drop.
 
 > ⚠️ **Honest coverage declaration is mandatory** (production lesson P6): where a physical cap *does* truncate (monorepo >1M LOC, §15), the artifact must declare the coverage % it actually achieved — never claim authority it doesn't have. "7% of files read, 85% confidence in hot zones, 20% elsewhere" builds trust; a blanket "90%" that adversarial review falsifies destroys it permanently.
 
@@ -730,26 +731,26 @@ GATE: any `missing` id → error → the run FAILS
 
 `check_anchor_accounting` guarantees a route is *classified into a flow*. It does **not** guarantee the route's *behavior is documented*. A route can be accounted-for yet have an undocumented dangerous path (a security check, a data-loss branch, a crash mode) — the exact "reported done, never understood" failure.
 
-Steal from Spec Studio's **Blind Spot detector** (its hardest and most valuable mechanism): for each `entry_ref` code span, audit *"does this code have a behavior NOT covered by any `step.contract`?"* — with the deliberate asymmetry that an undocumented-but-real behavior is a **finding** (the spec is incomplete), not a spec error. Uncovered dangerous behaviors → parked in `unclassified` or raised to the SME queue (§6.2 guardrail 3).
+Steal the **Blind Spot detector** pattern (from the reference engine) (its hardest and most valuable mechanism): for each `entry_ref` code span, audit *"does this code have a behavior NOT covered by any `step.contract`?"* — with the deliberate asymmetry that an undocumented-but-real behavior is a **finding** (the spec is incomplete), not a spec error. Uncovered dangerous behaviors → parked in `unclassified` or raised to the SME queue (§6.2 guardrail 3).
 
 This is a **planned `behavior_coverage` gate** (not yet shipped — the honest status). It closes the reverse direction: §11.1 asks "is every anchor in the spec?"; §11.2 asks "is every *behavior* of each anchored span in the spec?" Coverage is only real when both hold.
 
-### 11.3 Correctness — four independent mechanisms (Spec Studio model)
+### 11.3 Correctness — four independent mechanisms (4-mechanism model, from the reference engine)
 
-A spec's correctness is not one check; Spec Studio proves it needs **four independent mechanisms**, because each catches a different lie:
+A spec's correctness is not one check; the reference engine proves it needs **four independent mechanisms**, because each catches a different lie:
 
 | # | Mechanism | Catches | Our status |
 |---|---|---|---|
-| ① | **Anchor traceability + explicit unknowns** | fabricated structure; hidden gaps | ✅ shipped — every assertion carries `anchor`(file:line) + `verified`; unverified is marked `[llm-inferred]`, never presented as fact (§6). Their equivalent: `[[REQ-043]]` tags + `🔍 UNKNOWN` markers. |
+| ① | **Anchor traceability + explicit unknowns** | fabricated structure; hidden gaps | ✅ shipped — every assertion carries `anchor`(file:line) + `verified`; unverified is marked `[llm-inferred]`, never presented as fact (§6). Their equivalent: per-claim requirement-id tags + explicit `UNKNOWN` markers. |
 | ② | **Anti-spurious + anti-false-negative guards** | invented constraints (spurious 0.67); mislabeled-absent real rules | ✅ shipped — `check_llm_assertion_guards` (`:307`): `verified:false` REQUIRES non-blank `absence_evidence` (grep=0), a fabricated `verified:true` with no resolvable anchor is REJECTED (§6.2). |
 | ③ | **Behavioral-equivalence** (spec ↔ runtime/tests) | "reads complete but behaves differently" — the 0.0%-vs-91.2% gap | ⚠️ **partial — scoring logic shipped + unit-tested, observation-wiring pending.** `score_equivalence` (`:1301`) + `derive_equivalence_assertions` + `equivalence_feedback` exist and are honest by construction (tags `verified` only when every assertion is *observed AND passed*, else `unchecked` — no fake-pass, §7). But they take a caller-supplied `observations` map and **no main-path caller yet produces it** (a test-runner that executes the domain's tests and populates `(step_id,code)→passed`); today they run only from unit tests. The honesty guarantee is real; the *wiring to a live test/runtime source* is the remaining gap (§11.7). |
 | ④ | **Adversarial spec validation** (test the SPEC, not the code) | over-promises, contradictions, specs too vague to catch errors | ⚠️ partial — our Gate-2 adversarial sub-agent is single-direction; the 4-detector bidirectional framework (§11.4) is the planned upgrade. |
 
-The load-bearing point: **①② are shipped and enforced in code (fail-closed gates wired into `validate_code_intel_json`), not review checklists.** ③'s *scoring* is shipped and honest-by-construction but not yet wired to a live observation source; ④ is where Spec Studio is furthest ahead. Being precise about which is enforced-today vs scoring-ready vs planned is itself the anti-theater discipline this doc argues for.
+The load-bearing point: **①② are shipped and enforced in code (fail-closed gates wired into `validate_code_intel_json`), not review checklists.** ③'s *scoring* is shipped and honest-by-construction but not yet wired to a live observation source; ④ is where the reference engine is furthest ahead. Being precise about which is enforced-today vs scoring-ready vs planned is itself the anti-theater discipline this doc argues for.
 
 ### 11.4 Adversarial spec validation — the 4-detector framework (planned upgrade)
 
-Spec Studio's `SpecStudioAdversarialTest` tests the *spec itself* with four detectors, each catching a distinct spec defect:
+The reference engine's adversarial-test subsystem tests the *spec itself* with four detectors, each catching a distinct spec defect:
 
 | Detector | Finds | Expected result |
 |---|---|---|
@@ -781,14 +782,14 @@ Point-in-time correctness is not enough; quality must not *regress*. The Siala &
 **Eval contract:**
 - Generation emits these 3 numbers + `F1 = 2·recall·precision/(recall+precision)` into run metadata.
 - **precision is the sign-off correctness floor** — spurious (FP) = customer signed a non-existent constraint. Target: precision ≥ deterministic-tool level (via the §6 anchoring guardrails keeping `verified:false` out of the fact layer).
-- Golden cases: for known-answer domains, assert generated completeness/precision ≥ threshold → a regression gate, not a one-time human judgment. This mirrors Spec Studio's decoupled `SpecStudioEval` (EventBridge → immutable question-set snapshot → run-to-run comparison) — architecturally the same shape as SwarmAI's own decoupled golden-case eval.
+- Golden cases: for known-answer domains, assert generated completeness/precision ≥ threshold → a regression gate, not a one-time human judgment. This mirrors the reference engine's decoupled continuous-eval subsystem (scheduled → immutable question-set snapshot → run-to-run comparison) — architecturally the same shape as SwarmAI's own decoupled golden-case eval.
 
 ### 11.6 Coverage over time — freshness (correct ≠ correct-forever)
 
 A spec that was correct at generation is *wrong* once the code moves under it — and a confidently-wrong spec is worse than none. Coverage therefore includes a time axis:
 - **Staleness detection** (`detect_spec_details_staleness`, shipped Run 4b): `spec.md mtime < code-intel.json mtime` ⇒ stale; surfaced as a per-session log signal (honest: detection lives in core, regeneration stays skill-owned — no dead event with no consumer, §9 loop-liveness lesson).
 - **Decay markers** in content (§18.1): a gotcha whose code was refactored but not re-verified → `[⚠️ unverified Nd]`; the agent treats it as "verify before relying."
-- Spec Studio's parallel: `STALE/FRESH` classification by (last-gen age vs commits since), default 7d + ≥1 commit → auto-queue regeneration.
+- the reference engine's parallel: `STALE/FRESH` classification by (last-gen age vs commits since), default 7d + ≥1 commit → auto-queue regeneration.
 
 ### 11.7 Where the guarantees are still gaps (honest self-assessment)
 
@@ -799,7 +800,7 @@ A spec that was correct at generation is *wrong* once the code moves under it �
 | Anti-spurious / anti-false-negative | ✅ shipped fail-closed (`check_llm_assertion_guards`) | static grep=0 misses "implemented but semantically wrong" — needs §11.4(c) dynamic falsification |
 | Behavioral equivalence | ⚠️ scoring logic shipped + unit-tested, honest-by-construction | no main-path caller yet feeds a live `observations` map (needs a test-runner that executes the domain's tests); pure-static legacy domains → `unchecked` by design |
 | Adversarial (4-detector, bidirectional) | ⚠️ single-direction Gate-2 only | restraint skeleton + Contradiction taxonomy not yet adopted (§11.4) |
-| Org-level coverage (fleet of repos) | ❌ single-repo only | Spec Studio's discovery-agent + gap-backfill is ahead; build only when serving many repos (§15) |
+| Org-level coverage (fleet of repos) | ❌ single-repo only | the reference engine's discovery-agent + gap-backfill is ahead; build only when serving many repos (§15) |
 
 ---
 
@@ -905,25 +906,29 @@ These are hard-won invariants, each earned from a real defect caught by **advers
 
 The through-line: **the LLM authorship trap ("I wrote it / I tested it in isolation, so it works") recurs at every layer** — guard code, tests, renderers, extractors. The defense is always the same shape: drive it through the real path, mutation-verify, and test against real producer output, never fixtures alone.
 
-### 15.2 Hardening backlog — coverage & graph-integrity gaps vs the precedent (Spec Studio deep-dive, 2026-07-16)
+### 15.2 Hardening backlog — coverage & graph-integrity gaps vs the reference engine (studied 2026-07-16)
 
-A source-verified comparison of our `code_intel` engine against Spec Studio's (`StoreGenSpecGenerationCore`) surfaced concrete gaps where the precedent is stricter. These are the prioritized "steal list" — each closes a *silent-failure* class our current engine has:
+A comparison of our `code_intel` engine against the enterprise reference engine surfaced concrete gaps where the precedent is stricter. These are the prioritized "steal list" — each closes a *silent-failure* class our current engine has:
 
-| # | Gap in our engine (verified in `backend/core/code_intel/`) | What Spec Studio does | Fix |
+| # | Gap in our engine (verified in `backend/core/code_intel/`) | What the reference engine does | Fix |
 |---|---|---|---|
-| 1 | **No scale fail-fast** — an empty repo returns `[]` silently; a huge repo just runs slowly. No `NO_SOURCE_FILES` / `PACKAGE_TOO_LARGE` signal. | `validateSourceFileCount` raises **non-retryable** errors before analysis; a treeless pre-clone probes size first. | Add an explicit pre-analysis count gate → loud error on empty/over-cap, never a silent partial graph. |
+| 1 | **No scale fail-fast** — an empty repo returns `[]` silently; a huge repo just runs slowly. No empty/too-large signal. | validates source-file count and raises **non-retryable** errors before analysis; a treeless pre-clone probes size first. | Add an explicit pre-analysis count gate → loud error on empty/over-cap, never a silent partial graph. |
 | 2 | **Unknown-extension = silent skip** — `parser.py` `if not lang: return` drops any non-`LANGUAGE_MAP` file with no signal (the §4.5.3 gap). | static-vs-LLM fallback: an unparseable file still gets analyzed, never dropped. | Route unknown extensions to a cheap-model LLM fallback (§4.5.3) + emit a coverage-hole signal. |
-| 3 | **No cardinality sentinel** — a tree-sitter grammar upgrade can silently misalign a query and produce a subtly-wrong graph with no crash. | `matchExactlyOnce`-style helpers **throw** when a query's match count is unexpected — crash loudly on grammar drift rather than emit a wrong graph. | Add cardinality assertions on the load-bearing tree-sitter queries. |
-| 4 | **No coverage-observability CLI** — coverage is implicit; you can't ask "what did it scan / exclude?" | `spec-studio code-graph list-includes / list-excludes` makes the scanned/excluded set auditable — excludes are not a black box. | Add a `list-includes/list-excludes` equivalent so the coverage boundary is inspectable, not inferred. |
-| 5 | **No accuracy benchmark for dead-code** — our detector is deliberately over-reporting (see §15.3) but has no ground-truth calibration. | dead-code test battery uses **Knip as ground truth**; measured asymmetry = 0 false-positive / 4 false-negative (宁漏勿错, deliberate). | Add a ground-truth benchmark (e.g. Knip / vulture) so the false-positive/negative bias is *measured*, not assumed. |
+| 3 | **No cardinality sentinel** — a tree-sitter grammar upgrade can silently misalign a query and produce a subtly-wrong graph with no crash. | match-exactly-once query helpers **throw** when a query's match count is unexpected — crash loudly on grammar drift rather than emit a wrong graph. | Add cardinality assertions on the load-bearing tree-sitter queries. |
+| 4 | **No coverage-observability CLI** — coverage is implicit; you can't ask "what did it scan / exclude?" | a `list-includes / list-excludes` CLI makes the scanned/excluded set auditable — excludes are not a black box. | Add a `list-includes/list-excludes` equivalent so the coverage boundary is inspectable, not inferred. |
+| 5 | **No accuracy benchmark for dead-code** — our detector is deliberately over-reporting (see §15.3) but has no ground-truth calibration. | dead-code test battery is calibrated against an independent unused-code tool as ground truth; *reported* bias is toward under-reporting (favoring false-negatives over false-positives — 宁漏勿错, deliberate) — reported-not-verified, see provenance note. | Add a ground-truth benchmark (e.g. Knip / vulture) so the false-positive/negative bias is *measured*, not assumed. |
 
-**Note on provenance (honest):** the Spec Studio mechanism names above (`validateSourceFileCount`, `matchExactlyOnce`, `collectFilePaths`, the CLI verbs) come from Spec Studio's **self-generated spec docs** (`developer-docs.md` + `system-overview.md`), *not* from a line-by-line source read — that dive's SSH clone failed on a passphrase prompt. The **`StoreGenSpecGenerationCore/packages/code-graph` engine WAS read at source level** (§4.5.1) — so the tree-sitter/`analyze.ts`/Zod/NOVA claims are source-confirmed, but the coverage-orchestration helper names are doc-sourced and should be re-confirmed against source before being cited as API. (This is the same R16b discipline the doc argues for — labeling exactly how each claim was established.)
+**Note on provenance (honest — two studies, different verification depth):** the reference-engine evidence comes from **two** investigations that read to different depths — label each claim by which:
+- **Study A — code-graph engine (SOURCE-READ).** The current code-graph engine was located and read at source level. The tree-sitter parse / column-precise definition spans / schema-constrained cheap-model fallback claims (§4.5.1, §4.5.3) are **source-confirmed** (primary-language paths read line-by-line; other-language query configs confirmed by pattern, not transcribed).
+- **Study B — coverage/orchestration (DOC-SOURCED only).** The coverage-orchestration mechanisms in the table above (source-file-count validation, match-exactly-once query helpers, the `list-includes/list-excludes` CLI verbs) **and the dead-code accuracy benchmark (§15.2 #5)** come from the engine's own generated documentation, *not* a line-by-line source read. Treat these as accurate-intent but **re-confirm against source before citing as API or as a hard benchmark.**
+
+(This split is the same R16b discipline the doc argues for — label exactly how each claim was established; do not let a doc-sourced mechanism name or a reported benchmark read as a source-verified fact.)
 
 ### 15.3 Dead-code detection — a deliberate opposite trade-off (documented, not a bug)
 
-Our dead-code detector (`dead_code.py`) intentionally **over-reports** (宁错勿漏), the mirror of Spec Studio's under-report (宁漏勿错):
+Our dead-code detector (`dead_code.py`) intentionally **over-reports** (宁错勿漏), the mirror of the reference engine's under-report (宁漏勿错):
 - **Why:** our parser does not extract decorators/annotations (`@app.route`, `@Test`, `export default` don't enter the graph), so a decorated entry point looks like it has zero in-edges. Rather than ship a check that silently never fires, `_is_entry_point`'s own comment accepts the false-positive rate: *"Phase 1 over-reports dead code for decorated entry points — this false-positive rate is acceptable, better than a ghost check that never triggers."*
-- **The judgment:** Spec Studio's consumer is a signed document → a false positive is expensive → omit when unsure. Our consumer is an agent that re-checks → a **silent** miss is worse than a flagged false positive the agent can dismiss. Same SQL predicate (`is_export=1 AND is_entry_point=0 AND zero in-edges AND not test AND not __init__.py`), opposite tuning — and the tuning follows from the consumer, not from one being "more correct." (This is why §15.2 #5 matters: the bias should be *measured against ground truth*, not just asserted.)
+- **The judgment:** the reference engine's consumer is a signed document → a false positive is expensive → omit when unsure. Our consumer is an agent that re-checks → a **silent** miss is worse than a flagged false positive the agent can dismiss. Same SQL predicate (`is_export=1 AND is_entry_point=0 AND zero in-edges AND not test AND not __init__.py`), opposite tuning — and the tuning follows from the consumer, not from one being "more correct." (This is why §15.2 #5 matters: the bias should be *measured against ground truth*, not just asserted.)
 
 ### 15.4 Generator failure modes & recovery — what happens when the ENGINE (not the input) fails
 
@@ -1074,7 +1079,7 @@ v3 is **additive and non-breaking** for existing v2 consumers:
 - IMPROVEMENT.md may contain commit hashes — public in any git repo.
 - `code-intel.json` domains[] reveals architectural + business-flow structure — teams should treat it with the same sensitivity as architecture diagrams and business-process documentation.
 - `install.sh` performs only local file operations — no network calls, no telemetry.
-- For Amazon internal use: generated artifacts inherit the source repository's classification.
+- For internal/enterprise use: generated artifacts inherit the source repository's data classification.
 
 ### 20.2 Threat model — the engine ingests arbitrary (possibly hostile) codebases
 
@@ -1107,13 +1112,13 @@ The unifying defense is Principle 20: **deterministic supplies the anchor, LLM s
 | **[Understand-Anything](https://github.com/Egonex-AI/Understand-Anything)** (74,486★, MIT; verified `gh repo view` 2026-07-16 — repo moved from `Lum1104` to `Egonex-AI`) | Primary competitor + mechanism source. Interactive knowledge-graph dashboard. | Entry-point grounding (`extract-domain-context.py`), incremental merge (`merge-batch-graphs.py` batch-existing/keep-last), file fingerprints (`build-fingerprints.mjs`), platforms table, worktree pitfall, localization. We diverge on: signable spec (not graph), anti-spurious anchoring, equivalence validation, single-agent (not multi-agent). |
 | **Siala, H. & Lano, K. (2025)** — *A comparison of large language models and model-driven reverse engineering for reverse engineering.* Frontiers in Computer Science 7:1516410. [DOI 10.3389/fcomp.2025.1516410](https://doi.org/10.3389/fcomp.2025.1516410) (open access, CC-BY; full-read verified) | Quantitative basis for §6 anti-spurious guardrails + §11 eval dimensions. | Bare LLM spurious 0.67 (Java) vs deterministic 0; precision (not recall) is the sign-off floor; explicit>implicit is measurable; anchor-every-assertion is the structural fix. |
 | **AgentModernize** — Ahmed, S.N. & Galib, M., *"AgentModernize: Preserving Business Logic in Legacy Modernization with Multi-Agent LLMs and Behavioral Specification Graphs"*, [arXiv:2605.17535](https://arxiv.org/abs/2605.17535) (abstract resolves-verified 2026-07-16; evaluated on 8 telecom/banking scenarios × 3 models) | Decisive evidence for §7 behavioral-equivalence layer. | Single-prompt/CoT LLM = 0.0% behavioral equivalence; Behavioral Specification Graph (checkable-graph + validator + feedback) = 91.2% of gold-standard rules. Unvalidated specs are theater. (Caveat: their result is a *precedent's* motivation for our §7, not a property of our own unwired layer — §11.3③.) |
-| **Amazon Spec Studio** (internal — `StoreGenSpecGenerationCore/packages/code-graph` (V2 engine), `StoreGenSpecStudio` / `SpecStudioAdversarialTest` / `SpecStudioEval`; source-level dive 2026-07-16) | Design frame for §4.5 grounding + §11 coverage & quality (4-mechanism correctness model + adversarial detectors). | Official AST-first grounding thesis (§4.5.1); **two engines** — V2 (`@amzn/storegen-code-graph`, TS **tree-sitter**, source read: `analyze.ts` `parser.setLanguage/parse`, column-precise `CodeDefinition{start,end:Point}` + hybrid LLM layer on top + cross-file dep resolution + graceful LLM-fallback for unsupported langs) vs legacy V1 (`StoreGenSpecGenerator`, substring reference-counting, zero AST). Four independent correctness mechanisms; detector RESTRAINT skeleton (3-question threshold + negative list + zero-is-valid); Contradiction 7-class taxonomy; coverage as a deterministic gate + org-level tracker. Our tree-sitter engine + fail-closed accounting are more transparent; their bidirectional adversarial + org coverage are ahead. |
+| **A large enterprise code→spec engine** (studied 2026-07-16; internal identifiers anonymized — *"the reference engine"*) | Design frame for §4.5 grounding + §11 coverage & quality (4-mechanism correctness model + adversarial detectors). | Stated AST-first grounding principle (§4.5.1); a current tree-sitter code-graph engine (read at source level: standard tree-sitter parsing, column-precise definition spans + a hybrid LLM layer on top + cross-file dep resolution + graceful cheap-model fallback for unsupported languages) and an earlier non-AST generation. Four independent correctness mechanisms; detector RESTRAINT skeleton (3-question threshold + negative list + zero-is-valid); Contradiction 7-class taxonomy; coverage as a deterministic gate + org-level tracker. Our tree-sitter engine + fail-closed accounting are more transparent; its bidirectional adversarial + org coverage are ahead. |
 | **Reverse Documentation Engineering field survey** — ACL 2026 Industry Track + Reversa (arXiv:2605.18684) + vendor landscape (IBM watsonx Code Assistant for Z, Amazon Q, CoreStory, EPAM) | §1.2 problem framing + §7.3 pipeline alignment + §13 multi-agent rejection. | 5-layer industry pipeline; "trust boundary" architecture (deterministic anchor / LLM reach / human sign-off); AI flips human from writer to verifier (~85% SME-validation, ~93% expert-agreement, ~70% doc-effort reduction). |
 | **SwarmAI Code Intelligence** (`backend/core/code_intel/`) | Internal implementation. `json_exporter.py` exports code-intel v3. | Schema reuse; production lessons: prefix resolution, test filtering, reindex timeout, thread safety. |
 | **SwarmAI DDD Cultivation** (`backend/core/ddd/`) | Keeps DDD docs alive via event-driven updates. | Freshness/decay model; tier concept (structural→semantic→full) maps to the 3-tier refresh; independent refresh path for spec-details. |
 | **SwarmAI Autonomous Pipeline** (`skills/s_autonomous-pipeline/`) | Quality system this engine runs through, and the single-agent role-switching that replaces a multi-agent RDE pipeline (§13 #6). | AC quality gate, User-Value Probe, adversarial review — the gates that caught the honest corrections in §16. |
 | **[agents.md spec](https://agents.md)** | Community convention for AI agent context. | We extend it: AGENTS.md is the ≤150-line entry point; the spec is flat, we add layered depth behind it. |
-| **AI-Native Brownfield Bootstrapper** (Amazon internal) | Amazon-internal AGENTS.md generator. | "Detect don't assume", ≤150-line entry point, two touchpoints, WHEN/RISK/BECAUSE grammar. |
+| **An internal brownfield-bootstrapper tool** (enterprise-internal; anonymized) | Internal AGENTS.md generator we drew practices from. | "Detect don't assume", ≤150-line entry point, two touchpoints, WHEN/RISK/BECAUSE grammar. |
 
 ---
 
