@@ -1786,3 +1786,124 @@ class TestThickenGate2PipeEscape:
         md = project_domain_skeleton(dom, flows, steps)
         in_line = [l for l in md.splitlines() if "输入" in l][0]
         assert "line1 line2" in in_line and "\n" not in in_line[3:]
+
+
+class TestEquivalenceLayer:
+    """Run 5 (run_3349787d, §10): derive assertions from step.contract, score
+    against observations with honest verified/partial/unchecked tagging, feedback."""
+
+    def _doc(self):
+        return {
+            "domains": [{"id": "domain:eval", "name": "Eval"},
+                        {"id": "domain:static", "name": "StaticNoContract"}],
+            "flows": [{"id": "flow:add", "domain_id": "domain:eval"},
+                      {"id": "flow:s", "domain_id": "domain:static"}],
+            "steps": [
+                {"id": "step:add", "flow_id": "flow:add",
+                 "contract": {"http": "POST /api/eval/golden-set",
+                              "status_codes": {"200": "created", "400": "invalid"}}},
+                {"id": "step:s", "flow_id": "flow:s"},  # no contract → unchecked
+            ],
+        }
+
+    def test_derive_from_contract(self):
+        from scripts.ai_ready_helpers import derive_equivalence_assertions
+        a = derive_equivalence_assertions(self._doc())
+        assert len(a) == 2  # 200 + 400
+        assert {x["code"] for x in a} == {"200", "400"}
+        assert all(x["step_id"] == "step:add" for x in a)
+
+    def test_no_contract_yields_nothing(self):
+        from scripts.ai_ready_helpers import derive_equivalence_assertions
+        doc = {"steps": [{"id": "s", "flow_id": "f"}], "flows": [], "domains": []}
+        assert derive_equivalence_assertions(doc) == []
+
+    def test_verified_when_all_observed_pass(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        obs = {("step:add", "200"): True, ("step:add", "400"): True}
+        r = score_equivalence(self._doc(), obs)
+        assert r["domains"]["domain:eval"]["tag"] == "verified"
+        assert r["overall_score"] == 1.0
+
+    def test_partial_when_some_fail_or_unobserved(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        obs = {("step:add", "200"): True}  # 400 unobserved
+        r = score_equivalence(self._doc(), obs)
+        assert r["domains"]["domain:eval"]["tag"] == "partial"
+
+    def test_failed_observation_is_partial_not_verified(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        obs = {("step:add", "200"): True, ("step:add", "400"): False}
+        r = score_equivalence(self._doc(), obs)
+        assert r["domains"]["domain:eval"]["tag"] == "partial"
+
+    def test_static_domain_is_unchecked_never_fakepass(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        r = score_equivalence(self._doc(), {})
+        # no-contract domain → unchecked; contract domain with no obs → also unchecked
+        assert r["domains"]["domain:static"]["tag"] == "unchecked"
+        assert r["domains"]["domain:eval"]["tag"] == "unchecked"  # has assertions, 0 observed
+
+    def test_feedback_enqueues_only_observed_failures(self):
+        from scripts.ai_ready_helpers import equivalence_feedback
+        obs = {("step:add", "200"): True, ("step:add", "400"): False}
+        q = equivalence_feedback(self._doc(), obs)
+        assert len(q) == 1  # only the observed FAILURE (400), not the unobserved
+        assert q[0]["code"] == "400" and q[0]["verified"] is False
+        assert "SME must adjudicate" in q[0]["reason"]
+
+    def test_e2e_on_real_swarmai_domains(self):
+        """E2E: derive from the REAL SwarmAI code-intel.json (3 real contracts),
+        score with a realistic observation set, prove honest tagging on real data."""
+        import json, sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", ".swarm-ai", "SwarmWS"))
+        from scripts.ai_ready_helpers import derive_equivalence_assertions, score_equivalence
+        # locate the real file via project registry
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "core"))
+        from project_registry import get_projects_dir
+        p = get_projects_dir() / "SwarmAI" / "code-intel.json"
+        if not p.exists():
+            import pytest; pytest.skip("real SwarmAI code-intel.json not present")
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        assertions = derive_equivalence_assertions(doc)
+        # real contracts: eval create_case(200,400) + canary(200,500) + reindex(202,400,404) = 7
+        assert len(assertions) >= 7, f"expected ≥7 real status-code assertions, got {len(assertions)}"
+        # score with a partial real observation (only eval 200s observed)
+        obs = {(a["step_id"], a["code"]): True for a in assertions if a["code"] == "200"}
+        r = score_equivalence(doc, obs)
+        # domains with contracts but not all codes observed → partial; static domains → unchecked
+        tags = {d: v["tag"] for d, v in r["domains"].items()}
+        assert "unchecked" in tags.values()  # static domains honestly unchecked
+        assert all(t in ("verified", "partial", "unchecked") for t in tags.values())
+
+
+class TestEquivalenceOrphanSurfacing:
+    """Gate-2 F5 (run_3349787d): orphan assertions (step→flow→domain unresolved)
+    must be SURFACED in __unresolved__, not silently dropped from the report/score."""
+
+    def test_orphan_step_surfaced_not_dropped(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        doc = {
+            "domains": [{"id": "domain:real"}],
+            "flows": [{"id": "flow:real", "domain_id": "domain:real"}],
+            "steps": [
+                {"id": "s:real", "flow_id": "flow:real",
+                 "contract": {"http": "GET /a", "status_codes": {"200": "ok"}}},
+                # orphan: flow:ghost is not in flows[] → no domain
+                {"id": "s:orphan", "flow_id": "flow:ghost",
+                 "contract": {"http": "GET /b", "status_codes": {"200": "ok", "500": "err"}}},
+            ],
+        }
+        r = score_equivalence(doc, {("s:real", "200"): True})
+        assert "__unresolved__" in r["domains"], "orphan assertions must be surfaced, not dropped"
+        assert r["domains"]["__unresolved__"]["total"] == 2  # the 2 orphan codes
+        assert r["domains"]["__unresolved__"]["tag"] == "unchecked"
+        # score denominator includes orphans (1 passed / 3 total)
+        assert r["overall_score"] == round(1/3, 4)
+
+    def test_no_orphan_no_bucket(self):
+        from scripts.ai_ready_helpers import score_equivalence
+        doc = {"domains": [{"id": "d"}], "flows": [{"id": "f", "domain_id": "d"}],
+               "steps": [{"id": "s", "flow_id": "f", "contract": {"http": "GET /a", "status_codes": {"200": "ok"}}}]}
+        r = score_equivalence(doc, {})
+        assert "__unresolved__" not in r["domains"]

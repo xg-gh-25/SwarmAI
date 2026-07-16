@@ -976,6 +976,131 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
     return "\n".join(out)
 
 
+# ─── Run 5 (run_3349787d, design §10): behavioral-equivalence layer ───
+
+def derive_equivalence_assertions(doc: dict) -> list[dict]:
+    """From each step.contract{http,status_codes} emit checkable assertion records
+    (§10.2). Each status_code becomes one behavioral claim the spec makes about the
+    code: "this endpoint returns <code> (<meaning>)". These are what an equivalence
+    check runs against real tests/runtime. Pure — reads the doc, no IO.
+
+    Returns [{flow_id, step_id, kind:'status_code', http, code, meaning}]. A step
+    with no contract / no status_codes contributes nothing (→ its domain will be
+    'unchecked' in scoring, never fake-passed).
+    """
+    out: list[dict] = []
+    for st in doc.get("steps", []) or []:
+        if not isinstance(st, dict):
+            continue
+        c = st.get("contract") or {}
+        codes = c.get("status_codes") or {}
+        if not isinstance(codes, dict):
+            continue
+        http = c.get("http", "")
+        for code, meaning in codes.items():
+            out.append({
+                "flow_id": st.get("flow_id"),
+                "step_id": st.get("id"),
+                "kind": "status_code",
+                "http": http,
+                "code": str(code),
+                "meaning": meaning,
+            })
+    return out
+
+
+def score_equivalence(doc: dict, observations: dict) -> dict:
+    """Score the domain layer's behavioral equivalence against real observations
+    (§10.2). `observations` maps (step_id, code) → observed_bool (did a real test /
+    runtime actually exhibit this status code?). Missing observation = UNVERIFIED,
+    NOT a pass.
+
+    Per-domain equivalence tag:
+      - 'verified'  — domain has ≥1 assertion AND every observed assertion passed
+                      AND every assertion was observed
+      - 'partial'   — some assertions observed+passed, some unobserved or failed
+      - 'unchecked' — domain has NO derivable assertion (no contract) OR no
+                      observation at all (§10.2 honest fallback — a static/no-test
+                      domain is NEVER fake-passed)
+    Returns {overall_score, domains:{domain_id: {tag, passed, total, observed}}}.
+    Pure.
+    """
+    assertions = derive_equivalence_assertions(doc)
+    # map step_id → domain_id via flow
+    flow_domain = {f.get("id"): f.get("domain_id") for f in doc.get("flows", []) or []}
+    step_flow = {s.get("id"): s.get("flow_id") for s in doc.get("steps", []) or []}
+
+    def _domain_of(step_id):
+        return flow_domain.get(step_flow.get(step_id))
+
+    per_domain: dict = {}
+    for a in assertions:
+        dom = _domain_of(a["step_id"])
+        d = per_domain.setdefault(dom, {"passed": 0, "total": 0, "observed": 0})
+        d["total"] += 1
+        key = (a["step_id"], a["code"])
+        if key in observations:
+            d["observed"] += 1
+            if observations[key]:
+                d["passed"] += 1
+
+    # every domain in the doc gets a tag (domains with no assertion → unchecked)
+    all_domains = [x.get("id") for x in doc.get("domains", []) or [] if isinstance(x, dict)]
+    result_domains: dict = {}
+    total_passed = total_all = 0
+    for dom in all_domains:
+        d = per_domain.get(dom)
+        if not d or d["total"] == 0:
+            result_domains[dom] = {"tag": "unchecked", "passed": 0, "total": 0, "observed": 0}
+            continue
+        total_passed += d["passed"]; total_all += d["total"]
+        if d["observed"] == 0:
+            tag = "unchecked"          # has assertions but none observed → honest unchecked
+        elif d["passed"] == d["total"] and d["observed"] == d["total"]:
+            tag = "verified"
+        else:
+            tag = "partial"
+        result_domains[dom] = {"tag": tag, **d}
+    # Surface orphan assertions (steps whose flow/domain doesn't resolve to a real
+    # domain) instead of silently dropping them (Gate-2 F5, run_3349787d): a
+    # contract that vanishes from the report reads as "fully covered" when it isn't.
+    # Fold into an explicit __unresolved__ bucket + the score denominator.
+    orphan = {"passed": 0, "total": 0, "observed": 0}
+    for dom, d in per_domain.items():
+        if dom in all_domains:
+            continue
+        orphan["passed"] += d["passed"]; orphan["total"] += d["total"]; orphan["observed"] += d["observed"]
+    if orphan["total"]:
+        total_passed += orphan["passed"]; total_all += orphan["total"]
+        result_domains["__unresolved__"] = {"tag": "unchecked", **orphan}
+    overall = round(total_passed / total_all, 4) if total_all else 0.0
+    return {"overall_score": overall, "domains": result_domains}
+
+
+def equivalence_feedback(doc: dict, observations: dict) -> list[dict]:
+    """§10.2 feedback loop + §1.5#3 SME queue: every assertion that was OBSERVED
+    and FAILED becomes an SME-review-queue item AND its step is (in the returned
+    copy) marked verified:false for that behavior. A failed equivalence claim means
+    the spec says one thing and the code does another — a human must adjudicate.
+
+    Returns the review-queue items [{step_id, flow_id, http, code, meaning, reason}].
+    (Unobserved assertions are NOT failures — they're 'unchecked', per §10.2, and do
+    not enqueue.) Pure — does not mutate doc.
+    """
+    queue: list[dict] = []
+    for a in derive_equivalence_assertions(doc):
+        key = (a["step_id"], a["code"])
+        if key in observations and not observations[key]:
+            queue.append({
+                "step_id": a["step_id"], "flow_id": a["flow_id"],
+                "http": a["http"], "code": a["code"], "meaning": a["meaning"],
+                "reason": f"spec claims {a['http']} → {a['code']} ({a['meaning']}) "
+                          f"but the observed behavior did NOT exhibit it — SME must adjudicate",
+                "verified": False,
+            })
+    return queue
+
+
 # ─── Git History Parsing for Gotchas ───
 
 _FIX_PATTERN = re.compile(
