@@ -187,6 +187,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
         errors.extend(check_domain_referential_integrity(doc))
         errors.extend(check_llm_assertion_guards(doc))
         errors.extend(check_mermaid_node_anchoring(doc, repo_root=repo_root))
+        errors.extend(check_anchor_accounting(doc))
 
     return errors
 
@@ -457,6 +458,160 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
     for fl in doc.get("flows", []) or []:
         if isinstance(fl, dict):
             _check_diagram("flow", fl.get("id", "?"), fl)
+    return errors
+
+
+# ── Run 1 (run_94e5a5aa): anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
+#
+# The crux this closes: v3 generation was anti-hallucination-hard (a flow.entry_ref
+# must resolve) but coverage-BLIND — the LLM could classify 10 of 208 anchors and
+# the system silently accepted 4.8% coverage while reporting "valid". On a bank
+# legacy codebase that is a fatal delivery: "done" while only 4.8% is understood.
+#
+# The fix is NOT a route-% threshold (Gate-0 reframe: a % gate rewards padding
+# trivial routes to hit a number — P6 metric-gaming — and `routes` is the wrong
+# denominator for a batch/stored-proc/message-handler system). It is an ACCOUNTING
+# invariant: EVERY anchor must be ACCOUNTED — either classified (a flow entry_ref)
+# OR explicitly parked in `unclassified: [{id, reason}]` with a SUBSTANTIVE reason.
+# Silent omission is a fail-closed error; honest "no business flow, because X" is
+# allowed. This forbids the silent hole WITHOUT forcing fake flows.
+
+# A junk "reason" that must NOT rubber-stamp an omission (Gate-1 F5 — same family as
+# the mermaid absolute-path escape: a self-authored gate leaving its own hole). A
+# real reason explains WHY an anchor has no business flow; "." / "n/a" / "todo" do not.
+_JUNK_REASONS = {".", "-", "--", "n/a", "na", "none", "x", "?", "tbd", "todo", "fixme"}
+_MIN_REASON_LEN = 12  # a substantive reason is a short phrase, not a placeholder
+
+
+def _is_substantive_reason(reason) -> bool:
+    """A reason genuinely accounts for an un-classified anchor iff it is a real
+    EXPLANATION, not a placeholder or a length-padding stamp.
+
+    Gate-2 F1 (HIGH): `len>=12` alone was gameable — "xxxxxxxxxxxx" / 12 dots passed,
+    which just moved the reason="." rubber-stamp down one level (the CLASS-A
+    "self-authored gate leaves its own hole" pattern). So substance = ALL of:
+    - non-blank, not in the junk-token set, and len>=_MIN_REASON_LEN, AND
+    - a real PHRASE: >=2 whitespace-separated words (a single long token isn't an
+      explanation), AND
+    - low-information rejection: >=5 distinct characters (bars "xxxxxxxxxxxx",
+      "............", "____________" — a single repeated char is not an explanation).
+    """
+    if not _nonblank(reason):
+        return False
+    r = reason.strip().lower()
+    if r in _JUNK_REASONS or len(r) < _MIN_REASON_LEN:
+        return False
+    if len(r.split()) < 2:            # must be a phrase, not one padded token
+        return False
+    if len(set(r.replace(" ", ""))) < 5:  # too few distinct chars = filler
+        return False
+    return True
+
+
+def _route_anchor_ids(doc: dict) -> set[str]:
+    """The accounting denominator = the id set of ROUTE-kind anchors (Gate-1 2a:
+    extract_entry_anchors also yields entry_point-kind anchors, but referential
+    integrity only resolves flow.entry_ref against routes[], so an entry_point
+    anchor can never be *classified* — scoping the denominator to route-kind keeps
+    classified/unclassified drawn from the same set. When a real non-HTTP system
+    (jobs/handlers) arrives, extend BOTH the denominator and the classify path
+    together, not one alone)."""
+    anchors = extract_entry_anchors(doc)  # may raise ValueError (routes present, no ids)
+    return {a["id"] for a in anchors if a.get("kind") == "route" and _nonblank(a.get("id"))}
+
+
+def compute_anchor_accounting(doc: dict) -> dict:
+    """Pure: how much of the codebase's (route-kind) anchor menu is ACCOUNTED for.
+
+    Returns:
+      total             — count of route-kind anchors (the denominator)
+      classified        — anchors referenced by a flow.entry_ref
+      unclassified_count— anchors parked in doc['unclassified'] with a substantive reason
+      missing_ids       — anchors that are NEITHER (the silent-omission set; sorted)
+      accounted_ratio   — (classified + unclassified) / total  ← the GATED invariant (must be 1.0)
+      classified_ratio  — classified / total                   ← honest quality signal, NEVER gated
+                          (gating it would reward padding flows — P6)
+
+    If routes are present but un-backfilled (no ids), returns total=0 with an
+    `unbackfilled=True` flag rather than raising — this is a REPORT (fail-closed
+    enforcement lives in check_anchor_accounting, which errors on that case).
+    """
+    try:
+        all_ids = _route_anchor_ids(doc)
+    except ValueError:
+        return {"total": 0, "classified": 0, "unclassified_count": 0,
+                "missing_ids": [], "accounted_ratio": 0.0, "classified_ratio": 0.0,
+                "unbackfilled": True}
+    total = len(all_ids)
+    classified = {f.get("entry_ref") for f in (doc.get("flows") or [])
+                  if isinstance(f, dict) and _nonblank(f.get("entry_ref"))} & all_ids
+    unclassified = {u["id"] for u in (doc.get("unclassified") or [])
+                    if isinstance(u, dict) and u.get("id") in all_ids
+                    and _is_substantive_reason(u.get("reason"))}
+    accounted = classified | unclassified
+    missing = all_ids - accounted
+    return {
+        "total": total,
+        "classified": len(classified),
+        "unclassified_count": len(unclassified),
+        "missing_ids": sorted(missing),
+        "accounted_ratio": round(len(accounted) / total, 4) if total else 1.0,
+        "classified_ratio": round(len(classified) / total, 4) if total else 0.0,
+    }
+
+
+def check_anchor_accounting(doc: dict) -> list[str]:
+    """Fail-closed COVERAGE guard: every route-kind anchor must be accounted for.
+
+    Errors (any → validate_code_intel_json fails → finalize_v3 raises):
+    - a missing anchor (neither in a flow nor in a reasoned unclassified bucket) —
+      the silent-omission defect this whole mechanism exists to kill.
+    - an `unclassified` entry whose id is not a real anchor (fabricated — mirrors the
+      mermaid fake-node guard) OR whose reason is blank/junk (Gate-1 F5 rubber-stamp).
+    - an anchor listed in BOTH a flow AND unclassified (Gate-1 2b: double-accounting
+      masks a real omission).
+    - routes present but NONE carry ids (Gate-2 F2: extract_entry_anchors raises
+      loud — the guard must NOT swallow that into a clean pass, else a whole-codebase
+      omission ships silently because the id-backfill was skipped).
+    """
+    errors: list[str] = []
+    try:
+        all_ids = _route_anchor_ids(doc)
+    except ValueError as e:
+        # routes present but un-backfilled (no ids) — surface, do NOT pass vacuously.
+        return [f"anchor-accounting cannot run: {e} — run backfill_route_ids(doc) "
+                f"first so every route carries an id (Gate-2 F2 anti-vacuous-pass)"]
+    if not all_ids:
+        return errors  # genuinely no route entries (v2 doc) — not this guard's job
+
+    flow_refs = {f.get("entry_ref") for f in (doc.get("flows") or [])
+                 if isinstance(f, dict) and _nonblank(f.get("entry_ref"))} & all_ids
+
+    unclassified_ids: set[str] = set()
+    for u in (doc.get("unclassified") or []):
+        if not isinstance(u, dict):
+            errors.append("unclassified entry must be a dict {id, reason}")
+            continue
+        uid = u.get("id")
+        if uid not in all_ids:
+            errors.append(f"unclassified id '{uid}' is not a real anchor in the menu "
+                          f"(fabricated — must be a route id, §1.1 anti-hallucination)")
+            continue
+        if not _is_substantive_reason(u.get("reason")):
+            errors.append(f"unclassified anchor '{uid}' has no substantive reason "
+                          f"(blank/junk reason cannot rubber-stamp an omission — Gate-1 F5)")
+            continue
+        if uid in flow_refs:
+            errors.append(f"anchor '{uid}' is BOTH classified (a flow) AND unclassified "
+                          f"— double-accounting masks a real omission (Gate-1 2b)")
+            continue
+        unclassified_ids.add(uid)
+
+    missing = all_ids - flow_refs - unclassified_ids
+    for mid in sorted(missing):
+        errors.append(f"anchor '{mid}' is UNACCOUNTED — not in any flow.entry_ref and "
+                      f"not in unclassified[] with a reason (silent-omission = coverage hole; "
+                      f"classify it into a flow OR park it in unclassified:[{{id,reason}}])")
     return errors
 
 
@@ -796,8 +951,16 @@ def eval_spec_details(doc: dict) -> dict:
     """§9 eval dims for a code-intel v3 domain layer — the quantitative quality
     gate (Siala & Lano 2025), NOT "looks right".
 
-    - completeness (recall proxy): fraction of flows that resolve to a real route
-      entry_ref (an unanchored flow = a missing/hallucinated element).
+    - flow_validity (was misnamed 'completeness' — Run 1 fix): fraction of flows that
+      resolve to a real route entry_ref (an unanchored flow = a missing/hallucinated
+      element). This is a per-flow VALIDITY measure — NOT codebase coverage. The old
+      name lied: a doc with 10 valid flows covering 10 of 208 routes scored
+      "completeness"=1.0 while 95% of the codebase was unclassified. Real coverage is
+      the two accounting ratios below.
+    - accounted_ratio: (classified + reasoned-unclassified) / total anchors — the
+      fail-closed coverage invariant (must be 1.0; see check_anchor_accounting).
+    - classified_ratio: classified / total anchors — the HONEST quality signal (how
+      much is a real business flow, not just parked as unclassified). Never gated.
     - precision (consistency): fraction of assertions that are VERIFIED (a real
       bool True + non-blank anchor). FP here = spurious (paper: LLM 0.67) — an
       un-anchored / verified:false assertion counts against precision.
@@ -813,11 +976,13 @@ def eval_spec_details(doc: dict) -> dict:
     steps = doc.get("steps") or []
     route_ids = {r.get("id") for r in (doc.get("routes") or []) if r.get("id")}
 
-    # completeness: flows anchored to a real route
+    # flow_validity: flows anchored to a real route (per-flow validity, NOT coverage)
     anchored = sum(1 for f in flows
                    if f.get("entry_type") != "http" or f.get("entry_ref") in route_ids)
     n_flows = len(flows)
-    completeness = anchored / n_flows if n_flows else 0.0
+    flow_validity = anchored / n_flows if n_flows else 0.0
+    # real coverage (the metric the old 'completeness' hid)
+    _acc = compute_anchor_accounting(doc)
 
     # precision + explicit over all assertions / steps
     total_assert = 0
@@ -834,15 +999,19 @@ def eval_spec_details(doc: dict) -> dict:
     explicit_steps = sum(1 for s in steps if s.get("explicit") is True)
     explicit = explicit_steps / n_steps if n_steps else 0.0
 
-    f1 = (2 * completeness * precision / (completeness + precision)
-          if (completeness + precision) else 0.0)
+    # f1 pairs flow_validity with precision (unchanged semantics; renamed input)
+    f1 = (2 * flow_validity * precision / (flow_validity + precision)
+          if (flow_validity + precision) else 0.0)
 
     return {
-        "completeness": round(completeness, 4),
+        "flow_validity": round(flow_validity, 4),
+        "accounted_ratio": _acc["accounted_ratio"],
+        "classified_ratio": _acc["classified_ratio"],
         "precision": round(precision, 4),
         "explicit": round(explicit, 4),
         "f1": round(f1, 4),
-        "denominators": {"flows": n_flows, "assertions": total_assert, "steps": n_steps},
+        "denominators": {"flows": n_flows, "assertions": total_assert, "steps": n_steps,
+                         "anchors": _acc["total"]},
     }
 
 

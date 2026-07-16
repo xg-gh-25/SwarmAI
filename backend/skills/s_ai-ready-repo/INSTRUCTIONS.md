@@ -602,8 +602,27 @@ anchors = extract_entry_anchors(doc)
 ```
 
 **3. LLM classification (this is the agent's judgment step — NOT a helper):**
-Read the anchor menu + the UNDERSTAND-phase module/hot-zone analysis. Group the
-REAL anchors into business domains and flows. For each:
+Read the anchor menu + the UNDERSTAND-phase module/hot-zone analysis.
+
+> **🚨 COVERAGE IS MANDATORY — account for EVERY anchor, do NOT cherry-pick a subset.**
+> This is the difference between "we understand this codebase" and "we understand
+> the 5% we felt like classifying". On a bank/enterprise legacy codebase, reporting
+> "done" while silently leaving 95% of entry points unclassified is a **fatal
+> delivery**. Every anchor in the menu MUST be ACCOUNTED for — one of two ways:
+> 1. **Classified** — referenced by a `flow.entry_ref` (it belongs to a business flow), OR
+> 2. **Explicitly unclassified** — listed in a top-level `unclassified: [{id, reason}]`
+>    array, where `reason` is a **substantive** explanation of why it has no business
+>    flow (e.g. "unauthenticated health probe, no business semantics" / "static asset
+>    route" / "dead code, 0 callers"). A blank or junk reason (`"."`, `"n/a"`, `"todo"`)
+>    is REJECTED — it must genuinely explain the absence.
+>
+> `finalize_v3` is **fail-closed on accounting** (`check_anchor_accounting`): if ANY
+> anchor is neither classified nor reasoned-unclassified, it RAISES with the list of
+> unaccounted ids. Silent omission is structurally impossible to ship. The honest
+> `classified_ratio` (real business-flow coverage) is REPORTED, never gated — so you
+> are never rewarded for padding trivial routes into fake flows just to hit a number.
+
+Group the REAL anchors into business domains and flows. For each:
 - `domain`: id (`domain:<kebab>`), name, summary, entities, complexity, optional
   `business_rules`/`issues`/`gaps`/`diagram` (mermaid).
 - `flow`: id (`flow:<kebab>`), `domain_id` (a real domain id), `entry_ref`
@@ -619,12 +638,25 @@ REAL anchors into business domains and flows. For each:
 
 ```python
 # 4. Assemble + FAIL-CLOSED validate. Raises ValueError if ANY flow.entry_ref is
-#    dangling, any verified:true lacks an anchor (spurious), or any verified:false
-#    lacks absence_evidence. A rejected layer is NEVER written — fix and re-run.
+#    dangling, any verified:true lacks an anchor (spurious), any verified:false
+#    lacks absence_evidence, OR ANY anchor is UNACCOUNTED (not in a flow and not in
+#    a reasoned unclassified bucket — the coverage guarantee). A rejected layer is
+#    NEVER written — fix and re-run.
+#    Put every not-a-business-flow anchor in doc["unclassified"] with a real reason:
+doc["unclassified"] = [
+    {"id": "route:get-health-...", "reason": "unauthenticated liveness probe, no business semantics"},
+    # ... every anchor not classified into a flow MUST appear here with a substantive reason
+]
 doc = finalize_v3(doc, domains, flows, steps)  # doc["version"] now "3.0"
 
 errors = validate_code_intel_json(doc)  # redundant belt-and-suspenders; must be []
 assert not errors
+
+# Coverage report (honest signal — NOT a gate): how much is real business flow?
+acc = compute_anchor_accounting(doc)
+print(f"accounted {acc['accounted_ratio']:.0%} (MUST be 100% — fail-closed), "
+      f"of which real flows {acc['classified_ratio']:.0%}, "
+      f"{acc['unclassified_count']} explicitly-unclassified")
 ```
 
 Then re-write `code-intel.json` with the v3 doc. Downstream: Run-3 recall surfaces

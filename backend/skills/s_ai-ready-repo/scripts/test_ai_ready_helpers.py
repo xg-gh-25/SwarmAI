@@ -1356,14 +1356,14 @@ class TestEvalSpecDetails:
     def test_completeness_flow_anchored(self):
         from scripts.ai_ready_helpers import eval_spec_details
         m = eval_spec_details(self._doc())
-        assert m["completeness"] == 1.0  # the one http flow resolves to a real route
+        assert m["flow_validity"] == 1.0  # the one http flow resolves to a real route (renamed from misleading "completeness")
 
     def test_completeness_penalizes_dangling_flow(self):
         from scripts.ai_ready_helpers import eval_spec_details
         doc = self._doc()
         doc["flows"][0]["entry_ref"] = "route:GHOST"  # not in routes
         m = eval_spec_details(doc)
-        assert m["completeness"] == 0.0
+        assert m["flow_validity"] == 0.0
 
     def test_explicit_ratio(self):
         from scripts.ai_ready_helpers import eval_spec_details
@@ -1373,14 +1373,14 @@ class TestEvalSpecDetails:
     def test_empty_axes_are_zero_not_crash(self):
         from scripts.ai_ready_helpers import eval_spec_details
         m = eval_spec_details({"domains": [], "flows": [], "steps": [], "routes": []})
-        assert m["completeness"] == 0.0 and m["precision"] == 0.0
+        assert m["flow_validity"] == 0.0 and m["precision"] == 0.0
         assert m["f1"] == 0.0
         assert m["denominators"]["flows"] == 0
 
     def test_f1_harmonic(self):
         from scripts.ai_ready_helpers import eval_spec_details
         m = eval_spec_details(self._doc())
-        # completeness 1.0, precision 0.5 → f1 = 2*1*0.5/1.5 = 0.6667
+        # flow_validity 1.0, precision 0.5 → f1 = 2*1*0.5/1.5 = 0.6667
         assert abs(m["f1"] - 0.6667) < 0.001
 
 
@@ -2054,3 +2054,162 @@ class TestEquivalenceOrphanSurfacing:
                "steps": [{"id": "s", "flow_id": "f", "contract": {"http": "GET /a", "status_codes": {"200": "ok"}}}]}
         r = score_equivalence(doc, {})
         assert "__unresolved__" not in r["domains"]
+
+
+class TestAnchorAccounting:
+    """Run 1 (run_94e5a5aa): the coverage-guarantee mechanism. Every anchor must be
+    ACCOUNTED — in a flow entry_ref OR an explicit unclassified:[{id,reason}] with a
+    real (non-junk) reason. Silent omission = fail-closed error. Reframed away from a
+    route-% threshold (Gate-0) to an accounting invariant (no metric to game)."""
+
+    def _doc(self, n_routes=3, flow_refs=None, unclassified=None):
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": f"route:r{i}", "method": "GET", "path": f"/r{i}",
+                          "file_path": "a.py"} for i in range(n_routes)]
+        doc["domains"] = [{"id": "domain:o", "name": "O"}]
+        doc["flows"] = [{"id": f"flow:{i}", "domain_id": "domain:o", "entry_ref": ref}
+                        for i, ref in enumerate(flow_refs or [])]
+        if unclassified is not None:
+            doc["unclassified"] = unclassified
+        return doc
+
+    # ── compute_anchor_accounting (pure) ──
+    def test_compute_full_coverage(self):
+        from scripts.ai_ready_helpers import compute_anchor_accounting
+        doc = self._doc(3, flow_refs=["route:r0", "route:r1", "route:r2"])
+        acc = compute_anchor_accounting(doc)
+        assert acc["total"] == 3 and acc["classified"] == 3
+        assert acc["missing_ids"] == [] and acc["accounted_ratio"] == 1.0
+        assert acc["classified_ratio"] == 1.0
+
+    def test_compute_silent_omission_surfaced(self):
+        from scripts.ai_ready_helpers import compute_anchor_accounting
+        doc = self._doc(3, flow_refs=["route:r0"])  # 1/3 classified, 2 missing
+        acc = compute_anchor_accounting(doc)
+        assert acc["total"] == 3 and acc["classified"] == 1
+        assert set(acc["missing_ids"]) == {"route:r1", "route:r2"}
+        assert acc["accounted_ratio"] < 1.0
+        assert round(acc["classified_ratio"], 2) == 0.33
+
+    def test_compute_unclassified_accounts(self):
+        from scripts.ai_ready_helpers import compute_anchor_accounting
+        doc = self._doc(3, flow_refs=["route:r0"],
+                        unclassified=[{"id": "route:r1", "reason": "health-check endpoint, no business flow"},
+                                      {"id": "route:r2", "reason": "static asset serving, not a domain action"}])
+        acc = compute_anchor_accounting(doc)
+        assert acc["missing_ids"] == [] and acc["accounted_ratio"] == 1.0
+        # classified_ratio stays honest — only 1 of 3 is a real flow
+        assert round(acc["classified_ratio"], 2) == 0.33
+        assert acc["unclassified_count"] == 2
+
+    # ── check_anchor_accounting (validator, fail-closed) ──
+    def test_check_missing_anchor_is_error(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(3, flow_refs=["route:r0"])  # r1,r2 silently missing
+        errors = check_anchor_accounting(doc)
+        assert any("route:r1" in e for e in errors) and any("route:r2" in e for e in errors), \
+            "silently-unaccounted anchors must be a fail-closed error"
+
+    def test_check_blank_reason_rejected(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(2, flow_refs=["route:r0"],
+                        unclassified=[{"id": "route:r1", "reason": "  "}])
+        errors = check_anchor_accounting(doc)
+        assert any("route:r1" in e and "reason" in e.lower() for e in errors), \
+            "unclassified with blank reason must be rejected (not accounted)"
+
+    def test_check_junk_reason_rejected(self):
+        """Gate-1 F5 (the reason='.' rubber-stamp hole, same family as the mermaid
+        absolute-path escape): a non-blank but junk reason must NOT count as accounting."""
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        for junk in [".", "-", "n/a", "na", "x", "todo"]:
+            doc = self._doc(2, flow_refs=["route:r0"],
+                            unclassified=[{"id": "route:r1", "reason": junk}])
+            errors = check_anchor_accounting(doc)
+            assert any("route:r1" in e for e in errors), \
+                f"junk reason {junk!r} must not rubber-stamp an omission"
+
+    def test_check_substantive_reason_passes(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(2, flow_refs=["route:r0"],
+                        unclassified=[{"id": "route:r1", "reason": "unauthenticated health probe, no business semantics"}])
+        assert check_anchor_accounting(doc) == []
+
+    def test_check_low_info_reason_rejected(self):
+        """Gate-2 F1 (HIGH): len>=12 alone is gameable — 12 repeated chars or a
+        single long token is NOT an explanation. The rubber-stamp must not just move
+        one level down (the exact CLASS-A 'self-authored gate leaves its own hole')."""
+        from scripts.ai_ready_helpers import check_anchor_accounting, _is_substantive_reason
+        for junk in ["............", "xxxxxxxxxxxx", "aaaaaaaaaaaaaaa", "------------", "____________"]:
+            assert not _is_substantive_reason(junk), f"low-info reason {junk!r} must not pass"
+            doc = self._doc(2, flow_refs=["route:r0"],
+                            unclassified=[{"id": "route:r1", "reason": junk}])
+            assert any("route:r1" in e for e in check_anchor_accounting(doc)), \
+                f"12+ junk chars {junk!r} must not rubber-stamp an omission"
+        # a genuine multi-word phrase still passes
+        assert _is_substantive_reason("static asset route")
+
+    def test_check_ids_present_but_unbackfilled_not_vacuous(self):
+        """Gate-2 F2 (MED): routes present but NONE carry ids must NOT vacuously pass
+        (extract_entry_anchors raises loud; the guard must not swallow that into a
+        clean bill of health — that would let a whole-codebase omission ship)."""
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(3, flow_refs=[])
+        for r in doc["routes"]:
+            del r["id"]  # 3 real routes, no ids → unbackfilled
+        errors = check_anchor_accounting(doc)
+        assert errors, "routes present but id-less must surface an error, not pass vacuously"
+        assert any("id" in e.lower() or "backfill" in e.lower() for e in errors)
+
+    def test_check_fake_unclassified_id_rejected(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(2, flow_refs=["route:r0", "route:r1"],
+                        unclassified=[{"id": "route:GHOST", "reason": "this is a fabricated anchor id not in the menu"}])
+        errors = check_anchor_accounting(doc)
+        assert any("GHOST" in e for e in errors), "unclassified entry with a non-anchor id must be rejected"
+
+    def test_check_double_account_rejected(self):
+        """Gate-1 (2b): an id in BOTH a flow and unclassified masks a real omission."""
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = self._doc(2, flow_refs=["route:r0", "route:r1"],
+                        unclassified=[{"id": "route:r0", "reason": "some plausible-looking reason text here"}])
+        errors = check_anchor_accounting(doc)
+        assert any("route:r0" in e and ("both" in e.lower() or "double" in e.lower()) for e in errors), \
+            "an anchor classified AND unclassified must be flagged"
+
+    def test_check_wired_into_main_validator(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = self._doc(3, flow_refs=["route:r0"])  # 2 missing
+        errors = validate_code_intel_json(doc)
+        assert any("route:r1" in e or "route:r2" in e for e in errors), \
+            "main validator must run the accounting guard"
+
+    def test_finalize_v3_fails_closed_on_omission(self):
+        from scripts.ai_ready_helpers import finalize_v3
+        base = self._doc(3)
+        with pytest.raises(ValueError, match="route:r"):
+            finalize_v3(base, base["domains"],
+                        [{"id": "flow:0", "domain_id": "domain:o", "entry_ref": "route:r0"}], [])
+
+    def test_non_http_flow_does_not_consume_anchor(self):
+        """A non-http flow (no entry_ref) must not be counted as classifying an anchor,
+        and its None ref must not poison the classified set."""
+        from scripts.ai_ready_helpers import compute_anchor_accounting
+        doc = self._doc(2, flow_refs=["route:r0"])
+        doc["flows"].append({"id": "flow:bg", "domain_id": "domain:o", "entry_type": "job"})
+        acc = compute_anchor_accounting(doc)
+        assert acc["classified"] == 1 and set(acc["missing_ids"]) == {"route:r1"}
+
+    # ── eval_spec_details rename + honest ratio ──
+    def test_eval_renames_completeness_and_adds_accounting(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        # 1 valid flow covering 1 of 3 routes → flow_validity=1.0 but accounted<1
+        doc = self._doc(3, flow_refs=["route:r0"])
+        r = eval_spec_details(doc)
+        assert "flow_validity" in r, "completeness must be renamed to flow_validity (was misleading)"
+        assert "completeness" not in r, "the misleading 'completeness' key must be gone"
+        assert r["flow_validity"] == 1.0, "the single flow resolves → flow-validity is genuinely 1.0"
+        assert "accounted_ratio" in r and r["accounted_ratio"] < 1.0, \
+            "accounted_ratio must expose the real 1/3 coverage the old metric hid"
+        assert "classified_ratio" in r
