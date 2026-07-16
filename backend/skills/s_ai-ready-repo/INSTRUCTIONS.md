@@ -578,6 +578,59 @@ if errors:
 
 Write as formatted JSON (indent=2).
 
+#### 4.6.5: code-intel v3 domain layer (OPTIONAL — business-flow spec understanding)
+
+**When to run:** the user wants human-signable business-flow specs (the "legacy
+code nobody dares touch" use case), not just the machine graph. Skip for a plain
+AI-ready pass — v2 is complete without it. This produces `domains[]/flows[]/steps[]`
+that Run-3 recall + spec-details generation consume.
+
+**The anti-hallucination contract (§1.1/§1.5): the LLM classifies REAL entry
+points into business flows — it never invents an entry point.** The deterministic
+scaffold produces a constrained anchor menu; the LLM may only reference those ids.
+
+```python
+from ai_ready_helpers import (
+    backfill_route_ids, extract_entry_anchors, finalize_v3)
+
+# 1. Backfill stable §1.4 join keys onto v2 routes/entry_points (idempotent).
+doc = backfill_route_ids(doc)
+
+# 2. Project the ANCHOR MENU — the ONLY entry ids a flow may reference.
+anchors = extract_entry_anchors(doc)
+# anchors = [{id, method, path, file_path, line_number, kind}, ...]
+```
+
+**3. LLM classification (this is the agent's judgment step — NOT a helper):**
+Read the anchor menu + the UNDERSTAND-phase module/hot-zone analysis. Group the
+REAL anchors into business domains and flows. For each:
+- `domain`: id (`domain:<kebab>`), name, summary, entities, complexity, optional
+  `business_rules`/`issues`/`gaps`/`diagram` (mermaid).
+- `flow`: id (`flow:<kebab>`), `domain_id` (a real domain id), `entry_ref`
+  (**MUST be an id from the anchor menu** — a hallucinated ref is rejected in step 4),
+  `entry_type`, optional `diagram`.
+- `step`: id, `flow_id` (a real flow id), `order`, `name`, `file_path`, `line_range`,
+  optional `io`/`contract`/`rules`/`preconditions`/`exceptions`.
+- **§1.5 assertion rule (fail-closed):** every rule/precondition/exception is a
+  dict with an explicit bool `verified`. `verified:true` REQUIRES a non-blank
+  `anchor` (code file:line). `verified:false` REQUIRES `absence_evidence` (a
+  `grep`-returned-0 proof) — a "rule doesn't exist" claim is unreliable unless
+  proven absent. A bare-string rule or a missing `verified` is rejected.
+
+```python
+# 4. Assemble + FAIL-CLOSED validate. Raises ValueError if ANY flow.entry_ref is
+#    dangling, any verified:true lacks an anchor (spurious), or any verified:false
+#    lacks absence_evidence. A rejected layer is NEVER written — fix and re-run.
+doc = finalize_v3(doc, domains, flows, steps)  # doc["version"] now "3.0"
+
+errors = validate_code_intel_json(doc)  # redundant belt-and-suspenders; must be []
+assert not errors
+```
+
+Then re-write `code-intel.json` with the v3 doc. Downstream: Run-3 recall surfaces
+these domains on any recall query; `project_domain_skeleton(domain, flows, steps)`
+renders each into a `spec-details/<domain>.spec.md` skeleton for human enrichment.
+
 #### 4.7: ai-ready.json (metadata)
 
 ```python

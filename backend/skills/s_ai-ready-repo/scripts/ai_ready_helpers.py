@@ -467,6 +467,157 @@ def reconcile_human_blocks(
     return kept, orphaned
 
 
+# ─── Run 1.5 (run_1417a3a1): domain-layer GENERATION scaffold ───
+# The deterministic half of code-intel v3 domain generation (§1.1/§1.4/§1.5):
+# backfill join keys → project the anti-hallucination anchor menu → assemble +
+# fail-closed validate. LLM classification (routes → business domains) stays
+# agent-driven in INSTRUCTIONS.md; these functions are the guardrails around it.
+
+def backfill_route_ids(doc: dict) -> dict:
+    """Add a stable §1.4 `id` to every routes[]/entry_points[] entry lacking one.
+
+    The join key flows anchor to (flow.entry_ref → route.id). v2 routes have no
+    id; this backfills `derive_route_id(method, path, file_path)`. Pure: returns a
+    deep-copied doc, never mutates the caller's.
+
+    - IDEMPOTENT: an entry that already has a non-blank `id` is preserved
+      untouched (so re-running after a partial generation is safe).
+    - COLLISION-DETECTED (§1.4): if two entries derive/carry the SAME id, raises
+      ValueError — a silent keep-last would drop a real route from the anchor menu.
+    - entry_points may lack method/path (a CLI/cron entry) → id derives from
+      whatever of {method,path,file_path} exist; a fully-empty entry is skipped
+      (can't anchor a flow to nothing) rather than given a garbage id.
+    """
+    import copy as _copy
+    out = _copy.deepcopy(doc)
+    seen: dict[str, str] = {}  # id → "routes[i]"/"entry_points[i]" for collision msg
+
+    def _ensure(entries, label):
+        if not isinstance(entries, list):
+            return
+        for i, e in enumerate(entries):
+            if not isinstance(e, dict):
+                continue
+            existing = e.get("id")
+            if _nonblank(existing):
+                rid = existing
+                origin = "carried"  # author-supplied id
+            else:
+                method = str(e.get("method") or "")
+                path = str(e.get("path") or "")
+                fpath = str(e.get("file_path") or "")
+                if not (method or path or fpath):
+                    continue  # nothing to anchor on — skip, don't fabricate an id
+                rid = derive_route_id(method, path, fpath)
+                e["id"] = rid
+                origin = "derived"  # from method|path|file_path triple
+            where = f"{label}[{i}]"
+            if rid in seen:
+                prev_where, prev_origin = seen[rid]
+                # Distinguish the two collision classes (Gate-2 MED): a duplicate
+                # method|path|file triple (both derived) vs a carried id clashing
+                # with a derived/other id, vs a rare 32-bit sha1 birthday collision.
+                if prev_origin == "derived" and origin == "derived":
+                    cause = ("the method|path|file_path triple is duplicated (likely a "
+                             "real handler + a mock/test registration), OR a rare 32-bit "
+                             "hash collision between two distinct triples")
+                else:
+                    cause = (f"a {origin} id clashes with a {prev_origin} id — an "
+                             f"author-supplied 'id' duplicates another entry's id")
+                raise ValueError(
+                    f"route id collision: '{rid}' on both {prev_where} ({prev_origin}) "
+                    f"and {where} ({origin}) — §1.4 requires unique anchor ids. Cause: {cause}."
+                )
+            seen[rid] = (where, origin)
+
+    _ensure(out.get("routes"), "routes")
+    _ensure(out.get("entry_points"), "entry_points")
+    return out
+
+
+def extract_entry_anchors(doc: dict) -> list[dict]:
+    """Project routes[]+entry_points[] into the compact ANCHOR MENU that
+    constrains LLM flow creation (§1.1/§1.5 anti-hallucination).
+
+    Returns [{id, method, path, file_path, line_number, kind}] — the ONLY set of
+    ids a generated flow.entry_ref is allowed to reference. The LLM classifies
+    real anchors into business flows; it cannot invent an entry point, because a
+    flow whose entry_ref is not in this menu fails check_domain_referential_integrity.
+
+    Requires ids to be present (run backfill_route_ids first) — an entry without a
+    non-blank id is skipped (it can't be an anchor).
+
+    LOUD-on-empty (Gate-2 MED): if the doc HAS routes/entry_points but NONE carry an
+    id, the caller almost certainly forgot backfill_route_ids — a silent [] would
+    give the LLM an empty menu (nothing to anchor to) and only surface as a
+    downstream finalize_v3 rejection, far from the cause. Raise instead.
+    """
+    anchors: list[dict] = []
+    total_entries = 0
+    for kind, key in (("route", "routes"), ("entry_point", "entry_points")):
+        entries = doc.get(key)
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            total_entries += 1
+            if not _nonblank(e.get("id")):
+                continue
+            anchors.append({
+                "id": e["id"],
+                "method": e.get("method"),
+                "path": e.get("path"),
+                "file_path": e.get("file_path"),
+                "line_number": e.get("line_number"),
+                "kind": kind,
+            })
+    if total_entries and not anchors:
+        raise ValueError(
+            f"extract_entry_anchors: {total_entries} route/entry_point(s) present but "
+            f"NONE carry an id — run backfill_route_ids(doc) first (§1.4). An empty "
+            f"anchor menu would leave the LLM nothing to anchor flows to."
+        )
+    return anchors
+
+
+def finalize_v3(doc: dict, domains: list, flows: list, steps: list) -> dict:
+    """Assemble a generated domain layer into a v3 doc — FAIL-CLOSED gate.
+
+    Attaches domains/flows/steps, bumps version to '3.0', then runs the existing
+    Run-1 validators (structural + referential integrity + LLM-assertion guards).
+    Raises ValueError with ALL errors if any guard fails — a generation that
+    produces a dangling entry_ref or an unanchored 'verified:true' claim (§1.5
+    spurious) is REJECTED, never persisted. Pure: deep-copies, never mutates input.
+
+    The caller (agent workflow) is expected to have run backfill_route_ids first so
+    flow.entry_ref values resolve; finalize_v3 is the last line of defense that
+    proves the assembled doc is internally consistent before it becomes truth.
+    """
+    import copy as _copy
+    # Type-guard the layer args (Gate-2 HIGH): a non-list (dict/int) would either
+    # silently mangle (list(dict)→keys) or raise a bare TypeError instead of the
+    # documented ValueError. Fail-closed with a clear message. None → empty list.
+    for _name, _val in (("domains", domains), ("flows", flows), ("steps", steps)):
+        if _val is not None and not isinstance(_val, list):
+            raise ValueError(
+                f"finalize_v3: '{_name}' must be a list or None, got "
+                f"{type(_val).__name__} (fail-closed §1.5)"
+            )
+    out = _copy.deepcopy(doc)
+    out["domains"] = list(domains or [])
+    out["flows"] = list(flows or [])
+    out["steps"] = list(steps or [])
+    out["version"] = "3.0"
+    errors = validate_code_intel_json(out)
+    if errors:
+        raise ValueError(
+            "finalize_v3 rejected the generated domain layer (fail-closed §1.5):\n  - "
+            + "\n  - ".join(errors)
+        )
+    return out
+
+
 # ─── Run 3 (run_6602eeab): spec-details eval dims + deterministic skeleton ───
 
 def _iter_domain_assertions(domain: dict, flows: list, steps: list):

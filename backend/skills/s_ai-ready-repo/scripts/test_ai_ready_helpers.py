@@ -1276,3 +1276,219 @@ class TestProjectDomainSkeleton:
                   "file_path": "a.ts", "line_range": [1, 5]}]
         md = project_domain_skeleton(self._dom(), flows, steps)
         assert md.index("步骤 1 — First") < md.index("步骤 2 — Second")
+
+
+# ─── Run 1.5 (run_1417a3a1): domain-layer generation scaffold ───
+
+class TestBackfillRouteIds:
+    """AC1: backfill stable §1.4 ids onto v2 routes; idempotent + collision-detected."""
+
+    def test_backfills_missing_ids(self):
+        from scripts.ai_ready_helpers import backfill_route_ids
+        doc = {"routes": [{"method": "GET", "path": "/a", "file_path": "x.py"},
+                          {"method": "POST", "path": "/b", "file_path": "y.py"}]}
+        out = backfill_route_ids(doc)
+        ids = [r["id"] for r in out["routes"]]
+        assert all(i.startswith("route:") for i in ids)
+        assert len(set(ids)) == 2  # distinct
+
+    def test_does_not_mutate_input(self):
+        from scripts.ai_ready_helpers import backfill_route_ids
+        doc = {"routes": [{"method": "GET", "path": "/a", "file_path": "x.py"}]}
+        backfill_route_ids(doc)
+        assert "id" not in doc["routes"][0], "must not mutate caller's doc (pure)"
+
+    def test_idempotent_preserves_existing_id(self):
+        from scripts.ai_ready_helpers import backfill_route_ids
+        doc = {"routes": [{"method": "GET", "path": "/a", "file_path": "x.py", "id": "route:custom-1"}]}
+        out = backfill_route_ids(doc)
+        assert out["routes"][0]["id"] == "route:custom-1"
+        # re-running is stable
+        assert backfill_route_ids(out)["routes"][0]["id"] == "route:custom-1"
+
+    def test_collision_raises(self):
+        from scripts.ai_ready_helpers import backfill_route_ids
+        import pytest
+        # same method|path|file → same derived id → collision
+        doc = {"routes": [{"method": "GET", "path": "/a", "file_path": "x.py"},
+                          {"method": "GET", "path": "/a", "file_path": "x.py"}]}
+        with pytest.raises(ValueError, match="collision"):
+            backfill_route_ids(doc)
+
+    def test_empty_entry_skipped_no_garbage_id(self):
+        from scripts.ai_ready_helpers import backfill_route_ids
+        doc = {"entry_points": [{"note": "no anchor fields"}]}
+        out = backfill_route_ids(doc)
+        assert "id" not in out["entry_points"][0]
+
+
+class TestExtractEntryAnchors:
+    """AC2: anchor menu = the constrained id set an LLM flow may reference."""
+
+    def test_projects_id_bearing_entries(self):
+        from scripts.ai_ready_helpers import backfill_route_ids, extract_entry_anchors
+        doc = backfill_route_ids({"routes": [
+            {"method": "GET", "path": "/a", "file_path": "x.py", "line_number": 10}]})
+        anchors = extract_entry_anchors(doc)
+        assert len(anchors) == 1
+        a = anchors[0]
+        assert a["id"].startswith("route:") and a["method"] == "GET" and a["kind"] == "route"
+        assert a["line_number"] == 10
+
+    def test_skips_id_less_entries_in_mixed_doc(self):
+        """An id-less entry alongside id-bearing ones is skipped (not raised) —
+        the loud-on-empty guard only fires when NONE carry an id."""
+        from scripts.ai_ready_helpers import extract_entry_anchors
+        doc = {"routes": [{"id": "route:has-id", "method": "GET", "path": "/a", "file_path": "x.py"},
+                          {"method": "POST", "path": "/b", "file_path": "y.py"}]}  # 2nd has no id
+        anchors = extract_entry_anchors(doc)
+        assert [a["id"] for a in anchors] == ["route:has-id"]  # id-less one skipped
+
+
+class TestFinalizeV3:
+    """AC3: fail-closed assembly — a consistent domain layer passes, a dangling one raises."""
+
+    def _complete_v2_base(self, routes=None):
+        """A COMPLETE v2 doc (all _REQUIRED_TOP_LEVEL + repo fields) so finalize_v3
+        rejections isolate the DOMAIN-LAYER defect, not missing v2 scaffolding."""
+        return {
+            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+            "version": "2.0",
+            "repo": {"name": "t", "languages": {"python": 1.0}, "total_symbols": 1, "total_edges": 0},
+            "modules": [], "edges": [], "entry_points": [],
+            "routes": routes if routes is not None else [],
+        }
+
+    def test_valid_layer_finalizes_to_v3(self):
+        from scripts.ai_ready_helpers import backfill_route_ids, finalize_v3
+        base = backfill_route_ids(self._complete_v2_base(
+            routes=[{"method": "GET", "path": "/a", "file_path": "x.py"}]))
+        rid = base["routes"][0]["id"]
+        domains = [{"id": "domain:orders", "name": "Orders"}]
+        flows = [{"id": "flow:create", "domain_id": "domain:orders", "entry_ref": rid, "entry_type": "http"}]
+        steps = [{"id": "step:1", "flow_id": "flow:create"}]
+        out = finalize_v3(base, domains, flows, steps)
+        assert out["version"] == "3.0"
+        assert out["domains"][0]["id"] == "domain:orders"
+
+    def test_dangling_entry_ref_rejected(self):
+        from scripts.ai_ready_helpers import finalize_v3
+        import pytest
+        base = self._complete_v2_base(
+            routes=[{"id": "route:real", "method": "GET", "path": "/a", "file_path": "x.py"}])
+        domains = [{"id": "domain:orders", "name": "Orders"}]
+        flows = [{"id": "flow:create", "domain_id": "domain:orders",
+                  "entry_ref": "route:GHOST", "entry_type": "http"}]  # dangling
+        with pytest.raises(ValueError, match="does not resolve"):
+            finalize_v3(base, domains, flows, [])
+
+    def test_unanchored_verified_true_rejected(self):
+        from scripts.ai_ready_helpers import finalize_v3
+        import pytest
+        base = self._complete_v2_base()
+        domains = [{"id": "domain:x", "name": "X",
+                    "business_rules": [{"rule": "must be true", "verified": True}]}]  # no anchor
+        with pytest.raises(ValueError, match="spurious"):
+            finalize_v3(base, domains, [], [])
+
+    def test_does_not_mutate_input(self):
+        from scripts.ai_ready_helpers import finalize_v3
+        base = self._complete_v2_base()
+        finalize_v3(base, [], [], [])
+        assert base["version"] == "2.0" and "domains" not in base
+
+
+class TestGenerationWriteReadLoop:
+    """E2E: generate a real domains[] from a v2 doc via backfill→anchor→finalize,
+    prove it passes all guards AND is recallable via the Run 3 recall domain leg.
+    Closes the write→read loop (GUI10) — the whole point of Run 1.5 + Run 3."""
+
+    def test_generate_then_recall_domain(self, tmp_path, monkeypatch):
+        import json
+        from scripts.ai_ready_helpers import (
+            backfill_route_ids, extract_entry_anchors, finalize_v3)
+
+        # 1. Start from a realistic v2 doc (routes, no ids — like SwarmAI's real one)
+        v2 = {
+            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+            "version": "2.0",
+            "repo": {"name": "demo", "languages": {"python": 1.0}, "total_symbols": 2, "total_edges": 0},
+            "modules": [], "edges": [], "entry_points": [],
+            "routes": [{"method": "POST", "path": "/api/orders", "handler": "orders.py::create",
+                        "framework": "fastapi", "file_path": "backend/api/orders.py",
+                        "line_number": 40, "middleware": None}],
+        }
+        # 2. backfill ids → anchor menu (the LLM's constrained choice set)
+        v2 = backfill_route_ids(v2)
+        anchors = extract_entry_anchors(v2)
+        assert len(anchors) == 1
+        anchor_id = anchors[0]["id"]
+
+        # 3. "LLM classification" (simulated) → a domain anchored to a REAL anchor id
+        domains = [{"id": "domain:orders", "name": "Order Management",
+                    "summary": "zGENSENTINEL77 order lifecycle create-to-fulfill",
+                    "business_rules": [{"rule": "stock must suffice before commit",
+                                        "anchor": "backend/api/orders.py:47", "verified": True}]}]
+        flows = [{"id": "flow:create-order", "domain_id": "domain:orders",
+                  "entry_ref": anchor_id, "entry_type": "http",
+                  "summary": "client submits order to persistence"}]
+        steps = [{"id": "step:validate", "flow_id": "flow:create-order",
+                  "order": 1, "name": "Validate", "explicit": True}]
+
+        # 4. finalize (fail-closed gate) — proves the generated layer is consistent
+        v3 = finalize_v3(v2, domains, flows, steps)
+        assert v3["version"] == "3.0"
+
+        # 5. Write to a real project dir and RECALL via the Run 3 domain leg
+        proj = tmp_path / "Demo"
+        proj.mkdir()
+        (proj / "PRODUCT.md").write_text("## Vision\nunrelated\n", encoding="utf-8")
+        (proj / "code-intel.json").write_text(json.dumps(v3), encoding="utf-8")
+        import core.project_registry as pr
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
+
+        from core.recall_multi import _recall_ddd
+        hits, layer = _recall_ddd("zGENSENTINEL77 order lifecycle", "Demo", 5)
+        docs = [h.get("doc", "") for h in hits]
+        assert any("code-intel.json" in d for d in docs), \
+            f"generated domain MUST be recallable (write→read loop closed), got {docs}"
+
+
+class TestRun15Gate2Fixes:
+    """Gate-2 findings (run_1417a3a1): collision-message clarity, loud-empty-menu,
+    finalize type-guard."""
+
+    def test_carried_vs_derived_collision_message(self):
+        """MED: a hand-authored id clashing with a derived id names the class."""
+        from scripts.ai_ready_helpers import backfill_route_ids, derive_route_id
+        import pytest
+        rid = derive_route_id("GET", "/users", "h.py")
+        doc = {"routes": [{"id": rid},  # carried id equal to the next entry's derived id
+                          {"method": "GET", "path": "/users", "file_path": "h.py"}]}
+        with pytest.raises(ValueError, match="carried|author-supplied"):
+            backfill_route_ids(doc)
+
+    def test_extract_anchors_loud_when_no_ids(self):
+        """MED: routes present but zero ids → raise (forgot backfill), not silent []."""
+        from scripts.ai_ready_helpers import extract_entry_anchors
+        import pytest
+        doc = {"routes": [{"method": "GET", "path": "/a", "file_path": "x.py"}]}  # no id
+        with pytest.raises(ValueError, match="backfill_route_ids"):
+            extract_entry_anchors(doc)
+
+    def test_extract_anchors_empty_doc_ok(self):
+        """No entries at all → empty menu is fine (not a forgot-backfill case)."""
+        from scripts.ai_ready_helpers import extract_entry_anchors
+        assert extract_entry_anchors({"routes": [], "entry_points": []}) == []
+
+    def test_finalize_non_list_arg_raises_valueerror(self):
+        """HIGH: a non-list layer arg raises ValueError (not a bare TypeError)."""
+        from scripts.ai_ready_helpers import finalize_v3
+        import pytest
+        base = {"$schema": "s", "version": "2.0",
+                "repo": {"name": "t", "languages": {}, "total_symbols": 1, "total_edges": 0},
+                "modules": [], "edges": [], "entry_points": [], "routes": []}
+        with pytest.raises(ValueError, match="must be a list or None"):
+            finalize_v3(base, 5, [], [])  # int, not list
+        with pytest.raises(ValueError, match="must be a list or None"):
+            finalize_v3(base, {"d": 1}, [], [])  # dict, not list
