@@ -205,3 +205,40 @@ def _mtime_freshness(graph_store: GraphStore, repo_root: Path) -> FreshnessResul
         changed_files=changed,
         reason="mtime-based (no git)"
     )
+
+
+# ─── Run 4b (run_2bad039d, §8.6): spec-details staleness detector ───
+
+def detect_spec_details_staleness(project_dir: Path) -> list[str]:
+    """Return the names of spec-details/*.spec.md files that are STALE vs
+    code-intel.json — i.e. code-intel.json (the domains[] source) was regenerated
+    AFTER the spec was last projected, so the spec no longer reflects the domain
+    layer (design §8.6: code-intel mtime > spec.md mtime = stale).
+
+    PURE detection only (mtime comparison, no IO beyond stat). Regeneration is
+    NOT done here — it is skill-owned (project_domain_skeleton /
+    regenerate_spec_preserving_human) and agent/skill-triggered. Core must not
+    import a projected skill (C046 boundary); this detector lets a core hook
+    SIGNAL staleness so the regeneration gets scheduled, without the coupling.
+
+    Returns [] when: no code-intel.json, no spec-details/ dir, no .spec.md files,
+    or all specs are at-or-newer-than code-intel.json (fresh). Never raises on a
+    missing/unreadable file — a spec we can't stat is simply not reported stale.
+    """
+    project_dir = Path(project_dir)
+    ci = project_dir / "code-intel.json"
+    sd = project_dir / "spec-details"
+    if not ci.is_file() or not sd.is_dir():
+        return []
+    try:
+        ci_mtime = ci.stat().st_mtime
+    except OSError:
+        return []
+    stale: list[str] = []
+    for spec in sorted(sd.glob("*.spec.md")):
+        try:
+            if spec.stat().st_mtime < ci_mtime:
+                stale.append(spec.name)
+        except OSError:
+            continue  # can't stat → don't claim stale
+    return stale

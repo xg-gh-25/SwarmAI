@@ -679,6 +679,46 @@ class ContextHealthHook:
                 project_dir.name, len(freshness.changed_files),
             )
 
+        # Run 4b (run_2bad039d, §8.6): after refreshing code_intel, SIGNAL any
+        # spec-details that went stale vs code-intel.json (domains regenerated but
+        # the .spec.md projection not). Detection is core + pure; regeneration is
+        # skill-owned (project_domain_skeleton), so we emit a signal rather than
+        # import the projected skill (C046 core→skill boundary). Non-blocking.
+        self._signal_stale_spec_details(projects_dir)
+
+    def _signal_stale_spec_details(self, projects_dir: Path) -> None:
+        """LOG (only) a non-blocking staleness signal for each project whose
+        spec-details/ are stale vs code-intel.json. Regeneration is skill-owned
+        (s_ai-ready-repo), triggered by an operator/agent reading this signal.
+
+        Deliberately a LOG, NOT an emitted event (Gate-2 HIGH+MED, run_2bad039d):
+        there is NO consumer job for a `spec_details_stale` event, so emitting one
+        would be a write-only dead signal that re-fires every session and floods
+        the bounded (50-slot) pending-events ring — evicting REAL consumable events
+        (e.g. code_intel_full_reindex). An honest log line is the correct signal
+        surface until a regeneration consumer exists; adding the event without a
+        sink would relabel the deferred auto-regen as 'closed' when it isn't."""
+        try:
+            from core.code_intel.freshness import detect_spec_details_staleness
+        except Exception:  # pragma: no cover - defensive import
+            return
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+            try:
+                stale = detect_spec_details_staleness(project_dir)
+            except Exception as exc:  # never block session start on detection
+                logger.debug("spec-details staleness check failed for %s: %s",
+                             project_dir.name, exc)
+                continue
+            if not stale:
+                continue
+            logger.info(
+                "spec-details STALE in %s: %d spec(s) older than code-intel.json "
+                "(%s) — regenerate via s_ai-ready-repo (skill-owned, manual)",
+                project_dir.name, len(stale), ", ".join(stale[:5]),
+            )
+
     # ------------------------------------------------------------------
     # Auto-cultivation — promote REFLECT lessons into DDD docs
     # ------------------------------------------------------------------

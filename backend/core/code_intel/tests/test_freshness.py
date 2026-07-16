@@ -322,3 +322,47 @@ class TestFullRebuildDelegation:
             # full=True → inline (parse called), NOT delegated
             mock_emit.assert_not_called()
             mock_parse.assert_called_once()
+
+
+# ─── Run 4b (run_2bad039d, §8.6): spec-details staleness detector ───
+
+class TestSpecDetailsStaleness:
+    """detect_spec_details_staleness: spec.md older than code-intel.json = stale."""
+
+    def _setup(self, tmp_path, spec_older: bool):
+        import os, time
+        proj = tmp_path / "P"; proj.mkdir()
+        sd = proj / "spec-details"; sd.mkdir()
+        spec = sd / "orders.spec.md"
+        ci = proj / "code-intel.json"
+        if spec_older:
+            spec.write_text("# old", encoding="utf-8")
+            time.sleep(0.01)
+            ci.write_text("{}", encoding="utf-8")  # ci newer → spec stale
+        else:
+            ci.write_text("{}", encoding="utf-8")
+            time.sleep(0.01)
+            spec.write_text("# fresh", encoding="utf-8")  # spec newer → fresh
+        return proj
+
+    def test_stale_spec_detected(self, tmp_path):
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = self._setup(tmp_path, spec_older=True)
+        assert detect_spec_details_staleness(proj) == ["orders.spec.md"]
+
+    def test_fresh_spec_not_flagged(self, tmp_path):
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = self._setup(tmp_path, spec_older=False)
+        assert detect_spec_details_staleness(proj) == []
+
+    def test_no_code_intel_returns_empty(self, tmp_path):
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = tmp_path / "P"; (proj / "spec-details").mkdir(parents=True)
+        (proj / "spec-details" / "x.spec.md").write_text("x", encoding="utf-8")
+        assert detect_spec_details_staleness(proj) == []  # no code-intel.json
+
+    def test_no_spec_dir_returns_empty(self, tmp_path):
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = tmp_path / "P"; proj.mkdir()
+        (proj / "code-intel.json").write_text("{}", encoding="utf-8")
+        assert detect_spec_details_staleness(proj) == []
