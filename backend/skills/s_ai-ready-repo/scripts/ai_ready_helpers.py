@@ -726,6 +726,59 @@ def eval_spec_details(doc: dict) -> dict:
     }
 
 
+def _md_cell(v) -> str:
+    """Escape a value for a markdown TABLE cell: a literal `|` would create a
+    phantom column and corrupt the 2-col table; a newline would split the row.
+    (Gate-2 MED, run_235ffe64 — real step.io.output '{status:created} | 400'
+    carries a pipe.)"""
+    return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+def _fmt_assertion_row(a) -> str:
+    """One assertion (rule/precondition/exception) as inline text with verified
+    gating: verified:true → 'text (anchor)'; else → '[llm-inferred] text'. A bare
+    string is treated as unadjudicated (§1.5). NOT pipe-escaped here — the caller
+    escapes the joined cell (an anchor in backticks may legitimately contain no pipe)."""
+    if isinstance(a, dict):
+        txt = a.get("rule") or a.get("cond") or a.get("case") or ""
+        if a.get("verified") is True:
+            anc = str(a.get("anchor") or "").strip()
+            return f"{txt}" + (f" (`{anc}`)" if anc else "")
+        return f"[llm-inferred] {txt}"
+    return f"[llm-inferred] {a}"
+
+
+def _render_step_spec_table(st: dict) -> list[str]:
+    """Render the §3.2 rich step spec table (输入/输出/接口契约/前置/规则/异常)
+    from step.io + step.contract + step.preconditions/rules/exceptions. Emits ONLY
+    the rows that have data (a step with just a name/loc renders no table). Pure.
+    Every cell value is pipe/newline-escaped (_md_cell) so table-hostile content
+    (e.g. an output '{...} | 400') can't corrupt the markdown table."""
+    rows: list[str] = []
+    io = st.get("io") or {}
+    if io.get("input"):
+        rows.append(f"| 输入 | {_md_cell(io['input'])} |")
+    if io.get("output"):
+        rows.append(f"| 输出 | {_md_cell(io['output'])} |")
+    c = st.get("contract") or {}
+    if c:
+        sig = c.get("signature", "")
+        http = c.get("http", "")
+        codes = c.get("status_codes") or {}
+        codes_str = "; ".join(f"{k}={v}" for k, v in codes.items()) if isinstance(codes, dict) else ""
+        contract_bits = " · ".join(x for x in (f"`{sig}`" if sig else "", http, codes_str) if x)
+        if contract_bits:
+            rows.append(f"| 接口契约 | {_md_cell(contract_bits)} |")
+    for label, key in (("前置条件", "preconditions"), ("业务规则", "rules"), ("异常路径", "exceptions")):
+        items = st.get(key)
+        if isinstance(items, list) and items:
+            joined = "; ".join(_fmt_assertion_row(a) for a in items)
+            rows.append(f"| {label} | {_md_cell(joined)} |")
+    if not rows:
+        return []
+    return ["| 项 | 内容 |", "|---|---|"] + rows + [""]
+
+
 def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
     """Deterministically project ONE domain (+ its flows/steps) into the 8-section
     `.spec.md` skeleton (§3.2). Pure string render — NO LLM. The skeleton region
@@ -768,6 +821,7 @@ def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
             lr = st.get("line_range")
             loc = f"{st.get('file_path', '?')}:{lr[0]}-{lr[1]}" if lr else st.get("file_path", "?")
             L.append(f"#### 步骤 {st.get('order', '?')} — {st.get('name', '?')} (`{loc}`)")
+            L.extend(_render_step_spec_table(st))
     L.append("")
 
     L += ["## 5. 业务规则汇总(域级不变量)",

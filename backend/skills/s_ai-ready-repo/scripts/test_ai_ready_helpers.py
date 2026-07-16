@@ -1719,3 +1719,70 @@ class TestMergeExportedDocSafety:
         assert len(out["routes"]) == 1, "exported routes must survive merge"
         # input not mutated
         assert "nodes" not in exported
+
+
+class TestStepSpecTableRender:
+    """Thicken (run_235ffe64): §4 now renders the full §3.2 step spec table
+    (io/contract/rules) with verified gating, not just name+location."""
+
+    _DOM = {"id": "domain:eval", "name": "Eval", "summary": "s", "complexity": "moderate"}
+
+    def test_contract_and_io_rendered(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        flows = [{"id": "flow:add", "domain_id": "domain:eval", "name": "Add case",
+                  "entry_ref": "route:x", "entry_type": "http"}]
+        steps = [{"id": "step:add", "flow_id": "flow:add", "order": 1, "name": "Validate+create",
+                  "file_path": "backend/routers/eval.py",
+                  "io": {"input": "CreateCaseRequest", "output": "{status:created, case}"},
+                  "contract": {"signature": "create_case(req)", "http": "POST /api/eval/golden-set",
+                               "status_codes": {"200": "created", "400": "invalid"}},
+                  "rules": [{"rule": "4-gate validate", "anchor": "eval.py:120", "verified": True}]}]
+        md = project_domain_skeleton(self._DOM, flows, steps)
+        assert "接口契约" in md and "POST /api/eval/golden-set" in md
+        assert "200=created" in md and "400=invalid" in md
+        assert "输入 | CreateCaseRequest" in md
+        assert "4-gate validate (`eval.py:120`)" in md  # verified:true → anchored
+
+    def test_unverified_rule_gated_in_table(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        flows = [{"id": "flow:x", "domain_id": "domain:eval", "name": "X", "entry_ref": "r", "entry_type": "http"}]
+        steps = [{"id": "s", "flow_id": "flow:x", "order": 1, "name": "S", "file_path": "a.py",
+                  "rules": [{"rule": "maybe true", "verified": False, "absence_evidence": "grep=0"}]}]
+        md = project_domain_skeleton(self._DOM, flows, steps)
+        assert "[llm-inferred] maybe true" in md
+
+    def test_bare_step_renders_no_table(self):
+        """A step with only name/loc (no io/contract) must not emit an empty table."""
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        flows = [{"id": "flow:x", "domain_id": "domain:eval", "name": "X", "entry_ref": "r", "entry_type": "http"}]
+        steps = [{"id": "s", "flow_id": "flow:x", "order": 1, "name": "S", "file_path": "a.py"}]
+        md = project_domain_skeleton(self._DOM, flows, steps)
+        assert "| 项 | 内容 |" not in md  # no empty table for a bare step
+
+
+class TestThickenGate2PipeEscape:
+    """Gate-2 MED (run_235ffe64): a pipe in step.io/contract must not corrupt the
+    markdown table — real eval output '{status:created, case} | 400' has one."""
+
+    def test_pipe_in_output_escaped(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        dom = {"id": "domain:eval", "name": "Eval", "summary": "s"}
+        flows = [{"id": "flow:x", "domain_id": "domain:eval", "name": "X", "entry_ref": "r", "entry_type": "http"}]
+        steps = [{"id": "s", "flow_id": "flow:x", "order": 1, "name": "S", "file_path": "a.py",
+                  "io": {"input": "x", "output": "{status:created, case} | 400"}}]
+        md = project_domain_skeleton(dom, flows, steps)
+        # the output row must have exactly the 2-col shape: count UNESCAPED pipes
+        out_line = [l for l in md.splitlines() if "输出" in l][0]
+        unescaped = out_line.replace("\\|", "")  # drop escaped data pipes
+        assert unescaped.count("|") == 3, f"escaped pipe → exactly 2-col row, got: {out_line!r}"
+        assert "\\|" in out_line  # the data pipe is escaped, not a column sep
+
+    def test_newline_in_cell_flattened(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        dom = {"id": "d", "name": "D", "summary": "s"}
+        flows = [{"id": "f", "domain_id": "d", "name": "F", "entry_ref": "r", "entry_type": "http"}]
+        steps = [{"id": "s", "flow_id": "f", "order": 1, "name": "S", "file_path": "a.py",
+                  "io": {"input": "line1\nline2"}}]
+        md = project_domain_skeleton(dom, flows, steps)
+        in_line = [l for l in md.splitlines() if "输入" in l][0]
+        assert "line1 line2" in in_line and "\n" not in in_line[3:]
