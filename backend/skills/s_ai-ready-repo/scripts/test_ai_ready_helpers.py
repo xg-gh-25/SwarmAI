@@ -107,6 +107,220 @@ class TestCodeIntelValidation:
         assert any("path" in e or "responsibility" in e for e in errors)
 
 
+# ─── code-intel v3 domain layer (Run 1, run_aad6d4f2) ───
+
+def _minimal_v2_doc() -> dict:
+    """A valid v2 doc — reused as the base for v3 tests."""
+    return {
+        "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+        "version": "2.0",
+        "repo": {"name": "t", "languages": {"python": 1.0}, "total_symbols": 10, "total_edges": 1},
+        "modules": [{"name": "core", "path": "src/", "responsibility": "x"}],
+        "edges": [{"from": "core", "to": "db"}],
+        "entry_points": [{"path": "src/main.py"}],
+    }
+
+
+class TestV3SchemaValidation:
+    """v3 = v2 + domains/flows/steps. v2 docs MUST still pass (backward-compat)."""
+
+    def test_v2_doc_still_passes_under_v3_capable_validator(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        assert validate_code_intel_json(_minimal_v2_doc()) == []
+
+    def test_valid_v3_doc_passes(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = _minimal_v2_doc()
+        doc["$schema"] = "https://ai-ready-repo.dev/schemas/code-intel.v3.json"
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": "route:get-orders-a1b2", "method": "GET", "path": "/orders",
+                          "file_path": "src/api.py", "line_number": 10}]
+        doc["domains"] = [{"id": "domain:orders", "name": "Orders", "summary": "s",
+                           "complexity": "moderate", "source": "llm"}]
+        doc["flows"] = [{"id": "flow:list", "domain_id": "domain:orders", "name": "List",
+                         "entry_type": "http", "entry_ref": "route:get-orders-a1b2", "source": "llm"}]
+        doc["steps"] = [{"id": "step:list:q", "flow_id": "flow:list", "order": 1,
+                         "name": "Query", "file_path": "src/api.py", "line_range": [10, 20],
+                         "source": "llm"}]
+        assert validate_code_intel_json(doc) == []
+
+    def test_v3_domains_must_be_list(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = _minimal_v2_doc(); doc["version"] = "3.0"; doc["domains"] = {"not": "a list"}
+        errors = validate_code_intel_json(doc)
+        assert any("domains" in e for e in errors)
+
+    def test_v3_flow_missing_domain_id_flagged(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = _minimal_v2_doc(); doc["version"] = "3.0"
+        doc["flows"] = [{"id": "flow:x", "name": "X", "entry_type": "http", "source": "llm"}]
+        errors = validate_code_intel_json(doc)
+        assert any("domain_id" in e for e in errors)
+
+
+class TestReferentialIntegrity:
+    """flow.entry_ref → real route.id; cross_domain.target/domain_id/flow_id resolve."""
+
+    def test_dangling_entry_ref_flagged(self):
+        from scripts.ai_ready_helpers import check_domain_referential_integrity
+        doc = {"routes": [{"id": "route:real"}],
+               "domains": [{"id": "domain:o"}],
+               "flows": [{"id": "flow:x", "domain_id": "domain:o", "entry_ref": "route:GHOST"}],
+               "steps": []}
+        errors = check_domain_referential_integrity(doc)
+        assert any("route:GHOST" in e or "entry_ref" in e for e in errors)
+
+    def test_dangling_cross_domain_target_flagged(self):
+        from scripts.ai_ready_helpers import check_domain_referential_integrity
+        doc = {"routes": [], "flows": [], "steps": [],
+               "domains": [{"id": "domain:o", "cross_domain": [{"target": "domain:GHOST"}]}]}
+        errors = check_domain_referential_integrity(doc)
+        assert any("domain:GHOST" in e for e in errors)
+
+    def test_dangling_step_flow_id_flagged(self):
+        from scripts.ai_ready_helpers import check_domain_referential_integrity
+        doc = {"routes": [], "domains": [{"id": "domain:o"}], "flows": [],
+               "steps": [{"id": "step:x", "flow_id": "flow:GHOST"}]}
+        errors = check_domain_referential_integrity(doc)
+        assert any("flow:GHOST" in e or "flow_id" in e for e in errors)
+
+    def test_all_references_resolve_no_error(self):
+        from scripts.ai_ready_helpers import check_domain_referential_integrity
+        doc = {"routes": [{"id": "route:r"}],
+               "domains": [{"id": "domain:o", "cross_domain": []}],
+               "flows": [{"id": "flow:f", "domain_id": "domain:o", "entry_ref": "route:r"}],
+               "steps": [{"id": "step:s", "flow_id": "flow:f"}]}
+        assert check_domain_referential_integrity(doc) == []
+
+
+class TestLlmAssertionGuards:
+    """§1.5: verified:true needs anchor; verified:false needs absence_evidence."""
+
+    def test_verified_true_without_anchor_flagged(self):
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "domain:o",
+                            "business_rules": [{"rule": "r", "verified": True, "anchor": None}]}]}
+        errors = check_llm_assertion_guards(doc)
+        assert any("anchor" in e for e in errors)
+
+    def test_verified_false_without_absence_evidence_flagged(self):
+        """§1.5#4 anti-false-negative: a [llm-inferred] claim MUST prove absence."""
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "domain:o",
+                            "business_rules": [{"rule": "r", "verified": False}]}]}
+        errors = check_llm_assertion_guards(doc)
+        assert any("absence_evidence" in e for e in errors)
+
+    def test_well_formed_assertions_no_error(self):
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "domain:o", "business_rules": [
+            {"rule": "a", "verified": True, "anchor": "src/x.py:L10"},
+            {"rule": "b", "verified": False, "absence_evidence": "grep 'x' src → 0 hits"},
+        ]}]}
+        assert check_llm_assertion_guards(doc) == []
+
+
+class TestRouteIdDerivation:
+    """§1.4: route.id = {method}-{path}-{shorthash(file_path)}, collision-resistant."""
+
+    def test_deterministic_same_inputs_same_id(self):
+        from scripts.ai_ready_helpers import derive_route_id
+        a = derive_route_id("GET", "/orders", "src/api.py")
+        b = derive_route_id("GET", "/orders", "src/api.py")
+        assert a == b and a.startswith("route:")
+
+    def test_same_method_path_different_file_distinct_id(self):
+        """The collision case: same endpoint in two files → distinct ids (teeth)."""
+        from scripts.ai_ready_helpers import derive_route_id
+        real = derive_route_id("POST", "/orders", "src/api.py")
+        mock = derive_route_id("POST", "/orders", "tests/mock_api.py")
+        assert real != mock
+
+    def test_no_line_number_so_drift_resistant(self):
+        import re as _re
+        from scripts.ai_ready_helpers import derive_route_id
+        # id must NOT carry a `:line` suffix (would break on code drift)
+        rid = derive_route_id("GET", "/x", "src/api.py")
+        assert not _re.search(r":\d+$", rid), f"id must not embed a line number: {rid}"
+        # same file+method+path → stable id (no line dependency)
+        assert derive_route_id("GET", "/x", "src/api.py") == rid
+
+    def test_slug_collapsing_paths_do_not_collide(self):
+        """/a/b vs /a-b slug-collapse, but the exact-triple hash keeps them distinct."""
+        from scripts.ai_ready_helpers import derive_route_id
+        assert derive_route_id("GET", "/a/b", "src/api.py") != derive_route_id("GET", "/a-b", "src/api.py")
+        assert derive_route_id("GET", "/users", "src/api.py") != derive_route_id("GET", "/users/", "src/api.py")
+
+    def test_no_collision_across_realistic_route_count(self):
+        """300+ distinct routes → 300+ distinct ids (32-bit hash, not 16). Teeth for the collision fix."""
+        from scripts.ai_ready_helpers import derive_route_id
+        ids = {derive_route_id("GET", f"/r{i}", f"src/file_{i}.py") for i in range(400)}
+        assert len(ids) == 400
+
+
+class TestLlmAssertionGuardsHardened:
+    """Gate-2 bypass fixes (run_aad6d4f2): type-confusion, blank, opt-out, contract-level."""
+
+    def test_verified_string_not_bool_is_flagged(self):
+        """verified:"true" (string) must NOT sail through as a bool — CRITICAL bypass."""
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "d", "business_rules": [
+            {"rule": "r", "verified": "true", "absence_evidence": "x"}]}]}
+        assert any("bool" in e for e in check_llm_assertion_guards(doc))
+
+    def test_blank_anchor_flagged(self):
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "d", "business_rules": [
+            {"rule": "r", "verified": True, "anchor": "   "}]}]}
+        assert any("anchor" in e for e in check_llm_assertion_guards(doc))
+
+    def test_plain_string_rule_flagged(self):
+        """An LLM must not dodge the guard by emitting a bare string rule."""
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "d", "business_rules": ["order total must be > 0"]}]}
+        assert len(check_llm_assertion_guards(doc)) > 0
+
+    def test_dict_without_verified_flagged(self):
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"domains": [{"id": "d", "business_rules": [{"rule": "r"}]}]}
+        assert len(check_llm_assertion_guards(doc)) > 0
+
+    def test_step_contract_assertions_covered(self):
+        """Assertions hidden under step.contract must still be guarded (§1.5)."""
+        from scripts.ai_ready_helpers import check_llm_assertion_guards
+        doc = {"steps": [{"id": "s", "contract": {
+            "rules": [{"rule": "r", "verified": True, "anchor": None}]}}]}
+        assert any("anchor" in e for e in check_llm_assertion_guards(doc))
+
+
+class TestGuardsWiredIntoValidator:
+    """Gate-2 CRITICAL: the main validator MUST invoke both guards, not just structure."""
+
+    def test_dangling_entry_ref_caught_via_main_validator(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": "route:real", "method": "GET", "path": "/x", "file_path": "a.py"}]
+        doc["domains"] = [{"id": "domain:o", "name": "O"}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o", "entry_ref": "route:GHOST"}]
+        errors = validate_code_intel_json(doc)
+        assert any("GHOST" in e for e in errors), "main validator must run referential-integrity guard"
+
+    def test_unanchored_assertion_caught_via_main_validator(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "business_rules": [{"rule": "hallucinated", "verified": True, "anchor": None}]}]
+        errors = validate_code_intel_json(doc)
+        assert any("anchor" in e for e in errors), "main validator must run assertion guard"
+
+    def test_v2_doc_unaffected_by_guard_wiring(self):
+        """Backward-compat: a real v2 doc (no domain layer) triggers neither guard."""
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        assert validate_code_intel_json(_minimal_v2_doc()) == []
+
+
 # ─── AC4: Git log parsing for WHEN/RISK/BECAUSE ───
 
 class TestGitLogParsing:

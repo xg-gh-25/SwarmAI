@@ -11,6 +11,7 @@ All functions are pure/stateless. No LLM calls. No network.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -90,9 +91,10 @@ def validate_code_intel_json(doc: dict) -> list[str]:
         if field not in doc:
             errors.append(f"Missing required top-level field: '{field}'")
 
-    # Version check
-    if doc.get("version") and doc["version"] != "2.0":
-        errors.append(f"Invalid version: expected '2.0', got '{doc['version']}'")
+    # Version check — v2.0 and v3.0 both accepted (v3 = v2 + domain layer, Run 1)
+    _version = doc.get("version")
+    if _version and _version not in ("2.0", "3.0"):
+        errors.append(f"Invalid version: expected '2.0' or '3.0', got '{_version}'")
 
     # Repo structure
     repo = doc.get("repo")
@@ -147,7 +149,199 @@ def validate_code_intel_json(doc: dict) -> list[str]:
             elif "path" not in ep:
                 errors.append(f"entry_points[{i}] must have 'path' field")
 
+    # ─── v3 domain-layer validation (Run 1) ───
+    # v2 docs (no version 3.0, no non-empty domains/flows/steps) skip this
+    # entirely → backward-compatible. Fires when the doc declares v3 OR carries
+    # actual domain-layer content. All THREE v3 checks run together — structural
+    # AND the two anti-hallucination guards (referential integrity + LLM-assertion
+    # anchoring). Wiring the guards in here is load-bearing: they are the entire
+    # anti-spurious value (§1.5); if the main validator doesn't call them, a
+    # hallucinated/dangling assertion sails through (Gate-2 CRITICAL, run_aad6d4f2).
+    _has_v3_content = any(
+        isinstance(doc.get(k), list) and doc.get(k) for k in ("domains", "flows", "steps")
+    )
+    if _version == "3.0" or _has_v3_content:
+        errors.extend(_validate_v3_domain_layer(doc))
+        errors.extend(check_domain_referential_integrity(doc))
+        errors.extend(check_llm_assertion_guards(doc))
+
     return errors
+
+
+def _validate_v3_domain_layer(doc: dict) -> list[str]:
+    """Structural checks for the v3 domain layer: domains[]/flows[]/steps[].
+
+    Only STRUCTURE + required-field presence here. Referential integrity
+    (dangling refs) and LLM-assertion guards are separate pure functions
+    (check_domain_referential_integrity / check_llm_assertion_guards) so each
+    can be called + tested independently.
+    """
+    errors: list[str] = []
+    for key in ("domains", "flows", "steps"):
+        if key in doc and not isinstance(doc[key], list):
+            errors.append(f"'{key}' must be a list, got {type(doc[key]).__name__}")
+
+    for i, d in enumerate(doc.get("domains", []) if isinstance(doc.get("domains"), list) else []):
+        if not isinstance(d, dict):
+            errors.append(f"domains[{i}] must be a dict"); continue
+        for f in ("id", "name"):
+            if f not in d:
+                errors.append(f"domains[{i}] missing required field: '{f}'")
+
+    for i, fl in enumerate(doc.get("flows", []) if isinstance(doc.get("flows"), list) else []):
+        if not isinstance(fl, dict):
+            errors.append(f"flows[{i}] must be a dict"); continue
+        for f in ("id", "domain_id"):
+            if f not in fl:
+                errors.append(f"flows[{i}] missing required field: '{f}'")
+
+    for i, st in enumerate(doc.get("steps", []) if isinstance(doc.get("steps"), list) else []):
+        if not isinstance(st, dict):
+            errors.append(f"steps[{i}] must be a dict"); continue
+        for f in ("id", "flow_id"):
+            if f not in st:
+                errors.append(f"steps[{i}] missing required field: '{f}'")
+
+    return errors
+
+
+def check_domain_referential_integrity(doc: dict) -> list[str]:
+    """Every domain-layer reference must resolve to a real node (anti-dangling).
+
+    - flow.entry_ref → an id in routes[] (§1.1 anti-hallucination anchor)
+    - flow.domain_id → an id in domains[]
+    - step.flow_id   → an id in flows[]
+    - domain.cross_domain[].target → an id in domains[]
+    Pure function (no IO) → unit-testable + mutation-verifiable.
+    """
+    errors: list[str] = []
+    # Drop None/blank ids from the resolvable sets — a ref must match a REAL id,
+    # never a `None` a route without an id contributed (Gate-2 hole: None∈{None}).
+    route_ids = {r["id"] for r in doc.get("routes", []) if isinstance(r, dict) and _nonblank(r.get("id"))}
+    domain_ids = {d["id"] for d in doc.get("domains", []) if isinstance(d, dict) and _nonblank(d.get("id"))}
+    flow_ids = {f["id"] for f in doc.get("flows", []) if isinstance(f, dict) and _nonblank(f.get("id"))}
+
+    def _ref_error(node_id, field, ref, kind, resolvable) -> None:
+        # Present-but-blank ref is an error (a flow must belong to a real domain);
+        # absent ref (None/missing) is allowed (optional).
+        if ref is None:
+            return
+        if not _nonblank(ref) or ref not in resolvable:
+            errors.append(f"{field} '{ref}' on '{node_id}' does not resolve to any {kind}")
+
+    for d in doc.get("domains", []):
+        if not isinstance(d, dict):
+            continue
+        for xd in d.get("cross_domain", []) or []:
+            if isinstance(xd, dict) and "target" in xd:
+                _ref_error(d.get("id"), "cross_domain.target", xd.get("target"), "domain", domain_ids)
+
+    for fl in doc.get("flows", []):
+        if not isinstance(fl, dict):
+            continue
+        if "entry_ref" in fl:
+            _ref_error(fl.get("id"), "flow.entry_ref", fl.get("entry_ref"), "route.id", route_ids)
+        if "domain_id" in fl:
+            _ref_error(fl.get("id"), "flow.domain_id", fl.get("domain_id"), "domain", domain_ids)
+
+    for st in doc.get("steps", []):
+        if not isinstance(st, dict):
+            continue
+        if "flow_id" in st:
+            _ref_error(st.get("id"), "step.flow_id", st.get("flow_id"), "flow", flow_ids)
+
+    return errors
+
+
+# LLM-assertion fields carrying rule/precondition/exception claims (§1.5).
+# step-level `contract`/`io` also carry assertions → covered via _iter_assertion_lists.
+_LLM_ASSERTION_KEYS = ("business_rules", "preconditions", "rules", "exceptions")
+
+
+def _nonblank(v) -> bool:
+    """True iff v is a non-blank string (strips whitespace-only)."""
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _iter_assertion_lists(node: dict):
+    """Yield (key, list) for every assertion-bearing list on a domain-layer node,
+    including nested `contract`/`io` sub-objects (§1.5 step-level coverage)."""
+    for akey in _LLM_ASSERTION_KEYS:
+        val = node.get(akey)
+        if isinstance(val, list):
+            yield akey, val
+    # step.contract / step.io may themselves hold assertion lists
+    for sub in ("contract", "io"):
+        subobj = node.get(sub)
+        if isinstance(subobj, dict):
+            for akey in _LLM_ASSERTION_KEYS:
+                val = subobj.get(akey)
+                if isinstance(val, list):
+                    yield f"{sub}.{akey}", val
+
+
+def check_llm_assertion_guards(doc: dict) -> list[str]:
+    """§1.5 anti-spurious / anti-false-negative guard on LLM-generated assertions.
+
+    Each assertion object anywhere in the domain layer:
+    - MUST be a dict carrying an explicit boolean `verified` — a plain-string rule
+      or a dict with no `verified` is an UN-adjudicated claim, flagged (else an LLM
+      dodges the guard by omitting `verified` — Gate-2 HIGH, run_aad6d4f2).
+    - `verified` MUST be a real bool (not "true"/"false"/1 — the `is True` identity
+      check silently mis-branched string values, Gate-2 CRITICAL).
+    - verified:true  → non-blank `anchor` (code file:line); else spurious (paper 0.67).
+    - verified:false → non-blank `absence_evidence` (grep=0 proof); §1.5#4: a
+      "rule doesn't exist" negative is unreliable unless proven absent (the exact
+      false-negative that bit Run 0's fixed-column grep).
+    Pure function → unit-testable + mutation-verifiable.
+    """
+    errors: list[str] = []
+
+    def _check_assertion(a, where: str) -> None:
+        if not isinstance(a, dict):
+            errors.append(f"{where}: assertion must be a dict with a boolean 'verified' "
+                          f"(plain-string/unadjudicated claim, §1.5)")
+            return
+        v = a.get("verified")
+        if not isinstance(v, bool):
+            errors.append(f"{where}: 'verified' must be a bool, got {type(v).__name__} "
+                          f"(unadjudicated or type-confused claim, §1.5)")
+            return
+        if v is True:
+            if not _nonblank(a.get("anchor")):
+                errors.append(f"{where}: verified:true assertion has no anchor (spurious risk, §1.5)")
+        else:
+            if not _nonblank(a.get("absence_evidence")):
+                errors.append(f"{where}: verified:false assertion has no absence_evidence "
+                              f"(§1.5#4 anti-false-negative)")
+
+    for scope_key in ("domains", "flows", "steps"):
+        for node in doc.get(scope_key, []) or []:
+            if not isinstance(node, dict):
+                continue
+            nid = node.get("id", "?")
+            for akey, lst in _iter_assertion_lists(node):
+                for a in lst:
+                    _check_assertion(a, f"{nid}.{akey}")
+
+    return errors
+
+
+def derive_route_id(method: str, path: str, file_path: str) -> str:
+    """§1.4 collision-resistant route id = route:{slug}-{hash(method+path+file)}.
+
+    - slug is a readable label; the hash carries uniqueness (Gate-2 fix,
+      run_aad6d4f2): the OLD form slugged `method+path` (collapsing `/a/b`,
+      `/a-b`, `/users` vs `/users/` to one slug) and hashed only file_path
+      (16-bit → ~40% collision at 200+ routes). Now the hash is over the EXACT
+      `method|path|file_path` triple at 32 bits, so distinct routes get distinct
+      ids even when their slugs collapse or the same file defines several.
+    - NO line number → survives code drift (rejected {file}:{line} broke on edits).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{method} {path}".lower()).strip("-")
+    key = f"{method}|{path}|{file_path}"
+    h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]  # 32 bits
+    return f"route:{slug}-{h}"
 
 
 # ─── Git History Parsing for Gotchas ───
