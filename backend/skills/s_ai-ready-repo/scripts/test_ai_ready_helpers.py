@@ -1019,3 +1019,157 @@ class TestOutputPathResolution:
         # In practice, if SwarmWS exists it'll use that path
         result = resolve_output_path(repo, project_name="myrepo")
         assert "ai-ready-myrepo" in str(result)
+
+
+# ─── code-intel v3 incremental merge (Run 2, run_36266b66) ───
+
+class TestMergeCodeIntel:
+    """keep-last node dedup (baseline-first, new overwrites) + edge dedup + drop-dangling."""
+
+    def test_new_node_overwrites_baseline_same_id(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "n1", "summary": "old"}], "edges": []}
+        merged = merge_code_intel(baseline, [{"id": "n1", "summary": "new"}], [])
+        n1 = [n for n in merged["nodes"] if n["id"] == "n1"]
+        assert len(n1) == 1 and n1[0]["summary"] == "new", "new must overwrite baseline (keep-last)"
+
+    def test_baseline_only_node_survives(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "keep", "summary": "b"}], "edges": []}
+        merged = merge_code_intel(baseline, [{"id": "fresh", "summary": "n"}], [])
+        ids = {n["id"] for n in merged["nodes"]}
+        assert ids == {"keep", "fresh"}, "unchanged baseline nodes must survive incremental merge"
+
+    def test_idempotent_merge_twice_equals_once(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a", "v": 1}], "edges": [{"from": "a", "to": "a", "type": "x", "direction": "forward"}]}
+        once = merge_code_intel(baseline, [{"id": "b", "v": 2}], [])
+        twice = merge_code_intel(once, [{"id": "b", "v": 2}], [])
+        assert once["nodes"] == twice["nodes"] and once["edges"] == twice["edges"]
+
+    def test_edge_dedup_by_full_key(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a"}, {"id": "b"}],
+                    "edges": [{"from": "a", "to": "b", "type": "calls", "direction": "forward"}]}
+        merged = merge_code_intel(baseline, [], [{"from": "a", "to": "b", "type": "calls", "direction": "forward"}])
+        assert len(merged["edges"]) == 1, "identical edge must dedup"
+
+    def test_edge_direction_is_part_of_key(self):
+        """forward must NOT collapse into bidirectional (Run 0 lesson: teeth)."""
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
+        merged = merge_code_intel(baseline, [],
+            [{"from": "a", "to": "b", "type": "x", "direction": "forward"},
+             {"from": "a", "to": "b", "type": "x", "direction": "bidirectional"}])
+        assert len(merged["edges"]) == 2, "forward vs bidirectional are distinct edges"
+
+    def test_dangling_edge_dropped(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a"}], "edges": []}
+        merged = merge_code_intel(baseline, [], [{"from": "a", "to": "GHOST", "type": "x", "direction": "forward"}])
+        assert merged["edges"] == [], "edge with endpoint not in node set must be dropped"
+
+    def test_valid_edge_kept(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a"}, {"id": "b"}], "edges": []}
+        merged = merge_code_intel(baseline, [], [{"from": "a", "to": "b", "type": "x", "direction": "forward"}])
+        assert len(merged["edges"]) == 1, "edge with both endpoints present must survive"
+
+    # ── Gate-2 fixes (run_36266b66) ──
+
+    def test_does_not_mutate_caller_baseline(self):
+        """Pure function: mutating the result must NOT touch the caller's baseline."""
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "n1", "summary": "orig"}], "edges": [], "meta": {"version": "3.0"}}
+        merged = merge_code_intel(baseline, [], [])
+        merged["nodes"][0]["summary"] = "MUTATED"
+        merged["meta"]["version"] = "9.9"
+        assert baseline["nodes"][0]["summary"] == "orig", "nested node must not alias caller"
+        assert baseline["meta"]["version"] == "3.0", "nested meta must not alias caller"
+
+    def test_idless_node_remerge_idempotent(self):
+        """Re-feeding the same id-less node must NOT duplicate it (idempotency)."""
+        from scripts.ai_ready_helpers import merge_code_intel
+        idless = {"summary": "anon", "kind": "note"}  # no id
+        baseline = {"nodes": [idless], "edges": []}
+        once = merge_code_intel(baseline, [dict(idless)], [])
+        twice = merge_code_intel(once, [dict(idless)], [])
+        anon_count = sum(1 for n in twice["nodes"] if n.get("summary") == "anon")
+        assert anon_count == 1, f"id-less node must dedup structurally, got {anon_count}"
+
+    def test_edge_to_idless_node_not_dropped(self):
+        """An edge to a PRESENT id-less node must survive (node+edge consistency)."""
+        from scripts.ai_ready_helpers import merge_code_intel
+        import json as _j
+        idless = {"summary": "anon"}
+        sk = _j.dumps(idless, sort_keys=True, ensure_ascii=False, default=str)
+        baseline = {"nodes": [{"id": "a"}, idless], "edges": []}
+        merged = merge_code_intel(baseline, [], [{"from": "a", "to": sk, "type": "x", "direction": "forward"}])
+        assert len(merged["edges"]) == 1, "edge to a present id-less node must not be dropped"
+
+    def test_richer_edge_wins_on_key_collision(self):
+        """A stripped re-emit must NOT clobber a field-richer edge (no metadata loss)."""
+        from scripts.ai_ready_helpers import merge_code_intel
+        baseline = {"nodes": [{"id": "a"}, {"id": "b"}],
+                    "edges": [{"from": "a", "to": "b", "type": "x", "direction": "forward", "weight": 99, "note": "keep"}]}
+        merged = merge_code_intel(baseline, [], [{"from": "a", "to": "b", "type": "x", "direction": "forward"}])
+        assert len(merged["edges"]) == 1
+        assert merged["edges"][0].get("weight") == 99, "richer edge (weight/note) must survive a stripped re-emit"
+
+
+class TestHumanBlockReconcileHardened:
+    """Gate-2 fixes: ambiguous-hash quarantine + disjoint conservation."""
+
+    def test_ambiguous_hash_quarantines_not_wrong_attach(self):
+        """Two new domains sharing a content-hash → block quarantined, not bound to last-wins."""
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "d:old", "content": "r", "hash": "dup"}]
+        kept, orphaned = reconcile_human_blocks(old, [
+            {"domain_id": "d:first", "hash": "dup"}, {"domain_id": "d:second", "hash": "dup"}])
+        assert kept == [], "ambiguous hash must NOT silently bind to a domain"
+        assert len(orphaned) == 1, "ambiguous-match block must quarantine"
+
+    def test_kept_and_orphaned_are_disjoint(self):
+        """Conservation with teeth: union == input AND no block in both lists."""
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "d:a", "content": "r1", "hash": "h1"},
+               {"domain_id": "d:b", "content": "r2", "hash": "hZ"}]
+        kept, orphaned = reconcile_human_blocks(old, [{"domain_id": "d:a2", "hash": "h1"}])
+        contents_kept = {b["content"] for b in kept}
+        contents_orph = {b["content"] for b in orphaned}
+        assert contents_kept.isdisjoint(contents_orph), "a block must not be in BOTH lists"
+        assert contents_kept | contents_orph == {"r1", "r2"}, "union must equal input"
+
+    def test_both_sides_null_hash_orphans_not_matches(self):
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "d:x", "content": "r", "hash": None}]
+        kept, orphaned = reconcile_human_blocks(old, [{"domain_id": "d:y", "hash": None}])
+        assert kept == [] and len(orphaned) == 1, "null hash must never match null hash"
+
+
+class TestHumanBlockReconcile:
+    """§8.8: [human] blocks survive domain rename via content-hash; else quarantined, never dropped."""
+
+    def test_human_block_survives_domain_rename(self):
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "domain:order-mgmt", "content": "已支付订单不可删除", "hash": "h1"}]
+        # domain renamed to domain:orders — id changed, content identical
+        kept, orphaned = reconcile_human_blocks(old, new_domain_blocks=[{"domain_id": "domain:orders", "hash": "h1"}])
+        assert orphaned == [], "identical-content human block must re-attach, not orphan"
+        assert any(b["domain_id"] == "domain:orders" and b["content"] == "已支付订单不可删除" for b in kept)
+
+    def test_unmatched_human_block_quarantined_not_dropped(self):
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "domain:gone", "content": "orphan rule", "hash": "hX"}]
+        kept, orphaned = reconcile_human_blocks(old, new_domain_blocks=[{"domain_id": "domain:orders", "hash": "h1"}])
+        assert kept == [], "no match → nothing kept"
+        assert len(orphaned) == 1 and orphaned[0]["content"] == "orphan rule", "unmatched MUST quarantine, never delete"
+
+    def test_no_human_blocks_lost_invariant(self):
+        """Every input block ends up either kept or orphaned — never silently lost."""
+        from scripts.ai_ready_helpers import reconcile_human_blocks
+        old = [{"domain_id": "d:a", "content": "r1", "hash": "h1"},
+               {"domain_id": "d:b", "content": "r2", "hash": "h2"},
+               {"domain_id": "d:c", "content": "r3", "hash": "hZ"}]
+        kept, orphaned = reconcile_human_blocks(old, new_domain_blocks=[{"domain_id": "d:a2", "hash": "h1"}, {"domain_id": "d:b", "hash": "h2"}])
+        assert len(kept) + len(orphaned) == 3, "conservation: no block may vanish"

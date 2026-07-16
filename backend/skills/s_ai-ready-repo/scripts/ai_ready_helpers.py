@@ -344,6 +344,129 @@ def derive_route_id(method: str, path: str, file_path: str) -> str:
     return f"route:{slug}-{h}"
 
 
+# ─── Incremental merge (Run 2, run_36266b66) ───
+
+def merge_code_intel(baseline: dict, new_nodes: list, new_edges: list) -> dict:
+    """Merge freshly-analyzed nodes/edges into a baseline graph (§2, UA keep-last).
+
+    Incremental model (UA "old graph = batch -1"): the BASELINE is processed
+    FIRST, then new batches — so a node re-analyzed this round OVERWRITES its
+    baseline copy (keep-last by id). Unchanged baseline nodes survive untouched.
+
+    - Nodes: dedup by `id`, keep-last (baseline first → new wins). No id → kept
+      positionally (can't dedup an id-less node; rare, structural error caught
+      elsewhere).
+    - Edges: dedup by the full key (from, to, type, direction) — `direction` is
+      part of the key so a `forward` edge never silently overwrites a
+      `bidirectional` one (Run 0 lesson). Then DROP any edge whose `from`/`to`
+      endpoint is not in the merged node-id set (dangling → drop).
+
+    Pure function (deep-copies retained objects — never mutates/aliases the
+    caller's baseline) → unit-testable + mutation-verifiable + idempotent
+    (merge(merge(x)) == merge(x)) for ALL inputs, including id-less nodes.
+
+    id-less nodes: deduped by a structural content-key (not blind positional
+    append) so re-feeding the same id-less node is idempotent. An edge whose
+    endpoint is an id-less node is NOT dropped (id-less nodes join the
+    reachability set via a synthetic key) — keeping node+edge consistent.
+    Edge dedup prefers the FIELD-RICHER edge on a key collision (never loses
+    weight/note to a stripped re-emit).
+    """
+    import copy as _copy
+
+    def _struct_key(n: dict) -> str:
+        return json.dumps(n, sort_keys=True, ensure_ascii=False, default=str)
+
+    nodes_by_id: dict = {}
+    idless_by_struct: dict = {}  # dedup id-less nodes structurally (idempotent)
+    for node in list(baseline.get("nodes", [])) + list(new_nodes or []):
+        nd = _copy.deepcopy(node) if isinstance(node, dict) else node
+        if isinstance(nd, dict) and nd.get("id") is not None:
+            nodes_by_id[nd["id"]] = nd  # keep-last: later (new) wins
+        elif isinstance(nd, dict):
+            idless_by_struct[_struct_key(nd)] = nd
+        # non-dict nodes are structural garbage → dropped (can't be referenced)
+    merged_nodes = list(nodes_by_id.values()) + list(idless_by_struct.values())
+    # Reachability set for dangling-edge detection: real ids + id-less struct keys.
+    node_ids = set(nodes_by_id.keys())
+    idless_keys = set(idless_by_struct.keys())
+
+    def _endpoint_present(ep) -> bool:
+        # An endpoint resolves if it's a known id OR the struct-key of an id-less node.
+        return ep in node_ids or ep in idless_keys
+
+    def _richness(e: dict) -> int:
+        return len(e)  # more fields = richer; prefer it on collision
+
+    edges_by_key: dict = {}
+    for edge in list(baseline.get("edges", [])) + list(new_edges or []):
+        if not isinstance(edge, dict):
+            continue
+        e = _copy.deepcopy(edge)
+        key = (e.get("from"), e.get("to"), e.get("type"), e.get("direction"))
+        prev = edges_by_key.get(key)
+        # keep-last, but never let a stripped re-emit clobber a richer edge
+        if prev is None or _richness(e) >= _richness(prev):
+            edges_by_key[key] = e
+    merged_edges = [
+        e for e in edges_by_key.values()
+        if _endpoint_present(e.get("from")) and _endpoint_present(e.get("to"))
+    ]
+
+    out = _copy.deepcopy(baseline)  # no aliasing of caller's nested objects
+    out["nodes"] = merged_nodes
+    out["edges"] = merged_edges
+    return out
+
+
+def reconcile_human_blocks(
+    old_blocks: list, new_domain_blocks: list
+) -> tuple[list, list]:
+    """§8.8 [human] re-key contract: human-authored spec blocks survive a domain
+    rename (id change) as long as their CONTENT is unchanged, else quarantine.
+
+    A [human] block is anchored by a stable `hash` (content-hash), NOT by
+    `domain_id` — so when incremental merge renames/splits a domain (new id,
+    same content), the block re-attaches to the new domain that carries the same
+    hash. A block whose hash matches NO new domain is moved to `orphaned` (for
+    manual re-attach) — NEVER dropped (human business rules are assets).
+
+    Args:
+        old_blocks: [{domain_id, content, hash}, ...] — extracted from prior .spec.md
+        new_domain_blocks: [{domain_id, hash}, ...] — the post-merge domains
+    Returns:
+        (kept, orphaned) — kept blocks carry the NEW domain_id; every input block
+        appears in exactly one of the two lists (conservation: none vanish).
+    """
+    # Build hash → domain_id, tracking AMBIGUITY: if two new domains share a
+    # content-hash, we cannot know which one a human block belongs to → that
+    # hash is ambiguous and matching blocks are quarantined (not silently bound
+    # to a last-wins arbitrary domain). Gate-2 finding, run_36266b66.
+    hash_counts: dict = {}
+    hash_to_new_domain: dict = {}
+    for nd in new_domain_blocks or []:
+        if isinstance(nd, dict) and nd.get("hash") is not None:
+            h = nd["hash"]
+            hash_counts[h] = hash_counts.get(h, 0) + 1
+            hash_to_new_domain[h] = nd.get("domain_id")
+    ambiguous = {h for h, c in hash_counts.items() if c > 1}
+
+    kept: list = []
+    orphaned: list = []
+    for blk in old_blocks or []:
+        if not isinstance(blk, dict):
+            orphaned.append(blk)
+            continue
+        h = blk.get("hash")
+        if h is not None and h in hash_to_new_domain and h not in ambiguous:
+            rekeyed = dict(blk)
+            rekeyed["domain_id"] = hash_to_new_domain[h]  # re-attach to new id
+            kept.append(rekeyed)
+        else:
+            orphaned.append(blk)  # never dropped (unmatched OR ambiguous)
+    return kept, orphaned
+
+
 # ─── Git History Parsing for Gotchas ───
 
 _FIX_PATTERN = re.compile(
