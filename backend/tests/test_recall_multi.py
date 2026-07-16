@@ -12,6 +12,7 @@ Covers the 5 DoD criteria:
 READ-only: only the Bedrock network boundary is ever patched; no embed/write.
 """
 
+import json
 import sqlite3
 import pytest
 
@@ -490,3 +491,149 @@ class TestRecallAll:
         monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
         recall_multi.recall_all("zzz unrelated qqq", project="SwarmAI", allow_embed=False)
         assert spy["n"] == 0, "recall_all default must be embed-free (AC5)"
+
+
+# ===========================================================================
+# Run 3 (run_6602eeab) — §8.1 recall read-side wiring: code-intel domains[]
+# leg + spec-details [human]-marker chunker + verified gating + §8.9 sentinel.
+# Drives the REAL _recall_ddd through recall_all (no mock of the func under
+# change — the anti-test-theater discipline from Run 1/2).
+# ===========================================================================
+
+
+class TestHumanMarkerChunker:
+    """AC2: [human]-block extraction indexes ONLY backtick-fenced `[human]`
+    list items — bare-word / comment / legend mentions are NOT blocks."""
+
+    def test_backtick_fenced_human_extracted(self):
+        from core.recall_multi import _extract_human_blocks
+        txt = "- **single writer invariant** `[human]` — anchor `X.ts:6`\n- other `[llm]` line"
+        blocks = _extract_human_blocks(txt)
+        assert len(blocks) == 1
+        assert "single writer invariant" in blocks[0]
+
+    def test_bare_word_and_legend_not_a_block(self):
+        """The false-positive trap: legend/comment mention `[human]` without
+        backticks (dangerous-command-gate.spec.md:7). MUST NOT be indexed."""
+        from core.recall_multi import _extract_human_blocks
+        txt = (
+            "<!-- 骨架区(§1-4) = 机器生成;§5 [human] 可增补 -->\n"
+            "prose mentioning [human] with no backticks\n"
+            "- **real one** `[human]` — anchor `Y.ts:9`\n"
+        )
+        blocks = _extract_human_blocks(txt)
+        assert len(blocks) == 1, "only the backtick-fenced item counts, not comment/prose"
+        assert "real one" in blocks[0]
+
+    def test_html_comment_region_skipped(self):
+        from core.recall_multi import _extract_human_blocks
+        txt = (
+            "<!--\nmulti-line comment with `[human]` inside a fence in a COMMENT\n-->\n"
+            "- **actual rule** `[human]` — anchor `Z.ts:1`\n"
+        )
+        blocks = _extract_human_blocks(txt)
+        assert len(blocks) == 1
+        assert "actual rule" in blocks[0]
+
+    def test_inline_trailing_comment_does_not_drop_block(self):
+        """Gate-2 HIGH: a real rule with a trailing inline <!-- --> must NOT be
+        dropped (prior version skipped the whole line = false negative)."""
+        from core.recall_multi import _extract_human_blocks
+        txt = "- **never delete prod data** `[human]` — anchor `x.ts:1` <!-- note -->\n"
+        blocks = _extract_human_blocks(txt)
+        assert len(blocks) == 1
+        assert "never delete prod data" in blocks[0]
+
+    def test_prose_mention_of_marker_not_a_block(self):
+        """Gate-2 MEDIUM: prose quoting `[human]` (not a list item) is NOT a rule."""
+        from core.recall_multi import _extract_human_blocks
+        txt = "The `[human]` marker denotes human authorship in this file.\n"
+        assert _extract_human_blocks(txt) == []
+
+
+class TestVerifiedGating:
+    """AC1: verified:false assertions are GATED — surfaced as
+    [llm-inferred, UNVERIFIED], never as an established fact."""
+
+    def test_verified_true_is_fact(self):
+        from core.recall_multi import _domain_corpus
+        dom = {"id": "domain:x", "name": "X", "summary": "s",
+               "business_rules": [{"rule": "stock must suffice", "anchor": "a.ts:1", "verified": True}]}
+        corpus = _domain_corpus(dom, [], [])
+        assert "stock must suffice" in corpus
+        assert "[llm-inferred, UNVERIFIED] rule: stock must suffice" not in corpus
+
+    def test_verified_false_is_gated(self):
+        from core.recall_multi import _domain_corpus
+        dom = {"id": "domain:x", "name": "X", "summary": "s",
+               "business_rules": [{"rule": "refund is idempotent", "verified": False,
+                                    "absence_evidence": "grep=0"}]}
+        corpus = _domain_corpus(dom, [], [])
+        assert "[llm-inferred, UNVERIFIED] rule: refund is idempotent" in corpus
+
+    def test_bare_string_rule_treated_unverified(self):
+        from core.recall_multi import _domain_corpus
+        dom = {"id": "domain:x", "name": "X", "summary": "s",
+               "business_rules": ["some unadjudicated claim"]}
+        corpus = _domain_corpus(dom, [], [])
+        assert "[llm-inferred, UNVERIFIED] rule: some unadjudicated claim" in corpus
+
+
+class TestRun3RecallLegsE2E:
+    """AC3 §8.9 sentinel: a business-rule word living ONLY in a spec-details
+    [human] block, and ONLY in code-intel.json domains[], MUST be recalled
+    through the real _recall_ddd. This is the red→green liveness contract."""
+
+    def _make_project(self, tmp_path, monkeypatch, *, with_domains, with_human):
+        from core import recall_multi
+        proj = tmp_path / "Proj"
+        proj.mkdir()
+        # a canonical doc must exist so base.exists() + ddd leg run
+        (proj / "PRODUCT.md").write_text("## Vision\nunrelated content\n", encoding="utf-8")
+        if with_domains:
+            ci = {
+                "version": 3.0,
+                "routes": [{"id": "route:orders-post-a1b2"}],
+                "domains": [{"id": "domain:orders", "name": "Orders",
+                             "summary": "order lifecycle",
+                             "business_rules": [
+                                 {"rule": "zORPHANWIDGET42 domain invariant",
+                                  "anchor": "o.ts:1", "verified": True}]}],
+                "flows": [], "steps": [],
+            }
+            (proj / "code-intel.json").write_text(json.dumps(ci), encoding="utf-8")
+        if with_human:
+            sd = proj / "spec-details"
+            sd.mkdir()
+            (sd / "payment.spec.md").write_text(
+                "# 规格:Payment\n"
+                "## 5. 业务规则\n"
+                "- **zHUMANSENTINEL99 refund idempotency invariant** `[human]` — anchor `p.ts:1` ✅\n",
+                encoding="utf-8")
+        # _recall_ddd does `from core.project_registry import get_projects_dir`
+        # at call time → patch it on project_registry (the source module).
+        import core.project_registry as pr
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
+        return proj
+
+    def test_sentinel_recalled_from_human_block(self, tmp_path, monkeypatch):
+        from core.recall_multi import _recall_ddd
+        self._make_project(tmp_path, monkeypatch, with_domains=False, with_human=True)
+        hits, layer = _recall_ddd("zHUMANSENTINEL99 refund idempotency", "Proj", 5)
+        docs = [h.get("doc", "") for h in hits]
+        assert any("payment.spec.md" in d for d in docs), \
+            f"[human]-only sentinel MUST be recalled (§8.9 green), got {docs}"
+
+    def test_sentinel_recalled_from_domains(self, tmp_path, monkeypatch):
+        from core.recall_multi import _recall_ddd
+        self._make_project(tmp_path, monkeypatch, with_domains=True, with_human=False)
+        hits, layer = _recall_ddd("zORPHANWIDGET42 domain invariant", "Proj", 5)
+        docs = [h.get("doc", "") for h in hits]
+        assert any("code-intel.json" in d for d in docs), \
+            f"domains[]-only sentinel MUST be recalled, got {docs}"
+
+    def test_no_spec_details_dir_is_safe(self, tmp_path, monkeypatch):
+        from core.recall_multi import _recall_ddd
+        self._make_project(tmp_path, monkeypatch, with_domains=False, with_human=False)
+        hits, layer = _recall_ddd("anything", "Proj", 5)
+        assert isinstance(hits, list)  # no crash when neither leg has data

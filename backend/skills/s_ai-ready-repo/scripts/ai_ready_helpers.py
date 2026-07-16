@@ -467,6 +467,153 @@ def reconcile_human_blocks(
     return kept, orphaned
 
 
+# ─── Run 3 (run_6602eeab): spec-details eval dims + deterministic skeleton ───
+
+def _iter_domain_assertions(domain: dict, flows: list, steps: list):
+    """Yield every LLM-assertion dict (business_rules/issues/gaps + step
+    rules/preconditions/exceptions) belonging to `domain`. Shared by the eval
+    scorers so completeness/precision/explicit count the SAME element set."""
+    for a in domain.get("business_rules") or []:
+        yield a
+    for a in domain.get("issues") or []:
+        yield a
+    for a in domain.get("gaps") or []:
+        yield a
+    did = domain.get("id")
+    dom_flows = [f for f in flows if f.get("domain_id") == did]
+    for fl in dom_flows:
+        fid = fl.get("id")
+        for st in steps:
+            if st.get("flow_id") != fid:
+                continue
+            for k in ("rules", "preconditions", "exceptions"):
+                for a in st.get(k) or []:
+                    yield a
+
+
+def eval_spec_details(doc: dict) -> dict:
+    """§9 eval dims for a code-intel v3 domain layer — the quantitative quality
+    gate (Siala & Lano 2025), NOT "looks right".
+
+    - completeness (recall proxy): fraction of flows that resolve to a real route
+      entry_ref (an unanchored flow = a missing/hallucinated element).
+    - precision (consistency): fraction of assertions that are VERIFIED (a real
+      bool True + non-blank anchor). FP here = spurious (paper: LLM 0.67) — an
+      un-anchored / verified:false assertion counts against precision.
+    - explicit: fraction of steps with explicit==True (paper: can-forward-engineer).
+    - f1 = 2·recall·precision/(recall+precision).
+
+    Pure: counts over the doc structure, no I/O. Returns 0.0 for an empty axis
+    (no divide-by-zero) and records the denominators so a caller can tell
+    "1.0 because perfect" from "1.0 because vacuous (n=0)".
+    """
+    domains = doc.get("domains") or []
+    flows = doc.get("flows") or []
+    steps = doc.get("steps") or []
+    route_ids = {r.get("id") for r in (doc.get("routes") or []) if r.get("id")}
+
+    # completeness: flows anchored to a real route
+    anchored = sum(1 for f in flows
+                   if f.get("entry_type") != "http" or f.get("entry_ref") in route_ids)
+    n_flows = len(flows)
+    completeness = anchored / n_flows if n_flows else 0.0
+
+    # precision + explicit over all assertions / steps
+    total_assert = 0
+    verified_assert = 0
+    for dom in domains:
+        for a in _iter_domain_assertions(dom, flows, steps):
+            total_assert += 1
+            if isinstance(a, dict) and a.get("verified") is True \
+                    and str(a.get("anchor") or "").strip():
+                verified_assert += 1
+    precision = verified_assert / total_assert if total_assert else 0.0
+
+    n_steps = len(steps)
+    explicit_steps = sum(1 for s in steps if s.get("explicit") is True)
+    explicit = explicit_steps / n_steps if n_steps else 0.0
+
+    f1 = (2 * completeness * precision / (completeness + precision)
+          if (completeness + precision) else 0.0)
+
+    return {
+        "completeness": round(completeness, 4),
+        "precision": round(precision, 4),
+        "explicit": round(explicit, 4),
+        "f1": round(f1, 4),
+        "denominators": {"flows": n_flows, "assertions": total_assert, "steps": n_steps},
+    }
+
+
+def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
+    """Deterministically project ONE domain (+ its flows/steps) into the 8-section
+    `.spec.md` skeleton (§3.2). Pure string render — NO LLM. The skeleton region
+    (§1-4,6-7) is `domains[]`-authoritative; the §5 [human] region is left as a
+    stub for human authorship (owned by spec-details, protected on merge §8.2).
+
+    LLM domain EXTRACTION and prose THICKENING are out of scope for Run 3 (the
+    dropped Run-1 generation piece) — this renders the machine skeleton from an
+    already-populated domains[] entry, which is what exists today.
+    """
+    name = domain.get("name") or domain.get("id") or "Unnamed Domain"
+    did = domain.get("id")
+    L = [f"# 规格:{name}", ""]
+    L += ["## 1. 域概述",
+          f"职责:{domain.get('summary', '(未填)')}",
+          f"核心实体:{', '.join(domain.get('entities') or []) or '(未填)'}",
+          f"复杂度:{domain.get('complexity', 'moderate')}", ""]
+
+    diagram = (domain.get("diagram") or {}).get("mermaid")
+    L += ["## 2. 架构图(本域)"]
+    L += [f"```mermaid\n{diagram}\n```" if diagram else "_(无架构图)_", ""]
+
+    dom_flows = [f for f in flows if f.get("domain_id") == did]
+    L += ["## 3. 用户流程图(每条 flow)"]
+    for fl in dom_flows:
+        fd = (fl.get("diagram") or {}).get("mermaid")
+        if fd:
+            L.append(f"```mermaid\n{fd}\n```")
+    if not any((f.get("diagram") or {}).get("mermaid") for f in dom_flows):
+        L.append("_(无流程图)_")
+    L.append("")
+
+    L += ["## 4. 业务流 & 步骤规格"]
+    for fl in dom_flows:
+        L.append(f"### 业务流:{fl.get('name', fl.get('id'))} — 入口 {fl.get('entry_ref', '(未锚定)')}")
+        fid = fl.get("id")
+        fsteps = sorted((s for s in steps if s.get("flow_id") == fid),
+                        key=lambda s: s.get("order", 0))
+        for st in fsteps:
+            lr = st.get("line_range")
+            loc = f"{st.get('file_path', '?')}:{lr[0]}-{lr[1]}" if lr else st.get("file_path", "?")
+            L.append(f"#### 步骤 {st.get('order', '?')} — {st.get('name', '?')} (`{loc}`)")
+    L.append("")
+
+    L += ["## 5. 业务规则汇总(域级不变量)",
+          "<!-- [human] 区:人工增补业务承诺,merge 时受保护不覆盖(§8.2) -->",
+          "_(待人工增补 `[human]` 业务规则)_", ""]
+
+    L += ["## 6. 潜在问题 & 风险", "| 严重度 | 位置 | 问题 | 来源 |", "|---|---|---|---|"]
+    for iss in domain.get("issues") or []:
+        if isinstance(iss, dict):
+            L.append(f"| {iss.get('severity', '?')} | `{iss.get('file', '?')}:{iss.get('line', '?')}` "
+                     f"| {iss.get('issue', '')} | {iss.get('source', 'llm')} |")
+    L.append("")
+
+    L += ["## 7. Gaps & 改进区", "| 类型 | 位置 | 建议 | 来源 |", "|---|---|---|---|"]
+    for g in domain.get("gaps") or []:
+        if isinstance(g, dict):
+            L.append(f"| {g.get('kind', '?')} | `{g.get('file', '?')}` "
+                     f"| {g.get('action', g.get('note', ''))} | {g.get('source', 'llm')} |")
+    L.append("")
+
+    xd = domain.get("cross_domain") or []
+    ups = ", ".join(x.get("target", "") for x in xd if isinstance(x, dict)) or "无"
+    L += ["## 8. 关联", f"上下游域:{ups}",
+          "项目级教训:see IMPROVEMENT.md#(升级的问题上浮到此)", ""]
+    return "\n".join(L)
+
+
 # ─── Git History Parsing for Gotchas ───
 
 _FIX_PATTERN = re.compile(

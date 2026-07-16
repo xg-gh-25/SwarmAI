@@ -1173,3 +1173,106 @@ class TestHumanBlockReconcile:
                {"domain_id": "d:c", "content": "r3", "hash": "hZ"}]
         kept, orphaned = reconcile_human_blocks(old, new_domain_blocks=[{"domain_id": "d:a2", "hash": "h1"}, {"domain_id": "d:b", "hash": "h2"}])
         assert len(kept) + len(orphaned) == 3, "conservation: no block may vanish"
+
+
+# ─── Run 3 (run_6602eeab): eval dims + deterministic skeleton projection ───
+
+class TestEvalSpecDetails:
+    """AC4 §9: completeness/precision/explicit/F1 quantitative scorers."""
+
+    def _doc(self):
+        return {
+            "routes": [{"id": "route:orders-post-a1b2"}],
+            "domains": [{"id": "domain:orders", "name": "Orders", "summary": "s",
+                         "business_rules": [
+                             {"rule": "stock suffices", "anchor": "o.ts:1", "verified": True},
+                             {"rule": "refund idempotent", "verified": False,
+                              "absence_evidence": "grep=0"}]}],
+            "flows": [{"id": "flow:create", "domain_id": "domain:orders",
+                       "entry_type": "http", "entry_ref": "route:orders-post-a1b2"}],
+            "steps": [{"id": "step:1", "flow_id": "flow:create", "explicit": True},
+                      {"id": "step:2", "flow_id": "flow:create", "explicit": False}],
+        }
+
+    def test_precision_counts_only_verified(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        m = eval_spec_details(self._doc())
+        # 1 verified of 2 assertions → 0.5
+        assert m["precision"] == 0.5
+        assert m["denominators"]["assertions"] == 2
+
+    def test_completeness_flow_anchored(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        m = eval_spec_details(self._doc())
+        assert m["completeness"] == 1.0  # the one http flow resolves to a real route
+
+    def test_completeness_penalizes_dangling_flow(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        doc = self._doc()
+        doc["flows"][0]["entry_ref"] = "route:GHOST"  # not in routes
+        m = eval_spec_details(doc)
+        assert m["completeness"] == 0.0
+
+    def test_explicit_ratio(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        m = eval_spec_details(self._doc())
+        assert m["explicit"] == 0.5  # 1 of 2 steps explicit
+
+    def test_empty_axes_are_zero_not_crash(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        m = eval_spec_details({"domains": [], "flows": [], "steps": [], "routes": []})
+        assert m["completeness"] == 0.0 and m["precision"] == 0.0
+        assert m["f1"] == 0.0
+        assert m["denominators"]["flows"] == 0
+
+    def test_f1_harmonic(self):
+        from scripts.ai_ready_helpers import eval_spec_details
+        m = eval_spec_details(self._doc())
+        # completeness 1.0, precision 0.5 → f1 = 2*1*0.5/1.5 = 0.6667
+        assert abs(m["f1"] - 0.6667) < 0.001
+
+
+class TestProjectDomainSkeleton:
+    """AC5 §3.2: deterministic 8-section .spec.md projection (no LLM)."""
+
+    def _dom(self):
+        return {"id": "domain:orders", "name": "Orders", "summary": "order lifecycle",
+                "entities": ["Order"], "complexity": "moderate",
+                "diagram": {"mermaid": "graph TD\n  A-->B"},
+                "issues": [{"severity": "high", "file": "o.ts", "line": 210,
+                            "issue": "oversell", "source": "llm"}],
+                "gaps": [{"kind": "test-coverage", "file": "i.ts",
+                          "action": "add case", "source": "llm"}],
+                "cross_domain": [{"target": "domain:payment"}]}
+
+    def test_all_8_sections_present(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        md = project_domain_skeleton(self._dom(), [], [])
+        for h in ["## 1. 域概述", "## 2. 架构图", "## 3. 用户流程图",
+                  "## 4. 业务流", "## 5. 业务规则", "## 6. 潜在问题",
+                  "## 7. Gaps", "## 8. 关联"]:
+            assert h in md, f"missing section: {h}"
+
+    def test_human_zone_left_as_protected_stub(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        md = project_domain_skeleton(self._dom(), [], [])
+        assert "[human]" in md  # §5 stub references the protected human marker
+        assert "待人工增补" in md
+
+    def test_mermaid_and_issues_rendered(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        md = project_domain_skeleton(self._dom(), [], [])
+        assert "```mermaid" in md
+        assert "oversell" in md
+        assert "domain:payment" in md  # cross-domain link
+
+    def test_flow_steps_ordered(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton
+        flows = [{"id": "flow:create", "domain_id": "domain:orders",
+                  "name": "Create", "entry_ref": "route:x"}]
+        steps = [{"id": "s2", "flow_id": "flow:create", "order": 2, "name": "Second",
+                  "file_path": "a.ts", "line_range": [10, 20]},
+                 {"id": "s1", "flow_id": "flow:create", "order": 1, "name": "First",
+                  "file_path": "a.ts", "line_range": [1, 5]}]
+        md = project_domain_skeleton(self._dom(), flows, steps)
+        assert md.index("步骤 1 — First") < md.index("步骤 2 — Second")
