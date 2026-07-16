@@ -20,6 +20,11 @@ class TestCodeIntelValidation:
         """A well-formed v2 document should pass validation."""
         from scripts.ai_ready_helpers import validate_code_intel_json
 
+        # Matches the REAL exporter schema (json_exporter.py) — run_5647c72c.
+        # The old fixture used module.path/responsibility + top-level edges +
+        # entry_point.path, a schema the exporter NEVER emitted (that mismatch was
+        # the bug this run fixed). modules carry symbol_count; entry_points carry
+        # file_path; the graph section is `dependencies`, not `edges`.
         valid_doc = {
             "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
             "version": "2.0",
@@ -33,24 +38,21 @@ class TestCodeIntelValidation:
             "modules": [
                 {
                     "name": "core",
-                    "path": "src/core/",
-                    "responsibility": "Core business logic",
-                    "entry_points": ["src/core/main.py:main"],
-                    "depends_on": ["database"],
-                    "depended_by": ["api"],
+                    "symbol_count": 150,
+                    "function_count": 120,
+                    "class_count": 12,
+                    "file_count": 8,
+                    "files": ["src/core/main.py"],
                 }
             ],
-            "edges": [
-                {"from": "core", "to": "database", "type": "runtime", "weight": "critical"}
-            ],
             "entry_points": [
-                {"path": "src/main.py", "type": "cli", "description": "Entry point"}
+                {"name": "main", "file_path": "src/main.py", "type": "function"}
             ],
             "routes": [],
             "hot_zones": [],
             "risk_areas": [],
             "dead_code": [],
-            "dependencies": {},
+            "dependencies": {"language_distribution": {"python": 150}},
         }
 
         errors = validate_code_intel_json(valid_doc)
@@ -86,15 +88,15 @@ class TestCodeIntelValidation:
         assert any("version" in e for e in errors)
 
     def test_invalid_module_structure_fails(self):
-        """Module missing required fields should fail."""
+        """Module missing the required field (symbol_count, per the real exporter
+        _build_modules schema — run_5647c72c) should fail."""
         from scripts.ai_ready_helpers import validate_code_intel_json
 
         doc = {
             "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
             "version": "2.0",
             "repo": {"name": "test", "languages": {}, "total_symbols": 0, "total_edges": 0},
-            "modules": [{"name": "incomplete"}],  # missing path, responsibility
-            "edges": [],
+            "modules": [{"name": "incomplete"}],  # missing symbol_count
             "entry_points": [],
             "routes": [],
             "hot_zones": [],
@@ -104,20 +106,23 @@ class TestCodeIntelValidation:
         }
         errors = validate_code_intel_json(doc)
         assert len(errors) > 0
-        assert any("path" in e or "responsibility" in e for e in errors)
+        assert any("symbol_count" in e for e in errors)
 
 
 # ─── code-intel v3 domain layer (Run 1, run_aad6d4f2) ───
 
 def _minimal_v2_doc() -> dict:
-    """A valid v2 doc — reused as the base for v3 tests."""
+    """A valid v2 doc matching the REAL exporter schema (json_exporter.py) —
+    modules={name,symbol_count,…}, entry_points={name,file_path,type}, top-level
+    `dependencies` (NOT `edges`). run_5647c72c aligned this to ground truth."""
     return {
         "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
         "version": "2.0",
         "repo": {"name": "t", "languages": {"python": 1.0}, "total_symbols": 10, "total_edges": 1},
-        "modules": [{"name": "core", "path": "src/", "responsibility": "x"}],
-        "edges": [{"from": "core", "to": "db"}],
-        "entry_points": [{"path": "src/main.py"}],
+        "modules": [{"name": "core", "symbol_count": 10, "function_count": 8,
+                     "class_count": 1, "file_count": 2, "files": ["src/core.py"]}],
+        "entry_points": [{"name": "main", "file_path": "src/main.py", "type": "function"}],
+        "dependencies": {"language_distribution": {"python": 10}},
     }
 
 
@@ -1642,3 +1647,75 @@ class TestRun4Gate2Fixes:
                "- **real** `[human]` — anchor `a.py:1`\n")
         blocks = extract_human_spec_blocks(txt)
         assert len(blocks) == 1 and "real" in blocks[0]
+
+
+class TestValidatorMatchesRealExporter:
+    """run_5647c72c regression: the validator MUST accept what the REAL exporter
+    (core/code_intel/json_exporter.py) emits. Previously the validator was written
+    against a hand-built FIXTURE schema and rejected every real exporter output
+    (SwarmAI's own code-intel.json = 43 errors), blocking v3 generation on real
+    data (O009: validator never tested against real producer output)."""
+
+    def _exporter_shaped_doc(self):
+        """A doc built from the exporter's ACTUAL builder functions, so this test
+        breaks if validator ↔ exporter diverge again — not a hand-written schema."""
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "core"))
+        # Build modules/entry_points via the real exporter builders (ground truth).
+        from code_intel.json_exporter import _build_modules, _build_entry_points, _build_dependencies
+        module_map = {"core": [
+            {"file_path": "backend/core/a.py", "node_type": "function", "is_entry_point": True, "name": "main"},
+            {"file_path": "backend/core/a.py", "node_type": "class", "is_entry_point": False, "name": "Foo"},
+        ]}
+        return {
+            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+            "version": "2.0",
+            "repo": {"name": "t", "languages": {"python": 2}, "total_symbols": 2, "total_edges": 0},
+            "modules": _build_modules(module_map, {}),
+            "entry_points": _build_entry_points(module_map),
+            "routes": [], "hot_zones": [], "risk_areas": [], "dead_code": [],
+            "dependencies": _build_dependencies({"python": 2}),
+        }
+
+    def test_real_exporter_output_validates_clean(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = self._exporter_shaped_doc()
+        errors = validate_code_intel_json(doc)
+        assert errors == [], f"validator must accept real exporter output, got: {errors}"
+
+    def test_exporter_module_has_symbol_count_not_path(self):
+        """Pin the exact divergence that caused the bug: exporter modules carry
+        symbol_count, NOT path/responsibility."""
+        doc = self._exporter_shaped_doc()
+        mod = doc["modules"][0]
+        assert "symbol_count" in mod
+        assert "path" not in mod and "responsibility" not in mod
+
+    def test_exporter_entry_point_uses_file_path(self):
+        """Pin the latent 3rd divergence: entry_points use file_path, not path."""
+        doc = self._exporter_shaped_doc()
+        ep = doc["entry_points"][0]
+        assert "file_path" in ep and "path" not in ep
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        assert validate_code_intel_json(doc) == []
+
+
+class TestMergeExportedDocSafety:
+    """run_5647c72c R7-scan: merge_code_intel operates on the nodes/edges GRAPH,
+    not the exported code-intel.json (modules/routes). Passing an exported doc
+    must NOT wipe its modules/routes (deep-copy preserves them)."""
+
+    def test_merge_preserves_exported_modules_routes(self):
+        from scripts.ai_ready_helpers import merge_code_intel
+        exported = {
+            "$schema": "s", "version": "2.0",
+            "repo": {"name": "t", "languages": {}, "total_symbols": 5, "total_edges": 0},
+            "modules": [{"name": "core", "symbol_count": 5}],
+            "routes": [{"method": "GET", "path": "/a", "file_path": "x.py"}],
+            "dependencies": {"language_distribution": {"python": 5}},
+        }
+        out = merge_code_intel(exported, [], [])
+        assert len(out["modules"]) == 1, "exported modules must survive merge (deep-copy)"
+        assert len(out["routes"]) == 1, "exported routes must survive merge"
+        # input not mutated
+        assert "nodes" not in exported
