@@ -765,6 +765,133 @@ def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
     return "\n".join(L)
 
 
+# ─── Run 4 (run_b5993cdb, feature D): [human] preservation on regeneration ───
+
+# A [human] block = a markdown LIST ITEM carrying a backtick-fenced `[human]`
+# marker (§3.2 / §8.2), PLUS its continuation lines (wrapped text, indented
+# sub-bullets, fenced code) up to the next top-level list item or `## ` header.
+# Skill-LOCAL (NOT imported from core.recall_multi) so the skill stays portable
+# (C046). NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
+# recall does LINE-level BM25 indexing (one bullet line, comments stripped), but
+# PRESERVATION needs the VERBATIM block (continuation lines + inline comments kept)
+# or a multiline human rule loses its body on regen (Gate-2 CRITICAL, run_b5993cdb).
+# Different concern → different extractor; they are not "keep in sync".
+_HUMAN_MARKER_RE = re.compile(r"`\[human\]`")
+_LIST_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
+_SECTION_HDR_RE = re.compile(r"^##\s")
+
+
+def _is_top_level_bullet(raw: str) -> bool:
+    """A list bullet at column 0 (no leading indent) — starts a new block."""
+    return bool(_LIST_BULLET_RE.match(raw)) and raw[:1] in "-*+0123456789"
+
+
+def extract_human_spec_blocks(spec_text: str) -> list[str]:
+    """Return the human-authored §5 blocks of a .spec.md, VERBATIM (feature D).
+
+    A block = a top-level list item whose text carries a backtick-fenced
+    ``[human]`` marker, TOGETHER WITH its continuation lines (wrapped text,
+    indented sub-bullets, fenced code) until the next top-level bullet or ``##``
+    header. Returned verbatim (original indentation + inline comments preserved) —
+    this is a PRESERVATION extractor, not the recall LINE-indexer, so a multiline
+    human business rule survives regeneration intact.
+
+    Marker detection ignores HTML comments so a legend/comment mention of the bare
+    or quoted marker does NOT start a block; but once a real block starts, its own
+    trailing inline ``<!-- … -->`` is kept verbatim (it's human content).
+    """
+    lines = spec_text.splitlines()
+    inline_comment = re.compile(r"<!--.*?-->", re.DOTALL)
+    blocks: list[str] = []
+    n = len(lines)
+    i = 0
+    in_html_comment = False
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+        # Track HTML-comment regions ONLY to decide whether THIS line can START a
+        # block (a marker inside a comment must not trigger). We do not consume
+        # comment regions destructively — a block, once started, keeps its bytes.
+        scan = stripped
+        started_here = False
+        if not in_html_comment:
+            # residue after removing closed inline comments, for marker detection
+            residue = inline_comment.sub("", scan)
+            if "<!--" in residue and "-->" not in residue:
+                in_html_comment = True  # opens a multiline comment on this line
+                residue = residue.split("<!--", 1)[0]
+            if (_is_top_level_bullet(raw) and _HUMAN_MARKER_RE.search(residue)):
+                started_here = True
+        else:
+            if "-->" in stripped:
+                in_html_comment = False
+        if started_here:
+            block = [raw]
+            i += 1
+            # consume continuation lines until next top-level bullet / ## header
+            while i < n:
+                nxt = lines[i]
+                if _is_top_level_bullet(nxt) or _SECTION_HDR_RE.match(nxt.strip()):
+                    break
+                block.append(nxt)
+                i += 1
+            # trim trailing blank lines inside the captured block
+            while block and not block[-1].strip():
+                block.pop()
+            blocks.append("\n".join(block))
+        else:
+            i += 1
+    return blocks
+
+
+def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
+                                     flows: list, steps: list) -> str:
+    """Re-render a domain's `.spec.md` skeleton from fresh domains[] WITHOUT
+    destroying human-authored §5 business rules (feature D — the one irreversible
+    data-loss risk in the whole v3 governance surface).
+
+    The skeleton region (§1-4,6-8) is `domains[]`-authoritative → freshly rendered.
+    The §5 `[human]` list items from the EXISTING file are spliced back in, so a
+    regeneration cycle never overwrites a human business commitment (§8.2 ownership
+    boundary made concrete). A first generation (existing="") is a plain skeleton.
+
+    Idempotent: regenerating an already-preserved file re-extracts the SAME [human]
+    blocks and re-injects them (no duplication — the fresh skeleton's §5 has only
+    the stub, which the human blocks REPLACE, not append to).
+    """
+    fresh = project_domain_skeleton(domain, flows, steps)
+    human_blocks = extract_human_spec_blocks(existing_spec_md or "")
+    if not human_blocks:
+        return fresh  # nothing human to preserve (first gen, or all-machine spec)
+
+    # Replace the §5 stub body with the preserved human rules. §5 spans from its
+    # header to the next "## " header (§6). We keep the header + the HTML-comment
+    # ownership note, drop the "_(待人工增补…)_" stub line, inject the real blocks.
+    lines = fresh.split("\n")
+    out: list[str] = []
+    i = 0
+    injected = False
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        if line.startswith("## 5.") and not injected:
+            i += 1
+            # carry any HTML-comment ownership note lines verbatim; drop the stub
+            while i < len(lines) and not lines[i].startswith("## "):
+                nxt = lines[i]
+                if nxt.strip().startswith("<!--"):
+                    out.append(nxt)
+                # skip the stub placeholder + blanks; real content comes from human_blocks
+                i += 1
+            out.append("")
+            out.extend(human_blocks)
+            out.append("")
+            injected = True
+            continue
+        i += 1
+    return "\n".join(out)
+
+
 # ─── Git History Parsing for Gotchas ───
 
 _FIX_PATTERN = re.compile(

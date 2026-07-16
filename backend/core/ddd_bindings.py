@@ -471,6 +471,16 @@ def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = N
         extras.append("gates")
     if (d / "Knowledge").is_dir():
         extras.append("Knowledge/")
+    # code-intel v3 (run_b5993cdb A): surface the derived spec-details/ projection
+    # so the DDD index makes the system AWARE it exists (OT07 prevention — a
+    # generated domain layer that no index shows is a silent orphan). This is a
+    # DERIVED projection dir, NOT a 5th canonical doc (project_registry.py) — it
+    # rides in `extras`, never in the canonical `docs` list that gates completeness.
+    spec_dir = d / "spec-details"
+    if spec_dir.is_dir():
+        n_specs = sum(1 for s in spec_dir.glob("*.spec.md") if s.is_file())
+        if n_specs:
+            extras.append(f"spec-details/({n_specs} specs)")
     if (d / "bindings.yaml").is_file():
         extras.append("bindings")
 

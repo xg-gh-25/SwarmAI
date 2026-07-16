@@ -1492,3 +1492,153 @@ class TestRun15Gate2Fixes:
             finalize_v3(base, 5, [], [])  # int, not list
         with pytest.raises(ValueError, match="must be a list or None"):
             finalize_v3(base, {"d": 1}, [], [])  # dict, not list
+
+
+class TestRegenerateSpecPreservingHuman:
+    """Run 4 feature D: skeleton regeneration must NOT destroy [human] §5 rules."""
+
+    _DOMAIN = {"id": "domain:orders", "name": "Orders", "summary": "order lifecycle",
+               "entities": ["Order"], "complexity": "moderate"}
+
+    def test_extract_human_blocks_backtick_and_bullet(self):
+        from scripts.ai_ready_helpers import extract_human_spec_blocks
+        txt = ("## 5. rules\n"
+               "- **已支付订单不可删除** `[human]` — anchor `svc.py:10` ✅\n"
+               "- **machine rule** `[llm]` — anchor `svc.py:20`\n"
+               "The `[human]` marker is prose here, not a rule.\n")
+        blocks = extract_human_spec_blocks(txt)
+        assert len(blocks) == 1
+        assert "已支付订单不可删除" in blocks[0]
+
+    def test_first_generation_is_plain_skeleton(self):
+        from scripts.ai_ready_helpers import regenerate_spec_preserving_human, project_domain_skeleton
+        out = regenerate_spec_preserving_human("", self._DOMAIN, [], [])
+        # no prior human content → identical to a plain skeleton
+        assert out == project_domain_skeleton(self._DOMAIN, [], [])
+
+    def test_human_rule_survives_regeneration(self):
+        from scripts.ai_ready_helpers import regenerate_spec_preserving_human, project_domain_skeleton
+        # existing file: skeleton + a human rule in §5
+        existing = project_domain_skeleton(self._DOMAIN, [], []).replace(
+            "_(待人工增补 `[human]` 业务规则)_",
+            "- **已支付订单不可删除(人工承诺)** `[human]` — anchor `order.py:88` ✅")
+        # regenerate with a CHANGED skeleton (summary changed)
+        new_domain = dict(self._DOMAIN, summary="订单全新生命周期描述")
+        out = regenerate_spec_preserving_human(existing, new_domain, [], [])
+        # human rule preserved
+        assert "已支付订单不可删除(人工承诺)" in out
+        # AND the skeleton region refreshed to the new summary
+        assert "订单全新生命周期描述" in out
+        # the stub is gone (replaced by the real rule)
+        assert "待人工增补" not in out
+
+    def test_idempotent_no_duplication(self):
+        from scripts.ai_ready_helpers import regenerate_spec_preserving_human, project_domain_skeleton
+        existing = project_domain_skeleton(self._DOMAIN, [], []).replace(
+            "_(待人工增补 `[human]` 业务规则)_",
+            "- **规则X** `[human]` — anchor `a.py:1`")
+        once = regenerate_spec_preserving_human(existing, self._DOMAIN, [], [])
+        twice = regenerate_spec_preserving_human(once, self._DOMAIN, [], [])
+        assert once.count("规则X") == 1
+        assert twice.count("规则X") == 1, "regenerating a preserved file must not duplicate"
+
+    def test_multiple_human_rules_all_survive(self):
+        from scripts.ai_ready_helpers import regenerate_spec_preserving_human, project_domain_skeleton
+        existing = project_domain_skeleton(self._DOMAIN, [], []).replace(
+            "_(待人工增补 `[human]` 业务规则)_",
+            "- **规则A** `[human]` — a\n- **规则B** `[human]` — b\n- **机器规则** `[llm]` — c")
+        out = regenerate_spec_preserving_human(existing, self._DOMAIN, [], [])
+        assert "规则A" in out and "规则B" in out
+        # [llm] rule is NOT preserved (it's skeleton-authoritative, re-derived)
+        assert out.count("机器规则") == 0
+
+
+class TestSpecDetailsIndexRow:
+    """Run 4 feature A: ddd_bindings index line surfaces spec-details/(N specs)."""
+
+    def test_index_row_shows_spec_count(self, tmp_path):
+        from core.ddd_bindings import describe_project_ddd_line
+        proj = tmp_path / "Demo"
+        proj.mkdir()
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (proj / doc).write_text("# x\n", encoding="utf-8")
+        sd = proj / "spec-details"
+        sd.mkdir()
+        (sd / "orders.spec.md").write_text("# 规格\n", encoding="utf-8")
+        (sd / "payment.spec.md").write_text("# 规格\n", encoding="utf-8")
+        line = describe_project_ddd_line(proj)
+        assert "spec-details/(2 specs)" in line
+
+    def test_no_spec_dir_no_row(self, tmp_path):
+        from core.ddd_bindings import describe_project_ddd_line
+        proj = tmp_path / "Demo2"
+        proj.mkdir()
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (proj / doc).write_text("# x\n", encoding="utf-8")
+        line = describe_project_ddd_line(proj)
+        assert "spec-details" not in line
+
+    def test_empty_spec_dir_no_row(self, tmp_path):
+        from core.ddd_bindings import describe_project_ddd_line
+        proj = tmp_path / "Demo3"
+        proj.mkdir()
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (proj / doc).write_text("# x\n", encoding="utf-8")
+        (proj / "spec-details").mkdir()  # dir exists but no .spec.md
+        line = describe_project_ddd_line(proj)
+        assert "spec-details" not in line
+
+
+class TestRun4Gate2Fixes:
+    """Gate-2 CRITICAL: multiline [human] rules + inline comments must survive verbatim."""
+
+    _DOMAIN = {"id": "domain:orders", "name": "Orders", "summary": "s",
+               "entities": [], "complexity": "moderate"}
+
+    def test_multiline_rule_continuation_preserved(self):
+        """CRITICAL: a [human] rule with an indented continuation line must NOT
+        lose its body (the exact data-loss the feature exists to prevent)."""
+        from scripts.ai_ready_helpers import extract_human_spec_blocks
+        txt = ("## 5. rules\n"
+               "- **orders over $10k need CFO sign-off** `[human]` <!-- SOX -->\n"
+               "  - exception: renewals under 12mo\n"
+               "  - approver: CFO or delegate\n"
+               "- **next rule** `[human]` — anchor `a.py:1`\n")
+        blocks = extract_human_spec_blocks(txt)
+        assert len(blocks) == 2
+        # block 1 keeps ALL its lines (bullet + 2 continuations) AND the inline comment
+        assert "exception: renewals under 12mo" in blocks[0]
+        assert "approver: CFO or delegate" in blocks[0]
+        assert "<!-- SOX -->" in blocks[0], "inline comment on human content preserved verbatim"
+
+    def test_multiline_rule_survives_regeneration(self):
+        from scripts.ai_ready_helpers import regenerate_spec_preserving_human, project_domain_skeleton
+        existing = project_domain_skeleton(self._DOMAIN, [], []).replace(
+            "_(待人工增补 `[human]` 业务规则)_",
+            "- **多行承诺** `[human]` — anchor `x.py:1`\n  - 子条款: 必须双人复核\n  - SOX 合规")
+        out = regenerate_spec_preserving_human(existing, dict(self._DOMAIN, summary="新描述"), [], [])
+        assert "多行承诺" in out
+        assert "子条款: 必须双人复核" in out, "continuation line must survive regen"
+        assert "SOX 合规" in out
+        assert "新描述" in out  # skeleton still refreshed
+
+    def test_fenced_code_under_rule_preserved(self):
+        from scripts.ai_ready_helpers import extract_human_spec_blocks
+        txt = ("## 5. rules\n"
+               "- **规则带代码** `[human]`\n"
+               "  ```python\n"
+               "  assert qty > 0\n"
+               "  ```\n"
+               "## 6. next\n")
+        blocks = extract_human_spec_blocks(txt)
+        assert len(blocks) == 1
+        assert "assert qty > 0" in blocks[0] and "```python" in blocks[0]
+
+    def test_legend_mention_still_not_a_block(self):
+        """Regression: the false-positive guard still holds with verbatim capture."""
+        from scripts.ai_ready_helpers import extract_human_spec_blocks
+        txt = ("<!-- 骨架区 §5 [human] 可增补 -->\n"
+               "The `[human]` marker denotes authorship.\n"
+               "- **real** `[human]` — anchor `a.py:1`\n")
+        blocks = extract_human_spec_blocks(txt)
+        assert len(blocks) == 1 and "real" in blocks[0]
