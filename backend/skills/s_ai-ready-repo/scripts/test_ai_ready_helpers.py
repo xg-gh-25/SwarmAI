@@ -326,6 +326,153 @@ class TestGuardsWiredIntoValidator:
         assert validate_code_intel_json(_minimal_v2_doc()) == []
 
 
+class TestMermaidNodeAnchoring:
+    """Gate-1 must-fix (run_3026ef31): diagram.mermaid has NO validator — a
+    hallucinated node label ships silently. check_mermaid_node_anchoring asserts
+    every code-like token in a mermaid body resolves to a real file/module in the
+    doc, fail-closed like the other v3 guards."""
+
+    def _v3_doc_with_mermaid(self, mermaid: str, *, on="flow") -> dict:
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": "route:real", "method": "POST", "path": "/x",
+                          "file_path": "backend/routers/chat.py"}]
+        doc["domains"] = [{"id": "domain:o", "name": "O"}]
+        flow = {"id": "flow:x", "domain_id": "domain:o", "entry_ref": "route:real"}
+        if on == "flow":
+            flow["diagram"] = {"mermaid": mermaid}
+        else:
+            doc["domains"][0]["diagram"] = {"mermaid": mermaid}
+        doc["flows"] = [flow]
+        return doc
+
+    def test_hallucinated_file_node_flagged(self):
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        # ghost_service.py appears in NO module/route/entry/step file → hallucinated
+        doc = self._v3_doc_with_mermaid(
+            "sequenceDiagram\n  Client->>backend/ghost_service.py: call\n")
+        errors = check_mermaid_node_anchoring(doc)
+        assert any("ghost_service.py" in e for e in errors), \
+            "a mermaid node naming a non-existent file must be flagged"
+
+    def test_real_file_node_passes(self):
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        # chat.py is the route file_path → real anchor
+        doc = self._v3_doc_with_mermaid(
+            "sequenceDiagram\n  Client->>backend/routers/chat.py: POST\n")
+        assert check_mermaid_node_anchoring(doc) == [], \
+            "a mermaid node naming a real doc file must pass"
+
+    def test_prose_labels_not_false_flagged(self):
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        # plain human labels (no .py/.ts/path) are NOT code tokens → never flagged
+        doc = self._v3_doc_with_mermaid(
+            "sequenceDiagram\n  User->>Server: sends message\n  Server-->>User: streams reply\n")
+        assert check_mermaid_node_anchoring(doc) == [], \
+            "prose participant labels must not be treated as code anchors"
+
+    def test_domain_diagram_also_checked(self):
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        doc = self._v3_doc_with_mermaid(
+            "graph TD\n  A[backend/nonexistent_mod.py] --> B[core]\n", on="domain")
+        errors = check_mermaid_node_anchoring(doc)
+        assert any("nonexistent_mod.py" in e for e in errors), \
+            "domain-level diagram must be checked too"
+
+    def test_wired_into_main_validator(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = self._v3_doc_with_mermaid(
+            "sequenceDiagram\n  Client->>backend/ghost_service.py: call\n")
+        errors = validate_code_intel_json(doc)
+        assert any("ghost_service.py" in e for e in errors), \
+            "main validator must run the mermaid-anchoring guard"
+
+    def test_no_diagram_no_error(self):
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O"}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        assert check_mermaid_node_anchoring(doc) == []
+
+    def test_repo_root_accepts_real_disk_file_not_in_doc(self, tmp_path):
+        """A mermaid node naming a file that EXISTS on disk but isn't indexed in
+        code-intel.json must PASS when repo_root is given — the anti-hallucination
+        goal is 'maps to real code', and a real-on-disk file is real code (the doc's
+        v2 graph is incomplete, not the diagram's fault). Without repo_root it still
+        flags (doc-only, backward-compatible)."""
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        (tmp_path / "backend").mkdir()
+        real = tmp_path / "backend" / "session_healing.py"
+        real.write_text("# real file, not in code-intel doc\n")
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "diagram": {"mermaid": "graph TD\n  A[backend/session_healing.py] --> B[core]\n"}}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        # doc-only: flagged (not in code-intel)
+        assert any("session_healing.py" in e for e in check_mermaid_node_anchoring(doc))
+        # with repo_root: real disk file accepted
+        assert check_mermaid_node_anchoring(doc, repo_root=tmp_path) == []
+
+    def test_repo_root_still_flags_hallucinated(self, tmp_path):
+        """repo_root must NOT be an escape hatch — a file absent from BOTH the doc
+        AND disk is still a hallucinated node."""
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "diagram": {"mermaid": "graph TD\n  A[backend/ghost.py] --> B\n"}}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        assert any("ghost.py" in e for e in check_mermaid_node_anchoring(doc, repo_root=tmp_path))
+
+    def test_repo_root_rejects_absolute_path_escape(self, tmp_path):
+        """Gate-2 F1 (HIGH): an ABSOLUTE token (/tmp/x.py) must NOT pass just
+        because that file exists on disk — pathlib drops repo_root when the right
+        operand is absolute, escaping the repo. Containment must be enforced."""
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        outside = tmp_path / "outside.py"
+        outside.write_text("# real file, but OUTSIDE any sane repo_root\n")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "diagram": {"mermaid": f"graph TD\n  A[{outside}] --> B\n"}}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        errors = check_mermaid_node_anchoring(doc, repo_root=repo)
+        assert errors, "an absolute path escaping repo_root must be flagged, not accepted"
+
+    def test_repo_root_rejects_traversal_escape(self, tmp_path):
+        """Gate-2 F1 (HIGH): a ../ traversal token that resolves OUTSIDE repo_root
+        must be flagged even though the target file exists."""
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        secret = tmp_path / "secret.py"
+        secret.write_text("# exists but outside repo\n")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "diagram": {"mermaid": "graph TD\n  A[../secret.py] --> B\n"}}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        errors = check_mermaid_node_anchoring(doc, repo_root=repo)
+        assert errors, "a ../ traversal escaping repo_root must be flagged"
+
+    def test_backslash_path_still_checked(self, tmp_path):
+        """Gate-2 F3 (MED): a backslash path 'backend\\ghost.py' must not sneak a
+        hallucinated node through by having the regex only see the basename when
+        that basename is absent everywhere."""
+        from scripts.ai_ready_helpers import check_mermaid_node_anchoring
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "diagram": {"mermaid": "graph TD\n  A[backend\\\\ghost.py] --> B\n"}}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        assert any("ghost.py" in e for e in check_mermaid_node_anchoring(doc, repo_root=tmp_path)), \
+            "backslash-path hallucinated node must still be flagged"
+
+
 # ─── AC4: Git log parsing for WHEN/RISK/BECAUSE ───
 
 class TestGitLogParsing:

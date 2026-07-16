@@ -94,11 +94,14 @@ _OPTIONAL_TOP_LEVEL = {"routes", "hot_zones", "risk_areas", "dead_code",
                        "dependencies", "edges", "generated_at"}
 
 
-def validate_code_intel_json(doc: dict) -> list[str]:
+def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     """Validate a code-intel.json document against v2 schema.
 
     Returns list of error strings. Empty list = valid.
     Does NOT use jsonschema library — pure Python for zero-dep operation.
+
+    ``repo_root`` (optional): threaded to check_mermaid_node_anchoring so a mermaid
+    node naming a real-on-disk-but-unindexed file is accepted (run_3026ef31).
     """
     errors: list[str] = []
 
@@ -183,6 +186,7 @@ def validate_code_intel_json(doc: dict) -> list[str]:
         errors.extend(_validate_v3_domain_layer(doc))
         errors.extend(check_domain_referential_integrity(doc))
         errors.extend(check_llm_assertion_guards(doc))
+        errors.extend(check_mermaid_node_anchoring(doc, repo_root=repo_root))
 
     return errors
 
@@ -343,6 +347,116 @@ def check_llm_assertion_guards(doc: dict) -> list[str]:
                 for a in lst:
                     _check_assertion(a, f"{nid}.{akey}")
 
+    return errors
+
+
+# A "code-like" mermaid token = one that names a source artifact (carries a
+# source-file extension or a path separator). Prose labels (User, Server, "sends
+# message") have neither → never treated as an anchor claim (anti-false-positive).
+_CODE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*(?:\.py|\.ts|\.tsx|\.js|\.rs)\b")
+
+
+def _collect_doc_file_anchors(doc: dict) -> set[str]:
+    """Every real source-file path the doc knows about — the resolvable set a
+    mermaid node may reference. Union of modules[].files, entry_points[].file_path,
+    routes[].file_path, and steps[].file_path. Stored both as full path and
+    basename so a diagram may name either `backend/routers/chat.py` or `chat.py`."""
+    anchors: set[str] = set()
+
+    def _add(p) -> None:
+        if _nonblank(p):
+            anchors.add(p)
+            anchors.add(p.rsplit("/", 1)[-1])  # basename too
+
+    for mod in doc.get("modules", []) or []:
+        if isinstance(mod, dict):
+            for f in mod.get("files", []) or []:
+                _add(f)
+    for ep in doc.get("entry_points", []) or []:
+        if isinstance(ep, dict):
+            _add(ep.get("file_path") or ep.get("path"))
+    for r in doc.get("routes", []) or []:
+        if isinstance(r, dict):
+            _add(r.get("file_path"))
+    for st in doc.get("steps", []) or []:
+        if isinstance(st, dict):
+            _add(st.get("file_path"))
+    return anchors
+
+
+def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
+    """Gate-1 must-fix (run_3026ef31): the diagram.mermaid field has NO other
+    validator, so a hallucinated node label ("backend/ghost_service.py") ships
+    silently. This closes the hole fail-closed like the §1.5 guards.
+
+    For every ``diagram.mermaid`` on any domain/flow, extract every CODE-LIKE
+    token (one carrying a source-file extension — a path/filename), and assert it
+    resolves to real code. A token is accepted iff it is EITHER (a) a file in the
+    doc's own anchor set (_collect_doc_file_anchors) OR (b) — when ``repo_root`` is
+    provided — a file that actually EXISTS on disk under repo_root. A token that
+    resolves to neither is a hallucinated node → error.
+
+    Why (b): the anti-hallucination goal is "the node maps to REAL code", and a
+    file that exists on disk IS real code. The v2 code-intel graph indexes only a
+    SUBSET of the repo (run_3026ef31: session_healing.py / json_exporter.py exist
+    on disk but aren't in the graph) — without the disk check, the gate would
+    false-reject a truthful node just because the graph is incomplete. repo_root is
+    NOT an escape hatch: a token absent from BOTH the doc AND disk still fails, AND
+    the disk check enforces containment (an absolute/`../`-traversal token that
+    resolves OUTSIDE repo_root is rejected, not accepted — Gate-2 F1).
+
+    Prose participant labels (no source-file extension) are ignored, so honest
+    sequenceDiagram actor names never false-positive.
+
+    Pure w.r.t. the doc; the optional disk check is the only IO (repo_root=None →
+    pure, backward-compatible + unit-testable + mutation-verifiable).
+    """
+    errors: list[str] = []
+    anchors = _collect_doc_file_anchors(doc)
+    _root = Path(repo_root) if repo_root is not None else None
+
+    _root_resolved = _root.resolve() if _root is not None else None
+
+    def _resolves(tok: str, base: str) -> bool:
+        if tok in anchors or base in anchors:
+            return True
+        # Disk fallback: the file genuinely exists WITHIN the repo (graph
+        # incomplete). Gate-2 F1 (HIGH): containment is load-bearing — an
+        # absolute token (`/tmp/x.py`) makes `_root / tok` DISCARD _root
+        # (pathlib absolute-rhs rule), and `../` traversal escapes upward, so
+        # is_file() alone would accept ANY real file on the machine, defeating
+        # the anti-hallucination gate. Resolve + assert the candidate stays
+        # under repo_root (same discipline as _safe_file_read).
+        if _root_resolved is not None:
+            try:
+                cand = (_root_resolved / tok).resolve()
+                cand.relative_to(_root_resolved)  # ValueError if outside repo
+                if cand.is_file():
+                    return True
+            except (OSError, ValueError):
+                pass
+        return False
+
+    def _check_diagram(node_kind: str, node_id: str, node: dict) -> None:
+        diagram = node.get("diagram")
+        if not isinstance(diagram, dict):
+            return
+        mermaid = diagram.get("mermaid")
+        if not _nonblank(mermaid):
+            return
+        for tok in _CODE_TOKEN_RE.findall(mermaid):
+            base = tok.rsplit("/", 1)[-1]
+            if not _resolves(tok, base):
+                errors.append(
+                    f"{node_kind} '{node_id}' mermaid references '{tok}' which is not "
+                    f"a real file in code-intel.json or on disk (hallucinated node, Gate-1 anti-hallucination)")
+
+    for d in doc.get("domains", []) or []:
+        if isinstance(d, dict):
+            _check_diagram("domain", d.get("id", "?"), d)
+    for fl in doc.get("flows", []) or []:
+        if isinstance(fl, dict):
+            _check_diagram("flow", fl.get("id", "?"), fl)
     return errors
 
 
@@ -611,7 +725,7 @@ def extract_entry_anchors(doc: dict) -> list[dict]:
     return anchors
 
 
-def finalize_v3(doc: dict, domains: list, flows: list, steps: list) -> dict:
+def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=None) -> dict:
     """Assemble a generated domain layer into a v3 doc — FAIL-CLOSED gate.
 
     Attaches domains/flows/steps, bumps version to '3.0', then runs the existing
@@ -619,6 +733,12 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list) -> dict:
     Raises ValueError with ALL errors if any guard fails — a generation that
     produces a dangling entry_ref or an unanchored 'verified:true' claim (§1.5
     spurious) is REJECTED, never persisted. Pure: deep-copies, never mutates input.
+
+    ``repo_root`` (optional): when given, the mermaid-node-anchoring guard also
+    accepts a node naming a file that EXISTS on disk under repo_root (the v2 graph
+    indexes only a subset of the repo — a truthful node must not be rejected merely
+    because the graph is incomplete; run_3026ef31). NOT an escape hatch: a node
+    absent from both the doc and disk still fails.
 
     The caller (agent workflow) is expected to have run backfill_route_ids first so
     flow.entry_ref values resolve; finalize_v3 is the last line of defense that
@@ -639,7 +759,7 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list) -> dict:
     out["flows"] = list(flows or [])
     out["steps"] = list(steps or [])
     out["version"] = "3.0"
-    errors = validate_code_intel_json(out)
+    errors = validate_code_intel_json(out, repo_root=repo_root)
     if errors:
         raise ValueError(
             "finalize_v3 rejected the generated domain layer (fail-closed §1.5):\n  - "
