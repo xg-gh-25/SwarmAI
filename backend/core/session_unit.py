@@ -4403,14 +4403,24 @@ class SessionUnit:
         await self._crash_to_cold_async(clear_identity=False)
 
     async def refresh_context(self) -> None:
-        """User-triggered context refresh — kill subprocess for resume.
+        """User-triggered context refresh — kill subprocess + drop resume identity.
 
-        Same mechanism as force_unstick but explicitly user-initiated.
-        Preserves _sdk_session_id so the next send() triggers --resume
-        with structured context injection (50-100K tokens of conversation
-        summary). Works from any non-STREAMING state.
+        Explicitly user-initiated (the "Refresh Context" button). Uses
+        ``clear_identity=True`` to DROP ``_sdk_session_id`` — this is the
+        load-bearing choice: with the SDK session id gone, the next ``send()``
+        does NOT take the SDK ``--resume`` path (which would replay the FULL
+        transcript, defeating the button's purpose). Instead it becomes a TRUE
+        cold resume — ``session_router.is_cold_resume`` (which requires
+        ``_sdk_session_id is None``) turns True, so ``needs_context_injection``
+        is set and ``build_resume_context`` injects a STRUCTURED conversation
+        summary (mechanism B, ~50-100K tokens) into the fresh system prompt.
 
-        After this call, state = COLD and next send() will auto-resume.
+        Net effect = the AI restarts on a summary, shedding the bloated
+        transcript — which is exactly what "refresh context" means. Works from
+        any non-STREAMING state.
+
+        After this call, state = COLD and next send() auto-resumes via
+        mechanism-B summary injection.
         """
         logger.info(
             "session_unit.refresh_context session_id=%s state=%s "
@@ -4427,7 +4437,9 @@ class SessionUnit:
         # If already COLD (no subprocess), nothing to kill — just return
         if self.state == SessionState.COLD:
             return
-        await self._crash_to_cold_async(clear_identity=False)
+        # clear_identity=True → drops _sdk_session_id → next send() is a cold
+        # resume → mechanism-B structured-summary injection (see docstring).
+        await self._crash_to_cold_async(clear_identity=True)
 
     def clear_session_identity(self) -> None:
         """Clear ``_sdk_session_id`` so the unit cannot resume.

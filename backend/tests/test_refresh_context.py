@@ -10,6 +10,8 @@ Testing methodology: unit test with mocked SessionRouter/SessionUnit.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -63,10 +65,45 @@ class TestRefreshContextUnitGuard:
 
     @pytest.mark.asyncio
     async def test_idle_calls_crash_to_cold(self):
-        """IDLE → kills subprocess via _crash_to_cold_async(clear_identity=False)."""
+        """IDLE → kills subprocess via _crash_to_cold_async(clear_identity=True).
+
+        clear_identity=True drops _sdk_session_id, so the next send() is a TRUE
+        cold resume (session_router is_cold_resume=True) → mechanism-B structured
+        summary injection fires. This is the whole point of the button: shed the
+        bloated transcript and restart on a summary, NOT --resume the full log.
+        """
         unit = self._make_unit(SessionState.IDLE)
         await unit.refresh_context()
-        unit._crash_to_cold_async.assert_called_once_with(clear_identity=False)
+        unit._crash_to_cold_async.assert_called_once_with(clear_identity=True)
+
+    @pytest.mark.asyncio
+    async def test_idle_clears_sdk_session_id(self):
+        """IDLE refresh must NULL _sdk_session_id (the is_cold_resume precondition).
+
+        Drives the REAL _crash_to_cold_async (NOT mocked — only _force_kill +
+        _transition are stubbed) so this test has TEETH: revert refresh_context to
+        clear_identity=False and _cleanup_internal preserves _sdk_session_id →
+        this assertion goes RED. Mechanism-B injection is gated on
+        _sdk_session_id is None (session_router.py is_cold_resume), so this is the
+        load-bearing effect, not just the call arg.
+        """
+        unit = object.__new__(SessionUnit)
+        unit.state = SessionState.IDLE
+        unit.session_id = "test-session-123"
+        unit._sdk_session_id = "sdk-abc"
+        # Real _crash_to_cold_async + real _full_cleanup run; stub only the
+        # OS-touching internals and the transient-field reset (_cleanup_internal
+        # touches ~24 subprocess attrs a bare unit lacks). Teeth are preserved:
+        # _full_cleanup = _cleanup_internal() + `_sdk_session_id = None`, and the
+        # fix's discriminator is WHICH cleanup runs — clear_identity=True →
+        # _full_cleanup (nulls id); revert to False → _cleanup_internal (no-op
+        # here) leaves the id set → this assertion goes RED.
+        unit._lock = asyncio.Lock()
+        unit._force_kill = AsyncMock()
+        unit._transition = MagicMock()
+        unit._cleanup_internal = MagicMock()
+        await unit.refresh_context()
+        assert unit._sdk_session_id is None
 
 
 # ---------------------------------------------------------------------------

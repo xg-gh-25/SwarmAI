@@ -2315,11 +2315,14 @@ class SessionRouter:
         return await unit.compact(instructions)
 
     async def refresh_session(self, session_id: str) -> dict:
-        """Refresh a session's context by killing subprocess for resume.
+        """Refresh a session's context by killing subprocess + dropping resume id.
 
-        User-triggered "same-tab restart": kills the subprocess but preserves
-        _sdk_session_id so the next send() auto-resumes with structured context
-        injection. Only works when session is IDLE (not streaming).
+        User-triggered "same-tab restart": kills the subprocess and DROPS
+        _sdk_session_id (via refresh_context → clear_identity=True), so the next
+        send() is a cold resume that injects a STRUCTURED conversation summary
+        (mechanism B) instead of replaying the full transcript via --resume. This
+        is what sheds a bloated conversation. Only works when session is IDLE
+        (not streaming).
 
         Returns dict with success status and message.
         """
