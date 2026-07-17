@@ -351,6 +351,42 @@ class TestVerifyBedrockTimeout:
         assert cfg.read_timeout is not None and cfg.read_timeout <= 30
 
 
+# ── AC3/AC5: persist API key (secret) + auth_method endpoints ──
+
+class TestAuthPersistEndpoints:
+    def test_set_api_key_persists_and_not_echoed(self, client):
+        """POST /system/anthropic-api-key stores the key via the secret store
+        and the response must NOT echo the key back."""
+        called = {}
+        def fake_set_secret(self, k, v):
+            called[k] = v
+        with patch("core.app_config_manager.AppConfigManager.set_secret", new=fake_set_secret):
+            resp = client.post("/api/system/anthropic-api-key", json={"api_key": "sk-ant-endpoint"})
+        assert resp.status_code == 200
+        assert called.get("anthropic_api_key") == "sk-ant-endpoint"
+        # never echo the secret
+        assert "sk-ant-endpoint" not in resp.text
+
+    def test_set_api_key_rejects_empty(self, client):
+        resp = client.post("/api/system/anthropic-api-key", json={"api_key": ""})
+        assert resp.status_code in (400, 422)
+
+    def test_set_auth_method_persists(self, client):
+        """POST /system/auth-method persists the chosen method (non-secret)."""
+        updates = {}
+        def fake_update(self, d):
+            updates.update(d)
+        with patch("core.app_config_manager.AppConfigManager.update", new=fake_update):
+            resp = client.post("/api/system/auth-method", json={"method": "sso", "deployment_context": "external"})
+        assert resp.status_code == 200
+        assert updates.get("auth_method") == "sso"
+        assert updates.get("deployment_context") == "external"
+
+    def test_set_auth_method_rejects_bad_value(self, client):
+        resp = client.post("/api/system/auth-method", json={"method": "hacker"})
+        assert resp.status_code in (400, 422)
+
+
 # ── AC2: auth-hint detects ADA dir, SSO cache, API key ──
 
 class TestAuthHint:

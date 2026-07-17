@@ -28,13 +28,20 @@ async def _collect(unit, options=None, config=None):
     return events
 
 
+def _cfg(use_bedrock=True, auth_method="ada"):
+    """A fake AppConfigManager.instance() with the given auth mode/method."""
+    values = {"aws_region": "us-east-1", "use_bedrock": use_bedrock, "auth_method": auth_method}
+    return type("Cfg", (), {"get": lambda self, k, d=None: values.get(k, d)})()
+
+
 @pytest.mark.asyncio
-async def test_preflight_expired_emits_credentials_expired_and_aborts():
-    """check→expired → CREDENTIALS_EXPIRED SSE event + _abort, NO _spawn."""
+async def test_preflight_expired_ada_mentions_ada_remediation():
+    """Bedrock+ada, check→expired → CREDENTIALS_EXPIRED + _abort, ada-specific fix."""
     unit = _cold_unit()
     fake_validator = type("V", (), {"check": AsyncMock(return_value="expired")})()
 
     with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(True, "ada")), \
          patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
         events = await _collect(unit, options=object(), config=None)
 
@@ -42,9 +49,45 @@ async def test_preflight_expired_emits_credentials_expired_and_aborts():
     assert "CREDENTIALS_EXPIRED" in codes, f"got {events}"
     assert any(e.get("_abort") for e in events), "must abort"
     mock_spawn.assert_not_called(), "must NOT spawn when expired"
-    # the error event must carry an actionable mwinit hint
     cred_ev = next(e for e in events if e.get("code") == "CREDENTIALS_EXPIRED")
-    assert "mwinit" in (cred_ev.get("suggested_action") or "").lower()
+    action = (cred_ev.get("suggested_action") or "").lower()
+    assert "ada" in action or "mwinit" in action
+
+
+@pytest.mark.asyncio
+async def test_preflight_expired_sso_does_NOT_say_mwinit():
+    """Bedrock+sso, check→expired → remediation says `aws sso login`, NOT mwinit."""
+    unit = _cold_unit()
+    fake_validator = type("V", (), {"check": AsyncMock(return_value="expired")})()
+
+    with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(True, "sso")), \
+         patch.object(unit, "_spawn", new=AsyncMock()):
+        events = await _collect(unit, options=object(), config=None)
+
+    cred_ev = next(e for e in events if e.get("code") == "CREDENTIALS_EXPIRED")
+    action = (cred_ev.get("suggested_action") or "").lower()
+    assert "aws sso login" in action
+    assert "mwinit" not in action
+
+
+@pytest.mark.asyncio
+async def test_preflight_apikey_mode_skips_STS_and_spawns():
+    """use_bedrock=false (Anthropic-direct) → NO STS check, NO expired event,
+    proceeds to spawn. An API-key user must not get 'AWS credentials expired'."""
+    unit = _cold_unit()
+    # Even if the validator WOULD say expired, apikey mode must never call it.
+    check_mock = AsyncMock(return_value="expired")
+    fake_validator = type("V", (), {"check": check_mock})()
+
+    with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(False, "apikey")), \
+         patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
+        events = await _collect(unit, options=object(), config=None)
+
+    assert not any(e.get("code") == "CREDENTIALS_EXPIRED" for e in events)
+    check_mock.assert_not_called(), "apikey mode must NOT run the AWS STS check"
+    mock_spawn.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -54,6 +97,7 @@ async def test_preflight_unknown_proceeds_to_spawn():
     fake_validator = type("V", (), {"check": AsyncMock(return_value="unknown")})()
 
     with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(True, "sso")), \
          patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
         events = await _collect(unit, options=object(), config=None)
 
@@ -68,6 +112,7 @@ async def test_preflight_valid_proceeds_to_spawn():
     fake_validator = type("V", (), {"check": AsyncMock(return_value="valid")})()
 
     with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(True, "sso")), \
          patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
         events = await _collect(unit, options=object(), config=None)
 

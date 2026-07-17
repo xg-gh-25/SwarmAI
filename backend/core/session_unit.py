@@ -2283,25 +2283,38 @@ class SessionUnit:
         try:
             from . import session_registry
             from .app_config_manager import AppConfigManager
+            from .auth_remediation import remediation_for
 
-            _region = AppConfigManager.instance().get("aws_region", "us-east-1")
-            _auth = await session_registry.get_credential_validator().check(_region)
-            if _auth == "expired":
-                logger.warning(
-                    "session_unit.preflight session_id=%s creds expired — "
-                    "aborting spawn (avoids invoke stall)",
+            _cfg = AppConfigManager.instance()
+            _use_bedrock = _cfg.get("use_bedrock", True)
+            # Anthropic-direct (API-key) mode uses NO AWS credentials — the STS
+            # check is meaningless and would falsely report "expired" for a user
+            # who correctly configured an API key. Skip it entirely (AC4).
+            if not _use_bedrock:
+                logger.debug(
+                    "session_unit.preflight session_id=%s use_bedrock=false — "
+                    "skipping AWS STS check (API-key mode)",
                     self.session_id,
                 )
-                yield _build_error_event(
-                    code="CREDENTIALS_EXPIRED",
-                    message="AWS credentials have expired.",
-                    suggested_action=(
-                        "Run `mwinit -f` in a terminal to refresh your "
-                        "credentials, then send your message again."
-                    ),
-                )
-                yield {"_abort": True}
-                return
+            else:
+                _region = _cfg.get("aws_region", "us-east-1")
+                _auth = await session_registry.get_credential_validator().check(_region)
+                if _auth == "expired":
+                    # Remediation must match the actual method — use_bedrock can't
+                    # tell ada from sso, so read the persisted auth_method (AC5).
+                    _rem = remediation_for(_cfg.get("auth_method"))
+                    logger.warning(
+                        "session_unit.preflight session_id=%s creds expired "
+                        "(method=%s) — aborting spawn (avoids invoke stall)",
+                        self.session_id, _cfg.get("auth_method"),
+                    )
+                    yield _build_error_event(
+                        code="CREDENTIALS_EXPIRED",
+                        message=_rem["message"],
+                        suggested_action=_rem["fix_text"],
+                    )
+                    yield {"_abort": True}
+                    return
         except Exception as exc:  # noqa: BLE001 — pre-flight must never block spawn on its own bug
             # A bug in the pre-flight itself must not become a self-inflicted
             # outage. Log and fall through to the normal spawn path.

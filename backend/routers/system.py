@@ -315,7 +315,7 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "anthropic_api_key": None,
         }
     if override:
-        for k in ("use_bedrock", "aws_region", "default_model", "anthropic_base_url"):
+        for k in ("use_bedrock", "aws_region", "default_model", "anthropic_base_url", "anthropic_api_key"):
             if k in override and override[k] is not None:
                 base[k] = override[k]
     return base
@@ -363,6 +363,55 @@ async def verify_auth(request: Request):
         return _verify_bedrock(config)
     else:
         return await _verify_anthropic_api(config)
+
+
+class SetApiKeyRequest(BaseModel):
+    api_key: str
+
+
+class SetAuthMethodRequest(BaseModel):
+    method: str  # "ada" | "sso" | "apikey" | "iam_role"
+    deployment_context: Optional[str] = None  # "internal" | "external"
+
+
+_VALID_AUTH_METHODS = {"ada", "sso", "apikey", "iam_role"}
+
+
+@router.post("/anthropic-api-key")
+async def set_anthropic_api_key(req: SetApiKeyRequest):
+    """Persist the user's Anthropic API key to the durable 0o600 secret store.
+
+    This is the ONLY sanctioned write path for the key (never via PUT /settings,
+    which strips secrets). The key is NEVER echoed back in any response. After
+    this, _configure_claude_environment injects it into the SDK env at the next
+    spawn (no daemon relaunch) and verify-auth can validate it.
+    """
+    key = (req.api_key or "").strip()
+    if not key:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="api_key must be non-empty")
+    AppConfigManager.instance().set_secret("anthropic_api_key", key)
+    return {"status": "ok", "configured": True}
+
+
+@router.post("/auth-method")
+async def set_auth_method(req: SetAuthMethodRequest):
+    """Persist the chosen auth method (+ optional deployment_context).
+
+    Non-secret. Lets error remediation (CredentialBanner / spawn pre-flight) be
+    method-aware — use_bedrock alone can't distinguish ada from sso.
+    """
+    if req.method not in _VALID_AUTH_METHODS:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail=f"method must be one of {sorted(_VALID_AUTH_METHODS)}",
+        )
+    updates: dict = {"auth_method": req.method}
+    if req.deployment_context in ("internal", "external"):
+        updates["deployment_context"] = req.deployment_context
+    AppConfigManager.instance().update(updates)
+    return {"status": "ok", "auth_method": req.method}
 
 
 def _verify_bedrock(config: dict) -> dict:

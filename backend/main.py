@@ -1294,7 +1294,15 @@ async def health_check():
         # so a slow or flaky STS call can never degrade /health.
         from core import session_registry
         from core.app_config_manager import AppConfigManager
-        region = AppConfigManager.instance().get("aws_region", "us-east-1")
+        _cfg = AppConfigManager.instance()
+        # API-key (Anthropic-direct) mode uses NO AWS credentials — running STS
+        # would falsely report "expired" and fire the AWS CredentialBanner for a
+        # user who never uses AWS. Report "valid" (auth is not an AWS concern
+        # here) so the banner stays hidden (AC4). CredentialBanner only shows on
+        # "expired", so "valid" is the correct non-AWS signal.
+        if not _cfg.get("use_bedrock", True):
+            return "valid"
+        region = _cfg.get("aws_region", "us-east-1")
         return await asyncio.wait_for(
             session_registry.get_credential_validator().check(region),
             timeout=1.0,
