@@ -91,6 +91,26 @@ async def test_preflight_apikey_mode_skips_STS_and_spawns():
 
 
 @pytest.mark.asyncio
+async def test_preflight_bedrock_api_key_skips_STS_and_spawns():
+    """use_bedrock=True BUT auth_method=bedrock_api_key → bearer token has no
+    STS identity, so the STS check must be SKIPPED (AC5). An STS call would
+    falsely report 'expired' and block the spawn."""
+    unit = _cold_unit()
+    check_mock = AsyncMock(return_value="expired")  # would block if called
+    fake_validator = type("V", (), {"check": check_mock})()
+
+    with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+         patch("core.app_config_manager.AppConfigManager.instance",
+               return_value=_cfg(True, "bedrock_api_key")), \
+         patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
+        events = await _collect(unit, options=object(), config=None)
+
+    assert not any(e.get("code") == "CREDENTIALS_EXPIRED" for e in events)
+    check_mock.assert_not_called(), "bedrock_api_key mode must NOT run the AWS STS check"
+    mock_spawn.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_preflight_unknown_proceeds_to_spawn():
     """check→unknown → fail-open: _spawn IS called (behavior == today)."""
     unit = _cold_unit()

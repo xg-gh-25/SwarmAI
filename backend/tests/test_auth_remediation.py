@@ -31,6 +31,15 @@ class TestRemediation:
         assert "iam" in r["fix_text"].lower()
         assert "mwinit" not in r["fix_text"].lower()
 
+    def test_bedrock_api_key_points_to_settings_not_mwinit(self):
+        r = remediation_for("bedrock_api_key")
+        assert r["settings_tab"] == "ai-models"
+        assert "mwinit" not in r["fix_text"].lower()
+        # points the user at the in-app Bedrock key entry
+        assert "key" in r["fix_text"].lower()
+        # must NOT be the generic fallback — it names Bedrock specifically
+        assert "bedrock" in r["message"].lower() or "bedrock" in r["fix_text"].lower()
+
     def test_unknown_method_safe_generic_fallback(self):
         r = remediation_for(None)
         # must not crash, must not hardcode mwinit
@@ -38,6 +47,6 @@ class TestRemediation:
         assert "mwinit" not in r["fix_text"].lower()
 
     def test_all_methods_have_message_and_tab(self):
-        for m in ("ada", "sso", "apikey", "iam_role", None, "garbage"):
+        for m in ("ada", "sso", "apikey", "iam_role", "bedrock_api_key", None, "garbage"):
             r = remediation_for(m)
             assert r["message"] and r["fix_text"] and "settings_tab" in r

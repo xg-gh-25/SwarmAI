@@ -148,6 +148,56 @@ class TestNoCredentialEnvVars:
 
 
 # ---------------------------------------------------------------------------
+# Bedrock API-key (bearer token) injection — AC3
+# ---------------------------------------------------------------------------
+class TestBedrockBearerInjection:
+    def test_bearer_injected_when_method_is_bedrock_api_key(self):
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        cfg = _make_config({
+            "use_bedrock": True,
+            "auth_method": "bedrock_api_key",
+            "aws_bearer_token_bedrock": "bedrock-bearer-abc",
+        })
+        _configure_claude_environment(cfg)
+        assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "bedrock-bearer-abc"
+        # It IS a Bedrock method — the toggle stays on.
+        assert os.environ["CLAUDE_CODE_USE_BEDROCK"] == "true"
+        # And ANTHROPIC_API_KEY must NOT be set in this branch.
+        assert "ANTHROPIC_API_KEY" not in os.environ
+
+    def test_bearer_not_injected_for_other_bedrock_methods(self):
+        """ada/sso/iam_role are Bedrock too but must NOT carry the bearer token."""
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        cfg = _make_config({
+            "use_bedrock": True,
+            "auth_method": "ada",
+            "aws_bearer_token_bedrock": "bedrock-bearer-abc",
+        })
+        _configure_claude_environment(cfg)
+        assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+
+    def test_stale_bearer_we_injected_is_cleared_on_switch_away(self):
+        """Switching bedrock_api_key → ada must pop the token WE injected."""
+        cfg = _make_config({
+            "use_bedrock": True, "auth_method": "ada",
+            "aws_bearer_token_bedrock": "our-token",
+        })
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "our-token"  # simulate prior inject
+        _configure_claude_environment(cfg)
+        assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+
+    def test_legit_ambient_bearer_not_clobbered(self):
+        """A user's own ambient AWS_BEARER_TOKEN_BEDROCK (≠ persisted) survives."""
+        cfg = _make_config({
+            "use_bedrock": True, "auth_method": "ada",
+            "aws_bearer_token_bedrock": "our-token",
+        })
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "user-own-export"  # NOT ours
+        _configure_claude_environment(cfg)
+        assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "user-own-export"
+
+
+# ---------------------------------------------------------------------------
 # Auth validation (Req 13.6)
 # ---------------------------------------------------------------------------
 class TestAuthValidation:

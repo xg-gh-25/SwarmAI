@@ -518,6 +518,15 @@ export const systemService = {
   },
 
   /**
+   * Persist the user's Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK). Stored
+   * in the daemon's durable secret store — never echoed back, no relaunch
+   * needed. Injected as AWS_BEARER_TOKEN_BEDROCK at the next spawn.
+   */
+  async persistBearerToken(bearerToken: string): Promise<void> {
+    await api.post('/system/bedrock-api-key', { bearer_token: bearerToken });
+  },
+
+  /**
    * Persist the chosen auth method (+ deployment context) so credential-error
    * remediation is method-aware.
    */

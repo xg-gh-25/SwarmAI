@@ -9,7 +9,7 @@ import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../servi
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
 
-type AuthMethod = 'sso' | 'ada' | 'apikey';
+type AuthMethod = 'sso' | 'ada' | 'apikey' | 'bedrock_api_key';
 
 interface AuthConfigPanelProps {
   mode: 'onboarding' | 'settings';
@@ -33,6 +33,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   const [adaAccount, setAdaAccount] = useState('');
   const [adaRole, setAdaRole] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [bearerToken, setBearerToken] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [verifyResult, setVerifyResult] = useState<VerifyAuthResponse | null>(null);
   const [authHint, setAuthHint] = useState<AuthHintResponse | null>(null);
@@ -54,6 +55,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         // Map backend suggestion to UI method (iam_role → sso for Hive)
         const methodMap: Record<string, AuthMethod> = {
           'ada': 'ada', 'sso': 'sso', 'apikey': 'apikey', 'iam_role': 'sso',
+          'bedrock_api_key': 'bedrock_api_key',
         };
         setMethod(methodMap[hint.suggestedMethod] || 'sso');
         // Pre-fill from probed credentials — IAM details take priority (Hive),
@@ -103,6 +105,13 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       if (method === 'apikey' && apiKey.trim()) {
         configUpdate.anthropic_api_key = apiKey.trim();
       }
+      // For Bedrock API Key, pass the bearer token + auth_method so the backend
+      // temp-injects AWS_BEARER_TOKEN_BEDROCK to verify a not-yet-persisted token.
+      // It is a Bedrock method (use_bedrock stays true).
+      if (method === 'bedrock_api_key' && bearerToken.trim()) {
+        configUpdate.auth_method = 'bedrock_api_key';
+        configUpdate.aws_bearer_token_bedrock = bearerToken.trim();
+      }
 
       const result = await systemService.verifyAuth(configUpdate);
       setVerifyResult(result);
@@ -114,6 +123,10 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         if (method === 'apikey' && apiKey.trim()) {
           await systemService.persistApiKey(apiKey.trim());
           setApiKey('');  // don't keep the secret in component memory after persist
+        }
+        if (method === 'bedrock_api_key' && bearerToken.trim()) {
+          await systemService.persistBearerToken(bearerToken.trim());
+          setBearerToken('');  // don't keep the secret in component memory after persist
         }
         await settingsService.updateAPIConfiguration(configUpdate);
         // Persist the chosen method + context so error remediation is method-aware.
@@ -135,18 +148,23 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   };
 
   // Method cards are filtered by deployment context:
-  //   internal → [ADA, SSO]        (Amazon employees: ADA or corporate SSO)
-  //   external → [SSO, Anthropic]  (others: personal-AWS SSO, or Anthropic key)
+  //   internal → [ADA, SSO, Bedrock Key]       (Amazon employees: ADA or corporate SSO)
+  //   external → [SSO, Anthropic, Bedrock Key]  (others: personal-AWS SSO, or Anthropic key)
   // SSO is shared by both (same `aws sso login` → Bedrock, identity-agnostic).
+  // Bedrock API Key is shown in BOTH — a bearer token is account-agnostic and is
+  // the fastest path to Bedrock for internal AND external users alike.
+  const bedrockKeyCard = { id: 'bedrock_api_key' as AuthMethod, label: 'Bedrock API Key', desc: 'Bearer Token' };
   const methods: { id: AuthMethod; label: string; desc: string }[] =
     context === 'internal'
       ? [
           { id: 'ada', label: 'Ada', desc: 'Amazon Internal' },
           { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+          bedrockKeyCard,
         ]
       : [
           { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
           { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
+          bedrockKeyCard,
         ];
 
   // If the current method isn't valid for this context, snap to the first card.
@@ -302,8 +320,10 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         ))}
       </div>
 
-      {/* Config fields based on method */}
-      {method !== 'apikey' && (
+      {/* Config fields for AWS-identity methods (ada/sso). bedrock_api_key is a
+          Bedrock method but uses a bearer token (no ADA/SSO account or setup
+          hint) — its region lives in its own card block below. */}
+      {method !== 'apikey' && method !== 'bedrock_api_key' && (
         <div className="space-y-3">
           {/* AWS Account ID.
               - ADA: editable — the value builds the `ada credentials update` command below.
@@ -458,6 +478,44 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
           </div>
           <p className="text-[10px] text-[var(--color-text-muted)] opacity-60">
             Stored securely on this device (not synced, not in config backups). Get a key at console.anthropic.com.
+          </p>
+        </div>
+      )}
+
+      {method === 'bedrock_api_key' && (
+        <div className="space-y-2">
+          <Dropdown
+            label="AWS Region"
+            options={AWS_REGION_OPTIONS}
+            selectedId={region}
+            onChange={setRegion}
+            placeholder="Select region..."
+          />
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Bedrock API Key (bearer token)</label>
+            <input
+              type="password"
+              value={bearerToken}
+              onChange={(e) => { setBearerToken(e.target.value); setVerifyState('idle'); setVerifyResult(null); }}
+              placeholder="ABSKQmVkcm9jk..."
+              autoComplete="off"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+            />
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] opacity-70">
+            Use a <strong>short-term key</strong> (max 12h — it inherits the permissions of the IAM
+            principal that generated it). Generate one with{' '}
+            <code className="text-[var(--color-primary)]">aws bedrock create-api-key</code> or the Bedrock console.
+          </p>
+          <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <p className="text-[10px] text-amber-500/90 leading-relaxed">
+              ⚠️ Avoid <strong>long-term keys</strong> in production: generating one in the console
+              auto-creates an IAM User, and a leaked token carries a high blast radius. Prefer
+              short-term keys and rotate them.
+            </p>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+            Stored securely on this device (not synced, not in config backups).
           </p>
         </div>
       )}

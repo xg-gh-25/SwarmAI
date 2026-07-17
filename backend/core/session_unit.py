@@ -2287,14 +2287,18 @@ class SessionUnit:
 
             _cfg = AppConfigManager.instance()
             _use_bedrock = _cfg.get("use_bedrock", True)
-            # Anthropic-direct (API-key) mode uses NO AWS credentials — the STS
-            # check is meaningless and would falsely report "expired" for a user
-            # who correctly configured an API key. Skip it entirely (AC4).
-            if not _use_bedrock:
+            _auth_method = _cfg.get("auth_method")
+            # Skip the AWS STS check when the active auth uses NO sigv4 identity:
+            #   - Anthropic-direct (API-key) mode: use_bedrock=False, no AWS at all
+            #   - Bedrock API-key mode: use_bedrock=True BUT auth is a bearer token
+            #     (AWS_BEARER_TOKEN_BEDROCK), which has no STS-resolvable identity —
+            #     an STS call would falsely report "expired" and block the spawn.
+            # In both cases STS is meaningless; skip it entirely (AC4/AC5).
+            if not _use_bedrock or _auth_method == "bedrock_api_key":
                 logger.debug(
-                    "session_unit.preflight session_id=%s use_bedrock=false — "
-                    "skipping AWS STS check (API-key mode)",
-                    self.session_id,
+                    "session_unit.preflight session_id=%s use_bedrock=%s "
+                    "auth_method=%s — skipping AWS STS check (no sigv4 identity)",
+                    self.session_id, _use_bedrock, _auth_method,
                 )
             else:
                 _region = _cfg.get("aws_region", "us-east-1")

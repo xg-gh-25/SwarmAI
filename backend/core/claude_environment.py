@@ -183,11 +183,15 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
     - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
       memory pipeline (DailyActivity → distillation → MEMORY.md)
+    - ``ANTHROPIC_API_KEY`` — injected in Anthropic-direct (apikey) mode from
+      the persisted secret; cleared in Bedrock mode if WE injected it
+    - ``AWS_BEARER_TOKEN_BEDROCK`` — injected in Bedrock API-key
+      (``auth_method=="bedrock_api_key"``) mode from the persisted secret;
+      cleared for other Bedrock methods if WE injected it
 
     **Env vars NOT set** (delegated to AWS credential chain):
 
     - ``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY``, ``AWS_SESSION_TOKEN``
-    - ``AWS_BEARER_TOKEN_BEDROCK``
 
     Raises:
         AuthenticationNotConfiguredError: If no ``ANTHROPIC_API_KEY`` env var
@@ -210,6 +214,21 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
         _persisted = config.get("anthropic_api_key")
         if _persisted and os.environ.get("ANTHROPIC_API_KEY") == _persisted:
             os.environ.pop("ANTHROPIC_API_KEY", None)
+
+        # Bedrock API-key (bearer-token) mode — inject the persisted
+        # AWS_BEARER_TOKEN_BEDROCK so the CLI subprocess authenticates to
+        # bedrock-runtime with the bearer token instead of the sigv4 credential
+        # chain (verified: the CLI reads this env var; botocore does too). Only
+        # active when auth_method=="bedrock_api_key"; all other Bedrock methods
+        # (ada/sso/iam_role) must NOT carry it, so we clear a token WE injected.
+        # Guard the clear with "== persisted" (mirror the ANTHROPIC_API_KEY logic
+        # above) so a user's legitimate ambient AWS_BEARER_TOKEN_BEDROCK export is
+        # never clobbered when they switch to ada/sso/iam_role.
+        _bearer = config.get("aws_bearer_token_bedrock")
+        if config.get("auth_method") == "bedrock_api_key" and _bearer:
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = _bearer
+        elif _bearer and os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _bearer:
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
     else:
         os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
 

@@ -17,6 +17,7 @@ const mockUpdateAPIConfiguration = vi.fn();
 
 const mockPersistApiKey = vi.fn();
 const mockSetAuthMethod = vi.fn();
+const mockPersistBearerToken = vi.fn();
 
 vi.mock('../../../services/system', () => ({
   systemService: {
@@ -24,6 +25,7 @@ vi.mock('../../../services/system', () => ({
     getAuthHint: (...a: unknown[]) => mockGetAuthHint(...a),
     persistApiKey: (...a: unknown[]) => mockPersistApiKey(...a),
     setAuthMethod: (...a: unknown[]) => mockSetAuthMethod(...a),
+    persistBearerToken: (...a: unknown[]) => mockPersistBearerToken(...a),
   },
 }));
 vi.mock('../../../services/settings', () => ({
@@ -43,6 +45,7 @@ beforeEach(() => {
   mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latencyMs: 100 });
   mockPersistApiKey.mockResolvedValue(undefined);
   mockSetAuthMethod.mockResolvedValue(undefined);
+  mockPersistBearerToken.mockResolvedValue(undefined);
 });
 
 describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
@@ -92,6 +95,57 @@ describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
     await act(async () => { fireEvent.click(screen.getByText('API Key').closest('button')!); });
     const keyInput = screen.getByPlaceholderText(/sk-ant-/i);
     expect(keyInput).toBeInTheDocument();
+  });
+
+  // ── AC6: Bedrock API Key card in BOTH contexts + short-term guidance ──
+  it('shows Bedrock API Key card in EXTERNAL context', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    expect(screen.getByText('Bedrock API Key')).toBeInTheDocument();
+  });
+
+  it('shows Bedrock API Key card in INTERNAL context too (account-agnostic)', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    expect(screen.getByText('Bedrock API Key')).toBeInTheDocument();
+  });
+
+  it('Bedrock API Key card shows a bearer-token input + short-term-key guidance + long-term warning', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'bedrock_api_key', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Bedrock API Key').closest('button')!); });
+    // password input for the token
+    expect(screen.getByPlaceholderText(/ABSK/i)).toBeInTheDocument();
+    // default-guides to short-term keys (guidance mentions "max 12h"), warns on long-term
+    expect(screen.getByText(/max 12h/i)).toBeInTheDocument();
+    expect(screen.getByText(/long-term keys/i)).toBeInTheDocument();
+  });
+
+  it('successful Bedrock API Key verify persists the token via persistBearerToken + sets method', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'bedrock_api_key', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="settings" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Bedrock API Key').closest('button')!); });
+    const tokenInput = screen.getByPlaceholderText(/ABSK/i);
+    await act(async () => { fireEvent.change(tokenInput, { target: { value: 'bearer-tok-xyz' } }); });
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await waitFor(() => expect(mockPersistBearerToken).toHaveBeenCalledWith('bearer-tok-xyz'));
+    // verify sent the token + auth_method + stayed use_bedrock=true
+    expect(mockVerifyAuth).toHaveBeenCalledWith(expect.objectContaining({
+      use_bedrock: true, auth_method: 'bedrock_api_key', aws_bearer_token_bedrock: 'bearer-tok-xyz',
+    }));
+    expect(mockSetAuthMethod).toHaveBeenCalledWith('bedrock_api_key', 'external');
   });
 });
 

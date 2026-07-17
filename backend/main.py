@@ -1295,12 +1295,14 @@ async def health_check():
         from core import session_registry
         from core.app_config_manager import AppConfigManager
         _cfg = AppConfigManager.instance()
-        # API-key (Anthropic-direct) mode uses NO AWS credentials — running STS
-        # would falsely report "expired" and fire the AWS CredentialBanner for a
-        # user who never uses AWS. Report "valid" (auth is not an AWS concern
-        # here) so the banner stays hidden (AC4). CredentialBanner only shows on
-        # "expired", so "valid" is the correct non-AWS signal.
-        if not _cfg.get("use_bedrock", True):
+        # Skip STS when the active auth uses NO sigv4 identity — running STS would
+        # falsely report "expired" and fire the AWS CredentialBanner:
+        #   - API-key (Anthropic-direct) mode: use_bedrock=False, no AWS at all
+        #   - Bedrock API-key mode: use_bedrock=True but auth is a bearer token
+        #     (AWS_BEARER_TOKEN_BEDROCK) with no STS-resolvable identity.
+        # Report "valid" (auth is not an AWS-sigv4 concern here) so the banner
+        # stays hidden (AC4/AC5). CredentialBanner only shows on "expired".
+        if not _cfg.get("use_bedrock", True) or _cfg.get("auth_method") == "bedrock_api_key":
             return "valid"
         region = _cfg.get("aws_region", "us-east-1")
         return await asyncio.wait_for(

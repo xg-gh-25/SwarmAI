@@ -311,3 +311,26 @@ class TestSecretStore:
         mgr2 = AppConfigManager(config_path=tmp_config)
         mgr2.load()
         assert mgr2.get("anthropic_api_key") == "sk-ant-good"
+
+    def test_bedrock_bearer_token_is_a_secret_key(self):
+        """aws_bearer_token_bedrock (AWS_BEARER_TOKEN_BEDROCK) must be a SECRET_KEY."""
+        assert "aws_bearer_token_bedrock" in SECRET_KEYS
+
+    def test_bedrock_bearer_persists_and_never_in_config_json(self, tmp_config: Path):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("aws_bearer_token_bedrock", "bedrock-bearer-xyz")
+        assert mgr.get("aws_bearer_token_bedrock") == "bedrock-bearer-xyz"
+        # Force a config.json write; the bearer must NOT leak into it.
+        mgr.update({"aws_region": "us-west-2"})
+        raw = tmp_config.read_text(encoding="utf-8")
+        assert "aws_bearer_token_bedrock" not in json.loads(raw)
+        assert "bedrock-bearer-xyz" not in raw
+
+    def test_bedrock_bearer_survives_restart(self, tmp_config: Path):
+        mgr1 = AppConfigManager(config_path=tmp_config)
+        mgr1.load()
+        mgr1.set_secret("aws_bearer_token_bedrock", "bedrock-durable")
+        mgr2 = AppConfigManager(config_path=tmp_config)
+        mgr2.load()
+        assert mgr2.get("aws_bearer_token_bedrock") == "bedrock-durable"

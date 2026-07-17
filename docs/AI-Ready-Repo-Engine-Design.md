@@ -984,7 +984,7 @@ Our dead-code detector (`dead_code.py`) intentionally **over-reports** (宁错�
 | M2: IDE install | `install.sh` auto-detect Claude Code/Kiro, merge hooks | ✅ DONE |
 | M3: Verified output | Sub-agent VERIFY (fresh agent + 3 git-log tasks) | ✅ DONE |
 | M4: Self-maintaining | staleness detection + refresh trigger | ✅ DONE |
-| M5: Multi-package | per-package + cross-package synthesis | ✅ DONE |
+| M5: Multi-package | per-package + cross-package synthesis | ⚠️ **HELPER-ONLY, NOT WIRED** — `run_multi_package()` (`ai_ready_helpers.py:2581`) exists + unit-tested, but it produces only per-package **stats** (`gather_repo_info`/`extract_import_graph`/`parse_git_gotchas` counts) + a shared-dep synthesis; it does **NOT** emit per-package v3 code-intel.json/DDD/spec-details, does **NOT** auto-detect package boundaries, and is **NOT** called from INSTRUCTIONS.md (grep: 0 refs). Corrected 2026-07-17 (was falsely "✅ DONE"). Deterministic foundation (boundary detection + `packages[]` partition) tracked in §23.3 / run_693e08de; per-package v3 generation + fan-out orchestration deferred to a follow-up run. |
 | M6: Published standard | GitHub Discussion + spec repo + rubric + templates | ✅ DONE |
 
 ### v3 domain + spec-details layer (2026-07-16) — FOUNDATION SHIPPED (equivalence live-wiring + blind-spot / 4-detector gates pending — see §11.7)
@@ -1129,6 +1129,67 @@ The unifying defense is Principle 20: **deterministic supplies the anchor, LLM s
 | **SwarmAI Autonomous Pipeline** (`skills/s_autonomous-pipeline/`) | Quality system this engine runs through, and the single-agent role-switching that replaces a multi-agent RDE pipeline (§13 #6). | AC quality gate, User-Value Probe, adversarial review — the gates that caught the honest corrections in §16. |
 | **[agents.md spec](https://agents.md)** | Community convention for AI agent context. | We extend it: AGENTS.md is the ≤150-line entry point; the spec is flat, we add layered depth behind it. |
 | **An internal brownfield-bootstrapper tool** (enterprise-internal; anonymized) | Internal AGENTS.md generator we drew practices from. | "Detect don't assume", ≤150-line entry point, two touchpoints, WHEN/RISK/BECAUSE grammar. |
+
+---
+
+## 23. Legacy / COBOL Gap Analysis — the RDE Flagship Case (honest current-state)
+
+> **Why this section exists.** §1.2 sells the flagship use case as "make the legacy black box nobody dares touch signable." A field survey of the RDE landscape (a financial-sector legacy-modernization scenario — COBOL/PL-I/PL-SQL core-banking, 20-40yr systems, compliance-driven) surfaced concrete capabilities the *problem* demands that this engine does **not yet** deliver. Stated as gaps, not features — the same anti-theater discipline as §11.7. Ordered by kill-power for the bank/legacy scenario.
+
+### 23.1 The gaps (what the flagship RDE case needs that we lack)
+
+| # | Gap | Why it's load-bearing for legacy/bank | Current state | Fix direction |
+|---|-----|----------------------------------------|---------------|---------------|
+| **G1** | **COBOL / PL-I / PL-SQL parsing** | These ARE the legacy languages. Our grounding floor is tree-sitter (12 modern langs) + regex routes. §4.5.3: a file whose extension is not in `LANGUAGE_MAP` is **silently skipped** (`parser.py: if not lang: return`); the LLM-fallback is target-state, **not shipped**. So the flagship input produces a silent coverage hole, not a spec. | ❌ not parseable; ⚠️ LLM-fallback designed only (§4.5.3, §15.2 #2) | Ship the unknown-extension → cheap-model LLM-fallback + coverage-hole signal FIRST (credibility floor). COBOL tree-sitter grammar as a later hardening. |
+| **G2** | **Data lineage / CRUD matrix / field-level source→target mapping** | ACL'26 + EPAM ship these as core RDE outputs; for Basel/audit they are **mandatory deliverables**, not extras. We emit domains/flows/steps + business_rules only. | ❌ none | New code-intel product types: `data_lineage[]`, `crud_matrix[]`, `field_mappings[]`. Derive from DFG (the §7.3/§15 CFG-DFG enrichment axis) + DB-schema ingest (G3). |
+| **G3** | **Implicit rules outside code** (DB CHECK constraints, stored procedures, triggers, config, ops runbooks) | In core-banking, business rules live heavily in DB constraints / PL-SQL stored procs / config, not just app code. We ingest code + git + optional signals only. | ❌ none | Add ingesters: DB-schema/constraint extractor, PL-SQL stored-proc miner, config-rule extractor. Feed as anchored `business_rules` with `source:db|config`. |
+| **G4** | **Compliance / regulatory rule mapping** (Basel / 银保监 audit clause ↔ code) | Compliance is the bank's *primary* driver; the deliverable form is a regulation↔code traceability catalog. §20 covers data-sensitivity only. | ❌ none | A `compliance_map[]` artifact: regulation-id ↔ business_rule anchor. Human-verified (SME queue §6.2). |
+| **G5** | **Multi-million-LOC chunk+aggregate + cross-module rule chains** | Core banking = 千万级 LOC across many modules; business-rule chains span modules/systems. §15 has a churn-top-200 *strategy*, unimplemented; §11.0 marks legacy "foundation not finished". Directly blocked by the multi-package/repo gap (§23.3). | ⚠️ strategy only | Implement sampling + the §23.3 multi-package/repo work (cross-module chains need cross-package edges). |
+| **G6** | **Code→Spec→New-Code modernization closed loop** | The modernization endgame is spec-driven migration (COBOL→Java/Go). We stop at a *signable spec* (§7 validates, does not migrate). | 🟢 **intentional scope boundary** | Not a defect — but a legacy-modernization proposal must **explicitly** show "we do the critical first step (Code→Spec); migration hands off to Kiro (Spec→Code)" or a reviewer reads it as a hole. |
+
+### 23.2 Competitive framing (the deck needs a COBOL-specific one — §22 has none)
+
+§22 benchmarks only against Understand-Anything + the anonymized reference engine. The legacy market has dedicated COBOL/mainframe players a bank WILL name. Fact-checked against primary sources (2026-07-16; metrics are vendor/case figures unless marked peer-reviewed):
+
+| Player | Code→Spec capability | Legacy coverage | Cited metric (source-class) | Source |
+|---|---|---|---|---|
+| **IBM watsonx Code Assistant for Z** | NL code explanation + business-logic doc + COBOL→Java w/ semantic-equivalence tests | COBOL ✅ PL-I ✅ (z/OS) | 94% analysis-time↓ / 79% comprehension-time↓ (single-customer case, no accuracy%) | ibm.com/products/watsonx-code-assistant-z |
+| **AWS Transform for mainframe** (formerly Blu Age; ⚠️ **NOT** Amazon Q — Q does Java-upgrade/.NET-port only, not COBOL→spec) | Agentic: "extracts every business rule with full traceability" → dev-ready requirements → MCP→Kiro/IDE | COBOL ✅ PL-I ✅ | 5x faster / 929 dev-years saved (case; no accuracy%) | aws.amazon.com/transform/mainframe/ |
+| **Publicis Sapient Slingshot** | Reads code → extracts rules/deps/specs before rebuild; PL/SQL→Java agent | COBOL ✅ PL/SQL ✅ | **99% code-to-spec accuracy**; 3M LOC COBOL→specs in 8wk (vendor) | publicissapient.com/platforms/slingshot |
+| **EPAM AI/Run** | Legacy source → BRD incl. business rules, **lineage, CRUD matrices, source→target mappings** | COBOL ✅ PL-I ✅ | **85% rule accuracy / 70% doc-effort↓** (vendor blog) | solutionshub.epam.com/blog/post/cobol-code |
+| **CoreStory** | COBOL business-rule extraction, Code Intelligence Model + confidence scoring | COBOL ✅ | **1,984 specs / 85.5% SME validation** (production case) | corestory.ai |
+| **Concho AI** (2026-07) | Enterprise codebase → DDD-structured queryable knowledge layer, MCP/Claude-native | ❌ names only PICK BASIC (no COBOL claim) | 163 rules "95.6% code-derived"; 20M+ LOC (case) | concho.ai |
+| **CAST Imaging** | Architecture + dependency + transaction/data-lineage mapping → feeds AI agents | COBOL ✅ (450+ langs) | 450+ langs; "2X+ AI accuracy" (vendor) | castsoftware.com/products/imaging |
+
+**Academic anchors (peer-reviewed / preprint — cite with weight order):** ACL'26 Industry Track (COBOL/PL-I, 3.4M LOC): **93% expert-agreement, 70% doc-effort↓, 3.2-3.3x** [peer-reviewed, aclanthology.org/2026.acl-industry.4/]; AgentModernize arXiv:2605.17535: **91.2% gold-rule capture, single-prompt/CoT LLM 0.0% behavioral-equivalence** [preprint — cite with less weight].
+
+**Where we differentiate (the honest positioning):** our edge is **transparency + fail-closed grounding** (open tree-sitter engine, closed anchor menu, 4 fail-closed finalize gates that *reject* not warn, anti-spurious/anti-false-negative guards backed by Siala&Lano) — no vendor above publishes an accuracy% *paired with* an SME-validation denominator + a structural anti-hallucination gate. We are **behind** on: shipped COBOL parsing (G1), lineage/CRUD outputs (G2, EPAM/CAST have them), and proven scale (G5). The one-pager's job is to lead with the grounding-transparency edge and be explicit about G1-G2 as roadmap, not claimed capability.
+
+### 23.3 Multi-package / Multi-repo — verified current state (code is truth)
+
+Grep-verified in `backend/core/code_intel/` + `ddd_bindings.py` + `s_ai-ready-repo/` (2026-07-17):
+
+| Dimension | Support | Evidence |
+|---|---|---|
+| Single repo | ✅ full | `parser.parse_repo(repo_root: Path)` — single-root `rglob` |
+| Multiple independent repos (via `bindings.yaml`) | ⚠️ partial | `ddd_bindings.bind_repo` supports an array, but **each repo → its own `{repo}.code_intel.db`; no cross-repo merge, no cross-repo edge resolution** (a call from repo-A into repo-B is a bare unresolved edge) |
+| Monorepo (1 `.git`, N packages) | ❌ none | **no package-boundary detection** — does not read `package.json` workspaces / `pyproject` / `go.mod` / `Cargo [workspace]` / nx / lerna / turbo. Flattens the whole tree. |
+| git submodules | ❌ none | no `.gitmodules` parse, no `--recursive` clone |
+| `code-intel.json` schema | ❌ single `repo` key | no `repos[]` / `packages[]` partition; modules/routes flattened into one namespace |
+
+**What actually degrades on a monorepo (Gate-0-corrected — the earlier draft over-claimed several "collisions" that source-tracing REFUTED):**
+
+| Claimed breakage (earlier draft) | Verdict (code-traced 2026-07-17) |
+|---|---|
+| Symbol-ID collisions across packages | ❌ **FALSE** — ids are path-qualified: `_qualify(name, rel_path)` where `rel_path = path.relative_to(repo_root)` (`parser.py:593,613`). `packages/api/src/utils.py::helper` ≠ `packages/cli/src/utils.py::helper`. No collision. |
+| Route collisions (two `GET /health`) | ❌ **FALSE** — `route.id = {method}-{path}-{shorthash(file_path)}` (§5.5); the file-hash disambiguates same-path routes in different packages. |
+| Cross-package imports unresolvable | ✅ **real, but pre-existing** — `../api/User` stays a bare edge. This is Layer-2 resolution scope, NOT something a `packages[]` partition fixes. |
+| Module-map inconsistency | 🟡 **partial** — `graph_store.py:542` groups by a fixed 2-level prefix, so `packages/<pkg>/…` *incidentally* groups by package, but `apps/*`, a flat `src/`, or nested workspaces do not. Navigation is inconsistent, not wrong. |
+| No boundary detection / no `packages[]` | ✅ **real gap** — the genuine deliverable below. |
+
+**The honest reframe:** there is **no correctness bug** on a monorepo — path-qualified ids already prevent the collisions the earlier draft claimed. The real gap is **navigational/organizational**: nothing auto-detects package boundaries (so §18.3 fan-out can't auto-run on a monorepo — the caller must hand `run_multi_package` the package list), and `code-intel.json` has no per-package partition for per-package build commands / language mix.
+
+**The fix (M5 done for real — scoped as a DETERMINISTIC-FOUNDATION run, run_693e08de):** `run_multi_package()` today is a **stats-only stub** (per-package `gather_repo_info`/`import_graph`/`gotcha` counts + shared-dep synthesis) — it emits no per-package v3 artifacts and detects no boundaries. This run delivers the deterministic foundation: (1) auto-detect package roots from workspace manifests (`package.json` workspaces / pyproject PEP621 / `go.mod` / `Cargo [workspace]` / `pnpm-workspace.yaml` / `lerna.json` / `nx.json` / `turbo.json`; fallback `[root]` for a single-package repo); (2) an optional `packages[]` partition on `code-intel.json` (name / root / language mix) — **navigation metadata, NOT a collision fix**. Deferred to a follow-up run (explicitly out of scope here): per-package full v3 generation + the INSTRUCTIONS.md fan-out orchestration. Boundary detection is still the enabler for G5 (cross-module rule chains) on an inherently multi-module legacy core.
 
 ---
 

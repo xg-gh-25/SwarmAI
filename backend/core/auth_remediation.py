@@ -7,6 +7,7 @@ instruction MUST match the user's actual auth method — the old code hardcoded
   - external SSO users        → the fix is `aws sso login`
   - Anthropic-direct users    → the fix is entering an API key in Settings
   - Hive IAM-role users       → the fix is an IAM policy change
+  - Bedrock API-key users     → the fix is entering a new short-term bearer token
 
 `use_bedrock` alone cannot tell ada from sso (both are Bedrock), so the active
 method is persisted as `auth_method` in config and passed here.
@@ -58,6 +59,15 @@ _REMEDIATION: dict[str, Remediation] = {
         "fix_text": (
             "Add `bedrock:InvokeModel` to this instance's IAM role policy (and "
             "enable Bedrock model access for the region), then re-verify."
+        ),
+        "settings_tab": _SETTINGS_TAB,
+    },
+    "bedrock_api_key": {
+        "message": "Your Bedrock API key isn't working.",
+        "fix_text": (
+            "Your Bedrock bearer token has expired or is invalid. Generate a new "
+            "short-term key (max 12h) and enter it in Settings → AI & Models, then "
+            "send your message again."
         ),
         "settings_tab": _SETTINGS_TAB,
     },

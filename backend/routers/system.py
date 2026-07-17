@@ -300,9 +300,11 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "default_model": config.get("default_model", DEFAULT_CONFIG["default_model"]),
             "bedrock_model_map": config.get("bedrock_model_map"),
             "anthropic_base_url": config.get("anthropic_base_url"),
-            # Persisted secret (durable store) — so verify-auth can validate a
-            # key the user entered in-app without it being in os.environ.
+            "auth_method": config.get("auth_method"),
+            # Persisted secrets (durable store) — so verify-auth can validate a
+            # key/token the user entered in-app without it being in os.environ.
             "anthropic_api_key": config.get("anthropic_api_key"),
+            "aws_bearer_token_bedrock": config.get("aws_bearer_token_bedrock"),
         }
     except Exception:
         # AppConfigManager not initialized (e.g., during tests)
@@ -312,10 +314,15 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "default_model": DEFAULT_CONFIG["default_model"],
             "bedrock_model_map": None,
             "anthropic_base_url": None,
+            "auth_method": None,
             "anthropic_api_key": None,
+            "aws_bearer_token_bedrock": None,
         }
     if override:
-        for k in ("use_bedrock", "aws_region", "default_model", "anthropic_base_url", "anthropic_api_key"):
+        for k in (
+            "use_bedrock", "aws_region", "default_model", "anthropic_base_url",
+            "auth_method", "anthropic_api_key", "aws_bearer_token_bedrock",
+        ):
             if k in override and override[k] is not None:
                 base[k] = override[k]
     return base
@@ -360,7 +367,7 @@ async def verify_auth(request: Request):
     use_bedrock = config.get("use_bedrock", True)
 
     if use_bedrock:
-        return _verify_bedrock(config)
+        return await _verify_bedrock(config)
     else:
         return await _verify_anthropic_api(config)
 
@@ -369,12 +376,16 @@ class SetApiKeyRequest(BaseModel):
     api_key: str
 
 
+class SetBearerTokenRequest(BaseModel):
+    bearer_token: str
+
+
 class SetAuthMethodRequest(BaseModel):
-    method: str  # "ada" | "sso" | "apikey" | "iam_role"
+    method: str  # "ada" | "sso" | "apikey" | "iam_role" | "bedrock_api_key"
     deployment_context: Optional[str] = None  # "internal" | "external"
 
 
-_VALID_AUTH_METHODS = {"ada", "sso", "apikey", "iam_role"}
+_VALID_AUTH_METHODS = {"ada", "sso", "apikey", "iam_role", "bedrock_api_key"}
 
 
 @router.post("/anthropic-api-key")
@@ -391,6 +402,24 @@ async def set_anthropic_api_key(req: SetApiKeyRequest):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="api_key must be non-empty")
     AppConfigManager.instance().set_secret("anthropic_api_key", key)
+    return {"status": "ok", "configured": True}
+
+
+@router.post("/bedrock-api-key")
+async def set_bedrock_api_key(req: SetBearerTokenRequest):
+    """Persist the user's Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK).
+
+    Mirrors set_anthropic_api_key: the ONLY sanctioned write path for the token
+    (never via PUT /settings, which strips secrets). NEVER echoed back. After
+    this, _configure_claude_environment injects it as AWS_BEARER_TOKEN_BEDROCK
+    into the SDK env at the next spawn (no daemon relaunch) when
+    auth_method=="bedrock_api_key", and verify-auth can validate it.
+    """
+    token = (req.bearer_token or "").strip()
+    if not token:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="bearer_token must be non-empty")
+    AppConfigManager.instance().set_secret("aws_bearer_token_bedrock", token)
     return {"status": "ok", "configured": True}
 
 
@@ -414,11 +443,37 @@ async def set_auth_method(req: SetAuthMethodRequest):
     return {"status": "ok", "auth_method": req.method}
 
 
-def _verify_bedrock(config: dict) -> dict:
-    """Verify Bedrock auth with a minimal invoke."""
+_MISSING = object()  # sentinel: an env var that was ABSENT (restore = pop, not "")
+
+
+async def _verify_bedrock(config: dict) -> dict:
+    """Verify Bedrock auth with a minimal invoke.
+
+    Supports bearer-token (bedrock_api_key) auth: botocore reads
+    AWS_BEARER_TOKEN_BEDROCK from os.environ at CLIENT-CONSTRUCTION time (the
+    token is frozen into the signer there — botocore>=1.35). So for a
+    not-yet-persisted bearer token arriving in the verify override, we must set
+    the env var around `boto3.client(...)` ONLY.
+
+    Concurrency (Gate-1 fix): os.environ is process-global and shared with the
+    spawn path (_configure_claude_environment), which mutates env under the
+    module-level `_env_lock`. So the client-construction env mutation here MUST
+    also hold `_env_lock` — otherwise a concurrent session spawn could read this
+    verify token, or its finally-restore could strip a token a concurrent bedrock
+    spawn just injected. The blocking invoke_model runs in a thread OUTSIDE the
+    lock (the token is already frozen into the client), so the event loop and the
+    lock are both freed during the ~15s network call.
+    """
     region = config.get("aws_region", "us-east-1")
     model = config.get("default_model", DEFAULT_CONFIG["default_model"])
     bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"))
+    # Only inject a bearer token when THIS verify is for the bedrock_api_key
+    # method (else a stray persisted token could shadow a legit sigv4 verify).
+    bearer_token = (
+        config.get("aws_bearer_token_bedrock")
+        if config.get("auth_method") == "bedrock_api_key"
+        else None
+    )
 
     start = time.monotonic()
     try:
@@ -427,23 +482,50 @@ def _verify_bedrock(config: dict) -> dict:
         # ~60s botocore default × retries. Matches the timeout pattern used at
         # every other Bedrock call site (memory_extractor, embedding_client,
         # summarization, …). max_attempts=1 = no silent retry storm on verify.
+        # NOTE: do NOT set signature_version here — it would set
+        # has_in_code_configuration=True and suppress botocore's bearer-token
+        # preference over sigv4 (Gate-0 skeptic finding).
         from botocore.config import Config as _BotoConfig
         _verify_cfg = _BotoConfig(
             connect_timeout=5,
             read_timeout=10,
             retries={"max_attempts": 1},
         )
-        client = boto3.client("bedrock-runtime", region_name=region, config=_verify_cfg)
-        client.invoke_model(
-            modelId=bedrock_model,
-            contentType="application/json",
-            accept="application/json",
-            body=_json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}],
-            }),
-        )
+        if bearer_token:
+            from core.claude_environment import _env_lock
+            _KEY = "AWS_BEARER_TOKEN_BEDROCK"
+            async with _env_lock:
+                _prev = os.environ.get(_KEY, _MISSING)
+                os.environ[_KEY] = bearer_token
+                try:
+                    # botocore freezes the token into the signer HERE.
+                    client = boto3.client(
+                        "bedrock-runtime", region_name=region, config=_verify_cfg
+                    )
+                finally:
+                    if _prev is _MISSING:
+                        os.environ.pop(_KEY, None)
+                    else:
+                        os.environ[_KEY] = _prev
+        else:
+            client = boto3.client(
+                "bedrock-runtime", region_name=region, config=_verify_cfg
+            )
+
+        def _invoke():
+            return client.invoke_model(
+                modelId=bedrock_model,
+                contentType="application/json",
+                accept="application/json",
+                body=_json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }),
+            )
+        # Blocking network call off the event loop (token already frozen into
+        # the client above; no env dependency remains here).
+        await asyncio.to_thread(_invoke)
         latency = int((time.monotonic() - start) * 1000)
         return {
             "success": True,

@@ -419,6 +419,92 @@ class TestAuthPersistEndpoints:
         resp = client.post("/api/system/auth-method", json={"method": "hacker"})
         assert resp.status_code in (400, 422)
 
+    # ── AC1: bedrock_api_key accepted by the auth-method whitelist ──
+    def test_set_auth_method_accepts_bedrock_api_key(self, client):
+        updates = {}
+        def fake_update(self, d):
+            updates.update(d)
+        with patch("core.app_config_manager.AppConfigManager.update", new=fake_update):
+            resp = client.post("/api/system/auth-method",
+                               json={"method": "bedrock_api_key", "deployment_context": "external"})
+        assert resp.status_code == 200
+        assert updates.get("auth_method") == "bedrock_api_key"
+
+    # ── AC2: POST /system/bedrock-api-key persists the bearer token (secret) ──
+    def test_set_bedrock_api_key_persists_and_not_echoed(self, client):
+        called = {}
+        def fake_set_secret(self, k, v):
+            called[k] = v
+        with patch("core.app_config_manager.AppConfigManager.set_secret", new=fake_set_secret):
+            resp = client.post("/api/system/bedrock-api-key",
+                               json={"bearer_token": "bedrock-secret-xyz"})
+        assert resp.status_code == 200
+        assert called.get("aws_bearer_token_bedrock") == "bedrock-secret-xyz"
+        assert "bedrock-secret-xyz" not in resp.text
+
+    def test_set_bedrock_api_key_rejects_empty(self, client):
+        resp = client.post("/api/system/bedrock-api-key", json={"bearer_token": ""})
+        assert resp.status_code in (400, 422)
+
+
+# ── AC4: verify with a bedrock bearer token — env set at client construction ──
+
+class TestVerifyBedrockBearerToken:
+    def test_verify_sets_bearer_env_at_client_construction_then_restores(self, client):
+        """When auth_method=bedrock_api_key + a token in the override, the bearer
+        env var must be present WHEN boto3.client() is constructed (botocore
+        freezes it there), and RESTORED to absent afterward (temp-env wrapper)."""
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        env_at_construction = {}
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        def fake_client(service, **kwargs):
+            env_at_construction["token"] = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            return mock_client
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "bedrock_api_key",
+                 "aws_bearer_token_bedrock": "bearer-tok-123",
+             }):
+            mock_boto3.client.side_effect = fake_client
+            resp = client.post("/api/system/verify-auth")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        # present at construction time (botocore freezes it into the signer)
+        assert env_at_construction["token"] == "bearer-tok-123"
+        # restored to ABSENT afterward (was absent before)
+        assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+
+    def test_verify_bedrock_without_bearer_does_not_set_env(self, client):
+        """Non-bedrock_api_key Bedrock verify (ada/sso) must NOT inject a token
+        even if one is persisted (auth_method gates the injection)."""
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        seen = {}
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        def fake_client(service, **kwargs):
+            seen["token"] = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            return mock_client
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "ada",
+                 "aws_bearer_token_bedrock": "should-not-be-used",
+             }):
+            mock_boto3.client.side_effect = fake_client
+            resp = client.post("/api/system/verify-auth")
+        assert resp.status_code == 200
+        assert seen["token"] is None, "ada verify must not inject a bearer token"
+
 
 # ── AC2: auth-hint detects ADA dir, SSO cache, API key ──
 

@@ -48,6 +48,12 @@ SECRET_KEYS: frozenset[str] = frozenset({
     "aws_secret_access_key",
     "aws_session_token",
     "aws_bearer_token",
+    # The Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK). A DEDICATED key —
+    # NOT the vague orphan `aws_bearer_token` above — so it maps 1:1 to the
+    # botocore-derived env var name and can't be confused with any other
+    # AWS bearer token. Persisted to the durable 0o600 secret store, injected
+    # at spawn by _configure_claude_environment when auth_method=bedrock_api_key.
+    "aws_bearer_token_bedrock",
     "anthropic_api_key",
 })
 
@@ -71,7 +77,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Persisted, non-secret. The active auth method chosen at setup, so error
     # remediation (CredentialBanner + spawn pre-flight) can be method-aware:
     # use_bedrock alone can't distinguish "ada" from "sso" (both are Bedrock).
-    # Values: "ada" | "sso" | "apikey" | "iam_role". Written on successful verify.
+    # Values: "ada" | "sso" | "apikey" | "iam_role" | "bedrock_api_key".
+    # Written on successful verify.
     "auth_method": None,
     # Persisted display context ("internal" | "external"), mirrors the wizard's
     # detected/toggled deployment context so Settings shows the same card set.
