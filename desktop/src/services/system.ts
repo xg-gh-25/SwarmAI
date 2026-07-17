@@ -267,6 +267,7 @@ export interface AuthHintResponse {
   hasAdaDir: boolean;
   hasSsoCache: boolean;
   hasApiKey: boolean;
+  deploymentContext: 'internal' | 'external';
   suggestedMethod: 'ada' | 'sso' | 'apikey' | 'iam_role';
   adaDetails?: {
     accountId?: string;
@@ -506,6 +507,22 @@ export const systemService = {
   async getAuthHint(): Promise<AuthHintResponse> {
     const response = await api.get<Record<string, unknown>>('/system/auth-hint');
     return deepSnakeToCamel(response.data) as AuthHintResponse;
+  },
+
+  /**
+   * Persist the user's Anthropic API key (Anthropic-direct auth). Stored in the
+   * daemon's durable secret store — never echoed back, no relaunch needed.
+   */
+  async persistApiKey(apiKey: string): Promise<void> {
+    await api.post('/system/anthropic-api-key', { api_key: apiKey });
+  },
+
+  /**
+   * Persist the chosen auth method (+ deployment context) so credential-error
+   * remediation is method-aware.
+   */
+  async setAuthMethod(method: string, deploymentContext?: string): Promise<void> {
+    await api.post('/system/auth-method', { method, deployment_context: deploymentContext });
   },
 
   /**

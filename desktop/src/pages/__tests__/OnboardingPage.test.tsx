@@ -27,6 +27,8 @@ vi.mock('../../services/system', () => ({
     verifyAuth: (...args: unknown[]) => mockVerifyAuth(...args),
     setOnboardingComplete: (...args: unknown[]) => mockSetOnboardingComplete(...args),
     getAuthHint: (...args: unknown[]) => mockGetAuthHint(...args),
+    persistApiKey: vi.fn().mockResolvedValue(undefined),
+    setAuthMethod: vi.fn().mockResolvedValue(undefined),
     restoreBackup: vi.fn(),
   },
   RestoreEvent: {},
@@ -57,7 +59,7 @@ beforeEach(() => {
     swarmWorkspace: { ready: true },
   });
   mockGetBackupStatus.mockRejectedValue(new Error('no backup'));
-  mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false });
+  mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, deploymentContext: 'external' });
   mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'us-east-1' });
   mockUpdateAPIConfiguration.mockResolvedValue({});
   mockChannelsList.mockResolvedValue([]);
@@ -163,7 +165,7 @@ describe('OnboardingPage — no dead-ends', () => {
   });
 
   it('AC3: desktop Step2 has a "Configure later" control that completes onboarding', async () => {
-    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop' });
+    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
     const onComplete = vi.fn();
     render(<OnboardingPage onComplete={onComplete} />);
     await waitFor(() => screen.getByText('LLM Authentication'));
@@ -219,7 +221,7 @@ describe('OnboardingPage — no dead-ends', () => {
   });
 
   it('double-clicking "Configure later" fires onboarding-complete only ONCE', async () => {
-    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop' });
+    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
     render(<OnboardingPage onComplete={vi.fn()} />);
     await waitFor(() => screen.getByText('LLM Authentication'));
     const later = (await screen.findByText(/Configure later/i)).closest('button')!;
