@@ -470,3 +470,110 @@ class TestGate2AdversarialFixes:
         assert any("broken.py" in h.get("ref", "") and h["kind"] == "file"
                    for h in out.coverage_holes), f"failed parse must be a hole, got {out.coverage_holes}"
         assert out.status == "partial"
+
+
+class TestTreeSitterLiveAST:
+    """Revival of the real tree-sitter AST path (run_2e46f2af).
+
+    These tests drive the REAL _get_cached_parser construction — NO monkeypatch
+    of the parser/liveness — so they FAIL on the old `tslp.get_parser()` (old-ABI
+    builtins.Parser that rejects bytes) and PASS once the constructor is switched
+    to the standard `tree_sitter.Parser(tslp.get_language(...))` API. This is the
+    RED→GREEN guard for the fix; mutation-verified (revert the constructor → RED).
+    """
+
+    def test_tree_sitter_live_for_all_active_languages(self):
+        """AC1: _tree_sitter_live must be True for every active language.
+
+        RED on old get_parser (parse(bytes) raises → probe False for all langs).
+        """
+        import core.code_intel.parser as P
+        P._ts_live_cache.clear()
+        for lang in ("python", "javascript", "typescript", "go", "rust"):
+            assert P._tree_sitter_live(lang) is True, (
+                f"tree-sitter must be LIVE for {lang} — got False (AST path dead, "
+                f"regex fallback). The parser constructor is broken.")
+
+    def test_real_ast_extracts_python_symbols_with_line_spans(self, tmp_path):
+        """AC2: a real Python file parses via AST → correct symbol names + line spans.
+
+        This exercises _extract_from_tree against a genuine tree-sitter Tree — the
+        path that has NEVER run live in this env (regex was the only live path).
+        Asserts precise line numbers, which regex approximation would not get right.
+        """
+        import core.code_intel.parser as P
+        P._ts_live_cache.clear()
+        src = (
+            "import os\n"                 # line 1
+            "\n"                          # line 2
+            "def known_top_fn():\n"       # line 3
+            "    return os.getpid()\n"    # line 4
+            "\n"                          # line 5
+            "class KnownClass:\n"         # line 6
+            "    def known_method(self):\n"  # line 7
+            "        return 42\n"         # line 8
+        )
+        f = tmp_path / "sample.py"
+        f.write_text(src)
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "ok", f"clean python file must parse ok, got {status}"
+        names = {n.name: n for n in result.nodes}
+        # The function/class/method must be discovered by name...
+        assert "known_top_fn" in names, f"AST must find top-level fn, got {sorted(names)}"
+        assert "KnownClass" in names, f"AST must find class, got {sorted(names)}"
+        assert "known_method" in names, f"AST must find method, got {sorted(names)}"
+        # ...at their EXACT source lines (regex fallback would not be span-accurate).
+        assert names["known_top_fn"].line_start == 3, names["known_top_fn"].line_start
+        assert names["KnownClass"].line_start == 6, names["KnownClass"].line_start
+        assert names["known_method"].line_start == 7, names["known_method"].line_start
+
+    def test_real_ast_extracts_javascript_symbols(self, tmp_path):
+        """AC2 (multi-language): a real JS file parses via AST.
+
+        Asserts a CLASS METHOD (deepMethod) — a construct the ^-anchored regex
+        fallback CANNOT extract (verified: regex finds only the class, not the
+        method). This makes the test AST-discriminating: it goes RED on revert
+        (dead binding → regex fallback → deepMethod absent), so it genuinely
+        guards the DEFINITION_TYPES['javascript'] key this fix added — NOT a
+        vacuous assertion that regex would also satisfy (Gate-2 correctness MED,
+        run_2e46f2af: the old `function jsKnownFn` assertion passed on revert).
+        """
+        import core.code_intel.parser as P
+        P._ts_live_cache.clear()
+        f = tmp_path / "sample.js"
+        f.write_text("class JsCls {\n  deepMethod() {\n    return 1;\n  }\n}\n")
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "ok", f"clean js file must parse ok, got {status}"
+        names = {n.name for n in result.nodes}
+        assert "JsCls" in names, f"AST must find js class, got {sorted(names)}"
+        # deepMethod is the AST-only discriminator — regex fallback misses methods.
+        assert "deepMethod" in names, (
+            f"AST must find js class METHOD (regex fallback cannot — this is the "
+            f"non-vacuous guard for the javascript DEFINITION_TYPES key), got {sorted(names)}")
+
+    def test_fallback_intact_when_get_language_raises(self, tmp_path, monkeypatch):
+        """AC4: fail-safe fallback — if the binding is dead (get_language raises),
+        _get_cached_parser returns None → _tree_sitter_live False → regex, never a
+        crash or silent vanish. Mutation-forces the dead-binding path."""
+        import core.code_intel.parser as P
+        P._ts_live_cache.clear()
+        # Clear any thread-local cached parser so construction is re-attempted.
+        if hasattr(P._parser_cache_tls, "cache"):
+            P._parser_cache_tls.cache.clear()
+
+        def _boom(_lang):
+            raise RuntimeError("simulated dead tree-sitter binding")
+
+        # Force the construction dependency to raise (the real failure mode a
+        # broken/missing grammar would exhibit).
+        monkeypatch.setattr(P.tslp, "get_language", _boom)
+        assert P._get_cached_parser("python") is None, (
+            "a raising get_language must be caught → None (fail-safe), not propagate")
+        P._ts_live_cache.clear()
+        assert P._tree_sitter_live("python") is False, (
+            "dead binding must make _tree_sitter_live False → regex fallback")
+        # And a real file still parses (via regex) rather than crashing.
+        f = tmp_path / "still_works.py"
+        f.write_text("def survives():\n    return 1\n")
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status in ("ok", "failed"), f"must not crash on dead binding, got {status}"

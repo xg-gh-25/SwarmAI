@@ -56,6 +56,15 @@ DEFINITION_TYPES = {
         "function_declaration", "class_declaration",
         "method_definition", "arrow_function",
     ],
+    # JavaScript shares TypeScript's tree-sitter node types (verified against the
+    # live 'javascript' grammar, run_2e46f2af). LANGUAGE_MAP routes .js/.jsx here;
+    # without this key _extract_from_tree got [] for every .js/.jsx file once the
+    # AST path went live — a silent regression vs the regex fallback, which DOES
+    # extract JS defs. Mirror the typescript set.
+    "javascript": [
+        "function_declaration", "class_declaration",
+        "method_definition", "arrow_function",
+    ],
     "java": [
         "method_declaration", "class_declaration",
         "interface_declaration", "enum_declaration",
@@ -74,6 +83,7 @@ DEFINITION_TYPES = {
 CALL_TYPES = {
     "python": ["call"],
     "typescript": ["call_expression", "new_expression"],
+    "javascript": ["call_expression", "new_expression"],
     "java": ["method_invocation", "object_creation_expression"],
     "go": ["call_expression"],
     "rust": ["call_expression"],
@@ -207,10 +217,11 @@ _ts_available = False
 _parser_cache_tls = threading.local()
 
 try:
+    import tree_sitter
     import tree_sitter_language_pack as tslp
     _ts_available = True
 except ImportError:
-    logger.info("tree-sitter-language-pack not available, using regex fallback")
+    logger.info("tree-sitter/tree-sitter-language-pack not available, using regex fallback")
 
 
 def _get_cached_parser(language: str):
@@ -224,7 +235,15 @@ def _get_cached_parser(language: str):
     if language in cache:
         return cache[language]
     try:
-        parser = tslp.get_parser(language)
+        # Standard tree-sitter 0.25 API: construct a Parser from a Language.
+        # NOT tslp.get_parser() — that returns a bundled OLD-ABI builtins.Parser
+        # whose .parse() rejects bytes ('bytes object is not an instance of str'),
+        # which silently forced the whole indexing path onto the regex fallback
+        # (run_2e46f2af). tree_sitter.Parser(get_language(...)) parses bytes and
+        # exposes root_node as a property, as _tree_sitter_live / _extract_from_tree
+        # expect. Constructed per-thread here (the TLS cache above) because the
+        # native Parser is PyO3-`unsendable` — see the cache header comment.
+        parser = tree_sitter.Parser(tslp.get_language(language))
         cache[language] = parser
         return parser
     except Exception as e:
