@@ -20,7 +20,23 @@ import { AudioKeepAlive } from './components/AudioKeepAlive';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
 import OnboardingPage from './pages/OnboardingPage';
-import { systemService } from './services/system';
+import { systemService, type SystemStatus } from './services/system';
+
+/**
+ * Onboarding gate predicate.
+ *
+ * A user who has NOT completed onboarding must reach the wizard — REGARDLESS of
+ * `initialized`. This deliberately does NOT require `initialized` (the old gate
+ * did, which stranded a partial-init new user on an unusable ChatPage): the
+ * BackendStartupOverlay dismisses on agent+workspace readiness while `initialized`
+ * additionally requires db+gateway, so a partial-init new user satisfied the
+ * overlay but failed the gate. Step1 System Check inside OnboardingPage is the
+ * live wait state for the not-yet-ready backend. Returning users (migration sets
+ * onboarding_complete=1 where initialization_complete=1) are never re-onboarded.
+ */
+export function shouldShowOnboarding(status: SystemStatus | undefined): boolean {
+  return !!status && !status.onboardingComplete;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -170,8 +186,9 @@ function AppRoutes() {
     retry: 2,
   });
 
-  // Show onboarding on first run (only if backend is initialized and onboarding not done)
-  if (status?.initialized && !status?.onboardingComplete) {
+  // Show onboarding whenever the user hasn't completed it — even if the backend
+  // is only partially initialized. Step1 System Check is the in-wizard wait state.
+  if (shouldShowOnboarding(status)) {
     return <OnboardingPage onComplete={() => refetch()} />;
   }
 
