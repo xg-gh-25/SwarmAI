@@ -140,6 +140,49 @@ class TestVerifyAuthAnthropicAPI:
         assert data["error_type"] == "invalid_key"
 
 
+# ── AC1: deployment_context detection (internal via ~/.ada|~/.midway) ──
+
+class TestDeploymentContext:
+    """auth-hint returns deployment_context so the wizard shows the right
+    method cards. Internal = ~/.ada OR ~/.midway present (NOT ~/.toolbox —
+    too generic, false-positives external users). Else external."""
+
+    def _hint_with_home(self, client, present: set):
+        """Call auth-hint with Path.home() joinpath faked so only *present*
+        dot-dirs report is_dir()==True."""
+        def joinpath_side_effect(p):
+            m = MagicMock()
+            m.is_dir.return_value = (p in present)
+            m.glob.return_value = []
+            return m
+        with patch("routers.system.Path") as mock_path_cls:
+            home = MagicMock()
+            home.joinpath.side_effect = joinpath_side_effect
+            mock_path_cls.home.return_value = home
+            with patch.dict(os.environ, {}, clear=True):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                os.environ["SWARMAI_MODE"] = "daemon"
+                return client.get("/api/system/auth-hint").json()
+
+    def test_ada_present_is_internal(self, client):
+        d = self._hint_with_home(client, {".ada"})
+        assert d["deployment_context"] == "internal"
+
+    def test_midway_present_is_internal(self, client):
+        d = self._hint_with_home(client, {".midway"})
+        assert d["deployment_context"] == "internal"
+
+    def test_no_internal_signals_is_external(self, client):
+        d = self._hint_with_home(client, set())
+        assert d["deployment_context"] == "external"
+
+    def test_toolbox_alone_is_NOT_internal(self, client):
+        # ~/.toolbox is a generic name (non-Amazon tools use it) — must NOT
+        # flip an external user to internal (Gate-1 FIX-E).
+        d = self._hint_with_home(client, {".toolbox"})
+        assert d["deployment_context"] == "external"
+
+
 # ── AC5: verify-auth is stateless — accepts an optional override body ──
 
 class TestVerifyAuthOverrideBody:
@@ -224,6 +267,88 @@ class TestVerifyAuthOverrideBody:
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True
+
+
+# ── AC3: Anthropic-direct key works in-app (env injection + verify reads secret) ──
+
+class TestAnthropicDirectPath:
+    """External Anthropic-direct users enter a key in-app; it must (1) be
+    usable by the agent at spawn WITHOUT an env var or relaunch, and (2) let
+    verify-auth succeed reading the persisted key (not just os.environ)."""
+
+    def test_configure_env_injects_persisted_key_when_not_bedrock(self, tmp_path):
+        from core.app_config_manager import AppConfigManager
+        from core import claude_environment
+        cfg = AppConfigManager(config_path=tmp_path / "config.json")
+        cfg.load()
+        cfg.update({"use_bedrock": False})
+        cfg.set_secret("anthropic_api_key", "sk-ant-injected")
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            claude_environment._configure_claude_environment(cfg)
+            # The persisted key must land in os.environ so the SDK subprocess uses it.
+            assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-injected"
+
+    def test_configure_env_does_NOT_inject_when_bedrock(self, tmp_path):
+        from core.app_config_manager import AppConfigManager
+        from core import claude_environment
+        cfg = AppConfigManager(config_path=tmp_path / "config.json")
+        cfg.load()
+        cfg.update({"use_bedrock": True})
+        cfg.set_secret("anthropic_api_key", "sk-ant-shouldnotleak")
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            claude_environment._configure_claude_environment(cfg)
+            # Bedrock mode must not set the Anthropic key.
+            assert os.environ.get("ANTHROPIC_API_KEY") is None
+
+    def test_verify_anthropic_reads_persisted_key(self, client):
+        """verify-auth (apikey mode) must succeed with a persisted key even when
+        ANTHROPIC_API_KEY is NOT in the environment."""
+        async def mock_verify_ok(config):
+            # config must carry the key from the secret store, not env
+            assert config.get("anthropic_api_key") == "sk-ant-persisted"
+            return {"success": True, "model": "claude-opus-4-6", "latency_ms": 40}
+        from core.app_config_manager import AppConfigManager
+        with patch("routers.system._verify_anthropic_api", side_effect=mock_verify_ok), \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": False, "default_model": "claude-opus-4-6",
+                 "anthropic_base_url": None, "anthropic_api_key": "sk-ant-persisted",
+             }):
+            resp = client.post("/api/system/verify-auth", json={"use_bedrock": False})
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
+# ── AC6: Bedrock verify-auth is bounded (no unbounded hang) ──
+
+class TestVerifyBedrockTimeout:
+    def test_verify_bedrock_client_built_with_timeout_config(self, client):
+        """_verify_bedrock must construct the boto3 client with an explicit
+        botocore Config (connect/read timeout + max_attempts=1) so an
+        unreachable AWS returns fast instead of hanging."""
+        captured = {}
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        def fake_client(service, **kwargs):
+            captured.update(kwargs)
+            return mock_client
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+             }):
+            mock_boto3.client.side_effect = fake_client
+            resp = client.post("/api/system/verify-auth")
+        assert resp.status_code == 200
+        # A botocore Config with bounded timeouts must be passed.
+        cfg = captured.get("config")
+        assert cfg is not None, "boto3 client built without a botocore Config (unbounded hang risk)"
+        assert cfg.connect_timeout is not None and cfg.connect_timeout <= 15
+        assert cfg.read_timeout is not None and cfg.read_timeout <= 30
 
 
 # ── AC2: auth-hint detects ADA dir, SSO cache, API key ──

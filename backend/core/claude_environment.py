@@ -204,6 +204,18 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     else:
         os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
 
+    # 1b. Anthropic direct (API-key) mode — inject the persisted key into the
+    # environment so the SDK subprocess uses it, WITHOUT requiring the user to
+    # export ANTHROPIC_API_KEY in their shell (a Finder-launched launchd daemon
+    # does not inherit shell env) and WITHOUT a daemon relaunch (this runs on
+    # every spawn). The key lives in the durable 0o600 secret store, never in
+    # config.json. Bedrock mode must NOT set it. An env var already set by the
+    # user takes precedence (don't clobber an explicit export).
+    if not use_bedrock:
+        persisted_key = config.get("anthropic_api_key")
+        if persisted_key and not os.environ.get("ANTHROPIC_API_KEY"):
+            os.environ["ANTHROPIC_API_KEY"] = persisted_key
+
     # 2. Base URL (optional custom endpoint)
     base_url = config.get("anthropic_base_url")
     if base_url:

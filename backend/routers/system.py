@@ -300,6 +300,9 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "default_model": config.get("default_model", DEFAULT_CONFIG["default_model"]),
             "bedrock_model_map": config.get("bedrock_model_map"),
             "anthropic_base_url": config.get("anthropic_base_url"),
+            # Persisted secret (durable store) — so verify-auth can validate a
+            # key the user entered in-app without it being in os.environ.
+            "anthropic_api_key": config.get("anthropic_api_key"),
         }
     except Exception:
         # AppConfigManager not initialized (e.g., during tests)
@@ -309,6 +312,7 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "default_model": DEFAULT_CONFIG["default_model"],
             "bedrock_model_map": None,
             "anthropic_base_url": None,
+            "anthropic_api_key": None,
         }
     if override:
         for k in ("use_bedrock", "aws_region", "default_model", "anthropic_base_url"):
@@ -369,7 +373,18 @@ def _verify_bedrock(config: dict) -> dict:
 
     start = time.monotonic()
     try:
-        client = boto3.client("bedrock-runtime", region_name=region)
+        # Bounded timeouts so an unreachable/slow AWS returns an error in
+        # seconds instead of hanging the "Verify Connection" spinner for the
+        # ~60s botocore default × retries. Matches the timeout pattern used at
+        # every other Bedrock call site (memory_extractor, embedding_client,
+        # summarization, …). max_attempts=1 = no silent retry storm on verify.
+        from botocore.config import Config as _BotoConfig
+        _verify_cfg = _BotoConfig(
+            connect_timeout=5,
+            read_timeout=10,
+            retries={"max_attempts": 1},
+        )
+        client = boto3.client("bedrock-runtime", region_name=region, config=_verify_cfg)
         client.invoke_model(
             modelId=bedrock_model,
             contentType="application/json",
@@ -416,12 +431,18 @@ def _verify_bedrock(config: dict) -> dict:
 
 
 async def _verify_anthropic_api(config: dict) -> dict:
-    """Verify Anthropic API key with a minimal messages call."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    """Verify Anthropic API key with a minimal messages call.
+
+    Reads the key from the config secret store first (the in-app key the user
+    just entered), falling back to the ANTHROPIC_API_KEY env var. Without the
+    config fallback, a freshly-entered key could never verify (it isn't in the
+    daemon's env) — the external Anthropic-direct path would be dead.
+    """
+    api_key = config.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return _auth_error(
-            "ANTHROPIC_API_KEY not set", "missing_key",
-            "Set ANTHROPIC_API_KEY environment variable before launching SwarmAI."
+            "No Anthropic API key configured", "missing_key",
+            "Enter your Anthropic API key in the setup wizard or Settings → AI & Models."
         )
 
     base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"
@@ -476,8 +497,18 @@ async def get_auth_hint():
     and show real credential status when already configured.
     """
     has_ada = Path.home().joinpath(".ada").is_dir()
+    has_midway = Path.home().joinpath(".midway").is_dir()
     has_sso_cache = bool(list(Path.home().joinpath(".aws/sso/cache").glob("*.json")))
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    # Deployment context drives which auth-method cards the wizard shows:
+    #   internal → [ADA, SSO]   external → [SSO, Anthropic Direct]
+    # Detection is ASYMMETRIC: ~/.ada or ~/.midway present = confident internal
+    # (Amazon-only tools). Their ABSENCE only DEFAULTS to external — the frontend
+    # offers a one-click "Amazon employee?" toggle for internal users on a fresh
+    # machine that hasn't run mwinit/ada yet. Deliberately NOT keyed on ~/.toolbox
+    # (a generic name non-Amazon tools use → false-positives, Gate-1 FIX-E).
+    deployment_context = "internal" if (has_ada or has_midway) else "external"
 
     if has_api_key:
         suggested = "apikey"
@@ -511,6 +542,7 @@ async def get_auth_hint():
         "has_ada_dir": has_ada if run_mode != "hive" else False,
         "has_sso_cache": has_sso_cache if run_mode != "hive" else False,
         "has_api_key": has_api_key,
+        "deployment_context": deployment_context,
         "suggested_method": suggested,
         "ada_details": ada_details,
         "aws_profiles": aws_profiles,

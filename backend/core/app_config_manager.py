@@ -68,6 +68,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "thinking_mode": "adaptive",       # "adaptive" | "enabled" | "disabled"
     "thinking_effort": "high",         # "low" | "medium" | "high" | "xhigh" | "max"
     "anthropic_base_url": None,
+    # Persisted, non-secret. The active auth method chosen at setup, so error
+    # remediation (CredentialBanner + spawn pre-flight) can be method-aware:
+    # use_bedrock alone can't distinguish "ada" from "sso" (both are Bedrock).
+    # Values: "ada" | "sso" | "apikey" | "iam_role". Written on successful verify.
+    "auth_method": None,
+    # Persisted display context ("internal" | "external"), mirrors the wizard's
+    # detected/toggled deployment context so Settings shows the same card set.
+    "deployment_context": None,
     "sandbox_additional_write_paths": "~/.swarm-ai/",
     "sandbox_enabled_default": False,
     "sandbox_auto_allow_bash": True,
