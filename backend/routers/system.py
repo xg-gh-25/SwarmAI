@@ -11,7 +11,7 @@ from typing import Optional
 
 import boto3
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from config import get_bedrock_model_id, get_app_data_dir
@@ -284,11 +284,17 @@ async def get_system_status() -> SystemStatusResponse:
 # ── Onboarding endpoints ──────────────────────────────────────────────
 
 
-def _get_auth_config() -> dict:
-    """Read auth-related config from AppConfigManager."""
+def _get_auth_config(override: Optional[dict] = None) -> dict:
+    """Read auth-related config from AppConfigManager.
+
+    If ``override`` is provided (from a verify-auth request body), its
+    recognized keys are merged over the stored config — so a caller can verify
+    a NOT-YET-PERSISTED auth config (onboarding wizard) without writing it to
+    disk first. Only known auth keys are honored; unknown keys are ignored.
+    """
     try:
         config = AppConfigManager.instance()
-        return {
+        base = {
             "use_bedrock": config.get("use_bedrock", False),
             "aws_region": config.get("aws_region", "us-east-1"),
             "default_model": config.get("default_model", DEFAULT_CONFIG["default_model"]),
@@ -297,13 +303,18 @@ def _get_auth_config() -> dict:
         }
     except Exception:
         # AppConfigManager not initialized (e.g., during tests)
-        return {
+        base = {
             "use_bedrock": True,
             "aws_region": "us-east-1",
             "default_model": DEFAULT_CONFIG["default_model"],
             "bedrock_model_map": None,
             "anthropic_base_url": None,
         }
+    if override:
+        for k in ("use_bedrock", "aws_region", "default_model", "anthropic_base_url"):
+            if k in override and override[k] is not None:
+                base[k] = override[k]
+    return base
 
 
 def _auth_error(error: str, error_type: str, fix_hint: str) -> dict:
@@ -317,16 +328,31 @@ def _auth_error(error: str, error_type: str, fix_hint: str) -> dict:
 
 
 @router.post("/verify-auth")
-async def verify_auth():
+async def verify_auth(request: Request):
     """Verify LLM authentication by making a minimal API call.
 
-    Reads auth config from AppConfigManager, then:
+    Accepts an OPTIONAL JSON body (aws_region, use_bedrock, default_model,
+    anthropic_base_url) merged over the stored config — so the onboarding wizard
+    can verify a config the user has entered but NOT yet persisted, and only
+    persist it AFTER a successful verify. An empty/absent body falls back to the
+    stored config (the Settings-tab caller sends no body).
+
+    Then:
     - Bedrock: boto3 bedrock-runtime.invoke_model with max_tokens=1
     - API key: httpx POST to messages API with max_tokens=1
 
     Always returns 200 -- success/failure is in the response body.
     """
-    config = _get_auth_config()
+    # Tolerate an empty/non-JSON body — request.json() raises on empty content.
+    override: dict = {}
+    try:
+        parsed = await request.json()
+        if isinstance(parsed, dict):
+            override = parsed
+    except Exception:
+        override = {}
+
+    config = _get_auth_config(override=override)
     use_bedrock = config.get("use_bedrock", False)
 
     if use_bedrock:

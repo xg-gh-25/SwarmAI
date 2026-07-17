@@ -140,6 +140,75 @@ class TestVerifyAuthAnthropicAPI:
         assert data["error_type"] == "invalid_key"
 
 
+# ── AC5: verify-auth is stateless — accepts an optional override body ──
+
+class TestVerifyAuthOverrideBody:
+    """POST /api/system/verify-auth accepts an optional JSON body (region,
+    use_bedrock, ...) merged over stored config, so a caller can verify a
+    NOT-YET-PERSISTED config. Empty/no body falls back to stored config."""
+
+    def test_verify_auth_override_region_used(self, client):
+        """Body {region: eu-west-1} → boto3 client built with eu-west-1.
+
+        NOTE: intentionally does NOT mock _get_auth_config (the function under
+        change) — it drives the REAL merge path. The fallback base gives
+        region us-east-1; the override must win → eu-west-1."""
+        mock_response = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = mock_response
+
+        with patch("routers.system.boto3") as mock_boto3:
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth",
+                               json={"use_bedrock": True, "aws_region": "eu-west-1"})
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        # boto3 client MUST be built with the OVERRIDE region, not the stored/fallback.
+        _, kwargs = mock_boto3.client.call_args
+        assert kwargs.get("region_name") == "eu-west-1"
+
+    def test_verify_auth_empty_body_falls_back_to_stored(self, client):
+        """No body (Settings-tab caller) → does NOT crash; uses stored config."""
+        mock_response = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = mock_response
+
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")  # NO body
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        _, kwargs = mock_boto3.client.call_args
+        assert kwargs.get("region_name") == "us-east-1"
+
+    def test_verify_auth_override_use_bedrock_false_routes_to_apikey(self, client):
+        """Body {use_bedrock: false} overrides stored use_bedrock=true →
+        routes to the Anthropic API path, not Bedrock."""
+        async def mock_verify(config):
+            assert config.get("use_bedrock") is False
+            return {"success": True, "model": "claude-opus-4-6", "latency_ms": 50}
+
+        # Do NOT mock _get_auth_config — drive the real merge; override flips
+        # use_bedrock false so the endpoint routes to the API-key path.
+        with patch("routers.system._verify_anthropic_api", side_effect=mock_verify):
+            resp = client.post("/api/system/verify-auth", json={"use_bedrock": False})
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
 # ── AC2: auth-hint detects ADA dir, SSO cache, API key ──
 
 class TestAuthHint:
