@@ -243,3 +243,50 @@ class TestRoundTrip:
         original_model = mgr.get("default_model")
         mgr.update({"aws_region": "ap-south-1"})
         assert mgr.get("default_model") == original_model
+
+
+# ---------------------------------------------------------------------------
+# Secret store tests (FIX-A: durable secret storage, never in config.json)
+# ---------------------------------------------------------------------------
+
+class TestSecretStore:
+    """anthropic_api_key must persist across restarts via a SEPARATE secret
+    store (0o600), NEVER written to config.json (which is backed up to git)."""
+
+    def test_set_secret_persists_and_reads_back(self, tmp_config: Path):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("anthropic_api_key", "sk-ant-test123")
+        assert mgr.get("anthropic_api_key") == "sk-ant-test123"
+
+    def test_secret_NOT_written_to_config_json(self, tmp_config: Path):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("anthropic_api_key", "sk-ant-secret")
+        # config.json must never contain the secret value
+        disk = tmp_config.read_text(encoding="utf-8")
+        assert "sk-ant-secret" not in disk
+
+    def test_secret_survives_restart(self, tmp_config: Path):
+        mgr1 = AppConfigManager(config_path=tmp_config)
+        mgr1.load()
+        mgr1.set_secret("anthropic_api_key", "sk-ant-durable")
+        # New manager instance (simulates daemon restart) reads the same paths
+        mgr2 = AppConfigManager(config_path=tmp_config)
+        mgr2.load()
+        assert mgr2.get("anthropic_api_key") == "sk-ant-durable"
+
+    def test_secret_file_is_0600(self, tmp_config: Path):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("anthropic_api_key", "sk-ant-perm")
+        secret_path = tmp_config.parent / "secrets.json"
+        assert secret_path.exists()
+        mode = stat.S_IMODE(secret_path.stat().st_mode)
+        assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
+
+    def test_only_secret_keys_accepted(self, tmp_config: Path):
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        with pytest.raises(ValueError):
+            mgr.set_secret("aws_region", "us-west-2")  # not a secret key

@@ -141,6 +141,12 @@ class AppConfigManager:
 
     def __init__(self, config_path: Path | None = None) -> None:
         self._config_path: Path = config_path or (get_app_data_dir() / "SwarmWS" / "config.json")
+        # Secrets live in a SEPARATE file next to config.json — NEVER in
+        # config.json itself (which is git-tracked / backed up). This file is
+        # 0o600 and gitignored. It is the durable store for SECRET_KEYS so an
+        # API key survives a daemon restart (config.json strips secrets by
+        # design — see _write_to_disk).
+        self._secret_path: Path = self._config_path.parent / "secrets.json"
         self._cache: dict[str, Any] | None = None
 
     # -- public API --------------------------------------------------------
@@ -194,7 +200,74 @@ class AppConfigManager:
             )
             self._cache = dict(DEFAULT_CONFIG)
             self._write_to_disk()
+        # Hydrate secrets from the separate 0o600 store into the cache (never
+        # from config.json). This makes SECRET_KEYS durable across restarts.
+        self._load_secrets()
         return dict(self._cache)
+
+    def _load_secrets(self) -> None:
+        """Merge persisted secrets (secrets.json) into the in-memory cache.
+
+        Secrets are stored separately from config.json so they never enter
+        the git-tracked / backed-up config. Missing / invalid file → no-op.
+        """
+        if self._cache is None:
+            return
+        try:
+            raw = self._secret_path.read_text(encoding="utf-8").strip()
+            if not raw:
+                return
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if k in SECRET_KEYS and v:
+                        self._cache[k] = v
+        except FileNotFoundError:
+            return
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            logger.warning("Could not read secrets store (%s): %s", self._secret_path, exc)
+
+    def set_secret(self, key: str, value: str) -> None:
+        """Persist a single SECRET_KEYS value to the durable 0o600 secret store.
+
+        Writes to the cache (so the current process sees it immediately, e.g.
+        _configure_claude_environment at the next spawn) AND to secrets.json
+        (so it survives a daemon restart). NEVER touches config.json.
+
+        Raises ValueError if *key* is not a recognized secret key — this is the
+        single sanctioned write path for secrets; arbitrary keys are rejected.
+        """
+        if key not in SECRET_KEYS:
+            raise ValueError(f"{key!r} is not a secret key; use update() for non-secrets")
+        if self._cache is None:
+            self.load()
+        assert self._cache is not None
+        self._cache[key] = value
+        # Read-modify-write the secret store, preserving other secrets.
+        existing: dict[str, Any] = {}
+        try:
+            raw = self._secret_path.read_text(encoding="utf-8").strip()
+            if raw:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    existing = loaded
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+            existing = {}
+        existing[key] = value
+        self._secret_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write 0o600 atomically: create with restrictive mode from the start.
+        import os as _os
+        fd = _os.open(str(self._secret_path), _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+        try:
+            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(existing, indent=2) + "\n")
+        finally:
+            # Ensure mode is 0o600 even if the file pre-existed with looser bits.
+            try:
+                _os.chmod(str(self._secret_path), 0o600)
+            except OSError:
+                pass
+        logger.info("Secret persisted: %s (secrets.json, 0o600)", key)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Read a value from the in-memory cache (zero IO).
