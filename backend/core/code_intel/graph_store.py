@@ -336,7 +336,13 @@ class GraphStore:
                     d["language"],
                     int(d.get("is_export", 1)),
                     int(d.get("is_entry_point", 0)),
-                    d.get("file_hash"),
+                    # CodeNode carries the raw-file sha as `sha256`, not `file_hash`
+                    # (parser.py). Fall back so the FULL-REBUILD path persists a real
+                    # file hash — else every node stores file_hash=NULL and the graded
+                    # incremental NONE-detection (byte_changed = content_hash != old_hash)
+                    # is dead on the first run after a full rebuild (Gate-2 HIGH,
+                    # run_4602932d). Dicts that pass explicit file_hash are unaffected.
+                    d.get("file_hash") or d.get("sha256"),
                     d.get("indexed_at", now),
                 ))
             self._conn.executemany(sql, rows)

@@ -510,3 +510,44 @@ class TestSanitizeName:
     def test_truncates(self):
         long = "a" * 300
         assert len(_sanitize_name(long)) == 256
+
+
+class TestFullRebuildPersistsFileHash:
+    """Gate-2 HIGH (run_4602932d): full-rebuild path (upsert_nodes via bulk_insert)
+    must persist the raw-file sha as file_hash — CodeNode carries it as `sha256`,
+    not `file_hash`, so without the fallback every node stored file_hash=NULL and
+    the graded-incremental NONE-detection was dead on the first run after a full
+    rebuild. This test uses a dataclass-like node exposing `sha256` (as CodeNode
+    does) and asserts the stored file_hash equals it."""
+
+    def test_sha256_maps_to_file_hash(self, store):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _N:
+            id: str = "a.py::f"
+            file_path: str = "a.py"
+            node_type: str = "function"
+            name: str = "f"
+            line_start: int = 1
+            line_end: int = 3
+            language: str = "python"
+            is_export: bool = True
+            is_entry_point: bool = False
+            sha256: str | None = "deadbeefhash"
+            # deliberately NO file_hash attribute — mirrors real CodeNode
+
+        store.upsert_nodes([_N()])
+        rows = store.get_nodes_by_file("a.py")
+        assert rows and rows[0]["file_hash"] == "deadbeefhash", \
+            "full-rebuild must persist sha256 into file_hash (NONE-detection depends on it)"
+
+    def test_explicit_file_hash_still_wins(self, store):
+        """A dict node passing explicit file_hash keeps it (fallback only fills NULL)."""
+        store.upsert_nodes([{
+            "id": "b.py::g", "file_path": "b.py", "node_type": "function", "name": "g",
+            "line_start": 1, "line_end": 2, "language": "python",
+            "is_export": 1, "is_entry_point": 0, "file_hash": "explicit123",
+        }])
+        rows = store.get_nodes_by_file("b.py")
+        assert rows[0]["file_hash"] == "explicit123"

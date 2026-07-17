@@ -138,35 +138,138 @@ def reindex_projects(full: bool = False) -> dict:
                 "parse_status": parse_status,
             })
         else:
-            # Incremental: only changed files
-            from core.code_intel.parser import parse_file, LANGUAGE_MAP
+            # Incremental: only changed files, GRADED (run_4602932d).
+            #
+            # Each changed file is graded NONE/COSMETIC/STRUCTURAL by comparing its
+            # stored code SIGNATURE (node ids+kinds+flags + outbound edge triples,
+            # LINE-AGNOSTIC) against the fresh parse:
+            #   NONE     — bytes identical (nothing changed) → skip.
+            #   COSMETIC — bytes differ but signature identical (comment/whitespace)
+            #              → skip re-store, LEAVE stored nodes UNTOUCHED. This is the
+            #              token win, and the "never silently drop" bond: skip means
+            #              leave-in-place, NEVER remove (UA #402/#546/#484 data-loss
+            #              class). Line numbers may drift — the documented tradeoff.
+            #   STRUCTURAL — signature differs, OR language not tree-sitter-live
+            #              (regex fidelity too low, Gate-1 #3), OR id collision
+            #              (Gate-1 #1), OR no baseline/empty parse → re-store via the
+            #              existing atomic store_file_nodes_edges path.
+            # The aggregate verdict drives control flow HERE (not a sink-less write,
+            # Gate-1 #6): a SKIP changeset (0 structural files) short-circuits the
+            # batch-level rebuild_fts + prefix-resolution below, since nothing
+            # structural was stored. Note the short-circuit reads the LOCAL `verdict`
+            # variable; the `set_meta("last_change_class", verdict)` write is the
+            # DURABLE record of that decision (observability + a hook can later read
+            # it to decide domain-layer staleness, design §7.4) — it is persisted for
+            # that, not consumed by this function's own control flow.
+            from core.code_intel.parser import parse_file, LANGUAGE_MAP, _tree_sitter_live
             from core.code_intel import extract_and_store_routes
+            from core.code_intel import grading
 
             refreshed = 0
+            grades: list[str] = []
             for rel_path in freshness.changed_files[:200]:  # generous cap
                 full_path = repo_root / rel_path
-                if full_path.exists():
-                    try:
-                        result = parse_file(full_path, repo_root)
-                        if result.nodes:
-                            file_hash = result.nodes[0].sha256 or ""
-                            graph.store_file_nodes_edges(
-                                rel_path, result.nodes, result.edges, file_hash
-                            )
-                            # Extract routes from the same file content
-                            lang = LANGUAGE_MAP.get(full_path.suffix, "unknown")
-                            content = full_path.read_text(encoding="utf-8", errors="replace")
-                            extract_and_store_routes(graph, rel_path, content, lang)
-                            refreshed += 1
-                    except Exception:
-                        pass
-                else:
+                # Scope guard: the graph only ever contains LANGUAGE_MAP files
+                # (mirror the full-rebuild path, parser.py:805 `suffix in
+                # LANGUAGE_MAP`). A non-source file (docs, data, the code_intel.db
+                # itself + its -wal/-shm, images) was never a graph node, so it has
+                # nothing to conserve OR re-store — grade NONE and DO NOT let it
+                # push the changeset verdict. (An UNKNOWN-source ext like COBOL is a
+                # full-rebuild coverage-hole concern, not an incremental re-store
+                # target — it has no extractor, so STRUCTURAL would be a no-op that
+                # falsely inflates the verdict. run_4602932d E2E: committing the DB
+                # into the repo surfaced this.)
+                if Path(rel_path).suffix not in LANGUAGE_MAP:
+                    grades.append(grading.NONE)
+                    continue
+                if not full_path.exists():
+                    # Deletion — MUST remove (never guarded by a skip). A deleted
+                    # file has no new signature; leaving its nodes would be stale.
+                    # remove_file clears nodes+edges+FTS but NOT routes — clear those
+                    # too, or a deleted router file leaves phantom routes in
+                    # code_routes (Gate-2 MED, run_4602932d; mirrors the lost-all-
+                    # symbols purge branch below which already does both).
                     graph.remove_file(rel_path)
+                    graph.delete_routes_for_file(rel_path)
+                    grades.append(grading.STRUCTURAL)
                     refreshed += 1
+                    continue
+                grade = None  # single append point (below) — never double-count
+                try:
+                    result = parse_file(full_path, repo_root)
+                    new_hash = result.nodes[0].sha256 if result.nodes else None
+                    old_nodes = graph.get_nodes_by_file(rel_path)
 
-            # Apply router prefix resolution for any routes just inserted
-            _resolve_prefixes(graph, repo_root)
-            graph.rebuild_fts()
+                    # NONE-detection independent of parse-emptiness: a comment-only
+                    # or symbol-less file (0 nodes) whose CONTENT is unchanged from
+                    # the stored baseline must read NONE, not empty-parse STRUCTURAL
+                    # (which would force rebuild_fts on a no-op commit). Hash the raw
+                    # file bytes (the ground truth), not nodes[0].sha256 (absent when
+                    # the parse yields no nodes). Review MED.
+                    try:
+                        import hashlib
+                        content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                    except OSError:
+                        content_hash = new_hash  # unreadable → fall back
+                    old_hash = old_nodes[0]["file_hash"] if old_nodes else None
+
+                    # Build the OLD signature from what's stored for this file.
+                    old_sig = (
+                        grading.compute_signature(old_nodes, graph.get_edges_by_file(rel_path))
+                        if old_nodes else None
+                    )
+                    byte_changed = (content_hash is None) or (content_hash != old_hash)
+                    lang = LANGUAGE_MAP.get(full_path.suffix, "unknown")
+                    is_supported = lang != "unknown" and _tree_sitter_live(lang)
+
+                    grade = grading.file_grade(
+                        old_sig, result, byte_changed=byte_changed, is_supported=is_supported
+                    )
+
+                    if grading.is_skippable(grade):
+                        # NONE/COSMETIC: leave stored nodes UNTOUCHED (never remove).
+                        pass
+                    elif result.nodes:
+                        # STRUCTURAL with symbols: re-store via the existing
+                        # atomic-replace path (also re-derives routes for the file).
+                        file_hash = new_hash or ""
+                        graph.store_file_nodes_edges(
+                            rel_path, result.nodes, result.edges, file_hash
+                        )
+                        content = full_path.read_text(encoding="utf-8", errors="replace")
+                        extract_and_store_routes(graph, rel_path, content, lang)
+                        refreshed += 1
+                    elif old_nodes:
+                        # STRUCTURAL but the file lost ALL symbols (edited down to
+                        # comments/constants) AND it previously had nodes → PURGE the
+                        # stale nodes + routes. Leaving them is the silent-stale-graph
+                        # data-loss class this feature exists to prevent (Review HIGH:
+                        # the full-rebuild path drops them; the old incremental path
+                        # leaked them). remove_file clears nodes+edges; also clear routes.
+                        graph.remove_file(rel_path)
+                        graph.delete_routes_for_file(rel_path)
+                        refreshed += 1
+                    # else: STRUCTURAL, 0 new nodes, 0 old nodes → nothing to store or
+                    # purge (a newly-added symbol-less file); no-op is correct.
+                except Exception:
+                    # Fail-safe: an errored file is treated as STRUCTURAL (we could
+                    # not prove it cosmetic), so the changeset never mis-reads as SKIP.
+                    grade = grading.STRUCTURAL
+                grades.append(grade if grade is not None else grading.STRUCTURAL)
+
+            verdict = grading.classify_changeset(
+                grades,
+                new_or_deleted_topdirs=0,  # topology signal reserved for a future pass
+                total_graph_files=graph.count_files(),
+            )
+            graph.set_meta("last_change_class", verdict)
+
+            if verdict != grading.SKIP:
+                # Structural change stored → refresh derived state.
+                _resolve_prefixes(graph, repo_root)
+                graph.rebuild_fts()
+            # Always advance the freshness marker (we DID process this commit range,
+            # even if the verdict was SKIP — otherwise we'd re-grade forever).
             if freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
             # Reclaim WAL disk space after the batch (store_file_nodes_edges +
@@ -177,6 +280,8 @@ def reindex_projects(full: bool = False) -> dict:
                 "project": project_name,
                 "status": "incremental",
                 "files_refreshed": refreshed,
+                "change_class": verdict,
+                "grades": {g: grades.count(g) for g in set(grades)},
             })
 
     return {"status": "success", "projects": results}

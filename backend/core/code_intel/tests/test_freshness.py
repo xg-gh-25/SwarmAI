@@ -372,3 +372,203 @@ class TestSpecDetailsStaleness:
         proj = tmp_path / "P"; proj.mkdir()
         (proj / "code-intel.json").write_text("{}", encoding="utf-8")
         assert detect_spec_details_staleness(proj) == []
+
+
+# ─── run_4602932d: graded incremental re-analysis (E2E through reindex handler) ───
+
+class TestGradedIncrementalE2E:
+    """Drive reindex_projects(full=False) over a REAL mixed changeset and assert
+    the grading behavior: COSMETIC files are skipped WITH their nodes conserved
+    (the merge-never-drops bond), STRUCTURAL files are re-stored, and the
+    aggregate verdict is recorded to meta with a real consumer (SKIP short-circuit).
+    """
+
+    def _init_repo(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        proj = tmp_path / ".swarm-ai" / "SwarmWS" / "Projects" / "P1"
+        proj.mkdir(parents=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        sp.run(["git", "init", "-q"], cwd=proj, check=True, env=env)
+        # A supported-language file we will edit COSMETICALLY, and one we will
+        # edit STRUCTURALLY.
+        (proj / "cosmetic.py").write_text("def alpha():\n    return 1\n")
+        (proj / "structural.py").write_text("def beta():\n    return 2\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "init"], cwd=proj, check=True, env=env)
+        head = sp.run(["git", "rev-parse", "HEAD"], cwd=proj, capture_output=True,
+                      text=True, env=env).stdout.strip()
+
+        # Index the repo at this commit so there IS a baseline signature.
+        from core.code_intel.parser import parse_file
+        db = GraphStore(proj / "code_intel.db")
+        db.set_meta("repo_root", str(proj))
+        db.set_meta("last_indexed_commit", head)
+        for f in ("cosmetic.py", "structural.py"):
+            r = parse_file(proj / f, proj)
+            if r.nodes:
+                db.store_file_nodes_edges(f, r.nodes, r.edges, r.nodes[0].sha256 or "")
+        db.rebuild_fts()
+        db.close()
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        import core.code_intel as ci
+        monkeypatch.setattr(ci, "load_project_graph",
+                            lambda name: GraphStore(proj / "code_intel.db"))
+        import jobs.handlers.code_intel_reindex as handler
+        return handler, proj, env
+
+    def test_cosmetic_skipped_structural_restored_nodes_conserved(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        from core.code_intel import grading
+        handler, proj, env = self._init_repo(tmp_path, monkeypatch)
+
+        # Snapshot the cosmetic file's stored nodes BEFORE the reindex.
+        db0 = GraphStore(proj / "code_intel.db")
+        cosmetic_nodes_before = {n["id"] for n in db0.get_nodes_by_file("cosmetic.py")}
+        # alpha's stored line_start BEFORE = 1 (original position). This is the
+        # DISCRIMINATING signal between skip and re-store: the cosmetic edit shifts
+        # alpha to line 3. On SKIP the stored line_start stays 1 (the documented
+        # drift); a re-store would update it to 3. Node ids alone canNOT tell skip
+        # from re-store (both conserve ids, same signature) — so asserting the STALE
+        # line_start is what proves the re-store was actually skipped. Without this,
+        # the test is vacuous (mutation-verified: disabling the skip left it green).
+        alpha_line_before = next(
+            n["line_start"] for n in db0.get_nodes_by_file("cosmetic.py")
+            if n["name"] == "alpha")
+        db0.close()
+        assert cosmetic_nodes_before, "baseline must have indexed cosmetic.py"
+        assert alpha_line_before == 1
+
+        # COSMETIC edit: add a comment + blank line (shifts alpha to line 3, same signature).
+        (proj / "cosmetic.py").write_text(
+            "# a new comment\n\ndef alpha():\n    return 1  # inline note\n")
+        # STRUCTURAL edit: add a real new function (signature changes).
+        (proj / "structural.py").write_text(
+            "def beta():\n    return 2\n\ndef gamma():\n    return 3\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "mixed"], cwd=proj, check=True, env=env)
+
+        result = handler.reindex_projects(full=False)
+        p1 = next(r for r in result["projects"] if r["project"] == "P1")
+        assert p1["status"] == "incremental"
+        # At least one STRUCTURAL file → verdict is an update, not SKIP.
+        assert p1["change_class"] in (grading.PARTIAL_UPDATE, grading.ARCHITECTURE_UPDATE,
+                                       grading.FULL_UPDATE)
+
+        db = GraphStore(proj / "code_intel.db")
+        # COSMETIC file: nodes CONSERVED (never dropped)...
+        cosmetic_nodes_after = {n["id"] for n in db.get_nodes_by_file("cosmetic.py")}
+        assert cosmetic_nodes_after == cosmetic_nodes_before, "COSMETIC skip must conserve nodes"
+        # ...AND the re-store was actually SKIPPED: alpha's stored line_start is
+        # STILL 1 (stale), not updated to its new line 3. This is the non-vacuous
+        # assertion — if the handler re-stored the COSMETIC file, line_start would
+        # be 3 and this fails (mutation-verified: disabling the skip → RED here).
+        alpha_line_after = next(
+            n["line_start"] for n in db.get_nodes_by_file("cosmetic.py")
+            if n["name"] == "alpha")
+        assert alpha_line_after == alpha_line_before == 1, \
+            "COSMETIC file must be SKIPPED (stale line_start), not re-stored"
+        # STRUCTURAL file: the new function IS now in the graph.
+        structural_ids = {n["name"] for n in db.get_nodes_by_file("structural.py")}
+        assert "gamma" in structural_ids, "STRUCTURAL file must be re-stored with new symbol"
+        # Aggregate verdict recorded to meta (real consumer signal).
+        assert db.get_meta("last_change_class") == p1["change_class"]
+        db.close()
+
+    def test_all_cosmetic_yields_skip_verdict(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        from core.code_intel import grading
+        handler, proj, env = self._init_repo(tmp_path, monkeypatch)
+
+        # Only a comment change on ONE file → all-cosmetic changeset.
+        (proj / "cosmetic.py").write_text("# just a comment\ndef alpha():\n    return 1\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "comment only"], cwd=proj, check=True, env=env)
+
+        result = handler.reindex_projects(full=False)
+        p1 = next(r for r in result["projects"] if r["project"] == "P1")
+        assert p1["change_class"] == grading.SKIP, "all-cosmetic changeset → SKIP verdict"
+
+        db = GraphStore(proj / "code_intel.db")
+        assert db.get_meta("last_change_class") == grading.SKIP
+        # Nodes still present (skip = leave untouched, never drop).
+        assert {n["id"] for n in db.get_nodes_by_file("cosmetic.py")}
+        db.close()
+
+    def test_structural_file_emptied_of_symbols_purges_stale_nodes(self, tmp_path, monkeypatch):
+        """Review HIGH: a previously-indexed file edited down to ZERO symbols
+        (all defs removed) must have its stale nodes PURGED, not left in the graph.
+        The old `if result.nodes:` guard leaked them (silent stale graph)."""
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        handler, proj, env = self._init_repo(tmp_path, monkeypatch)
+
+        db0 = GraphStore(proj / "code_intel.db")
+        assert {n["id"] for n in db0.get_nodes_by_file("structural.py")}, "baseline has beta"
+        db0.close()
+
+        # Edit structural.py down to comments only — zero symbols.
+        (proj / "structural.py").write_text("# beta was here, now removed\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "gut structural"], cwd=proj, check=True, env=env)
+
+        handler.reindex_projects(full=False)
+
+        db = GraphStore(proj / "code_intel.db")
+        # Stale nodes for structural.py must be GONE, not leaked.
+        assert not db.get_nodes_by_file("structural.py"), \
+            "STRUCTURAL file emptied of symbols must purge stale nodes (no phantom leak)"
+        db.close()
+
+    def test_none_skip_over_full_rebuild_baseline(self, tmp_path, monkeypatch):
+        """Meta-review MED (run_4602932d): the sha256->file_hash fix (upsert_nodes)
+        is only reachable via the FULL-REBUILD path (bulk_insert), which the other
+        E2E tests bypass (they use store_file_nodes_edges). This test builds the
+        baseline via bulk_insert (the real full-rebuild store), then a commit that
+        does NOT change cosmetic.py's content — asserting it grades NONE (skipped).
+        Without the fix, file_hash=NULL → byte_changed always True → never NONE."""
+        import subprocess as sp
+        from core.code_intel.graph_store import GraphStore
+        from core.code_intel.parser import parse_file
+        from core.code_intel import grading
+        handler, proj, env = self._init_repo(tmp_path, monkeypatch)
+
+        # Re-seed the graph via the FULL-REBUILD store path (bulk_insert), which is
+        # where the sha256->file_hash fallback lives. _init_repo used
+        # store_file_nodes_edges; overwrite with a bulk_insert baseline.
+        baseline_head = sp.run(["git", "rev-parse", "HEAD"], cwd=proj, capture_output=True,
+                                text=True, env=env).stdout.strip()
+        db = GraphStore(proj / "code_intel.db")
+        db.clear()
+        parse_results = []
+        for f in ("cosmetic.py", "structural.py"):
+            r = parse_file(proj / f, proj)
+            parse_results.append(r)
+        db.bulk_insert(parse_results)  # full-rebuild path → exercises the fix
+        # clear()+bulk_insert wipe graph_meta — restore freshness markers to the
+        # CURRENT (pre-comment-edit) HEAD so the handler takes the INCREMENTAL branch
+        # (not never-indexed → delegated full) and sees ONLY the upcoming comment commit.
+        db.set_meta("repo_root", str(proj))
+        db.set_meta("last_indexed_commit", baseline_head)
+        # Prove the fix: file_hash is populated (not NULL) from sha256.
+        stored = db.get_nodes_by_file("cosmetic.py")
+        assert stored and stored[0]["file_hash"], "full-rebuild must persist file_hash (sha256 fallback)"
+        db.close()
+
+        # A commit that does NOT touch cosmetic.py's content (edit only structural.py
+        # cosmetically) → cosmetic.py is not even in the changeset, structural.py is
+        # a comment edit. Both should be NONE/COSMETIC → SKIP.
+        (proj / "structural.py").write_text("# only a comment added\ndef beta():\n    return 2\n")
+        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
+        sp.run(["git", "commit", "-q", "-m", "comment only on structural"], cwd=proj, check=True, env=env)
+
+        result = handler.reindex_projects(full=False)
+        p1 = next(r for r in result["projects"] if r["project"] == "P1")
+        # structural.py comment edit is COSMETIC (signature identical); cosmetic.py
+        # untouched → all-skippable → SKIP verdict. This is the path fix #4 activates.
+        assert p1["change_class"] == grading.SKIP, \
+            "comment-only edit over a full-rebuild baseline must grade SKIP (fix #4 makes file_hash non-NULL)"
