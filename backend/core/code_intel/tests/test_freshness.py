@@ -303,10 +303,13 @@ class TestFullRebuildDelegation:
     def test_incremental_job_delegates_full_rebuild(self, tmp_path, monkeypatch):
         from unittest.mock import patch
         handler = self._make_project(tmp_path, monkeypatch)
+        # Run AB: the full-rebuild path now parses via parse_repo_with_coverage
+        # (coverage-aware). Patch that entry point so "delegated → nothing parsed
+        # inline" stays an exact assertion.
         with patch("jobs.scheduler.emit_event_atomic") as mock_emit, \
-             patch("core.code_intel.parser.parse_repo") as mock_parse:
+             patch("core.code_intel.parser.parse_repo_with_coverage") as mock_parse:
             result = handler.reindex_projects(full=False)
-            # Delegated → event emitted, parse_repo NOT called inline
+            # Delegated → event emitted, no inline parse
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][0] == "code_intel_full_reindex"
             mock_parse.assert_not_called()
@@ -315,9 +318,12 @@ class TestFullRebuildDelegation:
 
     def test_full_job_runs_inline_not_delegated(self, tmp_path, monkeypatch):
         from unittest.mock import patch
+        from core.code_intel.parser import ParseRepoResult
         handler = self._make_project(tmp_path, monkeypatch)
+        # full=True → inline parse via the coverage-aware entry point (Run AB).
         with patch("jobs.scheduler.emit_event_atomic") as mock_emit, \
-             patch("core.code_intel.parser.parse_repo", return_value=[]) as mock_parse:
+             patch("core.code_intel.parser.parse_repo_with_coverage",
+                   return_value=ParseRepoResult(results=[], coverage_holes=[], status="complete")) as mock_parse:
             handler.reindex_projects(full=True)
             # full=True → inline (parse called), NOT delegated
             mock_emit.assert_not_called()

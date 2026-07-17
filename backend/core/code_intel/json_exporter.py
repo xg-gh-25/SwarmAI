@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,24 +25,59 @@ logger = logging.getLogger(__name__)
 # Maximum output size in bytes (500KB). If exceeded, trim dead_code section.
 _MAX_SIZE_BYTES = 500 * 1024
 
+# The v3 business-semantic layer keys the exporter must PRESERVE across a reindex.
+# The graph store only knows v2 structure (modules/routes/nodes); the v3 layer is
+# authored by the s_ai-ready-repo skill (LLM classification + finalize_v3) and lives
+# ONLY in the on-disk code-intel.json. A naive v2 overwrite wipes it → a backfilled
+# accounted_ratio=1.0 silently reverts to 4.8% on the next commit (Gate-1 Check-2:
+# the FALSE-100% banking red line). So we read the prior doc and re-attach these.
+_V3_PRESERVED_KEYS = ("domains", "flows", "steps", "unclassified")
+
 
 def export_code_intel_json(
     graph_store: 'GraphStore',
     project_name: str,
     output_path: Path,
+    coverage_holes: list[dict] | None = None,
+    parse_status: str = "complete",
 ) -> Path:
-    """Export the graph database to code-intel.json v2 format.
+    """Export the graph database to code-intel.json (v2, preserving any v3 layer).
 
     Args:
         graph_store: The GraphStore instance to export from.
         project_name: Human-readable project name.
         output_path: Where to write the JSON file.
+        coverage_holes: Optional file/repo-level coverage holes from
+            parser.parse_repo_with_coverage — written to doc['coverage_ledger'] and,
+            when non-empty, force status="partial" (coverage is NOT complete when the
+            parser could not read part of the repo). Never a silent under-report.
+        parse_status: "complete" | "partial" from the parse phase (oversized repo,
+            missing files). Combined with coverage_holes into the doc's status stamp.
 
     Returns:
         Path to the written file.
+
+    ROOT FIX (Run AB Cycle 3): this used to blindly overwrite with a v2-only doc,
+    wiping the v3 domains/flows/steps/unclassified layer + route ids on every
+    reindex. It now (1) PRESERVES the prior v3 layer, (2) re-attaches prior route
+    ids so flow.entry_ref keeps resolving, (3) writes ATOMICALLY (tmp+os.replace,
+    F19) so an interrupted write never corrupts the prior file, (4) stamps an
+    explicit status: complete|partial.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # ── Read the prior doc (for v3-layer + route-id preservation). Fail-safe:
+    # a missing/corrupt prior file → treat as no-prior, export fresh (never crash). ──
+    prior: dict = {}
+    if output_path.exists():
+        try:
+            prior = json.loads(output_path.read_text(encoding="utf-8"))
+            if not isinstance(prior, dict):
+                prior = {}
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Prior code-intel.json unreadable ({e}); exporting fresh")
+            prior = {}
 
     # Gather data from graph store
     summary = graph_store.get_codebase_summary()
@@ -64,6 +100,11 @@ def export_code_intel_json(
     # Build dependencies (language breakdown as proxy)
     dependencies = _build_dependencies(summary.get("languages", {}))
 
+    # Build routes, re-attaching prior route ids so flow.entry_ref keeps resolving
+    # (the v2 graph does not persist the v3 anchor ids — they live only on disk).
+    built_routes = _build_routes(routes)
+    _reattach_route_ids(built_routes, prior.get("routes"))
+
     # Assemble the v2 document
     doc = {
         "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
@@ -76,7 +117,7 @@ def export_code_intel_json(
             "total_edges": summary.get("total_edges", 0),
         },
         "modules": modules,
-        "routes": _build_routes(routes),
+        "routes": built_routes,
         "entry_points": entry_points,
         "hot_zones": hot_zones,
         "risk_areas": risk_areas,
@@ -84,11 +125,32 @@ def export_code_intel_json(
         "dependencies": dependencies,
     }
 
+    # ── PRESERVE the v3 business-semantic layer from the prior doc (Gate-1 Check-2
+    # ROOT fix). Without this a reindex silently reverts a backfilled coverage layer. ──
+    v3_preserved = False
+    for key in _V3_PRESERVED_KEYS:
+        if prior.get(key):
+            doc[key] = prior[key]
+            v3_preserved = True
+    if v3_preserved:
+        # A doc carrying the v3 layer IS a v3 doc — bump the version so downstream
+        # v3 validation (validate_code_intel_json) actually runs on it.
+        doc["version"] = "3.0"
+        doc["$schema"] = "https://ai-ready-repo.dev/schemas/code-intel.v3.json"
+
+    # ── coverage_ledger + status stamp (F19: never a silent under-report) ──
+    holes = coverage_holes or []
+    if holes:
+        doc["coverage_ledger"] = holes
+    status = "partial" if (holes or parse_status == "partial") else "complete"
+    doc["status"] = status
+
     # Serialize and check size cap
     content = json.dumps(doc, indent=2, ensure_ascii=False)
 
     if len(content.encode("utf-8")) > _MAX_SIZE_BYTES:
-        # Trim dead_code section first (least critical)
+        # Trim dead_code section first (least critical). NEVER trim the v3 layer or
+        # coverage_ledger — those are the coverage guarantee, not disposable padding.
         doc["dead_code"] = []
         content = json.dumps(doc, indent=2, ensure_ascii=False)
 
@@ -101,12 +163,51 @@ def export_code_intel_json(
             )[:20]
             content = json.dumps(doc, indent=2, ensure_ascii=False)
 
-    output_path.write_text(content, encoding="utf-8")
+    # ── F19: ATOMIC write (tmp + os.replace). An interrupted/failed write must never
+    # leave a half-written file or corrupt the prior one. os.replace is atomic within
+    # a filesystem; the .tmp sibling is cleaned up on failure. ──
+    tmp_path = output_path.with_name(output_path.name + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, output_path)
+    except Exception:
+        # Clean up the partial temp so no .tmp leftover; prior file stays intact
+        # (os.replace either fully succeeded or never touched output_path).
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
     logger.info(
         f"Exported code-intel.json for {project_name} "
-        f"({len(content)} bytes, {len(modules)} modules, {len(routes)} routes)"
+        f"({len(content)} bytes, {len(modules)} modules, {len(routes)} routes, "
+        f"status={status}, v3_layer={'preserved' if v3_preserved else 'none'}, "
+        f"holes={len(holes)})"
     )
     return output_path
+
+
+def _reattach_route_ids(built_routes: list[dict], prior_routes: list[dict] | None) -> None:
+    """Re-attach v3 anchor ids from the prior doc onto freshly-built routes, matched
+    by (method, path, file_path). The v2 graph does not persist route ids, so without
+    this every flow.entry_ref (which points at a route id) is orphaned on reindex.
+
+    Mutates built_routes in place. Routes with no prior match keep no id (they are
+    NEW routes the next generation pass will id+classify — surfaced as coverage holes
+    by check_anchor_accounting, never silently accepted)."""
+    if not prior_routes:
+        return
+    prior_by_key: dict[tuple, str] = {}
+    for r in prior_routes:
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        key = (r.get("method"), r.get("path"), r.get("file_path"))
+        prior_by_key[key] = r["id"]
+    for r in built_routes:
+        key = (r.get("method"), r.get("path"), r.get("file_path"))
+        if key in prior_by_key and not r.get("id"):
+            r["id"] = prior_by_key[key]
 
 
 def _build_modules(

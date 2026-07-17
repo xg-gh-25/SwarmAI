@@ -211,3 +211,133 @@ class TestJsonExporter:
         assert output.exists()
         size_kb = output.stat().st_size / 1024
         assert size_kb <= 512  # small tolerance for JSON formatting
+
+
+class TestV3PreservationAndCoverage:
+    """Run AB Cycle 3 — the ROOT fix (Gate-1 Check-2): a full reindex must NOT wipe
+    the v3 business-semantic layer. The v2 exporter overwrote domains/flows/steps/
+    unclassified + route ids on every reindex, so a backfilled accounted_ratio=1.0
+    silently reverted to 4.8% on the next commit — a FALSE 100% (the banking red line).
+    The exporter now PRESERVES the prior v3 layer + carries a coverage_ledger + writes
+    atomically with a status stamp."""
+
+    def _prior_v3_doc(self):
+        return {
+            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+            "version": "3.0",
+            "routes": [
+                {"id": "route:get-items-abc", "method": "GET", "path": "/api/items",
+                 "handler": "n3", "framework": "fastapi", "file_path": "backend/routers/api.py",
+                 "line_number": 15, "middleware": None},
+                {"id": "route:post-items-def", "method": "POST", "path": "/api/items",
+                 "handler": "n3", "framework": "fastapi", "file_path": "backend/routers/api.py",
+                 "line_number": 30, "middleware": "auth"},
+            ],
+            "domains": [{"id": "domain:items", "name": "Items"}],
+            "flows": [{"id": "flow:0", "domain_id": "domain:items", "entry_ref": "route:get-items-abc"}],
+            "steps": [{"id": "step:0", "flow_id": "flow:0"}],
+            "unclassified": [{"id": "route:post-items-def",
+                              "reason": "admin-only mutation, no user-facing business flow"}],
+        }
+
+    def test_v3_layer_preserved_across_reindex(self, tmp_path):
+        """The killer test: a prior doc with domains/flows/steps/unclassified must
+        NOT be wiped by a v2 reindex export."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        # seed a prior v3 doc on disk
+        output.write_text(json.dumps(self._prior_v3_doc()))
+
+        graph = _make_mock_graph()
+        export_code_intel_json(graph, "test-project", output)
+
+        data = json.loads(output.read_text())
+        assert data.get("domains"), "domains[] WIPED by reindex — the exact Gate-1 Check-2 regression"
+        assert data.get("flows"), "flows[] WIPED"
+        assert data.get("steps"), "steps[] WIPED"
+        assert data.get("unclassified"), "unclassified[] WIPED — accounted_ratio would revert to false-low"
+        # version stays v3 when a v3 layer is preserved
+        assert data["version"] == "3.0"
+
+    def test_route_ids_preserved_across_reindex(self, tmp_path):
+        """Route ids (the anchor menu) must survive — flow.entry_ref points at them.
+        The v2 _build_routes emits NO id, so a naive overwrite orphans every flow."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        output.write_text(json.dumps(self._prior_v3_doc()))
+        graph = _make_mock_graph()
+        export_code_intel_json(graph, "test-project", output)
+        data = json.loads(output.read_text())
+        # the flow's entry_ref must still resolve to a route id in routes[]
+        route_ids = {r.get("id") for r in data.get("routes", []) if r.get("id")}
+        flow_refs = {f.get("entry_ref") for f in data.get("flows", [])}
+        assert flow_refs and flow_refs <= route_ids, \
+            f"flow entry_refs {flow_refs} no longer resolve to route ids {route_ids} — orphaned"
+
+    def test_no_prior_file_exports_v2_cleanly(self, tmp_path):
+        """First-ever export (no prior file) still produces a valid v2 doc — no crash,
+        no phantom v3 layer."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(graph := _make_mock_graph(), "test-project", output)
+        data = json.loads(output.read_text())
+        assert data["version"] == "2.0"  # no v3 layer to preserve
+        assert "domains" not in data or data["domains"] == []
+
+    def test_corrupt_prior_file_does_not_crash(self, tmp_path):
+        """A corrupt/unparseable prior file must not break the export (fail-safe:
+        treat as no-prior, export fresh)."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        output.write_text("{ this is not valid json ")
+        export_code_intel_json(_make_mock_graph(), "test-project", output)
+        data = json.loads(output.read_text())
+        assert data["version"] == "2.0"
+
+    def test_status_stamp_present(self, tmp_path):
+        """F19: the doc carries an explicit status: complete|partial stamp."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(_make_mock_graph(), "test-project", output)
+        data = json.loads(output.read_text())
+        assert data.get("status") in ("complete", "partial")
+
+    def test_coverage_holes_carried_and_status_partial(self, tmp_path):
+        """coverage_holes passed in are written to doc['coverage_ledger'] and force
+        status=partial (coverage is not complete when holes exist)."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        holes = [{"ref": "legacy.cbl", "kind": "file",
+                  "reason": "unsupported extension .cbl — no AST parser available"}]
+        export_code_intel_json(_make_mock_graph(), "test-project", output, coverage_holes=holes)
+        data = json.loads(output.read_text())
+        assert data.get("coverage_ledger") == holes
+        assert data["status"] == "partial"
+
+    def test_f19_atomic_no_tmp_leftover(self, tmp_path):
+        """F19: atomic write leaves no .tmp sibling and the final file is intact."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(_make_mock_graph(), "test-project", output)
+        leftovers = list(tmp_path.glob("*.tmp")) + list(tmp_path.glob(".*.tmp"))
+        assert not leftovers, f"atomic write left temp files: {leftovers}"
+        assert json.loads(output.read_text())  # final is valid
+
+    def test_f19_write_failure_preserves_prior(self, tmp_path, monkeypatch):
+        """F19: if the atomic swap fails mid-write, the PRIOR file must remain intact
+        (never a half-written file)."""
+        import core.code_intel.json_exporter as JE
+        output = tmp_path / "code-intel.json"
+        prior = self._prior_v3_doc()
+        output.write_text(json.dumps(prior))
+        # force os.replace to fail
+        real_replace = JE.os.replace if hasattr(JE, "os") else __import__("os").replace
+        import os as _os
+        def boom(src, dst):
+            raise OSError("simulated swap failure")
+        monkeypatch.setattr(_os, "replace", boom)
+        with pytest.raises(Exception):
+            JE.export_code_intel_json(_make_mock_graph(), "test-project", output)
+        # prior file must still be the intact v3 doc
+        data = json.loads(output.read_text())
+        assert data["version"] == "3.0" and data.get("domains"), "prior file corrupted by failed write"
