@@ -2213,3 +2213,95 @@ class TestAnchorAccounting:
         assert "accounted_ratio" in r and r["accounted_ratio"] < 1.0, \
             "accounted_ratio must expose the real 1/3 coverage the old metric hid"
         assert "classified_ratio" in r
+
+
+class TestUnifiedCoverageLedger:
+    """Run AB Cycle 2 — ONE coverage ledger, not two (Gate-1 Check-5).
+
+    Route-level holes (unclassified[], id must be a route anchor) and file/repo-level
+    holes (coverage_ledger[], ref is a file path / repo, from the parser) share ONE
+    {ref, kind, reason} entry contract and ONE _is_substantive_reason gate. The
+    unified reader iter_coverage_ledger(doc) yields every hole in that shape so a
+    consumer gets a single honest "what is NOT understood" list."""
+
+    def _v3(self):
+        doc = _minimal_v2_doc()  # module-level helper in this test file
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": "route:r0", "method": "GET", "path": "/r0", "file_path": "a.py"}]
+        doc["domains"] = [{"id": "domain:o", "name": "O"}]
+        doc["flows"] = [{"id": "flow:0", "domain_id": "domain:o", "entry_ref": "route:r0"}]
+        return doc
+
+    # --- shared gate: the SAME _is_substantive_reason rejects junk for file holes too ---
+    def test_shared_gate_rejects_junk_file_reason(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "legacy.cbl", "kind": "file", "reason": "n/a"}]
+        errors = validate_coverage_ledger(doc)
+        assert any("reason" in e.lower() for e in errors), \
+            f"junk file-hole reason must be rejected by the shared gate, got {errors}"
+
+    def test_shared_gate_accepts_substantive_file_reason(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "legacy.cbl", "kind": "file",
+                                   "reason": "unsupported extension .cbl — no AST parser available"}]
+        assert validate_coverage_ledger(doc) == []
+
+    # --- kind is required + constrained ---
+    def test_ledger_entry_requires_kind(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "x.cbl", "reason": "unsupported extension no parser here"}]
+        errors = validate_coverage_ledger(doc)
+        assert any("kind" in e.lower() for e in errors)
+
+    def test_ledger_rejects_unknown_kind(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "x", "kind": "banana", "reason": "some substantive text here"}]
+        errors = validate_coverage_ledger(doc)
+        assert any("kind" in e.lower() for e in errors)
+
+    # --- route-kind entries in the ledger must still be REAL anchors (mirrors unclassified) ---
+    def test_ledger_route_kind_must_be_real_anchor(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "route:FAKE", "kind": "route",
+                                   "reason": "no business flow because it is internal only"}]
+        errors = validate_coverage_ledger(doc)
+        assert any("anchor" in e.lower() or "fabricat" in e.lower() for e in errors)
+
+    # --- unified reader: yields BOTH route holes (unclassified) AND file holes (ledger) ---
+    def test_iter_coverage_ledger_unifies_both_sources(self):
+        from scripts.ai_ready_helpers import iter_coverage_ledger
+        doc = self._v3()
+        # add a 2nd route parked in unclassified + a file hole in coverage_ledger
+        doc["routes"].append({"id": "route:r1", "method": "POST", "path": "/r1", "file_path": "b.py"})
+        doc["unclassified"] = [{"id": "route:r1", "reason": "admin-only endpoint, no user business flow"}]
+        doc["coverage_ledger"] = [{"ref": "legacy.cbl", "kind": "file",
+                                   "reason": "unsupported extension .cbl — no AST parser available"}]
+        holes = list(iter_coverage_ledger(doc))
+        kinds = {h["kind"] for h in holes}
+        refs = {h["ref"] for h in holes}
+        assert "route" in kinds and "file" in kinds, f"unified reader must yield both, got {kinds}"
+        assert "route:r1" in refs and "legacy.cbl" in refs
+        # every yielded hole conforms to the {ref,kind,reason} shape
+        assert all(set(h.keys()) >= {"ref", "kind", "reason"} for h in holes)
+
+    # --- empty/absent ledger is valid (a fully-covered v3 doc has no file holes) ---
+    def test_absent_ledger_is_valid(self):
+        from scripts.ai_ready_helpers import validate_coverage_ledger, iter_coverage_ledger
+        doc = self._v3()
+        assert validate_coverage_ledger(doc) == []
+        # iter still yields unclassified route holes if any; here none
+        assert list(iter_coverage_ledger(doc)) == []
+
+    # --- validate_code_intel_json wires the new ledger validator (5th... now 6th gate) ---
+    def test_validate_code_intel_json_wires_ledger(self):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = self._v3()
+        doc["coverage_ledger"] = [{"ref": "x.cbl", "kind": "file", "reason": "junk"}]  # too short/junk
+        errors = validate_code_intel_json(doc)
+        assert any("reason" in e.lower() or "ledger" in e.lower() for e in errors), \
+            f"validate_code_intel_json must run coverage_ledger validation, got {errors}"

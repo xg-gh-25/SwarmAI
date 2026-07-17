@@ -188,6 +188,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
         errors.extend(check_llm_assertion_guards(doc))
         errors.extend(check_mermaid_node_anchoring(doc, repo_root=repo_root))
         errors.extend(check_anchor_accounting(doc))
+        errors.extend(validate_coverage_ledger(doc))
 
     return errors
 
@@ -506,6 +507,99 @@ def _is_substantive_reason(reason) -> bool:
     if len(set(r.replace(" ", ""))) < 5:  # too few distinct chars = filler
         return False
     return True
+
+
+# ── Run AB Cycle 2: the UNIFIED coverage ledger (Gate-1 Check-5) ──
+#
+# "One ledger, not two." Two hole SOURCES exist at different granularities:
+#   - route-level: doc['unclassified'] = [{id, reason}] — a route anchor with no
+#     business flow (the id MUST be a real route anchor; enforced by
+#     check_anchor_accounting). This is the WORKING, back-compat route bucket.
+#   - file/repo-level: doc['coverage_ledger'] = [{ref, kind, reason}] — a file the
+#     deterministic PARSER could not turn into nodes (unknown extension, unreadable,
+#     parse failure) or a repo-level fact (empty/oversized). Produced upstream by
+#     parser.parse_repo_with_coverage (Cycle 1).
+# They cannot be physically ONE array because check_anchor_accounting requires an
+# unclassified `id` to be a real ROUTE anchor — a file path would be rejected as
+# fabricated. So unification is by CONTRACT, not by cramming: ONE {ref, kind, reason}
+# entry shape, ONE _is_substantive_reason gate for the `reason` of every hole
+# regardless of source, and ONE reader iter_coverage_ledger(doc) that yields the
+# complete hole set in that shape. That is the honest "single ledger" a consumer sees.
+
+_COVERAGE_HOLE_KINDS = {"route", "file", "repo", "query"}
+
+
+def validate_coverage_ledger(doc: dict) -> list[str]:
+    """Fail-closed validator for the file/repo-level coverage_ledger (Run AB).
+
+    Mirrors check_anchor_accounting's discipline for the parser-produced holes:
+    - each entry is a dict carrying {ref, kind, reason}
+    - `kind` is present and one of _COVERAGE_HOLE_KINDS (no silent unknown kind)
+    - `reason` is SUBSTANTIVE (same _is_substantive_reason gate as unclassified —
+      a hole cannot be rubber-stamped with junk/"n/a"/blank)
+    - a route-kind entry's `ref` MUST be a real route anchor (mirrors the
+      unclassified anti-fabrication check :596 — a file path masquerading as a
+      route hole is rejected)
+
+    An absent/empty coverage_ledger is valid (a fully-covered repo has no file holes).
+    """
+    errors: list[str] = []
+    ledger = doc.get("coverage_ledger")
+    if ledger is None:
+        return errors
+    if not isinstance(ledger, list):
+        return ["coverage_ledger must be a list of {ref, kind, reason} entries"]
+
+    # route-kind refs are validated against the real anchor menu (best-effort: if the
+    # doc has no backfilled ids, extract raises — that is check_anchor_accounting's
+    # job to report, so here we just skip the anchor cross-check rather than double-raise).
+    try:
+        route_ids = _route_anchor_ids(doc)
+    except ValueError:
+        route_ids = set()
+
+    for i, entry in enumerate(ledger):
+        if not isinstance(entry, dict):
+            errors.append(f"coverage_ledger[{i}] must be a dict {{ref, kind, reason}}")
+            continue
+        ref = entry.get("ref")
+        kind = entry.get("kind")
+        reason = entry.get("reason")
+        if not _nonblank(ref):
+            errors.append(f"coverage_ledger[{i}] missing 'ref'")
+        if kind not in _COVERAGE_HOLE_KINDS:
+            errors.append(f"coverage_ledger[{i}] has invalid 'kind'={kind!r} "
+                          f"(must be one of {sorted(_COVERAGE_HOLE_KINDS)})")
+        if not _is_substantive_reason(reason):
+            errors.append(f"coverage_ledger[{i}] (ref={ref!r}) has no substantive "
+                          f"'reason' — a hole cannot be rubber-stamped with a "
+                          f"blank/junk reason (same gate as unclassified)")
+        if kind == "route" and _nonblank(ref) and route_ids and ref not in route_ids:
+            errors.append(f"coverage_ledger[{i}] route-kind ref {ref!r} is not a real "
+                          f"route anchor (fabricated — a file path cannot be a route hole)")
+    return errors
+
+
+def iter_coverage_ledger(doc: dict):
+    """Yield the COMPLETE hole set in the unified {ref, kind, reason} shape (Run AB).
+
+    This is the single honest "what is NOT understood" reader that unifies the two
+    hole sources a consumer would otherwise have to know about separately:
+      - route holes from doc['unclassified'] ({id, reason} → {ref:id, kind:'route', reason})
+      - file/repo/query holes from doc['coverage_ledger'] (already {ref, kind, reason})
+
+    Only well-formed, substantively-reasoned holes are yielded (a junk-reason entry is
+    a validation error surfaced by validate_coverage_ledger / check_anchor_accounting,
+    not something to silently re-emit here). Order: route holes first, then ledger.
+    """
+    for u in (doc.get("unclassified") or []):
+        if isinstance(u, dict) and _nonblank(u.get("id")) and _is_substantive_reason(u.get("reason")):
+            yield {"ref": u["id"], "kind": "route", "reason": u["reason"]}
+    for h in (doc.get("coverage_ledger") or []):
+        if (isinstance(h, dict) and _nonblank(h.get("ref"))
+                and h.get("kind") in _COVERAGE_HOLE_KINDS
+                and _is_substantive_reason(h.get("reason"))):
+            yield {"ref": h["ref"], "kind": h["kind"], "reason": h["reason"]}
 
 
 def _route_anchor_ids(doc: dict) -> set[str]:
