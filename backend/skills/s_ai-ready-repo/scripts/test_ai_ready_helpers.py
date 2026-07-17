@@ -2305,3 +2305,73 @@ class TestUnifiedCoverageLedger:
         errors = validate_code_intel_json(doc)
         assert any("reason" in e.lower() or "ledger" in e.lower() for e in errors), \
             f"validate_code_intel_json must run coverage_ledger validation, got {errors}"
+
+
+class TestB7GateWiringMutation:
+    """Run AB Cycle 4 (B7) — prove EVERY v3 gate is load-bearing on the REAL path.
+
+    The authorship trap that bit run_aad6d4f2: a guard fully unit-tested in
+    isolation while validate_code_intel_json never CALLED it → a bad doc sailed
+    through with a 'verified' label. This mutation test drives the REAL entry point
+    (validate_code_intel_json) and, for EACH of the 6 v3 gates, monkeypatch-unwires
+    that gate and asserts a doc that SHOULD fail on it now PASSES — proving the gate
+    was actually firing. If a gate is silently unwired in the future, its row here
+    goes RED. (GUI32/PIT13: exercise the real assembly path, not the function alone.)
+    """
+
+    import pytest as _pytest
+
+    def _bad_doc_for(self, gate_name):
+        """A minimal v3 doc that is INVALID *specifically* for the named gate."""
+        base = _minimal_v2_doc()
+        base["version"] = "3.0"
+        base["routes"] = [{"id": "route:r0", "method": "GET", "path": "/r0", "file_path": "a.py"}]
+        base["domains"] = [{"id": "domain:o", "name": "O"}]
+        base["flows"] = [{"id": "flow:0", "domain_id": "domain:o", "entry_ref": "route:r0"}]
+        if gate_name == "check_domain_referential_integrity":
+            # flow points at a non-existent route anchor → referential-integrity error
+            base["flows"] = [{"id": "flow:0", "domain_id": "domain:o", "entry_ref": "route:GHOST"}]
+        elif gate_name == "check_anchor_accounting":
+            # a 2nd route with NO flow and NO unclassified bucket → coverage hole
+            base["routes"].append({"id": "route:r1", "method": "POST", "path": "/r1", "file_path": "b.py"})
+        elif gate_name == "validate_coverage_ledger":
+            base["coverage_ledger"] = [{"ref": "x.cbl", "kind": "file", "reason": "n/a"}]  # junk reason
+        elif gate_name == "check_llm_assertion_guards":
+            # a verified:true assertion with no anchor → assertion-guard error
+            base["domains"][0]["business_rules"] = [{"rule": "x", "verified": True}]
+        elif gate_name == "_validate_v3_domain_layer":
+            base["domains"] = "not-a-list"  # structural domain-layer error
+        elif gate_name == "check_mermaid_node_anchoring":
+            # diagram.mermaid with a CODE-LIKE token (file w/ extension) that resolves
+            # to neither the doc anchors nor disk → hallucinated node error.
+            base["flows"][0]["diagram"] = {
+                "mermaid": "graph TD\n  A[a.py] --> B[backend/ghost_service_xyz.py]"
+            }
+        return base
+
+    @_pytest.mark.parametrize("gate", [
+        "_validate_v3_domain_layer",
+        "check_domain_referential_integrity",
+        "check_llm_assertion_guards",
+        "check_mermaid_node_anchoring",
+        "check_anchor_accounting",
+        "validate_coverage_ledger",
+    ])
+    def test_gate_is_load_bearing(self, gate, monkeypatch):
+        import scripts.ai_ready_helpers as H
+        from scripts.ai_ready_helpers import validate_code_intel_json
+
+        doc = self._bad_doc_for(gate)
+        # 1. WITH the gate wired: the bad doc MUST be rejected (proves the doc is
+        #    genuinely invalid for this gate).
+        errors_before = validate_code_intel_json(doc)
+        assert errors_before, f"{gate}: test doc should be invalid but validate passed clean"
+
+        # 2. UNWIRE the gate (stub it to return no errors) and re-run. If the doc now
+        #    passes (or loses exactly this gate's errors), the gate WAS load-bearing.
+        monkeypatch.setattr(H, gate, lambda *a, **k: [])
+        errors_after = validate_code_intel_json(doc)
+        assert len(errors_after) < len(errors_before), (
+            f"{gate}: unwiring it did NOT change validation — the gate is NOT actually "
+            f"firing on the real path (authorship-trap / dead gate). before={len(errors_before)} "
+            f"after={len(errors_after)}")
