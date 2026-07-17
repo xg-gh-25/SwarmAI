@@ -807,9 +807,9 @@ A spec that was correct at generation is *wrong* once the code moves under it �
 |---|---|---|
 | Anchor coverage (classified-or-reasoned) | ✅ fail-closed gate, ratio=1.0 (`check_anchor_accounting`) | inherits physical caps on >1M-LOC repos (§15) — mitigated by mandatory honest coverage % |
 | Behavior coverage (blind-spot) | ⚠️ designed, not shipped (§11.2 `behavior_coverage` gate) | biggest single coverage gap — a classified route can still hide undocumented dangerous behavior |
-| Anti-spurious / anti-false-negative | ✅ shipped fail-closed (`check_llm_assertion_guards`) | static grep=0 misses "implemented but semantically wrong" — needs §11.4(c) dynamic falsification |
+| Anti-spurious / anti-false-negative | ✅ shipped fail-closed (`check_llm_assertion_guards`) | static grep=0 misses "implemented but semantically wrong" — needs §11.4(d) dynamic falsification (deferred: runtime) |
 | Behavioral equivalence | ⚠️ scoring logic shipped + unit-tested, honest-by-construction | no main-path caller yet feeds a live `observations` map (needs a test-runner that executes the domain's tests); pure-static legacy domains → `unchecked` by design |
-| Adversarial (4-detector, bidirectional) | ⚠️ single-direction Gate-2 only | restraint skeleton + Contradiction taxonomy not yet adopted (§11.4) |
+| Adversarial (4-detector, bidirectional) | ⚠️ restraint skeleton ✅ shipped (§11.4a, `deliver.md:401`); 4 detectors NOT built by design (§11.4b-d: Contradiction/Blind-Spot vacuous on current data, False-Promise/Weak-Spec runtime-deferred) | see §11.4 Adoption status (run_d9bd27da) — building an empty gate is the anti-pattern; activation triggers documented |
 | Org-level coverage (fleet of repos) | ❌ single-repo only | the reference engine's discovery-agent + gap-backfill is ahead; build only when serving many repos (§15) |
 
 ---
