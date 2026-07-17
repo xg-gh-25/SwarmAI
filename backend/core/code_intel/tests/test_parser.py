@@ -1160,3 +1160,53 @@ class TestValueRefFalsePositiveGuardsNewLangs:
                 else "fun f(o: Obj): Int {\n  return o.MAX\n}\n")
         t = self._refs(tmp_path, lang, ext, bind + body)
         assert "MAX" not in t, f"{lang}: o.MAX member access must not emit an edge, got {t}"
+
+    # ── Gate-2 findings (run_d021ce39): php reuses `name` for const reads AND the
+    # inner leaf of $variable_name / qualified_name → three false-positive shapes. ──
+
+    def test_php_local_variable_no_edge(self, tmp_path):
+        """Gate-2 F1 (HIGH): a php LOCAL `$MAX` shares the const's node type (`name`
+        under `variable_name`). Using the local must NOT emit a value-ref edge to a
+        same-named module const."""
+        t = self._refs(tmp_path, "php", ".php",
+                       "<?php\nconst MAX_TIMEOUT = 3;\n"
+                       "function f() { $MAX_TIMEOUT = 99; return $MAX_TIMEOUT; }\n")
+        assert "MAX_TIMEOUT" not in t, f"php local $var must not emit a const edge, got {t}"
+
+    def test_php_parameter_shadows_const(self, tmp_path):
+        """Gate-2 F2 (HIGH): a php parameter `$MAX` (nested simple_parameter >
+        variable_name > name) must shadow-prune the module const — no const node,
+        no edge — matching swift/kotlin behavior."""
+        import core.code_intel.parser as P
+        if "php" not in P.LANG_VALUE_SPEC or not P._tree_sitter_live("php"):
+            pytest.skip("php not enabled/live")
+        f = tmp_path / "m.php"
+        f.write_text("<?php\nconst MAX_RETRIES = 3;\n"
+                     "function f($MAX_RETRIES) { return $MAX_RETRIES; }\n")
+        r = P.parse_file(f, tmp_path)
+        consts = [n.name for n in r.nodes if n.node_type == "constant"]
+        refs = [e.target_id.split(P.QUALIFIED_SEPARATOR)[-1]
+                for e in r.edges if e.edge_type == "references"]
+        assert "MAX_RETRIES" not in consts, f"php param must shadow-prune the const, got consts={consts}"
+        assert "MAX_RETRIES" not in refs, f"php param must emit no edge, got {refs}"
+
+    def test_php_typed_parameter_shadows_const(self, tmp_path):
+        """Gate-2 F2 variant: a TYPED php param `Foo $MAX` must resolve the PARAM name
+        (not the type name) and shadow-prune the const."""
+        import core.code_intel.parser as P
+        if "php" not in P.LANG_VALUE_SPEC or not P._tree_sitter_live("php"):
+            pytest.skip("php not enabled/live")
+        f = tmp_path / "m.php"
+        f.write_text("<?php\nconst MAX_RETRIES = 3;\n"
+                     "function f(int $MAX_RETRIES) { return $MAX_RETRIES; }\n")
+        r = P.parse_file(f, tmp_path)
+        refs = [e.target_id.split(P.QUALIFIED_SEPARATOR)[-1]
+                for e in r.edges if e.edge_type == "references"]
+        assert "MAX_RETRIES" not in refs, f"typed php param must shadow-prune, got {refs}"
+
+    def test_php_namespaced_const_no_edge(self, tmp_path):
+        """Gate-2 F3 (MEDIUM): `App\\MAX` (qualified_name) is a namespaced reference,
+        not a bare read of the local module const `MAX`."""
+        t = self._refs(tmp_path, "php", ".php",
+                       "<?php\nconst MAX = 3;\nfunction f() { return App\\MAX; }\n")
+        assert "MAX" not in t, f"php namespaced App\\MAX must not emit a local-const edge, got {t}"

@@ -176,11 +176,13 @@ class LangValueSpec:
         "binding_specs", "lhs_type_filter", "qualifier_gate", "reader_types",
         "member_access_types", "receiver_guard_types", "wrap_types",
         "param_container_types", "use_distinctive_name",
+        "reader_exclusion_parent_types",
     )
 
     def __init__(self, *, binding_specs, reader_types, member_access_types,
                  param_container_types, wrap_types=frozenset(),
                  receiver_guard_types=frozenset(),
+                 reader_exclusion_parent_types=frozenset(),
                  lhs_type_filter=None, qualifier_gate=None,
                  use_distinctive_name=True):
         self.binding_specs = binding_specs
@@ -192,6 +194,12 @@ class LangValueSpec:
         self.receiver_guard_types = frozenset(receiver_guard_types)
         self.param_container_types = frozenset(param_container_types)
         self.wrap_types = frozenset(wrap_types)
+        # reader_exclusion_parent_types: if the reader identifier's DIRECT parent is
+        # one of these, it is NOT a bare module-const read. Needed when a language
+        # REUSES its reader node type for non-reads (php: `name` is both a const read
+        # AND the inner leaf of `$variable_name` and `qualified_name` — Gate-2
+        # run_d021ce39: a local `$MAX` or a namespaced `App\MAX` would false-positive).
+        self.reader_exclusion_parent_types = frozenset(reader_exclusion_parent_types)
         self.lhs_type_filter = frozenset(lhs_type_filter) if lhs_type_filter else None
         self.qualifier_gate = frozenset(qualifier_gate) if qualifier_gate else None
         self.use_distinctive_name = use_distinctive_name
@@ -275,6 +283,12 @@ LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
         member_access_types={"member_access_expression",
                              "class_constant_access_expression",
                              "object_creation_expression"},
+        # php REUSES `name` for a const read, the inner leaf of `$variable_name`,
+        # and the inner leaf of `qualified_name` (App\CONST). Exclude the latter two
+        # so a local `$MAX` or a namespaced `App\MAX` is NOT a bare-const read
+        # (Gate-2 run_d021ce39). swift/kotlin don't need this — their reader type
+        # `simple_identifier` is distinct from variable/type nodes.
+        reader_exclusion_parent_types={"variable_name", "qualified_name"},
         param_container_types={"formal_parameters"},
     ),
     # Swift — property_declaration binds a `pattern` (name is simple_identifier, also
@@ -820,9 +834,21 @@ def _extract_from_tree(tree, path_str: str, language: str,
         def _param_name(node):
             """Extract the identifier name of a parameter node (or None). A bare
             identifier param is itself the name; a typed/default param has the name
-            as its first identifier-ish child."""
+            as its first identifier-ish child.
+
+            php nests the name one level deeper: `simple_parameter > variable_name >
+            name` — and a TYPED param (`Foo $x`) has the TYPE name (`named_type > name`)
+            as an EARLIER child, so a naive first-identifier scan would grab the type.
+            So: if a direct child is `variable_name`, descend it (that is the param
+            name, unambiguously) BEFORE the generic first-identifier scan (Gate-2
+            run_d021ce39, F2 — php param shadow-prune)."""
             if node.type in _IDENTIFIER_LEAF_TYPES:
                 return _sanitize_name(node.text.decode("utf-8", errors="replace")) if node.text else None
+            for c in node.children:
+                if c.type == "variable_name":
+                    for gc in c.children:
+                        if gc.type in _IDENTIFIER_LEAF_TYPES and gc.text:
+                            return _sanitize_name(gc.text.decode("utf-8", errors="replace"))
             for c in node.children:
                 if c.type in _IDENTIFIER_LEAF_TYPES and c.text:
                     return _sanitize_name(c.text.decode("utf-8", errors="replace"))
@@ -867,6 +893,8 @@ def _extract_from_tree(tree, path_str: str, language: str,
     _reader_types = vspec.reader_types if vspec is not None else frozenset()
     _member_types = vspec.member_access_types if vspec is not None else frozenset()
     _receiver_types = vspec.receiver_guard_types if vspec is not None else frozenset()
+    _reader_excl_parents = (vspec.reader_exclusion_parent_types
+                            if vspec is not None else frozenset())
 
     def _walk(node, enclosing_func=None, enclosing_class=None):
         ntype = node.type
@@ -879,6 +907,8 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # dedup NULL-line edges.
         if (module_consts and enclosing_func and ntype in _reader_types
                 and node.text is not None
+                and not (node.parent is not None
+                         and node.parent.type in _reader_excl_parents)
                 and not _is_member_access(node, _member_types, _receiver_types)):
             nm = _sanitize_name(node.text.decode("utf-8", errors="replace"))
             if nm in module_consts and (enclosing_func, nm) not in _emitted_refs:
