@@ -59,9 +59,14 @@ CREATE TABLE IF NOT EXISTS code_edges (
     target_id TEXT NOT NULL,
     edge_type TEXT NOT NULL,
     confidence REAL DEFAULT 1.0,
-    line_number INTEGER,
-    UNIQUE(source_id, target_id, edge_type, line_number)
+    line_number INTEGER
 );
+
+-- NOTE: the edge-identity UNIQUE INDEX (idx_edges_identity) is NOT created here.
+-- It is owned exclusively by _migrate_schema(), because on a LEGACY DB the table
+-- still holds NULL-line duplicate rows and creating a UNIQUE index here would raise
+-- IntegrityError before the migration can dedup. _migrate_schema dedups first, then
+-- installs the index as the sole edge-identity authority (see its docstring).
 
 CREATE INDEX IF NOT EXISTS idx_edges_source ON code_edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON code_edges(target_id);
@@ -129,6 +134,93 @@ class GraphStore:
         self._conn.execute("PRAGMA wal_autocheckpoint=2000")
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
+        self._migrate_schema()
+
+    # ── schema migration ─────────────────────────────────────────────────
+
+    # Current edge-identity schema version. Bump when the code_edges identity
+    # contract changes. v2 = separate UNIQUE INDEX with IFNULL(line_number,-1)
+    # replacing the legacy inline UNIQUE(source,target,edge_type,line_number)
+    # that let NULL-line edges duplicate (codegraph #1034).
+    _EDGE_IDENTITY_VERSION = 2
+
+    def _migrate_schema(self) -> None:
+        """Bring an existing DB's edge-identity contract up to the current version.
+
+        code_intel.db is a rebuildable derived cache with no ALTER-based migration
+        framework — schema is (re)declared via ``CREATE ... IF NOT EXISTS`` on every
+        open, which is a NO-OP on an existing table. So a table that was created with
+        the OLD inline ``UNIQUE(source_id,target_id,edge_type,line_number)`` keeps that
+        constraint forever; merely adding the new ``idx_edges_identity`` index would
+        leave TWO conflicting identity rules (the inline one treats NULL-line rows as
+        distinct; the index folds them) and make ``INSERT OR REPLACE`` ambiguous
+        (Gate-1 #1/#2). The only correct fix on a legacy DB is to REBUILD the table
+        without the inline UNIQUE, deduping NULL-line rows in the process.
+
+        Idempotent + fail-safe: keyed on ``graph_meta.edge_identity_version``; a
+        fresh DB (already built from the new DDL) just records the version and does
+        no work. Any failure rolls back and is swallowed — a stale identity contract
+        degrades dedup, it must never break opening the store (the next full reindex
+        rebuilds cleanly).
+        """
+        try:
+            current = self.get_meta("edge_identity_version")
+            if current is not None and int(current) >= self._EDGE_IDENTITY_VERSION:
+                return  # already migrated
+
+            # Detect the legacy inline UNIQUE by inspecting the stored table DDL.
+            row = self._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_edges'"
+            ).fetchone()
+            table_sql = (row[0] if row else "") or ""
+            has_inline_unique = "UNIQUE(source_id, target_id, edge_type, line_number)" in table_sql
+
+            if not has_inline_unique:
+                # Fresh DB (or already-rebuilt table): no dedup needed, just ensure
+                # the identity index exists. _SCHEMA_SQL no longer creates it.
+                self._conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity "
+                    "ON code_edges(source_id, target_id, edge_type, IFNULL(line_number, -1))"
+                )
+                self._conn.commit()
+            else:
+                # Rebuild the table WITHOUT the inline UNIQUE, deduping on the folded
+                # identity key and keeping MAX(confidence) per group. The new
+                # idx_edges_identity (created by _SCHEMA_SQL above, but on the OLD
+                # table — harmless) is recreated after the swap so it binds the new
+                # table as the sole authority.
+                self._conn.execute("BEGIN")
+                self._conn.executescript(
+                    """
+                    DROP INDEX IF EXISTS idx_edges_identity;
+                    ALTER TABLE code_edges RENAME TO code_edges_legacy;
+                    CREATE TABLE code_edges (
+                        source_id TEXT NOT NULL,
+                        target_id TEXT NOT NULL,
+                        edge_type TEXT NOT NULL,
+                        confidence REAL DEFAULT 1.0,
+                        line_number INTEGER
+                    );
+                    INSERT INTO code_edges (source_id, target_id, edge_type, confidence, line_number)
+                        SELECT source_id, target_id, edge_type, MAX(confidence), line_number
+                        FROM code_edges_legacy
+                        GROUP BY source_id, target_id, edge_type, IFNULL(line_number, -1);
+                    DROP TABLE code_edges_legacy;
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity
+                        ON code_edges(source_id, target_id, edge_type, IFNULL(line_number, -1));
+                    CREATE INDEX IF NOT EXISTS idx_edges_source ON code_edges(source_id);
+                    CREATE INDEX IF NOT EXISTS idx_edges_target ON code_edges(target_id);
+                    """
+                )
+                self._conn.commit()
+
+            self.set_meta("edge_identity_version", str(self._EDGE_IDENTITY_VERSION))
+        except Exception as e:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+            logger.warning("code_edges schema migration skipped: %s", e)
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -717,6 +809,45 @@ class GraphStore:
             }
             for r in rows
         ]
+
+    def get_edges_by_file(self, file_path: str) -> list[dict]:
+        """Return the edges ORIGINATING from *file_path* (source_id ∈ this file).
+
+        ⚠️ Population must mirror the parser's edge-emission rule (parser.py:~483:
+        ``CodeEdge(source_id=enclosing_func, ...)`` — the source is always a def IN
+        the file being parsed). The `code_edges` table has NO `file_path` column
+        (edges are associated to a file only via node ids), and
+        `store_file_nodes_edges` DELETEs a *superset* (source OR target in the
+        file's nodes) — but that superset sweeps in INBOUND calls from OTHER files,
+        which the parser never re-emits for THIS file. Using the superset here
+        would make the OLD signature (superset) and the NEW signature (parser
+        outbound-only) permanently unequal → every file grades STRUCTURAL → the
+        grading optimization silently no-ops (Gate-1 #2, run_4602932d). So this
+        reader filters to OUTBOUND edges only, matching the parser exactly.
+        """
+        rows = self._conn.execute(
+            "SELECT e.source_id, e.target_id, e.edge_type, e.confidence, e.line_number "
+            "FROM code_edges e "
+            "WHERE e.source_id IN (SELECT id FROM code_nodes WHERE file_path = ?)",
+            (file_path,),
+        ).fetchall()
+        return [
+            {
+                "source_id": r[0], "target_id": r[1], "edge_type": r[2],
+                "confidence": r[3], "line_number": r[4],
+            }
+            for r in rows
+        ]
+
+    def count_files(self) -> int:
+        """Number of distinct files currently in the graph.
+
+        The denominator for grading.classify_changeset's FULL_PCT share test
+        (run_4602932d). Returns 0 for an empty graph (share test then disabled).
+        """
+        return self._conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM code_nodes"
+        ).fetchone()[0]
 
     def count_callers_by_file(self, file_path: str) -> dict[str, int]:
         """Count how many callers target each node in *file_path*.

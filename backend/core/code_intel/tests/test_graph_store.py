@@ -118,6 +118,79 @@ class TestUpsert:
         rows = store._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()
         assert rows[0] == 1
 
+    def test_upsert_edges_idempotent_null_line(self, store):
+        """NULL line_number edges (synthesized / file-level) must dedup too.
+
+        SQLite treats each NULL as DISTINCT in a UNIQUE index, so an edge with
+        line_number=None used to insert byte-identical duplicates that inflated
+        callers/impact counts (codegraph bug #1034). The identity index folds
+        NULL via IFNULL(line_number,-1) so these dedup.
+        """
+        store.upsert_nodes([_make_node("n1"), _make_node("n2")])
+        e = _make_edge("n1", "n2", edge_type="references", line_number=None)
+        store.upsert_edges([e])
+        store.upsert_edges([e])
+        rows = store._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()
+        assert rows[0] == 1
+
+    def test_null_line_migration_dedups_existing(self, tmp_path):
+        """The schema-version migration dedups pre-existing NULL-line dup rows.
+
+        Simulates an OLD-schema DB (inline UNIQUE on nullable line_number, which
+        let NULL-line duplicates through). Opening it via GraphStore must run the
+        migration: fold NULL, dedup keeping MAX(confidence), install the identity
+        index as sole authority.
+        """
+        db = tmp_path / "old_schema.db"
+        # Build an OLD-schema edges table with the original inline UNIQUE
+        # (source,target,edge_type,line_number) — NULL line lets dups through.
+        conn = sqlite3.connect(str(db))
+        conn.executescript(
+            """
+            CREATE TABLE code_edges (
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                edge_type TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                line_number INTEGER,
+                UNIQUE(source_id, target_id, edge_type, line_number)
+            );
+            """
+        )
+        # Two byte-identical NULL-line edges + a lower-confidence third — the old
+        # UNIQUE allowed all three because NULL != NULL.
+        conn.executemany(
+            "INSERT INTO code_edges (source_id,target_id,edge_type,confidence,line_number) "
+            "VALUES (?,?,?,?,?)",
+            [
+                ("a", "b", "references", 0.6, None),
+                ("a", "b", "references", 0.9, None),
+                ("a", "b", "references", 0.5, None),
+            ],
+        )
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0] == 3
+        conn.close()
+
+        # Opening via GraphStore triggers the migration.
+        gs = GraphStore(db)
+        try:
+            n = gs._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0]
+            assert n == 1, f"migration should dedup 3 NULL-line dups to 1, got {n}"
+            # Dedup keeps MAX(confidence).
+            conf = gs._conn.execute(
+                "SELECT confidence FROM code_edges WHERE source_id='a'"
+            ).fetchone()[0]
+            assert conf == 0.9, f"dedup must keep MAX(confidence)=0.9, got {conf}"
+            # The identity index is now sole authority — a re-insert dedups.
+            gs.upsert_edges(
+                [_make_edge("a", "b", edge_type="references", line_number=None)]
+            )
+            n2 = gs._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0]
+            assert n2 == 1, f"post-migration NULL-line re-insert must dedup, got {n2}"
+        finally:
+            gs.close()
+
 
 # ── Blast radius (bidirectional CTE) ────────────────────────────────────
 
