@@ -628,7 +628,7 @@ def derive_route_id(method: str, path: str, file_path: str) -> str:
     """
     slug = re.sub(r"[^a-z0-9]+", "-", f"{method} {path}".lower()).strip("-")
     key = f"{method}|{path}|{file_path}"
-    h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]  # 32 bits
+    h = hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]  # 32 bits, non-crypto id
     return f"route:{slug}-{h}"
 
 

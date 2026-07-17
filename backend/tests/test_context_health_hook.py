@@ -937,10 +937,15 @@ class TestNoProseBump:
         ctx = ws / ".context"
         ctx.mkdir(parents=True)
         # Entry titled "Correction" — a word that appears all over prose.
+        # Use a RECENT date: a hardcoded old date ages past the 45-day dormant
+        # threshold and gets reclaim-stripped before the assertion — a calendar
+        # time-bomb (this fixture's `2026-06-01` broke CI on 2026-07-16, exactly
+        # 45 days later). ref:0 + last:none is preserved (that IS the test).
+        recent = date.today().isoformat()
         (ctx / "MEMORY.md").write_text(
             "## Pitfalls\n"
             "_Operational lessons._\n\n"
-            "- [pitfall] **Correction** — a specific lesson (2026-06-01)\n"
+            f"- [pitfall] **Correction** — a specific lesson ({recent})\n"
             "  <!-- ref:0 | last:none | decay:active -->\n"
         )
         # DailyActivity prose that mentions the word "Correction" many times.
@@ -971,6 +976,12 @@ class TestUsageRefBridge:
         ws = tmp_path / "SwarmWS"
         ctx = ws / ".context"
         ctx.mkdir(parents=True)
+        # RECENT dates: an old title date would age past the 45-day dormant
+        # threshold and let reclaim STRIP the ref:0 "Rarely used note" entry —
+        # which would then satisfy `entries.get(..., 0) == 0` by DELETION rather
+        # than by the behavior under test (below-threshold entry not bridged).
+        # Recent dates keep both entries present so the assertions are non-vacuous.
+        recent = date.today().isoformat()
         (ctx / "MEMORY.md").write_text(
             "<!-- MEMORY_INDEX_START -->\n"
             "- [PIT07] Gate caught a real bug | gate, adversarial\n"
@@ -978,9 +989,9 @@ class TestUsageRefBridge:
             "<!-- MEMORY_INDEX_END -->\n"
             "## Pitfalls\n"
             "_lessons_\n\n"
-            "- [pitfall] **Gate caught a real bug** — body (2026-06-01)\n"
+            f"- [pitfall] **Gate caught a real bug** — body ({recent})\n"
             "  <!-- ref:0 | last:none | decay:active -->\n"
-            "- [guideline] **Rarely used note** — body (2026-06-01)\n"
+            f"- [guideline] **Rarely used note** — body ({recent})\n"
             "  <!-- ref:0 | last:none | decay:active -->\n"
         )
         (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40, "GUI99": 2}))

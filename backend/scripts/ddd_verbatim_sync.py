@@ -102,7 +102,8 @@ _KNOWN_NON_VERBATIM: set[str] = set()
 
 
 def _md5(p: Path) -> str:
-    return hashlib.md5(p.read_bytes()).hexdigest()
+    # non-crypto content fingerprint for copy-equality checks, not security
+    return hashlib.md5(p.read_bytes(), usedforsecurity=False).hexdigest()
 
 
 def _iter_ddd_assets():
