@@ -38,6 +38,20 @@ export function shouldShowOnboarding(status: SystemStatus | undefined): boolean 
   return !!status && !status.onboardingComplete;
 }
 
+/**
+ * What AppRoutes should render given the onboarding-status query state.
+ * 'loading' → render nothing (avoid the new-user ChatPage flash while status is
+ * undefined); 'onboarding' → wizard; 'app' → ChatPage. Pure, so it's testable
+ * without wiring a full useQuery render.
+ */
+export function routeDecision(
+  status: SystemStatus | undefined,
+  isLoading: boolean,
+): 'loading' | 'onboarding' | 'app' {
+  if (isLoading || status === undefined) return 'loading';
+  return shouldShowOnboarding(status) ? 'onboarding' : 'app';
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -179,16 +193,22 @@ function PostUpdateToast() {
  * Must be inside QueryClientProvider for useQuery.
  */
 function AppRoutes() {
-  const { data: status, refetch } = useQuery({
+  const { data: status, isLoading, refetch } = useQuery({
     queryKey: ['system-status-onboarding'],
     queryFn: systemService.getStatus,
     staleTime: 1000 * 60 * 10, // 10 min — only check once
     retry: 2,
   });
 
-  // Show onboarding whenever the user hasn't completed it — even if the backend
-  // is only partially initialized. Step1 System Check is the in-wizard wait state.
-  if (shouldShowOnboarding(status)) {
+  // While the onboarding status is still loading, render nothing — do NOT fall
+  // through to ChatPage. Otherwise a brand-new user (status undefined until the
+  // query resolves) would see a sub-second flash of the unusable, un-onboarded
+  // ChatPage before the wizard appears (meta-review MED, run_61c4c939).
+  const decision = routeDecision(status, isLoading);
+  if (decision === 'loading') {
+    return null;
+  }
+  if (decision === 'onboarding') {
     return <OnboardingPage onComplete={() => refetch()} />;
   }
 

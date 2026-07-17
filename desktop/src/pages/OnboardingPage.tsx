@@ -457,7 +457,9 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
   const [starting, setStarting] = useState(false);
   // Show the ACTUAL configured model + region (persisted by Step2 on verify),
   // not hardcoded strings that lie when the user picked a different region.
-  const [model, setModel] = useState<string>('claude-opus-4-8');
+  // Fallbacks match backend DEFAULT_CONFIG (app_config_manager.py) so the
+  // pre-resolve paint matches the real default a "Configure later" user gets.
+  const [model, setModel] = useState<string>('claude-opus-4-6');
   const [region, setRegion] = useState<string>('us-east-1');
 
   useEffect(() => {

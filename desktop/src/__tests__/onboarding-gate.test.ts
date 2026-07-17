@@ -7,7 +7,7 @@
  * NEVER re-see the wizard.
  */
 import { describe, it, expect } from 'vitest';
-import { shouldShowOnboarding } from '../App';
+import { shouldShowOnboarding, routeDecision } from '../App';
 import type { SystemStatus } from '../services/system';
 
 function status(partial: Partial<SystemStatus>): SystemStatus {
@@ -37,5 +37,23 @@ describe('shouldShowOnboarding — gate predicate', () => {
 
   it('status still loading (undefined) → no wizard (wait for status)', () => {
     expect(shouldShowOnboarding(undefined)).toBe(false);
+  });
+});
+
+describe('routeDecision — no new-user ChatPage flash', () => {
+  it('isLoading → render nothing (never flash ChatPage)', () => {
+    expect(routeDecision(undefined, true)).toBe('loading');
+  });
+
+  it('status undefined but not flagged loading → still render nothing', () => {
+    expect(routeDecision(undefined, false)).toBe('loading');
+  });
+
+  it('resolved + not onboarded → onboarding', () => {
+    expect(routeDecision(status({ initialized: false, onboardingComplete: false }), false)).toBe('onboarding');
+  });
+
+  it('resolved + onboarded → app (ChatPage)', () => {
+    expect(routeDecision(status({ onboardingComplete: true }), false)).toBe('app');
   });
 });
