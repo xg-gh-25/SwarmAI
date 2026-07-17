@@ -3,7 +3,7 @@ title: "SwarmAI — Agentic OS Architecture"
 subtitle: "High-Level Design Document"
 version: "2.1"
 created: 2026-04-15
-updated: 2026-05-14
+updated: 2026-07-17
 author: "REDACTED_NAME (XG) + Swarm (AI Co-Architect)"
 status: "For PE / Tech Leadership Review"
 classification: "Internal"
@@ -32,12 +32,12 @@ regenerate_pdf: "python3 Projects/SwarmAI/assets/generate-arch-doc.py"
 | **6 Architecture Layers** | Interface → Intelligence → Harness → Session → Engine → Platform |
 | **11-File Context Chain** | P0–P10 priority system with token budgets and L0/L1 caching |
 | **3-Layer Memory Pipeline** | Session capture → distillation → curated long-term memory (git-verified) |
-| **Hybrid Memory Recall** | FTS5 keyword + sqlite-vec vector search (Bedrock Titan v2 embeddings) |
-| **82 Skills (15 always + 67 lazy)** | Two-tier loading with manifest.yaml — 49% token reduction in skill listing |
-| **4-Phase Evolution Pipeline** | MINE → ASSESS → ACT → AUDIT with confidence-gated deployment |
+| **Memory Recall** | Pure-filesystem keyword FTS5 + Okapi-BM25 (vector/Titan leg removed 2026-06-28) |
+| **90+ Skills (always + lazy tiers)** | Two-tier loading with manifest.yaml — large token reduction in skill listing |
+| **Two-Axis Evolution** | Operational (MINE→ASSESS→ACT→AUDIT, confidence-gated L0 deploy) + Cognitive (CLASS_A/B/C judgment routing → human gate) |
 | **9-Stage Autonomous Pipeline + Goal Loop** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT; Goal Loop wraps multi-cycle convergence |
 | **Daemon-First Backend** | launchd daemon runs 24/7 — desktop app is optional UI layer |
-| **OOM Resilience** | Proactive RSS-based restart at 1.8GB — prevents macOS jetsam kills |
+| **OOM Resilience** | Proactive RSS-based restart at 3.5GB — prevents macOS jetsam kills |
 | **Multi-Channel Unified Brain** | Desktop + Slack — same agent, same memory, same context |
 
 Version: 2.1 • Date: April 15, 2026
@@ -73,23 +73,23 @@ SwarmAI is a desktop application that wraps Claude's Agent SDK inside a harness 
 
 The core thesis: most AI tools reset when you close them. Context is lost, decisions are forgotten, and users re-explain the same things session after session. SwarmAI solves this structurally — not through fine-tuning, but through engineered knowledge persistence.
 
-> **Key Innovation:** The "Harness" — an 11-file context priority chain, 3-layer memory distillation pipeline with hybrid vector+keyword recall, self-evolution registry, and 7 post-session hooks that create a compound loop: every session makes the next one better. Every correction prevents a class of future mistakes.
+> **Key Innovation:** The "Harness" — an 11-file context priority chain, 3-layer memory distillation pipeline with pure-filesystem keyword/FTS5/BM25 recall, self-evolution registry, and post-session hooks that create a compound loop: every session makes the next one better. Every correction prevents a class of future mistakes.
 
 ### Key Metrics (April 2026)
 
 | Metric | Value |
 |--------|-------|
 | Commits | 1,380+ |
-| Built-in Skills | 82 (15 always-loaded, 67 lazy-loaded via manifest.yaml) |
+| Built-in Skills | 90+ (always-loaded + lazy-loaded via manifest.yaml) |
 | Context Files | 11 (P0–P10 priority chain) |
 | Post-Session Hooks | 8 (auto-commit, DailyActivity, distillation, evolution ×2, context-health, improvement, user-observer) |
-| Pipeline Stages | 8 (EVALUATE → REFLECT) |
+| Pipeline Stages | 9 (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT) |
 | Session States | 5 (COLD → STREAMING → IDLE → WAITING_INPUT → DEAD) |
-| Core Engine Level | L4 (Autonomous) — DDD auto-refresh + auto-skill proposals + hybrid recall |
+| Core Engine Level | L4 (Autonomous) — DDD auto-refresh + auto-skill proposals + keyword/FTS5/BM25 recall |
 | Backend Mode | Daemon-first (launchd 24/7) — desktop app is optional UI layer |
-| OOM Protection | Proactive RSS restart at 1.8GB — prevents jetsam kills |
-| Memory Recall | 4-level: Brain (always) + Library (vector+FTS5) + Transcripts (semantic) + Session (FTS5) |
-| Evolution Pipeline | 4-phase MINE→ASSESS→ACT→AUDIT, confidence-gated deployment |
+| OOM Protection | Proactive RSS restart at 3.5GB — prevents jetsam kills |
+| Memory Recall | 4-level: Brain (always) + Library (keyword/FTS5/BM25) + Transcripts (FTS5) + Session (FTS5) |
+| Evolution Pipeline | Two-axis: operational (MINE→ASSESS→ACT→AUDIT, confidence-gated) + cognitive (CLASS_A/B/C → human gate) |
 | Channels | Desktop + Slack (unified brain) |
 | Tech Stack | 4 languages: Rust (Tauri), TypeScript (React), Python (FastAPI), SQL (SQLite) |
 
@@ -108,8 +108,8 @@ SwarmAI's architecture is organized into six horizontal layers. Each layer has a
 |-------|-------------|----------------|
 | Interface | Visual workspace, multi-tab chat, dashboard, channels | SwarmWS Explorer, Chat (1–4 tabs), Radar, Gateway (Slack) |
 | Intelligence | Proactive awareness, autonomous execution, jobs | Proactive Intelligence, Signal Pipeline, Autonomous Pipeline, Job System |
-| Harness | Core: raw Claude → persistent, evolving agent | Context (11 files), Memory (3-layer + hybrid recall), Evolution (56+ skills), Safety |
-| Session | Multi-session lifecycle, isolation, recovery | SessionRouter, SessionUnit (5-state), LifecycleManager, 7 Hooks |
+| Harness | Core: raw Claude → persistent, evolving agent | Context (11 files), Memory (3-layer + keyword/FTS5/BM25 recall), Evolution (90+ skills), Safety |
+| Session | Multi-session lifecycle, isolation, recovery | SessionRouter, SessionUnit (5-state), LifecycleManager, SessionRegistry, StreamingOrchestrator, RetryManager, SessionHealing, 7 Hooks |
 | Engine | AI model access, tool ecosystem | Claude Agent SDK, Bedrock/Anthropic, MCP Servers (7+), Skills Engine |
 | Platform | Desktop infra, all local, zero cloud | Tauri 2.0, React 19, FastAPI, SQLite, filesystem, launchd daemon (24/7) |
 
@@ -138,8 +138,8 @@ The Swarm Core Engine is the meta-architecture that ties all six flywheels toget
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
-| Self-Evolution | Observes user patterns, measures skill performance, auto-optimizes underperformers, never repeats mistakes | EVOLUTION.md, 56+ skills, SkillMetrics, EvolutionOptimizer, SessionMiner, SkillFitness, UserObserver, SkillGuard |
-| Self-Memory | 3-layer distillation + hybrid recall, SessionRecall (FTS5 cross-session search), MemoryGuard (all writes sanitized), git-verified, weekly LLM pruning | DailyActivity, distillation hooks, MEMORY.md, SessionRecall, MemoryGuard, briefing, sqlite-vec |
+| Self-Evolution | Observes user patterns, measures skill performance, auto-optimizes underperformers, never repeats mistakes | EVOLUTION.md, 90+ skills, SkillMetrics, EvolutionOptimizer, SessionMiner, SkillFitness, UserObserver, SkillGuard |
+| Self-Memory | 3-layer distillation + keyword/FTS5/BM25 recall, SessionRecall (FTS5 cross-session search), MemoryGuard (all writes sanitized), git-verified, weekly LLM pruning | DailyActivity, distillation hooks, MEMORY.md, SessionRecall, MemoryGuard, briefing |
 | Self-Context | 11-file P0-P10 priority chain + token budgets + caching | Context loader, prompt builder, budget tiers, freshness |
 | Self-Harness | Validates context files, detects DDD staleness, auto-refresh | ContextHealthHook (light+deep), auto-commit, integrity |
 | Self-Health | Monitors services, resources, sessions; proactive restart, auto-restart | Service manager, resource monitor, lifecycle manager, OOM governance |
@@ -153,7 +153,7 @@ The Swarm Core Engine is the meta-architecture that ties all six flywheels toget
 | L1 | Self-Maintaining | Remembers, self-commits, captures corrections, health monitoring | Complete |
 | L2 | Self-Improving | Weekly LLM maintenance, unified jobs, feedback loops closed | Complete |
 | L3 | Self-Governing | Session-type context, proactive gap detection, DDD auto-sync | Complete |
-| L4 | Autonomous | **Next-Gen Agent Intelligence: 12-module self-evolution loop closed.** UserObserver → SkillMetrics → SessionMiner → EvolutionOptimizer → auto-deploy with backup. Plus DDD refresh, skill proposer, hybrid recall, MemoryGuard on all paths, proactive OOM restart. | Current (4/6 + 2 new) |
+| L4 | Autonomous | **Next-Gen Agent Intelligence: 12-module self-evolution loop closed.** UserObserver → SkillMetrics → SessionMiner → EvolutionOptimizer → auto-deploy with backup. Plus DDD refresh, skill proposer, keyword/FTS5/BM25 recall, MemoryGuard on all paths, proactive OOM restart. | Current (4/6 + 2 new) |
 
 ---
 
@@ -197,7 +197,7 @@ Most AI tools assemble a single system prompt. SwarmAI maintains an 11-file prio
 The memory pipeline is now a two-part system: a **distillation pipeline** that converts raw session activity into durable, curated knowledge, and a **recall system** that ensures any memory entry — regardless of age — can be found when relevant.
 
 ![Figure 4: Memory Pipeline](memory-pipeline.svg)
-*Figure 4: Memory Pipeline — Three-layer distillation + hybrid recall system with vector embeddings*
+*Figure 4: Memory Pipeline — Three-layer distillation + pure-filesystem keyword/FTS5/BM25 recall*
 
 #### Distillation Pipeline
 
@@ -213,8 +213,8 @@ The memory pipeline is now a two-part system: a **distillation pipeline** that c
 |-------|------|---------|--------|-----------|
 | L1: Semantic | "I know that..." | MEMORY.md (curated, ~5K tokens) | N/A — full injection | Always in system prompt |
 | L2: Procedural | "I know how..." | EVOLUTION.md (corrections, competence) | N/A — full injection | Always in system prompt |
-| L3: Episodic | "I experienced..." | Knowledge Library (270+ files, 730K+ tokens) | Hybrid: 0.6 vector + 0.4 FTS5 | Pre-session + post-first-message recall |
-| L4: Verbatim | "The exact words..." | JSONL transcripts (1,500+ files, 700MB+) | Semantic vector + FTS5 | On-demand transcript search |
+| L3: Episodic | "I experienced..." | Knowledge Library (270+ files, 730K+ tokens) | Keyword FTS5 + Okapi-BM25 (vector leg removed 2026-06-28) | Pre-session + post-first-message recall |
+| L4: Verbatim | "The exact words..." | JSONL transcripts (1,500+ files, 700MB+) | FTS5 keyword search | On-demand transcript search |
 
 Three-stage recall activation: (1) Pre-session — focus keywords from proactive briefing. (2) Post-first-message — re-search with user's actual query (commit `3c9f0d4`). (3) Mid-session — agent-initiated Read tool. Score threshold <0.2 suppresses injection — empty recall beats wrong recall.
 
@@ -251,7 +251,7 @@ ACT:     HIGH → auto-deploy (.bak backup + verify + rollback)
 AUDIT:   Verify deployment, rollback on failure, log to EVOLUTION.md
 ```
 
-**Skill tiering** — 82 skills split into always-loaded (15, ~100 tokens each) and lazy-loaded (67, ~25-token stubs). Lazy skills read INSTRUCTIONS.md via agent Read tool on invocation. 49% token reduction. Complex skills declare scripts via `manifest.yaml`.
+**Skill tiering** — 90+ skills split into always-loaded (~100 tokens each) and lazy-loaded (~25-token stubs). Lazy skills read INSTRUCTIONS.md via agent Read tool on invocation. Large token reduction in the skill listing. Complex skills declare scripts via `manifest.yaml`.
 
 **Key design: confidence gating.** With ~6% correction rate, HIGH threshold is unreachable for most skills — the pipeline safely accumulates data until evidence justifies deployment. Observation is always safe; actuation is gated.
 
@@ -302,24 +302,27 @@ Swarm is a personal assistant with one brain. Regardless of channel — desktop 
 
 - Chat tabs are parallel (multi-slot, per-topic) — for deep work
 - Channel session is serialized (single dedicated slot) — for quick exchanges across platforms
-- One dedicated channel slot always reserved (min_tabs = 2) — channels never starve chat, chat never starves channels
+- Concurrency is bounded by real available RAM (`ResourceMonitor.spawn_budget()`), not a fixed slot count — channels and chat share the RAM-gated admission path so neither starves the other
 - User identity mapping ties platform IDs (Slack W017T04E) to one unified user_key
 
 ---
 
 ## 6. Session Architecture & Multi-Tab Parallel Sessions
 
-Replaced a monolithic AgentManager (5,428 lines) with four focused components during the v7 re-architecture. Driven by real need: parallel chat tabs + dedicated channel slots without resource exhaustion.
+Replaced a monolithic AgentManager (5,428 lines) with seven focused components during the v7 re-architecture. Driven by real need: parallel chat tabs + dedicated channel slots without resource exhaustion.
 
 ![Figure 7: Multi-Tab Parallel Sessions](multi-tab-sessions.svg)
 *Figure 7: Multi-Tab Parallel Sessions — SessionRouter, 5-state SessionUnits, dedicated channel slot*
 
 | Component | Responsibility |
 |-----------|---------------|
-| SessionRouter | Slot acquisition, IDLE eviction, queue timeout (60s), MAX_CONCURRENT=2 |
-| SessionUnit | 5-state machine (COLD→STREAMING→IDLE→WAIT→DEAD), subprocess spawn, 3x retry with --resume, SSE |
+| SessionRouter | Slot acquisition & routing, IDLE eviction, queue timeout (60s). RAM-based spawn admission (see below) |
+| SessionUnit | 5-state machine (COLD→STREAMING→IDLE→WAIT→DEAD), subprocess spawn, SSE |
 | LifecycleManager | 60s health loop, 12hr TTL kill, DEAD→COLD cleanup, startup orphan reaper, **proactive RSS restart** |
 | SessionRegistry | Module-level singletons, initialize() wires components, configure_hooks() |
+| StreamingOrchestrator | Owns the SDK streaming loop — sends query, parses SDK messages into SSE events |
+| RetryManager | Retry/recovery orchestration: 3x retry with --resume, OOM recovery, 10MB buffer-overflow recovery |
+| SessionHealing | Invisible self-healing — HealthSensor + TaskCheckpoint + HealingLoop (checkpoint → kill → respawn → continue) |
 
 #### Key Invariants
 
@@ -327,8 +330,8 @@ Replaced a monolithic AgentManager (5,428 lines) with four focused components du
 - Subprocess spawn serialized via module-level locks
 - Retry uses `--resume` to restore conversation context across crashes
 - Hooks fire via BackgroundHookExecutor — never block the request path
-- One dedicated slot always reserved for channels (min_tabs = 2)
-- **Proactive restart** `NEW`: when RSS exceeds 1.2GB, compact → kill → lazy resume (prevents jetsam OOM kills)
+- **Spawn admission is RAM-gated** `NEW`: admission is gated SOLELY by `ResourceMonitor.spawn_budget()` (real available RAM, with a concurrent-peak penalty) — NOT by a fixed tab-count ceiling. When RAM is exhausted, a request evicts an idle peer or queues until a slot frees. (`compute_max_tabs` is a frontend-only UX concern, no longer consulted for backend arbitration.)
+- **Proactive restart** `NEW`: when RSS exceeds 3.5GB, compact → kill → lazy resume (prevents jetsam OOM kills)
 
 ---
 
@@ -397,7 +400,7 @@ The interface is a single integrated system where the Chat Center orchestrates e
 | Column | Purpose | Key Interactions |
 |--------|---------|-----------------|
 | SwarmWS Explorer (left) | Persistent local workspace | Git-tracked + ETag polling. Agent reads/writes/commits directly. |
-| Chat Center (center) | Multi-session command surface | SSE streaming, per-tab isolation, 56+ skills, MCP tools. Controls Explorer and Radar. |
+| Chat Center (center) | Multi-session command surface | SSE streaming, per-tab isolation, 90+ skills, MCP tools. Controls Explorer and Radar. |
 | Swarm Radar (right) | Attention dashboard | ToDos, sessions, artifacts, jobs. Drag work packets to chat for instant context. |
 
 ---
@@ -433,13 +436,13 @@ macOS jetsam kills processes that exceed memory pressure thresholds — with no 
 
 ### The Problem
 
-Each Claude CLI subprocess + its MCP servers costs ~500MB RSS. Two active tabs = ~1GB. With context growth during long sessions, processes can reach 1.2-1.5GB, triggering jetsam exit code -9 kills. Previously: total data loss for that session.
+Each Claude CLI subprocess + its MCP servers costs ~500MB RSS. Multiple active tabs plus context growth during long sessions push a process tree into multi-gigabyte territory, triggering jetsam exit code -9 kills. Previously: total data loss for that session.
 
 ### The Solution: Proactive Restart-with-Resume
 
 | Component | What | Detail |
 |-----------|------|--------|
-| Trigger B (primary) | Post-turn RSS check | After STREAMING → IDLE, check process tree RSS. If > 1.8GB: trigger restart. |
+| Trigger B (primary) | Post-turn RSS check | After STREAMING → IDLE, check process tree RSS. If > 3.5GB: trigger restart. |
 | Trigger A (fallback) | Lifecycle maintenance loop | Every 60s, check all IDLE sessions. Catches sessions that grew but received no new messages. |
 | Restart Flow | Compact → kill → lazy resume | Trigger SDK compaction, kill subprocess, mark COLD. Next message auto-respawns with `--resume`. |
 | Cooldown | 3-minute per-session cooldown | Prevents restart loops. OOM crash adds 30-120s backoff. |
@@ -459,8 +462,8 @@ Each Claude CLI subprocess + its MCP servers costs ~500MB RSS. Two active tabs =
 
 | Decision | Choice | Alternative | Rationale |
 |----------|--------|------------|-----------|
-| Memory | 3-layer distillation + hybrid recall (files + vector) | Pure RAG / Vector DB | Files are git-trackable, human-readable, editable. Vector adds semantic recall without replacing files. |
-| Sessions | 4-component decomposition | Monolithic AgentManager | 5,428-line God Object caused 15+ bugs (COE). Clean error boundaries. |
+| Memory | 3-layer distillation + pure-filesystem keyword recall (FTS5/BM25) | Pure RAG / Vector DB | Files are git-trackable, human-readable, editable. Keyword recall + agentic re-search covers the synonym gap without embedding cost or a vector DB. |
+| Sessions | 7-component decomposition | Monolithic AgentManager | 5,428-line God Object caused 15+ bugs (COE). Clean error boundaries. |
 | Context | 11-file priority chain + budget | Single system prompt | Priority truncation ensures identity/safety survive under pressure |
 | Channels | Shared session (serialized) | Independent per channel | 'One brain': Slack knows what desktop said. No fragmentation. |
 | Skills | SKILL.md instruction files | Compiled plugins | LLM-native: agent reads as natural language. New skill = markdown file. |
@@ -479,17 +482,17 @@ SwarmAI occupies a unique position: not a code editor, not an IDE, not a CLI age
 
 | Capability | SwarmAI | Claude Code | Kiro | Cursor | OpenClaw |
 |-----------|---------|-------------|------|--------|----------|
-| Memory | 3-layer + hybrid vector recall | CLAUDE.md (manual) | Per-project | Per-project | Session pruning |
+| Memory | 3-layer + pure-filesystem keyword recall (FTS5/BM25) | CLAUDE.md (manual) | Per-project | Per-project | Session pruning |
 | Context | 11-file + budgets | Single prompt | Spec-driven | Codebase index | Standard |
 | Multi-session | 1-4 parallel tabs | 1 session | 1 session | 1 session | Per-channel |
-| Self-evolution | 82 skills + 4-phase evolution pipeline | No | No | No | No |
+| Self-evolution | 90+ skills + two-axis evolution pipeline (operational v2 + cognitive v3) | No | No | No | No |
 | Autonomous pipeline | 9-stage + Goal Loop + DDD+TDD | Manual | Spec-driven | No | No |
 | Multi-channel | Unified brain | Terminal | IDE only | IDE only | 21+ (isolated) |
 | Scope | All knowledge work | Coding | Coding | Coding | Messaging |
 | OOM protection | Proactive RSS restart | No | No | No | No |
 | Always-on | launchd daemon 24/7 | No | No | No | Per-channel |
 
-> **Core Differentiator:** The Harness. No competitor provides the compound loop of context engineering + memory distillation with hybrid recall + self-evolution + safety harness that makes an AI agent genuinely improve over time.
+> **Core Differentiator:** The Harness. No competitor provides the compound loop of context engineering + memory distillation with keyword/FTS5/BM25 recall + self-evolution + safety harness that makes an AI agent genuinely improve over time.
 
 ---
 

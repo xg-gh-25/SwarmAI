@@ -9,6 +9,15 @@ status: approved
 
 # Sub-Agent Progress Observability
 
+> **Superseded (implementation note):** This v1 design specifies a single
+> `_active_agent_tool: dict | None` field and assumes only one Agent tool can be
+> active at a time. Shipped reality is parallel-agent-capable: `session_unit.py`
+> uses `_active_agent_tools: dict[str, dict]` keyed by tool_use_id (parallel
+> reviewers — e.g. Gate 2 spawns several concurrently), and the
+> `GET /sessions/{id}/sub-agent-progress` endpoint (`backend/routers/chat.py`)
+> returns an extra `count` field alongside `elapsed_s` (oldest) and `label`
+> (newest). Read the field/edge-case text below as the historical single-agent v1.
+
 ## The Problem You Will Never See Until It Bites You
 
 ### What Happened (2026-06-10, real incident)
@@ -243,7 +252,7 @@ interface SubAgentProgress {
 | Backend restart during sub-agent | SessionUnit recreated → `_active_agent_tool` is None → poll returns `active: false`. SDK subprocess also dies, so parent will error/resume. |
 | Sub-agent in channel (non-desktop) | No frontend → no banner. Channel has its own timeout (max_turns=15). |
 | Agent tool_use arrives but NOT name="Agent" | Only `name === "Agent"` triggers tracking. Regular tools (Read, Bash) don't set `_active_agent_tool`. |
-| Concurrent Agent tools (theoretically impossible) | SDK serializes tool calls. Only one Agent tool can be active per session at a time. |
+| Concurrent Agent tools | v1 assumed "theoretically impossible" (SDK serializes). **Superseded:** parallel Agent tools DO occur (e.g. Gate 2 parallel reviewers), so the shipped impl tracks a `dict[str, dict]` keyed by tool_use_id and the endpoint returns a `count` of active sub-agents. |
 
 ---
 

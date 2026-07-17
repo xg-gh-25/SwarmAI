@@ -584,7 +584,7 @@ These skills are invoked by the pipeline orchestrator at specific stages:
 
 ### Reference Implementation: Skill Catalog Overview
 
-The reference implementation ships with 60 skills across 8 categories (full catalog with GitHub links in Appendix C):
+The reference implementation ships with 90+ skills across 8 categories (full catalog with GitHub links in Appendix C):
 
 | Category | Count | Examples |
 |---|---|---|
@@ -792,7 +792,7 @@ Scans for exfiltration, prompt injection, destructive commands, persistence mech
 
 ## 11. Pipeline Profiles & Budget
 
-### Five Pipeline Profiles
+### Six Pipeline Profiles
 
 The EVALUATE stage selects the right profile based on scope classification:
 
@@ -1053,7 +1053,7 @@ This architecture is not tied to any specific agent framework. To adopt:
 
 ---
 
-## Appendix C: Full Skill Catalog (60 skills)
+## Appendix C: Full Skill Catalog (90+ skills)
 
 Each skill links to its source in the [reference implementation](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills).
 

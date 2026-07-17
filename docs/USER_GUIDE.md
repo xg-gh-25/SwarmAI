@@ -169,7 +169,7 @@ Best for users with an AWS account. No API key management — uses your existing
    ```
 4. Your AWS account needs access to Claude models in Bedrock:
    - Go to [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/) → Model access
-   - Request access to **Claude 4.6 Opus** and/or **Claude 4.6 Sonnet**
+   - Request access to **Claude Opus 4.8** (current default), **Claude Opus 4.6**, and/or **Claude Sonnet 4.6**
 
 #### Option B: Anthropic API Key
 
@@ -185,17 +185,20 @@ Send a test message in the chat — any greeting like "hello" will do. If you ge
 
 ### Settings Overview
 
-SwarmAI Settings has 8 tabs:
+SwarmAI Settings has 11 tabs:
 
 | Tab | What It Does |
 |-----|-------------|
 | **General** | Theme, language, workspace path |
-| **AI** | Provider (Bedrock/Anthropic), model selection, AWS region |
+| **AI & Models** | Provider (Bedrock/Anthropic), model selection, AWS region |
 | **Channels** | Slack bot configuration |
-| **Skills** | Browse and manage 56+ built-in skills |
-| **MCP** | External tool servers (Slack, GitHub, Outlook, etc.) |
-| **Engine** | Core Engine growth dashboard — flywheel metrics |
+| **Skills** | Browse and manage 90+ built-in skills |
+| **MCP Servers** | External tool servers (Slack, GitHub, Outlook, etc.) |
+| **Hive** | Cloud Hive instance management (deploy/stop/delete) |
+| **Backup** | Workspace backup configuration |
+| **Core Engine** | Core Engine growth dashboard — flywheel metrics |
 | **System** | Backend status, resource usage, daemon health |
+| **Capabilities** | Enabled capabilities and feature toggles |
 | **About** | Version info, license, links |
 
 ---
@@ -288,9 +291,9 @@ SwarmAI remembers across sessions. This is the core differentiator.
 - Open threads and their status
 - Git commits and deliverables from each session
 
-**Hybrid Recall** — when MEMORY.md grows large, SwarmAI uses a two-part recall system:
-- **FTS5 keyword search** (0.4 weight) + **sqlite-vec vector search** (0.6 weight) powered by Bedrock Titan v2 embeddings
-- Finds relevant memories even when exact keywords don't match
+**Keyword Recall** — when MEMORY.md grows large, SwarmAI uses a pure-filesystem recall system:
+- **FTS5 full-text search** with **BM25 ranking** over your memory and knowledge files — no vector database, no embeddings, no external calls
+- Fast, local, and fully inspectable — surfaces the most relevant entries by keyword relevance
 
 **How to interact with memory:**
 ```
@@ -310,7 +313,7 @@ The more Swarm knows about you, the better it helps.
 
 ### Skills
 
-SwarmAI comes with 56+ built-in skills. You don't need to install or configure them — just ask naturally:
+SwarmAI comes with 90+ built-in skills. You don't need to install or configure them — just ask naturally:
 
 | Category | Examples |
 |----------|---------|
@@ -480,7 +483,7 @@ No — SwarmAI requires an active internet connection to reach the AI provider (
 ### How much does it cost to run?
 
 SwarmAI itself is free and open-source (MIT). The AI model usage costs depend on your provider:
-- **AWS Bedrock**: Pay-per-token, billed to your AWS account. Claude Opus 4.6 is ~$15/M input tokens, ~$75/M output tokens. A typical heavy session uses $1-5.
+- **AWS Bedrock**: Pay-per-token, billed to your AWS account. Claude Opus (4.8/4.6) is ~$15/M input tokens, ~$75/M output tokens. A typical heavy session uses $1-5.
 - **Anthropic API**: Similar per-token pricing. Check [anthropic.com/pricing](https://www.anthropic.com/pricing) for current rates.
 
 ### Can multiple people use one installation?
@@ -507,7 +510,7 @@ rm -rf ~/.swarm-ai/
 
 ### Can I use models other than Claude?
 
-Currently SwarmAI is built on the Claude Agent SDK and only supports Claude models (Opus 4.6, Sonnet 4.6). Support for other models is not planned — the deep integration with Claude's tool use and agentic capabilities is core to how SwarmAI works.
+Currently SwarmAI is built on the Claude Agent SDK and only supports Claude models (Opus 4.8, Opus 4.6, Sonnet 4.6). Support for other models is not planned — the deep integration with Claude's tool use and agentic capabilities is core to how SwarmAI works.
 
 ### Where are the logs?
 

@@ -1,7 +1,7 @@
 ---
 title: "DDD Cultivation Engine — Domain Expertise as Infrastructure"
 created: 2026-05-12
-updated: 2026-06-10
+updated: 2026-07-17
 tags: [architecture, ddd, cultivation, knowledge-lifecycle, autonomous-delivery]
 project: SwarmAI
 status: PE-review
@@ -15,6 +15,7 @@ status: PE-review
 
 | Date | Change | Sections Affected |
 |------|--------|-------------------|
+| 2026-07-17 | Drift fix: entry classification 5→7 types (added principle, correction); Channel 8 fires on TIMER_30MIN+SESSION_CLOSE (not GIT_COMMIT); auto-approval gate rewritten to match code (confidence >=8/10 + mechanical append-only + skip semantic sections); noted 11 runtime channels vs 8 conceptual feeds. | §3 L3, §6 Feeds, §7 Approval, §9b, §10 |
 | 2026-06-10 | Added: Knowledge Graph relations layer, Auto-approval gate, Memory decay (Ebbinghaus+Hebbian), Three-tier KNOWLEDGE index, Entry lifecycle channel. Updated channel count 7→8. | §3 L2, §6 Feeds, §7 Approval, new §9b |
 | 2026-05-12 | Initial PE-review version. 8 feed channels, 4 pillars, progressive loading, pipeline integration. | All |
 
@@ -99,7 +100,7 @@ Layer 3 closes the loop — it is the mechanism by which knowledge grows without
 
 **Cultivation Engine** — Receives signals from 8 feed channels, generates proposals for DDD changes, routes them through an approval gate, and applies approved changes to the correct document and section.
 
-**Auto-Approval Gate** *(added 2026-05-26)* — Mechanical approval for proposals that meet strict criteria: (a) target section is [Mature] or [Evergreen], (b) change is additive (no contradiction/deletion), (c) change magnitude below threshold, (d) observation pattern miner confirms consistency with recent work. Proposals that don't meet all criteria → human review. Implementation: `ddd_orchestrator.py::_ch_auto_apply()`.
+**Auto-Approval Gate** *(added 2026-05-26)* — Mechanical approval for proposals that meet strict criteria: (a) confidence >= 8/10, (b) change is mechanical append-only — the proposed block is a strict superset whose prefix exactly equals the current block (adds lines, never modifies or deletes), and (c) the target is NOT a semantic section (Non-Goals, Vision, Architecture are always skipped). Proposals that don't meet all criteria → human review. Implementation: `ddd_orchestrator.py::_auto_apply_ddd_proposals()` (channel `_ch_auto_apply`).
 
 **Entity Index** — A flat routing table (stored in PROJECTS.md) that maps domain concepts to specific project/document/section triples. Enables cross-project discovery without a graph database.
 
@@ -316,6 +317,8 @@ Eight channels nourish DDD from the natural flow of work. No channel requires de
 
 **Channel priority:** Corrections (Ch6) have highest priority because they represent explicit human judgment. Pipeline Delivery (Ch3) is the richest feed because REFLECT stage output is already structured and contextualized. Entry Lifecycle (Ch8) runs on a timer and maintains knowledge freshness without human input.
 
+> **Implementation note:** These 8 are the *conceptual* feed channels. At runtime the orchestrator registers **11** channels (`ddd_orchestrator.py`) — the 8 feeds above plus three operational refresh channels (`mechanical_refresh`, `memory_refresh`, `llm_refresh`) that keep indexes and derived state current. The count grew as the engine matured; the 8-feed model remains the design-level abstraction.
+
 ### Pillar 2: Health
 
 Health scoring operates at section level across five dimensions. The composite score determines two things: how much the agent trusts that section, and how urgently the cultivation engine should seek updates.
@@ -387,7 +390,7 @@ Every knowledge change flows through the same lifecycle regardless of source cha
 | Expire | No decision within TTL | Archive |
 | Apply | Written to target DDD section | Complete |
 
-**Auto-approval criteria:** A proposal can be auto-approved when (a) the target section is [Mature] or [Evergreen], (b) the change is additive (not contradicting existing content), and (c) the change magnitude is below threshold (minor refinement, not structural rewrite).
+**Auto-approval criteria:** A proposal can be auto-approved when (a) confidence >= 8/10, (b) the change is mechanical append-only — the proposed block is a strict superset whose prefix exactly matches the current block (lines added, none modified or deleted), and (c) the target is not a semantic section (Non-Goals, Vision, and Architecture sections are always excluded from auto-apply). Any change that fails these tests routes to human review.
 
 ### The Cultivation Flywheel
 
@@ -550,9 +553,9 @@ Individual bullet entries within DDD documents (primarily IMPROVEMENT.md) have t
 | `last` | Last referenced date | Auto-updated on reference |
 | `decay` | Lifecycle state: `active` → `dormant` → `archived` | Computed by decay engine |
 
-### 5-Type Classification
+### 7-Type Classification
 
-Every entry is classified into one of 5 MECE types that determine injection behavior:
+Every entry is classified into one of 7 MECE types that determine injection behavior:
 
 | Type | Description | Injected During | Lives In |
 |------|-------------|-----------------|----------|
@@ -561,8 +564,10 @@ Every entry is classified into one of 5 MECE types that determine injection beha
 | `decision` | "We chose A over B because..." | EVALUATE, PLAN | PRODUCT.md |
 | `model` | "This is what it looks like" | BUILD, DEBUG | TECH.md |
 | `process` | "These are the steps" | BUILD, DELIVER | TECH.md |
+| `principle` | "Design philosophy / first principle" | EVALUATE, THINK | Principles (evergreen, meta-cognitive) |
+| `correction` | "Cognitive bias / self-correction to avoid" | all stages | Corrections (evergreen, meta-cognitive) |
 
-Type classification is automatic via signal-word detection (`_TYPE_SIGNALS` in `ddd_entry_lifecycle.py`). `guideline` is the fallback — most entries are lessons/recommendations.
+Type classification is automatic via signal-word detection (`_TYPE_SIGNALS` in `ddd_entry_lifecycle.py`), with a priority chain (pitfall → decision → correction → principle → guideline → process → model). `guideline` is the fallback — most entries are lessons/recommendations. The two meta-cognitive types (`principle`, `correction`) are evergreen and treated as permanent (never archived by the decay engine).
 
 ### Decay Engine — Darwinian Knowledge Management
 
@@ -600,7 +605,7 @@ This is the progressive loading principle (Section 5) applied to workspace-level
 
 ### Channel 8: Entry Lifecycle *(added 2026-05-19)*
 
-The 8th cultivation channel. Fires on `GIT_COMMIT` and `TIMER_30MIN`:
+The 8th cultivation channel (`entry_lifecycle`). Fires on `TIMER_30MIN` and `SESSION_CLOSE`:
 
 1. Scans all project IMPROVEMENT.md files for entry metadata comments
 2. Bumps `ref` count for entries whose text appears in recent pipeline contexts
@@ -629,7 +634,7 @@ The 8th cultivation channel. Fires on `GIT_COMMIT` and `TIMER_30MIN`:
 
 The approval gate is the system's primary safety mechanism. Its design principle: **it is better to miss an update than to commit an incorrect one.** DDD documents carry authoritative weight — every statement in them will be used by agents to make autonomous decisions. A false statement in DDD is worse than a missing statement, because the agent will confidently act on the false one.
 
-Auto-approval is therefore conservative: only additive, minor changes to high-maturity sections qualify. Any change that contradicts, removes, or restructures existing content requires explicit approval.
+Auto-approval is therefore conservative: only high-confidence (>= 8/10), mechanical append-only changes qualify, and semantic sections (Non-Goals, Vision, Architecture) are always excluded. Any change that modifies, removes, or restructures existing content — or targets a semantic section — requires explicit approval.
 
 ### What This System Is NOT
 
@@ -704,7 +709,7 @@ It is not the most powerful system imaginable (a knowledge graph with a custom q
 | Context budget exceeded as DDD grows | Agent cannot load full context | Medium | Section-level loading + progressive strategy keeps per-task cost bounded |
 | Low adoption (agents not reading DDD) | No value delivered | Low | DDD loading is automatic at session start, not opt-in |
 | Entity Index becomes stale | Cross-project routing fails | Medium | Code Intelligence channel validates index against actual code |
-| Auto-approval permits bad changes | Trust erosion | Low | Conservative criteria: only additive, minor, to [Mature]+ sections |
+| Auto-approval permits bad changes | Trust erosion | Low | Conservative criteria: only high-confidence (>=8/10), mechanical append-only changes; semantic sections excluded |
 | Single-project use limits discovery value | No cross-project benefit | High (early) | Designed to deliver value per-project first; discovery is additive |
 
 ---

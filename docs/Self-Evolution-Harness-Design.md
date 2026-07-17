@@ -1,7 +1,7 @@
 ---
 title: "Self-Evolution Harness — Technical Design Document"
 created: 2026-04-15
-updated: 2026-05-14
+updated: 2026-07-17
 author: XG (architecture), Swarm (synthesis)
 status: PE-review-ready
 audience: AWS Internal PEs, Technical Architects
@@ -22,8 +22,8 @@ Most AI tools reset when you close them. Context is lost, decisions are forgotte
 The harness is the core innovation. It provides:
 
 - **Context continuity** --- an 11-file priority chain (P0--P10) assembled into every system prompt with token budget management and multi-tier caching
-- **Memory persistence** --- a 3-layer distillation pipeline (capture -> distill -> curate) with hybrid vector+keyword recall across 1,000K+ tokens of accumulated knowledge
-- **Self-evolution** --- a 4-phase pipeline (MINE -> ASSESS -> ACT -> AUDIT) that mines user corrections from 1,500+ session transcripts and autonomously improves underperforming skills
+- **Memory persistence** --- a 3-layer distillation pipeline (capture -> distill -> curate) with pure-filesystem keyword/FTS5/BM25 recall across 1,000K+ tokens of accumulated knowledge
+- **Self-evolution** --- two orthogonal axes governed by blast radius. The **operational** axis (v2 MINE -> ASSESS -> ACT -> AUDIT) mines user corrections from 1,500+ session transcripts and autonomously improves underperforming skills. The **cognitive** axis (v3 governance routing) classifies judgment-level corrections against SOUL principles, records recurrence, and surfaces structural-fix proposals to a human Intake Gate --- never auto-writing SOUL/AGENT/STEERING
 - **Proactive intelligence** --- 5-level session briefing (L0--L4) with cross-session learning and external signal integration
 - **Safety** --- 7 defense-in-depth layers from tool logging to decision classification
 - **Compound growth** --- 8 post-session hooks that create a flywheel where every session makes the next one better
@@ -36,8 +36,8 @@ The harness is the core innovation. It provides:
 | Post-session hooks | 9 (all async via BackgroundHookExecutor except 1 synchronous) |
 | Context files | 11 (P0--P10 priority chain) |
 | Token budget tiers | 3 (30K default, 50K large, 100K for 1M-context models) |
-| Skills | 82 (15 always-loaded, 67 lazy-loaded) |
-| Evolution pipeline | 4-phase MINE -> ASSESS -> ACT -> AUDIT, confidence-gated |
+| Skills | 90+ (lazy/always two-tier loading) |
+| Evolution pipeline | Two axes: operational (v2 MINE -> ASSESS -> ACT -> AUDIT, confidence-gated) + cognitive (v3 governance routing to human Intake Gate) |
 | Proactive intelligence | 5 levels (L0 parsing -> L4 external signals), 1,149 lines |
 | Safety layers | 7 defense-in-depth |
 | Commits | 838+ |
@@ -194,7 +194,7 @@ Every session close triggers 9 hooks via the `BackgroundHookExecutor`. All hooks
 | 1 | DailyActivity | 202 | DailyActivity/YYYY-MM-DD.md |
 | 2 | Distillation | 1,568 | MEMORY.md (promoted entries) |
 | 3 | EvolutionTrigger | 168 | EVOLUTION.md (corrections) |
-| 4 | EvolutionMaintenance | 398 | Pipeline trigger + status |
+| 4 | EvolutionMaintenance | 398 | v3 classify + escalate (per-session) + v2 cycle trigger |
 | 5 | SkillMetrics | 291 | skill\_metrics SQLite table |
 | 6 | UserObserver | 135 | user\_observations.jsonl |
 | 7 | ImprovementWriteback | 351 | IMPROVEMENT.md |
@@ -218,7 +218,7 @@ Every session close triggers 9 hooks via the `BackgroundHookExecutor`. All hooks
 
 **EvolutionTriggerHook** --- Detects user corrections ("don't X", "use Y instead") and competence demonstrations in real-time. Records to EVOLUTION.md corrections (C-entries) and competence (K-entries).
 
-**EvolutionMaintenanceHook** --- Manages evolution cycle timing (7-day cadence). Triggers the MINE -> ASSESS -> ACT -> AUDIT pipeline when due.
+**EvolutionMaintenanceHook** --- Its main per-session job is now v3 cognitive-axis governance: `classify_new_corrections` (watermark-gated: classify + route every new correction since last run) and `escalate_class` (for each tracked correction class, propose a structural fix if a recurrence threshold is met). It also runs cheap EVOLUTION.md upkeep (quality gate, deprecation, auto-resolve). The v2 MINE -> ASSESS -> ACT -> AUDIT cycle is no longer run here --- a ~293s job on the 180s session-close budget timed out and re-triggered every session, so the cycle was moved to the scheduled `evolution-cycle` job (weekly/secondary path). See §5.6.
 
 **SkillMetricsHook** --- Scans messages for `Using Skill:` patterns. Detects correction patterns in subsequent user messages. Records to `skill_metrics` SQLite table. `get_evolution_candidates()` feeds the evolution pipeline.
 
@@ -287,11 +287,11 @@ Close the evolution loop.
 
 ---
 
-## 5. Evolution Pipeline v2 --- MINE -> ASSESS -> ACT -> AUDIT
+## 5. Evolution Pipeline v2 --- Operational Axis (MINE -> ASSESS -> ACT -> AUDIT)
 
 ![Evolution Pipeline v2](diagrams/02-evolution-pipeline-v2.png)
 
-The evolution cycle runs on a 7-day cadence (session-end hook trigger + Thursday cron fallback). Shipped April 12, 2026.
+This is the **operational half** of self-evolution --- it improves the text of individual skills (L0 blast radius: one tool). The **cognitive half** (judgment-level governance) is a separate, orthogonal axis covered in §5.7. Shipped April 12, 2026; the cycle now runs on the scheduled `evolution-cycle` job (weekly/secondary), no longer on the per-session hook (see §5.6).
 
 ### 5.1 Phase 1: MINE
 
@@ -318,9 +318,11 @@ Confidence classification: `confidence = evidence x max(density, need)`
 
 | Confidence | Threshold | Meaning |
 |------------|-----------|---------|
-| **HIGH** | >= 0.7 | Strong correction evidence, clear pattern |
-| **MED** | 0.3--0.7 | Some evidence, pattern emerging |
-| **LOW** | < 0.3 | Insufficient data or low fitness signal |
+| **HIGH** | >= 0.15 | Genuine correction evidence --- auto-deploy |
+| **MED** | 0.08--0.15 | Some evidence, pattern emerging --- recommend |
+| **LOW** | < 0.08 | Insufficient data or low fitness signal --- log only |
+
+Thresholds are defined in `evolution_optimizer.py:50-51` (`HIGH_CONFIDENCE = 0.15`, `MED_CONFIDENCE = 0.08`) and are overridable via `config.evolution.high_confidence` / `med_confidence`. See §5.5 for why they are this low.
 
 ### 5.3 Phase 3: ACT
 
@@ -358,11 +360,65 @@ Confidence-gated deployment:
 4. Update `skill_health.json` with deployment record
 5. Process-level `fcntl` lock released
 
-### 5.5 Why Confidence Gating?
+### 5.5 Why Confidence Gating --- and Why the Threshold Was Lowered
 
-With the current ~6% correction rate across 61 skills, the HIGH threshold (>= 0.7) is unreachable for most skills by design. The pipeline safely accumulates observability data until correction evidence justifies deployment.
+The HIGH threshold was **deliberately lowered** over two revisions so that L0 auto-deploy is actually *reachable* on real data:
 
-This is the **separation of observation and actuation** --- the data pipeline (MINE + ASSESS) is always safe to run (read-only + write JSON). The actuation pipeline (ACT) is gated on confidence. Any autonomous system that modifies user-visible files should follow this pattern.
+- **v2.1 (2026-04-12):** 0.7 -> 0.35. The original 0.7/0.3 thresholds were unreachable with real correction data --- ACT never fired.
+- **v2.2 (2026-05-03):** HIGH 0.35 -> 0.15, MED lowered proportionally to 0.08. Real data (e.g. autonomous-pipeline: 5 corrections, 64 examples, confidence 0.16) still couldn't clear 0.35, so the ACT phase was *permanently frozen*. 0.15 lets a skill with genuine correction evidence deploy.
+
+The safety trade-off is not a high threshold but **cheap reversibility**: atomic deploy + `.bak` rollback + regression detection (a fitness drop > 0.1 auto-reverts). A low, reachable threshold plus guaranteed rollback beats a high threshold that freezes the pipeline.
+
+This is still the **separation of observation and actuation** --- the data pipeline (MINE + ASSESS) is always safe to run (read-only + write JSON), and the actuation pipeline (ACT) is gated on confidence. The gate is now *reachable by design*, not unreachable-by-design as an earlier revision framed it. Any autonomous system that modifies user-visible files should pair a reachable gate with atomic rollback.
+
+### 5.6 Where the v2 Cycle Runs
+
+The full MINE -> ASSESS -> ACT -> AUDIT cycle is a ~5-minute job and is **no longer triggered by the session-close hook**. A ~293s cycle on the 180s hook budget timed out before it could advance `.evolution_last_run`, re-triggering every session (~59x/day) and spawning uncancellable zombie threads (run_6ac3fc0b). The cycle now runs **solely** from the scheduled `evolution-cycle` job. The per-session `EvolutionMaintenanceHook` keeps only the cheap governance work: the v3 classifier/escalation (§5.7) plus EVOLUTION.md quality-gate/deprecation/auto-resolve upkeep.
+
+### 5.7 Evolution Pipeline v3 --- Cognitive Axis (Governance Routing)
+
+The v2 optimizer improves *skill text*. But the most damaging failures are not bad skill prose --- they are **judgment failures**: shipping untested code, coding against an unverified API, researching at the wrong layer. These cannot be fixed by rewriting a SKILL.md, and auto-deploying a change to the agent's constitution (SOUL/AGENT/STEERING) would be reckless. v3 adds a **cognitive axis** that runs alongside v2, discriminated by **blast radius**.
+
+**Implementation:** `core/evolution/` --- `judgment_classifier.py`, `governance_router.py`, `correction_tracker.py`, `escalation_ladder.py`, `class_key.py` (plus `governance_miner.py`, `closed_loop.py`).
+
+#### Two Orthogonal Axes
+
+| Axis | What it answers | Blast radius | Fate of a correction |
+|------|-----------------|--------------|----------------------|
+| **Operational** | *What* skill produced bad output? | Confined to one tool (L0) | Auto-counts. Feeds the v2 optimizer (§5.1--5.4). |
+| **Cognitive** | *Why* --- a recurring judgment pattern? | Tied to a SOUL principle; system-wide | Classified (CLASS_A/B/C), recurrence-tracked, routed to a human Intake Gate. |
+
+The classifier keys off record type: a `tool_failure` is Tier-1 mechanical (operational, no LLM); a `user_correction` is Tier-2 (a Bedrock Sonnet call that assigns the cognitive **CLASS** and its parent SOUL principle P1--P5). Tier-2 fires *only* for `user_correction` records, so the ~92% `tool_failure` noise never incurs LLM cost.
+
+The three cognitive classes mirror the SOUL/EVOLUTION.md taxonomy:
+
+- **CLASS_A** --- confidence overrode process (shipped untested, skipped a gate; "I wrote it so it works").
+- **CLASS_B** --- symptom-fix or inference without verifying (coded against an unverified API, wrong root cause).
+- **CLASS_C** --- shallow / wrong-layer execution (README-level research, fix-scope mismatch).
+
+#### The Routing Path
+
+Each classification carries a `counter_state` that encodes the asymmetric-autonomy decision:
+
+1. **`counted`** (operational / low-risk) --- `judgment_classifier` -> `governance_router.route_classification` calls `correction_tracker.record()` once immediately. Low stakes, so it auto-counts toward recurrence.
+2. **`pending_confirm`** (cognitive CLASS_*) --- the router records the recurrence (idempotent by `correction_ref`, gated on a 0.6 confidence floor) **and** appends the item to a flock-safe **pending-confirm queue** with a SOUL Intake Gate brief. The counter feeds the autonomous escalation loop; the queue feeds the human dashboard.
+3. **`ignored`** (operator/transient noise --- file-not-found, user-interrupt, network transients, inline-probe tracebacks) --- neither counted nor parked, so noise cannot inflate the operational count and drive fake governance proposals.
+
+**Safety invariant (non-negotiable):** no module in `core/evolution/` ever writes SOUL/AGENT/STEERING. `judgment_classifier` only classifies; `governance_router` only records the counter and persists the pending queue; `escalation_ladder` only *produces* proposal data. Constitution writes happen exclusively at the human Intake Gate (`eval_service.decide_governance` -> `register_rule`/`register_gate`), git-tracked and surfaced in the growth report. The mentor's oversight is a veto-via-revert on an autonomous proposal, not a blocking pre-count approval.
+
+#### Escalation --- Recurrence to Structural Fix
+
+`correction_tracker` records each class as a small state machine (count, active_rule, active_gate, post-fix recurrence, 30-day auto-resolve). At the **3x recurrence threshold**, the per-session `escalate_class` runs `escalation_ladder.decide_escalation`:
+
+- occurrence 1--2 -> **none** (log only)
+- occurrence >= 3, no structural fix yet -> **rule** (propose an L1 AGENT/STEERING rule)
+- a rule was accepted but the class *recurred past it* (post-rule recurrence >= 2) -> **gate** (escalate the enforcement mechanism to a code gate --- the CLASS-A lesson: "rules don't stop the pattern, only gates do")
+
+Proposals are written to `.evolution_proposals.json` (kind-aware dedup) and surface in the session briefing --- never auto-applied. An axis guard ensures OPERATIONAL/UNCLASSIFIED classes never escalate to a governance proposal regardless of count.
+
+#### Success Metric
+
+The operational axis is measured by deploy-count. The cognitive axis is **not** --- its success metric is **time-to-surface a judgment pattern** and whether a class **stopped recurring** after its structural fix. `closed_loop.audit_recurrence` is the Goodhart guard: a falling correction count is only real evolution if it fell because of *fewer mistakes* (known-class recurrence dropped after a gate), not because the system *logged less*.
 
 ---
 
@@ -372,12 +428,12 @@ This is the **separation of observation and actuation** --- the data pipeline (M
 
 ### 6.1 Two-Tier Loading
 
-61 skills split into two tiers to optimize signal-to-noise in the system prompt:
+90+ skills split into two tiers to optimize signal-to-noise in the system prompt:
 
-| Tier | Count | System Prompt | On Invocation |
-|------|-------|---------------|---------------|
-| **always** | 15 | Full SKILL.md (~100 tokens each) | Direct execution |
-| **lazy** | 46 | Stub only (~25 tokens: name + trigger) | Agent reads INSTRUCTIONS.md via Read tool |
+| Tier | System Prompt | On Invocation |
+|------|---------------|---------------|
+| **always** | Full SKILL.md (~100 tokens each) | Direct execution |
+| **lazy** | Stub only (~25 tokens: name + trigger) | Agent reads INSTRUCTIONS.md via Read tool |
 
 **Token savings:** ~3,650 tokens/session (49% reduction in skill listing).
 
@@ -388,7 +444,7 @@ This is the **separation of observation and actuation** --- the data pipeline (M
 
 ### 6.2 Manifest System
 
-Complex skills (16 of 61) declare scripts and entry points via `manifest.yaml`:
+Complex skills declare scripts and entry points via `manifest.yaml`:
 
 ```yaml
 name: browser-agent
@@ -408,7 +464,7 @@ scripts:
 | SkillRegistry | `core/skill_registry.py` | 220 |
 | MigrateSkills | `migrate_skills.py` | one-time |
 
-### 6.3 Skill Categories (61 skills)
+### 6.3 Skill Categories (illustrative)
 
 | Category | Count | Examples |
 |----------|-------|---------|
@@ -548,7 +604,7 @@ The Core Engine is the meta-architecture that ties all subsystems together. Six 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
 | **Self-Evolution** | Observes patterns, measures performance, optimizes skills | EVOLUTION.md, SkillMetrics, SessionMiner, EvolutionOptimizer, SkillGuard |
-| **Self-Memory** | 3-layer distillation + hybrid recall | DailyActivity, distillation, MEMORY.md, SessionRecall, MemoryGuard, RecallEngine |
+| **Self-Memory** | 3-layer distillation + keyword/FTS5/BM25 recall | DailyActivity, distillation, MEMORY.md, SessionRecall, MemoryGuard, RecallEngine |
 | **Self-Context** | 11-file priority chain + budget + caching | Context loader, prompt builder, budget tiers, L0/L1 freshness |
 | **Self-Harness** | Validates context files, detects staleness | ContextHealthHook, auto-commit, integrity checks |
 | **Self-Health** | Monitors services, resources, sessions | Service manager, resource monitor, lifecycle manager, OOM governance |
@@ -562,7 +618,7 @@ The Core Engine is the meta-architecture that ties all subsystems together. Six 
 | L1 | Self-Maintaining | Remembers, self-commits, captures corrections, health monitoring | Complete |
 | L2 | Self-Improving | Weekly LLM maintenance, unified jobs, feedback loops closed | Complete |
 | L3 | Self-Governing | Session-type context, proactive gap detection, DDD auto-sync | Complete |
-| L4 | Autonomous | 19-module evolution loop closed, hybrid recall, UserObserver, proactive OOM restart | Current |
+| L4 | Autonomous | evolution loop closed, keyword/FTS5/BM25 recall, UserObserver, proactive OOM restart | Current |
 
 ### 9.2 Engine Metrics (`core/engine_metrics.py`, 562 lines)
 
@@ -722,4 +778,4 @@ Each hook has a single responsibility and independent failure domain. Merging ho
 
 ---
 
-*Updated 2026-04-15. Covers the complete SwarmAI harness: context engineering, 9 post-session hooks, 19-module agent intelligence, 4-phase evolution pipeline, 61-skill architecture, 5-level proactive intelligence, and 7-layer safety system.*
+*Updated 2026-07-17. Covers the complete SwarmAI harness: context engineering, 9 post-session hooks, 19-module agent intelligence, the two-axis evolution pipeline (v2 operational + v3 cognitive governance routing), 90+ skill architecture, 5-level proactive intelligence, and 7-layer safety system.*

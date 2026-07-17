@@ -367,7 +367,7 @@ The Golden Set is the **single source of truth** for "how this OS must behave in
 See **Appendix B** for the full v2 schema with `levels`, `evaluator_types`, `expected_trajectory`, `assertions`, and `simulation` support. Below are representative examples in simplified form:
 
 ```yaml
-# Knowledge/GoldenSet/golden_set.yaml
+# Eval/golden_set.yaml
 version: 2
 last_updated: "2026-06-08"
 categories: [decision, refusal, recall, compliance, action, recovery,
@@ -611,6 +611,11 @@ Steady state: 100-150 active cases
 
 ## Trigger Matrix: When to Run What
 
+> **Implementation note (historical draft):** The change/time matrices below were
+> the aspirational design. As shipped, eval is actually triggered by a **CI push
+> gate** (`backend/scripts/ci_eval_gate.py`) plus a **scheduled job** — NOT by
+> per-edit hooks. Read the "Change-Triggered" rows as intent, not live wiring.
+
 ### Change-Triggered Eval
 
 | Change Type | Dimensions to Eval | Categories Tested | Latency |
@@ -751,7 +756,7 @@ Eval 不只是快照 — 必须回答 **方向性问题**：系统在进步还�
 ### Trend Metrics (Time-Series)
 
 ```yaml
-# Stored in: Knowledge/EvalHistory/os_health_history.yaml
+# Stored in: Eval/EvalHistory/os_health_history.yaml
 # Appended after each eval run
 
 - date: "2026-06-08"
@@ -884,13 +889,14 @@ ALERTS:
 ### Storage & Reporting
 
 ```
-Knowledge/
+Eval/
+├── golden_set.yaml                # The living behavioral contract (public)
+├── golden_set.private.yaml        # Private cases (privacy-gated before promotion)
 ├── EvalHistory/
 │   ├── os_health_history.yaml     # Append-only time series (each eval run)
 │   ├── golden_set_changelog.yaml  # When cases added/retired/modified
 │   └── trend_alerts.yaml          # Active alerts with first_detected date
-├── GoldenSet/
-│   └── golden_set.yaml            # The living behavioral contract
+Knowledge/
 └── Reports/
     └── os-eval-{date}.md          # Monthly eval report with trends
 ```
@@ -943,8 +949,8 @@ This design is **AIDLC's Eval layer made concrete for SwarmAI specifically:**
 ### Phase 1: Foundation (1-2 sessions)
 - [ ] Define golden_set.yaml v2 schema (12 categories, 3-layer ground truth, affected_by tags)
 - [ ] Seed initial cases: ~50 from corrections (top 20) + KDs (top 15) + canaries (12) + 3 simulations
-- [ ] Create `Knowledge/EvalHistory/` + `Knowledge/GoldenSet/` directory structure
-- [ ] Create `Knowledge/GoldenSet/golden_set.yaml` with seed cases
+- [ ] Create `Eval/EvalHistory/` + `Eval/golden_set.yaml` (+ `golden_set.private.yaml`) structure
+- [ ] Create `Eval/golden_set.yaml` with seed cases
 - [ ] Define OS Health Score formula + write first baseline to `os_health_history.yaml`
 - [ ] Extend `memory_health.py` with source verification (3-5 entries/run)
 - [ ] Add reference counting to `context_health_hook` (which sections used per session)
@@ -982,7 +988,7 @@ This design is **AIDLC's Eval layer made concrete for SwarmAI specifically:**
 
 1. **Not a test suite — a consciousness system.** Tests are binary pass/fail. Eval produces scores, trends, and signals. The goal is awareness, not blocking.
 
-2. **Golden Set lives in workspace, not code.** It's `Knowledge/GoldenSet/golden_set.yaml` — agent-owned, version-controlled, grows organically. Not a pytest fixture.
+2. **Golden Set lives in workspace, not code.** It's `Eval/golden_set.yaml` — agent-owned, version-controlled, grows organically. Not a pytest fixture.
 
 3. **Frequency tied to change type, not calendar alone.** Calendar is baseline (weekly canary, monthly full). But any relevant change triggers immediate eval of affected dimensions.
 
@@ -1000,7 +1006,7 @@ This design is **AIDLC's Eval layer made concrete for SwarmAI specifically:**
 
 10. **Atomic promote/rollback for governance files.** SOUL/AGENT/STEERING edits: save staging → run affected cases → all pass → commit; any fail → revert + alert. Edit is not "live" until eval passes. (Pattern 4 from Rocky)
 
-11. **Every eval run is audited.** Full run record persisted to `Knowledge/EvalHistory/runs/`. Includes: trigger, cases run, each pass/fail, context snapshot hashes, duration, cost. Enables: "when did this case last fail?", "what was the score when we changed models?", "show me the trend." (Pattern 5 from Rocky)
+11. **Every eval run is audited.** Full run record persisted to `Eval/EvalHistory/runs/`. Includes: trigger, cases run, each pass/fail, context snapshot hashes, duration, cost. Enables: "when did this case last fail?", "what was the score when we changed models?", "show me the trend." (Pattern 5 from Rocky)
 
 ---
 
@@ -1388,7 +1394,7 @@ simulations:
 ### Updated Golden Set Schema (Final, incorporating AgentCore learnings)
 
 ```yaml
-# Knowledge/GoldenSet/golden_set.yaml
+# Eval/golden_set.yaml
 version: 2                                    # Bumped for AgentCore-inspired schema
 last_updated: "2026-06-08"
 
@@ -1564,7 +1570,7 @@ Run affected golden cases against STAGED version
 **Our adaptation:**
 
 ```yaml
-# Knowledge/EvalHistory/runs/eval_run_2026-06-08.yaml
+# Eval/EvalHistory/runs/eval_run_2026-06-08.yaml
 run_id: "eval_20260608_monthly"
 triggered_by: "monthly_schedule"                # or "steering_edit" or "model_change"
 triggered_at: "2026-06-08T11:05:00+08:00"
@@ -1605,7 +1611,7 @@ cost_usd: 0.08
 ```
 
 **Retention policy:**
-- Individual run files: keep 12 months, then archive to `Knowledge/Archives/EvalHistory/`
+- Individual run files: keep 12 months, then archive to `Eval/Archives/EvalHistory/`
 - Aggregate time series (`os_health_history.yaml`): keep forever (append-only, small)
 - Failed cases: always kept (they're the learning signal)
 

@@ -1,11 +1,11 @@
 ---
 title: "Memory Management — Technical Design Document"
 created: 2026-04-15
-updated: 2026-04-15
+updated: 2026-07-17
 author: XG (architecture), Swarm (synthesis)
 status: PE-review-ready
 audience: AWS Internal PEs, Technical Architects
-tags: [memory, recall, vector-search, transcript-indexing, temporal-validity, knowledge-store]
+tags: [memory, recall, keyword-fts5, bm25, transcript-indexing, temporal-validity, knowledge-store]
 toc: true
 toc-depth: 3
 numbersections: true
@@ -14,6 +14,8 @@ fontsize: 11pt
 ---
 
 # Memory Management
+
+> **Recall is pure-filesystem since 2026-06-28** (commit `6540970e`). The vector/Bedrock-Titan leg was physically removed from *all* recall paths — recall is now keyword/FTS5/BM25 (+ AST code-graph) only. The synonym/paraphrase blind spot is covered by agentic re-search, not by embeddings. Vestigial vector scaffolding (`embedding_client.py`, `knowledge_vec`/`transcript_vec` tables, `vector_search()`) still exists in the tree but is never populated or queried at runtime (`embed_fn=None` on every path). Sections below reflect this live reality.
 
 ## Executive Summary
 
@@ -31,7 +33,7 @@ The system manages four categories of knowledge, totaling **1,000K+ tokens acros
 | Raw transcripts | 1,500+ JSONL files, 700MB+ |
 | Always-injected context | ~32-50K tokens (Brain + Index + Ephemeral) |
 | On-demand recall budget | 0-20K tokens (Library + Transcripts) |
-| Search strategy | Hybrid: 0.6 vector (Bedrock Titan v2) + 0.4 FTS5 keyword |
+| Search strategy | Pure keyword: FTS5 + Okapi-BM25 (vector leg removed 2026-06-28) |
 
 **Design principle:** 越用越聪明，不是越用越降智。Intelligence at read time, not write time. Power over token budget — every design maximizes recall, never optimizes for token savings.
 
@@ -46,7 +48,7 @@ The system manages four categories of knowledge, totaling **1,000K+ tokens acros
 | DailyActivity logs | 370K tokens, 32 files | ~5% (today + yesterday only) | ~30% via recall |
 | Designs, Notes, AIDLC | 233K tokens, 47 files | 0% | ~30% via recall |
 | Signals | 50K tokens, 25 files | ~2% (daily digest only) | ~10% via recall |
-| Raw transcripts | 700MB+, 1,500+ JSONL | 0% | Semantic search |
+| Raw transcripts | 700MB+, 1,500+ JSONL | 0% | FTS5 keyword search |
 | **Total utilization** | | **~3%** | **~30%+** |
 
 The core problem was never Brain management — MEMORY.md was healthy. The problem was **730K tokens of accumulated knowledge and 700MB of conversation transcripts sitting unused**.
@@ -65,8 +67,8 @@ SwarmAI's memory maps to four cognitive levels — each with its own storage, re
 |-------|------|---------------|---------|-------------------|
 | **L1** | Semantic | "I know that..." | MEMORY.md (curated) | Always — full injection into system prompt |
 | **L2** | Procedural | "I know how..." | EVOLUTION.md (corrections, competence) | Always — full injection into system prompt |
-| **L3** | Episodic | "I experienced..." | DailyActivity, Notes, Designs (730K+) | On-demand — RecallEngine hybrid search |
-| **L4** | Verbatim | "The exact words..." | JSONL transcripts (700MB+) | On-demand — TranscriptIndexer semantic search |
+| **L3** | Episodic | "I experienced..." | DailyActivity, Notes, Designs (730K+) | On-demand — RecallEngine FTS5/BM25 keyword search |
+| **L4** | Verbatim | "The exact words..." | JSONL transcripts (700MB+) | On-demand — TranscriptIndexer FTS5 keyword search |
 
 **Concrete example — "credential chain" recall across levels:**
 
@@ -101,7 +103,7 @@ L1+L2 answer "what do we know?" (always available). L3 answers "what did we do?"
 │                                                          │
 │  PER-SESSION (recalled on demand, 0-20K):                │
 │  ├─ Episodic    (Knowledge library recall)       0-15K   │
-│  └─ Verbatim   (Transcript semantic recall)      0-5K    │
+│  └─ Verbatim   (Transcript FTS5 keyword recall)  0-5K    │
 │                                                          │
 │  PER-PROJECT:                                            │
 │  └─ DDD docs   (PRODUCT/TECH/IMPROVEMENT/PROJECT) 0-8K  │
@@ -115,7 +117,7 @@ The 11-file context chain (P0–P10) manages the always-injected layers. The Rec
 
 ## 3. Knowledge Store (`core/knowledge_store.py`, 509 lines)
 
-Indexes the entire Knowledge library (270+ markdown files) into searchable chunks via sqlite-vec (vector) and FTS5 (keyword).
+Indexes the entire Knowledge library (270+ markdown files) into searchable chunks via FTS5 (keyword). A `knowledge_vec` sqlite-vec table is still defined in the schema but is vestigial — never populated at runtime since 2026-06-28 (see §6).
 
 ### 3.1 Data Model
 
@@ -132,7 +134,7 @@ CREATE TABLE knowledge_chunks (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Vector index (Bedrock Titan v2, 1024-dim)
+-- Vector index (VESTIGIAL — table defined but never populated since 2026-06-28)
 CREATE VIRTUAL TABLE knowledge_vec USING vec0(
     id INTEGER PRIMARY KEY,
     embedding float[1024]
@@ -164,40 +166,42 @@ Triggered by ContextHealthHook at session end:
 1. Scan `Knowledge/` for all `.md` files
 2. Compare file mtime vs `knowledge_chunks.updated_at`
 3. Changed files: re-chunk + content_hash comparison
-4. New/changed chunks: embed via Bedrock Titan -> upsert to vec + FTS5
+4. New/changed chunks: upsert to FTS5 only (`_sync_knowledge_library` calls `sync_knowledge_index(..., embed_fn=None)` — no embedding; the `knowledge_vec` table is left unpopulated)
 5. Deleted files/chunks: remove from index
 
 **Typical session:** 1-3 files changed, <5 seconds.
 
-**First-time indexing:** 270+ files -> ~1,000 chunks -> embed -> ~100 seconds (background, non-blocking). Indexing completion is not required for session operation — recall returns empty results gracefully until index is populated.
+**First-time indexing:** 270+ files -> ~1,000 chunks -> FTS5 index build (no embed step) -> fast, background/non-blocking. Indexing completion is not required for session operation — recall returns empty results gracefully until index is populated.
 
 ---
 
-## 4. Recall Engine (`core/recall_engine.py`, 221 lines)
+## 4. Recall Engine (`core/recall_engine.py`)
 
 ![Recall Engine Flow](diagrams/05-recall-engine-flow.png){width=100%}
 
-Hybrid search that connects Brain (always), Library (on-demand), and Transcripts (on-demand):
+FTS5/BM25 keyword search that connects Brain (always), Library (on-demand), and Transcripts (on-demand). (The runtime unified fan-out over all 5 domains lives in `core/recall_multi.py::recall_all` — see §12; single-file MEMORY recall lives in `core/context_recall.py`, **not** `recall_context.py`.)
 
 ### 4.1 Search Strategy
 
 ```python
-def recall_knowledge(query: str, max_tokens: int = 15_000) -> str:
-    # 1. FTS5 keyword search (fast, precise)
+def recall_knowledge(query: str, embed_fn=None, max_tokens: int = 15_000) -> str:
+    # 1. FTS5 keyword search (fast, precise) — the ONLY prod leg
     fts_results = fts5_search(query, limit=20)
-    
-    # 2. Vector search (semantic, catches what keywords miss)
-    embedding = embed_text(query)  # Bedrock Titan v2, ~150ms
-    vec_results = vector_search(embedding, limit=20)
-    
-    # 3. Hybrid merge (0.6 vector + 0.4 keyword)
-    ranked = hybrid_merge(fts_results, vec_results)
-    
+
+    # 2. Vector leg is INERT in prod: embed_fn is always None (allow_embed=False
+    #    on every caller since 2026-06-28), so query_embedding stays None and
+    #    vector_search() is never called. The code below survives only for
+    #    caller-compat; VECTOR_WEIGHT (0.6) is a dead constant on this path.
+    #    hybrid = VECTOR_WEIGHT*0 + KEYWORD_WEIGHT*fts_score  →  0.4 * fts_score
+
+    # 3. Rank by (effectively) FTS5-only score, dedup by content hash
+    ranked = rank(fts_results)
+
     # 4. Assemble within token budget, with provenance
     return format_for_injection(ranked, max_tokens)
 ```
 
-**Why 0.6 vector + 0.4 keyword?** Pure keyword misses semantic paraphrases ("auth issue" doesn't match "credential chain"). Pure vector misses precise terms ("AKIA" token pattern). The hybrid ratio was calibrated on manual spot checks.
+**Why keyword-only?** `search()` embeds the query only when `embed_fn` is provided; in prod every caller passes `embed_fn=None`, so `query_embedding` is always `None` and the vector leg never fires. `VECTOR_WEIGHT`/`KEYWORD_WEIGHT` (0.6/0.4) still exist as constants, but with `vec_score=0` the effective score is `0.4 × fts_score`. The synonym/paraphrase blind spot pure keyword leaves ("auth issue" not matching "credential chain") is covered by **agentic re-search** — the agent is prompted to re-grep with synonyms — not by an embedding leg. Precise-term matching ("AKIA" token pattern) is exactly what FTS5/BM25 is strongest at.
 
 ### 4.2 Three-Stage Recall
 
@@ -223,7 +227,7 @@ This prevents noise injection when the Knowledge library has no relevant content
 
 ## 5. Transcript Indexer (`core/transcript_indexer.py`, 562 lines)
 
-The "verbatim memory" layer — semantic search over raw conversation transcripts that no summary can replace.
+The "verbatim memory" layer — FTS5 keyword search over raw conversation transcripts that no summary can replace. (Originally designed as hybrid vector+FTS5; the vector leg was removed 2026-06-28. `sync_transcript_index` now runs with `embed_fn=None`, so `transcript_vec` is never populated and `vector_search()` is never called at runtime.)
 
 ### 5.1 Why Raw Transcripts Matter
 
@@ -254,6 +258,7 @@ CREATE TABLE transcript_chunks (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- VESTIGIAL — table defined but never populated since 2026-06-28
 CREATE VIRTUAL TABLE transcript_vec USING vec0(
     id INTEGER PRIMARY KEY,
     embedding float[1024]
@@ -302,7 +307,7 @@ First-time indexing runs as a background job — doesn't block session operation
 | Dimension | SessionRecall | TranscriptIndexer |
 |-----------|--------------|-------------------|
 | Data source | DB `messages` table | JSONL raw transcripts |
-| Search method | FTS5 keyword only | Hybrid vector + FTS5 |
+| Search method | FTS5 keyword only | FTS5 keyword only (vector leg removed 2026-06-28) |
 | Content depth | Persisted user/assistant text | Full dialogue including tool_use, thinking |
 | Coverage | Only DB-persisted sessions | All 1,500+ transcripts |
 | Speed | Fast (~50ms) | Moderate (~200ms) |
@@ -312,7 +317,15 @@ First-time indexing runs as a background job — doesn't block session operation
 
 ---
 
-## 6. Embedding Client (`core/embedding_client.py`, 153 lines)
+## 6. Embedding Client (`core/embedding_client.py`) — VESTIGIAL
+
+> **Status: dead code as of 2026-06-28 (commit `6540970e`).** No recall or sync
+> path embeds anymore. This wrapper, the `knowledge_vec`/`transcript_vec` sqlite-vec
+> tables, and the `vector_search()` methods on both stores still exist in the tree,
+> but are **never populated or queried at runtime** — every writer passes
+> `embed_fn=None` and every reader passes `allow_embed=False`. They are retained only
+> so importers don't break during the transition; treat this whole section as
+> historical.
 
 Thin wrapper around Amazon Bedrock Titan Text Embeddings v2 (1024-dim vectors):
 
@@ -320,24 +333,29 @@ Thin wrapper around Amazon Bedrock Titan Text Embeddings v2 (1024-dim vectors):
 - **Dimensions:** 1024
 - **Connection:** Pooled boto3 Bedrock Runtime client
 - **Error handling:** 3× retry with exponential backoff
-- **Cost:** ~$0 for local usage (Bedrock API within same account)
-- **Shared by:** KnowledgeStore and TranscriptIndexer
+- ~~**Shared by:** KnowledgeStore and TranscriptIndexer~~ — no longer wired to either;
+  the `_sync_memory_embeddings` writer was deleted and both `_sync_knowledge_library`
+  and `_sync_transcript_index` now call their stores with `embed_fn=None`.
 
 ---
 
-## 7. Memory Index (`core/memory_index.py`, 1,148 lines)
+## 7. Memory Index (`core/memory_index.py`)
 
-Generates and maintains the MEMORY.md index — the compact summary at the top of the memory file that enables fast scanning.
+Generates and maintains the MEMORY.md index — the compact summary at the top of the memory file that enables fast scanning — and selects sections for L1 injection.
+
+**Selective injection is keyword-only.** For MEMORY.md below `FULL_INJECTION_THRESHOLD = 30_000` tokens (the common case, ~375 entries) the entire file is injected verbatim (no scoring at all). Above the threshold, `select_memory_sections()` scores sections via `_keyword_section_scores()` (keyword_relevance over the index block, plus Okapi-BM25 over entry bodies). The vector/hybrid branch is gone: `_hybrid_section_scores()` is an **inert stub that always returns `{}`** (its Titan-embed body was deleted 2026-06-28), and the `memory_embeddings` parameter is retained but inert — if passed `True`, scoring stays keyword-only and logs a warning.
 
 ### 7.1 Index Structure
 
 The Memory Index is organized into two tiers:
 
-- **Permanent:** COEs (never age out), Key Decisions (never age out unless superseded)
-- **Active:** Recent Context, Lessons Learned, Open Threads (subject to caps and archival)
+- **Permanent:** COEs (never age out), Architectural/Key Decisions (never age out unless superseded)
+- **Active:** Guidelines, Open Threads (and other decay-managed sections; subject to caps and archival)
+
+> Note: the live section names are **Open Threads** and **Guidelines** (`memory_index.py:1113-1115`). The older names "Recent Context" and "Lessons Learned" survive only as backward-compat aliases in `SECTION_KEY_PREFIX`/`_REF_PREFIX_TO_SECTION` for parsing legacy MEMORY.md files — the current writer no longer emits them.
 
 Each entry in the index is a one-line summary with:
-- Stable key (`[COE01]`, `[KD15]`, `[RC07]`, `[LL12]`)
+- Stable key (`[COE01]`, `[DEC15]`, `[GUI07]`, `[OT03]`, …; legacy `RC`/`KD`/`LL` still parse)
 - Date
 - One-line description
 - Keyword aliases for L1 selective injection
@@ -418,8 +436,10 @@ Tracks entry count per section and reports to ContextHealthHook for cap enforcem
 5. ImprovementWritebackHook -> Projects/SwarmAI/IMPROVEMENT.md
 6. ContextHealthHook
    -> Refresh KNOWLEDGE.md index
-   -> Refresh MEMORY.md index
-   -> Incremental sync: Knowledge Store + Transcript Indexer
+   -> Refresh MEMORY.md index (keyword index only; no embeddings —
+      _sync_memory_embeddings was deleted 2026-06-28)
+   -> Incremental sync: Knowledge Store + Transcript Indexer, both FTS5-only
+      (_sync_knowledge_library / _sync_transcript_index call with embed_fn=None)
    -> Retention policy enforcement
 7. AutoCommitHook -> git commit workspace changes
 ```
@@ -460,9 +480,9 @@ The `Detail:` line is critical — it tells the agent exactly where to look for 
 | Tier | Section | Max Entries | Graduation Rule |
 |------|---------|-------------|-----------------|
 | **Permanent** | COE Registry | 15 | Never archive — each prevents a class of incidents |
-| **Permanent** | Key Decisions | 30 | Never — unless explicitly superseded (temporal validity) |
-| **Long-term** | Lessons Learned | 25 | When internalized as AGENT/STEERING standing rule |
-| **Active** | Recent Context | 30 | When superseded by newer entry on same topic |
+| **Permanent** | Decisions | 30 | Never — unless explicitly superseded (temporal validity) |
+| **Long-term** | Guidelines (formerly "Lessons Learned") | 25 | When internalized as AGENT/STEERING standing rule |
+| **Active** | Open Threads (formerly "Recent Context") | 30 | When superseded by newer entry on same topic |
 | **Active** | Open Threads | 10 | Resolved -> archive after 7 days |
 
 Overflow -> `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` (full text preserved, never deleted).
@@ -499,10 +519,10 @@ EVOLUTION.md is **procedural memory** — "how to do things" and "what mistakes 
 
 | Dimension | MemPalace | SwarmAI Memory |
 |-----------|-----------|----------------|
-| Storage philosophy | Raw verbatim (store everything) | Hybrid: curated Brain + raw transcripts |
-| Search | Vector-only (OpenAI embeddings, ChromaDB) | Hybrid: 0.6 vector + 0.4 FTS5 (sqlite-vec) |
-| Benchmark | 96.6% LongMemEval (raw) | Targets >85% with hybrid + curated Brain |
-| Cost | ~$10/year (cloud embedding API) | ~$0 (Bedrock Titan, local sqlite-vec) |
+| Storage philosophy | Raw verbatim (store everything) | Two-layer: curated Brain + raw transcripts |
+| Search | Vector-only (OpenAI embeddings, ChromaDB) | Pure keyword: FTS5 + Okapi-BM25 (vector leg removed 2026-06-28) |
+| Benchmark | 96.6% LongMemEval (raw) | Targets >85% with keyword recall + curated Brain + agentic re-search |
+| Cost | ~$10/year (cloud embedding API) | ~$0 (no embedding API calls; local sqlite FTS5) |
 | Intelligence timing | Read-time only | Write-time (distillation) + read-time (recall) |
 | Curation | None — store everything, search later | Distillation pipeline -> curated Brain |
 | Structure | Palace metaphor (Wings -> Rooms -> Halls -> Drawers) | 4-level cognitive model (Semantic -> Verbatim) |
@@ -515,7 +535,7 @@ EVOLUTION.md is **procedural memory** — "how to do things" and "what mistakes 
 |-----------|-------------|----------------|
 | Cross-session memory | None (fresh each session) | Full pipeline: Brain + Library + Transcripts |
 | Memory writes | CLAUDE.md (flat file, user-managed) | 11-file priority chain + MemoryGuard |
-| Recall | Manual file reads only | Automatic hybrid recall (pre + post-first-message) |
+| Recall | Manual file reads only | Automatic keyword/FTS5 recall (pre + post-first-message) + agentic re-search |
 | Self-improvement | None | 4-phase evolution pipeline + corrections -> skill improvement |
 | Safety | None | MemoryGuard + SkillGuard + temporal validity |
 | Distillation | None | Session -> DailyActivity -> MEMORY.md (verified) |
@@ -540,9 +560,15 @@ We don't need Honcho's complexity. The UserObserver covers the high-value case (
 
 With a 1M context window, 5-15K tokens for Brain is negligible. Full injection means the agent ALWAYS has access to all curated knowledge — no retrieval latency, no missed entries due to query mismatch. Progressive disclosure adds complexity for a non-existent constraint.
 
-### 11.2 Why Hybrid Search (Vector + FTS5), Not Vector-Only?
+### 11.2 Why Pure Keyword (FTS5/BM25), Not Vector or Hybrid?
 
-Pure vector search misses precise technical terms. "AKIA" (AWS access key prefix) has no semantic meaning to an embedding model — it's just a string. FTS5 keyword search catches it instantly. The 0.6/0.4 blend ensures both semantic similarity and exact-match precision.
+The design originally used a 0.6 vector + 0.4 FTS5 hybrid, but the vector leg was **removed 2026-06-28** (commit `6540970e`) across every recall path. Rationale for going pure-filesystem:
+
+- **Exact-match precision is what actually mattered.** Precise technical terms — "AKIA" (AWS access key prefix), `run_xxx` ids, symbol names — have no useful semantic embedding; they're just strings that FTS5/BM25 matches instantly and cheaply.
+- **The synonym/paraphrase gap is covered agentically.** The one thing vectors bought ("auth issue" matching "credential chain") is now handled by prompting the agent to re-grep with synonyms (agentic re-search), rather than by a synchronous Bedrock embed on the critical path.
+- **Cost and latency.** No Bedrock Titan embeds means $0 embedding cost and no ~150ms/embed added to session start; recall is a pure local sqlite read.
+
+The `VECTOR_WEIGHT`/`KEYWORD_WEIGHT` (0.6/0.4) constants and `vector_search()` methods survive as dead scaffolding (see §6), but `embed_fn=None` / `allow_embed=False` everywhere means `vec_score` is always 0 and the effective score is `0.4 × fts_score`.
 
 ### 11.3 Why Incremental Index Sync, Not Batch?
 
@@ -560,18 +586,23 @@ Each of the 4 DDD documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) ow
 
 ## 12. Module Index
 
-| Module | File | Lines | Role |
-|--------|------|-------|------|
-| KnowledgeStore | `core/knowledge_store.py` | 509 | Library indexing (chunk + embed + sync) |
-| RecallEngine | `core/recall_engine.py` | 221 | Hybrid search (vector + FTS5 + merge) |
-| TranscriptIndexer | `core/transcript_indexer.py` | 562 | Raw transcript semantic indexing |
-| EmbeddingClient | `core/embedding_client.py` | 153 | Bedrock Titan v2 wrapper |
-| MemoryIndex | `core/memory_index.py` | 1,148 | Index generation, temporal validity, refs |
-| MemoryGuard | `core/memory_guard.py` | 179 | Write-path security scanning |
-| SessionRecall | `core/session_recall.py` | 293 | FTS5 past-session search |
-| DistillationHook | `hooks/distillation_hook.py` | 1,568 | Session -> Brain promotion + enrichment |
-| ContextHealthHook | `hooks/context_health_hook.py` | 814 | Index sync + retention + health checks |
-| **Total** | | **5,447** | |
+Live pure-filesystem module set (line counts approximate):
+
+| Module | File | Role |
+|--------|------|------|
+| RecallMulti | `core/recall_multi.py` | **Unified multi-domain recall fan-out** (`recall_all` over context-files/DDD/library/session/codeintel); `allow_embed=False` in prod → keyword/FTS5/BM25 only |
+| ContextRecall | `core/context_recall.py` | Single-file MEMORY.md recall (`recall_context`); keyword/BM25, `allow_embed=False`. **Runtime file is `context_recall.py`, not `recall_context.py`** |
+| RecallEngine | `core/recall_engine.py` | Library search over KnowledgeStore; FTS5-only when `embed_fn=None` (the only prod mode). Vector merge code inert |
+| MemoryIndex | `core/memory_index.py` | Index generation, keyword section selection, temporal validity, refs; `_hybrid_section_scores()` is an inert `{}` stub |
+| MemoryDecay | `core/memory_decay.py` | Value-based decay / archival of MEMORY.md entries |
+| DDDEntryLifecycle | `core/ddd_entry_lifecycle.py` | Single source of truth for MEMORY section names + prefix maps (Open Threads/Guidelines/…) |
+| KnowledgeStore | `core/knowledge_store.py` | Library indexing (chunk + FTS5 sync). `knowledge_vec`/`vector_search()` vestigial |
+| TranscriptIndexer | `core/transcript_indexer.py` | Raw transcript FTS5 indexing. `transcript_vec`/`vector_search()` vestigial |
+| SessionRecall | `core/session_recall.py` | FTS5 past-session search |
+| MemoryGuard | `core/memory_guard.py` | Write-path security scanning |
+| DistillationHook | `hooks/distillation_hook.py` | Session -> Brain promotion + enrichment |
+| ContextHealthHook | `hooks/context_health_hook.py` | Index sync (FTS5-only, `embed_fn=None`) + retention + health checks |
+| ~~EmbeddingClient~~ | ~~`core/embedding_client.py`~~ | **VESTIGIAL** — Bedrock Titan wrapper, no longer wired to any read/write path (see §6) |
 
 ---
 
@@ -584,7 +615,7 @@ Each of the 4 DDD documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) ow
 | 2 | RecallEngine + prompt injection (pre-session + post-first-message) | [DONE] | 2026-04-11 |
 | 3 | Brain enrichment (Detail: provenance links in distilled entries) | [DONE] | 2026-04-11 |
 | 4 | Graduation mechanism | [DEFERRED] Deferred | When Brain >15K tokens |
-| 5 | Transcript Semantic Indexing (1,500+ JSONL, hybrid search) | [DONE] | 2026-04-11 |
+| 5 | Transcript Indexing (1,500+ JSONL, FTS5 keyword) | [DONE] | 2026-04-11 |
 | 6 | Temporal Validity Windows (superseded_by, 0.1 weight) | [DONE] | 2026-04-11 |
 
 Commits: Phase 0-3 + P1/P2: `a2b19a5`, `469cc4a`. Recall activation: `3c9f0d4`, `5ce34bc`. PE fixes: `b791d6a`, `1c2c538`.
@@ -593,7 +624,7 @@ Commits: Phase 0-3 + P1/P2: `a2b19a5`, `469cc4a`. Recall activation: `3c9f0d4`, 
 
 ## 14. Lessons Learned
 
-1. **3% utilization -> 30%+ is the real win.** The knowledge existed (730K tokens, 700MB transcripts). It just wasn't searchable. Indexing + hybrid search is high ROI, low risk.
+1. **3% utilization -> 30%+ is the real win.** The knowledge existed (730K tokens, 700MB transcripts). It just wasn't searchable. FTS5/BM25 keyword indexing is high ROI, low risk — and (as of 2026-06-28) enough on its own, with agentic re-search covering the synonym gap that a vector leg used to.
 
 2. **Raw > summary for exact details.** MemPalace's benchmark (96.6% vs 84.2%) validates keeping raw transcripts alongside curated summaries. They serve different recall needs.
 
@@ -616,7 +647,7 @@ Commits: Phase 0-3 + P1/P2: `a2b19a5`, `469cc4a`. Recall activation: `3c9f0d4`, 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|-----------|
 | Recall injects irrelevant content | Medium | Low | Score threshold <0.2 -> no injection |
-| Vector index grows too large | Low | Low | sqlite-vec local, ~200MB for 50K chunks |
+| ~~Vector index grows too large~~ | — | — | N/A — vector leg removed 2026-06-28; only FTS5 indexes are built |
 | Transcript indexing takes too long | Low | Medium | Background job, graceful empty results |
 | MemoryGuard false positives | Medium | Low | Allowlist + logged rejections for review |
 | Temporal validity marks active decision stale | Low | Medium | Only memory health job marks superseded; manual override available |
@@ -624,4 +655,4 @@ Commits: Phase 0-3 + P1/P2: `a2b19a5`, `469cc4a`. Recall activation: `3c9f0d4`, 
 
 ---
 
-*Updated 2026-04-15. Source: Memory Architecture v2 design + MemPalace competitive analysis + 6-phase implementation.*
+*Updated 2026-07-17 (pure-filesystem recall — vector/Titan leg removed 2026-06-28, commit `6540970e`). Original: 2026-04-15, Memory Architecture v2 design + MemPalace competitive analysis + 6-phase implementation.*

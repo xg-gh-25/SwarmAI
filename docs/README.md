@@ -8,7 +8,7 @@
 |---|----------|-------|-------------|
 | 1 | [SwarmAI Architecture Design](SwarmAI-Architecture-Design.pdf) | 22 | **Start here.** Six-layer architecture, 11-file context chain, compound learning loop, daemon-first backend, OOM resilience, competitive positioning. |
 | 2 | [Self-Evolution Harness](Self-Evolution-Harness-Design.pdf) | 27 | **The core innovation.** Context engineering (11-file P0-P10 chain), 9 post-session hooks, 19-module agent intelligence (4-phase), evolution pipeline v2 (MINE->ASSESS->ACT->AUDIT), 82-skill architecture, proactive intelligence (L0-L4), 7-layer safety. 28 files, 14,500+ lines. |
-| 3 | [Memory Management](Memory-Management-Design.pdf) | 19 | **How the agent remembers.** 4-level cognitive memory (Semantic->Verbatim), hybrid recall engine (vector+FTS5), transcript indexing (1,500+ JSONL, 700MB+), temporal validity. 9 modules, 5,447 lines. |
+| 3 | [Memory Management](Memory-Management-Design.pdf) | 19 | **How the agent remembers.** 4-level cognitive memory (Semantic->Verbatim), pure-filesystem recall engine (keyword/FTS5/BM25), transcript indexing (1,500+ JSONL, 700MB+), temporal validity. 9 modules, 5,447 lines. |
 
 ## Reading Order
 
@@ -97,7 +97,7 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 
 ## Discussions (Thought Leadership)
 
-All 43+ discussion articles are mirrored in [`discussions/`](discussions/) for DeepWiki indexing and offline reading.
+All 70+ discussion articles are mirrored in [`discussions/`](discussions/) for DeepWiki indexing and offline reading.
 
 | Theme | Key Articles |
 |-------|-------------|
@@ -107,7 +107,7 @@ All 43+ discussion articles are mirrored in [`discussions/`](discussions/) for D
 | **Autonomous Delivery** | Coding as Black Box (#4), Content as Black Box (#5), AI for Data (#36) |
 | **AI Strategy** | S×T Tension Matrix (#11), Flat vs Compound (#13), Startup Stages (#16) |
 
-**Reading paths:** [Builder / Architect / Leader guide](discussions/35-reading-matrix-3-paths-through-34-discussions-builder-archit.md)
+**Reading paths:** [Builder / Architect / Leader guide](discussions/35-reading-matrix-3-paths-through-72-discussions.md)
 
 ## Other Documentation
 
@@ -119,4 +119,4 @@ All 43+ discussion articles are mirrored in [`discussions/`](discussions/) for D
 
 ---
 
-*Last updated: May 29, 2026 --- v3.2*
+*Last updated: July 2026 --- v1.25.0*

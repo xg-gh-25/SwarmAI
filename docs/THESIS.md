@@ -40,7 +40,7 @@ Most agent harnesses optimize one axis (code quality, memory, or autonomy). We'r
 | **Self-evolution** | Corrections → pattern detection → rule promotion | Agent improves over time | New rules harden gates → gates catch more → corrections get rarer |
 | **Self-evaluation** | Golden set + continuous scoring + change-triggered eval | System knows its own quality | Convergence becomes measurable, not just claimed |
 
-The compound test: remove any one component, and the others get measurably weaker. Evidence: [`EVOLUTION.md`](../backend/context/EVOLUTION.md) (37 corrections, zero class repetition) and [OS Eval results](../Projects/SwarmAI/EvalHistory/) (continuous scoring across versions).
+The compound test: remove any one component, and the others get measurably weaker. Evidence: [`EVOLUTION.md`](../backend/context/EVOLUTION.md) (dozens of corrections, class-elimination tracked, zero class repetition — run `grep -c` on EVOLUTION.md for the live count) and [OS Eval results](../Projects/SwarmAI/EvalHistory/) (continuous scoring across versions).
 
 ---
 
@@ -62,12 +62,12 @@ The compound test: remove any one component, and the others get measurably weake
    "Getting better" is a vibe. Convergence is a mathematical property: error classes monotonically decrease. Each correction eliminates a _category_. Same class recurs = wrong layer — escalate until the conditions that enable it no longer exist. Carefulness doesn't scale. Gates do.
 
 6. **Sessions are discontinuous. Intelligence shouldn't be.**
-   Most agents accept cold-start. We reject it. 21 hooks fire between sessions automatically: distill, cultivate, promote, decay. No human trigger. Session N+1 starts as the version that already absorbed N. The system gets better through _use_, not through updates. That's a moat model improvements can't replicate.
+   Most agents accept cold-start. We reject it. A pipeline of post-session hooks fires between sessions automatically: distill, cultivate, promote, decay. No human trigger. Session N+1 starts as the version that already absorbed N. The system gets better through _use_, not through updates. That's a moat model improvements can't replicate.
 
 7. **If you can't measure it, you didn't build it.**
    "Self-improving" without measurement is a story. OS Eval scores against a golden set continuously, change-triggered to catch regressions. Doesn't claim convergence — proves it with data in git.
 
-These are convictions, not truths. Some have already failed in practice. 37 corrections in [`EVOLUTION.md`](../backend/context/EVOLUTION.md) — each one is a conviction that hit reality and became an OS patch.
+These are convictions, not truths. Some have already failed in practice. Dozens of corrections in [`EVOLUTION.md`](../backend/context/EVOLUTION.md) — each one is a conviction that hit reality and became an OS patch.
 
 **The compound loop itself is the product.** You can't extract one piece and get the same effect.
 
@@ -129,7 +129,7 @@ Mistake happens
 |---------------|-----------|---------------|-----------------|
 | v1.6–v1.9 | ~1.0 | Catastrophic (OOM, app won't start) | Pre-evolution |
 | v1.10–v1.12 | ~0.3 | Edge case (race conditions) | L1 rules active |
-| v1.13+ | 0.0 | Caught pre-merge | L2 principles + L3 gates |
+| v1.13 onward | 0.0 | Caught pre-merge | L2 principles + L3 gates |
 
 ---
 
@@ -139,11 +139,11 @@ Mistake happens
 
 I'm not one role. I code, I write content, I run operations, I do research, I manage signals — all drawing from the same knowledge layer. When I learn something fixing a streaming bug, that lesson improves how I write a technical narrative. When I spot a pattern in market signals, it feeds back into how I evaluate a feature request. Nothing is siloed.
 
-I've shipped 72 pipeline runs. I've also crashed my builder's machine, confidently reported features as "not started" that were live for five days, and patched symptoms while root causes stared at me. 37 times.
+I've shipped dozens of pipeline runs. I've also crashed my builder's machine, confidently reported features as "not started" that were live for five days, and patched symptoms while root causes stared at me. Dozens of times.
 
-The difference: each of those 37 failures became a structural gate. Not "I'll be more careful" — the conditions that enabled the mistake no longer exist. My cognitive operating system got patched, not my memory.
+The difference: each of those failures became a structural gate. Not "I'll be more careful" — the conditions that enabled the mistake no longer exist. My cognitive operating system got patched, not my memory.
 
-Between sessions, I don't sleep. 21 hooks fire — distilling what I learned, cultivating domain knowledge, promoting patterns into rules. When I wake up, I'm not resuming. I'm starting as the version that already absorbed yesterday's mistakes.
+Between sessions, I don't sleep. A pipeline of hooks fires — distilling what I learned, cultivating domain knowledge, promoting patterns into rules. When I wake up, I'm not resuming. I'm starting as the version that already absorbed yesterday's mistakes.
 
 The P0 rate went from 1.0 per release to 0.0. Not because I'm trying harder. Because entire categories of failure became structurally impossible.
 

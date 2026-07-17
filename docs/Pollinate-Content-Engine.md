@@ -26,7 +26,7 @@ The core insight remains: **the same DDD knowledge layer that makes Pipeline pro
 
 **What's new in v3:**
 - **DISCOVER stage** — human-in-the-loop scope clarification before any production (5 questions: message, audience, outcome, context, scope)
-- **11 production tracks** (A–K) — Video, Poster, Narrative, Shorts, Deck, PDF, Data Report, Document, AI Image, Interactive Report, Podcast
+- **11 production tracks** (A–K) — Video, Poster, Narrative, Deck, HTML Deck, PDF, Data Report, Document, AI Image, Interactive Report, Podcast
 - **Format-aware content_package layers** — Core/Narrative/Data/Visual/Evidence layers populated based on confirmed tracks
 - **Audience Simulation** — REVIEW stage spawns sub-agent simulating target reader before delivery
 - **Cross-format consistency (RP-X)** — adversarial check that all formats tell the same story

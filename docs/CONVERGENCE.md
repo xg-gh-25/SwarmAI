@@ -25,6 +25,8 @@ Corrections are structural fixes that eliminate an entire class of bugs. Each on
 
 **Trend:** Correction rate is ~4/week. The interesting metric isn't "fewer corrections" (we're still learning) — it's "no correction repeats a pattern already captured." Zero C001-class bugs since March 15. Zero C005-class bugs since April. The captured patterns are working.
 
+> **Live count:** The table above is a historical trajectory. For the current total, see the live [`EVOLUTION.md`](../backend/context/EVOLUTION.md) (`grep -c "^### C" backend/context/EVOLUTION.md`) — the shipped seed and the live workspace diverge, so this doc does not freeze a single number.
+
 ---
 
 ## P0 (Critical Bug) Rate Per Release
@@ -112,6 +114,8 @@ How much context does a cold-resumed session start with?
 | 2026-05-01 | ~700 | Pipeline + DDD | Same |
 | 2026-05-16 | ~780+ | Cultivation + quality gates | Same |
 
+> **Note:** This table records the early ramp only. Test count has grown well past this range since — see the current figure in the [Snapshot History](#snapshot-history) table below (run the command to reproduce live).
+
 **Evidence:** `cd backend && .venv/bin/python -m pytest --co -q 2>/dev/null | tail -1`
 
 ---
@@ -129,7 +133,7 @@ How much context does a cold-resumed session start with?
 
 ---
 
-_Last updated: 2026-05-16. Updated on meaningful milestones, not on schedule._
+_Last updated: 2026-07-13 (current release v1.25.0). Updated on meaningful milestones, not on schedule._
 
 ---
 
@@ -158,3 +162,6 @@ _Last updated: 2026-05-16. Updated on meaningful milestones, not on schedule._
 | 2026-07-04 | v1.23.0 | 17 | 37 | 6672+ | auto (release) |
 | 2026-07-10 | v1.24.0 | 17 | 37 | 7017+ | auto (release) |
 | 2026-07-13 | v1.24.1 | 17 | 37 | 7188+ | auto (release) |
+| 2026-07-17 | v1.25.0 | see live EVOLUTION.md | — | 7188+ | current |
+
+> Correction/section counts in the seed lag the live workspace — see live [`EVOLUTION.md`](../backend/context/EVOLUTION.md) for the current figure rather than the frozen seed value.

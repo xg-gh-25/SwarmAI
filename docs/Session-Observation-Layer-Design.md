@@ -95,7 +95,7 @@ class Observation:
     duration_ms: int = 0
 ```
 
-**Why `slots=True`:** Reduces per-instance memory from ~400 bytes to ~200 bytes. At 200 slots, total ring overhead is ~40KB for data + ~40KB for deque structure = ~80KB.
+**Why `slots=True`:** Trims per-instance dict/attribute overhead. Each Observation averages ~400 bytes; at 200 slots the total ring overhead is ~80KB (see §3.3 and the `observation_ring.py` header comment).
 
 **Why no locks:** The hook chain guarantees single-writer semantics. PreToolUse and PostToolUse execute sequentially in the same event loop --- there is never concurrent writing. Consumers read from the ring between hook invocations, also sequentially. Lock-free means zero contention overhead.
 
@@ -147,9 +147,9 @@ This enriches the existing checkpoint with structured context. On crash recovery
 
 This replaces the previous model where DDD events only fired from the DailyActivityExtractionHook (at session end, 4+ hours after the actual edit).
 
-#### Consumer 3 (Future): ObservationMiner
+#### Consumer 3: ObservationMiner
 
-**Planned for Step 3.** Will extract patterns from the ring:
+**Update (shipped):** The ObservationMiner has since landed as `backend/core/observation_miner.py` — the "Future/Step 3" framing below is historical. It extracts patterns from the ring:
 - Repeated tool sequences (e.g., Read -> Edit -> Bash test cycle)
 - Common file clusters (files that are always edited together)
 - Intent patterns that correlate with corrections

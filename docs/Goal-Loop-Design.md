@@ -255,10 +255,13 @@ Triggered only on SUCCESS exit (after final adversarial passes):
 Goal Loop is not a separate system — it is a **pipeline profile**. When EVALUATE determines the requirement is goal-shaped (open-ended, measurable DoD, multi-cycle), it selects the `goal` profile:
 
 ```
-Pipeline Profiles:
-  standard  → 9 stages + Quality Convergence Loop (default)
+Pipeline Profiles (6 total):
+  full      → 9 stages + Quality Convergence Loop (default)
+  trivial   → abbreviated stages for small changes
+  research  → EVALUATE + THINK + REFLECT
+  docs      → EVALUATE + THINK + PLAN + DELIVER + REFLECT
+  bugfix    → abbreviated stages for urgent fixes
   goal      → EVALUATE + GOAL_CYCLE + REFLECT (this document)
-  hotfix    → abbreviated stages for urgent fixes
 ```
 
 The same DDD knowledge, the same adversarial review architecture, and the same REFLECT → DDD feedback loop apply. Goal Loop simply changes the execution topology from linear (9 stages) to iterative (N cycles).

@@ -113,7 +113,7 @@ DDD is not a flat document. It's a three-layer system:
 | PROJECT.md | Team rules, decision history, workflow preferences | All engines (operational context) |
 
 **Intelligence Layer:**
-- Health Scores — 5-dimension scoring (completeness, accuracy, freshness, consistency, usefulness) drives how much the AI trusts each section
+- Health Scores — 5-dimension scoring (completeness, accuracy, staleness, consistency, usefulness) drives how much the AI trusts each section
 - Maturity Tracking — Sparse, Growing, Mature, Evergreen stages determine autonomy levels
 - Code Graph — Structural relationships extracted from actual codebase, not documentation
 
@@ -172,7 +172,7 @@ Cultivation is the orchestration mechanism that turns raw signals into structure
 **Health Scoring (5 dimensions):**
 - Completeness — are all expected sections populated?
 - Accuracy — does content match current reality?
-- Freshness — when was each section last validated?
+- Staleness (days since update) — when was each section last validated?
 - Consistency — do sections contradict each other?
 - Usefulness — does the AI actually reference this content?
 
