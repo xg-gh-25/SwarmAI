@@ -302,6 +302,39 @@ class TestAnthropicDirectPath:
             # Bedrock mode must not set the Anthropic key.
             assert os.environ.get("ANTHROPIC_API_KEY") is None
 
+    def test_switch_apikey_to_bedrock_clears_stale_key(self, tmp_path):
+        """Gate-2 C2: a key injected in a prior API-key spawn must NOT linger in
+        the long-lived daemon's env when the user switches to Bedrock."""
+        from core.app_config_manager import AppConfigManager
+        from core import claude_environment
+        cfg = AppConfigManager(config_path=tmp_path / "config.json")
+        cfg.load()
+        cfg.set_secret("anthropic_api_key", "sk-ant-stale")
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            # 1st spawn: API-key mode injects the key
+            cfg.update({"use_bedrock": False})
+            claude_environment._configure_claude_environment(cfg)
+            assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-stale"
+            # 2nd spawn: user switched to Bedrock — the stale key must be cleared
+            cfg.update({"use_bedrock": True})
+            claude_environment._configure_claude_environment(cfg)
+            assert os.environ.get("ANTHROPIC_API_KEY") is None
+
+    def test_bedrock_does_NOT_clobber_users_own_export(self, tmp_path):
+        """If the user exported their OWN key (≠ persisted), Bedrock mode must
+        not pop it — we only clear the key WE injected."""
+        from core.app_config_manager import AppConfigManager
+        from core import claude_environment
+        cfg = AppConfigManager(config_path=tmp_path / "config.json")
+        cfg.load()
+        cfg.set_secret("anthropic_api_key", "sk-ant-persisted")
+        cfg.update({"use_bedrock": True})
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-USER-EXPORT"}, clear=True):
+            claude_environment._configure_claude_environment(cfg)
+            # User's explicit export (different value) is preserved.
+            assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-USER-EXPORT"
+
     def test_verify_anthropic_reads_persisted_key(self, client):
         """verify-auth (apikey mode) must succeed with a persisted key even when
         ANTHROPIC_API_KEY is NOT in the environment."""

@@ -32,15 +32,25 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   const [accountId, setAccountId] = useState('');
   const [adaAccount, setAdaAccount] = useState('');
   const [adaRole, setAdaRole] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [verifyResult, setVerifyResult] = useState<VerifyAuthResponse | null>(null);
   const [authHint, setAuthHint] = useState<AuthHintResponse | null>(null);
+  // Deployment context drives which method cards show. Detected by the backend
+  // (internal iff ~/.ada|~/.midway), overridable by the user via a one-click
+  // toggle (an internal employee on a fresh machine, or vice versa).
+  const [context, setContext] = useState<'internal' | 'external'>('external');
+  const [contextOverridden, setContextOverridden] = useState(false);
 
   // Auto-detect best auth method and load real credential details
   useEffect(() => {
     systemService.getAuthHint()
       .then((hint) => {
         setAuthHint(hint);
+        // Adopt detected context unless the user already toggled it.
+        if (!contextOverridden && hint.deploymentContext) {
+          setContext(hint.deploymentContext);
+        }
         // Map backend suggestion to UI method (iam_role → sso for Hive)
         const methodMap: Record<string, AuthMethod> = {
           'ada': 'ada', 'sso': 'sso', 'apikey': 'apikey', 'iam_role': 'sso',
@@ -88,13 +98,26 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         configUpdate.ada_account = adaAccount;
         configUpdate.ada_role = adaRole;
       }
+      // For Anthropic-direct, pass the entered key so verify can validate it
+      // even before it's persisted (backend reads override.anthropic_api_key).
+      if (method === 'apikey' && apiKey.trim()) {
+        configUpdate.anthropic_api_key = apiKey.trim();
+      }
 
       const result = await systemService.verifyAuth(configUpdate);
       setVerifyResult(result);
       setVerifyState(result.success ? 'success' : 'error');
 
       if (result.success) {
+        // Persist the API key via the dedicated secret endpoint (NOT settings —
+        // secrets are stripped there). Then persist non-secret config + method.
+        if (method === 'apikey' && apiKey.trim()) {
+          await systemService.persistApiKey(apiKey.trim());
+          setApiKey('');  // don't keep the secret in component memory after persist
+        }
         await settingsService.updateAPIConfiguration(configUpdate);
+        // Persist the chosen method + context so error remediation is method-aware.
+        await systemService.setAuthMethod(method, context);
         if (onVerifySuccess) onVerifySuccess();
       } else if (onVerifyFail) {
         onVerifyFail();
@@ -111,15 +134,37 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
     }
   };
 
-  // Build methods list — show Ada only when detected (Amazon internal)
-  // Note: Access Keys method removed — it collected credentials but never
-  // persisted them (PE review finding #2). Re-add when wired to ~/.aws/credentials.
-  const hasAda = authHint?.hasAdaDir ?? false;
-  const methods: { id: AuthMethod; label: string; desc: string }[] = [
-    { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
-    ...(hasAda ? [{ id: 'ada' as AuthMethod, label: 'Ada', desc: 'Amazon Internal' }] : []),
-    { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
-  ];
+  // Method cards are filtered by deployment context:
+  //   internal → [ADA, SSO]        (Amazon employees: ADA or corporate SSO)
+  //   external → [SSO, Anthropic]  (others: personal-AWS SSO, or Anthropic key)
+  // SSO is shared by both (same `aws sso login` → Bedrock, identity-agnostic).
+  const methods: { id: AuthMethod; label: string; desc: string }[] =
+    context === 'internal'
+      ? [
+          { id: 'ada', label: 'Ada', desc: 'Amazon Internal' },
+          { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+        ]
+      : [
+          { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+          { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
+        ];
+
+  // If the current method isn't valid for this context, snap to the first card.
+  useEffect(() => {
+    if (!methods.some(m => m.id === method)) {
+      setMethod(methods[0].id);
+      setVerifyState('idle');
+      setVerifyResult(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context]);
+
+  const toggleContext = () => {
+    setContextOverridden(true);
+    setContext(c => (c === 'internal' ? 'external' : 'internal'));
+    setVerifyState('idle');
+    setVerifyResult(null);
+  };
 
   // Hive mode: single fixed auth method, no choices
   const isHiveIam = authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role';
@@ -379,10 +424,18 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                 </>
               ) : (
                 <>
-                  <p className="text-[var(--color-text-muted)] mb-1">Authenticate with AWS SSO:</p>
+                  <p className="text-[var(--color-text-muted)] mb-1">
+                    No AWS SSO profile found. Set one up first (one time), then sign in:
+                  </p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
-                    aws sso login --profile your-profile
+                    aws configure sso
                   </code>
+                  <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded mt-1">
+                    aws sso login --profile &lt;your-profile&gt;
+                  </code>
+                  <p className="text-[var(--color-text-muted)] mt-1.5 opacity-60 text-[10px]">
+                    `aws configure sso` walks you through your Identity Center start URL + region.
+                  </p>
                 </>
               )
             )}
@@ -391,17 +444,37 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       )}
 
       {method === 'apikey' && (
-        <div className="p-3 bg-[var(--color-card)] rounded-lg text-xs">
-          <p className="text-[var(--color-text-muted)] mb-1">
-            Set the <code className="px-1 py-0.5 bg-[var(--color-bg)] rounded">ANTHROPIC_API_KEY</code> environment variable before launching SwarmAI:
+        <div className="space-y-2">
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Anthropic API Key</label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => { setApiKey(e.target.value); setVerifyState('idle'); setVerifyResult(null); }}
+              placeholder="sk-ant-..."
+              autoComplete="off"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+            />
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] opacity-60">
+            Stored securely on this device (not synced, not in config backups). Get a key at console.anthropic.com.
           </p>
-          <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
-            export ANTHROPIC_API_KEY=sk-ant-...
-          </code>
         </div>
       )}
 
       {renderVerifySection()}
+
+      {/* One-click deployment-context switch — for an internal employee on a
+          machine that hasn't run ada/mwinit yet, or an external user misdetected
+          as internal. Auto-detection is a default, not a lock (AC2). */}
+      {mode === 'onboarding' && authHint?.runMode !== 'hive' && (
+        <button
+          onClick={toggleContext}
+          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors underline decoration-dotted"
+        >
+          {context === 'external' ? 'Amazon employee? Switch to internal options' : 'Not internal? Switch to external options'}
+        </button>
+      )}
     </div>
   );
 }

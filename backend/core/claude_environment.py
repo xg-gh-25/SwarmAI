@@ -194,13 +194,22 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
             is set and Bedrock is disabled.
     """
     # 1. Bedrock toggle + region (from cached config, zero IO)
-    use_bedrock = config.get("use_bedrock", False)
+    use_bedrock = config.get("use_bedrock", True)
 
     if use_bedrock:
         os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
         region = config.get("aws_region", "us-east-1") or "us-east-1"
         os.environ["AWS_REGION"] = region
         os.environ["AWS_DEFAULT_REGION"] = region
+        # Clear a stale key that WE injected in a prior API-key-mode spawn — the
+        # daemon is long-lived, so a leftover ANTHROPIC_API_KEY from a previous
+        # config would ride into this Bedrock session and confuse SDK routing.
+        # Only pop the one we injected (persisted key); never clobber a user's
+        # explicit shell export (which would === the persisted value only if they
+        # match — safest is to pop only when it equals the persisted key).
+        _persisted = config.get("anthropic_api_key")
+        if _persisted and os.environ.get("ANTHROPIC_API_KEY") == _persisted:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
     else:
         os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
 

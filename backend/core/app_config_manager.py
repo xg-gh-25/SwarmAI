@@ -263,18 +263,25 @@ class AppConfigManager:
             existing = {}
         existing[key] = value
         self._secret_path.parent.mkdir(parents=True, exist_ok=True)
-        # Write 0o600 atomically: create with restrictive mode from the start.
+        # Atomic 0o600 write: write to a temp file created 0o600, then os.replace
+        # onto the target (rename is atomic on the same filesystem). A crash can
+        # never leave a truncated secrets.json → the persisted key is durable.
         import os as _os
-        fd = _os.open(str(self._secret_path), _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+        tmp_path = str(self._secret_path) + ".tmp"
+        fd = _os.open(tmp_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
         try:
             with _os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(existing, indent=2) + "\n")
+                fh.flush()
+                _os.fsync(fh.fileno())
+            _os.replace(tmp_path, str(self._secret_path))
+            _os.chmod(str(self._secret_path), 0o600)  # re-assert after replace
         finally:
-            # Ensure mode is 0o600 even if the file pre-existed with looser bits.
-            try:
-                _os.chmod(str(self._secret_path), 0o600)
-            except OSError:
-                pass
+            if _os.path.exists(tmp_path):
+                try:
+                    _os.unlink(tmp_path)
+                except OSError:
+                    pass
         logger.info("Secret persisted: %s (secrets.json, 0o600)", key)
 
     def get(self, key: str, default: Any = None) -> Any:

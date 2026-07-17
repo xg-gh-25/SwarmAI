@@ -290,3 +290,24 @@ class TestSecretStore:
         mgr.load()
         with pytest.raises(ValueError):
             mgr.set_secret("aws_region", "us-west-2")  # not a secret key
+
+    def test_config_json_never_contains_secret_after_set_secret(self, tmp_config: Path):
+        """Gate-2 R4: even after a normal update() writes config.json, the
+        secret set via set_secret must be absent from the config file."""
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("anthropic_api_key", "sk-ant-must-not-appear")
+        mgr.update({"aws_region": "eu-west-1"})  # forces a config.json write
+        raw = tmp_config.read_text(encoding="utf-8")
+        assert "anthropic_api_key" not in json.loads(raw)
+        assert "sk-ant-must-not-appear" not in raw
+
+    def test_secret_survives_stale_tmp_from_crashed_write(self, tmp_config: Path):
+        """Atomic write: a leftover .tmp must not clobber a good secrets.json."""
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        mgr.set_secret("anthropic_api_key", "sk-ant-good")
+        (tmp_config.parent / "secrets.json.tmp").write_text("{corrupt", encoding="utf-8")
+        mgr2 = AppConfigManager(config_path=tmp_config)
+        mgr2.load()
+        assert mgr2.get("anthropic_api_key") == "sk-ant-good"

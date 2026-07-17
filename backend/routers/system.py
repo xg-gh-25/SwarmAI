@@ -295,7 +295,7 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
     try:
         config = AppConfigManager.instance()
         base = {
-            "use_bedrock": config.get("use_bedrock", False),
+            "use_bedrock": config.get("use_bedrock", True),
             "aws_region": config.get("aws_region", "us-east-1"),
             "default_model": config.get("default_model", DEFAULT_CONFIG["default_model"]),
             "bedrock_model_map": config.get("bedrock_model_map"),
@@ -357,7 +357,7 @@ async def verify_auth(request: Request):
         override = {}
 
     config = _get_auth_config(override=override)
-    use_bedrock = config.get("use_bedrock", False)
+    use_bedrock = config.get("use_bedrock", True)
 
     if use_bedrock:
         return _verify_bedrock(config)

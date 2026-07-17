@@ -15,10 +15,15 @@ const mockGetAuthHint = vi.fn();
 const mockGetAPIConfiguration = vi.fn();
 const mockUpdateAPIConfiguration = vi.fn();
 
+const mockPersistApiKey = vi.fn();
+const mockSetAuthMethod = vi.fn();
+
 vi.mock('../../../services/system', () => ({
   systemService: {
     verifyAuth: (...a: unknown[]) => mockVerifyAuth(...a),
     getAuthHint: (...a: unknown[]) => mockGetAuthHint(...a),
+    persistApiKey: (...a: unknown[]) => mockPersistApiKey(...a),
+    setAuthMethod: (...a: unknown[]) => mockSetAuthMethod(...a),
   },
 }));
 vi.mock('../../../services/settings', () => ({
@@ -36,6 +41,58 @@ beforeEach(() => {
   mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'us-east-1' });
   mockUpdateAPIConfiguration.mockResolvedValue({});
   mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latencyMs: 100 });
+  mockPersistApiKey.mockResolvedValue(undefined);
+  mockSetAuthMethod.mockResolvedValue(undefined);
+});
+
+describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
+  it('internal context shows ADA + SSO, NOT Anthropic Direct', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+    expect(screen.getByText('AWS SSO')).toBeInTheDocument();
+    expect(screen.queryByText(/Anthropic/i)).not.toBeInTheDocument();
+  });
+
+  it('external context shows SSO + Anthropic Direct, NOT ADA', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    expect(screen.getByText('AWS SSO')).toBeInTheDocument();
+    expect(screen.getByText(/Anthropic/i)).toBeInTheDocument();
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+  });
+
+  it('one-click toggle flips external -> internal card set', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    // external: no ADA yet
+    expect(screen.queryByText('Ada')).not.toBeInTheDocument();
+    // toggle to internal
+    const toggle = screen.getByText(/Amazon employee/i);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(screen.getByText('Ada')).toBeInTheDocument();
+  });
+
+  it('external Anthropic Direct shows an API key INPUT (not just env-var text)', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'apikey', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    // Select the Anthropic Direct card -> real password input for the key
+    await act(async () => { fireEvent.click(screen.getByText('API Key').closest('button')!); });
+    const keyInput = screen.getByPlaceholderText(/sk-ant-/i);
+    expect(keyInput).toBeInTheDocument();
+  });
 });
 
 describe('AuthConfigPanel — AC4 SSO account input', () => {
@@ -46,8 +103,8 @@ describe('AuthConfigPanel — AC4 SSO account input', () => {
     });
     render(<AuthConfigPanel mode="onboarding" />);
     await waitFor(() => screen.getByText('Verify Connection'));
-    // The probed account is shown...
-    expect(screen.getByText('123456789012')).toBeInTheDocument();
+    // The probed account is shown (findBy waits for the mount-effect state set)...
+    expect(await screen.findByText('123456789012')).toBeInTheDocument();
     // ...but NOT as an editable input with the old placeholder.
     expect(screen.queryByPlaceholderText(/12-digit AWS account ID/i)).not.toBeInTheDocument();
   });
@@ -66,7 +123,7 @@ describe('AuthConfigPanel — AC4 SSO account input', () => {
 
   it('ADA keeps an EDITABLE account input', async () => {
     mockGetAuthHint.mockResolvedValue({
-      suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',
+      deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',
       adaDetails: { accountId: '', roleName: '' },
     });
     render(<AuthConfigPanel mode="onboarding" />);
