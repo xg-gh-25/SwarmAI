@@ -96,6 +96,42 @@ CALL_TYPES = {
     "cpp": ["call_expression"],
 }
 
+# ── Value-reference edges (per-language registry) ─────────────────────────
+#
+# VALUE_DEFINITION_TYPES declares, per language, the tree-sitter node type(s) that
+# represent a MODULE-SCOPE constant/variable binding. When a language is present
+# here, _extract_from_tree runs a second pass that (1) emits a `constant` node for
+# each distinctive module-scope binding and (2) emits a `references` edge from any
+# reader function/method to the const it reads — closing the "change this const,
+# break its readers" impact hole (calls/imports edges never captured value reads).
+#
+# LANGUAGE EXPANSION: to support a new language, add ONE row here with its
+# module-scope-assignment node type, then verify against a real repo of that
+# language (see the expansion plan in the run's REFLECT / IMPROVEMENT.md). The
+# 2-pass logic, distinctive-name guard, and shadow-prune are language-agnostic;
+# only the node-type name differs. Python-only for now (dogfood language, lowest
+# false-positive risk); other languages are follow-up runs behind a verify gate.
+#
+# The value is a list of (assignment_node_type, lhs_field_name): the node type of a
+# binding statement and the field holding its target identifier. Only a SINGLE
+# plain identifier LHS is treated as a const (tuple-unpacking `A, B = ...` has a
+# pattern_list LHS and is skipped — ambiguous target). Augmented assignment
+# (`X += 1`) is deliberately EXCLUDED: it is a mutation, not a const definition.
+VALUE_DEFINITION_TYPES: dict[str, list[tuple[str, str]]] = {
+    # `TIMEOUT: int = 30` parses as `assignment` too (typed) → caught; `X += 1` is
+    # `augmented_assignment` → not listed → excluded.
+    "python": [("assignment", "left")],
+}
+
+
+def _is_distinctive_const_name(name: str) -> bool:
+    """A value-ref target name is 'distinctive' iff ≥3 chars AND has an uppercase
+    letter or underscore. Dodges the local-shadowing false-positive trap that
+    single-letter / all-lowercase names invite (`x`, `i`, `tmp` match everything).
+    """
+    return len(name) >= 3 and (any(c.isupper() for c in name) or "_" in name)
+
+
 # NOTE: IMPORT_TYPES not used in Phase 1 — imports extracted via regex in
 # _build_file_scope_regex(). Tree-sitter import node walking deferred to Phase 2.
 
@@ -446,9 +482,97 @@ def _extract_from_tree(tree, path_str: str, language: str,
     root = tree.root_node
     def_types = set(DEFINITION_TYPES.get(language, []))
     call_types = set(CALL_TYPES.get(language, []))
+    value_types = VALUE_DEFINITION_TYPES.get(language, [])
+
+    # ── Value-ref pass 1: collect module-scope const targets + shadow set ──
+    # module_consts: {name: line} for distinctive, single-identifier bindings that
+    # are DIRECT children of the module root (true module scope). shadowed: names
+    # ALSO bound inside a nested scope — a file-scope edge would be a false positive
+    # because nested readers resolve to the inner binding. 2-pass (collect ALL
+    # before emitting any) makes this order-independent.
+    module_consts: dict[str, int] = {}
+    if value_types:
+        assign_types = {t for t, _f in value_types}
+        field_by_type = {t: f for t, f in value_types}
+        shadowed: set[str] = set()
+
+        def _binding_name(node):
+            """Return the single plain-identifier LHS name, or None (skip tuple/
+            subscript/attribute targets — ambiguous)."""
+            field = field_by_type.get(node.type)
+            lhs = node.child_by_field_name(field) if field else None
+            if lhs is not None and lhs.type == "identifier" and lhs.text:
+                return _sanitize_name(lhs.text.decode("utf-8", errors="replace"))
+            return None
+
+        # Module-scope bindings = assignment nodes that are direct children of root.
+        # Track their exact identity (start_byte) so the shadow scan can tell a
+        # module-scope binding apart from a same-named inner rebinding.
+        module_binding_bytes: set[int] = set()
+        for child in root.children:
+            inner = child
+            # Python wraps a module-level assignment in expression_statement; unwrap
+            # one level so `MAX = 3` (module child → expression_statement → assignment)
+            # is seen. A binding nested deeper than this is NOT module scope.
+            if inner.type not in assign_types and inner.child_count == 1:
+                inner = inner.children[0]
+            if inner.type in assign_types:
+                nm = _binding_name(inner)
+                if nm and _is_distinctive_const_name(nm):
+                    module_consts.setdefault(nm, inner.start_point[0] + 1)
+                    module_binding_bytes.add(inner.start_byte)
+
+        # Shadow set: a binding of a tracked const name whose node is NOT the
+        # module-scope binding itself → it's bound in a nested scope, so a
+        # file-scope edge would be a false positive. Compared by start_byte
+        # (node identity), NOT by depth — the module binding sits at depth 2
+        # (root→expression_statement→assignment) so a depth threshold can't
+        # distinguish it from a nested rebinding.
+        def _scan_shadow(node):
+            if node.type in assign_types and node.start_byte not in module_binding_bytes:
+                nm = _binding_name(node)
+                if nm and nm in module_consts:
+                    shadowed.add(nm)
+            for c in node.children:
+                _scan_shadow(c)
+        _scan_shadow(root)
+
+        for nm in shadowed:
+            module_consts.pop(nm, None)
+
+        # Emit a constant node per surviving module-scope const. is_export=0 keeps
+        # find_dead_code (is_export=1 filter) clean — a module const is not an
+        # "export" in the unreferenced-symbol sense.
+        for nm, line in module_consts.items():
+            nodes.append(CodeNode(
+                id=_qualify(nm, path_str, None), file_path=path_str,
+                node_type="constant", name=nm, line_start=line, line_end=line,
+                language=language, is_export=False, is_entry_point=False,
+            ))
+
+    # (reader_id, const_name) already emitted — dedup per (reader, target).
+    _emitted_refs: set[tuple[str, str]] = set()
 
     def _walk(node, enclosing_func=None, enclosing_class=None):
         ntype = node.type
+
+        # Value-ref: a reader function/method body references a module-scope const.
+        # An `identifier` whose name is a surviving const, seen while inside a
+        # reader (enclosing_func set). line_number=None (a value read, not a call
+        # site) — which is exactly why the NULL-line idempotency fix (HOLE 2) must
+        # dedup NULL-line edges.
+        if (module_consts and enclosing_func and ntype == "identifier"
+                and node.text is not None):
+            nm = _sanitize_name(node.text.decode("utf-8", errors="replace"))
+            if nm in module_consts and (enclosing_func, nm) not in _emitted_refs:
+                _emitted_refs.add((enclosing_func, nm))
+                edges.append(CodeEdge(
+                    source_id=enclosing_func,
+                    target_id=_qualify(nm, path_str, None),
+                    edge_type="references",
+                    confidence=1.0,
+                    line_number=None,
+                ))
 
         # Definitions
         if ntype in def_types:

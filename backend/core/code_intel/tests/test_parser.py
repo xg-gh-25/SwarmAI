@@ -577,3 +577,121 @@ class TestTreeSitterLiveAST:
         f.write_text("def survives():\n    return 1\n")
         result, status = P.parse_file_with_status(f, tmp_path)
         assert status in ("ok", "failed"), f"must not crash on dead binding, got {status}"
+
+
+# ── Value-reference edges (Python module-scope const consumers) ────────────
+
+
+class TestValueRefEdges:
+    """reader-symbol -> module-scope-const `references` edges (Python).
+
+    Closes the "change this const/table, break its readers" impact hole: static
+    extraction edged calls/imports but never edged a constant to the symbols that
+    read it, so a config-const change looked like "nothing depends on this".
+    """
+
+    _SRC = (
+        "MAX_RETRIES = 3\n"                 # distinctive (uppercase) module const
+        "DB_CONFIG = {'h': 'x'}\n"          # distinctive
+        "counter = 1\n"                    # NOT distinctive (no uppercase, no _) -> no edge
+        "SHADOWED = 1\n"                    # distinctive BUT reassigned in a func -> shadow-pruned
+        "\n"
+        "def do_work():\n"
+        "    n = MAX_RETRIES\n"            # reader of MAX_RETRIES
+        "    cfg = DB_CONFIG\n"            # reader of DB_CONFIG
+        "    y = counter\n"                # reads a non-distinctive name -> no edge
+        "    return n, cfg, y\n"
+        "\n"
+        "def override():\n"
+        "    SHADOWED = 2\n"               # inner rebinding -> SHADOWED is shadowed
+        "    return SHADOWED\n"
+    )
+
+    def _parse(self, tmp_path):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        src = tmp_path / "mod.py"
+        src.write_text(self._SRC)
+        return P.parse_file(src, tmp_path)
+
+    def _ref_edges(self, result):
+        return [e for e in result.edges if e.edge_type == "references"]
+
+    def test_reference_edge_present_for_distinctive_const(self, tmp_path):
+        result = self._parse(tmp_path)
+        targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(result)}
+        assert "MAX_RETRIES" in targets, f"expected MAX_RETRIES ref edge, got {targets}"
+        assert "DB_CONFIG" in targets, f"expected DB_CONFIG ref edge, got {targets}"
+
+    def test_reference_edges_absent_when_feature_disabled(self, tmp_path, monkeypatch):
+        """Mutation: with VALUE_DEFINITION_TYPES emptied, zero references edges."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        monkeypatch.setattr(P, "VALUE_DEFINITION_TYPES", {})
+        src = tmp_path / "mod.py"
+        src.write_text(self._SRC)
+        result = P.parse_file(src, tmp_path)
+        assert self._ref_edges(result) == [], "no references edges when feature disabled"
+
+    def test_non_distinctive_name_produces_no_edge(self, tmp_path):
+        result = self._parse(tmp_path)
+        targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(result)}
+        assert "counter" not in targets, "non-distinctive name (no uppercase/underscore) must not produce a ref edge"
+
+    def test_shadowed_const_produces_no_edge(self, tmp_path):
+        result = self._parse(tmp_path)
+        targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(result)}
+        assert "SHADOWED" not in targets, "a const reassigned in an inner scope must be shadow-pruned"
+
+    def test_const_node_is_not_exported(self, tmp_path):
+        """const nodes get is_export=0 so find_dead_code (is_export=1 filter) is clean."""
+        result = self._parse(tmp_path)
+        const_nodes = [n for n in result.nodes if n.node_type == "constant"]
+        assert const_nodes, "expected at least one constant node (MAX_RETRIES/DB_CONFIG)"
+        assert all(not n.is_export for n in const_nodes), "constant nodes must be is_export=0"
+
+    def test_callable_node_count_invariant(self, tmp_path, monkeypatch):
+        """function/class/method node COUNT is identical feature on/off (additive)."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        src = tmp_path / "mod.py"
+        src.write_text(self._SRC)
+
+        result_on = P.parse_file(src, tmp_path)
+        monkeypatch.setattr(P, "VALUE_DEFINITION_TYPES", {})
+        result_off = P.parse_file(src, tmp_path)
+
+        def _callables(r):
+            return sorted(
+                n.id for n in r.nodes if n.node_type in ("function", "class", "method")
+            )
+        assert _callables(result_on) == _callables(result_off), (
+            "value-ref feature must not change function/class/method nodes")
+
+    def test_impact_via_blast_radius(self, tmp_path):
+        """E2E: a const node id as a blast_radius seed surfaces its reader."""
+        result = self._parse(tmp_path)
+        from core.code_intel.graph_store import GraphStore
+        gs = GraphStore(tmp_path / "g.db")
+        try:
+            gs.upsert_nodes([n.__dict__ for n in result.nodes])
+            gs.upsert_edges([e.__dict__ for e in result.edges])
+            const_id = next(
+                n.id for n in result.nodes
+                if n.node_type == "constant" and n.name == "MAX_RETRIES"
+            )
+            affected = {nid for nid, _depth in gs.blast_radius([const_id], max_depth=2)}
+            reader_ids = {e.source_id for e in self._ref_edges(result)
+                          if e.target_id == const_id}
+            assert reader_ids, "test setup: expected a reader of MAX_RETRIES"
+            assert reader_ids & affected, (
+                f"blast_radius from const {const_id} must surface its reader "
+                f"{reader_ids}, got affected={affected}")
+        finally:
+            gs.close()
