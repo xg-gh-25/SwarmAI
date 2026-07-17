@@ -277,6 +277,15 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "Lost connection to the AI service.",
         "Reconnecting automatically. If this persists, try restarting the app.",
     ),
+    (
+        # Anthropic-direct auth failure at runtime — a key valid at setup but
+        # later revoked/rotated. In API-key mode the STS pre-flight and the
+        # /health auth check are both skipped, so this SDK error is the FIRST
+        # signal. Map to an actionable, provider-correct message (never mwinit).
+        r"(?:authentication_error|invalid.{0,20}(?:api[_-]?key|x-api-key)|\b401\b|permission_error|Unauthorized)",
+        "Your API key isn't working.",
+        "Update your Anthropic API key in Settings → AI & Models, then send your message again.",
+    ),
 ]
 
 
