@@ -106,7 +106,10 @@ def test_accept_gate_calls_register_gate(svc):
     with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True) as TrackerCls:
         tracker = TrackerCls.return_value
         res = svc.decide_governance("CLASS_A:gate", "accept")
-    assert res["action_taken"] == "registered_gate"
+    # accept-gate now ALSO scaffolds an inert gate stub (run_90b8aeed ②→③ last mile),
+    # so the action is "registered_gate" optionally suffixed "+scaffolded" when the
+    # stub was written (skipped if a gate file already exists). Either is valid.
+    assert res["action_taken"] in ("registered_gate", "registered_gate+scaffolded")
     tracker.register_gate.assert_called_once()
     tracker.register_rule.assert_not_called()
 

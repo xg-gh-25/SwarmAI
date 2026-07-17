@@ -1528,6 +1528,22 @@ class EvalService:
                 if kind == "gate":
                     tracker.register_gate(cls, f"GATE_{cls}", "accepted via governance dashboard")
                     action_taken = "registered_gate"
+                    # ②→③ last mile (run_90b8aeed): also scaffold an INERT, fail-open
+                    # GATE_<cls>.py stub so the human isn't hand-writing from a blank
+                    # page. P7-compliant: the human already approved AND still must
+                    # complete the match logic + wire it — the stub enforces nothing.
+                    # NON-FATAL: a scaffold failure must never fail the human's accept
+                    # (the real work — register_gate + remove_proposal — must complete).
+                    try:
+                        from core.evolution.gate_scaffold import scaffold_gate_stub
+
+                        gates_dir = self._workspace_root / "Projects" / "SwarmAI" / "gates"
+                        scaffolded = scaffold_gate_stub(gates_dir, cls, f"GATE_{cls}")
+                        if scaffolded is not None:
+                            action_taken = "registered_gate+scaffolded"
+                    except Exception as e:  # noqa: BLE001 — scaffold is best-effort, never fatal to accept
+                        logger.warning("gate scaffold failed for class %r (non-fatal): %s: %s",
+                                       cls, type(e).__name__, e)
                 else:
                     tracker.register_rule(cls, f"RULE_{cls}", "accepted via governance dashboard")
                     action_taken = "registered_rule"
