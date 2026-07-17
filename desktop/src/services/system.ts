@@ -482,8 +482,10 @@ export const systemService = {
    * Verify LLM authentication by making a real API call.
    * Returns success/failure with model name, latency, and error details.
    */
-  async verifyAuth(): Promise<VerifyAuthResponse> {
-    const response = await api.post<Record<string, unknown>>('/system/verify-auth');
+  async verifyAuth(override?: Record<string, unknown>): Promise<VerifyAuthResponse> {
+    // `override` lets the caller verify a NOT-YET-PERSISTED config (onboarding
+    // wizard). Omitted (Settings tab) → backend falls back to stored config.
+    const response = await api.post<Record<string, unknown>>('/system/verify-auth', override);
     const d = response.data;
     return {
       success: d.success as boolean,

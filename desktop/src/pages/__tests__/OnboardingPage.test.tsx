@@ -178,6 +178,46 @@ describe('OnboardingPage — no dead-ends', () => {
     });
   });
 
+  it('AC5: a FAILED verify persists NO config (updateAPIConfiguration not called)', async () => {
+    mockVerifyAuth.mockResolvedValue({ success: false, error_type: 'access_denied', fix_hint: 'x' });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+    // Verify was attempted, but config must NOT be persisted on failure.
+    await waitFor(() => expect(mockVerifyAuth).toHaveBeenCalled());
+    expect(mockUpdateAPIConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('AC5: a SUCCESSFUL verify persists config AFTER verify', async () => {
+    mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latency_ms: 100 });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+    await waitFor(() => expect(mockUpdateAPIConfiguration).toHaveBeenCalled());
+    // verify was called with the attempted override body (stateless verify).
+    expect(mockVerifyAuth).toHaveBeenCalledWith(expect.objectContaining({ use_bedrock: true }));
+  });
+
+  it('AC6: Step4 Ready shows the ACTUAL configured region, not hardcoded us-east-1', async () => {
+    mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'eu-west-1', defaultModel: 'claude-sonnet-4-6' });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    // advance to Ready
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await waitFor(() => screen.getByText('Skip for now'));
+    await act(async () => { fireEvent.click(screen.getByText('Skip for now').closest('button')!); });
+    await waitFor(() => screen.getByText("You're All Set!"));
+    await waitFor(() => {
+      expect(screen.getByText('eu-west-1')).toBeInTheDocument();
+      expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('us-east-1')).not.toBeInTheDocument();
+  });
+
   it('system check interval does NOT reset step after advancing past step 2', async () => {
     // Use a slow status that resolves immediately
     let callCount = 0;

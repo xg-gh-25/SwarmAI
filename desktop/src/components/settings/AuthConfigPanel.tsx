@@ -76,7 +76,9 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
     setVerifyResult(null);
 
     try {
-      // Save auth config before verifying
+      // Verify FIRST with the attempted (not-yet-persisted) config, and persist
+      // ONLY after a successful verify. A failed verify must leave config
+      // untouched (otherwise a wrong region/method silently persists).
       const isBedrock = method !== 'apikey';
       const configUpdate: Record<string, unknown> = {
         use_bedrock: isBedrock,
@@ -86,15 +88,15 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         configUpdate.ada_account = adaAccount;
         configUpdate.ada_role = adaRole;
       }
-      await settingsService.updateAPIConfiguration(configUpdate);
 
-      const result = await systemService.verifyAuth();
+      const result = await systemService.verifyAuth(configUpdate);
       setVerifyResult(result);
       setVerifyState(result.success ? 'success' : 'error');
 
-      if (result.success && onVerifySuccess) {
-        onVerifySuccess();
-      } else if (!result.success && onVerifyFail) {
+      if (result.success) {
+        await settingsService.updateAPIConfiguration(configUpdate);
+        if (onVerifySuccess) onVerifySuccess();
+      } else if (onVerifyFail) {
         onVerifyFail();
       }
     } catch (e) {
@@ -258,17 +260,32 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       {/* Config fields based on method */}
       {method !== 'apikey' && (
         <div className="space-y-3">
-          {/* AWS Account ID — shown for all AWS methods */}
-          <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
-            <input
-              type="text"
-              value={accountId}
-              onChange={(e) => { setAccountId(e.target.value); if (method === 'ada') setAdaAccount(e.target.value); }}
-              placeholder="Enter your 12-digit AWS account ID"
-              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
+          {/* AWS Account ID.
+              - ADA: editable — the value builds the `ada credentials update` command below.
+              - SSO: READ-ONLY probed value. boto3/SSO reads the account from the
+                active profile, not from this field; an editable input here was
+                silently discarded (its value was never persisted). Show it as
+                context, not a dead input. Hidden entirely if nothing was probed. */}
+          {method === 'ada' ? (
+            <div>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+              <input
+                type="text"
+                value={accountId}
+                onChange={(e) => { setAccountId(e.target.value); setAdaAccount(e.target.value); }}
+                placeholder="Enter your 12-digit AWS account ID"
+                className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+              />
+            </div>
+          ) : accountId ? (
+            <div>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+              <div className="w-full px-3 py-2 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)] flex items-center justify-between">
+                <code className="text-[var(--color-text)]">{accountId}</code>
+                <span className="text-[10px] uppercase tracking-wide opacity-60">from AWS profile</span>
+              </div>
+            </div>
+          ) : null}
 
           <Dropdown
             label="AWS Region"

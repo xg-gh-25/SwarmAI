@@ -7,6 +7,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { systemService, RestoreEvent } from '../services/system';
+import { settingsService } from '../services/settings';
 import { channelsService } from '../services/channels';
 import type { Channel } from '../types';
 import AuthConfigPanel from '../components/settings/AuthConfigPanel';
@@ -449,6 +450,20 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
 
 function Step4Ready({ onStart }: { onStart: () => void }) {
   const [starting, setStarting] = useState(false);
+  // Show the ACTUAL configured model + region (persisted by Step2 on verify),
+  // not hardcoded strings that lie when the user picked a different region.
+  const [model, setModel] = useState<string>('claude-opus-4-8');
+  const [region, setRegion] = useState<string>('us-east-1');
+
+  useEffect(() => {
+    settingsService.getAPIConfiguration()
+      .then((config) => {
+        if (config.defaultModel) setModel(config.defaultModel);
+        if (config.awsRegion) setRegion(config.awsRegion);
+      })
+      .catch(() => { /* keep sensible defaults if config fetch fails */ });
+  }, []);
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">You're All Set!</h2>
@@ -460,11 +475,11 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-[var(--color-text-muted)]">Model</span>
-            <p className="text-[var(--color-text)] font-mono">claude-opus-4-8</p>
+            <p className="text-[var(--color-text)] font-mono">{model}</p>
           </div>
           <div>
             <span className="text-[var(--color-text-muted)]">Region</span>
-            <p className="text-[var(--color-text)] font-mono">us-east-1</p>
+            <p className="text-[var(--color-text)] font-mono">{region}</p>
           </div>
           <div>
             <span className="text-[var(--color-text-muted)]">Theme</span>
