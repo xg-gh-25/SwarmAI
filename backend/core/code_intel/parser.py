@@ -96,32 +96,200 @@ CALL_TYPES = {
     "cpp": ["call_expression"],
 }
 
-# ── Value-reference edges (per-language registry) ─────────────────────────
+# ── Value-reference edges (per-language descriptor engine) ─────────────────
 #
-# VALUE_DEFINITION_TYPES declares, per language, the tree-sitter node type(s) that
-# represent a MODULE-SCOPE constant/variable binding. When a language is present
-# here, _extract_from_tree runs a second pass that (1) emits a `constant` node for
-# each distinctive module-scope binding and (2) emits a `references` edge from any
-# reader function/method to the const it reads — closing the "change this const,
-# break its readers" impact hole (calls/imports edges never captured value reads).
+# A `references` edge connects a reader function/method to the MODULE-SCOPE
+# constant/variable it reads — closing the "change this const, break its readers"
+# impact hole (calls/imports edges never captured value reads). _extract_from_tree
+# runs a 2-pass: pass-1 collects distinctive module-scope const bindings (minus a
+# shadow set of names also bound in a nested scope / as a parameter), pass-2 emits
+# a `constant` node per surviving const + a `references` edge per reader.
 #
-# LANGUAGE EXPANSION: to support a new language, add ONE row here with its
-# module-scope-assignment node type, then verify against a real repo of that
-# language (see the expansion plan in the run's REFLECT / IMPROVEMENT.md). The
-# 2-pass logic, distinctive-name guard, and shadow-prune are language-agnostic;
-# only the node-type name differs. Python-only for now (dogfood language, lowest
-# false-positive risk); other languages are follow-up runs behind a verify gate.
+# LANGUAGE SUPPORT is DESCRIPTOR-DRIVEN, not hardcoded. Each supported language
+# has a LangValueSpec describing how its grammar expresses the pieces the 2-pass
+# needs. Adding a language = add ONE spec + make it pass the per-language
+# validation harness (tests/test_parser.py::TestValueRefLanguages). A language NOT
+# in LANG_VALUE_SPEC simply has no value-ref edges (feature-absent, never broken).
 #
-# The value is a list of (assignment_node_type, lhs_field_name): the node type of a
-# binding statement and the field holding its target identifier. Only a SINGLE
-# plain identifier LHS is treated as a const (tuple-unpacking `A, B = ...` has a
-# pattern_list LHS and is skipped — ambiguous target). Augmented assignment
-# (`X += 1`) is deliberately EXCLUDED: it is a mutation, not a const definition.
-VALUE_DEFINITION_TYPES: dict[str, list[tuple[str, str]]] = {
-    # `TIMEOUT: int = 30` parses as `assignment` too (typed) → caught; `X += 1` is
-    # `augmented_assignment` → not listed → excluded.
-    "python": [("assignment", "left")],
+# WHY A DESCRIPTOR AND NOT A FLAT {node: field} TABLE (Gate-1, run_13667da9): the
+# grammars diverge on FIVE axes, each of which silently mis-handles a language if
+# assumed to be "like Python":
+#   1. binding node → name PATH differs (rust/swift: a `name` field directly;
+#      go/ts/php/kotlin: descend one child then its field).
+#   2. the READER node type of a const differs from a plain identifier
+#      (ruby reads a const as a `constant` node; swift/kotlin as `simple_identifier`;
+#      go/rust/ts/js/python as `identifier`). Hardcoding `identifier` would emit
+#      ZERO edges for ruby/swift/kotlin — a silent no-op, verified via live AST.
+#   3. the MEMBER-ACCESS (attribute) node to guard differs (python=attribute,
+#      go=selector_expression, ts=member_expression, rust=field_expression,
+#      ruby=scope_resolution, php=member_access_expression, swift/kotlin=
+#      navigation_expression). The guard must use the language's own node types.
+#   4. some languages WRAP a module binding (python=expression_statement,
+#      ts=export_statement) — the collector must unwrap the language's wrappers.
+#   5. the PARAMETER container node (for shadow-prune) differs per language.
+#
+# DEFERRED (Tier B — NOT in LANG_VALUE_SPEC, by design):
+#   - java, csharp: NO module scope — a const lives only as a class field
+#     (`field_declaration` inside a class body). Same-file class-member value-ref
+#     is a different scope strategy with higher false-positive risk; deferred until
+#     a real Java/C# repo can validate it behind the harness.
+#   - c: a const is EITHER a `declaration` gated by a `const` type_qualifier OR a
+#     `#define` (`preproc_def`) — the latter is a preprocessor node with no
+#     field-based name path, a genuinely separate extraction path. Deferred until
+#     that path + a real C repo exist. (Gate-1 finding #3.)
+
+
+class LangValueSpec:
+    """Per-language description of how value-ref constants are expressed.
+
+    Fields:
+      binding_specs: list of (binding_node_type, name_path). name_path is a tuple
+          of steps to reach the identifier from the binding node:
+          - a str F        → child_by_field_name(F)
+          - ("child", T, F)→ descend to the first child of type T, then its field F
+          - ("child", T)   → descend to the first child of type T, take its first
+                             identifier-ish leaf
+          The final node's text is the const name (only a single plain identifier
+          leaf qualifies; a destructuring/pattern LHS yields None → skipped).
+      lhs_type_filter: if set, the resolved LHS leaf node MUST be one of these
+          types (ruby: {"constant"} — the grammar already marks a constant, so we
+          trust it directly instead of the distinctive-name heuristic).
+      qualifier_gate: if set, the binding node must have a descendant whose text is
+          in this set (reserved for a future C `const` gate; unused by Tier A).
+      reader_types: node types that count as a const READ inside a function body
+          (python/go/rust/ts/js={"identifier"}; ruby={"constant"};
+          swift/kotlin={"simple_identifier"}).
+      member_access_types: node types of a member access (obj.CONST) — an
+          identifier that is the trailing member of one of these is NOT a const
+          read (false-positive guard).
+      wrap_types: node types that WRAP a module-scope binding as a single child
+          (python={"expression_statement"}, ts={"export_statement"}); the collector
+          unwraps one level through these.
+      param_container_types: node types whose direct children are function
+          parameters (for shadow-prune).
+      use_distinctive_name: apply the ≥3-char + uppercase/underscore heuristic.
+          False only when lhs_type_filter already guarantees const-ness (ruby).
+    """
+
+    __slots__ = (
+        "binding_specs", "lhs_type_filter", "qualifier_gate", "reader_types",
+        "member_access_types", "wrap_types", "param_container_types",
+        "use_distinctive_name",
+    )
+
+    def __init__(self, *, binding_specs, reader_types, member_access_types,
+                 param_container_types, wrap_types=frozenset(),
+                 lhs_type_filter=None, qualifier_gate=None,
+                 use_distinctive_name=True):
+        self.binding_specs = binding_specs
+        self.reader_types = frozenset(reader_types)
+        self.member_access_types = frozenset(member_access_types)
+        self.param_container_types = frozenset(param_container_types)
+        self.wrap_types = frozenset(wrap_types)
+        self.lhs_type_filter = frozenset(lhs_type_filter) if lhs_type_filter else None
+        self.qualifier_gate = frozenset(qualifier_gate) if qualifier_gate else None
+        self.use_distinctive_name = use_distinctive_name
+
+
+# Node types that name a single plain identifier leaf. A binding whose resolved LHS
+# is one of these (and passes the guards) is a const; anything else (pattern_list,
+# tuple_pattern, subscript, …) is skipped as an ambiguous target.
+_IDENTIFIER_LEAF_TYPES = frozenset({
+    "identifier", "simple_identifier", "constant",
+    "name",  # PHP: a const_element's name child + a bare const read are `name` nodes
+})
+
+LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
+    # Python — reproduces the pre-descriptor behavior byte-identical (the reference
+    # implementation). `TIMEOUT: int = 30` parses as `assignment` (typed) → caught;
+    # `X += 1` is `augmented_assignment` → excluded (mutation, not a const def).
+    "python": LangValueSpec(
+        binding_specs=[("assignment", "left")],
+        reader_types={"identifier"},
+        member_access_types={"attribute"},
+        wrap_types={"expression_statement"},
+        param_container_types={"parameters"},
+    ),
+    # Go — const/var declaration wraps a spec node holding the `name` field.
+    "go": LangValueSpec(
+        binding_specs=[("const_declaration", ("child", "const_spec", "name")),
+                       ("var_declaration", ("child", "var_spec", "name"))],
+        reader_types={"identifier"},
+        member_access_types={"selector_expression"},
+        param_container_types={"parameter_list"},
+    ),
+    # Rust — const_item/static_item expose the name directly as a field.
+    "rust": LangValueSpec(
+        binding_specs=[("const_item", "name"), ("static_item", "name")],
+        reader_types={"identifier"},
+        member_access_types={"field_expression"},
+        param_container_types={"parameters"},
+    ),
+    # TypeScript / JavaScript — a lexical_declaration holds variable_declarator(s);
+    # a module const may be wrapped in export_statement.
+    "typescript": LangValueSpec(
+        binding_specs=[("lexical_declaration", ("child", "variable_declarator", "name"))],
+        reader_types={"identifier"},
+        member_access_types={"member_expression"},
+        wrap_types={"export_statement"},
+        param_container_types={"formal_parameters"},
+    ),
+    "javascript": LangValueSpec(
+        binding_specs=[("lexical_declaration", ("child", "variable_declarator", "name"))],
+        reader_types={"identifier"},
+        member_access_types={"member_expression"},
+        wrap_types={"export_statement"},
+        param_container_types={"formal_parameters"},
+    ),
+    # Ruby — the grammar MARKS a constant: LHS node type is `constant`, and a const
+    # READ is also a `constant` node. Trust the grammar (no distinctive-name guess).
+    "ruby": LangValueSpec(
+        binding_specs=[("assignment", "left")],
+        lhs_type_filter={"constant"},
+        use_distinctive_name=False,
+        reader_types={"constant"},
+        member_access_types={"scope_resolution"},
+        param_container_types={"method_parameters"},
+    ),
+    # DEFERRED — php, swift, kotlin (NOT in Tier A), for a reason ORTHOGONAL to
+    # value-ref: the base parser does not currently extract their FUNCTION nodes at
+    # all (their `function_definition`/`function_declaration` names aren't picked up
+    # by _get_name — a pre-existing gap, verified run_13667da9: a plain
+    # `function hello(){}` / `func f(){}` / `fun f(){}` yields ZERO nodes). Value-ref
+    # reader edges need an enclosing function node to attach to, so they cannot work
+    # until base function extraction is fixed for these three languages. Their
+    # value-ref const-extraction descriptors were verified correct in isolation
+    # (const NODES are emitted); only the reader-EDGE attachment is blocked. The
+    # working descriptors, for the follow-up run that fixes base extraction:
+    #   php:    binding ("const_declaration", ("child","const_element",None)),
+    #           reader {"name"}, member {"member_access_expression"},
+    #           params {"formal_parameters"}
+    #   swift:  binding ("property_declaration", ("child","pattern",None)),
+    #           reader {"simple_identifier"}, member {"navigation_expression"},
+    #           params {"parameter"}
+    #   kotlin: binding ("property_declaration", ("child","variable_declaration",None)),
+    #           reader {"simple_identifier"}, member {"navigation_expression"},
+    #           params {"function_value_parameters"}
 }
+
+
+def _resolve_binding_name_node(node, name_path):
+    """Resolve a binding node + name_path (see LangValueSpec) to the identifier
+    leaf node naming the const, or None if the path doesn't reach a single leaf."""
+    if isinstance(name_path, str):
+        return node.child_by_field_name(name_path)
+    if isinstance(name_path, tuple) and name_path and name_path[0] == "child":
+        child_type = name_path[1]
+        target = next((c for c in node.children if c.type == child_type), None)
+        if target is None:
+            return None
+        field = name_path[2] if len(name_path) > 2 else None
+        if field:
+            return target.child_by_field_name(field)
+        # No field: take the first identifier-ish leaf under the child.
+        return next((c for c in target.children
+                     if c.type in _IDENTIFIER_LEAF_TYPES), None)
+    return None
 
 
 def _is_distinctive_const_name(name: str) -> bool:
@@ -132,23 +300,26 @@ def _is_distinctive_const_name(name: str) -> bool:
     return len(name) >= 3 and (any(c.isupper() for c in name) or "_" in name)
 
 
-def _is_attribute_member(node) -> bool:
-    """True if this identifier is the `.member` part of an attribute access
-    (`obj.MAX_RETRIES`), NOT a standalone name read. Such an identifier names an
-    attribute OF another object — it is NOT a read of a same-named module const,
-    so a value-ref edge would be a false positive (inflates blast radius).
+def _is_member_access(node, member_access_types) -> bool:
+    """True if this identifier is the trailing `.member` of a member access
+    (`obj.MAX_RETRIES` / `obj->CONST` / `Obj::CONST`), NOT a standalone name read.
+    Such an identifier names a member OF another object, not a same-named module
+    const, so a value-ref edge would be a false positive (inflates blast radius).
 
-    Detected via the tree-sitter `attribute` node's `attribute` field: for
-    `config.MAX_RETRIES`, node.parent is `attribute`, its `object` field is
-    `config` and its `attribute` field is this `MAX_RETRIES` identifier. We skip
-    ONLY when the identifier is that trailing member — the leading object
-    (`config`) is a genuine standalone read and is left alone.
+    Language-agnostic (Gate-1 run_13667da9): the member-access node type differs per
+    language (python=attribute, go=selector_expression, ts=member_expression, …), so
+    the caller passes the active language's member_access_types. We skip ONLY when
+    the identifier is the trailing member (the last identifier-ish child of the
+    member-access node); the leading object is a genuine standalone read, left alone.
     """
     parent = node.parent
-    if parent is None or parent.type != "attribute":
+    if parent is None or parent.type not in member_access_types:
         return False
-    member = parent.child_by_field_name("attribute")
-    return member is not None and member.start_byte == node.start_byte
+    # The trailing member is the LAST identifier-ish child of the member-access node
+    # (works across grammars: `field`/`attribute`/`name`/`property` field names vary,
+    # but the member always sorts after the object in child order).
+    members = [c for c in parent.children if c.type in _IDENTIFIER_LEAF_TYPES]
+    return bool(members) and members[-1].start_byte == node.start_byte
 
 
 # NOTE: IMPORT_TYPES not used in Phase 1 — imports extracted via regex in
@@ -501,85 +672,92 @@ def _extract_from_tree(tree, path_str: str, language: str,
     root = tree.root_node
     def_types = set(DEFINITION_TYPES.get(language, []))
     call_types = set(CALL_TYPES.get(language, []))
-    value_types = VALUE_DEFINITION_TYPES.get(language, [])
+    vspec = LANG_VALUE_SPEC.get(language)
 
     # ── Value-ref pass 1: collect module-scope const targets + shadow set ──
     # module_consts: {name: line} for distinctive, single-identifier bindings that
     # are DIRECT children of the module root (true module scope). shadowed: names
     # ALSO bound inside a nested scope — a file-scope edge would be a false positive
     # because nested readers resolve to the inner binding. 2-pass (collect ALL
-    # before emitting any) makes this order-independent.
+    # before emitting any) makes this order-independent. Descriptor-driven: every
+    # per-language node type comes from `vspec` (LangValueSpec), never hardcoded.
     module_consts: dict[str, int] = {}
-    if value_types:
-        assign_types = {t for t, _f in value_types}
-        field_by_type = {t: f for t, f in value_types}
+    if vspec is not None:
+        binding_types = {t for t, _p in vspec.binding_specs}
+        name_path_by_type = {t: p for t, p in vspec.binding_specs}
         shadowed: set[str] = set()
 
         def _binding_name(node):
-            """Return the single plain-identifier LHS name, or None (skip tuple/
-            subscript/attribute targets — ambiguous)."""
-            field = field_by_type.get(node.type)
-            lhs = node.child_by_field_name(field) if field else None
-            if lhs is not None and lhs.type == "identifier" and lhs.text:
-                return _sanitize_name(lhs.text.decode("utf-8", errors="replace"))
-            return None
+            """Return the single plain-identifier binding name, or None (skip
+            tuple/subscript/pattern targets — ambiguous). Uses the language's
+            name_path + optional lhs_type_filter (ruby trusts the `constant` node)."""
+            path = name_path_by_type.get(node.type)
+            if path is None:
+                return None
+            leaf = _resolve_binding_name_node(node, path)
+            if leaf is None or not leaf.text:
+                return None
+            if leaf.type not in _IDENTIFIER_LEAF_TYPES:
+                return None
+            if vspec.lhs_type_filter and leaf.type not in vspec.lhs_type_filter:
+                return None
+            return _sanitize_name(leaf.text.decode("utf-8", errors="replace"))
 
-        # Module-scope bindings = assignment nodes that are direct children of root.
-        # Track their exact identity (start_byte) so the shadow scan can tell a
-        # module-scope binding apart from a same-named inner rebinding.
+        def _passes_name_guard(nm):
+            # Ruby-style grammar-marked consts skip the distinctive heuristic.
+            return (not vspec.use_distinctive_name) or _is_distinctive_const_name(nm)
+
+        # Module-scope bindings = binding nodes that are direct children of root
+        # (after unwrapping the language's wrapper nodes, e.g. python
+        # expression_statement / ts export_statement). Track their identity
+        # (start_byte) so the shadow scan can tell a module binding apart from a
+        # same-named inner rebinding.
         module_binding_bytes: set[int] = set()
         for child in root.children:
             inner = child
-            # Python wraps a module-level assignment in expression_statement; unwrap
-            # one level so `MAX = 3` (module child → expression_statement → assignment)
-            # is seen. A binding nested deeper than this is NOT module scope.
-            if inner.type not in assign_types and inner.child_count == 1:
+            # Unwrap one wrapper level if this child wraps a single binding.
+            if inner.type in vspec.wrap_types and inner.child_count >= 1:
+                inner = next((c for c in inner.children if c.type in binding_types),
+                             inner)
+            # Python's bare `X = 3` is module-child → expression_statement → assignment;
+            # the wrap unwrap above covers it. Also handle a lone single-child wrapper
+            # not explicitly typed (defensive, matches prior behavior).
+            elif inner.type not in binding_types and inner.child_count == 1:
                 inner = inner.children[0]
-            if inner.type in assign_types:
+            if inner.type in binding_types:
                 nm = _binding_name(inner)
-                if nm and _is_distinctive_const_name(nm):
+                if nm and _passes_name_guard(nm):
                     module_consts.setdefault(nm, inner.start_point[0] + 1)
                     module_binding_bytes.add(inner.start_byte)
 
-        # A function PARAMETER named like a const also shadows it: a read inside
-        # that function reads the param, not the module const. Params are NOT
-        # `assignment` nodes (Python: `parameter` / `default_parameter` /
-        # `typed_parameter` / `typed_default_parameter` under a `parameters` node),
-        # so the assignment scan misses them → they need their own detection.
-        _PARAM_TYPES = {
-            "parameter", "default_parameter", "typed_parameter",
-            "typed_default_parameter", "identifier",  # bare param is a lone identifier
-        }
-
         def _param_name(node):
-            """Extract the identifier name of a parameter node (or None)."""
-            if node.type == "identifier":
+            """Extract the identifier name of a parameter node (or None). A bare
+            identifier param is itself the name; a typed/default param has the name
+            as its first identifier-ish child."""
+            if node.type in _IDENTIFIER_LEAF_TYPES:
                 return _sanitize_name(node.text.decode("utf-8", errors="replace")) if node.text else None
-            # default/typed params: the name is the first `identifier` child.
             for c in node.children:
-                if c.type == "identifier" and c.text:
+                if c.type in _IDENTIFIER_LEAF_TYPES and c.text:
                     return _sanitize_name(c.text.decode("utf-8", errors="replace"))
             return None
 
         # Shadow set: a binding of a tracked const name whose node is NOT the
-        # module-scope binding itself → it's bound in a nested scope (assignment
-        # OR function parameter), so a file-scope edge would be a false positive.
-        # Assignments compared by start_byte (node identity), NOT by depth — the
-        # module binding sits at depth 2 (root→expression_statement→assignment) so
-        # a depth threshold can't distinguish it from a nested rebinding.
+        # module-scope binding itself → bound in a nested scope (a nested binding OR
+        # a function parameter), so a file-scope edge would be a false positive.
+        # Bindings compared by start_byte (node identity), NOT by depth — a module
+        # binding and a same-typed nested binding can't be told apart by depth alone.
         def _scan_shadow(node):
-            if node.type in assign_types and node.start_byte not in module_binding_bytes:
+            if node.type in binding_types and node.start_byte not in module_binding_bytes:
                 nm = _binding_name(node)
                 if nm and nm in module_consts:
                     shadowed.add(nm)
-            # Parameter bindings: only look at identifiers directly under a
-            # `parameters` node (a function signature), not every identifier.
-            elif node.type == "parameters":
+            # Parameter bindings: identifiers directly under the language's parameter
+            # container node (a function signature), not every identifier.
+            elif node.type in vspec.param_container_types:
                 for pc in node.children:
-                    if pc.type in _PARAM_TYPES:
-                        nm = _param_name(pc)
-                        if nm and nm in module_consts:
-                            shadowed.add(nm)
+                    nm = _param_name(pc)
+                    if nm and nm in module_consts:
+                        shadowed.add(nm)
             for c in node.children:
                 _scan_shadow(c)
         _scan_shadow(root)
@@ -599,17 +777,21 @@ def _extract_from_tree(tree, path_str: str, language: str,
 
     # (reader_id, const_name) already emitted — dedup per (reader, target).
     _emitted_refs: set[tuple[str, str]] = set()
+    _reader_types = vspec.reader_types if vspec is not None else frozenset()
+    _member_types = vspec.member_access_types if vspec is not None else frozenset()
 
     def _walk(node, enclosing_func=None, enclosing_class=None):
         ntype = node.type
 
         # Value-ref: a reader function/method body references a module-scope const.
-        # An `identifier` whose name is a surviving const, seen while inside a
-        # reader (enclosing_func set). line_number=None (a value read, not a call
-        # site) — which is exactly why the NULL-line idempotency fix (HOLE 2) must
+        # The reader node type is per-language (python/go/rust/ts=identifier;
+        # ruby=constant; swift/kotlin=simple_identifier — Gate-1: hardcoding
+        # 'identifier' silently no-ops ruby/swift/kotlin). line_number=None (a value
+        # read, not a call site) — which is why the NULL-line idempotency fix must
         # dedup NULL-line edges.
-        if (module_consts and enclosing_func and ntype == "identifier"
-                and node.text is not None and not _is_attribute_member(node)):
+        if (module_consts and enclosing_func and ntype in _reader_types
+                and node.text is not None
+                and not _is_member_access(node, _member_types)):
             nm = _sanitize_name(node.text.decode("utf-8", errors="replace"))
             if nm in module_consts and (enclosing_func, nm) not in _emitted_refs:
                 _emitted_refs.add((enclosing_func, nm))

@@ -626,12 +626,12 @@ class TestValueRefEdges:
         assert "DB_CONFIG" in targets, f"expected DB_CONFIG ref edge, got {targets}"
 
     def test_reference_edges_absent_when_feature_disabled(self, tmp_path, monkeypatch):
-        """Mutation: with VALUE_DEFINITION_TYPES emptied, zero references edges."""
+        """Mutation: with LANG_VALUE_SPEC emptied, zero references edges."""
         pytest.importorskip("tree_sitter_language_pack")
         import core.code_intel.parser as P
         if not P._tree_sitter_live("python"):
             pytest.skip("tree-sitter python grammar not live in this env")
-        monkeypatch.setattr(P, "VALUE_DEFINITION_TYPES", {})
+        monkeypatch.setattr(P, "LANG_VALUE_SPEC", {})
         src = tmp_path / "mod.py"
         src.write_text(self._SRC)
         result = P.parse_file(src, tmp_path)
@@ -695,7 +695,7 @@ class TestValueRefEdges:
         src.write_text(self._SRC)
 
         result_on = P.parse_file(src, tmp_path)
-        monkeypatch.setattr(P, "VALUE_DEFINITION_TYPES", {})
+        monkeypatch.setattr(P, "LANG_VALUE_SPEC", {})
         result_off = P.parse_file(src, tmp_path)
 
         def _callables(r):
@@ -726,3 +726,155 @@ class TestValueRefEdges:
                 f"{reader_ids}, got affected={affected}")
         finally:
             gs.close()
+
+
+# ── Value-ref language expansion (per-language validation harness) ─────────
+
+
+class TestValueRefLanguages:
+    """Per-language validation gate for value-reference edges (run_13667da9).
+
+    Each Tier-A language must pass ALL assertions on a live-AST sample:
+    (1) present — a distinctive module-scope const read by a function emits a
+        reader->const `references` edge; (2) attribute-FP — a member access of the
+        same name (obj.CONST) emits NO edge; (3) node-count invariant — enabling the
+        language adds no function/class/method nodes. A language that cannot pass is
+        NOT in LANG_VALUE_SPEC (disabled), so this harness enumerates the SHIPPED set
+        and every member must be green — a broken descriptor fails the suite.
+
+    Deferred languages (php/swift/kotlin — base function extraction gap; c/java/
+    csharp — no module scope / preproc path) are asserted to emit NOTHING.
+    """
+
+    # (ext, source): a module-scope distinctive const read by a function BOTH bare
+    # (→ one edge) AND via a member access of the same name (obj.CONST → no edge).
+    # Samples deliberately do NOT add a param-shadow function: shadow-prune is GLOBAL
+    # (a name shadowed in ANY nested scope drops the module const everywhere —
+    # precision-over-recall, inherited from the Python design, covered by
+    # TestValueRefEdges::test_shadowed/parameter_*). This harness tests present +
+    # attribute-FP per language; shadow-prune is language-agnostic once the param
+    # container node type is in the descriptor.
+    _SAMPLES = {
+        "go": (".go",
+               "package m\n"
+               "const MaxRetries = 3\n"
+               "func f(o Obj) int { return o.MaxRetries + MaxRetries }\n",
+               "MaxRetries"),
+        "rust": (".rs",
+                 "const MAX_RETRIES: u32 = 3;\n"
+                 "fn f(o: Obj) -> u32 { o.MAX_RETRIES + MAX_RETRIES }\n",
+                 "MAX_RETRIES"),
+        "typescript": (".ts",
+                       "const MAX_RETRIES = 3;\n"
+                       "function f(o) { return o.MAX_RETRIES + MAX_RETRIES; }\n",
+                       "MAX_RETRIES"),
+        "javascript": (".js",
+                       "const MAX_RETRIES = 3;\n"
+                       "function f(o) { return o.MAX_RETRIES + MAX_RETRIES; }\n",
+                       "MAX_RETRIES"),
+        "ruby": (".rb",
+                 "MAX_RETRIES = 3\n"
+                 "def f(o)\n  o::MAX_RETRIES\n  MAX_RETRIES\nend\n",
+                 "MAX_RETRIES"),
+    }
+
+    def _parse(self, tmp_path, lang):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if lang not in P.LANG_VALUE_SPEC:
+            pytest.skip(f"{lang} not enabled in LANG_VALUE_SPEC")
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"tree-sitter {lang} grammar not live")
+        ext, src, nm = self._SAMPLES[lang]
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        return P.parse_file(f, tmp_path), nm
+
+    def _ref_targets(self, result):
+        from core.code_intel.parser import QUALIFIED_SEPARATOR
+        return [e.target_id.split(QUALIFIED_SEPARATOR)[-1]
+                for e in result.edges if e.edge_type == "references"]
+
+    @pytest.mark.parametrize("lang", list(_SAMPLES.keys()))
+    def test_present_and_attribute_fp(self, tmp_path, lang):
+        """A distinctive module const read by a function emits exactly ONE
+        reader->const edge (the bare read), NOT the obj.CONST member access."""
+        result, nm = self._parse(tmp_path, lang)
+        consts = [n.name for n in result.nodes if n.node_type == "constant"]
+        assert nm in consts, f"{lang}: expected constant node {nm}, got {consts}"
+        targets = self._ref_targets(result)
+        rc = sum(1 for t in targets if t == nm)
+        assert rc == 1, (
+            f"{lang}: expected exactly 1 reference edge to {nm} (the bare read, "
+            f"NOT the member access obj.{nm}), got {rc} — targets={targets}")
+
+    @pytest.mark.parametrize("lang", list(_SAMPLES.keys()))
+    def test_node_count_invariant(self, tmp_path, lang, monkeypatch):
+        """Enabling a language adds const nodes + references edges but leaves
+        function/class/method node counts byte-identical (feature is additive)."""
+        import core.code_intel.parser as P
+        if lang not in P.LANG_VALUE_SPEC or not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} not enabled/live")
+        ext, src, _nm = self._SAMPLES[lang]
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+
+        r_on = P.parse_file(f, tmp_path)
+        monkeypatch.setattr(P, "LANG_VALUE_SPEC", {})
+        r_off = P.parse_file(f, tmp_path)
+
+        def _callables(r):
+            return sorted(n.id for n in r.nodes
+                          if n.node_type in ("function", "class", "method"))
+        assert _callables(r_on) == _callables(r_off), (
+            f"{lang}: value-ref must not change function/class/method nodes")
+
+    def test_cross_language_no_contamination(self, tmp_path):
+        """A language's descriptor is applied ONLY to files of that language.
+        A Python file with a name that would be a member access in Go/TS syntax
+        is handled by the PYTHON descriptor only — no other language's node types
+        are consulted (lookup is keyed on the file's detected language)."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("python grammar not live")
+        # Python file: MAX_R read bare (edge) + as an attribute (no edge). If a Go
+        # 'selector_expression' guard leaked in, it would not match python's
+        # 'attribute' node and the FP guard would break — assert it does NOT.
+        f = tmp_path / "m.py"
+        f.write_text("MAX_R = 3\ndef f(o):\n    return o.MAX_R + MAX_R\n")
+        r = P.parse_file(f, tmp_path)
+        rc = sum(1 for t in self._ref_targets(r) if t == "MAX_R")
+        assert rc == 1, f"python attribute-guard must hold under multi-lang spec, got {rc}"
+
+    @pytest.mark.parametrize("lang,ext,src", [
+        ("java", ".java",
+         "class C {\n  static final int MAX_RETRIES = 3;\n"
+         "  int f() { return MAX_RETRIES; }\n}\n"),
+        ("csharp", ".cs",
+         "class C {\n  const int MAX_RETRIES = 3;\n"
+         "  int F() { return MAX_RETRIES; }\n}\n"),
+        ("c", ".c",
+         "static const int TIMEOUT = 30;\nint f() { return TIMEOUT; }\n"),
+        ("php", ".php",
+         "<?php\nconst MAX_RETRIES = 3;\n"
+         "function f() { return MAX_RETRIES; }\n"),
+    ])
+    def test_deferred_languages_emit_nothing(self, tmp_path, lang, ext, src):
+        """Tier-B / deferred languages (java/csharp: no module scope; c: preproc
+        path; php: base-func-extraction gap) are NOT in LANG_VALUE_SPEC → they emit
+        0 constant nodes and 0 references edges (feature-absent, never broken)."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        assert lang not in P.LANG_VALUE_SPEC, (
+            f"{lang} must be DEFERRED (not in LANG_VALUE_SPEC) this run")
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} grammar not live")
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        r = P.parse_file(f, tmp_path)
+        consts = [n for n in r.nodes if n.node_type == "constant"]
+        refs = [e for e in r.edges if e.edge_type == "references"]
+        assert not consts and not refs, (
+            f"{lang} (deferred) must emit no value-ref nodes/edges, "
+            f"got {len(consts)} consts, {len(refs)} refs")
