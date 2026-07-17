@@ -292,3 +292,122 @@ class TestParseRepo:
         results = parse_repo(tmp_path)
         all_nodes = [n for r in results for n in r.nodes]
         assert any(n.name == "nested" for n in all_nodes)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Coverage-correctness (Run AB): parse_repo_with_coverage — never silently
+# under-report. A file that is SEEN but not turned into nodes must be
+# accounted for as a coverage-hole {ref, kind, reason}, never silently dropped.
+# ═══════════════════════════════════════════════════════════════════════
+
+from core.code_intel.parser import (  # noqa: E402
+    parse_repo_with_coverage,
+    ParseRepoResult,
+)
+
+
+class TestParseRepoWithCoverage:
+    """A1/A2/A3: deterministic parse never silently under-reports."""
+
+    def test_returns_results_and_holes(self, tmp_path):
+        (tmp_path / "main.py").write_text("def main():\n    pass\n")
+        out = parse_repo_with_coverage(tmp_path)
+        assert isinstance(out, ParseRepoResult)
+        assert any(n.name == "main" for r in out.results for n in r.nodes)
+        assert isinstance(out.coverage_holes, list)
+        assert out.status in ("complete", "partial")
+
+    # --- back-compat: parse_repo (the list API) is UNCHANGED ---
+    def test_parse_repo_still_returns_bare_list(self, tmp_path):
+        (tmp_path / "main.py").write_text("def main():\n    pass\n")
+        results = parse_repo(tmp_path)
+        assert isinstance(results, list)  # NOT a tuple/dataclass — 3 callers depend on this
+        assert all(isinstance(r, ParseResult) for r in results)
+
+    # --- A1: unknown-extension source-like file is a coverage-hole, not silent ---
+    def test_a1_unknown_extension_recorded_as_hole(self, tmp_path):
+        (tmp_path / "app.py").write_text("def app():\n    pass\n")
+        (tmp_path / "legacy.cbl").write_text("IDENTIFICATION DIVISION.\n")  # COBOL, not in LANGUAGE_MAP
+        out = parse_repo_with_coverage(tmp_path)
+        file_holes = [h for h in out.coverage_holes if h["kind"] == "file"]
+        assert any("legacy.cbl" in h["ref"] for h in file_holes), \
+            f"unknown-ext file must be a coverage-hole, got {out.coverage_holes}"
+        # reason must be substantive (names the extension / why)
+        cbl = next(h for h in file_holes if "legacy.cbl" in h["ref"])
+        assert ".cbl" in cbl["reason"] or "cbl" in cbl["reason"].lower()
+
+    def test_a1_unknown_extensions_deduped_by_ext_bounded(self, tmp_path):
+        # 50 .cbl files must NOT create 50 noisy holes on the same reason-class;
+        # bounded reporting (dedupe by extension OR cap) keeps the ledger readable.
+        (tmp_path / "app.py").write_text("def app():\n    pass\n")
+        for i in range(50):
+            (tmp_path / f"f{i}.cbl").write_text("X.\n")
+        out = parse_repo_with_coverage(tmp_path)
+        cbl_holes = [h for h in out.coverage_holes if h["kind"] == "file" and ".cbl" in h.get("ref", "") + h.get("reason", "")]
+        # bounded: either one aggregate hole for the extension, or a capped list — never all 50
+        assert 1 <= len(cbl_holes) <= 10, f"unbounded unknown-ext noise: {len(cbl_holes)} holes"
+
+    # --- A1: unreadable / decode-failure file is a hole (parse FAILURE) ---
+    def test_a1_unreadable_file_recorded_as_hole(self, tmp_path, monkeypatch):
+        bad = tmp_path / "bad.py"
+        bad.write_text("def ok(): pass\n")
+        (tmp_path / "good.py").write_text("def good():\n    pass\n")
+        real_read_bytes = Path.read_bytes
+        def boom(self, *a, **k):
+            if self.name == "bad.py":
+                raise OSError("simulated unreadable")
+            return real_read_bytes(self, *a, **k)
+        monkeypatch.setattr(Path, "read_bytes", boom)
+        out = parse_repo_with_coverage(tmp_path)
+        assert any("bad.py" in h["ref"] and h["kind"] == "file" for h in out.coverage_holes), \
+            f"unreadable file must be a hole, got {out.coverage_holes}"
+
+    # --- A3: a file that parses FINE but legitimately has 0 nodes is NOT a hole ---
+    def test_a3_clean_empty_file_is_not_a_hole(self, tmp_path):
+        (tmp_path / "app.py").write_text("def app():\n    pass\n")
+        (tmp_path / "__init__.py").write_text("# re-exports only\n")  # 0 nodes, legit
+        out = parse_repo_with_coverage(tmp_path)
+        # __init__.py must NOT be flagged — clean parse, legitimately empty (Gate-1 Check-3)
+        assert not any("__init__.py" in h.get("ref", "") for h in out.coverage_holes), \
+            f"clean 0-node file wrongly flagged: {out.coverage_holes}"
+
+    # --- A3: serial and parallel paths must behave identically (Gate-1 Check-3) ---
+    def test_a3_serial_and_parallel_paths_consistent(self, tmp_path):
+        # < _SERIAL_THRESHOLD (8) files → serial; >= 8 → parallel. Both must
+        # treat a clean-empty file the same way (neither drops it as a hole).
+        for i in range(3):  # serial path
+            (tmp_path / f"m{i}.py").write_text("# comment only\n")
+        out_serial = parse_repo_with_coverage(tmp_path)
+        for i in range(3, 20):  # push over threshold → parallel path
+            (tmp_path / f"m{i}.py").write_text("# comment only\n")
+        out_parallel = parse_repo_with_coverage(tmp_path)
+        serial_holes = {h.get("ref") for h in out_serial.coverage_holes}
+        parallel_holes = {h.get("ref") for h in out_parallel.coverage_holes}
+        # comment-only files are clean-empty → neither path should flag them
+        assert not any("m0.py" in (r or "") for r in serial_holes)
+        assert not any("m10.py" in (r or "") for r in parallel_holes)
+
+    # --- A2: non-dir → explicit signal, not silent [] ---
+    def test_a2_nonexistent_dir_signals_partial(self, tmp_path):
+        out = parse_repo_with_coverage(tmp_path / "missing")
+        assert out.results == []
+        assert out.status == "partial"
+        assert any(h["kind"] == "repo" for h in out.coverage_holes), \
+            "non-dir must emit an explicit repo-level signal, not silent []"
+
+    # --- A2: empty repo → explicit signal ---
+    def test_a2_empty_repo_signals(self, tmp_path):
+        out = parse_repo_with_coverage(tmp_path)
+        assert out.results == []
+        # empty repo is a coverage-relevant fact — must be signalled, not silent
+        assert any(h["kind"] == "repo" for h in out.coverage_holes)
+
+    # --- A2: oversized repo → explicit signal + status partial (bounded) ---
+    def test_a2_oversized_repo_signals_partial(self, tmp_path, monkeypatch):
+        import core.code_intel.parser as P
+        monkeypatch.setattr(P, "_MAX_REPO_FILES", 3, raising=False)
+        for i in range(10):
+            (tmp_path / f"f{i}.py").write_text(f"def f{i}(): pass\n")
+        out = parse_repo_with_coverage(tmp_path)
+        assert out.status == "partial", "oversized repo must be flagged partial, not silently truncated as complete"
+        assert any(h["kind"] == "repo" for h in out.coverage_holes)
