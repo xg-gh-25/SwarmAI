@@ -60,6 +60,9 @@ CAPABILITY_MANIFEST = [
     ("numpy",               "numpy",                         "important"),
     ("amazon_transcribe",   "amazon_transcribe",             "critical"),
     ("awscrt",              "awscrt",                        "critical"),
+    # Bare-import checks stay "important": import success != AST functional. The
+    # get_parser old-ABI bug (run_2e46f2af) had BOTH imports succeeding while the
+    # AST path was dead. The CRITICAL gate is the FUNCTIONAL probe (__native__ below).
     ("tree_sitter",         "tree_sitter",                   "important"),
     ("tree_sitter_langs",   "tree_sitter_language_pack",     "important"),
 
@@ -102,6 +105,17 @@ CAPABILITY_MANIFEST = [
     # vec0_dylib: CI runners often bundle sqlite3 without enable_load_extension.
     # App gracefully degrades (VEC_AVAILABLE guards), so "important" not "critical".
     ("vec0_dylib",          "__native__:sqlite_vec/vec0",    "important"),
+    # tree_sitter/parse: FUNCTIONAL AST probe (constructs Parser, parses bytes,
+    # asserts a node) — CRITICAL because code-intel is now source-level AST and a
+    # build where the grammar imports but fails to parse would silently revert the
+    # whole indexer to the regex fallback (run_2e46f2af). The parser DOES fall back
+    # to regex (parser.py _tree_sitter_live gate), so nothing crashes — but that
+    # degrade is a SILENT quality regression (approximate symbols, no precise spans),
+    # not a benign one like vec0's CI-runner sqlite limitation. tree_sitter needs
+    # only pure-Python wheels + the bundled grammar (no env-specific fragility), so
+    # a failing probe means a genuinely broken build, not a benign CI difference →
+    # critical is safe (won't false-block) and warranted (catches the silent revert).
+    ("tree_sitter_ast",     "__native__:tree_sitter/parse",  "critical"),
 ]
 
 

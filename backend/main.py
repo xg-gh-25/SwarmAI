@@ -1408,6 +1408,25 @@ async def verify_native(path: str):
             return {"loadable": True, "detail": f"sqlite-vec {version}"}
         except Exception as e:
             return {"loadable": False, "detail": str(e)}
+    # tree_sitter/parse: a FUNCTIONAL AST probe, not a bare import. verify-import
+    # only does __import__('tree_sitter'), which SUCCEEDS even when the AST path is
+    # broken (run_2e46f2af: the old get_parser returned an old-ABI object whose
+    # .parse(bytes) raised — import fine, parsing dead). So the real gate must
+    # construct a parser and confirm a node comes back — mirroring the sqlite_vec
+    # load-and-call probe above.
+    if len(parts) == 2 and parts[0] == "tree_sitter":
+        try:
+            import tree_sitter
+            from tree_sitter_language_pack import get_language
+            parser = tree_sitter.Parser(get_language("python"))
+            tree = parser.parse(b"def _probe():\n    return 1\n")
+            root_type = tree.root_node.type
+            if root_type != "module":
+                return {"loadable": False,
+                        "detail": f"tree-sitter parsed but root type is {root_type!r}, expected 'module'"}
+            return {"loadable": True, "detail": f"tree-sitter AST functional (root={root_type})"}
+        except Exception as e:
+            return {"loadable": False, "detail": f"tree-sitter AST non-functional: {e}"}
     return {"loadable": False, "detail": f"unknown native extension: {path}"}
 
 
