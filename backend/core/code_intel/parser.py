@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -647,6 +648,47 @@ def _should_skip_dir(component: str) -> bool:
     return component in SKIP_DIRS or component.endswith(".egg-info")
 
 
+def _gitignored_subset(repo_root: Path, paths: list[Path]) -> set[Path]:
+    """Return the subset of `paths` that the repo's .gitignore IGNORES, via ONE
+    batched `git check-ignore --stdin` (DoD2, run_fe26ed6c).
+
+    git check-ignore semantics we rely on (documented, verified 2026-07-17):
+      - Prints ONLY the paths that are ignored; exit 0 = some ignored, 1 = none
+        ignored, >1 = error. A TRACKED file matching a pattern is NOT reported
+        (git tracks it), so real source is never dropped — this is why we honor
+        .gitignore instead of re-implementing pattern matching.
+      - --stdin reads NUL/newline-separated paths; we feed newline-separated
+        repo-relative POSIX paths and read newline-separated ignored ones back.
+
+    Fail-open (returns empty set) on: git binary missing, non-git dir, timeout,
+    any non-{0,1} exit, or decode error. A repo we can't check is simply treated
+    as 'nothing extra ignored' — never crashes the walk, never drops source."""
+    if not paths:
+        return set()
+    rel_to_path = {p.relative_to(repo_root).as_posix(): p for p in paths}
+    stdin_blob = "\n".join(rel_to_path.keys())
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "--stdin"],
+            input=stdin_blob, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.debug("git check-ignore unavailable for %s: %s", repo_root, e)
+        return set()
+    # 0 = some ignored, 1 = none ignored (both normal). Anything else = error.
+    if proc.returncode not in (0, 1):
+        logger.debug("git check-ignore errored (rc=%s) for %s: %s",
+                     proc.returncode, repo_root, proc.stderr[:200])
+        return set()
+    out: set[Path] = set()
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        p = rel_to_path.get(line)
+        if p is not None:
+            out.add(p)
+    return out
+
+
 def _is_entry_point(name: str, file_path: str, language: str) -> bool:
     """Detect entry points per language."""
     fname = Path(file_path).name
@@ -926,7 +968,11 @@ def _extract_from_tree(tree, path_str: str, language: str,
             name = _get_name(node, language)
             if name:
                 name = _sanitize_name(name)
-                is_class = "class" in ntype or "interface" in ntype or "enum" in ntype
+                # "struct" covers C/C++ struct_specifier (a record TYPE, not a
+                # function — run_88512360: a C struct was mislabeled node_type=function
+                # because struct_specifier matched none of the type keywords).
+                is_class = ("class" in ntype or "interface" in ntype
+                            or "enum" in ntype or "struct" in ntype)
                 node_type = "class" if is_class else "method" if enclosing_class else "function"
                 qn = _qualify(name, path_str, enclosing_class)
                 code_node = CodeNode(
@@ -982,8 +1028,80 @@ NAME_NODE_TYPES: dict[str, tuple[str, ...]] = {
 }
 
 
+# C-family languages whose function/method NAME is nested inside a `declarator`
+# field (not a direct child) — the codegraph pattern (colbymchenry/codegraph
+# src/extraction/languages/c-cpp.ts). `_get_name`'s flat direct-child scan returns
+# None for these (verified run_88512360: `int add(...)` → function_definition >
+# function_declarator > identifier; `char* dup(...)` adds a pointer_declarator
+# wrapper; a C++ method name is a `field_identifier`; an out-of-line def is a
+# `qualified_identifier`). SCOPED to c/cpp: python/php also use function_definition
+# but resolve their name as a DIRECT child and have no `declarator` field, so they
+# must stay on the flat scan (M3 cross-lang finding).
+_C_FAMILY_LANGS = frozenset({"c", "cpp"})
+# Name-bearing leaf/wrapper nodes reachable via the declarator BFS. operator_name
+# (`operator+`) and destructor_name (`~Foo`) are WRAPPERS whose full text IS the
+# name — they must be matched ON DEQUEUE before descending, else destructor_name's
+# inner `identifier` wins and drops the `~` (Gate-1 run_88512360, verified live).
+_C_DECLARATOR_NAME_TYPES = frozenset({
+    "identifier", "field_identifier", "qualified_identifier",
+    "operator_name", "destructor_name",
+    # operator_cast = a C++ user-defined conversion operator (`operator int`); its
+    # node text is `operator int()` (trailing param list included) so the name is
+    # rebuilt from its non-parameter children (Gate-2 LOW, run_88512360). Without it
+    # a conversion operator resolves to None and is silently dropped.
+    "operator_cast",
+})
+# Declarator-subtree children NOT descended into — a parameter's own type/name
+# (`const std::string& x`) or a trailing return type must never be mistaken for the
+# function name (codegraph's documented `std::string TableFileName(...)`→`string` bug).
+_C_DECLARATOR_SKIP = frozenset({"parameter_list", "parameters", "trailing_return_type"})
+
+
+def _c_family_declarator_name(node) -> str | None:
+    """Resolve a c/cpp definition's name by descending its `declarator` field
+    (BFS, skipping parameter/return-type subtrees). Returns the name text, or None
+    if the node has no declarator field (e.g. struct_specifier/class_specifier —
+    those fall back to the flat scan, which reads their direct `type_identifier`)."""
+    dec = node.child_by_field_name("declarator")
+    if dec is None:
+        return None
+    from collections import deque
+    queue = deque([dec])
+    while queue:
+        cur = queue.popleft()
+        # Match wrapper/leaf name nodes on dequeue BEFORE enqueuing children, so a
+        # destructor_name (~Foo) returns its full text instead of the inner `Foo`.
+        if cur.type in _C_DECLARATOR_NAME_TYPES:
+            if cur.type == "qualified_identifier":
+                # out-of-line def `Ret Foo::bar()` → take the last :: segment
+                parts = [p for p in cur.text.decode("utf-8", errors="replace").strip().split("::") if p]
+                return parts[-1] if parts else None
+            if cur.type == "operator_cast":
+                # node text is `operator int()` — rebuild from non-parameter children
+                # (`operator` keyword + the target type) so the name is `operator int`.
+                bits = [c.text.decode("utf-8", errors="replace")
+                        for c in cur.children if c.type not in _C_DECLARATOR_SKIP
+                        and c.type != "abstract_function_declarator"]
+                return " ".join(b for b in bits if b) or None
+            return cur.text.decode("utf-8", errors="replace")
+        for c in cur.children:
+            if c.type not in _C_DECLARATOR_SKIP:
+                queue.append(c)
+    return None
+
+
 def _get_name(node, language: str) -> str | None:
-    """Extract the name identifier from a definition node (per-language name types)."""
+    """Extract the name identifier from a definition node (per-language name types).
+
+    c/cpp function/method names are NESTED in a `declarator` field, not a direct
+    child — those go through declarator descent first, then fall back to the flat
+    scan (which handles struct_specifier/class_specifier, whose name IS a direct
+    type_identifier)."""
+    if language in _C_FAMILY_LANGS:
+        nested = _c_family_declarator_name(node)
+        if nested is not None:
+            return nested
+        # fall through: struct_specifier/class_specifier name is a direct child
     name_types = NAME_NODE_TYPES.get(language, _DEFAULT_NAME_NODE_TYPES)
     for child in node.children:
         if child.type in name_types:
@@ -1314,6 +1432,32 @@ def parse_repo_with_coverage(
             ex = unknown_ext_examples.setdefault(suffix, [])
             if len(ex) < _MAX_UNKNOWN_EXT_EXAMPLES:
                 ex.append(rel)
+
+    # ── DoD2 (run_fe26ed6c): honor the target repo's .gitignore ──
+    # The hardcoded SKIP_DIRS/suffix checks above are a fast-path (and the ONLY
+    # skip mechanism for non-git repos). For a git repo we ALSO drop files the
+    # repo itself ignores (build output under a non-standard name — out/, _build/,
+    # bazel-*, etc.) that the hardcoded list can't know. Done as ONE batched
+    # `git check-ignore --stdin` AFTER the walk (never a per-file subprocess —
+    # that would fork thousands of times). git check-ignore correctly does NOT
+    # report a TRACKED file even if it matches a pattern, so real source is never
+    # dropped. Fail-open: no .git / git missing / git error → keep the SKIP_DIRS
+    # result unchanged. O030: ignored files are RECORDED as coverage holes
+    # (kind='gitignored'), bounded — never silently invisible.
+    if files_to_parse and (repo_root / ".git").exists():
+        ignored = _gitignored_subset(repo_root, files_to_parse)
+        if ignored:
+            files_to_parse = [p for p in files_to_parse if p not in ignored]
+            status = "partial"
+            _ignored_rels = sorted(str(p.relative_to(repo_root)) for p in ignored)
+            for ex in _ignored_rels[:_MAX_UNKNOWN_EXT_EXAMPLES]:
+                coverage_holes.append({
+                    "ref": ex, "kind": "gitignored",
+                    "reason": (f"ignored by the repo's .gitignore ({len(ignored)} "
+                               f"file(s) total; showing up to "
+                               f"{_MAX_UNKNOWN_EXT_EXAMPLES}). Out of scope by the "
+                               f"repo's own rules — recorded, never silently dropped."),
+                })
 
     # Emit bounded unknown-extension holes (one row per example, capped; the reason
     # on every row carries the TRUE total for that extension so the count is honest).

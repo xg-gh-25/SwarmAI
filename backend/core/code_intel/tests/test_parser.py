@@ -1210,3 +1210,215 @@ class TestValueRefFalsePositiveGuardsNewLangs:
         t = self._refs(tmp_path, "php", ".php",
                        "<?php\nconst MAX = 3;\nfunction f() { return App\\MAX; }\n")
         assert "MAX" not in t, f"php namespaced App\\MAX must not emit a local-const edge, got {t}"
+
+
+class TestCCppBaseFunctionExtraction:
+    """run_88512360 — c/cpp function/method NAMES are nested in a `declarator` field
+    (not a direct child), so the flat _get_name scan dropped them: a C function
+    extracted 0 nodes, a C++ function/method was dropped (only the class survived),
+    and a C `struct` was MISLABELED node_type='function'. Fix: c/cpp-scoped
+    declarator descent (codegraph pattern) + struct_specifier→class classification.
+    Exercises the REAL parse_file entry point.
+    """
+
+    def _nodes(self, tmp_path, lang, ext, src):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"tree-sitter {lang} grammar not live")
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "ok", f"{lang}: parse_file status must be ok, got {status}"
+        by_type = {}
+        for n in result.nodes:
+            by_type.setdefault(n.node_type, []).append(n.name)
+        return by_type
+
+    def test_c_function_extracted(self, tmp_path):
+        """C top-level function: name nested in function_declarator."""
+        bt = self._nodes(tmp_path, "c", ".c", "int add(int x) { return x + 1; }\n")
+        assert "add" in bt.get("function", []), f"C function 'add' dropped — got {bt}"
+
+    def test_c_pointer_return_function_extracted(self, tmp_path):
+        """C function with pointer return: descent through pointer_declarator wrapper."""
+        bt = self._nodes(tmp_path, "c", ".c", "char* dup(char* s) { return s; }\n")
+        assert "dup" in bt.get("function", []), f"C pointer-return function 'dup' dropped — got {bt}"
+
+    def test_c_struct_classified_as_class_not_function(self, tmp_path):
+        """C struct: was MISLABELED node_type='function' (struct_specifier matched no
+        type keyword). Must be a type node (class), never a function."""
+        bt = self._nodes(tmp_path, "c", ".c", "struct Foo { int a; };\n")
+        assert "Foo" in bt.get("class", []), f"C struct 'Foo' must be a class node — got {bt}"
+        assert "Foo" not in bt.get("function", []), f"C struct 'Foo' must NOT be a function — got {bt}"
+
+    def test_cpp_free_function_and_method_and_class(self, tmp_path):
+        """C++: free function (declarator descent), class method (name=field_identifier,
+        nested inside class body), and the class itself — all extracted."""
+        bt = self._nodes(tmp_path, "cpp", ".cpp",
+                         "int add(int x) { return x + 1; }\n"
+                         "class Foo {\npublic:\n  int bar() { return 1; }\n};\n")
+        assert "add" in bt.get("function", []), f"C++ free function 'add' dropped — got {bt}"
+        assert "bar" in bt.get("method", []), f"C++ method 'bar' dropped — got {bt}"
+        assert "Foo" in bt.get("class", []), f"C++ class 'Foo' dropped — got {bt}"
+
+    def test_cpp_destructor_keeps_tilde(self, tmp_path):
+        """C++ destructor name is destructor_name(~ + identifier); the wrapper's full
+        text (~S) must be returned, NOT the inner identifier S (Gate-1 correction)."""
+        bt = self._nodes(tmp_path, "cpp", ".cpp",
+                         "class S {\npublic:\n  ~S() {}\n};\n")
+        assert "~S" in bt.get("method", []), f"C++ destructor must keep the tilde (~S) — got {bt}"
+
+    def test_cpp_operator_overload_extracted(self, tmp_path):
+        """C++ operator overload name is operator_name (no inner identifier) — the
+        wrapper's full text (operator+) must be returned, else it's dropped (Gate-1)."""
+        bt = self._nodes(tmp_path, "cpp", ".cpp",
+                         "class V {\npublic:\n  V operator+(int x) { return *this; }\n};\n")
+        assert "operator+" in bt.get("method", []), f"C++ operator+ dropped — got {bt}"
+
+    def test_cpp_conversion_operator_extracted(self, tmp_path):
+        """C++ user-defined conversion operator: name node is operator_cast whose text
+        is `operator int()`; the name is rebuilt from non-parameter children →
+        `operator int` (Gate-2 LOW run_88512360; without the handler it was dropped)."""
+        bt = self._nodes(tmp_path, "cpp", ".cpp",
+                         "struct C { operator int() { return 1; } };\n")
+        assert "operator int" in bt.get("method", []), \
+            f"C++ conversion operator dropped — got {bt}"
+
+    def test_cpp_param_type_not_mistaken_for_name(self, tmp_path):
+        """codegraph's documented bug: without skipping parameter_list, a function
+        `int compute(const char* name)` was named after its parameter's type. The BFS
+        must skip parameter_list → name is 'compute'."""
+        bt = self._nodes(tmp_path, "cpp", ".cpp",
+                         "int compute(const char* name) { return 0; }\n")
+        assert "compute" in bt.get("function", []), f"C++ function must be named 'compute' — got {bt}"
+        # nothing should be named after the param/type
+        allnames = [n for names in bt.values() for n in names]
+        assert "name" not in allnames and "char" not in allnames, \
+            f"param name/type leaked as a definition name — got {bt}"
+
+
+class TestGetNameCCppDeclaratorDescent:
+    """run_88512360 — unit tests for _c_family_declarator_name + _get_name c/cpp path,
+    incl the cross-language SCOPE guarantee: python/php (which also use
+    function_definition) must NOT go through declarator descent."""
+
+    def _get_name_of(self, lang, src, def_type):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} grammar not live")
+        tree = P._get_cached_parser(lang).parse(bytes(src, "utf8"))
+        found = []
+
+        def walk(n):
+            if n.type == def_type:
+                found.append(n)
+            for c in n.children:
+                walk(c)
+        walk(tree.root_node)
+        assert found, f"{lang}: no {def_type} node in sample"
+        return P._get_name(found[0], lang)
+
+    def test_c_function_name_via_declarator(self):
+        assert self._get_name_of("c", "int add(int x) { return x; }\n",
+                                 "function_definition") == "add"
+
+    def test_cpp_qualified_out_of_line_method(self):
+        """`int Foo::bar() {...}` → qualified_identifier → last :: segment = bar."""
+        assert self._get_name_of("cpp", "int Foo::bar() { return 1; }\n",
+                                 "function_definition") == "bar"
+
+    def test_c_scope_gate_does_not_touch_python(self):
+        """python shares function_definition but its name is a DIRECT child and it
+        has no `declarator` field — must resolve via the flat scan, unchanged."""
+        assert self._get_name_of("python", "def foo(x):\n    return x\n",
+                                 "function_definition") == "foo"
+
+    def test_c_scope_gate_does_not_touch_php(self):
+        """php shares function_definition; name is a direct `name` node — unchanged."""
+        assert self._get_name_of("php", "<?php\nfunction greet() {}\n",
+                                 "function_definition") == "greet"
+
+    def test_anonymous_struct_no_crash(self):
+        """An anonymous struct has no name field — _get_name returns None (dropped),
+        never crashes."""
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("c"):
+            pytest.skip("c grammar not live")
+        tree = P._get_cached_parser("c").parse(bytes("struct { int a; } x;\n", "utf8"))
+        sp = [n for n in tree.root_node.children[0].children
+              if n.type == "struct_specifier"]
+        if sp:
+            assert P._get_name(sp[0], "c") is None
+
+
+# ─── DoD2 (run_fe26ed6c): parser honors the target repo's .gitignore ───
+
+class TestGitignoreHonoring:
+    """parse_repo_with_coverage drops files the repo's .gitignore ignores (batched
+    git check-ignore), records them as coverage_holes kind='gitignored' (O030),
+    and NEVER drops a tracked source file. Fail-open on non-git / git error."""
+
+    def _git_repo(self, tmp_path):
+        import subprocess
+        repo = tmp_path / "repo"; repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        return repo
+
+    def test_gitignored_build_dir_skipped(self, tmp_path):
+        from core.code_intel.parser import parse_repo_with_coverage
+        repo = self._git_repo(tmp_path)
+        (repo / ".gitignore").write_text("out/\n", encoding="utf-8")
+        (repo / "src").mkdir(); (repo / "out").mkdir()
+        (repo / "src" / "app.py").write_text("def a(): pass\n", encoding="utf-8")
+        (repo / "out" / "gen.py").write_text("def g(): pass\n", encoding="utf-8")
+        res = parse_repo_with_coverage(repo)
+        parsed = {r.file_path for r in res.results}
+        assert "src/app.py" in parsed, "tracked source must be parsed"
+        assert "out/gen.py" not in parsed, "gitignored file must be skipped"
+        # O030: recorded, not silent
+        holes = {h["ref"] for h in res.coverage_holes if h.get("kind") == "gitignored"}
+        assert "out/gen.py" in holes
+
+    def test_tracked_source_never_dropped(self, tmp_path):
+        # A .py that matches a gitignore pattern but is TRACKED must NOT be skipped
+        # (git check-ignore does not report tracked files).
+        import subprocess
+        from core.code_intel.parser import parse_repo_with_coverage
+        repo = self._git_repo(tmp_path)
+        (repo / ".gitignore").write_text("*.py\n", encoding="utf-8")  # ignore ALL .py
+        (repo / "keep.py").write_text("def k(): pass\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-f", "keep.py"], cwd=repo, check=True)  # force-track
+        res = parse_repo_with_coverage(repo)
+        parsed = {r.file_path for r in res.results}
+        assert "keep.py" in parsed, "a TRACKED .py must survive even if pattern matches"
+
+    def test_non_git_repo_unchanged(self, tmp_path):
+        # No .git → gitignore path is skipped entirely, SKIP_DIRS still applies.
+        from core.code_intel.parser import parse_repo_with_coverage
+        repo = tmp_path / "plain"; repo.mkdir()
+        (repo / "node_modules").mkdir()
+        (repo / "src").mkdir()
+        (repo / "src" / "app.py").write_text("def a(): pass\n", encoding="utf-8")
+        (repo / "node_modules" / "dep.py").write_text("x=1\n", encoding="utf-8")
+        res = parse_repo_with_coverage(repo)
+        parsed = {r.file_path for r in res.results}
+        assert "src/app.py" in parsed
+        assert "node_modules/dep.py" not in parsed  # SKIP_DIRS still works
+        # no gitignored holes on a non-git repo
+        assert not any(h.get("kind") == "gitignored" for h in res.coverage_holes)
+
+    def test_git_error_fails_open(self, tmp_path, monkeypatch):
+        # git check-ignore raising → treat as 'nothing extra ignored', never crash.
+        from core.code_intel import parser as P
+        repo = self._git_repo(tmp_path)
+        (repo / "app.py").write_text("def a(): pass\n", encoding="utf-8")
+        def _boom(*a, **k):
+            raise OSError("git exploded")
+        monkeypatch.setattr(P.subprocess, "run", _boom)
+        res = P.parse_repo_with_coverage(repo)
+        parsed = {r.file_path for r in res.results}
+        assert "app.py" in parsed  # fail-open: file still parsed
