@@ -14,7 +14,12 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from core.code_intel import load_project_graph, get_code_intel_db_path, invalidate_cache
+from core.code_intel import (
+    load_project_graph,
+    get_code_intel_db_path,
+    invalidate_cache,
+    extract_repo_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -227,15 +232,20 @@ def _run_reindex(project: str) -> None:
             return
 
         content = tech_md.read_text(encoding="utf-8")
-        match = re.search(r"\*\*Repo Path:\*\*\s*`([^`]+)`", content)
-        if not match:
+        # Multi-format parse via the shared helper (core/code_intel.extract_repo_path).
+        # The old inline single-format regex ('**Repo Path:**') matched ZERO of the
+        # real project TECH.md files (they use '**Local:**' / a bare '## Codebase
+        # Location' path line), so reindex was silently dead for every project.
+        raw_repo_path = extract_repo_path(content)
+        if not raw_repo_path:
             logger.warning(f"Cannot reindex {project}: no repo_path in TECH.md")
             return
 
-        repo_path = match.group(1)
+        from pathlib import Path as _Path
+        # Normalize (helper is pure — dir-validation/normalization is the caller's job).
+        repo_path = str(_Path(raw_repo_path.rstrip("/")).resolve())
         logger.info(f"Re-indexing {project} from {repo_path}")
 
-        from pathlib import Path as _Path
         graph = GraphStore(db_path)
         parse_results = parse_repo(_Path(repo_path))
         graph.bulk_insert(parse_results)

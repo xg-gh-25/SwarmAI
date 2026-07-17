@@ -137,24 +137,46 @@ def extract_and_store_routes(graph: GraphStore, file_path: str, content: str, la
     return 0
 
 
-def _build_project_path_cache():
-    """Scan Projects/*/TECH.md for repo_path fields.
+# Repo-path markers found across real TECH.md files, in priority order. Order is
+# load-bearing: the labeled pattern is tried FIRST so a bold label always wins over
+# an earlier bare-backtick path elsewhere in the doc; the bare-backtick fallback
+# (re.MULTILINE, end-of-line anchored) catches the '## Codebase Location' + bare
+# path-on-its-own-line format. Do NOT reorder or switch to findall — the first-match
+# semantics are what keep a 400K TECH.md from resolving to a wrong inline path.
+_REPO_PATH_PATTERNS = [
+    re.compile(r"\*\*(?:Repo Path|Local|Codebase).*?:\*\*\s*`([^`]+)`"),
+    re.compile(r"`(/[^`]+)`\s*$", re.MULTILINE),  # bare backtick path on a line
+]
 
-    Supports multiple formats found in the wild:
-    - **Repo Path:** `/path/to/repo`
-    - **Local:** `/path/to/repo`
-    - **Codebase Location** section with backtick-wrapped paths
+
+def extract_repo_path(content: str) -> str | None:
+    """Extract a repo path from TECH.md *content*. PURE — no filesystem I/O.
+
+    Tries the markers in `_REPO_PATH_PATTERNS` order, returning the FIRST matching
+    pattern's captured path (raw, un-normalized — trailing slash preserved) or None.
+
+    Supported formats (found in the wild):
+    - ``**Repo Path:** `/path/to/repo` `` (legacy label)
+    - ``**Local:** `/path/to/repo` `` (SwarmAI)
+    - ``## Codebase Location`` heading + a bare `` `/path` `` line (ai_ready_repo)
+
+    Callers own dir-validation (rstrip/resolve/is_dir) — keeping this pure lets it
+    be unit-tested with plain strings and shared between the reindex endpoint and
+    the project-path cache without coupling to any multi-project filtering.
     """
+    for pattern in _REPO_PATH_PATTERNS:
+        match = pattern.search(content)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _build_project_path_cache():
+    """Scan Projects/*/TECH.md for repo_path fields (uses `extract_repo_path`)."""
     from jobs.paths import PROJECTS_DIR
     projects_dir = PROJECTS_DIR
     if not projects_dir.is_dir():
         return
-
-    # Match any bold label followed by a backtick-wrapped absolute path
-    path_patterns = [
-        re.compile(r"\*\*(?:Repo Path|Local|Codebase).*?:\*\*\s*`([^`]+)`"),
-        re.compile(r"`(/[^`]+)`\s*$", re.MULTILINE),  # bare backtick path on a line
-    ]
 
     for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
@@ -164,13 +186,10 @@ def _build_project_path_cache():
             continue
         try:
             content = tech_md.read_text(encoding="utf-8")
-            for pattern in path_patterns:
-                match = pattern.search(content)
-                if match:
-                    candidate = match.group(1).rstrip("/")
-                    resolved = str(Path(candidate).resolve())
-                    if Path(resolved).is_dir():
-                        _project_path_cache[resolved] = project_dir.name
-                        break
+            candidate = extract_repo_path(content)
+            if candidate:
+                resolved = str(Path(candidate.rstrip("/")).resolve())
+                if Path(resolved).is_dir():
+                    _project_path_cache[resolved] = project_dir.name
         except Exception:
             continue

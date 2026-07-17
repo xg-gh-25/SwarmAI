@@ -139,3 +139,62 @@ class TestCodeIntelReindex:
 
         assert resp.status_code == 202
         assert resp.json()["status"] == "already_indexing"
+
+
+class TestRunReindexRepoPathParsing:
+    """run_19eecc9f (AC6): _run_reindex must resolve the repo path from the REAL
+    TECH.md formats. The old inline single-format regex ('**Repo Path:**') matched
+    ZERO real projects → reindex silently returned for every project. These tests
+    close the coverage gap (prior reindex tests mock _run_reindex wholesale, so the
+    path-parsing was never exercised)."""
+
+    def _run_with_tech_md(self, tmp_path, tech_md_content):
+        """Drive _run_reindex against a fake project dir; capture parse_repo's arg."""
+        from pathlib import Path
+        from unittest.mock import patch, MagicMock
+        import routers.code_intel as mod
+
+        db_path = tmp_path / "code_intel.db"
+        db_path.write_text("")  # exists() → True
+        (tmp_path / "TECH.md").write_text(tech_md_content, encoding="utf-8")
+
+        captured = {}
+
+        def fake_parse_repo(root):
+            captured["root"] = root
+            return []
+
+        # GraphStore + parse_repo are imported function-locally inside _run_reindex,
+        # so patch them at their SOURCE modules (not on routers.code_intel).
+        with patch.object(mod, "get_code_intel_db_path", return_value=db_path), \
+             patch("core.code_intel.graph_store.GraphStore", return_value=MagicMock()), \
+             patch("core.code_intel.parser.parse_repo", side_effect=fake_parse_repo), \
+             patch.object(mod, "invalidate_cache"), \
+             patch.dict(mod._reindex_in_progress, {}, clear=True):
+            mod._run_reindex("FakeProj")
+        return captured
+
+    def test_local_bold_format_resolves(self, tmp_path):
+        """'**Local:** `path`' (SwarmAI format) — parse_repo is called, not skipped."""
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        content = f"## Codebase Location\n\n- **Local:** `{repo}/`\n"
+        captured = self._run_with_tech_md(tmp_path, content)
+        assert "root" in captured, "parse_repo was NOT called — reindex silently skipped"
+        # trailing slash normalized away by the caller's rstrip/resolve
+        assert str(captured["root"]) == str(repo.resolve())
+
+    def test_bare_backtick_format_resolves(self, tmp_path):
+        """'## Codebase Location' + bare backtick path (ai_ready_repo format)."""
+        repo = tmp_path / "airepo"
+        repo.mkdir()
+        content = f"## Codebase Location\n\n`{repo}`\n\n## GitHub\n"
+        captured = self._run_with_tech_md(tmp_path, content)
+        assert "root" in captured
+        assert str(captured["root"]) == str(repo.resolve())
+
+    def test_no_marker_skips_gracefully(self, tmp_path):
+        """No path marker → warning + return, parse_repo NEVER called (unchanged)."""
+        content = "## Some Heading\n\nno path here.\n"
+        captured = self._run_with_tech_md(tmp_path, content)
+        assert "root" not in captured, "parse_repo should not run without a repo_path"
