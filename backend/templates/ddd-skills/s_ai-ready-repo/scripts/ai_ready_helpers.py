@@ -11,9 +11,9 @@ All functions are pure/stateless. No LLM calls. No network.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-import os
 import re
 import subprocess
 from collections import Counter
@@ -72,17 +72,36 @@ def _safe_file_read(file_path: Path, repo_root: Path, max_size: int = 10 * 1024 
 
 # ─── code-intel.json v2 Schema Validation ───
 
-_REQUIRED_TOP_LEVEL = {"$schema", "version", "repo", "modules", "edges", "entry_points"}
+# Schema aligned to the REAL producer, core/code_intel/json_exporter.py (the
+# ground-truth v2 emitter that runs on every reindex). run_5647c72c fixed a
+# validator↔exporter divergence: the validator had been written against a
+# hand-built FIXTURE schema (module.path/responsibility, top-level `edges`,
+# entry_point.path) that the exporter never emitted — so the real SwarmAI
+# code-intel.json failed its own validator (43 errors) and v3 generation could
+# not run on real data (O009: validator never tested against real output).
+# The exporter emits: top-level `dependencies` (NOT `edges`); modules as
+# {name, symbol_count, function_count, class_count, file_count, files}; and
+# entry_points as {name, file_path, type}.
+_REQUIRED_TOP_LEVEL = {"$schema", "version", "repo", "modules", "entry_points"}
 _REQUIRED_REPO = {"name", "languages", "total_symbols", "total_edges"}
-_REQUIRED_MODULE = {"name", "path", "responsibility"}
-_OPTIONAL_TOP_LEVEL = {"routes", "hot_zones", "risk_areas", "dead_code", "dependencies", "generated_at"}
+# The exporter's _build_modules (json_exporter.py:121-132) emits ALL of these
+# UNCONDITIONALLY (no branches) — so the exact producer contract is all 6, not a
+# loose {name, symbol_count} floor (Gate-2 LOW, run_5647c72c: don't under-specify
+# a schema the sole producer always fully populates).
+_REQUIRED_MODULE = {"name", "symbol_count", "function_count", "class_count",
+                    "file_count", "files"}
+_OPTIONAL_TOP_LEVEL = {"routes", "hot_zones", "risk_areas", "dead_code",
+                       "dependencies", "edges", "generated_at"}
 
 
-def validate_code_intel_json(doc: dict) -> list[str]:
+def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
     """Validate a code-intel.json document against v2 schema.
 
     Returns list of error strings. Empty list = valid.
     Does NOT use jsonschema library — pure Python for zero-dep operation.
+
+    ``repo_root`` (optional): threaded to check_mermaid_node_anchoring so a mermaid
+    node naming a real-on-disk-but-unindexed file is accepted (run_3026ef31).
     """
     errors: list[str] = []
 
@@ -91,9 +110,10 @@ def validate_code_intel_json(doc: dict) -> list[str]:
         if field not in doc:
             errors.append(f"Missing required top-level field: '{field}'")
 
-    # Version check
-    if doc.get("version") and doc["version"] != "2.0":
-        errors.append(f"Invalid version: expected '2.0', got '{doc['version']}'")
+    # Version check — v2.0 and v3.0 both accepted (v3 = v2 + domain layer, Run 1)
+    _version = doc.get("version")
+    if _version and _version not in ("2.0", "3.0"):
+        errors.append(f"Invalid version: expected '2.0' or '3.0', got '{_version}'")
 
     # Repo structure
     repo = doc.get("repo")
@@ -139,16 +159,1329 @@ def validate_code_intel_json(doc: dict) -> list[str]:
                 f"Either include more edges or set total_edges to match the delivered count."
             )
 
-    # Entry points validation
+    # Entry points validation. The real exporter (_build_entry_points) emits
+    # {name, file_path, type}; older/agent-authored docs may use {path, …}.
+    # Accept EITHER a `file_path` or a `path` locator (run_5647c72c: requiring
+    # only `path` rejected every real exporter output).
     entry_points = doc.get("entry_points")
     if isinstance(entry_points, list):
         for i, ep in enumerate(entry_points):
             if not isinstance(ep, dict):
                 errors.append(f"entry_points[{i}] must be a dict")
-            elif "path" not in ep:
-                errors.append(f"entry_points[{i}] must have 'path' field")
+            elif "file_path" not in ep and "path" not in ep:
+                errors.append(f"entry_points[{i}] must have a 'file_path' (or 'path') field")
+
+    # ─── v3 domain-layer validation (Run 1) ───
+    # v2 docs (no version 3.0, no non-empty domains/flows/steps) skip this
+    # entirely → backward-compatible. Fires when the doc declares v3 OR carries
+    # actual domain-layer content. All THREE v3 checks run together — structural
+    # AND the two anti-hallucination guards (referential integrity + LLM-assertion
+    # anchoring). Wiring the guards in here is load-bearing: they are the entire
+    # anti-spurious value (§1.5); if the main validator doesn't call them, a
+    # hallucinated/dangling assertion sails through (Gate-2 CRITICAL, run_aad6d4f2).
+    _has_v3_content = any(
+        isinstance(doc.get(k), list) and doc.get(k) for k in ("domains", "flows", "steps")
+    )
+    if _version == "3.0" or _has_v3_content:
+        errors.extend(_validate_v3_domain_layer(doc))
+        errors.extend(check_domain_referential_integrity(doc))
+        errors.extend(check_llm_assertion_guards(doc))
+        errors.extend(check_mermaid_node_anchoring(doc, repo_root=repo_root))
+        errors.extend(check_anchor_accounting(doc))
+        errors.extend(validate_coverage_ledger(doc))
 
     return errors
+
+
+def _validate_v3_domain_layer(doc: dict) -> list[str]:
+    """Structural checks for the v3 domain layer: domains[]/flows[]/steps[].
+
+    Only STRUCTURE + required-field presence here. Referential integrity
+    (dangling refs) and LLM-assertion guards are separate pure functions
+    (check_domain_referential_integrity / check_llm_assertion_guards) so each
+    can be called + tested independently.
+    """
+    errors: list[str] = []
+    for key in ("domains", "flows", "steps"):
+        if key in doc and not isinstance(doc[key], list):
+            errors.append(f"'{key}' must be a list, got {type(doc[key]).__name__}")
+
+    for i, d in enumerate(doc.get("domains", []) if isinstance(doc.get("domains"), list) else []):
+        if not isinstance(d, dict):
+            errors.append(f"domains[{i}] must be a dict"); continue
+        for f in ("id", "name"):
+            if f not in d:
+                errors.append(f"domains[{i}] missing required field: '{f}'")
+
+    for i, fl in enumerate(doc.get("flows", []) if isinstance(doc.get("flows"), list) else []):
+        if not isinstance(fl, dict):
+            errors.append(f"flows[{i}] must be a dict"); continue
+        for f in ("id", "domain_id"):
+            if f not in fl:
+                errors.append(f"flows[{i}] missing required field: '{f}'")
+
+    for i, st in enumerate(doc.get("steps", []) if isinstance(doc.get("steps"), list) else []):
+        if not isinstance(st, dict):
+            errors.append(f"steps[{i}] must be a dict"); continue
+        for f in ("id", "flow_id"):
+            if f not in st:
+                errors.append(f"steps[{i}] missing required field: '{f}'")
+
+    return errors
+
+
+def check_domain_referential_integrity(doc: dict) -> list[str]:
+    """Every domain-layer reference must resolve to a real node (anti-dangling).
+
+    - flow.entry_ref → an id in routes[] (§1.1 anti-hallucination anchor)
+    - flow.domain_id → an id in domains[]
+    - step.flow_id   → an id in flows[]
+    - domain.cross_domain[].target → an id in domains[]
+    Pure function (no IO) → unit-testable + mutation-verifiable.
+    """
+    errors: list[str] = []
+    # Drop None/blank ids from the resolvable sets — a ref must match a REAL id,
+    # never a `None` a route without an id contributed (Gate-2 hole: None∈{None}).
+    route_ids = {r["id"] for r in doc.get("routes", []) if isinstance(r, dict) and _nonblank(r.get("id"))}
+    domain_ids = {d["id"] for d in doc.get("domains", []) if isinstance(d, dict) and _nonblank(d.get("id"))}
+    flow_ids = {f["id"] for f in doc.get("flows", []) if isinstance(f, dict) and _nonblank(f.get("id"))}
+
+    def _ref_error(node_id, field, ref, kind, resolvable) -> None:
+        # Present-but-blank ref is an error (a flow must belong to a real domain);
+        # absent ref (None/missing) is allowed (optional).
+        if ref is None:
+            return
+        if not _nonblank(ref) or ref not in resolvable:
+            errors.append(f"{field} '{ref}' on '{node_id}' does not resolve to any {kind}")
+
+    for d in doc.get("domains", []):
+        if not isinstance(d, dict):
+            continue
+        for xd in d.get("cross_domain", []) or []:
+            if isinstance(xd, dict) and "target" in xd:
+                _ref_error(d.get("id"), "cross_domain.target", xd.get("target"), "domain", domain_ids)
+
+    for fl in doc.get("flows", []):
+        if not isinstance(fl, dict):
+            continue
+        if "entry_ref" in fl:
+            _ref_error(fl.get("id"), "flow.entry_ref", fl.get("entry_ref"), "route.id", route_ids)
+        if "domain_id" in fl:
+            _ref_error(fl.get("id"), "flow.domain_id", fl.get("domain_id"), "domain", domain_ids)
+
+    for st in doc.get("steps", []):
+        if not isinstance(st, dict):
+            continue
+        if "flow_id" in st:
+            _ref_error(st.get("id"), "step.flow_id", st.get("flow_id"), "flow", flow_ids)
+
+    return errors
+
+
+# LLM-assertion fields carrying rule/precondition/exception claims (§1.5).
+# step-level `contract`/`io` also carry assertions → covered via _iter_assertion_lists.
+_LLM_ASSERTION_KEYS = ("business_rules", "preconditions", "rules", "exceptions")
+
+
+def _nonblank(v) -> bool:
+    """True iff v is a non-blank string (strips whitespace-only)."""
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _iter_assertion_lists(node: dict):
+    """Yield (key, list) for every assertion-bearing list on a domain-layer node,
+    including nested `contract`/`io` sub-objects (§1.5 step-level coverage)."""
+    for akey in _LLM_ASSERTION_KEYS:
+        val = node.get(akey)
+        if isinstance(val, list):
+            yield akey, val
+    # step.contract / step.io may themselves hold assertion lists
+    for sub in ("contract", "io"):
+        subobj = node.get(sub)
+        if isinstance(subobj, dict):
+            for akey in _LLM_ASSERTION_KEYS:
+                val = subobj.get(akey)
+                if isinstance(val, list):
+                    yield f"{sub}.{akey}", val
+
+
+def check_llm_assertion_guards(doc: dict) -> list[str]:
+    """§1.5 anti-spurious / anti-false-negative guard on LLM-generated assertions.
+
+    Each assertion object anywhere in the domain layer:
+    - MUST be a dict carrying an explicit boolean `verified` — a plain-string rule
+      or a dict with no `verified` is an UN-adjudicated claim, flagged (else an LLM
+      dodges the guard by omitting `verified` — Gate-2 HIGH, run_aad6d4f2).
+    - `verified` MUST be a real bool (not "true"/"false"/1 — the `is True` identity
+      check silently mis-branched string values, Gate-2 CRITICAL).
+    - verified:true  → non-blank `anchor` (code file:line); else spurious (paper 0.67).
+    - verified:false → non-blank `absence_evidence` (grep=0 proof); §1.5#4: a
+      "rule doesn't exist" negative is unreliable unless proven absent (the exact
+      false-negative that bit Run 0's fixed-column grep).
+    Pure function → unit-testable + mutation-verifiable.
+    """
+    errors: list[str] = []
+
+    def _check_assertion(a, where: str) -> None:
+        if not isinstance(a, dict):
+            errors.append(f"{where}: assertion must be a dict with a boolean 'verified' "
+                          f"(plain-string/unadjudicated claim, §1.5)")
+            return
+        v = a.get("verified")
+        if not isinstance(v, bool):
+            errors.append(f"{where}: 'verified' must be a bool, got {type(v).__name__} "
+                          f"(unadjudicated or type-confused claim, §1.5)")
+            return
+        if v is True:
+            if not _nonblank(a.get("anchor")):
+                errors.append(f"{where}: verified:true assertion has no anchor (spurious risk, §1.5)")
+        else:
+            if not _nonblank(a.get("absence_evidence")):
+                errors.append(f"{where}: verified:false assertion has no absence_evidence "
+                              f"(§1.5#4 anti-false-negative)")
+
+    for scope_key in ("domains", "flows", "steps"):
+        for node in doc.get(scope_key, []) or []:
+            if not isinstance(node, dict):
+                continue
+            nid = node.get("id", "?")
+            for akey, lst in _iter_assertion_lists(node):
+                for a in lst:
+                    _check_assertion(a, f"{nid}.{akey}")
+
+    return errors
+
+
+# A "code-like" mermaid token = one that names a source artifact (carries a
+# source-file extension or a path separator). Prose labels (User, Server, "sends
+# message") have neither → never treated as an anchor claim (anti-false-positive).
+_CODE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*(?:\.py|\.ts|\.tsx|\.js|\.rs)\b")
+
+
+def _collect_doc_file_anchors(doc: dict) -> set[str]:
+    """Every real source-file path the doc knows about — the resolvable set a
+    mermaid node may reference. Union of modules[].files, entry_points[].file_path,
+    routes[].file_path, and steps[].file_path. Stored both as full path and
+    basename so a diagram may name either `backend/routers/chat.py` or `chat.py`."""
+    anchors: set[str] = set()
+
+    def _add(p) -> None:
+        if _nonblank(p):
+            anchors.add(p)
+            anchors.add(p.rsplit("/", 1)[-1])  # basename too
+
+    for mod in doc.get("modules", []) or []:
+        if isinstance(mod, dict):
+            for f in mod.get("files", []) or []:
+                _add(f)
+    for ep in doc.get("entry_points", []) or []:
+        if isinstance(ep, dict):
+            _add(ep.get("file_path") or ep.get("path"))
+    for r in doc.get("routes", []) or []:
+        if isinstance(r, dict):
+            _add(r.get("file_path"))
+    for st in doc.get("steps", []) or []:
+        if isinstance(st, dict):
+            _add(st.get("file_path"))
+    return anchors
+
+
+def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
+    """Gate-1 must-fix (run_3026ef31): the diagram.mermaid field has NO other
+    validator, so a hallucinated node label ("backend/ghost_service.py") ships
+    silently. This closes the hole fail-closed like the §1.5 guards.
+
+    For every ``diagram.mermaid`` on any domain/flow, extract every CODE-LIKE
+    token (one carrying a source-file extension — a path/filename), and assert it
+    resolves to real code. A token is accepted iff it is EITHER (a) a file in the
+    doc's own anchor set (_collect_doc_file_anchors) OR (b) — when ``repo_root`` is
+    provided — a file that actually EXISTS on disk under repo_root. A token that
+    resolves to neither is a hallucinated node → error.
+
+    Why (b): the anti-hallucination goal is "the node maps to REAL code", and a
+    file that exists on disk IS real code. The v2 code-intel graph indexes only a
+    SUBSET of the repo (run_3026ef31: session_healing.py / json_exporter.py exist
+    on disk but aren't in the graph) — without the disk check, the gate would
+    false-reject a truthful node just because the graph is incomplete. repo_root is
+    NOT an escape hatch: a token absent from BOTH the doc AND disk still fails, AND
+    the disk check enforces containment (an absolute/`../`-traversal token that
+    resolves OUTSIDE repo_root is rejected, not accepted — Gate-2 F1).
+
+    Prose participant labels (no source-file extension) are ignored, so honest
+    sequenceDiagram actor names never false-positive.
+
+    Pure w.r.t. the doc; the optional disk check is the only IO (repo_root=None →
+    pure, backward-compatible + unit-testable + mutation-verifiable).
+    """
+    errors: list[str] = []
+    anchors = _collect_doc_file_anchors(doc)
+    _root = Path(repo_root) if repo_root is not None else None
+
+    _root_resolved = _root.resolve() if _root is not None else None
+
+    def _resolves(tok: str, base: str) -> bool:
+        if tok in anchors or base in anchors:
+            return True
+        # Disk fallback: the file genuinely exists WITHIN the repo (graph
+        # incomplete). Gate-2 F1 (HIGH): containment is load-bearing — an
+        # absolute token (`/tmp/x.py`) makes `_root / tok` DISCARD _root
+        # (pathlib absolute-rhs rule), and `../` traversal escapes upward, so
+        # is_file() alone would accept ANY real file on the machine, defeating
+        # the anti-hallucination gate. Resolve + assert the candidate stays
+        # under repo_root (same discipline as _safe_file_read).
+        if _root_resolved is not None:
+            try:
+                cand = (_root_resolved / tok).resolve()
+                cand.relative_to(_root_resolved)  # ValueError if outside repo
+                if cand.is_file():
+                    return True
+            except (OSError, ValueError):
+                pass
+        return False
+
+    def _check_diagram(node_kind: str, node_id: str, node: dict) -> None:
+        diagram = node.get("diagram")
+        if not isinstance(diagram, dict):
+            return
+        mermaid = diagram.get("mermaid")
+        if not _nonblank(mermaid):
+            return
+        for tok in _CODE_TOKEN_RE.findall(mermaid):
+            base = tok.rsplit("/", 1)[-1]
+            if not _resolves(tok, base):
+                errors.append(
+                    f"{node_kind} '{node_id}' mermaid references '{tok}' which is not "
+                    f"a real file in code-intel.json or on disk (hallucinated node, Gate-1 anti-hallucination)")
+
+    for d in doc.get("domains", []) or []:
+        if isinstance(d, dict):
+            _check_diagram("domain", d.get("id", "?"), d)
+    for fl in doc.get("flows", []) or []:
+        if isinstance(fl, dict):
+            _check_diagram("flow", fl.get("id", "?"), fl)
+    return errors
+
+
+# ── Run 1 (run_94e5a5aa): anchor-accounting = the COVERAGE-GUARANTEE mechanism ──
+#
+# The crux this closes: v3 generation was anti-hallucination-hard (a flow.entry_ref
+# must resolve) but coverage-BLIND — the LLM could classify 10 of 208 anchors and
+# the system silently accepted 4.8% coverage while reporting "valid". On a bank
+# legacy codebase that is a fatal delivery: "done" while only 4.8% is understood.
+#
+# The fix is NOT a route-% threshold (Gate-0 reframe: a % gate rewards padding
+# trivial routes to hit a number — P6 metric-gaming — and `routes` is the wrong
+# denominator for a batch/stored-proc/message-handler system). It is an ACCOUNTING
+# invariant: EVERY anchor must be ACCOUNTED — either classified (a flow entry_ref)
+# OR explicitly parked in `unclassified: [{id, reason}]` with a SUBSTANTIVE reason.
+# Silent omission is a fail-closed error; honest "no business flow, because X" is
+# allowed. This forbids the silent hole WITHOUT forcing fake flows.
+
+# A junk "reason" that must NOT rubber-stamp an omission (Gate-1 F5 — same family as
+# the mermaid absolute-path escape: a self-authored gate leaving its own hole). A
+# real reason explains WHY an anchor has no business flow; "." / "n/a" / "todo" do not.
+_JUNK_REASONS = {".", "-", "--", "n/a", "na", "none", "x", "?", "tbd", "todo", "fixme"}
+_MIN_REASON_LEN = 12  # a substantive reason is a short phrase, not a placeholder
+
+
+def _is_substantive_reason(reason) -> bool:
+    """A reason genuinely accounts for an un-classified anchor iff it is a real
+    EXPLANATION, not a placeholder or a length-padding stamp.
+
+    Gate-2 F1 (HIGH): `len>=12` alone was gameable — "xxxxxxxxxxxx" / 12 dots passed,
+    which just moved the reason="." rubber-stamp down one level (the CLASS-A
+    "self-authored gate leaves its own hole" pattern). So substance = ALL of:
+    - non-blank, not in the junk-token set, and len>=_MIN_REASON_LEN, AND
+    - a real PHRASE: >=2 whitespace-separated words (a single long token isn't an
+      explanation), AND
+    - low-information rejection: >=5 distinct characters (bars "xxxxxxxxxxxx",
+      "............", "____________" — a single repeated char is not an explanation).
+    """
+    if not _nonblank(reason):
+        return False
+    r = reason.strip().lower()
+    if r in _JUNK_REASONS or len(r) < _MIN_REASON_LEN:
+        return False
+    if len(r.split()) < 2:            # must be a phrase, not one padded token
+        return False
+    if len(set(r.replace(" ", ""))) < 5:  # too few distinct chars = filler
+        return False
+    return True
+
+
+# ── Run AB Cycle 2: the UNIFIED coverage ledger (Gate-1 Check-5) ──
+#
+# "One ledger, not two." Two hole SOURCES exist at different granularities:
+#   - route-level: doc['unclassified'] = [{id, reason}] — a route anchor with no
+#     business flow (the id MUST be a real route anchor; enforced by
+#     check_anchor_accounting). This is the WORKING, back-compat route bucket.
+#   - file/repo-level: doc['coverage_ledger'] = [{ref, kind, reason}] — a file the
+#     deterministic PARSER could not turn into nodes (unknown extension, unreadable,
+#     parse failure) or a repo-level fact (empty/oversized). Produced upstream by
+#     parser.parse_repo_with_coverage (Cycle 1).
+# They cannot be physically ONE array because check_anchor_accounting requires an
+# unclassified `id` to be a real ROUTE anchor — a file path would be rejected as
+# fabricated. So unification is by CONTRACT, not by cramming: ONE {ref, kind, reason}
+# entry shape, ONE _is_substantive_reason gate for the `reason` of every hole
+# regardless of source, and ONE reader iter_coverage_ledger(doc) that yields the
+# complete hole set in that shape. That is the honest "single ledger" a consumer sees.
+
+_COVERAGE_HOLE_KINDS = {"route", "file", "repo", "query"}
+
+
+def validate_coverage_ledger(doc: dict) -> list[str]:
+    """Fail-closed validator for the file/repo-level coverage_ledger (Run AB).
+
+    Mirrors check_anchor_accounting's discipline for the parser-produced holes:
+    - each entry is a dict carrying {ref, kind, reason}
+    - `kind` is present and one of _COVERAGE_HOLE_KINDS (no silent unknown kind)
+    - `reason` is SUBSTANTIVE (same _is_substantive_reason gate as unclassified —
+      a hole cannot be rubber-stamped with junk/"n/a"/blank)
+    - a route-kind entry's `ref` MUST be a real route anchor (mirrors the
+      unclassified anti-fabrication check :596 — a file path masquerading as a
+      route hole is rejected)
+
+    An absent/empty coverage_ledger is valid (a fully-covered repo has no file holes).
+    """
+    errors: list[str] = []
+    ledger = doc.get("coverage_ledger")
+    if ledger is None:
+        return errors
+    if not isinstance(ledger, list):
+        return ["coverage_ledger must be a list of {ref, kind, reason} entries"]
+
+    # route-kind refs are validated against the real anchor menu (best-effort: if the
+    # doc has no backfilled ids, extract raises — that is check_anchor_accounting's
+    # job to report, so here we just skip the anchor cross-check rather than double-raise).
+    try:
+        route_ids = _route_anchor_ids(doc)
+    except ValueError:
+        route_ids = set()
+
+    for i, entry in enumerate(ledger):
+        if not isinstance(entry, dict):
+            errors.append(f"coverage_ledger[{i}] must be a dict {{ref, kind, reason}}")
+            continue
+        ref = entry.get("ref")
+        kind = entry.get("kind")
+        reason = entry.get("reason")
+        if not _nonblank(ref):
+            errors.append(f"coverage_ledger[{i}] missing 'ref'")
+        if kind not in _COVERAGE_HOLE_KINDS:
+            errors.append(f"coverage_ledger[{i}] has invalid 'kind'={kind!r} "
+                          f"(must be one of {sorted(_COVERAGE_HOLE_KINDS)})")
+        if not _is_substantive_reason(reason):
+            errors.append(f"coverage_ledger[{i}] (ref={ref!r}) has no substantive "
+                          f"'reason' — a hole cannot be rubber-stamped with a "
+                          f"blank/junk reason (same gate as unclassified)")
+        if kind == "route" and _nonblank(ref) and route_ids and ref not in route_ids:
+            errors.append(f"coverage_ledger[{i}] route-kind ref {ref!r} is not a real "
+                          f"route anchor (fabricated — a file path cannot be a route hole)")
+    return errors
+
+
+def iter_coverage_ledger(doc: dict):
+    """Yield the COMPLETE hole set in the unified {ref, kind, reason} shape (Run AB).
+
+    This is the single honest "what is NOT understood" reader that unifies the two
+    hole sources a consumer would otherwise have to know about separately:
+      - route holes from doc['unclassified'] ({id, reason} → {ref:id, kind:'route', reason})
+      - file/repo/query holes from doc['coverage_ledger'] (already {ref, kind, reason})
+
+    Only well-formed, substantively-reasoned holes are yielded (a junk-reason entry is
+    a validation error surfaced by validate_coverage_ledger / check_anchor_accounting,
+    not something to silently re-emit here). Order: route holes first, then ledger.
+    """
+    for u in (doc.get("unclassified") or []):
+        if isinstance(u, dict) and _nonblank(u.get("id")) and _is_substantive_reason(u.get("reason")):
+            yield {"ref": u["id"], "kind": "route", "reason": u["reason"]}
+    for h in (doc.get("coverage_ledger") or []):
+        if (isinstance(h, dict) and _nonblank(h.get("ref"))
+                and h.get("kind") in _COVERAGE_HOLE_KINDS
+                and _is_substantive_reason(h.get("reason"))):
+            yield {"ref": h["ref"], "kind": h["kind"], "reason": h["reason"]}
+
+
+def _route_anchor_ids(doc: dict) -> set[str]:
+    """The accounting denominator = the id set of ROUTE-kind anchors (Gate-1 2a:
+    extract_entry_anchors also yields entry_point-kind anchors, but referential
+    integrity only resolves flow.entry_ref against routes[], so an entry_point
+    anchor can never be *classified* — scoping the denominator to route-kind keeps
+    classified/unclassified drawn from the same set. When a real non-HTTP system
+    (jobs/handlers) arrives, extend BOTH the denominator and the classify path
+    together, not one alone)."""
+    anchors = extract_entry_anchors(doc)  # may raise ValueError (routes present, no ids)
+    return {a["id"] for a in anchors if a.get("kind") == "route" and _nonblank(a.get("id"))}
+
+
+def compute_anchor_accounting(doc: dict) -> dict:
+    """Pure: how much of the codebase's (route-kind) anchor menu is ACCOUNTED for.
+
+    Returns:
+      total             — count of route-kind anchors (the denominator)
+      classified        — anchors referenced by a flow.entry_ref
+      unclassified_count— anchors parked in doc['unclassified'] with a substantive reason
+      missing_ids       — anchors that are NEITHER (the silent-omission set; sorted)
+      accounted_ratio   — (classified + unclassified) / total  ← the GATED invariant (must be 1.0)
+      classified_ratio  — classified / total                   ← honest quality signal, NEVER gated
+                          (gating it would reward padding flows — P6)
+
+    If routes are present but un-backfilled (no ids), returns total=0 with an
+    `unbackfilled=True` flag rather than raising — this is a REPORT (fail-closed
+    enforcement lives in check_anchor_accounting, which errors on that case).
+    """
+    try:
+        all_ids = _route_anchor_ids(doc)
+    except ValueError:
+        return {"total": 0, "classified": 0, "unclassified_count": 0,
+                "missing_ids": [], "accounted_ratio": 0.0, "classified_ratio": 0.0,
+                "unbackfilled": True}
+    total = len(all_ids)
+    classified = {f.get("entry_ref") for f in (doc.get("flows") or [])
+                  if isinstance(f, dict) and _nonblank(f.get("entry_ref"))} & all_ids
+    unclassified = {u["id"] for u in (doc.get("unclassified") or [])
+                    if isinstance(u, dict) and u.get("id") in all_ids
+                    and _is_substantive_reason(u.get("reason"))}
+    accounted = classified | unclassified
+    missing = all_ids - accounted
+    return {
+        "total": total,
+        "classified": len(classified),
+        "unclassified_count": len(unclassified),
+        "missing_ids": sorted(missing),
+        "accounted_ratio": round(len(accounted) / total, 4) if total else 1.0,
+        "classified_ratio": round(len(classified) / total, 4) if total else 0.0,
+    }
+
+
+def check_anchor_accounting(doc: dict) -> list[str]:
+    """Fail-closed COVERAGE guard: every route-kind anchor must be accounted for.
+
+    Errors (any → validate_code_intel_json fails → finalize_v3 raises):
+    - a missing anchor (neither in a flow nor in a reasoned unclassified bucket) —
+      the silent-omission defect this whole mechanism exists to kill.
+    - an `unclassified` entry whose id is not a real anchor (fabricated — mirrors the
+      mermaid fake-node guard) OR whose reason is blank/junk (Gate-1 F5 rubber-stamp).
+    - an anchor listed in BOTH a flow AND unclassified (Gate-1 2b: double-accounting
+      masks a real omission).
+    - routes present but NONE carry ids (Gate-2 F2: extract_entry_anchors raises
+      loud — the guard must NOT swallow that into a clean pass, else a whole-codebase
+      omission ships silently because the id-backfill was skipped).
+    """
+    errors: list[str] = []
+    try:
+        all_ids = _route_anchor_ids(doc)
+    except ValueError as e:
+        # routes present but un-backfilled (no ids) — surface, do NOT pass vacuously.
+        return [f"anchor-accounting cannot run: {e} — run backfill_route_ids(doc) "
+                f"first so every route carries an id (Gate-2 F2 anti-vacuous-pass)"]
+    if not all_ids:
+        return errors  # genuinely no route entries (v2 doc) — not this guard's job
+
+    flow_refs = {f.get("entry_ref") for f in (doc.get("flows") or [])
+                 if isinstance(f, dict) and _nonblank(f.get("entry_ref"))} & all_ids
+
+    unclassified_ids: set[str] = set()
+    for u in (doc.get("unclassified") or []):
+        if not isinstance(u, dict):
+            errors.append("unclassified entry must be a dict {id, reason}")
+            continue
+        uid = u.get("id")
+        if uid not in all_ids:
+            errors.append(f"unclassified id '{uid}' is not a real anchor in the menu "
+                          f"(fabricated — must be a route id, §1.1 anti-hallucination)")
+            continue
+        if not _is_substantive_reason(u.get("reason")):
+            errors.append(f"unclassified anchor '{uid}' has no substantive reason "
+                          f"(blank/junk reason cannot rubber-stamp an omission — Gate-1 F5)")
+            continue
+        if uid in flow_refs:
+            errors.append(f"anchor '{uid}' is BOTH classified (a flow) AND unclassified "
+                          f"— double-accounting masks a real omission (Gate-1 2b)")
+            continue
+        unclassified_ids.add(uid)
+
+    missing = all_ids - flow_refs - unclassified_ids
+    for mid in sorted(missing):
+        errors.append(f"anchor '{mid}' is UNACCOUNTED — not in any flow.entry_ref and "
+                      f"not in unclassified[] with a reason (silent-omission = coverage hole; "
+                      f"classify it into a flow OR park it in unclassified:[{{id,reason}}])")
+    return errors
+
+
+def derive_route_id(method: str, path: str, file_path: str) -> str:
+    """§1.4 collision-resistant route id = route:{slug}-{hash(method+path+file)}.
+
+    - slug is a readable label; the hash carries uniqueness (Gate-2 fix,
+      run_aad6d4f2): the OLD form slugged `method+path` (collapsing `/a/b`,
+      `/a-b`, `/users` vs `/users/` to one slug) and hashed only file_path
+      (16-bit → ~40% collision at 200+ routes). Now the hash is over the EXACT
+      `method|path|file_path` triple at 32 bits, so distinct routes get distinct
+      ids even when their slugs collapse or the same file defines several.
+    - NO line number → survives code drift (rejected {file}:{line} broke on edits).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{method} {path}".lower()).strip("-")
+    key = f"{method}|{path}|{file_path}"
+    h = hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]  # 32 bits, non-crypto id
+    return f"route:{slug}-{h}"
+
+
+# ─── Incremental merge (Run 2, run_36266b66) ───
+
+def merge_code_intel(baseline: dict, new_nodes: list, new_edges: list) -> dict:
+    """Merge freshly-analyzed nodes/edges into a baseline GRAPH (§2, UA keep-last).
+
+    ⚠️ OPERATES ON A NODE/EDGE GRAPH, NOT ON THE EXPORTED code-intel.json.
+    (run_5647c72c) This is the UA batch-graph merge — it reads/writes
+    ``baseline["nodes"]`` + ``baseline["edges"]``. The PRODUCED code-intel.json
+    (core/code_intel/json_exporter.py) has NO top-level `nodes`/`edges` — it uses
+    `modules`/`routes`/`dependencies`. Passing an exported code-intel.json here is
+    SAFE for existing keys (baseline is deep-copied, so modules/routes survive
+    untouched) but the merge is a NO-OP on them — it only reconciles the graph
+    `nodes`/`edges` layer. Do NOT use this to incrementally merge exported
+    code-intel.json module/route data; that layer is regenerated by the exporter,
+    not merged here. (0 production callers today — this guard prevents future misuse.)
+
+    Incremental model (UA "old graph = batch -1"): the BASELINE is processed
+    FIRST, then new batches — so a node re-analyzed this round OVERWRITES its
+    baseline copy (keep-last by id). Unchanged baseline nodes survive untouched.
+
+    - Nodes: dedup by `id`, keep-last (baseline first → new wins). No id → kept
+      positionally (can't dedup an id-less node; rare, structural error caught
+      elsewhere).
+    - Edges: dedup by the full key (from, to, type, direction) — `direction` is
+      part of the key so a `forward` edge never silently overwrites a
+      `bidirectional` one (Run 0 lesson). Then DROP any edge whose `from`/`to`
+      endpoint is not in the merged node-id set (dangling → drop).
+
+    Pure function (deep-copies retained objects — never mutates/aliases the
+    caller's baseline) → unit-testable + mutation-verifiable + idempotent
+    (merge(merge(x)) == merge(x)) for ALL inputs, including id-less nodes.
+
+    id-less nodes: deduped by a structural content-key (not blind positional
+    append) so re-feeding the same id-less node is idempotent. An edge whose
+    endpoint is an id-less node is NOT dropped (id-less nodes join the
+    reachability set via a synthetic key) — keeping node+edge consistent.
+    Edge dedup prefers the FIELD-RICHER edge on a key collision (never loses
+    weight/note to a stripped re-emit).
+    """
+    import copy as _copy
+
+    def _struct_key(n: dict) -> str:
+        return json.dumps(n, sort_keys=True, ensure_ascii=False, default=str)
+
+    nodes_by_id: dict = {}
+    idless_by_struct: dict = {}  # dedup id-less nodes structurally (idempotent)
+    for node in list(baseline.get("nodes", [])) + list(new_nodes or []):
+        nd = _copy.deepcopy(node) if isinstance(node, dict) else node
+        if isinstance(nd, dict) and nd.get("id") is not None:
+            nodes_by_id[nd["id"]] = nd  # keep-last: later (new) wins
+        elif isinstance(nd, dict):
+            idless_by_struct[_struct_key(nd)] = nd
+        # non-dict nodes are structural garbage → dropped (can't be referenced)
+    merged_nodes = list(nodes_by_id.values()) + list(idless_by_struct.values())
+    # Reachability set for dangling-edge detection: real ids + id-less struct keys.
+    node_ids = set(nodes_by_id.keys())
+    idless_keys = set(idless_by_struct.keys())
+
+    def _endpoint_present(ep) -> bool:
+        # An endpoint resolves if it's a known id OR the struct-key of an id-less node.
+        return ep in node_ids or ep in idless_keys
+
+    def _richness(e: dict) -> int:
+        return len(e)  # more fields = richer; prefer it on collision
+
+    edges_by_key: dict = {}
+    for edge in list(baseline.get("edges", [])) + list(new_edges or []):
+        if not isinstance(edge, dict):
+            continue
+        e = _copy.deepcopy(edge)
+        key = (e.get("from"), e.get("to"), e.get("type"), e.get("direction"))
+        prev = edges_by_key.get(key)
+        # keep-last, but never let a stripped re-emit clobber a richer edge
+        if prev is None or _richness(e) >= _richness(prev):
+            edges_by_key[key] = e
+    merged_edges = [
+        e for e in edges_by_key.values()
+        if _endpoint_present(e.get("from")) and _endpoint_present(e.get("to"))
+    ]
+
+    out = _copy.deepcopy(baseline)  # no aliasing of caller's nested objects
+    out["nodes"] = merged_nodes
+    out["edges"] = merged_edges
+    return out
+
+
+def reconcile_human_blocks(
+    old_blocks: list, new_domain_blocks: list
+) -> tuple[list, list]:
+    """§8.8 [human] re-key contract: human-authored spec blocks survive a domain
+    rename (id change) as long as their CONTENT is unchanged, else quarantine.
+
+    A [human] block is anchored by a stable `hash` (content-hash), NOT by
+    `domain_id` — so when incremental merge renames/splits a domain (new id,
+    same content), the block re-attaches to the new domain that carries the same
+    hash. A block whose hash matches NO new domain is moved to `orphaned` (for
+    manual re-attach) — NEVER dropped (human business rules are assets).
+
+    Args:
+        old_blocks: [{domain_id, content, hash}, ...] — extracted from prior .spec.md
+        new_domain_blocks: [{domain_id, hash}, ...] — the post-merge domains
+    Returns:
+        (kept, orphaned) — kept blocks carry the NEW domain_id; every input block
+        appears in exactly one of the two lists (conservation: none vanish).
+    """
+    # Build hash → domain_id, tracking AMBIGUITY: if two new domains share a
+    # content-hash, we cannot know which one a human block belongs to → that
+    # hash is ambiguous and matching blocks are quarantined (not silently bound
+    # to a last-wins arbitrary domain). Gate-2 finding, run_36266b66.
+    hash_counts: dict = {}
+    hash_to_new_domain: dict = {}
+    for nd in new_domain_blocks or []:
+        if isinstance(nd, dict) and nd.get("hash") is not None:
+            h = nd["hash"]
+            hash_counts[h] = hash_counts.get(h, 0) + 1
+            hash_to_new_domain[h] = nd.get("domain_id")
+    ambiguous = {h for h, c in hash_counts.items() if c > 1}
+
+    kept: list = []
+    orphaned: list = []
+    for blk in old_blocks or []:
+        if not isinstance(blk, dict):
+            orphaned.append(blk)
+            continue
+        h = blk.get("hash")
+        if h is not None and h in hash_to_new_domain and h not in ambiguous:
+            rekeyed = dict(blk)
+            rekeyed["domain_id"] = hash_to_new_domain[h]  # re-attach to new id
+            kept.append(rekeyed)
+        else:
+            orphaned.append(blk)  # never dropped (unmatched OR ambiguous)
+    return kept, orphaned
+
+
+# ─── Run 1.5 (run_1417a3a1): domain-layer GENERATION scaffold ───
+# The deterministic half of code-intel v3 domain generation (§1.1/§1.4/§1.5):
+# backfill join keys → project the anti-hallucination anchor menu → assemble +
+# fail-closed validate. LLM classification (routes → business domains) stays
+# agent-driven in INSTRUCTIONS.md; these functions are the guardrails around it.
+
+def backfill_route_ids(doc: dict) -> dict:
+    """Add a stable §1.4 `id` to every routes[]/entry_points[] entry lacking one.
+
+    The join key flows anchor to (flow.entry_ref → route.id). v2 routes have no
+    id; this backfills `derive_route_id(method, path, file_path)`. Pure: returns a
+    deep-copied doc, never mutates the caller's.
+
+    - IDEMPOTENT: an entry that already has a non-blank `id` is preserved
+      untouched (so re-running after a partial generation is safe).
+    - COLLISION-DETECTED (§1.4): if two entries derive/carry the SAME id, raises
+      ValueError — a silent keep-last would drop a real route from the anchor menu.
+    - entry_points may lack method/path (a CLI/cron entry) → id derives from
+      whatever of {method,path,file_path} exist; a fully-empty entry is skipped
+      (can't anchor a flow to nothing) rather than given a garbage id.
+    """
+    import copy as _copy
+    out = _copy.deepcopy(doc)
+    seen: dict[str, str] = {}  # id → "routes[i]"/"entry_points[i]" for collision msg
+
+    def _ensure(entries, label):
+        if not isinstance(entries, list):
+            return
+        for i, e in enumerate(entries):
+            if not isinstance(e, dict):
+                continue
+            existing = e.get("id")
+            if _nonblank(existing):
+                rid = existing
+                origin = "carried"  # author-supplied id
+            else:
+                method = str(e.get("method") or "")
+                path = str(e.get("path") or "")
+                fpath = str(e.get("file_path") or "")
+                if not (method or path or fpath):
+                    continue  # nothing to anchor on — skip, don't fabricate an id
+                rid = derive_route_id(method, path, fpath)
+                e["id"] = rid
+                origin = "derived"  # from method|path|file_path triple
+            where = f"{label}[{i}]"
+            if rid in seen:
+                prev_where, prev_origin = seen[rid]
+                # Distinguish the two collision classes (Gate-2 MED): a duplicate
+                # method|path|file triple (both derived) vs a carried id clashing
+                # with a derived/other id, vs a rare 32-bit sha1 birthday collision.
+                if prev_origin == "derived" and origin == "derived":
+                    cause = ("the method|path|file_path triple is duplicated (likely a "
+                             "real handler + a mock/test registration), OR a rare 32-bit "
+                             "hash collision between two distinct triples")
+                else:
+                    cause = (f"a {origin} id clashes with a {prev_origin} id — an "
+                             f"author-supplied 'id' duplicates another entry's id")
+                raise ValueError(
+                    f"route id collision: '{rid}' on both {prev_where} ({prev_origin}) "
+                    f"and {where} ({origin}) — §1.4 requires unique anchor ids. Cause: {cause}."
+                )
+            seen[rid] = (where, origin)
+
+    _ensure(out.get("routes"), "routes")
+    _ensure(out.get("entry_points"), "entry_points")
+    return out
+
+
+def extract_entry_anchors(doc: dict) -> list[dict]:
+    """Project routes[]+entry_points[] into the compact ANCHOR MENU that
+    constrains LLM flow creation (§1.1/§1.5 anti-hallucination).
+
+    Returns [{id, method, path, file_path, line_number, kind}] — the ONLY set of
+    ids a generated flow.entry_ref is allowed to reference. The LLM classifies
+    real anchors into business flows; it cannot invent an entry point, because a
+    flow whose entry_ref is not in this menu fails check_domain_referential_integrity.
+
+    Requires ids to be present (run backfill_route_ids first) — an entry without a
+    non-blank id is skipped (it can't be an anchor).
+
+    LOUD-on-empty (Gate-2 MED): if the doc HAS routes/entry_points but NONE carry an
+    id, the caller almost certainly forgot backfill_route_ids — a silent [] would
+    give the LLM an empty menu (nothing to anchor to) and only surface as a
+    downstream finalize_v3 rejection, far from the cause. Raise instead.
+    """
+    anchors: list[dict] = []
+    total_entries = 0
+    for kind, key in (("route", "routes"), ("entry_point", "entry_points")):
+        entries = doc.get(key)
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            total_entries += 1
+            if not _nonblank(e.get("id")):
+                continue
+            anchors.append({
+                "id": e["id"],
+                "method": e.get("method"),
+                "path": e.get("path"),
+                "file_path": e.get("file_path"),
+                "line_number": e.get("line_number"),
+                "kind": kind,
+            })
+    if total_entries and not anchors:
+        raise ValueError(
+            f"extract_entry_anchors: {total_entries} route/entry_point(s) present but "
+            f"NONE carry an id — run backfill_route_ids(doc) first (§1.4). An empty "
+            f"anchor menu would leave the LLM nothing to anchor flows to."
+        )
+    return anchors
+
+
+def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=None) -> dict:
+    """Assemble a generated domain layer into a v3 doc — FAIL-CLOSED gate.
+
+    Attaches domains/flows/steps, bumps version to '3.0', then runs the existing
+    Run-1 validators (structural + referential integrity + LLM-assertion guards).
+    Raises ValueError with ALL errors if any guard fails — a generation that
+    produces a dangling entry_ref or an unanchored 'verified:true' claim (§1.5
+    spurious) is REJECTED, never persisted. Pure: deep-copies, never mutates input.
+
+    ``repo_root`` (optional): when given, the mermaid-node-anchoring guard also
+    accepts a node naming a file that EXISTS on disk under repo_root (the v2 graph
+    indexes only a subset of the repo — a truthful node must not be rejected merely
+    because the graph is incomplete; run_3026ef31). NOT an escape hatch: a node
+    absent from both the doc and disk still fails.
+
+    The caller (agent workflow) is expected to have run backfill_route_ids first so
+    flow.entry_ref values resolve; finalize_v3 is the last line of defense that
+    proves the assembled doc is internally consistent before it becomes truth.
+    """
+    import copy as _copy
+    # Type-guard the layer args (Gate-2 HIGH): a non-list (dict/int) would either
+    # silently mangle (list(dict)→keys) or raise a bare TypeError instead of the
+    # documented ValueError. Fail-closed with a clear message. None → empty list.
+    for _name, _val in (("domains", domains), ("flows", flows), ("steps", steps)):
+        if _val is not None and not isinstance(_val, list):
+            raise ValueError(
+                f"finalize_v3: '{_name}' must be a list or None, got "
+                f"{type(_val).__name__} (fail-closed §1.5)"
+            )
+    out = _copy.deepcopy(doc)
+    out["domains"] = list(domains or [])
+    out["flows"] = list(flows or [])
+    out["steps"] = list(steps or [])
+    out["version"] = "3.0"
+    errors = validate_code_intel_json(out, repo_root=repo_root)
+    if errors:
+        raise ValueError(
+            "finalize_v3 rejected the generated domain layer (fail-closed §1.5):\n  - "
+            + "\n  - ".join(errors)
+        )
+    return out
+
+
+# ─── Run 3 (run_6602eeab): spec-details eval dims + deterministic skeleton ───
+
+def _iter_domain_assertions(domain: dict, flows: list, steps: list):
+    """Yield every LLM-assertion dict (business_rules/issues/gaps + step
+    rules/preconditions/exceptions) belonging to `domain`. Shared by the eval
+    scorers so completeness/precision/explicit count the SAME element set."""
+    for a in domain.get("business_rules") or []:
+        yield a
+    for a in domain.get("issues") or []:
+        yield a
+    for a in domain.get("gaps") or []:
+        yield a
+    did = domain.get("id")
+    dom_flows = [f for f in flows if f.get("domain_id") == did]
+    for fl in dom_flows:
+        fid = fl.get("id")
+        for st in steps:
+            if st.get("flow_id") != fid:
+                continue
+            for k in ("rules", "preconditions", "exceptions"):
+                for a in st.get(k) or []:
+                    yield a
+
+
+def eval_spec_details(doc: dict) -> dict:
+    """§9 eval dims for a code-intel v3 domain layer — the quantitative quality
+    gate (Siala & Lano 2025), NOT "looks right".
+
+    - flow_validity (was misnamed 'completeness' — Run 1 fix): fraction of flows that
+      resolve to a real route entry_ref (an unanchored flow = a missing/hallucinated
+      element). This is a per-flow VALIDITY measure — NOT codebase coverage. The old
+      name lied: a doc with 10 valid flows covering 10 of 208 routes scored
+      "completeness"=1.0 while 95% of the codebase was unclassified. Real coverage is
+      the two accounting ratios below.
+    - accounted_ratio: (classified + reasoned-unclassified) / total anchors — the
+      fail-closed coverage invariant (must be 1.0; see check_anchor_accounting).
+    - classified_ratio: classified / total anchors — the HONEST quality signal (how
+      much is a real business flow, not just parked as unclassified). Never gated.
+    - precision (consistency): fraction of assertions that are VERIFIED (a real
+      bool True + non-blank anchor). FP here = spurious (paper: LLM 0.67) — an
+      un-anchored / verified:false assertion counts against precision.
+    - explicit: fraction of steps with explicit==True (paper: can-forward-engineer).
+    - f1 = 2·recall·precision/(recall+precision).
+
+    Pure: counts over the doc structure, no I/O. Returns 0.0 for an empty axis
+    (no divide-by-zero) and records the denominators so a caller can tell
+    "1.0 because perfect" from "1.0 because vacuous (n=0)".
+    """
+    domains = doc.get("domains") or []
+    flows = doc.get("flows") or []
+    steps = doc.get("steps") or []
+    route_ids = {r.get("id") for r in (doc.get("routes") or []) if r.get("id")}
+
+    # flow_validity: flows anchored to a real route (per-flow validity, NOT coverage)
+    anchored = sum(1 for f in flows
+                   if f.get("entry_type") != "http" or f.get("entry_ref") in route_ids)
+    n_flows = len(flows)
+    flow_validity = anchored / n_flows if n_flows else 0.0
+    # real coverage (the metric the old 'completeness' hid)
+    _acc = compute_anchor_accounting(doc)
+
+    # precision + explicit over all assertions / steps
+    total_assert = 0
+    verified_assert = 0
+    for dom in domains:
+        for a in _iter_domain_assertions(dom, flows, steps):
+            total_assert += 1
+            if isinstance(a, dict) and a.get("verified") is True \
+                    and str(a.get("anchor") or "").strip():
+                verified_assert += 1
+    precision = verified_assert / total_assert if total_assert else 0.0
+
+    n_steps = len(steps)
+    explicit_steps = sum(1 for s in steps if s.get("explicit") is True)
+    explicit = explicit_steps / n_steps if n_steps else 0.0
+
+    # f1 pairs flow_validity with precision (unchanged semantics; renamed input)
+    f1 = (2 * flow_validity * precision / (flow_validity + precision)
+          if (flow_validity + precision) else 0.0)
+
+    return {
+        "flow_validity": round(flow_validity, 4),
+        "accounted_ratio": _acc["accounted_ratio"],
+        "classified_ratio": _acc["classified_ratio"],
+        "precision": round(precision, 4),
+        "explicit": round(explicit, 4),
+        "f1": round(f1, 4),
+        "denominators": {"flows": n_flows, "assertions": total_assert, "steps": n_steps,
+                         "anchors": _acc["total"]},
+    }
+
+
+def _md_cell(v) -> str:
+    """Escape a value for a markdown TABLE cell: a literal `|` would create a
+    phantom column and corrupt the 2-col table; a newline would split the row.
+    (Gate-2 MED, run_235ffe64 — real step.io.output '{status:created} | 400'
+    carries a pipe.)"""
+    return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+def _fmt_assertion_row(a) -> str:
+    """One assertion (rule/precondition/exception) as inline text with verified
+    gating: verified:true → 'text (anchor)'; else → '[llm-inferred] text'. A bare
+    string is treated as unadjudicated (§1.5). NOT pipe-escaped here — the caller
+    escapes the joined cell (an anchor in backticks may legitimately contain no pipe)."""
+    if isinstance(a, dict):
+        txt = a.get("rule") or a.get("cond") or a.get("case") or ""
+        if a.get("verified") is True:
+            anc = str(a.get("anchor") or "").strip()
+            return f"{txt}" + (f" (`{anc}`)" if anc else "")
+        return f"[llm-inferred] {txt}"
+    return f"[llm-inferred] {a}"
+
+
+def _render_step_spec_table(st: dict) -> list[str]:
+    """Render the §3.2 rich step spec table (输入/输出/接口契约/前置/规则/异常)
+    from step.io + step.contract + step.preconditions/rules/exceptions. Emits ONLY
+    the rows that have data (a step with just a name/loc renders no table). Pure.
+    Every cell value is pipe/newline-escaped (_md_cell) so table-hostile content
+    (e.g. an output '{...} | 400') can't corrupt the markdown table."""
+    rows: list[str] = []
+    io = st.get("io") or {}
+    if io.get("input"):
+        rows.append(f"| 输入 | {_md_cell(io['input'])} |")
+    if io.get("output"):
+        rows.append(f"| 输出 | {_md_cell(io['output'])} |")
+    c = st.get("contract") or {}
+    if c:
+        sig = c.get("signature", "")
+        http = c.get("http", "")
+        codes = c.get("status_codes") or {}
+        codes_str = "; ".join(f"{k}={v}" for k, v in codes.items()) if isinstance(codes, dict) else ""
+        contract_bits = " · ".join(x for x in (f"`{sig}`" if sig else "", http, codes_str) if x)
+        if contract_bits:
+            rows.append(f"| 接口契约 | {_md_cell(contract_bits)} |")
+    for label, key in (("前置条件", "preconditions"), ("业务规则", "rules"), ("异常路径", "exceptions")):
+        items = st.get(key)
+        if isinstance(items, list) and items:
+            joined = "; ".join(_fmt_assertion_row(a) for a in items)
+            rows.append(f"| {label} | {_md_cell(joined)} |")
+    if not rows:
+        return []
+    return ["| 项 | 内容 |", "|---|---|"] + rows + [""]
+
+
+def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
+    """Deterministically project ONE domain (+ its flows/steps) into the 8-section
+    `.spec.md` skeleton (§3.2). Pure string render — NO LLM. The skeleton region
+    (§1-4,6-7) is `domains[]`-authoritative; the §5 [human] region is left as a
+    stub for human authorship (owned by spec-details, protected on merge §8.2).
+
+    LLM domain EXTRACTION and prose THICKENING are out of scope for Run 3 (the
+    dropped Run-1 generation piece) — this renders the machine skeleton from an
+    already-populated domains[] entry, which is what exists today.
+    """
+    name = domain.get("name") or domain.get("id") or "Unnamed Domain"
+    did = domain.get("id")
+    L = [f"# 规格:{name}", ""]
+    L += ["## 1. 域概述",
+          f"职责:{domain.get('summary', '(未填)')}",
+          f"核心实体:{', '.join(domain.get('entities') or []) or '(未填)'}",
+          f"复杂度:{domain.get('complexity', 'moderate')}", ""]
+
+    diagram = (domain.get("diagram") or {}).get("mermaid")
+    L += ["## 2. 架构图(本域)"]
+    L += [f"```mermaid\n{diagram}\n```" if diagram else "_(无架构图)_", ""]
+
+    dom_flows = [f for f in flows if f.get("domain_id") == did]
+    L += ["## 3. 用户流程图(每条 flow)"]
+    for fl in dom_flows:
+        fd = (fl.get("diagram") or {}).get("mermaid")
+        if fd:
+            L.append(f"```mermaid\n{fd}\n```")
+    if not any((f.get("diagram") or {}).get("mermaid") for f in dom_flows):
+        L.append("_(无流程图)_")
+    L.append("")
+
+    L += ["## 4. 业务流 & 步骤规格"]
+    for fl in dom_flows:
+        L.append(f"### 业务流:{fl.get('name', fl.get('id'))} — 入口 {fl.get('entry_ref', '(未锚定)')}")
+        fid = fl.get("id")
+        fsteps = sorted((s for s in steps if s.get("flow_id") == fid),
+                        key=lambda s: s.get("order", 0))
+        for st in fsteps:
+            lr = st.get("line_range")
+            loc = f"{st.get('file_path', '?')}:{lr[0]}-{lr[1]}" if lr else st.get("file_path", "?")
+            L.append(f"#### 步骤 {st.get('order', '?')} — {st.get('name', '?')} (`{loc}`)")
+            L.extend(_render_step_spec_table(st))
+    L.append("")
+
+    L += ["## 5. 业务规则汇总(域级不变量)",
+          "<!-- [human] 区:人工增补业务承诺,merge 时受保护不覆盖(§8.2) -->",
+          "_(待人工增补 `[human]` 业务规则)_", ""]
+
+    L += ["## 6. 潜在问题 & 风险", "| 严重度 | 位置 | 问题 | 来源 |", "|---|---|---|---|"]
+    for iss in domain.get("issues") or []:
+        if isinstance(iss, dict):
+            L.append(f"| {iss.get('severity', '?')} | `{iss.get('file', '?')}:{iss.get('line', '?')}` "
+                     f"| {iss.get('issue', '')} | {iss.get('source', 'llm')} |")
+    L.append("")
+
+    L += ["## 7. Gaps & 改进区", "| 类型 | 位置 | 建议 | 来源 |", "|---|---|---|---|"]
+    for g in domain.get("gaps") or []:
+        if isinstance(g, dict):
+            L.append(f"| {g.get('kind', '?')} | `{g.get('file', '?')}` "
+                     f"| {g.get('action', g.get('note', ''))} | {g.get('source', 'llm')} |")
+    L.append("")
+
+    xd = domain.get("cross_domain") or []
+    ups = ", ".join(x.get("target", "") for x in xd if isinstance(x, dict)) or "无"
+    L += ["## 8. 关联", f"上下游域:{ups}",
+          "项目级教训:see IMPROVEMENT.md#(升级的问题上浮到此)", ""]
+    return "\n".join(L)
+
+
+# ─── Run 4 (run_b5993cdb, feature D): [human] preservation on regeneration ───
+
+# A [human] block = a markdown LIST ITEM carrying a backtick-fenced `[human]`
+# marker (§3.2 / §8.2), PLUS its continuation lines (wrapped text, indented
+# sub-bullets, fenced code) up to the next top-level list item or `## ` header.
+# Skill-LOCAL (NOT imported from core.recall_multi) so the skill stays portable
+# (C046). NOTE — this DELIBERATELY DIVERGES from recall_multi._extract_human_blocks:
+# recall does LINE-level BM25 indexing (one bullet line, comments stripped), but
+# PRESERVATION needs the VERBATIM block (continuation lines + inline comments kept)
+# or a multiline human rule loses its body on regen (Gate-2 CRITICAL, run_b5993cdb).
+# Different concern → different extractor; they are not "keep in sync".
+_HUMAN_MARKER_RE = re.compile(r"`\[human\]`")
+_LIST_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
+_SECTION_HDR_RE = re.compile(r"^##\s")
+
+
+def _is_top_level_bullet(raw: str) -> bool:
+    """A list bullet at column 0 (no leading indent) — starts a new block."""
+    return bool(_LIST_BULLET_RE.match(raw)) and raw[:1] in "-*+0123456789"
+
+
+def extract_human_spec_blocks(spec_text: str) -> list[str]:
+    """Return the human-authored §5 blocks of a .spec.md, VERBATIM (feature D).
+
+    A block = a top-level list item whose text carries a backtick-fenced
+    ``[human]`` marker, TOGETHER WITH its continuation lines (wrapped text,
+    indented sub-bullets, fenced code) until the next top-level bullet or ``##``
+    header. Returned verbatim (original indentation + inline comments preserved) —
+    this is a PRESERVATION extractor, not the recall LINE-indexer, so a multiline
+    human business rule survives regeneration intact.
+
+    Marker detection ignores HTML comments so a legend/comment mention of the bare
+    or quoted marker does NOT start a block; but once a real block starts, its own
+    trailing inline ``<!-- … -->`` is kept verbatim (it's human content).
+    """
+    lines = spec_text.splitlines()
+    inline_comment = re.compile(r"<!--.*?-->", re.DOTALL)
+    blocks: list[str] = []
+    n = len(lines)
+    i = 0
+    in_html_comment = False
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+        # Track HTML-comment regions ONLY to decide whether THIS line can START a
+        # block (a marker inside a comment must not trigger). We do not consume
+        # comment regions destructively — a block, once started, keeps its bytes.
+        scan = stripped
+        started_here = False
+        if not in_html_comment:
+            # residue after removing closed inline comments, for marker detection
+            residue = inline_comment.sub("", scan)
+            if "<!--" in residue and "-->" not in residue:
+                in_html_comment = True  # opens a multiline comment on this line
+                residue = residue.split("<!--", 1)[0]
+            if (_is_top_level_bullet(raw) and _HUMAN_MARKER_RE.search(residue)):
+                started_here = True
+        else:
+            if "-->" in stripped:
+                in_html_comment = False
+        if started_here:
+            block = [raw]
+            i += 1
+            # consume continuation lines until next top-level bullet / ## header
+            while i < n:
+                nxt = lines[i]
+                if _is_top_level_bullet(nxt) or _SECTION_HDR_RE.match(nxt.strip()):
+                    break
+                block.append(nxt)
+                i += 1
+            # trim trailing blank lines inside the captured block
+            while block and not block[-1].strip():
+                block.pop()
+            blocks.append("\n".join(block))
+        else:
+            i += 1
+    return blocks
+
+
+def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
+                                     flows: list, steps: list) -> str:
+    """Re-render a domain's `.spec.md` skeleton from fresh domains[] WITHOUT
+    destroying human-authored §5 business rules (feature D — the one irreversible
+    data-loss risk in the whole v3 governance surface).
+
+    The skeleton region (§1-4,6-8) is `domains[]`-authoritative → freshly rendered.
+    The §5 `[human]` list items from the EXISTING file are spliced back in, so a
+    regeneration cycle never overwrites a human business commitment (§8.2 ownership
+    boundary made concrete). A first generation (existing="") is a plain skeleton.
+
+    Idempotent: regenerating an already-preserved file re-extracts the SAME [human]
+    blocks and re-injects them (no duplication — the fresh skeleton's §5 has only
+    the stub, which the human blocks REPLACE, not append to).
+    """
+    fresh = project_domain_skeleton(domain, flows, steps)
+    human_blocks = extract_human_spec_blocks(existing_spec_md or "")
+    if not human_blocks:
+        return fresh  # nothing human to preserve (first gen, or all-machine spec)
+
+    # Replace the §5 stub body with the preserved human rules. §5 spans from its
+    # header to the next "## " header (§6). We keep the header + the HTML-comment
+    # ownership note, drop the "_(待人工增补…)_" stub line, inject the real blocks.
+    lines = fresh.split("\n")
+    out: list[str] = []
+    i = 0
+    injected = False
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        if line.startswith("## 5.") and not injected:
+            i += 1
+            # carry any HTML-comment ownership note lines verbatim; drop the stub
+            while i < len(lines) and not lines[i].startswith("## "):
+                nxt = lines[i]
+                if nxt.strip().startswith("<!--"):
+                    out.append(nxt)
+                # skip the stub placeholder + blanks; real content comes from human_blocks
+                i += 1
+            out.append("")
+            out.extend(human_blocks)
+            out.append("")
+            injected = True
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+# ─── Run 5 (run_3349787d, design §10): behavioral-equivalence layer ───
+
+def derive_equivalence_assertions(doc: dict) -> list[dict]:
+    """From each step.contract{http,status_codes} emit checkable assertion records
+    (§10.2). Each status_code becomes one behavioral claim the spec makes about the
+    code: "this endpoint returns <code> (<meaning>)". These are what an equivalence
+    check runs against real tests/runtime. Pure — reads the doc, no IO.
+
+    Returns [{flow_id, step_id, kind:'status_code', http, code, meaning}]. A step
+    with no contract / no status_codes contributes nothing (→ its domain will be
+    'unchecked' in scoring, never fake-passed).
+    """
+    out: list[dict] = []
+    for st in doc.get("steps", []) or []:
+        if not isinstance(st, dict):
+            continue
+        c = st.get("contract") or {}
+        codes = c.get("status_codes") or {}
+        if not isinstance(codes, dict):
+            continue
+        http = c.get("http", "")
+        for code, meaning in codes.items():
+            out.append({
+                "flow_id": st.get("flow_id"),
+                "step_id": st.get("id"),
+                "kind": "status_code",
+                "http": http,
+                "code": str(code),
+                "meaning": meaning,
+            })
+    return out
+
+
+def score_equivalence(doc: dict, observations: dict) -> dict:
+    """Score the domain layer's behavioral equivalence against real observations
+    (§10.2). `observations` maps (step_id, code) → observed_bool (did a real test /
+    runtime actually exhibit this status code?). Missing observation = UNVERIFIED,
+    NOT a pass.
+
+    Per-domain equivalence tag:
+      - 'verified'  — domain has ≥1 assertion AND every observed assertion passed
+                      AND every assertion was observed
+      - 'partial'   — some assertions observed+passed, some unobserved or failed
+      - 'unchecked' — domain has NO derivable assertion (no contract) OR no
+                      observation at all (§10.2 honest fallback — a static/no-test
+                      domain is NEVER fake-passed)
+    Returns {overall_score, domains:{domain_id: {tag, passed, total, observed}}}.
+    Pure.
+    """
+    assertions = derive_equivalence_assertions(doc)
+    # map step_id → domain_id via flow
+    flow_domain = {f.get("id"): f.get("domain_id") for f in doc.get("flows", []) or []}
+    step_flow = {s.get("id"): s.get("flow_id") for s in doc.get("steps", []) or []}
+
+    def _domain_of(step_id):
+        return flow_domain.get(step_flow.get(step_id))
+
+    per_domain: dict = {}
+    for a in assertions:
+        dom = _domain_of(a["step_id"])
+        d = per_domain.setdefault(dom, {"passed": 0, "total": 0, "observed": 0})
+        d["total"] += 1
+        key = (a["step_id"], a["code"])
+        if key in observations:
+            d["observed"] += 1
+            if observations[key]:
+                d["passed"] += 1
+
+    # every domain in the doc gets a tag (domains with no assertion → unchecked)
+    all_domains = [x.get("id") for x in doc.get("domains", []) or [] if isinstance(x, dict)]
+    result_domains: dict = {}
+    total_passed = total_all = 0
+    for dom in all_domains:
+        d = per_domain.get(dom)
+        if not d or d["total"] == 0:
+            result_domains[dom] = {"tag": "unchecked", "passed": 0, "total": 0, "observed": 0}
+            continue
+        total_passed += d["passed"]; total_all += d["total"]
+        if d["observed"] == 0:
+            tag = "unchecked"          # has assertions but none observed → honest unchecked
+        elif d["passed"] == d["total"] and d["observed"] == d["total"]:
+            tag = "verified"
+        else:
+            tag = "partial"
+        result_domains[dom] = {"tag": tag, **d}
+    # Surface orphan assertions (steps whose flow/domain doesn't resolve to a real
+    # domain) instead of silently dropping them (Gate-2 F5, run_3349787d): a
+    # contract that vanishes from the report reads as "fully covered" when it isn't.
+    # Fold into an explicit __unresolved__ bucket + the score denominator.
+    orphan = {"passed": 0, "total": 0, "observed": 0}
+    for dom, d in per_domain.items():
+        if dom in all_domains:
+            continue
+        orphan["passed"] += d["passed"]; orphan["total"] += d["total"]; orphan["observed"] += d["observed"]
+    if orphan["total"]:
+        total_passed += orphan["passed"]; total_all += orphan["total"]
+        result_domains["__unresolved__"] = {"tag": "unchecked", **orphan}
+    overall = round(total_passed / total_all, 4) if total_all else 0.0
+    return {"overall_score": overall, "domains": result_domains}
+
+
+def equivalence_feedback(doc: dict, observations: dict) -> list[dict]:
+    """§10.2 feedback loop + §1.5#3 SME queue: every assertion that was OBSERVED
+    and FAILED becomes an SME-review-queue item AND its step is (in the returned
+    copy) marked verified:false for that behavior. A failed equivalence claim means
+    the spec says one thing and the code does another — a human must adjudicate.
+
+    Returns the review-queue items [{step_id, flow_id, http, code, meaning, reason}].
+    (Unobserved assertions are NOT failures — they're 'unchecked', per §10.2, and do
+    not enqueue.) Pure — does not mutate doc.
+    """
+    queue: list[dict] = []
+    for a in derive_equivalence_assertions(doc):
+        key = (a["step_id"], a["code"])
+        if key in observations and not observations[key]:
+            queue.append({
+                "step_id": a["step_id"], "flow_id": a["flow_id"],
+                "http": a["http"], "code": a["code"], "meaning": a["meaning"],
+                "reason": f"spec claims {a['http']} → {a['code']} ({a['meaning']}) "
+                          f"but the observed behavior did NOT exhibit it — SME must adjudicate",
+                "verified": False,
+            })
+    return queue
 
 
 # ─── Git History Parsing for Gotchas ───
@@ -517,6 +1850,14 @@ def gotchas_for_agents_md(raw_gotchas: list[dict[str, str]]) -> list[dict[str, s
 def render_agents_md(data: dict[str, Any]) -> str:
     """Render AGENTS.md from structured data. Output MUST be ≤150 lines.
 
+    ⚠️ INPUT IS AN AGENT-ASSEMBLED dict, NOT the exported code-intel.json
+    (run_5647c72c). This reads `modules[].path`/`.responsibility` and
+    `entry_points[].path`/`.description` — the AGENTS.md authoring shape assembled
+    by the skill's GENERATE step (INSTRUCTIONS.md §4.5), NOT the exporter shape
+    (which uses `symbol_count`/`file_path`). Do NOT feed a code-intel.json
+    `modules`/`entry_points` array here — it lacks these keys and will KeyError.
+    The two schemas are deliberately different artifacts (AGENTS.md vs code-intel).
+
     Args:
         data: Dict with keys: project_name, build_command, test_command,
               lint_command, test_duration, modules, entry_points,
@@ -798,9 +2139,9 @@ def resolve_output_path(
 ) -> Path:
     """Resolve where to write AI-Ready output.
 
-    Priority (portable — NO hardcoded ~/.swarm-ai):
+    Priority:
     1. User-specified target path (if provided)
-    2. The workspace's .artifacts/ under $SWARM_WORKSPACE (DDD-local, if that env is set)
+    2. SwarmWS .artifacts/ directory (if running inside SwarmAI)
     3. Alongside the repo itself ({repo_parent}/ai-ready-{name}/)
 
     Always returns an absolute path. Creates directories if needed.
@@ -813,12 +2154,10 @@ def resolve_output_path(
     repo_path = Path(repo_path).resolve()
     name = project_name or repo_path.name
 
-    # DDD-local: write under the workspace's .artifacts/ when $SWARM_WORKSPACE is set.
-    # (Was a hardcoded ~/.swarm-ai/SwarmWS SwarmAI check — decoupled so a DDD on
-    # Kiro/Claude Code writes to its own workspace, not a SwarmAI path that won't exist.)
-    ws = os.environ.get("SWARM_WORKSPACE")
-    if ws and Path(ws).is_dir():
-        out = Path(ws) / ".artifacts" / "ai-ready" / f"ai-ready-{name}"
+    # Check if we're in SwarmAI workspace
+    swarmws = Path.home() / ".swarm-ai" / "SwarmWS"
+    if swarmws.exists():
+        out = swarmws / "Projects" / "ai_ready_repo" / ".artifacts" / f"ai-ready-{name}"
         out.mkdir(parents=True, exist_ok=True)
         return out
 
