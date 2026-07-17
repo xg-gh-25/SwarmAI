@@ -185,33 +185,51 @@ class GraphStore:
                 self._conn.commit()
             else:
                 # Rebuild the table WITHOUT the inline UNIQUE, deduping on the folded
-                # identity key and keeping MAX(confidence) per group. The new
-                # idx_edges_identity (created by _SCHEMA_SQL above, but on the OLD
-                # table — harmless) is recreated after the swap so it binds the new
-                # table as the sole authority.
-                self._conn.execute("BEGIN")
-                self._conn.executescript(
-                    """
-                    DROP INDEX IF EXISTS idx_edges_identity;
-                    ALTER TABLE code_edges RENAME TO code_edges_legacy;
-                    CREATE TABLE code_edges (
-                        source_id TEXT NOT NULL,
-                        target_id TEXT NOT NULL,
-                        edge_type TEXT NOT NULL,
-                        confidence REAL DEFAULT 1.0,
-                        line_number INTEGER
-                    );
-                    INSERT INTO code_edges (source_id, target_id, edge_type, confidence, line_number)
-                        SELECT source_id, target_id, edge_type, MAX(confidence), line_number
-                        FROM code_edges_legacy
-                        GROUP BY source_id, target_id, edge_type, IFNULL(line_number, -1);
-                    DROP TABLE code_edges_legacy;
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity
-                        ON code_edges(source_id, target_id, edge_type, IFNULL(line_number, -1));
-                    CREATE INDEX IF NOT EXISTS idx_edges_source ON code_edges(source_id);
-                    CREATE INDEX IF NOT EXISTS idx_edges_target ON code_edges(target_id);
-                    """
-                )
+                # identity key and keeping MAX(confidence) per group.
+                #
+                # ATOMICITY (Gate-2 HIGH, multi-specialist confirmed + observed): the
+                # rebuild MUST be one all-or-nothing transaction, else a mid-way
+                # failure leaves a half-migrated DB (legacy renamed away, new table
+                # not built) that the swallow-except below would hide. sqlite3's
+                # `executescript()` IMPLICITLY COMMITS any pending transaction before
+                # it runs — so a `BEGIN` + `executescript` does NOT wrap the rebuild
+                # (verified: rows survived a rollback). We therefore issue each
+                # statement via `execute()` inside a single explicit transaction.
+                #
+                # CONCURRENCY (Gate-2 HIGH): `BEGIN IMMEDIATE` takes the write lock up
+                # front, so if a second daemon/hook thread opens the same DB
+                # concurrently it blocks on busy_timeout instead of racing into a
+                # double ALTER TABLE RENAME. The loser, once it acquires the lock,
+                # re-reads the DDL — the inline UNIQUE is gone (winner rebuilt it) →
+                # it takes the no-op branch. Re-checked below to be race-safe.
+                self._conn.execute("BEGIN IMMEDIATE")
+                # Re-read DDL under the write lock: a concurrent migrator may have
+                # rebuilt the table between our unlocked check and acquiring the lock.
+                row2 = self._conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='code_edges'"
+                ).fetchone()
+                if row2 and "UNIQUE(source_id, target_id, edge_type, line_number)" in (row2[0] or ""):
+                    for stmt in (
+                        "DROP INDEX IF EXISTS idx_edges_identity",
+                        "ALTER TABLE code_edges RENAME TO code_edges_legacy",
+                        """CREATE TABLE code_edges (
+                               source_id TEXT NOT NULL,
+                               target_id TEXT NOT NULL,
+                               edge_type TEXT NOT NULL,
+                               confidence REAL DEFAULT 1.0,
+                               line_number INTEGER
+                           )""",
+                        """INSERT INTO code_edges (source_id, target_id, edge_type, confidence, line_number)
+                               SELECT source_id, target_id, edge_type, MAX(confidence), line_number
+                               FROM code_edges_legacy
+                               GROUP BY source_id, target_id, edge_type, IFNULL(line_number, -1)""",
+                        "DROP TABLE code_edges_legacy",
+                        """CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity
+                               ON code_edges(source_id, target_id, edge_type, IFNULL(line_number, -1))""",
+                        "CREATE INDEX IF NOT EXISTS idx_edges_source ON code_edges(source_id)",
+                        "CREATE INDEX IF NOT EXISTS idx_edges_target ON code_edges(target_id)",
+                    ):
+                        self._conn.execute(stmt)
                 self._conn.commit()
 
             self.set_meta("edge_identity_version", str(self._EDGE_IDENTITY_VERSION))
@@ -221,6 +239,22 @@ class GraphStore:
             except Exception:
                 pass
             logger.warning("code_edges schema migration skipped: %s", e)
+            # Consistency backstop (Gate-2 MED): a rollback should undo everything,
+            # but if the DB is somehow left half-migrated (legacy table orphaned),
+            # do NOT record the version — leave the store in a state the next open
+            # will re-attempt, rather than silently stamping it "migrated".
+            try:
+                orphan = self._conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='code_edges_legacy'"
+                ).fetchone()
+                if orphan:
+                    logger.error(
+                        "code_edges migration left an orphaned code_edges_legacy table "
+                        "— NOT recording version; next open will retry. Manual reindex advised."
+                    )
+                    return
+            except Exception:
+                pass
 
     # ── lifecycle ────────────────────────────────────────────────────────
 

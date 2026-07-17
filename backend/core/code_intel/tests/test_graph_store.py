@@ -191,6 +191,79 @@ class TestUpsert:
         finally:
             gs.close()
 
+    def test_migration_is_atomic_on_midway_failure(self, tmp_path):
+        """A migration that fails mid-rebuild must roll back FULLY — original data
+        survives, no orphaned code_edges_legacy, version NOT recorded.
+
+        Guards the Gate-2 HIGH: sqlite3.executescript() implicitly commits, so the
+        rebuild must run as per-statement execute() inside one real transaction. We
+        force a failure partway (a BEFORE-INSERT trigger on the freshly-created
+        code_edges that RAISEs) and assert all-or-nothing. Because sqlite3.Connection
+        is a C type (can't monkeypatch .execute), we inject the failure via a
+        subclass of GraphStore that plants the aborting trigger between the CREATE
+        and the INSERT...SELECT of the rebuild.
+        """
+        import core.code_intel.graph_store as G
+
+        db = tmp_path / "old_schema.db"
+        conn = sqlite3.connect(str(db))
+        conn.executescript(
+            """
+            CREATE TABLE code_edges (
+                source_id TEXT NOT NULL, target_id TEXT NOT NULL, edge_type TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0, line_number INTEGER,
+                UNIQUE(source_id, target_id, edge_type, line_number)
+            );
+            CREATE TABLE graph_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            """
+        )
+        conn.execute(
+            "INSERT INTO code_edges (source_id,target_id,edge_type,confidence,line_number) "
+            "VALUES ('a','b','calls',1.0,5)"
+        )
+        conn.commit()
+        conn.close()
+
+        # sqlite3.Connection is a C type — .execute is read-only, can't monkeypatch.
+        # Wrap the connection in a thin Python proxy for the duration of the
+        # migration so we can raise on the rebuild's INSERT...SELECT (after ALTER
+        # RENAME + CREATE have already run inside the transaction). The proxy
+        # delegates everything else to the real connection.
+        class _FlakyConn:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *a, **k):
+                if "INSERT INTO code_edges" in sql and "SELECT" in sql:
+                    raise sqlite3.OperationalError("simulated mid-rebuild failure")
+                return self._real.execute(sql, *a, **k)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        class _FlakyGraphStore(G.GraphStore):
+            def _migrate_schema(self):
+                real = self._conn
+                self._conn = _FlakyConn(real)
+                try:
+                    return super()._migrate_schema()
+                finally:
+                    self._conn = real
+
+        gs = _FlakyGraphStore(db)  # migration runs in __init__, hits the forced failure
+        try:
+            # All-or-nothing: the ORIGINAL table + row must still be intact.
+            n = gs._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0]
+            assert n == 1, f"failed migration must roll back — original row lost, got {n}"
+            orphan = gs._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='code_edges_legacy'"
+            ).fetchone()
+            assert orphan is None, "failed migration must not orphan code_edges_legacy"
+            assert gs.get_meta("edge_identity_version") != str(G.GraphStore._EDGE_IDENTITY_VERSION), \
+                "a failed migration must NOT stamp the version as migrated"
+        finally:
+            gs.close()
+
 
 # ── Blast radius (bidirectional CTE) ────────────────────────────────────
 
