@@ -3853,6 +3853,41 @@ def cmd_run_observe(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"status": "ok", "event": event, "run_id": args.run_id}))
 
 
+def cmd_bind(args, reg) -> None:
+    """CREATE→BIND→PULL: clone + index every binding of a project's bindings.yaml.
+
+    The invokable entrypoint for the DDD binding layer — replaces the old python -c
+    prose recipe. Calls core.ddd_bindings.bind_project (which loops ALL bindings with
+    per-binding isolation) and prints one JSON outcome per binding. A pure-DDD project
+    (no bindings.yaml) prints an empty list. Exit 1 only if EVERY binding failed
+    (a mixed bound/deferred/failed set still exits 0 — deferred + isolated-failure are
+    expected, not a run-level error).
+    """
+    from core.ddd_bindings import bind_project
+
+    try:
+        outcomes = bind_project(args.project)
+    except (FileNotFoundError, ValueError) as e:
+        # A malformed bindings.yaml (ValueError names the bad field) is a run-level error.
+        print(json.dumps({"error": f"bind failed for '{args.project}': {e}"}), file=sys.stderr)
+        sys.exit(1)
+
+    payload = [
+        {"repo": o.repo, "kind": o.kind, "status": o.status, "error": o.error,
+         "worktree": o.worktree, "code_intel_db": o.code_intel_db, "node_count": o.node_count}
+        for o in outcomes
+    ]
+    print(json.dumps({"project": args.project, "bindings": payload,
+                      "counts": {
+                          "bound": sum(1 for o in outcomes if o.status == "bound"),
+                          "deferred": sum(1 for o in outcomes if o.status == "deferred"),
+                          "failed": sum(1 for o in outcomes if o.status == "failed"),
+                      }}, indent=2, default=str))
+    # Run-level failure ONLY when there were bindings and every one failed.
+    if outcomes and all(o.status == "failed" for o in outcomes):
+        sys.exit(1)
+
+
 def cmd_ddd_health(args, reg) -> None:
     """5-dimensional DDD health scoring per section."""
     project_dir = _get_workspace() / "Projects" / args.project
@@ -4153,6 +4188,10 @@ def main() -> None:
     p_observe.add_argument("--adversarial-count", default=None, help="Adversarial findings count")
     p_observe.add_argument("--overlap", default=None, help="Overlap count (review ∩ adversarial)")
 
+    # bind (CREATE→BIND→PULL: clone + index every binding of a project's bindings.yaml)
+    p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
+    p_bind.add_argument("--project", required=True, help="Project whose bindings.yaml to PULL")
+
     # ddd-health
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
@@ -4204,6 +4243,7 @@ def main() -> None:
         "run-cultivate": cmd_run_cultivate,
         "cleanup-orphans": cmd_cleanup_orphans,
         "run-observe": cmd_run_observe,
+        "bind": cmd_bind,
         "ddd-health": cmd_ddd_health,
         "ddd-retire": cmd_ddd_retire,
         "ddd-noise": cmd_ddd_noise,

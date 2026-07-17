@@ -431,32 +431,36 @@ bindings:
 for development does NOT mean piling repo-specific rules into global STEERING — each
 repo declares its own delivery contract here (decision 7).
 
-#### Step 2: PULL + build codeIntel (call the helper — never hand-roll)
+#### Step 2: PULL + build codeIntel (one command — never hand-roll)
 
-Validate the doc and bind each git-clonable repo by calling `core.ddd_bindings`
-(the buildable core — do NOT hand-assemble clone/index logic):
+Run the `bind` subcommand — it loads the project's `bindings.yaml`, loops EVERY
+binding, clones each git-clonable repo OUTSIDE the git-tracked workspace, and builds
+its codeIntel graph. Do NOT hand-assemble a `python -c` loop — this is the invokable
+entrypoint (run_8a3e7ebf; `bind_repo` used to be reachable only via a prose recipe):
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && source backend/.venv/bin/activate
-python3 -c "
-from core.ddd_bindings import load_bindings, bind_repo
-from jobs.paths import PROJECTS_DIR
-doc = load_bindings(PROJECTS_DIR / 'AIDLC' / 'bindings.yaml')   # raises ValueError naming any bad field
-for b in doc.bindings:
-    try:
-        r = bind_repo(b)   # clones OUTSIDE git-tracked SwarmWS + builds code_intel via parse_repo+bulk_insert
-        print(f'{b.repo}: worktree={r.worktree} nodes={r.node_count}')
-    except NotImplementedError as e:
-        print(f'{b.repo}: DEFERRED — {e}')   # internal/brazil bindings wait for the pre-Run-2 Midway spike
-    except (ValueError, RuntimeError) as e:
-        print(f'{b.repo}: FAILED — {e}')     # bad binding OR clone/index failure — surfaced, not swallowed
-"
+python backend/scripts/artifact_cli.py bind --project AIDLC
 ```
 
-- `load_bindings(path)` — parses + validates; raises `ValueError` naming the offending field.
-- `bind_repo(binding)` — clones a **git-clonable** target into a worktree OUTSIDE the
-  git-tracked SwarmWS workspace (so a cloned repo never pollutes workspace git), then
-  builds a codeIntel graph by reusing the existing indexer. Idempotent (re-bind is safe).
+Output is one JSON outcome per binding + a `counts` rollup, e.g.:
+
+```json
+{"project":"AIDLC","bindings":[
+  {"repo":"adlc-workflows","kind":"external","status":"bound","worktree":"~/.swarm-ai/bindings/adlc-workflows","node_count":1037},
+  {"repo":"GCRAIDLCPreset","kind":"internal","status":"deferred","error":"...Brazil+Midway..."}
+], "counts":{"bound":1,"deferred":1,"failed":0}}
+```
+
+- **Per-binding isolation:** every binding yields `bound` / `deferred` / `failed`; one
+  unreachable repo never aborts the others (multi-repo safe). A DDD may bind MANY repos.
+- **`bound`** — git-clonable target cloned + indexed (reuses the existing parser; idempotent).
+- **`deferred`** — `kind: internal` / `build_system: brazil` waits for the pre-Run-2
+  Midway spike (§7.2.2).
+- **`failed`** — bad bindings field or clone/index error, surfaced (not swallowed) with
+  its message; the run continues. Exit 1 ONLY if a malformed `bindings.yaml` blocks the
+  whole load, or every binding failed.
+- Underlying core: `core.ddd_bindings.bind_project()` → `bind_repo()` per binding.
 - **Internal / Brazil bindings** (e.g. GCRAIDLCPreset via `brazil ws create`) raise
   `NotImplementedError` — their PULL needs Brazil + Midway headless auth and is deferred
   to the pre-Run-2 spike. Declaring them in `bindings.yaml` is fine; PULLing them is not

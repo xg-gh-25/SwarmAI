@@ -109,6 +109,29 @@ class BindResult:
     node_count: int
 
 
+@dataclass
+class BindOutcome:
+    """Per-binding result of ``bind_project`` — a tri-state wrapper over ``bind_repo``.
+
+    ``BindResult`` is the SUCCESS-only payload; a project-level loop must also record
+    deferred (internal/brazil) and failed (clone/index error) bindings WITHOUT letting
+    one bad binding abort the rest. ``status``:
+      - ``"bound"``    — bind_repo succeeded; worktree/code_intel_db/node_count set.
+      - ``"deferred"`` — internal/brazil binding (bind_repo raised NotImplementedError);
+                         PULL deferred to the pre-Run-2 Brazil/Midway spike.
+      - ``"failed"``   — bind_repo raised (bad bindings field / clone / index); ``error``
+                         carries the message. The loop continues (per-binding isolation).
+    """
+
+    repo: str
+    kind: str
+    status: Literal["bound", "deferred", "failed"]
+    error: Optional[str] = None
+    worktree: Optional[str] = None
+    code_intel_db: Optional[str] = None
+    node_count: Optional[int] = None
+
+
 # ── Load + validate ────────────────────────────────────────────────────────
 
 def _format_validation_error(exc: ValidationError) -> str:
@@ -278,6 +301,68 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
         binding.repo, worktree, db_path, node_count,
     )
     return BindResult(worktree=str(worktree), code_intel_db=str(db_path), node_count=node_count)
+
+
+# ── ORCHESTRATION: the real CREATE→BIND→PULL caller (run_8a3e7ebf) ─────────────
+#
+# bind_repo was an ORPHAN — zero production callers, invokable only via a python -c
+# prose recipe in s_project-manager/SKILL.md. bind_project is its first real caller:
+# it resolves a project's ⑤ bindings.yaml, loops EVERY binding, and PULLs each with
+# per-binding error isolation so a DDD that binds MANY repos (bindings is list[Binding])
+# processes each independently — one unreachable repo never aborts the others.
+
+def bind_project(
+    project_name: str,
+    projects_dir: str | Path | None = None,
+    worktree_root: str | Path | None = None,
+) -> list[BindOutcome]:
+    """PULL every binding of a project's ``bindings.yaml`` — the orchestrated caller.
+
+    Resolves ``<projects_dir>/<project_name>/bindings.yaml`` (``projects_dir`` defaults
+    to ``jobs.paths.PROJECTS_DIR``; overridable for tests), validates it via
+    ``load_bindings``, then loops ALL ``doc.bindings`` calling ``bind_repo`` per entry.
+
+    Per-binding isolation (the multi-repo + negative-path guarantee): each binding is
+    wrapped so its outcome is one of bound / deferred / failed, and NO single binding
+    can abort the loop —
+      - success              → BindOutcome(status="bound", worktree/db/node_count set)
+      - NotImplementedError   → BindOutcome(status="deferred")   (internal/brazil, Run-1 scope)
+      - any other exception   → BindOutcome(status="failed", error=str(e))
+
+    Returns a list of BindOutcome (one per binding, in file order). A project with no
+    bindings.yaml (a pure-DDD "none" project) returns ``[]`` — not an error.
+    """
+    if projects_dir is not None:
+        base = Path(projects_dir)
+    else:
+        from jobs.paths import PROJECTS_DIR
+        base = Path(PROJECTS_DIR)
+
+    bindings_path = base / project_name / "bindings.yaml"
+    if not bindings_path.exists():
+        # A no-repo / pure-DDD project — nothing to PULL. Not an error.
+        logger.info("bind_project: no bindings.yaml for '%s' (pure-DDD) — nothing to PULL", project_name)
+        return []
+
+    doc = load_bindings(bindings_path)  # raises ValueError (named field) on a malformed doc
+
+    outcomes: list[BindOutcome] = []
+    for b in doc.bindings:
+        try:
+            r = bind_repo(b, worktree_root)
+            outcomes.append(BindOutcome(
+                repo=b.repo, kind=b.kind, status="bound",
+                worktree=r.worktree, code_intel_db=r.code_intel_db, node_count=r.node_count,
+            ))
+        except NotImplementedError as e:
+            # internal/brazil binding — PULL deferred to the pre-Run-2 Midway spike.
+            outcomes.append(BindOutcome(repo=b.repo, kind=b.kind, status="deferred", error=str(e)))
+        except Exception as e:  # noqa: BLE001 — per-binding isolation: capture, never abort the loop.
+            # Bad bindings field / clone failure / index error → record + continue.
+            logger.warning("bind_project: binding '%s' FAILED: %s: %s",
+                           b.repo, type(e).__name__, e)
+            outcomes.append(BindOutcome(repo=b.repo, kind=b.kind, status="failed", error=str(e)))
+    return outcomes
 
 
 # ── SYNC-BACK (Run 5): the REVERSE of bind_repo — reflow repo DDD edits → SwarmWS ──────
