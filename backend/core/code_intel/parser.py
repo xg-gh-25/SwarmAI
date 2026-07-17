@@ -232,6 +232,55 @@ def _get_cached_parser(language: str):
         return None
 
 
+# Gate-2 F4 (run AB): the AST path is only trustworthy if the installed binding
+# actually parses. Some environments/binding versions reject parser.parse()'s
+# argument for every file → a silent universal regex fallback. We probe ONCE per
+# language (cheap, cached) and gate the tree-sitter branch on it, so a dead binding
+# is surfaced as a repo-level fidelity hole instead of masquerading as full coverage.
+_ts_live_cache: dict[str, bool] = {}
+_ts_live_lock = threading.Lock()
+
+_TS_PROBE_SRC = {
+    "python": b"def _p():\n    return 1\n",
+}
+_TS_DEFAULT_PROBE = b"def _p(){}\n"
+
+
+def _tree_has_error(tree) -> bool:
+    """True if the parsed tree's root node reports a syntax error. Tolerant of
+    binding differences (has_error may be attr or absent) — returns False when it
+    can't tell (never invent a failure)."""
+    try:
+        root = tree.root_node
+        return bool(getattr(root, "has_error", False))
+    except Exception:
+        return False
+
+
+def _tree_sitter_live(language: str) -> bool:
+    """Probe (once per language, cached) whether tree-sitter can actually parse a
+    trivial snippet AND expose a usable root node. False → the AST path is dead in
+    this environment; callers fall back to regex and the repo-level fidelity hole
+    is emitted. Fail-safe: any probe error → not live (regex, honest signal)."""
+    with _ts_live_lock:
+        if language in _ts_live_cache:
+            return _ts_live_cache[language]
+    live = False
+    try:
+        parser = _get_cached_parser(language)
+        if parser is not None:
+            src = _TS_PROBE_SRC.get(language, _TS_DEFAULT_PROBE)
+            tree = parser.parse(src)
+            root = tree.root_node          # must not raise / must be a node
+            live = getattr(root, "type", None) is not None and root.child_count >= 0
+    except Exception as e:
+        logger.debug(f"tree-sitter liveness probe failed for {language}: {e}")
+        live = False
+    with _ts_live_lock:
+        _ts_live_cache[language] = live
+    return live
+
+
 # ── Utility ─────────────────────────────────────────────────────────────
 
 def _sanitize_name(s: str, max_len: int = 256) -> str:
@@ -633,30 +682,44 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
     content = raw_bytes.decode("utf-8", errors="replace")
     sha = hashlib.sha256(raw_bytes).hexdigest()
 
-    # Try tree-sitter first
-    parser = _get_cached_parser(lang)
+    # Try tree-sitter first — but ONLY when the AST path is actually LIVE. Gate-2 F4
+    # (run AB adversarial, CRITICAL): in some environments the tree-sitter binding
+    # rejects parser.parse()'s argument for EVERY file → a silent universal fallback
+    # to the low-fidelity regex path. If we treated that as a normal parse we'd report
+    # "complete" coverage while running at fallback fidelity for the whole repo — a
+    # false-confidence the banking guarantee forbids. So: only enter the tree-sitter
+    # branch when a liveness probe confirms the AST path works; the repo-level
+    # fidelity signal is emitted once by parse_repo_with_coverage (not per file).
+    parser = _get_cached_parser(lang) if _tree_sitter_live(lang) else None
     if parser:
         try:
             tree = parser.parse(raw_bytes)
             import_map, defined_names = _build_file_scope_regex(content, lang)
             nodes, edges = _extract_from_tree(tree, rel_path, lang, import_map, defined_names)
-            # Set sha256 on all nodes
             for n in nodes:
                 n.sha256 = sha
-            # Clean tree-sitter parse — "ok" EVEN IF 0 nodes. A comment-only or
-            # re-export file legitimately has no definitions; that is not a failure
-            # (Gate-1 Check-3: absence of nodes ≠ parse failure).
+            # Gate-2 F3: "failed" is now REACHABLE. A LIVE tree-sitter that parses this
+            # file into an error-riddled tree (root has_error) on a non-empty file =
+            # a genuine parse failure → coverage hole, not silent "ok".
+            if _tree_has_error(tree) and content.strip():
+                logger.debug(f"Tree-sitter parse has errors on {path} → failed")
+                return ParseResult(file_path=rel_path, language=lang), "failed"
+            # Clean parse — "ok" EVEN IF 0 nodes (comment-only/__init__.py is
+            # legitimately empty; Gate-1 Check-3: absence of nodes ≠ failure).
             return ParseResult(nodes=nodes, edges=edges, language=lang, file_path=rel_path), "ok"
         except Exception as e:
-            logger.debug(f"Tree-sitter failed on {path}: {e}, falling back to regex")
+            # A LIVE tree-sitter that throws on THIS file (not the dead-binding case,
+            # which _tree_sitter_live already filtered) is a genuine per-file failure.
+            logger.debug(f"Tree-sitter threw on {path}: {e} → failed")
+            fallback = _regex_fallback(path, repo_root)
+            if not fallback.nodes and not fallback.edges and content.strip():
+                return ParseResult(file_path=rel_path, language=lang), "failed"
+            return fallback, "ok"
 
-    # Regex fallback (best-effort). We deliberately do NOT infer "failed" from
-    # "regex found nothing": regex legitimately finds nothing in comment-only /
-    # config-like files, AND this tree-sitter binding can reject the source-arg type
-    # for EVERY file (falling back to regex universally) — so a regex-empty result is
-    # NOT positive evidence of a parse failure, and treating it as one wrongly flags
-    # __init__.py-class files (Gate-1 Check-3). A hole is signalled ONLY by an
-    # unreadable file (OSError, above). Absence of nodes ≠ failure.
+    # Regex fallback (best-effort) — reached when tree-sitter is not live for this
+    # language. Absence of nodes here is NOT a per-file failure (regex legitimately
+    # finds nothing in comment-only/config files); the DEGRADED-FIDELITY fact is
+    # surfaced once at the repo level by parse_repo_with_coverage's liveness hole.
     return _regex_fallback(path, repo_root), "ok"
 
 
@@ -759,6 +822,24 @@ def parse_repo_with_coverage(
                           "out of scope) — nothing to parse",
             })
         return ParseRepoResult(results=[], coverage_holes=coverage_holes, status="partial")
+
+    # ── Gate-2 F4: fidelity signal. If tree-sitter is NOT live for the languages
+    # present, the whole repo is parsed by the low-fidelity regex fallback. That is
+    # honest only if SAID — a "complete" stamp over regex-only fidelity is the
+    # false-confidence the banking guarantee forbids. Emit ONE repo-level hole per
+    # dead language (not per file) and mark partial. ──
+    langs_present = {LANGUAGE_MAP[p.suffix] for p in files_to_parse if p.suffix in LANGUAGE_MAP}
+    dead_langs = sorted(l for l in langs_present if not _tree_sitter_live(l))
+    if dead_langs:
+        status = "partial"
+        coverage_holes.append({
+            "ref": str(repo_root), "kind": "repo",
+            "reason": (f"tree-sitter AST parser is NOT functional for {dead_langs} in "
+                       f"this environment — those files were parsed by the low-fidelity "
+                       f"REGEX fallback (approximate symbols/edges, no precise line spans). "
+                       f"Coverage is degraded-fidelity, not full AST; treat accounted "
+                       f"symbols as approximate until the AST path is restored."),
+        })
 
     # ── A2: oversized repo → parse up to the cap, flag partial (never silent truncation) ──
     if len(files_to_parse) > _MAX_REPO_FILES:

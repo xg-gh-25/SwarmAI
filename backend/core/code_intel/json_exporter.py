@@ -138,11 +138,49 @@ def export_code_intel_json(
         doc["version"] = "3.0"
         doc["$schema"] = "https://ai-ready-repo.dev/schemas/code-intel.v3.json"
 
+    # ── prune stale v3 refs (Gate-2 F5) BEFORE validation so a deleted route's
+    # lingering unclassified id doesn't trip the anti-fabrication guard ──
+    if v3_preserved:
+        _prune_stale_v3_refs(doc)
+
     # ── coverage_ledger + status stamp (F19: never a silent under-report) ──
-    holes = coverage_holes or []
+    holes = list(coverage_holes or [])
+    status = "partial" if (holes or parse_status == "partial") else "complete"
+
+    # ── Gate-2 F2 (KEYSTONE, CRITICAL): the reindex→export path is the ONLY writer
+    # of code-intel.json on the automated on:git_commit job, and it previously NEVER
+    # re-ran the v3 gates — so a preserved-but-now-inconsistent v3 layer (e.g. a
+    # moved route orphaning a flow.entry_ref, an id-less route) would ship stamped
+    # "complete" with NOTHING enforcing the coverage invariant until a human re-ran
+    # the skill. A "complete" stamp must never outrun validation. If the doc carries
+    # a v3 layer, validate it here and DOWNGRADE to partial + record the failure as a
+    # coverage hole when it doesn't hold. ──
+    if v3_preserved:
+        try:
+            from importlib import import_module
+            import sys as _sys
+            _skill_scripts = str(Path(__file__).resolve().parents[2]
+                                 / "skills" / "s_ai-ready-repo" / "scripts")
+            if _skill_scripts not in _sys.path:
+                _sys.path.insert(0, _skill_scripts)
+            _arh = import_module("ai_ready_helpers")
+            repo_root = graph_store.get_meta("repo_root") if hasattr(graph_store, "get_meta") else None
+            v3_errors = _arh.validate_code_intel_json(doc, repo_root=repo_root)
+        except Exception as e:
+            # Fail-SAFE: if validation itself can't run, that is NOT a clean bill of
+            # health — mark partial + a hole, never silently "complete".
+            v3_errors = [f"v3 validation could not run at export: {type(e).__name__}: {e}"]
+        if v3_errors:
+            status = "partial"
+            holes.append({
+                "ref": "code-intel.json", "kind": "repo",
+                "reason": ("v3 coverage layer failed validation at export time — "
+                           "accounted_ratio is NOT trustworthy until re-generated: "
+                           + "; ".join(v3_errors[:3]))[:500],
+            })
+
     if holes:
         doc["coverage_ledger"] = holes
-    status = "partial" if (holes or parse_status == "partial") else "complete"
     doc["status"] = status
 
     # Serialize and check size cap
@@ -189,25 +227,65 @@ def export_code_intel_json(
 
 
 def _reattach_route_ids(built_routes: list[dict], prior_routes: list[dict] | None) -> None:
-    """Re-attach v3 anchor ids from the prior doc onto freshly-built routes, matched
-    by (method, path, file_path). The v2 graph does not persist route ids, so without
-    this every flow.entry_ref (which points at a route id) is orphaned on reindex.
+    """Re-attach v3 anchor ids onto freshly-built routes so flow.entry_ref keeps
+    resolving across a reindex (the v2 graph does not persist route ids).
 
-    Mutates built_routes in place. Routes with no prior match keep no id (they are
-    NEW routes the next generation pass will id+classify — surfaced as coverage holes
-    by check_anchor_accounting, never silently accepted)."""
-    if not prior_routes:
-        return
+    Matching: (method, path, file_path) against the prior doc. Mutates built_routes
+    in place. EVERY built route ends with an id:
+    - a prior match → reuse the prior id (keeps flow.entry_ref stable);
+    - NO prior match (a NEW or moved/renamed route) → mint a FRESH deterministic id
+      via derive_route_id, so the route is NEVER id-less.
+
+    Gate-2 F1 (run AB adversarial, CRITICAL): a route left id-less is silently
+    excluded from the coverage denominator (extract_entry_anchors skips id-less
+    entries) → a moved route would VANISH and accounted_ratio would falsely read 1.0.
+    Minting an id for unmatched routes keeps them IN the denominator; if they carry
+    no flow/unclassified entry they surface as a real coverage hole via
+    check_anchor_accounting — visible, never silently accepted."""
+    # derive_route_id lives in the s_ai-ready-repo skill (not importable from core —
+    # C046 core-must-not-import-skill). Mint a fresh id inline that is BYTE-IDENTICAL
+    # to ai_ready_helpers.derive_route_id so a later skill run (backfill_route_ids)
+    # produces the SAME id for the same route → a moved route re-matches by id and its
+    # flow.entry_ref keeps resolving. MUST stay in lockstep with derive_route_id:
+    # slug = re.sub([^a-z0-9]+,-, "{method} {path}".lower()).strip(-);
+    # h = sha1("{method}|{path}|{file_path}")[:8] (32-bit non-crypto id, NO [:60] cap).
+    import hashlib as _hashlib
+    import re as _re
+
+    def _mint_id(method: str, path: str, file_path: str) -> str:
+        m, p, fp = method or "", path or "", file_path or ""
+        slug = _re.sub(r"[^a-z0-9]+", "-", f"{m} {p}".lower()).strip("-")
+        key = f"{m}|{p}|{fp}"
+        h = _hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+        return f"route:{slug}-{h}"
+
     prior_by_key: dict[tuple, str] = {}
-    for r in prior_routes:
+    for r in (prior_routes or []):
         if not isinstance(r, dict) or not r.get("id"):
             continue
         key = (r.get("method"), r.get("path"), r.get("file_path"))
-        prior_by_key[key] = r["id"]
+        prior_by_key.setdefault(key, r["id"])  # first-wins on dup key (stable)
     for r in built_routes:
+        if r.get("id"):
+            continue
         key = (r.get("method"), r.get("path"), r.get("file_path"))
-        if key in prior_by_key and not r.get("id"):
-            r["id"] = prior_by_key[key]
+        r["id"] = prior_by_key.get(key) or _mint_id(*key)
+
+
+def _prune_stale_v3_refs(doc: dict) -> None:
+    """Drop unclassified[] / flow.entry_ref entries whose route id no longer exists
+    in the current routes[] (Gate-2 F5): a deleted/moved route leaves a stale
+    unclassified id that check_anchor_accounting would flag as 'fabricated anchor' —
+    the wrong signal (it's a removed route, not a hallucination). Prune so the doc
+    stays internally consistent across reindexes. Mutates doc in place."""
+    current_ids = {r.get("id") for r in (doc.get("routes") or [])
+                   if isinstance(r, dict) and r.get("id")}
+    if not current_ids:
+        return
+    uncls = doc.get("unclassified")
+    if isinstance(uncls, list):
+        doc["unclassified"] = [u for u in uncls
+                               if isinstance(u, dict) and u.get("id") in current_ids]
 
 
 def _build_modules(

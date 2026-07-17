@@ -341,3 +341,93 @@ class TestV3PreservationAndCoverage:
         # prior file must still be the intact v3 doc
         data = json.loads(output.read_text())
         assert data["version"] == "3.0" and data.get("domains"), "prior file corrupted by failed write"
+
+
+class TestGate2F1F2F5ExporterFixes:
+    """Run AB Gate-2 fixes at the exporter: F1 (mint id for unmatched route),
+    F2 (validate before stamping complete), F5 (prune stale unclassified)."""
+
+    def _prior_v3(self):
+        return {
+            "version": "3.0",
+            "routes": [{"id": "route:a", "method": "GET", "path": "/api/items",
+                        "handler": "n3", "framework": "fastapi",
+                        "file_path": "backend/routers/api.py", "line_number": 15, "middleware": None}],
+            "domains": [{"id": "domain:i", "name": "Items"}],
+            "flows": [{"id": "flow:0", "domain_id": "domain:i", "entry_ref": "route:a"}],
+            "unclassified": [],
+        }
+
+    def test_f1_unmatched_route_gets_minted_id(self, tmp_path):
+        """A freshly-built route with no prior match must get a MINTED id (never
+        id-less → never silently dropped from the denominator)."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        output.write_text(json.dumps(self._prior_v3()))
+        graph = _make_mock_graph()  # emits routes with id="" — none match the prior key
+        export_code_intel_json(graph, "test", output)
+        data = json.loads(output.read_text())
+        assert all(r.get("id") for r in data["routes"]), \
+            f"every route must have an id after export, got {[r.get('id') for r in data['routes']]}"
+
+    def test_f2_status_downgraded_when_v3_invalid(self, tmp_path):
+        """F2 KEYSTONE: if the preserved v3 layer is inconsistent (flow points at a
+        ghost route), export must NOT stamp complete — downgrade to partial + hole."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        bad = self._prior_v3()
+        bad["flows"] = [{"id": "flow:0", "domain_id": "domain:i", "entry_ref": "route:GHOST"}]
+        output.write_text(json.dumps(bad))
+        export_code_intel_json(_make_mock_graph(), "test", output)
+        data = json.loads(output.read_text())
+        assert data["status"] == "partial", "invalid v3 layer must downgrade status to partial"
+        assert any("validation" in h.get("reason", "").lower() for h in data.get("coverage_ledger", [])), \
+            "a v3-validation failure must be recorded as a coverage hole"
+
+    def test_f5_stale_unclassified_pruned(self, tmp_path):
+        """F5: an unclassified id for a route no longer present is pruned (not left as
+        a 'fabricated anchor' landmine)."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        output = tmp_path / "code-intel.json"
+        prior = self._prior_v3()
+        prior["unclassified"] = [{"id": "route:DELETED", "reason": "was a real route, now removed from the codebase"}]
+        output.write_text(json.dumps(prior))
+        export_code_intel_json(_make_mock_graph(), "test", output)
+        data = json.loads(output.read_text())
+        uncls_ids = {u["id"] for u in data.get("unclassified", [])}
+        assert "route:DELETED" not in uncls_ids, "stale unclassified id must be pruned"
+
+
+class TestMintIdMirrorsDeriveRouteId:
+    """Run AB Gate-2 re-verify: _mint_id (exporter, core-side) MUST be byte-identical
+    to ai_ready_helpers.derive_route_id (skill-side) so a moved route re-matches by id
+    on the next skill run. A lockstep contract test — if either drifts, this goes RED
+    (the R7 lying-comment class: the comment claimed 'in sync' while it wasn't)."""
+
+    def test_mint_id_byte_identical_to_derive_route_id(self, tmp_path):
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
+                                        "skills", "s_ai-ready-repo", "scripts"))
+        from ai_ready_helpers import derive_route_id
+        # reach _mint_id via a real export path is awkward; re-derive its logic by
+        # calling through _reattach_route_ids on an unmatched route and comparing.
+        from core.code_intel.json_exporter import _reattach_route_ids
+        cases = [
+            ("GET", "/api/items", "backend/routers/api.py"),
+            ("POST", "/users/{id}/posts", "svc/users.py"),
+            ("DELETE", "/a-b", "x.py"),
+            ("GET", "/a/b", "x.py"),  # must NOT collide with /a-b
+        ]
+        for method, path, fp in cases:
+            built = [{"method": method, "path": path, "file_path": fp}]  # no id
+            _reattach_route_ids(built, prior_routes=None)  # forces mint
+            minted = built[0]["id"]
+            expected = derive_route_id(method, path, fp)
+            assert minted == expected, (
+                f"_mint_id drifted from derive_route_id for {method} {path}: "
+                f"minted={minted} expected={expected}")
+        # collision guard: /a-b and /a/b must differ
+        b1 = [{"method": "GET", "path": "/a-b", "file_path": "x.py"}]
+        b2 = [{"method": "GET", "path": "/a/b", "file_path": "x.py"}]
+        _reattach_route_ids(b1, None); _reattach_route_ids(b2, None)
+        assert b1[0]["id"] != b2[0]["id"], "slug-collapsing routes must get distinct ids"

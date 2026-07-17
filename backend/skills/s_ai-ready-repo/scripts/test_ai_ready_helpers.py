@@ -2375,3 +2375,31 @@ class TestB7GateWiringMutation:
             f"{gate}: unwiring it did NOT change validation — the gate is NOT actually "
             f"firing on the real path (authorship-trap / dead gate). before={len(errors_before)} "
             f"after={len(errors_after)}")
+
+
+class TestGate2F1IdlessRoute:
+    """Run AB Gate-2 F1 (CRITICAL): a route without an id must NOT silently vanish
+    from the coverage denominator — it must be a loud error, not a false 1.0."""
+
+    def test_idless_route_is_flagged_not_dropped(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting, compute_anchor_accounting
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["routes"] = [
+            {"id": "route:a", "method": "GET", "path": "/a", "file_path": "a.py"},
+            {"method": "GET", "path": "/b", "file_path": "b.py"},  # NO id (moved route)
+        ]
+        doc["domains"] = [{"id": "d", "name": "D"}]
+        doc["flows"] = [{"id": "f", "domain_id": "d", "entry_ref": "route:a"}]
+        errors = check_anchor_accounting(doc)
+        assert any("no id" in e.lower() or "id-less" in e.lower() for e in errors), \
+            f"id-less route must be flagged, got {errors}"
+
+    def test_all_routes_with_id_and_accounted_passes(self):
+        from scripts.ai_ready_helpers import check_anchor_accounting
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["routes"] = [{"id": "route:a", "method": "GET", "path": "/a", "file_path": "a.py"}]
+        doc["domains"] = [{"id": "d", "name": "D"}]
+        doc["flows"] = [{"id": "f", "domain_id": "d", "entry_ref": "route:a"}]
+        assert check_anchor_accounting(doc) == []

@@ -411,3 +411,62 @@ class TestParseRepoWithCoverage:
         out = parse_repo_with_coverage(tmp_path)
         assert out.status == "partial", "oversized repo must be flagged partial, not silently truncated as complete"
         assert any(h["kind"] == "repo" for h in out.coverage_holes)
+
+
+class TestGate2AdversarialFixes:
+    """Run AB Gate-2 adversarial fixes (F3 reachable-failed, F4 fidelity signal)."""
+
+    def test_f4_dead_treesitter_emits_repo_fidelity_hole(self, tmp_path, monkeypatch):
+        # Force tree-sitter "not live" and assert the repo-level fidelity hole fires.
+        import core.code_intel.parser as P
+        monkeypatch.setattr(P, "_tree_sitter_live", lambda lang: False)
+        P._ts_live_cache.clear()
+        (tmp_path / "a.py").write_text("def a():\n    pass\n")
+        out = P.parse_repo_with_coverage(tmp_path)
+        fidelity = [h for h in out.coverage_holes
+                    if h["kind"] == "repo" and "tree-sitter" in h["reason"].lower()]
+        assert fidelity, f"dead tree-sitter must emit a repo fidelity hole, got {out.coverage_holes}"
+        assert out.status == "partial"
+
+    def test_f4_live_treesitter_no_fidelity_hole(self, tmp_path, monkeypatch):
+        import core.code_intel.parser as P
+        monkeypatch.setattr(P, "_tree_sitter_live", lambda lang: True)
+        P._ts_live_cache.clear()
+        (tmp_path / "a.py").write_text("def a():\n    pass\n")
+        out = P.parse_repo_with_coverage(tmp_path)
+        fidelity = [h for h in out.coverage_holes if "tree-sitter" in h.get("reason", "").lower()]
+        assert not fidelity, f"live tree-sitter must NOT emit a fidelity hole, got {fidelity}"
+
+    def test_f3_failed_status_is_reachable(self, tmp_path, monkeypatch):
+        # A LIVE tree-sitter that returns a has_error tree on a non-empty file → "failed".
+        import core.code_intel.parser as P
+        monkeypatch.setattr(P, "_tree_sitter_live", lambda lang: True)
+        P._ts_live_cache.clear()
+
+        class _ErrRoot:
+            type = "module"; child_count = 0; has_error = True
+        class _ErrTree:
+            root_node = _ErrRoot()
+        fake_parser = type("FP", (), {"parse": lambda self, b: _ErrTree()})()
+        monkeypatch.setattr(P, "_get_cached_parser", lambda lang: fake_parser)
+
+        f = tmp_path / "broken.py"
+        f.write_text("def (((\n")  # non-empty, broken
+        res, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "failed", f"has_error tree on non-empty file must be 'failed', got {status}"
+
+    def test_f3_failed_recorded_as_hole_in_repo(self, tmp_path, monkeypatch):
+        import core.code_intel.parser as P
+        monkeypatch.setattr(P, "_tree_sitter_live", lambda lang: True)
+        P._ts_live_cache.clear()
+        class _ErrRoot:
+            type = "module"; child_count = 0; has_error = True
+        class _ErrTree:
+            root_node = _ErrRoot()
+        monkeypatch.setattr(P, "_get_cached_parser",
+                            lambda lang: type("FP", (), {"parse": lambda self, b: _ErrTree()})())
+        (tmp_path / "broken.py").write_text("def (((\n")
+        out = P.parse_repo_with_coverage(tmp_path)
+        assert any("broken.py" in h.get("ref", "") and h["kind"] == "file"
+                   for h in out.coverage_holes), f"failed parse must be a hole, got {out.coverage_holes}"
+        assert out.status == "partial"

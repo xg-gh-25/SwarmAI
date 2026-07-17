@@ -675,6 +675,23 @@ def check_anchor_accounting(doc: dict) -> list[str]:
         # routes present but un-backfilled (no ids) — surface, do NOT pass vacuously.
         return [f"anchor-accounting cannot run: {e} — run backfill_route_ids(doc) "
                 f"first so every route carries an id (Gate-2 F2 anti-vacuous-pass)"]
+
+    # Gate-2 F1 (run AB adversarial, CRITICAL): a route present WITHOUT an id is
+    # silently excluded from all_ids by extract_entry_anchors — so a moved/renamed
+    # route that lost its id-reattach match would VANISH from the accounting
+    # denominator and accounted_ratio would read 1.0 over a set that no longer
+    # contains it (a real route invisible = the banking false-100% red line). The
+    # ALL-id-less case raises above; this catches the PARTIAL case (some ids present,
+    # some routes id-less) which does NOT raise. Every route MUST carry an id.
+    idless = [f"{r.get('method')} {r.get('path')} ({r.get('file_path')})"
+              for r in (doc.get("routes") or [])
+              if isinstance(r, dict) and not _nonblank(r.get("id"))]
+    for loc in idless:
+        errors.append(f"route {loc} has NO id — it is silently excluded from the "
+                      f"coverage denominator (a moved/renamed route that lost its "
+                      f"anchor id). Run backfill_route_ids(doc) so every route is "
+                      f"accounted (Gate-2 F1: id-less route = invisible coverage hole).")
+
     if not all_ids:
         return errors  # genuinely no route entries (v2 doc) — not this guard's job
 
