@@ -123,7 +123,8 @@ CALL_TYPES = {
 #   3. the MEMBER-ACCESS (attribute) node to guard differs (python=attribute,
 #      go=selector_expression, ts=member_expression, rust=field_expression,
 #      ruby=scope_resolution, php=member_access_expression, swift/kotlin=
-#      navigation_expression). The guard must use the language's own node types.
+#      navigation_suffix — the member nests under the SUFFIX, not the
+#      navigation_expression itself). The guard must use the language's own node types.
 #   4. some languages WRAP a module binding (python=expression_statement,
 #      ts=export_statement) — the collector must unwrap the language's wrappers.
 #   5. the PARAMETER container node (for shadow-prune) differs per language.
@@ -261,25 +262,44 @@ LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
         receiver_guard_types={"call"},
         param_container_types={"method_parameters"},
     ),
-    # DEFERRED — php, swift, kotlin (NOT in Tier A), for a reason ORTHOGONAL to
-    # value-ref: the base parser does not currently extract their FUNCTION nodes at
-    # all (their `function_definition`/`function_declaration` names aren't picked up
-    # by _get_name — a pre-existing gap, verified run_13667da9: a plain
-    # `function hello(){}` / `func f(){}` / `fun f(){}` yields ZERO nodes). Value-ref
-    # reader edges need an enclosing function node to attach to, so they cannot work
-    # until base function extraction is fixed for these three languages. Their
-    # value-ref const-extraction descriptors were verified correct in isolation
-    # (const NODES are emitted); only the reader-EDGE attachment is blocked. The
-    # working descriptors, for the follow-up run that fixes base extraction:
-    #   php:    binding ("const_declaration", ("child","const_element",None)),
-    #           reader {"name"}, member {"member_access_expression"},
-    #           params {"formal_parameters"}
-    #   swift:  binding ("property_declaration", ("child","pattern",None)),
-    #           reader {"simple_identifier"}, member {"navigation_expression"},
-    #           params {"parameter"}
-    #   kotlin: binding ("property_declaration", ("child","variable_declaration",None)),
-    #           reader {"simple_identifier"}, member {"navigation_expression"},
-    #           params {"function_value_parameters"}
+    # PHP — const_declaration wraps const_element (name is a `name` node, also the
+    # reader node type). Three false-positive shapes suppressed via member_access_types
+    # (all verified live-AST, run_d021ce39): `$o->CONST` (member_access_expression),
+    # `Foo::CONST` (class_constant_access_expression — CONST is the trailing `name`),
+    # and `new CONST()` (object_creation_expression — CONST is the only identifier-ish
+    # child, so guard-(a)'s "last member" catches it; note the `new` keyword makes it
+    # NOT the first child, so the receiver guard would MISS it — member guard is right).
+    "php": LangValueSpec(
+        binding_specs=[("const_declaration", ("child", "const_element", None))],
+        reader_types={"name"},
+        member_access_types={"member_access_expression",
+                             "class_constant_access_expression",
+                             "object_creation_expression"},
+        param_container_types={"formal_parameters"},
+    ),
+    # Swift — property_declaration binds a `pattern` (name is simple_identifier, also
+    # the reader type). `o.CONST` nests the member under `navigation_suffix` (NOT a
+    # direct child of navigation_expression), so navigation_suffix is the member type.
+    # `CONST()` is a call_expression with CONST as the FIRST child → receiver guard.
+    "swift": LangValueSpec(
+        binding_specs=[("property_declaration", ("child", "pattern", None))],
+        reader_types={"simple_identifier"},
+        member_access_types={"navigation_suffix"},
+        receiver_guard_types={"call_expression"},
+        param_container_types={"parameter"},
+    ),
+    # Kotlin — property_declaration binds a `variable_declaration` (name is
+    # simple_identifier). Same member/receiver shapes as swift (navigation_suffix +
+    # call_expression). const val / val / var all parse as property_declaration.
+    "kotlin": LangValueSpec(
+        binding_specs=[("property_declaration", ("child", "variable_declaration", None))],
+        reader_types={"simple_identifier"},
+        member_access_types={"navigation_suffix"},
+        receiver_guard_types={"call_expression"},
+        param_container_types={"function_value_parameters"},
+    ),
+    # DEFERRED — java, csharp, c (NOT in LANG_VALUE_SPEC, by design — see the block
+    # above the class definition for the reasons: no module scope / preproc path).
 }
 
 
@@ -363,7 +383,29 @@ SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
     ".eggs", "egg-info", ".next", ".nuxt",
+    # `target` = Rust/Cargo (also Maven) build output — a near-universal,
+    # tool-reserved build-dir name, safe as a bare component skip at any depth.
+    # (Part of the run_f64f6031 fix for ~3316 build-artifact nodes polluting the
+    # SwarmAI graph.) NOTE: the PyInstaller bundle dir is NOT skipped here as a bare
+    # `binaries` component — see _SKIP_PATH_SUFFIXES below. `binaries` is a plausible
+    # legit source-dir name in an arbitrary repo (this parser is the ai-ready-repo
+    # ENGINE running on ANY repo), so a bare component skip would silently drop real
+    # source — the same over-broad risk that keeps `_internal` (pydantic/_internal)
+    # out of this set. General fix (honor .gitignore) is a deferred follow-up.
+    "target",
 }
+
+# Path-scoped skips (matched against the repo-relative POSIX path, not a single
+# component) for build/bundle dirs whose NAME is too generic to skip everywhere.
+# `src-tauri/binaries` = the Tauri sidecar convention: the bundled backend binary
+# (e.g. desktop/src-tauri/binaries/python-backend-*/_internal/...). Scoping to the
+# `src-tauri/` parent means we skip the Tauri bundle in ANY Tauri app WITHOUT
+# false-skipping a random repo's top-level `binaries/` source dir (run_f64f6031,
+# Gate-2 MED). Match is substring-on-a-slash-delimited path so an intermediate
+# component named exactly this pair is caught at any depth.
+_SKIP_PATH_SUFFIXES = (
+    "src-tauri/binaries",
+)
 
 QUALIFIED_SEPARATOR = "::"
 _MAX_WORKERS = 4
@@ -580,7 +622,14 @@ def _file_hash(path: Path) -> str:
 
 
 def _should_skip_dir(component: str) -> bool:
-    """Check if a directory component should be skipped."""
+    """Check if a single path COMPONENT is a tool-reserved skip dir.
+
+    Bare-component match only — for generic dir names that are only safe to skip
+    under a known parent (e.g. `src-tauri/binaries`), see _SKIP_PATH_SUFFIXES and
+    the path-scoped check in parse_repo_with_coverage. Keeping generic names OUT of
+    SKIP_DIRS is deliberate: this parser runs on arbitrary repos, so a bare skip of
+    `binaries`/`_internal` would silently drop real source (run_f64f6031, Gate-2).
+    """
     return component in SKIP_DIRS or component.endswith(".egg-info")
 
 
@@ -886,10 +935,28 @@ def _extract_from_tree(tree, path_str: str, language: str,
     return nodes, edges
 
 
+# The node type(s) a definition's NAME child carries, per language. The default
+# (identifier/property_identifier/type_identifier) covers python/go/rust/ts/js/java.
+# Some grammars name a definition differently and were SILENTLY DROPPED before this
+# map existed (verified live-AST, run_d021ce39): php function/class/method names are
+# `name` nodes; swift/kotlin `function_declaration` names are `simple_identifier`
+# (their `class_declaration` name is `type_identifier`, already covered). The name is
+# always the FIRST such child of the definition node (params live inside a separate
+# parameter-container node), so returning the first match is correct. Keyed per
+# language so widening for php/swift/kotlin CANNOT add spurious names to the others.
+_DEFAULT_NAME_NODE_TYPES = ("identifier", "property_identifier", "type_identifier")
+NAME_NODE_TYPES: dict[str, tuple[str, ...]] = {
+    "php": _DEFAULT_NAME_NODE_TYPES + ("name",),
+    "swift": _DEFAULT_NAME_NODE_TYPES + ("simple_identifier",),
+    "kotlin": _DEFAULT_NAME_NODE_TYPES + ("simple_identifier",),
+}
+
+
 def _get_name(node, language: str) -> str | None:
-    """Extract the name identifier from a definition node."""
+    """Extract the name identifier from a definition node (per-language name types)."""
+    name_types = NAME_NODE_TYPES.get(language, _DEFAULT_NAME_NODE_TYPES)
     for child in node.children:
-        if child.type in ("identifier", "property_identifier", "type_identifier"):
+        if child.type in name_types:
             return child.text.decode("utf-8", errors="replace")
     return None
 
@@ -1190,8 +1257,15 @@ def parse_repo_with_coverage(
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
+        rel = path.relative_to(repo_root)
         # Skip dirs by checking each path component (out of scope, not a hole)
-        if any(_should_skip_dir(part) for part in path.relative_to(repo_root).parts):
+        if any(_should_skip_dir(part) for part in rel.parts):
+            continue
+        # Path-scoped skips (generic dir names only safe under a known parent, e.g.
+        # `src-tauri/binaries` — the Tauri sidecar bundle). Match on the POSIX path
+        # so an intermediate `.../src-tauri/binaries/...` is caught at any depth.
+        rel_posix = rel.as_posix()
+        if any(f"{sfx}/" in f"{rel_posix}/" for sfx in _SKIP_PATH_SUFFIXES):
             continue
         suffix = path.suffix
         if suffix in LANGUAGE_MAP:

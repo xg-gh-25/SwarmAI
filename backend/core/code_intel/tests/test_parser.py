@@ -54,6 +54,22 @@ class TestShouldSkipDir:
         assert _should_skip_dir("venv")
         assert _should_skip_dir(".venv")
 
+    def test_skips_target_build_dir(self):
+        # `target` = Rust/Cargo (also Maven) build output — a tool-reserved name,
+        # safe as a bare component skip at any depth. It polluted the SwarmAI graph
+        # with build-artifact nodes (run_f64f6031).
+        assert _should_skip_dir("target")
+
+    def test_does_not_bare_skip_generic_dir_names(self):
+        # Gate-2 MED (run_f64f6031): `binaries` and `_internal` are NOT bare-component
+        # skips — both are plausible LEGIT source-dir names in an arbitrary repo (this
+        # parser is the ai-ready-repo ENGINE running on ANY repo), and a bare skip
+        # would silently drop real source (`pydantic/_internal`, a repo's top-level
+        # `binaries/` utilities). The SwarmAI PyInstaller bundle is skipped PATH-scoped
+        # (`src-tauri/binaries`, see TestSkipPathSuffixes), not by name.
+        assert not _should_skip_dir("binaries")
+        assert not _should_skip_dir("_internal")
+
     def test_allows_normal_dirs(self):
         assert not _should_skip_dir("core")
         assert not _should_skip_dir("src")
@@ -257,6 +273,33 @@ class TestParseRepo:
         all_nodes = [n for r in results for n in r.nodes]
         names = {n.name for n in all_nodes}
         assert "internal" not in names
+        assert "app" in names
+
+    def test_skips_tauri_sidecar_binaries_path_scoped(self, tmp_path):
+        # run_f64f6031: the PyInstaller bundle at src-tauri/binaries/... polluted
+        # the graph. It is skipped PATH-scoped (src-tauri/binaries), not by a bare
+        # `binaries` component — so the Tauri sidecar bundle is skipped in ANY Tauri
+        # app while a repo's top-level binaries/ source stays visible (next test).
+        bundle = tmp_path / "desktop" / "src-tauri" / "binaries" / "python-backend" / "_internal"
+        bundle.mkdir(parents=True)
+        (bundle / "vendored.py").write_text("def bundled_dep():\n    return 1\n")
+        (tmp_path / "app.py").write_text("def app():\n    pass\n")
+        results = parse_repo(tmp_path)
+        names = {n.name for r in results for n in r.nodes}
+        assert "bundled_dep" not in names   # sidecar bundle skipped
+        assert "app" in names
+
+    def test_does_not_skip_toplevel_binaries_source(self, tmp_path):
+        # Gate-2 MED guard: a repo's OWN top-level binaries/ (real source, not a
+        # Tauri sidecar) must NOT be skipped — bare `binaries` was removed from
+        # SKIP_DIRS precisely to avoid silently dropping arbitrary-repo source.
+        binz = tmp_path / "binaries"
+        binz.mkdir()
+        (binz / "tool.py").write_text("def real_tool():\n    return 42\n")
+        (tmp_path / "app.py").write_text("def app():\n    pass\n")
+        results = parse_repo(tmp_path)
+        names = {n.name for r in results for n in r.nodes}
+        assert "real_tool" in names   # top-level binaries/ source PRESERVED
         assert "app" in names
 
     def test_skips_pycache(self, tmp_path):
@@ -742,8 +785,9 @@ class TestValueRefLanguages:
         NOT in LANG_VALUE_SPEC (disabled), so this harness enumerates the SHIPPED set
         and every member must be green — a broken descriptor fails the suite.
 
-    Deferred languages (php/swift/kotlin — base function extraction gap; c/java/
-    csharp — no module scope / preproc path) are asserted to emit NOTHING.
+    Deferred languages (java/csharp — no module scope; c — preproc path) are
+    asserted to emit NOTHING. php/swift/kotlin were enabled run_d021ce39 (base
+    function extraction fixed via per-language _get_name name types).
     """
 
     # (ext, source): a module-scope distinctive const read by a function BOTH bare
@@ -776,6 +820,24 @@ class TestValueRefLanguages:
                  "MAX_RETRIES = 3\n"
                  "def f(o)\n  o::MAX_RETRIES\n  MAX_RETRIES\nend\n",
                  "MAX_RETRIES"),
+        # php/swift/kotlin — enabled run_d021ce39 after fixing base function
+        # extraction (_get_name per-language name types: php `name`,
+        # swift/kotlin `simple_identifier`). Samples use MULTILINE bodies: a whole
+        # kotlin class body on ONE physical line trips a grammar has_error quirk
+        # (real code is never formatted that way) — pinned by
+        # test_kotlin_multiline_class_parses_clean below.
+        "php": (".php",
+                "<?php\nconst MAX_RETRIES = 3;\n"
+                "function f($o) { return $o->MAX_RETRIES + MAX_RETRIES; }\n",
+                "MAX_RETRIES"),
+        "swift": (".swift",
+                  "let MAX_RETRIES = 3\n"
+                  "func f(o: Obj) -> Int {\n  return o.MAX_RETRIES + MAX_RETRIES\n}\n",
+                  "MAX_RETRIES"),
+        "kotlin": (".kt",
+                   "const val MAX_RETRIES = 3\n"
+                   "fun f(o: Obj): Int {\n  return o.MAX_RETRIES + MAX_RETRIES\n}\n",
+                   "MAX_RETRIES"),
     }
 
     def _parse(self, tmp_path, lang):
@@ -856,14 +918,12 @@ class TestValueRefLanguages:
          "  int F() { return MAX_RETRIES; }\n}\n"),
         ("c", ".c",
          "static const int TIMEOUT = 30;\nint f() { return TIMEOUT; }\n"),
-        ("php", ".php",
-         "<?php\nconst MAX_RETRIES = 3;\n"
-         "function f() { return MAX_RETRIES; }\n"),
     ])
     def test_deferred_languages_emit_nothing(self, tmp_path, lang, ext, src):
         """Tier-B / deferred languages (java/csharp: no module scope; c: preproc
-        path; php: base-func-extraction gap) are NOT in LANG_VALUE_SPEC → they emit
-        0 constant nodes and 0 references edges (feature-absent, never broken)."""
+        path) are NOT in LANG_VALUE_SPEC → they emit 0 constant nodes and 0
+        references edges (feature-absent, never broken). php/swift/kotlin were
+        REMOVED from this list run_d021ce39 (now enabled — see _SAMPLES)."""
         pytest.importorskip("tree_sitter_language_pack")
         import core.code_intel.parser as P
         assert lang not in P.LANG_VALUE_SPEC, (
@@ -925,3 +985,178 @@ class TestValueRefGate2Fixes:
                         "function f() { return MAX_A + MAX_B; }\n")
         targets = set(self._ref_targets(r))
         assert {"MAX_A", "MAX_B"} <= targets, f"both declarators must have ref edges, got {targets}"
+
+
+class TestBaseFunctionExtractionPhpSwiftKotlin:
+    """run_d021ce39 — the base function-extraction fix that UNBLOCKS value-ref for
+    php/swift/kotlin. Before: _get_name hardcoded {identifier,property_identifier,
+    type_identifier}; php names are `name` nodes and swift/kotlin function names are
+    `simple_identifier`, so their functions/methods were SILENTLY DROPPED (php=0
+    nodes, swift/kotlin=class-only). These tests exercise the REAL entry point
+    (parse_file / parse_file_with_status), NOT _extract_from_tree — the M3-skeptic
+    lesson that a kotlin file can extract nodes yet be discarded by the coverage gate.
+    """
+
+    _CASES = {
+        "php": (".php",
+                "<?php\nfunction do_thing($x) { return $x; }\n"
+                "class Foo { public function bar() { return 1; } }\n"),
+        "swift": (".swift",
+                  "func doThing(x: Int) -> Int {\n  return x\n}\n"
+                  "class Foo {\n  func bar() -> Int {\n    return 1\n  }\n}\n"),
+        "kotlin": (".kt",
+                   "fun doThing(x: Int): Int {\n  return x\n}\n"
+                   "class Foo {\n  fun bar(): Int {\n    return 1\n  }\n}\n"),
+    }
+
+    def _parse(self, tmp_path, lang):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"tree-sitter {lang} grammar not live")
+        ext, src = self._CASES[lang]
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        return P.parse_file_with_status(f, tmp_path)
+
+    @pytest.mark.parametrize("lang", ["php", "swift", "kotlin"])
+    def test_function_and_method_extracted_through_parse_file(self, tmp_path, lang):
+        """A top-level function + a class-with-method yields BOTH a `function` and a
+        `method` node (plus the `class`), through the REAL parse_file entry point."""
+        result, status = self._parse(tmp_path, lang)
+        assert status == "ok", f"{lang}: parse_file status must be ok, got {status}"
+        by_type = {}
+        for n in result.nodes:
+            by_type.setdefault(n.node_type, []).append(n.name)
+        assert "function" in by_type, f"{lang}: top-level function dropped — got {by_type}"
+        assert "method" in by_type, f"{lang}: class method dropped — got {by_type}"
+        assert "class" in by_type, f"{lang}: class dropped — got {by_type}"
+        assert "doThing" in by_type["function"] or "do_thing" in by_type["function"]
+        assert "bar" in by_type["method"]
+
+    def test_kotlin_multiline_class_parses_clean(self, tmp_path):
+        """Kotlin coverage-gate regression: a multiline class body (how real code is
+        written) must parse clean (_tree_has_error False) so its nodes survive the
+        gate. A whole class body on ONE physical line trips a known grammar has_error
+        quirk — we deliberately do NOT loosen the banking-grade coverage gate for that
+        unrealistic shape (Gate-1 verdict), so the harness uses multiline samples."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("kotlin"):
+            pytest.skip("kotlin grammar not live")
+        parser = P._get_cached_parser("kotlin")
+        tree = parser.parse(
+            b"const val MAX = 3\nfun f(): Int {\n  return MAX\n}\n"
+            b"class Foo {\n  fun bar(): Int {\n    return 1\n  }\n}\n")
+        assert not P._tree_has_error(tree), (
+            "multiline kotlin must parse clean so its nodes survive the coverage gate")
+
+
+class TestGetNamePerLanguage:
+    """run_d021ce39 — _get_name resolves the definition name using per-language node
+    types (NAME_NODE_TYPES). Directly unit-tests the fix + its non-regression: the 6
+    pre-existing languages MUST still resolve via the default 3 types (widening for
+    php/swift/kotlin cannot add spurious names elsewhere — the map is keyed)."""
+
+    def _first_def(self, lang, src, def_type):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} grammar not live")
+        parser = P._get_cached_parser(lang)
+        tree = parser.parse(bytes(src, "utf8"))
+
+        found = []
+
+        def walk(n):
+            if n.type == def_type:
+                found.append(n)
+            for c in n.children:
+                walk(c)
+        walk(tree.root_node)
+        assert found, f"{lang}: no {def_type} node in sample"
+        return P._get_name(found[0], lang)
+
+    def test_php_name_node_resolved(self):
+        import core.code_intel.parser as P
+        assert self._first_def("php", "<?php\nfunction hello() {}\n",
+                               "function_definition") == "hello"
+        # regression: without the fix _get_name returned None (name is a `name` node)
+        assert "name" in P.NAME_NODE_TYPES["php"]
+
+    def test_swift_simple_identifier_resolved(self):
+        assert self._first_def("swift", "func hello() {}\n",
+                               "function_declaration") == "hello"
+
+    def test_kotlin_simple_identifier_resolved(self):
+        assert self._first_def("kotlin", "fun hello() {}\n",
+                               "function_declaration") == "hello"
+
+    def test_default_languages_unaffected(self):
+        """The 6 pre-existing langs resolve names via the default types — the map
+        does NOT widen them (keyed lookup, default fallback)."""
+        import core.code_intel.parser as P
+        assert P.NAME_NODE_TYPES.get("python") is None  # falls to default
+        assert self._first_def("python", "def hello():\n    pass\n",
+                               "function_definition") == "hello"
+        assert self._first_def("go", "package m\nfunc Hello() {}\n",
+                               "function_declaration") == "Hello"
+
+
+class TestValueRefFalsePositiveGuardsNewLangs:
+    """run_d021ce39 Gate-1 findings — php/swift/kotlin value-ref must suppress the
+    per-language false-positive shapes (verified against live AST before coding)."""
+
+    def _refs(self, tmp_path, lang, ext, src):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if lang not in P.LANG_VALUE_SPEC or not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} not enabled/live")
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        r = P.parse_file(f, tmp_path)
+        return [e.target_id.split(P.QUALIFIED_SEPARATOR)[-1]
+                for e in r.edges if e.edge_type == "references"]
+
+    def test_php_static_access_no_edge(self, tmp_path):
+        """`Foo::MAX` (class_constant_access_expression) is NOT a value read."""
+        t = self._refs(tmp_path, "php", ".php",
+                       "<?php\nconst MAX = 3;\nfunction f() { return Foo::MAX; }\n")
+        assert "MAX" not in t, f"Foo::MAX must not emit a value-ref edge, got {t}"
+
+    def test_php_new_instantiation_no_edge(self, tmp_path):
+        """`new MAX()` (object_creation_expression) is a class instantiation, not a
+        value read — CONST is not the first child (the `new` keyword is), so the
+        member guard (last identifier-ish child), not the receiver guard, catches it."""
+        t = self._refs(tmp_path, "php", ".php",
+                       "<?php\nconst MAX = 3;\nfunction f() { return new MAX(); }\n")
+        assert "MAX" not in t, f"new MAX() must not emit a value-ref edge, got {t}"
+
+    def test_php_bare_read_still_emits(self, tmp_path):
+        t = self._refs(tmp_path, "php", ".php",
+                       "<?php\nconst MAX = 3;\nfunction f() { return MAX; }\n")
+        assert "MAX" in t, f"bare const read must emit an edge, got {t}"
+
+    @pytest.mark.parametrize("lang,ext,bind", [
+        ("swift", ".swift", "let MAX = 3\n"),
+        ("kotlin", ".kt", "const val MAX = 3\n"),
+    ])
+    def test_swift_kotlin_call_receiver_no_edge(self, tmp_path, lang, ext, bind):
+        """`MAX()` (call_expression, MAX is the first child) is a call/construction,
+        not a value read — receiver guard."""
+        body = ("func f() -> Int {\n  return MAX()\n}\n" if lang == "swift"
+                else "fun f(): Int {\n  return MAX()\n}\n")
+        t = self._refs(tmp_path, lang, ext, bind + body)
+        assert "MAX" not in t, f"{lang}: MAX() call must not emit a value-ref edge, got {t}"
+
+    @pytest.mark.parametrize("lang,ext,bind", [
+        ("swift", ".swift", "let MAX = 3\n"),
+        ("kotlin", ".kt", "const val MAX = 3\n"),
+    ])
+    def test_swift_kotlin_member_access_no_edge(self, tmp_path, lang, ext, bind):
+        """`o.MAX` (member under navigation_suffix) is a member access, not a bare
+        module-const read."""
+        body = ("func f(o: Obj) -> Int {\n  return o.MAX\n}\n" if lang == "swift"
+                else "fun f(o: Obj): Int {\n  return o.MAX\n}\n")
+        t = self._refs(tmp_path, lang, ext, bind + body)
+        assert "MAX" not in t, f"{lang}: o.MAX member access must not emit an edge, got {t}"
