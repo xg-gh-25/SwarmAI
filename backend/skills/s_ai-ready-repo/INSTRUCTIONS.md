@@ -660,8 +660,29 @@ print(f"accounted {acc['accounted_ratio']:.0%} (MUST be 100% — fail-closed), "
 ```
 
 Then re-write `code-intel.json` with the v3 doc. Downstream: Run-3 recall surfaces
-these domains on any recall query; `project_domain_skeleton(domain, flows, steps)`
-renders each into a `spec-details/<domain>.spec.md` skeleton for human enrichment.
+these domains on any recall query; each domain also gets a
+`spec-details/<domain>.spec.md` for human enrichment.
+
+**⚠️ Writing a `.spec.md` — ALWAYS route through the preserving path (irreversible
+data-loss risk):** §5 of a spec holds human-authored `[human]` business rules that
+a banking reviewer has signed off on. Regenerating a spec MUST NOT destroy them.
+
+```python
+from ai_ready_helpers import regenerate_spec_preserving_human
+# domain['id'] is "domain:<name>"; the spec filename is the bare <name>.
+spec_name = domain["id"].split(":", 1)[-1]
+spec_path = spec_dir / f"{spec_name}.spec.md"
+existing = spec_path.read_text(encoding="utf-8") if spec_path.exists() else ""
+spec_md = regenerate_spec_preserving_human(existing, domain, flows, steps)  # splices §5 [human] blocks back in; plain skeleton on first gen
+spec_path.write_text(spec_md, encoding="utf-8")
+```
+
+`regenerate_spec_preserving_human` auto-detects `[human]` blocks in `existing` and
+re-injects them verbatim (idempotent; a first generation where `existing==""` yields
+a plain skeleton). **NEVER call `project_domain_skeleton(...)` directly to WRITE a
+spec file that may already exist** — it renders only the raw skeleton with an empty
+§5 stub, so writing it over an enriched spec DESTROYS the human rules. Use
+`project_domain_skeleton` only for an in-memory preview of a brand-new domain.
 
 #### 4.7: ai-ready.json (metadata)
 
