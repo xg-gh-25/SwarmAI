@@ -838,6 +838,13 @@ class TestValueRefLanguages:
                    "const val MAX_RETRIES = 3\n"
                    "fun f(o: Obj): Int {\n  return o.MAX_RETRIES + MAX_RETRIES\n}\n",
                    "MAX_RETRIES"),
+        # c — module-scope `static const`, enabled run_078cf907. Bare read → edge;
+        # the member shape here is `s->MAX_RETRIES` (field_expression). Uses a struct
+        # param so the member access is valid C.
+        "c": (".c",
+              "static const int MAX_RETRIES = 3;\n"
+              "int f(struct S* s) { return s->MAX_RETRIES + MAX_RETRIES; }\n",
+              "MAX_RETRIES"),
     }
 
     def _parse(self, tmp_path, lang):
@@ -916,14 +923,14 @@ class TestValueRefLanguages:
         ("csharp", ".cs",
          "class C {\n  const int MAX_RETRIES = 3;\n"
          "  int F() { return MAX_RETRIES; }\n}\n"),
-        ("c", ".c",
-         "static const int TIMEOUT = 30;\nint f() { return TIMEOUT; }\n"),
     ])
     def test_deferred_languages_emit_nothing(self, tmp_path, lang, ext, src):
-        """Tier-B / deferred languages (java/csharp: no module scope; c: preproc
-        path) are NOT in LANG_VALUE_SPEC → they emit 0 constant nodes and 0
-        references edges (feature-absent, never broken). php/swift/kotlin were
-        REMOVED from this list run_d021ce39 (now enabled — see _SAMPLES)."""
+        """Tier-B / deferred languages (java/csharp: no module scope — class-scope
+        value-ref is a future run) are NOT in LANG_VALUE_SPEC → they emit 0 constant
+        nodes and 0 references edges (feature-absent, never broken). php/swift/kotlin
+        (run_d021ce39) and c static-const (run_078cf907) were REMOVED from this list
+        as they were enabled. C `#define` remains permanently deferred (NO-GO), tested
+        separately in TestValueRefCStaticConst::test_c_define_emits_nothing."""
         pytest.importorskip("tree_sitter_language_pack")
         import core.code_intel.parser as P
         assert lang not in P.LANG_VALUE_SPEC, (
@@ -1422,3 +1429,92 @@ class TestGitignoreHonoring:
         res = P.parse_repo_with_coverage(repo)
         parsed = {r.file_path for r in res.results}
         assert "app.py" in parsed  # fail-open: file still parsed
+
+
+class TestValueRefCStaticConst:
+    """run_078cf907 — C `static const` value-ref (RUN 1 of the run_0f977b9f research).
+    C consts are MODULE-SCOPE (declaration>init_declarator>identifier), enabled via a
+    `c` descriptor + the first use of qualifier_gate (text=='const'). The reader is a
+    bare `identifier` (node-type-reuse trap) so the php-family FP guards apply. C
+    `#define` is permanently deferred (NO-GO — scopeless textual reads)."""
+
+    def _refs(self, tmp_path, src):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if "c" not in P.LANG_VALUE_SPEC or not P._tree_sitter_live("c"):
+            pytest.skip("c not enabled/live")
+        f = tmp_path / "m.c"
+        f.write_text(src)
+        r = P.parse_file(f, tmp_path)
+        return sorted(e.target_id.split(P.QUALIFIED_SEPARATOR)[-1]
+                      for e in r.edges if e.edge_type == "references")
+
+    def test_static_const_bare_read_emits_edge(self, tmp_path):
+        assert self._refs(tmp_path,
+            "static const int MAX_R=3;\nint f(){ return MAX_R; }\n") == ["MAX_R"]
+
+    def test_const_without_static_emits_edge(self, tmp_path):
+        assert self._refs(tmp_path,
+            "const int MAX_R=3;\nint f(){ return MAX_R; }\n") == ["MAX_R"]
+
+    def test_east_const_emits_edge(self, tmp_path):
+        """`int const MAX=3` (east-const) — type_qualifier is still a direct child."""
+        assert self._refs(tmp_path,
+            "int const MAX_R=3;\nint f(){ return MAX_R; }\n") == ["MAX_R"]
+
+    def test_mutable_global_no_edge(self, tmp_path):
+        """A mutable top-level `int x=3` has NO const type_qualifier → not a const."""
+        assert self._refs(tmp_path,
+            "int MUT_GLOBAL=3;\nint f(){ return MUT_GLOBAL; }\n") == []
+
+    def test_static_noncosnt_no_edge(self, tmp_path):
+        """`static int x` has storage_class_specifier but NO type_qualifier."""
+        assert self._refs(tmp_path,
+            "static int STAT_X=3;\nint f(){ return STAT_X; }\n") == []
+
+    def test_volatile_no_edge(self, tmp_path):
+        """THE M3 trap: volatile is ALSO a type_qualifier — the gate is text=='const',
+        so a `volatile int` must NOT be collected as a const."""
+        assert self._refs(tmp_path,
+            "volatile int VOL_X=3;\nint f(){ return VOL_X; }\n") == []
+
+    def test_leading_const_member_access_no_edge(self, tmp_path):
+        """`CFG.x` — CFG is a leading `identifier` (reader), so member_access_types=
+        {field_expression} is load-bearing here (Gate-1 verified)."""
+        assert self._refs(tmp_path,
+            "static const int CFG=3;\nint f(){ return CFG.x; }\n") == []
+
+    def test_arrow_member_no_edge(self, tmp_path):
+        """`s->MAX_R` — the member is a field_identifier, excluded by reader_types."""
+        assert self._refs(tmp_path,
+            "struct S{int MAX_R;};\nstatic const int MAX_R=3;\n"
+            "int g(struct S* s){ return s->MAX_R; }\n") == []
+
+    def test_local_var_shadows_const(self, tmp_path):
+        assert self._refs(tmp_path,
+            "static const int MAX_R=3;\nint f(){ int MAX_R=9; return MAX_R; }\n") == []
+
+    def test_param_shadows_const(self, tmp_path):
+        assert self._refs(tmp_path,
+            "static const int MAX_R=3;\nint f(int MAX_R){ return MAX_R; }\n") == []
+
+    def test_c_define_emits_nothing(self, tmp_path):
+        """C `#define` is permanently deferred (NO-GO): preproc_def is not a binding
+        spec, so a #define const emits no node and no edge."""
+        import core.code_intel.parser as P
+        if "c" not in P.LANG_VALUE_SPEC or not P._tree_sitter_live("c"):
+            pytest.skip("c not enabled/live")
+        f = tmp_path / "m.c"
+        f.write_text("#define K 1\nint f(){ return K; }\n")
+        r = P.parse_file(f, tmp_path)
+        consts = [n for n in r.nodes if n.node_type == "constant"]
+        assert not consts, f"#define must emit no const node, got {consts}"
+        assert not self._refs(tmp_path, "#define K 1\nint f(){ return K; }\n")
+
+    def test_pointer_const_documented_gap(self, tmp_path):
+        """DOCUMENTED RECALL GAP (Gate-1): a pointer const `const char *NAME` has its
+        name under pointer_declarator (not init_declarator) → NOT collected. Asserted
+        so the gap is intentional, not accidental (conservative: drop, never
+        false-emit). If pointer-consts are needed later, extend the binding path."""
+        assert self._refs(tmp_path,
+            'const char *NAME="x";\nint f(){ return NAME==0; }\n') == []

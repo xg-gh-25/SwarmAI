@@ -313,8 +313,31 @@ LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
         receiver_guard_types={"call_expression"},
         param_container_types={"function_value_parameters"},
     ),
-    # DEFERRED — java, csharp, c (NOT in LANG_VALUE_SPEC, by design — see the block
-    # above the class definition for the reasons: no module scope / preproc path).
+    # C — a MODULE-SCOPE const is a top-level `declaration` (declaration >
+    # init_declarator > identifier) gated by a `const` type_qualifier. This is the
+    # FIRST use of qualifier_gate: without it, a mutable global (`int x=3;`) and a
+    # `volatile`-qualified global (volatile is ALSO a type_qualifier) would be false
+    # consts — the gate is TEXT-EQUALITY on `const` (run_078cf907, RUN 1 of the
+    # run_0f977b9f research). member_access_types={field_expression} guards the
+    # LEADING-const shape `CFG.field` (CFG is an `identifier` reader); the trailing
+    # `s->MAX` member is a `field_identifier`, already excluded by reader_types.
+    # KNOWN RECALL GAPS (conservative — drop, never false-emit): names that nest
+    # BELOW init_declarator are not reached by the ("child","init_declarator",None)
+    # path — a pointer const `const char *NAME` (pointer_declarator), a const array
+    # `const int TABLE[3]` (array_declarator), and a typedef'd const are NOT collected
+    # (Gate-2 run_078cf907). To add them later, descend pointer_declarator/
+    # array_declarator in the binding path. C `#define` is a SEPARATE, permanently
+    # deferred path (preproc_def — scopeless textual reads, un-guardable; research
+    # NO-GO). java/csharp remain deferred (class-scope value-ref = a future run).
+    "c": LangValueSpec(
+        binding_specs=[("declaration", ("child", "init_declarator", None))],
+        reader_types={"identifier"},
+        member_access_types={"field_expression"},
+        param_container_types={"parameter_list"},
+        qualifier_gate={"const"},
+    ),
+    # DEFERRED — java, csharp (no module scope — a const is a class field; class-scope
+    # value-ref is a future run), and C `#define`/preproc_def (scopeless textual, NO-GO).
 }
 
 
@@ -849,6 +872,24 @@ def _extract_from_tree(tree, path_str: str, language: str,
             # Ruby-style grammar-marked consts skip the distinctive heuristic.
             return (not vspec.use_distinctive_name) or _is_distinctive_const_name(nm)
 
+        def _passes_qualifier_gate(binding_node) -> bool:
+            """When a language sets qualifier_gate, a binding is a const ONLY if it
+            carries a matching qualifier keyword as a DIRECT child. C: a top-level
+            `declaration` is a const only with a `type_qualifier` whose text is
+            `const` — WITHOUT this gate every mutable global (`int x=3;`) and every
+            other qualifier (`volatile int x` — volatile is ALSO a `type_qualifier`,
+            text `volatile`) would be a false const (verified live, run_078cf907).
+            Text-equality on the keyword, NOT mere node-type presence, is required.
+            No-op when qualifier_gate is None (the 9 module-scope langs)."""
+            if vspec.qualifier_gate is None:
+                return True
+            return any(
+                c.type == "type_qualifier"
+                and c.text is not None
+                and c.text.decode("utf-8", errors="replace") in vspec.qualifier_gate
+                for c in binding_node.children
+            )
+
         # Module-scope bindings = binding nodes that are direct children of root
         # (after unwrapping the language's wrapper nodes, e.g. python
         # expression_statement / ts export_statement). Track their identity
@@ -866,7 +907,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
             # not explicitly typed (defensive, matches prior behavior).
             elif inner.type not in binding_types and inner.child_count == 1:
                 inner = inner.children[0]
-            if inner.type in binding_types:
+            if inner.type in binding_types and _passes_qualifier_gate(inner):
                 names = [n for n in _binding_names(inner) if _passes_name_guard(n)]
                 if names:
                     for nm in names:
