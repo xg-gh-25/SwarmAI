@@ -555,12 +555,17 @@ class TestVerifiedGating:
     """AC1: verified:false assertions are GATED — surfaced as
     [llm-inferred, UNVERIFIED], never as an established fact."""
 
-    def test_verified_true_is_fact(self):
+    def test_verified_true_is_llm_claim(self):
+        # Run C (Gate-2 F1): verified:true is an LLM self-assertion + a code POINTER,
+        # NOT a machine-verified fact — the recall corpus must mark it [llm-claim]
+        # with the anchor, never surface it as bare fact (mirrors _fmt_assertion_row).
         from core.recall_multi import _domain_corpus
         dom = {"id": "domain:x", "name": "X", "summary": "s",
                "business_rules": [{"rule": "stock must suffice", "anchor": "a.ts:1", "verified": True}]}
         corpus = _domain_corpus(dom, [], [])
-        assert "stock must suffice" in corpus
+        assert "[llm-claim] rule: stock must suffice (anchor: `a.ts:1`)" in corpus
+        # the old bare-fact form (no marker) must be GONE
+        assert "rule: stock must suffice" not in corpus.replace("[llm-claim] rule: stock must suffice", "")
         assert "[llm-inferred, UNVERIFIED] rule: stock must suffice" not in corpus
 
     def test_verified_false_is_gated(self):

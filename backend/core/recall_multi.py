@@ -547,10 +547,17 @@ def _score_spec_details_human(query: str, base, max_sections: int) -> list[dict]
 
 def _domain_corpus(dom: dict, flows: list, steps: list) -> str:
     """Flatten a domain + its flows/steps into one recall document string, with
-    verified:false assertions GATED behind an [llm-inferred, UNVERIFIED] prefix
-    (§8.1 verified gating) so a hallucinated constraint (paper spurious 0.67) is
-    never surfaced as an established code fact — the recall analogue of the
-    [RECALLED] provenance boundary / CLASS A′ defense.
+    EVERY LLM-sourced assertion honestly provenance-marked (§8.1 verified gating +
+    Run C semantic-boundary honesty) so no claim is ever surfaced as an established
+    code fact — the recall analogue of the [RECALLED] provenance boundary / CLASS A′
+    defense:
+    - verified:true  → '[llm-claim] label: txt (anchor: `x`)' — the LLM asserted it
+      AND gave a code POINTER, but the prose was NOT verified against the code (the
+      guard only checks the anchor STRING is present; see
+      ai_ready_helpers.check_llm_assertion_guards). NOT a machine-verified fact.
+    - verified:false / bare → '[llm-inferred, UNVERIFIED] label: txt'.
+    Mirrors _fmt_assertion_row so the recall corpus and the .spec.md render agree —
+    neither ever emits a verified:true assertion as bare fact (Gate-2 F1, run_3b2c85a7).
     """
     parts: list[str] = [str(dom.get("name", "")), str(dom.get("summary", ""))]
 
@@ -560,7 +567,9 @@ def _domain_corpus(dom: dict, flows: list, steps: list) -> str:
                 txt = a.get("rule") or a.get("cond") or a.get("case") or a.get("issue") \
                     or a.get("note") or ""
                 if a.get("verified") is True:
-                    parts.append(f"{label}: {txt}")
+                    anc = str(a.get("anchor") or "").strip()
+                    parts.append(f"[llm-claim] {label}: {txt}"
+                                 + (f" (anchor: `{anc}`)" if anc else ""))
                 else:
                     parts.append(f"[llm-inferred, UNVERIFIED] {label}: {txt}")
             elif isinstance(a, str):

@@ -1888,7 +1888,10 @@ class TestStepSpecTableRender:
         assert "接口契约" in md and "POST /api/eval/golden-set" in md
         assert "200=created" in md and "400=invalid" in md
         assert "输入 | CreateCaseRequest" in md
-        assert "4-gate validate (`eval.py:120`)" in md  # verified:true → anchored
+        # Run C: verified:true is an LLM self-assertion + a code POINTER, NOT a
+        # machine-verified fact — the render must SAY so (no bare "text (anchor)").
+        assert "[llm-claim] 4-gate validate (anchor: `eval.py:120`)" in md
+        assert "4-gate validate (`eval.py:120`)" not in md  # old bare-fact form is GONE
 
     def test_unverified_rule_gated_in_table(self):
         from scripts.ai_ready_helpers import project_domain_skeleton

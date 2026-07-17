@@ -308,17 +308,31 @@ def _iter_assertion_lists(node: dict):
 def check_llm_assertion_guards(doc: dict) -> list[str]:
     """§1.5 anti-spurious / anti-false-negative guard on LLM-generated assertions.
 
+    ⚠️ SCOPE OF THE GUARANTEE (Run C honesty): this guard enforces that a claim is
+    ANCHORED, NOT that its prose is TRUE. `verified:true` here means "the LLM asserted
+    this rule AND supplied a non-blank `anchor` string" — it does NOT mean the anchored
+    code was read and confirmed to match the prose (that would need an LLM prose-judge,
+    the deliberate anti-scope). A `verified:true` rule with a real anchor pointing at
+    code that contradicts it still passes this guard. Consumers must treat verified:true
+    as "LLM-asserted + anchor-present, human-unadjudicated" (see _fmt_assertion_row,
+    which renders it as '[llm-claim] ... (anchor: ...)', never as bare fact).
+
     Each assertion object anywhere in the domain layer:
     - MUST be a dict carrying an explicit boolean `verified` — a plain-string rule
       or a dict with no `verified` is an UN-adjudicated claim, flagged (else an LLM
       dodges the guard by omitting `verified` — Gate-2 HIGH, run_aad6d4f2).
     - `verified` MUST be a real bool (not "true"/"false"/1 — the `is True` identity
       check silently mis-branched string values, Gate-2 CRITICAL).
-    - verified:true  → non-blank `anchor` (code file:line); else spurious (paper 0.67).
+    - verified:true  → non-blank `anchor` (code file:line PRESENT — not resolved/read);
+      else spurious (paper 0.67).
     - verified:false → non-blank `absence_evidence` (grep=0 proof); §1.5#4: a
       "rule doesn't exist" negative is unreliable unless proven absent (the exact
       false-negative that bit Run 0's fixed-column grep).
-    Pure function → unit-testable + mutation-verifiable.
+    Pure function → unit-testable + mutation-verifiable. (Deliberately NOT extended to
+    read anchored files: a line-resolvability check is theater — anchors are
+    signature-first by design (INSTRUCTIONS.md: "signature is the stable anchor, not
+    line number"), so line-range checks false-reject intended drift, and "line exists"
+    says nothing about prose truth — Run C M3-skeptic verdict.)
     """
     errors: list[str] = []
 
@@ -675,6 +689,23 @@ def check_anchor_accounting(doc: dict) -> list[str]:
         # routes present but un-backfilled (no ids) — surface, do NOT pass vacuously.
         return [f"anchor-accounting cannot run: {e} — run backfill_route_ids(doc) "
                 f"first so every route carries an id (Gate-2 F2 anti-vacuous-pass)"]
+
+    # Gate-2 F1 (run AB adversarial, CRITICAL): a route present WITHOUT an id is
+    # silently excluded from all_ids by extract_entry_anchors — so a moved/renamed
+    # route that lost its id-reattach match would VANISH from the accounting
+    # denominator and accounted_ratio would read 1.0 over a set that no longer
+    # contains it (a real route invisible = the banking false-100% red line). The
+    # ALL-id-less case raises above; this catches the PARTIAL case (some ids present,
+    # some routes id-less) which does NOT raise. Every route MUST carry an id.
+    idless = [f"{r.get('method')} {r.get('path')} ({r.get('file_path')})"
+              for r in (doc.get("routes") or [])
+              if isinstance(r, dict) and not _nonblank(r.get("id"))]
+    for loc in idless:
+        errors.append(f"route {loc} has NO id — it is silently excluded from the "
+                      f"coverage denominator (a moved/renamed route that lost its "
+                      f"anchor id). Run backfill_route_ids(doc) so every route is "
+                      f"accounted (Gate-2 F1: id-less route = invisible coverage hole).")
+
     if not all_ids:
         return errors  # genuinely no route entries (v2 doc) — not this guard's job
 
@@ -1055,9 +1086,12 @@ def eval_spec_details(doc: dict) -> dict:
       fail-closed coverage invariant (must be 1.0; see check_anchor_accounting).
     - classified_ratio: classified / total anchors — the HONEST quality signal (how
       much is a real business flow, not just parked as unclassified). Never gated.
-    - precision (consistency): fraction of assertions that are VERIFIED (a real
-      bool True + non-blank anchor). FP here = spurious (paper: LLM 0.67) — an
-      un-anchored / verified:false assertion counts against precision.
+    - precision (consistency): fraction of assertions that are ANCHORED-AND-ASSERTED
+      (a real bool True + non-blank anchor). ⚠️ Run C honesty: "verified" here means
+      LLM-asserted + anchor-string-present, NOT prose-confirmed-against-code — this
+      metric measures how many claims carry a checkable pointer, not how many are
+      true. FP here = spurious (paper: LLM 0.67) — an un-anchored / verified:false
+      assertion counts against precision.
     - explicit: fraction of steps with explicit==True (paper: can-forward-engineer).
     - f1 = 2·recall·precision/(recall+precision).
 
@@ -1118,15 +1152,25 @@ def _md_cell(v) -> str:
 
 
 def _fmt_assertion_row(a) -> str:
-    """One assertion (rule/precondition/exception) as inline text with verified
-    gating: verified:true → 'text (anchor)'; else → '[llm-inferred] text'. A bare
-    string is treated as unadjudicated (§1.5). NOT pipe-escaped here — the caller
-    escapes the joined cell (an anchor in backticks may legitimately contain no pipe)."""
+    """One assertion (rule/precondition/exception) as inline text, HONESTLY labeled
+    so no assertion is ever read as a machine-verified fact (Run C, semantic-boundary
+    honesty). Two LLM-sourced states, both explicitly marked:
+
+    - verified:true  → '[llm-claim] text (anchor: `file:line`)'. This means the LLM
+      ASSERTED the rule AND supplied a code POINTER a human/grep can check — it does
+      NOT mean the prose was verified against the code (the guard only enforces the
+      anchor STRING is present, never reads the line). The old render 'text (`anchor`)'
+      LIED: it read as an established fact with a citation, so a banking consumer
+      mistook an LLM self-assertion for machine-confirmed truth.
+    - verified:false / bare string → '[llm-inferred] text' (unadjudicated, §1.5).
+
+    Neither ever renders as plain fact. NOT pipe-escaped here — the caller escapes the
+    joined cell."""
     if isinstance(a, dict):
         txt = a.get("rule") or a.get("cond") or a.get("case") or ""
         if a.get("verified") is True:
             anc = str(a.get("anchor") or "").strip()
-            return f"{txt}" + (f" (`{anc}`)" if anc else "")
+            return f"[llm-claim] {txt}" + (f" (anchor: `{anc}`)" if anc else "")
         return f"[llm-inferred] {txt}"
     return f"[llm-inferred] {a}"
 
@@ -1360,6 +1404,18 @@ def regenerate_spec_preserving_human(existing_spec_md: str, domain: dict,
 
 
 # ─── Run 5 (run_3349787d, design §10): behavioral-equivalence layer ───
+#
+# ⚠️ DESIGN-ONLY / CONSUMER-API for a STATIC analyzer (Run C honesty note): this layer
+# scores the spec's behavioral claims against REAL runtime `observations` — but a
+# static code-intel tool NEVER executes the target repo, so it cannot itself PRODUCE
+# observations. `observations` MUST be supplied by an EXTERNAL caller that has them
+# (a CI harness / test-runner / instrumented runtime). Do NOT build an in-tool
+# "observations producer" — a static tool can only synthesize them from the same doc
+# that made the claims, a closed loop that fake-passes by construction (Run C
+# M3-skeptic verdict: C042 over-engineering). Absent observations the layer is
+# CORRECTLY inert: score_equivalence returns 'unchecked', never 'verified'. So this
+# trio is a consumer API awaiting real observations, not a production code path — it
+# is expected to have no non-test caller inside this repo until such a consumer exists.
 
 def derive_equivalence_assertions(doc: dict) -> list[dict]:
     """From each step.contract{http,status_codes} emit checkable assertion records
