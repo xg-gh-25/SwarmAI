@@ -5,7 +5,7 @@
  *   System Check -> LLM Auth (blocking) -> [Restore (if backup)] -> Channels (optional) -> Ready.
  * Shown when onboardingComplete is false in system status.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { systemService, RestoreEvent } from '../services/system';
 import { settingsService } from '../services/settings';
 import { channelsService } from '../services/channels';
@@ -28,6 +28,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const [authVerified, setAuthVerified] = useState(false);
   const [hasBackup, setHasBackup] = useState(false);
   const [restoreSkipped, setRestoreSkipped] = useState(false);
+  const skippingRef = useRef(false);
 
   // Step 1: Auto-check system with retry every 3s until backend is ready.
   // If it never becomes ready, surface a failure state after a bounded number
@@ -94,7 +95,11 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   // Escape hatch shared by Step1 failure card and Step2 "Configure later":
   // mark onboarding complete and enter the app. CredentialBanner surfaces any
   // unverified/expired auth state afterward, so this is never a dead-end.
-  const handleSkipSetup = useCallback(() => { void handleComplete(); }, [handleComplete]);
+  const handleSkipSetup = useCallback(() => {
+    if (skippingRef.current) return; // guard against double-click → duplicate onboarding-complete PUT
+    skippingRef.current = true;
+    void handleComplete();
+  }, [handleComplete]);
 
   // Show restore step only if backup was detected and not skipped
   const showRestore = hasBackup && !restoreSkipped;

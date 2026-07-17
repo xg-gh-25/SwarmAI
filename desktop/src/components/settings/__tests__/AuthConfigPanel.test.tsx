@@ -52,6 +52,18 @@ describe('AuthConfigPanel — AC4 SSO account input', () => {
     expect(screen.queryByPlaceholderText(/12-digit AWS account ID/i)).not.toBeInTheDocument();
   });
 
+  it('SSO with NO probed account hides the field entirely (no empty read-only box)', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
+      // no iamDetails, no adaDetails → accountId stays ''
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    // No editable input AND no read-only "AWS Account ID" label at all.
+    expect(screen.queryByPlaceholderText(/12-digit AWS account ID/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('AWS Account ID')).not.toBeInTheDocument();
+  });
+
   it('ADA keeps an EDITABLE account input', async () => {
     mockGetAuthHint.mockResolvedValue({
       suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',

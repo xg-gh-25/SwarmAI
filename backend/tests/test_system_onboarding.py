@@ -193,6 +193,23 @@ class TestVerifyAuthOverrideBody:
         _, kwargs = mock_boto3.client.call_args
         assert kwargs.get("region_name") == "us-east-1"
 
+    def test_verify_auth_non_dict_body_does_not_crash(self, client):
+        """A non-dict JSON body (array/string) must NOT 500 — falls back to
+        stored config via the isinstance(parsed, dict) guard."""
+        mock_response = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = mock_response
+        with patch("routers.system.boto3") as mock_boto3:
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth", json=["garbage", "array"])
+        assert resp.status_code == 200
+        # fell back to stored/fallback region, no crash
+        _, kwargs = mock_boto3.client.call_args
+        assert kwargs.get("region_name") == "us-east-1"
+
     def test_verify_auth_override_use_bedrock_false_routes_to_apikey(self, client):
         """Body {use_bedrock: false} overrides stored use_bedrock=true →
         routes to the Anthropic API path, not Bedrock."""

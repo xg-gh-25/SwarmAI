@@ -218,6 +218,19 @@ describe('OnboardingPage — no dead-ends', () => {
     expect(screen.queryByText('us-east-1')).not.toBeInTheDocument();
   });
 
+  it('double-clicking "Configure later" fires onboarding-complete only ONCE', async () => {
+    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop' });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('LLM Authentication'));
+    const later = (await screen.findByText(/Configure later/i)).closest('button')!;
+    await act(async () => {
+      fireEvent.click(later);
+      fireEvent.click(later); // rapid double-click
+    });
+    await waitFor(() => expect(mockSetOnboardingComplete).toHaveBeenCalled());
+    expect(mockSetOnboardingComplete).toHaveBeenCalledTimes(1);
+  });
+
   it('system check interval does NOT reset step after advancing past step 2', async () => {
     // Use a slow status that resolves immediately
     let callCount = 0;
