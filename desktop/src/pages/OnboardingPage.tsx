@@ -16,25 +16,37 @@ interface OnboardingPageProps {
   onComplete: () => void;
 }
 
+// After this many consecutive failed/not-ready polls (~60s at 3s each), Step1
+// stops pretending to spin forever and surfaces a failure card + an escape.
+const SYSTEM_CHECK_FAILURE_THRESHOLD = 20;
+
 export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const [step, setStep] = useState(1);
   const [systemOk, setSystemOk] = useState(false);
+  const [systemCheckFailed, setSystemCheckFailed] = useState(false);
   const [authVerified, setAuthVerified] = useState(false);
   const [hasBackup, setHasBackup] = useState(false);
   const [restoreSkipped, setRestoreSkipped] = useState(false);
 
-  // Step 1: Auto-check system with retry every 3s until backend is ready
+  // Step 1: Auto-check system with retry every 3s until backend is ready.
+  // If it never becomes ready, surface a failure state after a bounded number
+  // of attempts instead of spinning forever (a partial-init backend must not
+  // trap the user on an infinite spinner — the gate now routes them here).
   useEffect(() => {
     let cancelled = false;
     let done = false;
+    let attempts = 0;
     let interval: ReturnType<typeof setInterval> | null = null;
+    const stop = () => { if (interval) { clearInterval(interval); interval = null; } };
     const check = async () => {
       if (done) return; // Already succeeded — no-op for late interval fires
       try {
         const status = await systemService.getStatus();
-        if (!cancelled && status.database.healthy && status.swarmWorkspace.ready) {
+        if (cancelled) return;
+        if (status.database.healthy && status.swarmWorkspace.ready) {
           done = true;
           setSystemOk(true);
+          setSystemCheckFailed(false);
           // Check if backup exists (fresh install might have a backup to restore)
           // Skip on Hive — cloud instances don't restore from user backups
           try {
@@ -47,17 +59,24 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
             }
           } catch { /* no backup configured — skip */ }
           setStep(2); // Auto-advance to Auth
-          // Stop polling — system is confirmed ready, step 1 done
-          if (interval) { clearInterval(interval); interval = null; }
+          stop(); // Stop polling — system is confirmed ready, step 1 done
+          return;
         }
+        // Reachable-but-not-ready counts as a failed attempt too.
+        attempts += 1;
       } catch {
-        // Backend not ready yet — retry will fire via interval
+        // Backend not reachable yet — count the attempt.
+        attempts += 1;
+      }
+      if (!cancelled && !done && attempts >= SYSTEM_CHECK_FAILURE_THRESHOLD) {
+        setSystemCheckFailed(true); // surface the failure card + escape (does not stop polling — may still recover)
       }
     };
     check();
     interval = setInterval(check, 3000);
-    return () => { cancelled = true; if (interval) clearInterval(interval); };
+    return () => { cancelled = true; stop(); };
   }, []);
+
 
   // Step 4: Complete — always proceed even if backend flag fails to persist
   const handleComplete = useCallback(async () => {
@@ -70,6 +89,11 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
     }
     onComplete();
   }, [onComplete]);
+
+  // Escape hatch shared by Step1 failure card and Step2 "Configure later":
+  // mark onboarding complete and enter the app. CredentialBanner surfaces any
+  // unverified/expired auth state afterward, so this is never a dead-end.
+  const handleSkipSetup = useCallback(() => { void handleComplete(); }, [handleComplete]);
 
   // Show restore step only if backup was detected and not skipped
   const showRestore = hasBackup && !restoreSkipped;
@@ -116,10 +140,11 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
 
       {/* Main content */}
       <div className="flex-1 p-12 max-w-2xl">
-        {step === 1 && <Step1SystemCheck ok={systemOk} />}
+        {step === 1 && <Step1SystemCheck ok={systemOk} failed={systemCheckFailed} onSkip={handleSkipSetup} />}
         {step === 2 && (
           <Step2Auth
             onVerified={() => { setAuthVerified(true); setStep(3); }}
+            onSkip={handleSkipSetup}
           />
         )}
         {step === 3 && showRestore && (
@@ -142,7 +167,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
 
 // ── Step 1: System Check ──
 
-function Step1SystemCheck({ ok }: { ok: boolean }) {
+function Step1SystemCheck({ ok, failed, onSkip }: { ok: boolean; failed: boolean; onSkip: () => void }) {
   return (
     <div>
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">System Check</h2>
@@ -151,6 +176,25 @@ function Step1SystemCheck({ ok }: { ok: boolean }) {
         <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-3">
           <span className="material-symbols-outlined text-green-400">check_circle</span>
           <span className="text-green-400">Backend, Database, and Workspace are ready.</span>
+        </div>
+      ) : failed ? (
+        <div className="space-y-4">
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+            <div className="flex items-center gap-3 mb-1">
+              <span className="material-symbols-outlined text-red-400">error</span>
+              <span className="text-red-400 font-medium">System check is taking longer than expected</span>
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              The backend hasn't reported ready. It may still be starting up — this will keep retrying.
+              You can wait, restart the app, or proceed now and finish setup later.
+            </p>
+          </div>
+          <button
+            onClick={onSkip}
+            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+          >
+            Continue anyway
+          </button>
         </div>
       ) : (
         <div className="p-4 bg-[var(--color-card)] rounded-lg flex items-center gap-3">
@@ -164,11 +208,11 @@ function Step1SystemCheck({ ok }: { ok: boolean }) {
 
 // ── Step 2: LLM Authentication ──
 
-function Step2Auth({ onVerified }: { onVerified: () => void }) {
+function Step2Auth({ onVerified, onSkip }: { onVerified: () => void; onSkip: () => void }) {
   const [failCount, setFailCount] = useState(0);
   const [isHive, setIsHive] = useState(false);
 
-  // Detect Hive mode for escape-hatch visibility
+  // Detect Hive mode for escape-hatch wording
   useEffect(() => {
     systemService.getAuthHint()
       .then((hint) => { if (hint.runMode === 'hive') setIsHive(true); })
@@ -186,15 +230,17 @@ function Step2Auth({ onVerified }: { onVerified: () => void }) {
         onVerifySuccess={onVerified}
         onVerifyFail={() => setFailCount(c => c + 1)}
       />
-      {/* Escape hatch: after 2+ failures on Hive, let user proceed (they can't fix IAM from UI) */}
-      {isHive && failCount >= 2 && (
+      {/* Escape hatch — ALWAYS available (desktop + Hive): a user who can't reach
+          AWS right now must not be trapped in the wizard. "Configure later"
+          completes onboarding; CredentialBanner surfaces the unverified state. */}
+      <div className="mt-4">
         <button
-          onClick={onVerified}
-          className="mt-4 px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          onClick={onSkip}
+          className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          Skip — fix IAM permissions later
+          {isHive && failCount >= 2 ? 'Skip — fix IAM permissions later' : 'Configure later'}
         </button>
-      )}
+      </div>
     </div>
   );
 }

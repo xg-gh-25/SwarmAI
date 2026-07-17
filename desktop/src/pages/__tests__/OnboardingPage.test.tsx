@@ -142,6 +142,42 @@ describe('OnboardingPage — no dead-ends', () => {
     });
   });
 
+  it('AC2: Step1 shows a failure surface + escape after repeated status failures (no infinite spin)', async () => {
+    // Backend never becomes ready — getStatus keeps failing.
+    mockGetStatus.mockRejectedValue(new Error('backend down'));
+    vi.useFakeTimers();
+    try {
+      render(<OnboardingPage onComplete={vi.fn()} />);
+      // Drive the 3s poll interval past the failure threshold.
+      await act(async () => {
+        for (let i = 0; i < 25; i++) {
+          await vi.advanceTimersByTimeAsync(3000);
+        }
+      });
+      // A failure card + an escape control must appear — not an endless spinner.
+      expect(screen.getByText(/System check (failed|could not complete|is taking)/i)).toBeInTheDocument();
+      expect(screen.getByText(/Continue anyway|Skip|Configure later/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('AC3: desktop Step2 has a "Configure later" control that completes onboarding', async () => {
+    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop' });
+    const onComplete = vi.fn();
+    render(<OnboardingPage onComplete={onComplete} />);
+    await waitFor(() => screen.getByText('LLM Authentication'));
+    // Desktop user who can't reach AWS must have an escape — not just Hive.
+    const later = await screen.findByText(/Configure later/i);
+    await act(async () => {
+      fireEvent.click(later.closest('button')!);
+    });
+    await waitFor(() => {
+      expect(mockSetOnboardingComplete).toHaveBeenCalled();
+      expect(onComplete).toHaveBeenCalled();
+    });
+  });
+
   it('system check interval does NOT reset step after advancing past step 2', async () => {
     // Use a slow status that resolves immediately
     let callCount = 0;
