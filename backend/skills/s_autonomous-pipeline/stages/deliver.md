@@ -398,6 +398,34 @@ For each finding, output a JSON object on its own line:
 Required fields: severity, confidence, path, category, summary, specialist.
 Optional: line, fix, fingerprint, evidence, exploit (required for security specialist).
 
+## Restraint (borrowed from Amazon Spec Studio's 4-detector skeleton — cuts noise)
+A padded weak finding is worse than silence — it trains the reviewer to ignore
+findings. Do not invent a finding to "look thorough."
+
+**But ZERO findings is valid ONLY after you have Read every changed file and can name
+what you checked.** A bare `NO FINDINGS` with no evidence of reading is the C011 /
+run_bd42b58f failure signature ("self-review found 0, adversarial found 5, same code"),
+NOT a clean result. Zero-is-valid is a noise brake, never a skip license — if you have
+not read the files, you have not earned "no findings."
+
+Before you report ANY finding, it must pass ALL 3 questions (not-all-YES → do NOT report):
+1. Is it a real BUG (a wrong behavior), not a style/naming/taste preference?
+2. Will it actually trigger in production (not a hypothetical edge outside the requirement)?
+   **EXCEPTION — shared mutable state:** if the finding touches a variable/flag/field read
+   by 2+ sites, REPORT it even if prod-trigger is uncertain. Blast-radius, not your
+   confidence about one call site, decides — let Step 3c.1 adjudicate (run_fd4d756b: a
+   conf-4 shared-state finding dropped here → real regression shipped). Do NOT pre-empt 3c.1.
+3. Do you have a concrete `file:line` + a reproducing input / exploit?
+
+Do NOT report (negative list):
+- pure style / naming / formatting preferences
+- a path covered by a test you have CONFIRMED is non-vacuous (goes RED when the guarded
+  behavior is reverted — RP47). **Bare test existence does NOT count** — an un-mutation-
+  verified test is exactly the theater RP47/RP31 say to distrust; if unsure, REPORT.
+- hypothetical edge cases outside the stated requirement
+- "could be better but isn't wrong" suggestions
+- speculative concerns you cannot tie to a specific line
+
 If no findings: output `NO FINDINGS` and nothing else.
 Do not output anything else — no preamble, no summary, no commentary.
 
@@ -442,11 +470,28 @@ After all specialist sub-agents complete:
 - Same fingerprint from multiple specialists → keep highest confidence, tag:
   "MULTI-SPECIALIST CONFIRMED (specialist1 + specialist2)", boost confidence +1 (cap 10)
 
-**3c. Apply confidence gates (Unified Confidence Rubric):**
+**3c. Apply confidence gates (Unified Confidence Rubric).**
+
+> **ORDER IS LOAD-BEARING (§11.3 restraint reframe, run_b3404953):** WHEN a finding
+> touches shared mutable state (≥2 readers, grep-derived), the Shared-State Override
+> (3c.1) is evaluated first and BLOCKS tier-based suppression — such a finding is NEVER
+> suppressed by the confidence tiers below, regardless of how low its confidence. (A
+> finding that touches no shared symbol has nothing for 3c.1 to evaluate; the tiers apply
+> directly.) This is why the drop is NOT code-enforced as a blind `confidence < 5` filter:
+> the shared-state status is grep-derived (not a finding field), so a mechanical drop would
+> re-automate the run_fd4d756b regression (a conf-4 shared-state finding wrongly suppressed
+> → real kill-healthy-subprocess bug shipped).
+
+Three tiers (a finding cleared by 3c.1, or not shared-state):
 - Confidence 7+: show normally in findings output
 - Confidence 5-6: show with caveat "⚠️ Medium confidence — verify"
-- Confidence 3-4: suppress from main findings (appendix only)
-- Confidence 1-2: suppress entirely
+- Confidence 3-4: suppress from main findings (**appendix only — retained, not dropped**)
+- Confidence 1-2: suppress entirely (dropped)
+
+**Do NOT collapse this into a binary keep/drop at 5** — the conf 3-4 appendix tier is
+retained for visibility, and Step 5's fix-gate (`confidence >= 5`) depends on the
+surviving-vs-appendix distinction. Blanket-dropping all sub-5 findings loses the appendix
+and violates the "verify top findings by evidence" discipline.
 
 **3c.1 Shared-State Override (BLOCKING — overrides suppression):**
 
