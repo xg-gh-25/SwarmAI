@@ -878,3 +878,50 @@ class TestValueRefLanguages:
         assert not consts and not refs, (
             f"{lang} (deferred) must emit no value-ref nodes/edges, "
             f"got {len(consts)} consts, {len(refs)} refs")
+
+
+class TestValueRefGate2Fixes:
+    """Gate-2 adversarial findings (run_13667da9), both verified against live AST."""
+
+    def _parse(self, tmp_path, lang, ext, src):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if lang not in P.LANG_VALUE_SPEC or not P._tree_sitter_live(lang):
+            pytest.skip(f"{lang} not enabled/live")
+        f = tmp_path / f"m{ext}"
+        f.write_text(src)
+        return P.parse_file(f, tmp_path)
+
+    def _ref_targets(self, r):
+        from core.code_intel.parser import QUALIFIED_SEPARATOR
+        return [e.target_id.split(QUALIFIED_SEPARATOR)[-1]
+                for e in r.edges if e.edge_type == "references"]
+
+    def test_ruby_class_method_call_receiver_no_edge(self, tmp_path):
+        """Gate-2 HIGH: `Foo.new` — a `constant` that is the RECEIVER of a call is a
+        class reference, not a value read. Must NOT emit a references edge, while a
+        genuine bare const read (BAR) still does."""
+        r = self._parse(tmp_path, "ruby", ".rb",
+                        "Foo = 100\nBAR = 5\ndef test\n  x = Foo.new\n  y = BAR\nend\n")
+        targets = self._ref_targets(r)
+        assert "Foo" not in targets, "Foo.new (call receiver) must NOT emit a value-ref edge"
+        assert "BAR" in targets, "a genuine bare const read (BAR) must still emit an edge"
+
+    def test_go_grouped_const_all_names_extracted(self, tmp_path):
+        """Gate-2 MED: `const ( A=1; B=2 )` (grouped) must extract BOTH names + edges,
+        not silently drop all but the first (recall gap)."""
+        r = self._parse(tmp_path, "go", ".go",
+                        "package m\nconst (\n  MaxRetries = 3\n  MinRetries = 1\n)\n"
+                        "func f() int { return MaxRetries + MinRetries }\n")
+        consts = {n.name for n in r.nodes if n.node_type == "constant"}
+        targets = set(self._ref_targets(r))
+        assert {"MaxRetries", "MinRetries"} <= consts, f"both grouped consts must be nodes, got {consts}"
+        assert {"MaxRetries", "MinRetries"} <= targets, f"both grouped consts must have ref edges, got {targets}"
+
+    def test_ts_multi_declarator_all_names_extracted(self, tmp_path):
+        """Gate-2 MED sibling: `const A=1, B=2` (multi-declarator) must extract BOTH."""
+        r = self._parse(tmp_path, "typescript", ".ts",
+                        "const MAX_A = 1, MAX_B = 2;\n"
+                        "function f() { return MAX_A + MAX_B; }\n")
+        targets = set(self._ref_targets(r))
+        assert {"MAX_A", "MAX_B"} <= targets, f"both declarators must have ref edges, got {targets}"

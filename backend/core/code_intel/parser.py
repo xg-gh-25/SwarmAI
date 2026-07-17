@@ -173,17 +173,22 @@ class LangValueSpec:
 
     __slots__ = (
         "binding_specs", "lhs_type_filter", "qualifier_gate", "reader_types",
-        "member_access_types", "wrap_types", "param_container_types",
-        "use_distinctive_name",
+        "member_access_types", "receiver_guard_types", "wrap_types",
+        "param_container_types", "use_distinctive_name",
     )
 
     def __init__(self, *, binding_specs, reader_types, member_access_types,
                  param_container_types, wrap_types=frozenset(),
+                 receiver_guard_types=frozenset(),
                  lhs_type_filter=None, qualifier_gate=None,
                  use_distinctive_name=True):
         self.binding_specs = binding_specs
         self.reader_types = frozenset(reader_types)
         self.member_access_types = frozenset(member_access_types)
+        # receiver_guard_types: node types where a leading const is a call RECEIVER
+        # (e.g. ruby `Foo.new` — `Foo` is the first child of a `call`), not a value
+        # read. Only set for languages whose reader node type doubles as a class ref.
+        self.receiver_guard_types = frozenset(receiver_guard_types)
         self.param_container_types = frozenset(param_container_types)
         self.wrap_types = frozenset(wrap_types)
         self.lhs_type_filter = frozenset(lhs_type_filter) if lhs_type_filter else None
@@ -249,6 +254,11 @@ LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
         use_distinctive_name=False,
         reader_types={"constant"},
         member_access_types={"scope_resolution"},
+        # `Foo.new` — a `constant` that is the receiver of a `call` is a class
+        # reference, not a value read (Gate-2: false-positive guard). Ruby uses the
+        # same `constant` node for a class name and a const value, so we must guard
+        # the call-receiver position specifically.
+        receiver_guard_types={"call"},
         param_container_types={"method_parameters"},
     ),
     # DEFERRED — php, swift, kotlin (NOT in Tier A), for a reason ORTHOGONAL to
@@ -273,23 +283,34 @@ LANG_VALUE_SPEC: dict[str, LangValueSpec] = {
 }
 
 
-def _resolve_binding_name_node(node, name_path):
-    """Resolve a binding node + name_path (see LangValueSpec) to the identifier
-    leaf node naming the const, or None if the path doesn't reach a single leaf."""
+def _resolve_binding_name_nodes(node, name_path):
+    """Resolve a binding node + name_path (see LangValueSpec) to the list of
+    identifier leaf nodes it binds — usually one, but MULTIPLE when a single binding
+    node groups several names (Gate-2 run_13667da9): go `const ( A=1; B=2 )` has
+    several `const_spec` children; ts `const A=1, B=2` has several
+    `variable_declarator` children. Taking only the first silently dropped edges for
+    the rest (recall gap). Returns [] if the path reaches no identifier leaf.
+      - str F          → child_by_field_name(F)  (single-name shapes: rust/swift)
+      - ("child", T, F)→ for EVERY child of type T, its field F  (multi-name shapes)
+      - ("child", T)   → for EVERY child of type T, its first identifier-ish leaf
+    """
     if isinstance(name_path, str):
-        return node.child_by_field_name(name_path)
+        n = node.child_by_field_name(name_path)
+        return [n] if n is not None else []
     if isinstance(name_path, tuple) and name_path and name_path[0] == "child":
         child_type = name_path[1]
-        target = next((c for c in node.children if c.type == child_type), None)
-        if target is None:
-            return None
         field = name_path[2] if len(name_path) > 2 else None
-        if field:
-            return target.child_by_field_name(field)
-        # No field: take the first identifier-ish leaf under the child.
-        return next((c for c in target.children
-                     if c.type in _IDENTIFIER_LEAF_TYPES), None)
-    return None
+        out = []
+        for target in (c for c in node.children if c.type == child_type):
+            if field:
+                leaf = target.child_by_field_name(field)
+            else:
+                leaf = next((c for c in target.children
+                             if c.type in _IDENTIFIER_LEAF_TYPES), None)
+            if leaf is not None:
+                out.append(leaf)
+        return out
+    return []
 
 
 def _is_distinctive_const_name(name: str) -> bool:
@@ -300,26 +321,38 @@ def _is_distinctive_const_name(name: str) -> bool:
     return len(name) >= 3 and (any(c.isupper() for c in name) or "_" in name)
 
 
-def _is_member_access(node, member_access_types) -> bool:
-    """True if this identifier is the trailing `.member` of a member access
-    (`obj.MAX_RETRIES` / `obj->CONST` / `Obj::CONST`), NOT a standalone name read.
-    Such an identifier names a member OF another object, not a same-named module
-    const, so a value-ref edge would be a false positive (inflates blast radius).
+def _is_member_access(node, member_access_types, receiver_guard_types=frozenset()) -> bool:
+    """True if this identifier is part of a member/receiver access, NOT a standalone
+    value read of a module const — so a value-ref edge would be a false positive.
 
-    Language-agnostic (Gate-1 run_13667da9): the member-access node type differs per
-    language (python=attribute, go=selector_expression, ts=member_expression, …), so
-    the caller passes the active language's member_access_types. We skip ONLY when
-    the identifier is the trailing member (the last identifier-ish child of the
-    member-access node); the leading object is a genuine standalone read, left alone.
+    TWO guarded shapes (Gate-2 run_13667da9):
+      (a) TRAILING MEMBER of a member-access node (`obj.MAX_RETRIES` / `obj->CONST` /
+          `Obj::CONST`): the identifier names a member OF another object. The
+          member-access node type differs per language (python=attribute,
+          go=selector_expression, ts=member_expression, ruby=scope_resolution, …),
+          passed as member_access_types. We skip the LAST identifier-ish child (the
+          member); the leading object is a genuine read, left alone.
+      (b) RECEIVER of a call (`Foo.new` in ruby, where `Foo` is a `constant` node
+          that is the FIRST child of a `call` node followed by `.method`): calling a
+          method ON a constant is not reading the const's VALUE. Guarded when the
+          identifier is the first child of a node in receiver_guard_types AND a later
+          sibling is a `.`/method access. (Ruby class-reference false positive.)
     """
     parent = node.parent
-    if parent is None or parent.type not in member_access_types:
+    if parent is None:
         return False
-    # The trailing member is the LAST identifier-ish child of the member-access node
-    # (works across grammars: `field`/`attribute`/`name`/`property` field names vary,
-    # but the member always sorts after the object in child order).
-    members = [c for c in parent.children if c.type in _IDENTIFIER_LEAF_TYPES]
-    return bool(members) and members[-1].start_byte == node.start_byte
+    # (a) trailing member of a member-access node.
+    if parent.type in member_access_types:
+        members = [c for c in parent.children if c.type in _IDENTIFIER_LEAF_TYPES]
+        if members and members[-1].start_byte == node.start_byte:
+            return True
+    # (b) receiver (leading const) of a call — `Foo.new`. Guard only when node is the
+    # FIRST child and there is a trailing method access (a `.`/`::`-then-name), so a
+    # bare `Foo` read (parent not a call, or Foo used as a value) is NOT guarded.
+    if parent.type in receiver_guard_types and parent.children:
+        if parent.children[0].start_byte == node.start_byte and len(parent.children) > 1:
+            return True
+    return False
 
 
 # NOTE: IMPORT_TYPES not used in Phase 1 — imports extracted via regex in
@@ -687,21 +720,25 @@ def _extract_from_tree(tree, path_str: str, language: str,
         name_path_by_type = {t: p for t, p in vspec.binding_specs}
         shadowed: set[str] = set()
 
-        def _binding_name(node):
-            """Return the single plain-identifier binding name, or None (skip
-            tuple/subscript/pattern targets — ambiguous). Uses the language's
-            name_path + optional lhs_type_filter (ruby trusts the `constant` node)."""
+        def _binding_names(node):
+            """Return ALL plain-identifier binding names on this binding node (skip
+            tuple/subscript/pattern targets — ambiguous). Usually one, but several
+            when a binding groups multiple names (go grouped const, ts `A=1,B=2`).
+            Uses the language's name_path + optional lhs_type_filter (ruby trusts the
+            grammar `constant` node)."""
             path = name_path_by_type.get(node.type)
             if path is None:
-                return None
-            leaf = _resolve_binding_name_node(node, path)
-            if leaf is None or not leaf.text:
-                return None
-            if leaf.type not in _IDENTIFIER_LEAF_TYPES:
-                return None
-            if vspec.lhs_type_filter and leaf.type not in vspec.lhs_type_filter:
-                return None
-            return _sanitize_name(leaf.text.decode("utf-8", errors="replace"))
+                return []
+            out = []
+            for leaf in _resolve_binding_name_nodes(node, path):
+                if leaf is None or not leaf.text:
+                    continue
+                if leaf.type not in _IDENTIFIER_LEAF_TYPES:
+                    continue
+                if vspec.lhs_type_filter and leaf.type not in vspec.lhs_type_filter:
+                    continue
+                out.append(_sanitize_name(leaf.text.decode("utf-8", errors="replace")))
+            return out
 
         def _passes_name_guard(nm):
             # Ruby-style grammar-marked consts skip the distinctive heuristic.
@@ -725,9 +762,10 @@ def _extract_from_tree(tree, path_str: str, language: str,
             elif inner.type not in binding_types and inner.child_count == 1:
                 inner = inner.children[0]
             if inner.type in binding_types:
-                nm = _binding_name(inner)
-                if nm and _passes_name_guard(nm):
-                    module_consts.setdefault(nm, inner.start_point[0] + 1)
+                names = [n for n in _binding_names(inner) if _passes_name_guard(n)]
+                if names:
+                    for nm in names:
+                        module_consts.setdefault(nm, inner.start_point[0] + 1)
                     module_binding_bytes.add(inner.start_byte)
 
         def _param_name(node):
@@ -748,9 +786,9 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # binding and a same-typed nested binding can't be told apart by depth alone.
         def _scan_shadow(node):
             if node.type in binding_types and node.start_byte not in module_binding_bytes:
-                nm = _binding_name(node)
-                if nm and nm in module_consts:
-                    shadowed.add(nm)
+                for nm in _binding_names(node):
+                    if nm in module_consts:
+                        shadowed.add(nm)
             # Parameter bindings: identifiers directly under the language's parameter
             # container node (a function signature), not every identifier.
             elif node.type in vspec.param_container_types:
@@ -779,6 +817,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
     _emitted_refs: set[tuple[str, str]] = set()
     _reader_types = vspec.reader_types if vspec is not None else frozenset()
     _member_types = vspec.member_access_types if vspec is not None else frozenset()
+    _receiver_types = vspec.receiver_guard_types if vspec is not None else frozenset()
 
     def _walk(node, enclosing_func=None, enclosing_class=None):
         ntype = node.type
@@ -791,7 +830,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # dedup NULL-line edges.
         if (module_consts and enclosing_func and ntype in _reader_types
                 and node.text is not None
-                and not _is_member_access(node, _member_types)):
+                and not _is_member_access(node, _member_types, _receiver_types)):
             nm = _sanitize_name(node.text.decode("utf-8", errors="replace"))
             if nm in module_consts and (enclosing_func, nm) not in _emitted_refs:
                 _emitted_refs.add((enclosing_func, nm))
