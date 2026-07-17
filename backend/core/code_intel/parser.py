@@ -132,6 +132,25 @@ def _is_distinctive_const_name(name: str) -> bool:
     return len(name) >= 3 and (any(c.isupper() for c in name) or "_" in name)
 
 
+def _is_attribute_member(node) -> bool:
+    """True if this identifier is the `.member` part of an attribute access
+    (`obj.MAX_RETRIES`), NOT a standalone name read. Such an identifier names an
+    attribute OF another object — it is NOT a read of a same-named module const,
+    so a value-ref edge would be a false positive (inflates blast radius).
+
+    Detected via the tree-sitter `attribute` node's `attribute` field: for
+    `config.MAX_RETRIES`, node.parent is `attribute`, its `object` field is
+    `config` and its `attribute` field is this `MAX_RETRIES` identifier. We skip
+    ONLY when the identifier is that trailing member — the leading object
+    (`config`) is a genuine standalone read and is left alone.
+    """
+    parent = node.parent
+    if parent is None or parent.type != "attribute":
+        return False
+    member = parent.child_by_field_name("attribute")
+    return member is not None and member.start_byte == node.start_byte
+
+
 # NOTE: IMPORT_TYPES not used in Phase 1 — imports extracted via regex in
 # _build_file_scope_regex(). Tree-sitter import node walking deferred to Phase 2.
 
@@ -522,17 +541,45 @@ def _extract_from_tree(tree, path_str: str, language: str,
                     module_consts.setdefault(nm, inner.start_point[0] + 1)
                     module_binding_bytes.add(inner.start_byte)
 
+        # A function PARAMETER named like a const also shadows it: a read inside
+        # that function reads the param, not the module const. Params are NOT
+        # `assignment` nodes (Python: `parameter` / `default_parameter` /
+        # `typed_parameter` / `typed_default_parameter` under a `parameters` node),
+        # so the assignment scan misses them → they need their own detection.
+        _PARAM_TYPES = {
+            "parameter", "default_parameter", "typed_parameter",
+            "typed_default_parameter", "identifier",  # bare param is a lone identifier
+        }
+
+        def _param_name(node):
+            """Extract the identifier name of a parameter node (or None)."""
+            if node.type == "identifier":
+                return _sanitize_name(node.text.decode("utf-8", errors="replace")) if node.text else None
+            # default/typed params: the name is the first `identifier` child.
+            for c in node.children:
+                if c.type == "identifier" and c.text:
+                    return _sanitize_name(c.text.decode("utf-8", errors="replace"))
+            return None
+
         # Shadow set: a binding of a tracked const name whose node is NOT the
-        # module-scope binding itself → it's bound in a nested scope, so a
-        # file-scope edge would be a false positive. Compared by start_byte
-        # (node identity), NOT by depth — the module binding sits at depth 2
-        # (root→expression_statement→assignment) so a depth threshold can't
-        # distinguish it from a nested rebinding.
+        # module-scope binding itself → it's bound in a nested scope (assignment
+        # OR function parameter), so a file-scope edge would be a false positive.
+        # Assignments compared by start_byte (node identity), NOT by depth — the
+        # module binding sits at depth 2 (root→expression_statement→assignment) so
+        # a depth threshold can't distinguish it from a nested rebinding.
         def _scan_shadow(node):
             if node.type in assign_types and node.start_byte not in module_binding_bytes:
                 nm = _binding_name(node)
                 if nm and nm in module_consts:
                     shadowed.add(nm)
+            # Parameter bindings: only look at identifiers directly under a
+            # `parameters` node (a function signature), not every identifier.
+            elif node.type == "parameters":
+                for pc in node.children:
+                    if pc.type in _PARAM_TYPES:
+                        nm = _param_name(pc)
+                        if nm and nm in module_consts:
+                            shadowed.add(nm)
             for c in node.children:
                 _scan_shadow(c)
         _scan_shadow(root)
@@ -562,7 +609,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # site) — which is exactly why the NULL-line idempotency fix (HOLE 2) must
         # dedup NULL-line edges.
         if (module_consts and enclosing_func and ntype == "identifier"
-                and node.text is not None):
+                and node.text is not None and not _is_attribute_member(node)):
             nm = _sanitize_name(node.text.decode("utf-8", errors="replace"))
             if nm in module_consts and (enclosing_func, nm) not in _emitted_refs:
                 _emitted_refs.add((enclosing_func, nm))

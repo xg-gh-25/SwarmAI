@@ -647,6 +647,37 @@ class TestValueRefEdges:
         targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(result)}
         assert "SHADOWED" not in targets, "a const reassigned in an inner scope must be shadow-pruned"
 
+    def _parse_src(self, tmp_path, src):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        f = tmp_path / "m.py"
+        f.write_text(src)
+        return P.parse_file(f, tmp_path)
+
+    def test_attribute_access_produces_no_edge(self, tmp_path):
+        """`obj.MAX_RETRIES` is an ATTRIBUTE read of obj, NOT a read of the module
+        const — must not emit a spurious references edge (false-positive impact)."""
+        r = self._parse_src(
+            tmp_path,
+            "MAX_RETRIES = 30\n\ndef getter(config):\n    return config.MAX_RETRIES\n",
+        )
+        targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(r)}
+        assert "MAX_RETRIES" not in targets, (
+            "attribute access obj.MAX_RETRIES must NOT emit a reference edge to the module const")
+
+    def test_parameter_shadow_produces_no_edge(self, tmp_path):
+        """A function PARAMETER named like a const shadows it — a read inside that
+        function reads the param, not the module const. No false edge."""
+        r = self._parse_src(
+            tmp_path,
+            "MAX_RETRIES = 30\n\ndef helper(MAX_RETRIES=None):\n    return MAX_RETRIES + 1\n",
+        )
+        targets = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._ref_edges(r)}
+        assert "MAX_RETRIES" not in targets, (
+            "a parameter shadowing a const name must prune the const (no false edge to the reader)")
+
     def test_const_node_is_not_exported(self, tmp_path):
         """const nodes get is_export=0 so find_dead_code (is_export=1 filter) is clean."""
         result = self._parse(tmp_path)
