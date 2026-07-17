@@ -687,17 +687,24 @@ class ContextHealthHook:
         self._signal_stale_spec_details(projects_dir)
 
     def _signal_stale_spec_details(self, projects_dir: Path) -> None:
-        """LOG (only) a non-blocking staleness signal for each project whose
-        spec-details/ are stale vs code-intel.json. Regeneration is skill-owned
-        (s_ai-ready-repo), triggered by an operator/agent reading this signal.
+        """Signal spec-details staleness for each project whose specs no longer
+        match their domain content-hash (freshness.detect_spec_details_staleness,
+        CONTENT-based since run_fe26ed6c — NOT mtime). Two surfaces:
 
-        Deliberately a LOG, NOT an emitted event (Gate-2 HIGH+MED, run_2bad039d):
-        there is NO consumer job for a `spec_details_stale` event, so emitting one
-        would be a write-only dead signal that re-fires every session and floods
-        the bounded (50-slot) pending-events ring — evicting REAL consumable events
-        (e.g. code_intel_full_reindex). An honest log line is the correct signal
-        surface until a regeneration consumer exists; adding the event without a
-        sink would relabel the deferred auto-regen as 'closed' when it isn't."""
+        1. A LOG line (always).
+        2. A Radar TODO via escalation.create_radar_todo (run_fe26ed6c) — a REAL
+           consumable surface the operator acts on, NOT a sink-less event. This
+           is the loop-closing consumer the earlier LOG-only design (run_2bad039d)
+           deferred for lack of one: regeneration is skill-owned (s_ai-ready-repo,
+           LLM-in-agent, C046), and the todo is exactly the operator trigger for it.
+           We deliberately do NOT emit a `spec_details_stale` EVENT — that would be
+           the sink-less write-only signal Gate-2 (run_2bad039d) correctly rejected;
+           a todo has a human consumer, an event has none.
+
+        Dedup: the todo's source is the deterministic key
+        ``escalation:spec_details_stale:<project>`` — if an OPEN one already exists,
+        we skip (no per-session spam). Fail-open: any todo/escalation error leaves
+        the LOG as the surviving signal, never blocks session start."""
         try:
             from core.code_intel.freshness import detect_spec_details_staleness
         except Exception:  # pragma: no cover - defensive import
@@ -714,10 +721,46 @@ class ContextHealthHook:
             if not stale:
                 continue
             logger.info(
-                "spec-details STALE in %s: %d spec(s) older than code-intel.json "
+                "spec-details STALE in %s: %d spec(s) drifted from domain content "
                 "(%s) — regenerate via s_ai-ready-repo (skill-owned, manual)",
                 project_dir.name, len(stale), ", ".join(stale[:5]),
             )
+            self._create_spec_stale_todo(project_dir.name, stale)
+
+    def _create_spec_stale_todo(self, project: str, stale: list[str]) -> None:
+        """Create (or dedup-skip) a Radar todo prompting spec-details regeneration.
+        Fail-open — a todo/DB error must never break session-start health refresh."""
+        try:
+            from core.escalation import (
+                Escalation, Level, create_radar_todo, _get_db_path,
+            )
+            import sqlite3 as _sqlite3
+            source_key = f"escalation:spec_details_stale:{project}"
+            db = _get_db_path()
+            if db.exists():
+                with _sqlite3.connect(str(db), timeout=5.0) as conn:
+                    row = conn.execute(
+                        "SELECT 1 FROM todos WHERE source=? AND status='pending' LIMIT 1",
+                        (source_key,),
+                    ).fetchone()
+                if row:
+                    return  # an open todo already exists → no spam
+            specs = ", ".join(stale[:5]) + (" …" if len(stale) > 5 else "")
+            esc = Escalation(
+                id=f"spec_details_stale:{project}",
+                level=Level.CONSULT,  # override-window advisory, not a hard BLOCK
+                trigger="CONTRADICTS_LESSON",  # closest existing type (spec ↔ code drift)
+                title=f"spec-details drifted in {project} ({len(stale)} spec(s))",
+                situation=(f"{len(stale)} spec-details file(s) in {project} no longer "
+                           f"match their domain content-hash ({specs}). The code-intel "
+                           f"domain layer changed since these specs were projected."),
+                recommendation="Regenerate via s_ai-ready-repo (preserves [human] §5 blocks)",
+                project=project,
+                pipeline_stage="",
+            )
+            create_radar_todo(esc)
+        except Exception as exc:  # noqa: BLE001 — fail-open (log survives as signal)
+            logger.debug("spec-stale todo creation failed for %s: %s", project, exc)
 
     # ------------------------------------------------------------------
     # Auto-cultivation — promote REFLECT lessons into DDD docs

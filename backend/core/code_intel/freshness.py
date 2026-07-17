@@ -7,7 +7,9 @@ Detects ALL changes: our commits, teammates' commits, rebases, merges.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -208,22 +210,40 @@ def _mtime_freshness(graph_store: GraphStore, repo_root: Path) -> FreshnessResul
 
 
 # ─── Run 4b (run_2bad039d, §8.6): spec-details staleness detector ───
+# ─── run_fe26ed6c RESHAPE: mtime → domain CONTENT-HASH (Gate-1 F1/F1b) ───
+
+# The spec-hash marker embedded in each .spec.md header by the skill's
+# project_domain_skeleton. READ-only regex (never computes a hash), so duplicating
+# the *pattern* here does NOT reintroduce two-writer drift — the hash VALUE is
+# computed at exactly one site (ai_ready_helpers._spec_content_hash, stamped into
+# code-intel.json domains[].spec_hash at export). freshness.py only COMPARES the
+# marker to that stamp; C046 keeps core from importing the skill.
+_SPEC_HASH_MARKER_RE = re.compile(r"<!--\s*spec-hash:\s*([0-9a-f]{64})\s*-->")
+
 
 def detect_spec_details_staleness(project_dir: Path) -> list[str]:
-    """Return the names of spec-details/*.spec.md files that are STALE vs
-    code-intel.json — i.e. code-intel.json (the domains[] source) was regenerated
-    AFTER the spec was last projected, so the spec no longer reflects the domain
-    layer (design §8.6: code-intel mtime > spec.md mtime = stale).
+    """Return the names of spec-details/*.spec.md files that are STALE vs their
+    domain — i.e. the domain's CONTENT changed since the spec was last projected.
 
-    PURE detection only (mtime comparison, no IO beyond stat). Regeneration is
-    NOT done here — it is skill-owned (project_domain_skeleton /
-    regenerate_spec_preserving_human) and agent/skill-triggered. Core must not
-    import a projected skill (C046 boundary); this detector lets a core hook
-    SIGNAL staleness so the regeneration gets scheduled, without the coupling.
+    CONTENT-HASH based, NOT mtime (Gate-1 RESHAPE, run_fe26ed6c). Each domain in
+    code-intel.json carries a ``spec_hash`` (stamped at export from the domain +
+    its flows + steps); each .spec.md embeds a ``<!-- spec-hash: X -->`` marker.
+    A spec is STALE iff its marker is MISSING or != its domain's spec_hash. mtime
+    is irrelevant: a reindex rewrites code-intel.json (mtime bumps) while PRESERVING
+    identical domains[] — the old mtime detector false-fired EVERY spec after any
+    rebuild (the exact bug this replaces).
+
+    Matching: spec file ``<name>.spec.md`` ↔ domain id ``domain:<name>`` (the skill's
+    own filename convention, INSTRUCTIONS.md: ``domain['id'].split(':',1)[-1]``).
+
+    PURE detection only (read + hash-compare, no regeneration). Regeneration is
+    skill-owned (LLM-in-agent, C046) — this detector lets a core hook SIGNAL
+    staleness so regeneration gets scheduled, without the coupling.
 
     Returns [] when: no code-intel.json, no spec-details/ dir, no .spec.md files,
-    or all specs are at-or-newer-than code-intel.json (fresh). Never raises on a
-    missing/unreadable file — a spec we can't stat is simply not reported stale.
+    no domains[] with spec_hash, or every spec's marker matches. A domain WITHOUT
+    a spec_hash stamp (pre-reshape doc) is unjudgeable → its spec is NOT flagged
+    (never false-positive). Never raises on a missing/unreadable file.
     """
     project_dir = Path(project_dir)
     ci = project_dir / "code-intel.json"
@@ -231,14 +251,33 @@ def detect_spec_details_staleness(project_dir: Path) -> list[str]:
     if not ci.is_file() or not sd.is_dir():
         return []
     try:
-        ci_mtime = ci.stat().st_mtime
-    except OSError:
+        doc = json.loads(ci.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    # Map spec-filename-stem → domain spec_hash (only domains that carry one).
+    want: dict[str, str] = {}
+    for dom in (doc.get("domains") or []):
+        if not isinstance(dom, dict):
+            continue
+        did = dom.get("id") or ""
+        sh = dom.get("spec_hash")
+        if did and sh:
+            want[did.split(":", 1)[-1]] = sh
+    if not want:
         return []
     stale: list[str] = []
     for spec in sorted(sd.glob("*.spec.md")):
+        stem = spec.name[: -len(".spec.md")]
+        expected = want.get(stem)
+        if not expected:
+            continue  # no domain stamp for this spec → unjudgeable, not stale
         try:
-            if spec.stat().st_mtime < ci_mtime:
-                stale.append(spec.name)
+            text = spec.read_text(encoding="utf-8")
         except OSError:
-            continue  # can't stat → don't claim stale
+            continue  # can't read → don't claim stale
+        m = _SPEC_HASH_MARKER_RE.search(text)
+        if m is None or m.group(1) != expected:
+            stale.append(spec.name)
     return stale

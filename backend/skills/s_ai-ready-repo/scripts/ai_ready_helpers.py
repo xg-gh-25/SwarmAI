@@ -1206,9 +1206,45 @@ def _render_step_spec_table(st: dict) -> list[str]:
     return ["| 项 | 内容 |", "|---|---|"] + rows + [""]
 
 
+# ─── code-intel v3 loop-liveness: spec-details content-hash (SINGLE SOURCE) ───
+#
+# The staleness of a `.spec.md` vs its domain is decided by a CONTENT HASH, NOT the
+# file mtime (mtime false-fires: a reindex rewrites code-intel.json — mtime bumps —
+# while PRESERVING identical domains[], so every spec would read "stale" forever).
+#
+# This is the ONE place the hash is DEFINED (Gate-1 F1b — no two-writer drift). The
+# json_exporter (core) imports THIS to stamp each domain's `spec_hash`; freshness.py
+# only READS that stamp + the marker below. The hash MUST cover the domain AND its
+# flows/steps, because project_domain_skeleton renders §3/§4 from them — a flow/step
+# change alters the rendered spec, so a domain-dict-only hash would false-fresh
+# (Gate-1 F1). We hash the rendered skeleton itself (with the marker line elided) so
+# "what changed the rendered spec" and "what bumps the hash" are the SAME set by
+# construction — impossible to drift out of coverage.
+SPEC_HASH_MARKER_RE = re.compile(r"<!--\s*spec-hash:\s*([0-9a-f]{64})\s*-->")
+_SPEC_HASH_MARKER_LINE_RE = re.compile(r"^\s*<!--\s*spec-hash:.*-->\s*$", re.MULTILINE)
+
+
+def extract_spec_hash_marker(spec_text: str) -> str | None:
+    """Return the sha256 hex embedded in a `.spec.md`'s ``<!-- spec-hash: X -->``
+    marker, or None if absent (→ treated as stale by the detector)."""
+    m = SPEC_HASH_MARKER_RE.search(spec_text or "")
+    return m.group(1) if m else None
+
+
+def _spec_content_hash(domain: dict, flows: list, steps: list) -> str:
+    """sha256 hex of the domain's RENDERED skeleton (marker line elided). Covers
+    domain + its flows + steps by construction (renders the same thing the spec
+    shows). THE single definition of spec staleness — see the block comment above.
+    """
+    skeleton = _render_domain_skeleton_body(domain, flows, steps)
+    canonical = _SPEC_HASH_MARKER_LINE_RE.sub("", skeleton)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
     """Deterministically project ONE domain (+ its flows/steps) into the 8-section
-    `.spec.md` skeleton (§3.2). Pure string render — NO LLM. The skeleton region
+    `.spec.md` skeleton (§3.2), with a ``<!-- spec-hash: X -->`` staleness marker
+    embedded in the header. Pure string render — NO LLM. The skeleton region
     (§1-4,6-7) is `domains[]`-authoritative; the §5 [human] region is left as a
     stub for human authorship (owned by spec-details, protected on merge §8.2).
 
@@ -1216,6 +1252,17 @@ def project_domain_skeleton(domain: dict, flows: list, steps: list) -> str:
     dropped Run-1 generation piece) — this renders the machine skeleton from an
     already-populated domains[] entry, which is what exists today.
     """
+    body = _render_domain_skeleton_body(domain, flows, steps)
+    marker = f"<!-- spec-hash: {_spec_content_hash(domain, flows, steps)} -->"
+    # Inject the marker right after the H1 title line (stable, human-invisible).
+    lines = body.split("\n")
+    lines.insert(1, marker)
+    return "\n".join(lines)
+
+
+def _render_domain_skeleton_body(domain: dict, flows: list, steps: list) -> str:
+    """The raw 8-section skeleton render (no spec-hash marker). Split out so
+    _spec_content_hash can hash the exact rendered content the human sees."""
     name = domain.get("name") or domain.get("id") or "Unnamed Domain"
     did = domain.get("id")
     L = [f"# 规格:{name}", ""]
@@ -1693,6 +1740,21 @@ _LANG_EXTENSIONS = {
     ".bash": "shell",
 }
 
+
+def _count_langs_by_ext(files) -> "Counter":
+    """Count files by language via _LANG_EXTENSIONS. Shared by _detect_tech_stack
+    and the multi-package language-mix (Gate-1 B1: single counting source, no
+    third copy of the ext map). `files` = iterable of relative path strings."""
+    counter: Counter = Counter()
+    for f in files:
+        if not f:
+            continue
+        ext = Path(f).suffix.lower()
+        if ext in _LANG_EXTENSIONS:
+            counter[_LANG_EXTENSIONS[ext]] += 1
+    return counter
+
+
 _IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".next", ".nuxt", "target", ".tox",
@@ -1779,10 +1841,7 @@ def _detect_tech_stack(repo_path: Path) -> dict[str, Any]:
         logger.warning(f"git ls-files timed out in _detect_tech_stack for {repo_path}")
         files = []
 
-    for f in files:
-        ext = Path(f).suffix.lower()
-        if ext in _LANG_EXTENSIONS:
-            lang_counter[_LANG_EXTENSIONS[ext]] += 1
+    lang_counter = _count_langs_by_ext(files)
 
     total = sum(lang_counter.values()) or 1
     languages = {lang: round(count / total, 2) for lang, count in lang_counter.most_common(10)}
@@ -3082,3 +3141,318 @@ def evaluate_verification_response(
         "results": results,
         "feedback": feedback,
     }
+
+
+# ─── M5 Multi-package: deterministic package-boundary detection ───
+#
+# Navigational, NOT a correctness fix. Symbol ids are already path-qualified
+# (parser.py:_qualify uses rel_path=relative_to(repo_root)) and route.id hashes
+# file_path, so a monorepo does NOT collide — verified by Gate-0 (run_693e08de).
+# The real gap this closes: nothing auto-detects package roots from workspace
+# manifests, so run_multi_package() requires the CALLER to hand it the package
+# list. This detector produces that list from the manifests.
+#
+# Scope boundary: this is skill-layer only. It does NOT emit packages[] into the
+# core single-repo code-intel.json (parser/graph_store/json_exporter untouched).
+# Per-package v3 generation + INSTRUCTIONS.md fan-out orchestration are a
+# deliberate follow-up run.
+
+import fnmatch as _fnmatch
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class PackageRoot:
+    """A detected package boundary within a (mono)repo. `root` is POSIX-relative
+    to repo_root ('.' for the repo itself). `language_mix` is {lang: file_count}
+    from _LANG_EXTENSIONS, excluding _IGNORE_DIRS. `detected_by` names the
+    manifest signal(s) that surfaced it (sorted, comma-joined)."""
+    name: str
+    root: str
+    language_mix: dict = field(default_factory=dict)
+    detected_by: str = ""
+
+
+def _validate_dir_path(p: Path) -> Path:
+    """Lighter sibling of _validate_repo_path for boundary detection: resolves
+    symlinks (traversal safety) + requires exists/is-dir, but does NOT require
+    .git. Boundary detection operates on manifests/filesystem, so it must work on
+    a package sub-root or a non-git tarball — requiring git would break the real
+    fan-out use case."""
+    p = Path(p).resolve()
+    if not p.exists():
+        raise ValueError(f"Path does not exist: {p}")
+    if not p.is_dir():
+        raise ValueError(f"Path is not a directory: {p}")
+    return p
+
+
+def _rel_posix(path: Path, repo_root: Path) -> str:
+    """Relative POSIX path of `path` under `repo_root`; '.' for repo_root itself."""
+    rel = path.resolve().relative_to(repo_root.resolve())
+    s = rel.as_posix()
+    return s if s else "."
+
+
+def _expand_globs(repo_root: Path, patterns) -> list[Path]:
+    """Expand a list of workspace glob patterns ('packages/*', 'libs/core') to
+    REAL directories on disk under repo_root. Non-dir / non-existent matches are
+    dropped (a glob must never leak a literal pattern or a file — Gate-1 B3).
+    Fail-soft: a bad pattern yields nothing, never raises."""
+    dirs: list[Path] = []
+    for pat in patterns or []:
+        if not isinstance(pat, str) or not pat.strip():
+            continue
+        pat = pat.strip().rstrip("/")
+        try:
+            # Path.glob handles '*' / '**' relative to repo_root. A literal
+            # (non-glob) pattern falls through to a direct existence check.
+            if any(ch in pat for ch in "*?[]"):
+                matches = list(repo_root.glob(pat))
+            else:
+                matches = [repo_root / pat]
+        except (ValueError, OSError):
+            continue
+        for m in matches:
+            try:
+                if m.is_dir():
+                    dirs.append(m)
+            except OSError:
+                continue
+    return dirs
+
+
+def _read_json_soft(path: Path):
+    """Parse JSON, returning None on missing/malformed (never raises) — Gate-1 B2."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+# ── per-ecosystem manifest readers ──
+# Contract (all): take repo_root, return list[Path] of REAL package dirs, or []
+# if the manifest is absent/malformed/empty. NEVER raise.
+
+def _npm_workspaces(repo_root: Path) -> list[Path]:
+    data = _read_json_soft(repo_root / "package.json")
+    if not isinstance(data, dict):
+        return []
+    ws = data.get("workspaces")
+    patterns: list = []
+    if isinstance(ws, list):
+        patterns = ws
+    elif isinstance(ws, dict) and isinstance(ws.get("packages"), list):
+        patterns = ws["packages"]
+    return _expand_globs(repo_root, patterns)
+
+
+def _pnpm_workspaces(repo_root: Path) -> list[Path]:
+    f = repo_root / "pnpm-workspace.yaml"
+    if not f.is_file():
+        return []
+    try:
+        import yaml
+        data = yaml.safe_load(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    pkgs = data.get("packages")
+    return _expand_globs(repo_root, pkgs) if isinstance(pkgs, list) else []
+
+
+def _lerna(repo_root: Path) -> list[Path]:
+    data = _read_json_soft(repo_root / "lerna.json")
+    if not isinstance(data, dict):
+        return []
+    pkgs = data.get("packages")
+    return _expand_globs(repo_root, pkgs) if isinstance(pkgs, list) else []
+
+
+def _cargo_workspace(repo_root: Path) -> list[Path]:
+    f = repo_root / "Cargo.toml"
+    if not f.is_file():
+        return []
+    try:
+        import tomllib
+        data = tomllib.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    ws = data.get("workspace") if isinstance(data, dict) else None
+    members = ws.get("members") if isinstance(ws, dict) else None
+    return _expand_globs(repo_root, members) if isinstance(members, list) else []
+
+
+def _go_modules(repo_root: Path) -> list[Path]:
+    """Every go.mod BELOW the root (a nested go.mod = an independent module).
+    The root go.mod itself is handled by the [root] fallback, not here."""
+    dirs: list[Path] = []
+    try:
+        for gomod in repo_root.rglob("go.mod"):
+            parent = gomod.parent
+            if parent.resolve() == repo_root.resolve():
+                continue  # root module → fallback covers it
+            if any(_is_ignored_dir(p) for p in parent.relative_to(repo_root).parts):
+                continue
+            dirs.append(parent)
+    except OSError:
+        return []
+    return dirs
+
+
+def _python_packages(repo_root: Path) -> list[Path]:
+    """Multiple pyproject.toml / setup.py in SUBDIRS = a python multi-package
+    layout. Root-level manifest → [root] fallback, not here."""
+    dirs: list[Path] = []
+    seen: set = set()
+    try:
+        for marker in ("pyproject.toml", "setup.py"):
+            for mf in repo_root.rglob(marker):
+                parent = mf.parent
+                if parent.resolve() == repo_root.resolve():
+                    continue
+                if any(_is_ignored_dir(p) for p in parent.relative_to(repo_root).parts):
+                    continue
+                rp = parent.resolve()
+                if rp not in seen:
+                    seen.add(rp)
+                    dirs.append(parent)
+    except OSError:
+        return []
+    return dirs
+
+
+# nx.json / turbo.json are monorepo *signals* but carry no portable member list
+# (nx infers projects from project.json files; turbo from the package manager's
+# workspaces). We surface them as a signal that boosts confidence the repo IS a
+# monorepo, but rely on the npm/pnpm reader for the actual member dirs. Presence
+# alone never fabricates a member — it just tags detected_by.
+def _monorepo_signal(repo_root: Path) -> list[str]:
+    sigs = []
+    for name in ("nx.json", "turbo.json"):
+        if (repo_root / name).is_file():
+            sigs.append(name.split(".")[0])
+    return sigs
+
+
+_PACKAGE_READERS = {
+    "npm": _npm_workspaces,
+    "pnpm": _pnpm_workspaces,
+    "lerna": _lerna,
+    "cargo": _cargo_workspace,
+    "go": _go_modules,
+    "python": _python_packages,
+}
+
+
+def _language_mix(abs_root: Path) -> dict:
+    """{lang: file_count} under abs_root via the shared counter, excluding
+    _IGNORE_DIRS. Uses git ls-files scoped to abs_root when possible (respects
+    .gitignore), else rglob. Paths are relative to abs_root throughout."""
+    files: list[str] = []
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"], cwd=abs_root,
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            files = [f for f in result.stdout.strip().split("\n") if f]
+    except (subprocess.TimeoutExpired, OSError):
+        files = []
+    if not files:
+        try:
+            for p in abs_root.rglob("*"):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(abs_root)
+                if any(_is_ignored_dir(part) for part in rel.parts):
+                    continue
+                files.append(str(rel))
+        except OSError:
+            pass
+    else:
+        # git ls-files does not descend into ignored dirs, but be defensive
+        files = [f for f in files
+                 if not any(_is_ignored_dir(part) for part in Path(f).parts)]
+    return dict(_count_langs_by_ext(files))
+
+
+def detect_package_roots(repo_root) -> list[PackageRoot]:
+    """Deterministically detect package boundaries in a (mono)repo from workspace
+    manifests. Returns >=1 PackageRoot, ALWAYS (falls back to [root] when no
+    multi-package signal is found). Dedups by resolved path so a dir surfaced by
+    two manifests (e.g. npm + lerna both globbing packages/*) appears once, with
+    its detected_by merged. Fail-soft throughout — a malformed manifest degrades
+    to fewer signals, never an exception."""
+    repo_root = _validate_dir_path(Path(repo_root))
+
+    # resolved-path -> {"path": Path, "by": set[str]}
+    found: dict = {}
+    for label, reader in _PACKAGE_READERS.items():
+        try:
+            dirs = reader(repo_root)
+        except Exception:
+            dirs = []
+        for d in dirs:
+            try:
+                key = d.resolve()
+            except OSError:
+                continue
+            if key == repo_root.resolve():
+                continue  # a member that IS the root → fallback territory
+            entry = found.setdefault(key, {"path": d, "by": set()})
+            entry["by"].add(label)
+
+    signals = _monorepo_signal(repo_root)
+
+    if not found:
+        # Single-package repo: exactly [root]. detected_by records any monorepo
+        # signal seen (nx/turbo present but no members) or "root".
+        by = ",".join(sorted(signals)) if signals else "root"
+        return [PackageRoot(
+            name=repo_root.name,
+            root=".",
+            language_mix=_language_mix(repo_root),
+            detected_by=by,
+        )]
+
+    roots: list[PackageRoot] = []
+    for key in sorted(found, key=lambda k: str(k)):
+        entry = found[key]
+        d = entry["path"]
+        by = sorted(entry["by"]) + signals
+        roots.append(PackageRoot(
+            name=d.name,
+            root=_rel_posix(d, repo_root),
+            language_mix=_language_mix(d),
+            detected_by=",".join(sorted(set(by))),
+        ))
+    return roots
+
+
+def build_packages_partition(repo_root) -> list[dict]:
+    """Wrap detect_package_roots() into navigation-metadata dicts suitable for a
+    code-intel.json `packages[]` partition (skill-layer only — NOT emitted into
+    the core single-repo doc this run). Names are made unique (path-suffixed on
+    collision) so two packages both named 'core' stay distinguishable."""
+    roots = detect_package_roots(repo_root)
+    # Two-pass (Gate-2 F2): disambiguate ALL colliding names symmetrically, not
+    # just the 2nd+ occurrence — otherwise the first 'core' keeps the bare name
+    # and is indistinguishable from a truly root-level 'core'. Pass 1 counts
+    # names; pass 2 path-qualifies every name that collides.
+    from collections import Counter as _Counter
+    name_counts = _Counter(r.name for r in roots)
+    out: list[dict] = []
+    for r in roots:
+        name = r.name
+        if name_counts[name] > 1:
+            parent = Path(r.root).parent.name
+            name = f"{parent}/{r.name}" if parent and parent != "." else f"{r.name}:{r.root}"
+        out.append({
+            "name": name,
+            "root": r.root,
+            "language_mix": r.language_mix,
+            "detected_by": r.detected_by,
+        })
+    return out

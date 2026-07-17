@@ -143,6 +143,18 @@ def export_code_intel_json(
     if v3_preserved:
         _prune_stale_v3_refs(doc)
 
+    # ── stamp each domain's spec_hash (run_fe26ed6c, §8 loop-liveness) ──
+    # The SINGLE source of the spec-details staleness hash lives in the skill
+    # (ai_ready_helpers._spec_content_hash). We compute it HERE — the one place
+    # domains+flows+steps are all in hand — and stamp it onto each domain, so
+    # freshness.detect_spec_details_staleness can decide staleness by CONTENT
+    # (not mtime) without importing the skill (C046) or recomputing the hash
+    # (Gate-1 F1b no-two-writer-drift). Same sys.path import the v3 validation
+    # below already relies on; fail-open (a stamping failure must never corrupt
+    # the export — the detector just treats an unstamped domain as unjudgeable).
+    if v3_preserved and doc.get("domains"):
+        _stamp_spec_hashes(doc)
+
     # ── coverage_ledger + status stamp (F19: never a silent under-report) ──
     holes = list(coverage_holes or [])
     status = "partial" if (holes or parse_status == "partial") else "complete"
@@ -270,6 +282,36 @@ def _reattach_route_ids(built_routes: list[dict], prior_routes: list[dict] | Non
             continue
         key = (r.get("method"), r.get("path"), r.get("file_path"))
         r["id"] = prior_by_key.get(key) or _mint_id(*key)
+
+
+def _stamp_spec_hashes(doc: dict) -> None:
+    """Stamp each domain with `spec_hash` = the content-hash of its rendered spec
+    skeleton (domain + its flows + steps). The hash function is the SKILL's single
+    source (ai_ready_helpers._spec_content_hash) — imported via the same sys.path
+    the v3 validation uses. Mutates doc in place. Fail-open: any import/compute
+    error leaves domains unstamped (detector treats an unstamped domain as
+    unjudgeable → never a false-positive), never corrupts the export."""
+    try:
+        import sys as _sys
+        _skill_scripts = str(Path(__file__).resolve().parents[2]
+                             / "skills" / "s_ai-ready-repo" / "scripts")
+        if _skill_scripts not in _sys.path:
+            _sys.path.insert(0, _skill_scripts)
+        from importlib import import_module
+        _arh = import_module("ai_ready_helpers")
+        spec_hash = _arh._spec_content_hash
+    except Exception as e:  # noqa: BLE001 — fail-open by design (documented above)
+        logger.warning("spec_hash stamping skipped (import failed): %s", e)
+        return
+    flows = doc.get("flows") or []
+    steps = doc.get("steps") or []
+    for dom in doc.get("domains") or []:
+        if not isinstance(dom, dict):
+            continue
+        try:
+            dom["spec_hash"] = spec_hash(dom, flows, steps)
+        except Exception as e:  # noqa: BLE001 — one bad domain must not sink the rest
+            logger.warning("spec_hash compute failed for %s: %s", dom.get("id"), e)
 
 
 def _prune_stale_v3_refs(doc: dict) -> None:

@@ -333,32 +333,66 @@ class TestFullRebuildDelegation:
 # ─── Run 4b (run_2bad039d, §8.6): spec-details staleness detector ───
 
 class TestSpecDetailsStaleness:
-    """detect_spec_details_staleness: spec.md older than code-intel.json = stale."""
+    """detect_spec_details_staleness: CONTENT-HASH based (NOT mtime).
 
-    def _setup(self, tmp_path, spec_older: bool):
-        import os, time
-        proj = tmp_path / "P"; proj.mkdir()
-        sd = proj / "spec-details"; sd.mkdir()
-        spec = sd / "orders.spec.md"
-        ci = proj / "code-intel.json"
-        if spec_older:
-            spec.write_text("# old", encoding="utf-8")
-            time.sleep(0.01)
-            ci.write_text("{}", encoding="utf-8")  # ci newer → spec stale
-        else:
-            ci.write_text("{}", encoding="utf-8")
-            time.sleep(0.01)
-            spec.write_text("# fresh", encoding="utf-8")  # spec newer → fresh
+    A spec is stale iff its embedded ``<!-- spec-hash: X -->`` marker is missing or
+    != the ``spec_hash`` stamped on its domain in code-intel.json. mtime is
+    IRRELEVANT (Gate-1 RESHAPE): a reindex rewrites code-intel.json — mtime bumps —
+    while PRESERVING identical domains[], so an mtime detector false-fired all specs.
+    """
+    import json as _json
+
+    def _write(self, proj, domain_id, spec_hash_in_json, marker_hash_in_spec):
+        """Write a code-intel.json with one domain carrying spec_hash, plus a
+        spec.md carrying (or lacking) a spec-hash marker. Returns proj dir."""
+        import json
+        proj.mkdir(exist_ok=True)
+        sd = proj / "spec-details"; sd.mkdir(exist_ok=True)
+        name = domain_id.split(":", 1)[-1]
+        dom = {"id": domain_id, "name": name}
+        if spec_hash_in_json is not None:
+            dom["spec_hash"] = spec_hash_in_json
+        (proj / "code-intel.json").write_text(
+            json.dumps({"domains": [dom]}), encoding="utf-8")
+        marker = (f"<!-- spec-hash: {marker_hash_in_spec} -->\n"
+                  if marker_hash_in_spec is not None else "")
+        (sd / f"{name}.spec.md").write_text(f"# 规格:{name}\n{marker}body\n",
+                                            encoding="utf-8")
         return proj
 
-    def test_stale_spec_detected(self, tmp_path):
+    def test_matching_hash_is_fresh(self, tmp_path):
         from core.code_intel.freshness import detect_spec_details_staleness
-        proj = self._setup(tmp_path, spec_older=True)
+        h = "a" * 64
+        proj = self._write(tmp_path / "P", "domain:orders", h, h)
+        assert detect_spec_details_staleness(proj) == []
+
+    def test_mismatched_hash_is_stale(self, tmp_path):
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = self._write(tmp_path / "P", "domain:orders", "a" * 64, "b" * 64)
         assert detect_spec_details_staleness(proj) == ["orders.spec.md"]
 
-    def test_fresh_spec_not_flagged(self, tmp_path):
+    def test_missing_marker_is_stale(self, tmp_path):
         from core.code_intel.freshness import detect_spec_details_staleness
-        proj = self._setup(tmp_path, spec_older=False)
+        proj = self._write(tmp_path / "P", "domain:orders", "a" * 64, None)
+        assert detect_spec_details_staleness(proj) == ["orders.spec.md"]
+
+    def test_mtime_bump_with_identical_content_is_FRESH(self, tmp_path):
+        # THE false-positive the whole reshape exists to kill: rewrite code-intel.json
+        # (mtime bumps) but domains[]+spec_hash unchanged → MUST report fresh.
+        import os, time
+        from core.code_intel.freshness import detect_spec_details_staleness
+        h = "c" * 64
+        proj = self._write(tmp_path / "P", "domain:orders", h, h)
+        assert detect_spec_details_staleness(proj) == []
+        # bump code-intel.json mtime WAY past the spec, content identical
+        ci = proj / "code-intel.json"
+        os.utime(ci, (time.time() + 10_000, time.time() + 10_000))
+        assert detect_spec_details_staleness(proj) == []  # mtime-independent
+
+    def test_domain_without_spec_hash_not_flagged(self, tmp_path):
+        # A domain with no spec_hash stamp (e.g. pre-reshape doc) → can't judge → not stale.
+        from core.code_intel.freshness import detect_spec_details_staleness
+        proj = self._write(tmp_path / "P", "domain:orders", None, "a" * 64)
         assert detect_spec_details_staleness(proj) == []
 
     def test_no_code_intel_returns_empty(self, tmp_path):
@@ -572,3 +606,65 @@ class TestGradedIncrementalE2E:
         # untouched → all-skippable → SKIP verdict. This is the path fix #4 activates.
         assert p1["change_class"] == grading.SKIP, \
             "comment-only edit over a full-rebuild baseline must grade SKIP (fix #4 makes file_hash non-NULL)"
+
+
+# ─── run_fe26ed6c: exporter spec_hash stamping + write→read loop closure ───
+
+class TestSpecHashStampingLoop:
+    """_stamp_spec_hashes (exporter) + detect_spec_details_staleness (freshness)
+    close the write→read loop: a spec projected from a domain reads FRESH; a domain
+    whose content then changes reads STALE. This is the whole point of the reshape —
+    the stamp (write) and the detector (read) must agree by construction."""
+
+    def _domain(self):
+        return {"id": "domain:orders", "name": "orders", "summary": "order lifecycle",
+                "entities": ["Order"], "complexity": "moderate"}
+
+    def test_stamp_matches_skill_hash(self):
+        from core.code_intel.json_exporter import _stamp_spec_hashes
+        import sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parents[3]
+                                / "skills" / "s_ai-ready-repo" / "scripts"))
+        from ai_ready_helpers import _spec_content_hash
+        d = self._domain()
+        doc = {"domains": [dict(d)], "flows": [], "steps": []}
+        _stamp_spec_hashes(doc)
+        assert doc["domains"][0]["spec_hash"] == _spec_content_hash(d, [], [])
+
+    def test_write_then_read_loop_fresh(self, tmp_path):
+        # project a spec from a domain, stamp the doc → detector says FRESH.
+        import json, sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parents[3]
+                                / "skills" / "s_ai-ready-repo" / "scripts"))
+        from ai_ready_helpers import project_domain_skeleton
+        from core.code_intel.json_exporter import _stamp_spec_hashes
+        from core.code_intel.freshness import detect_spec_details_staleness
+        d = self._domain()
+        proj = tmp_path / "P"; (proj / "spec-details").mkdir(parents=True)
+        (proj / "spec-details" / "orders.spec.md").write_text(
+            project_domain_skeleton(d, [], []), encoding="utf-8")
+        doc = {"domains": [dict(d)], "flows": [], "steps": []}
+        _stamp_spec_hashes(doc)
+        (proj / "code-intel.json").write_text(json.dumps(doc), encoding="utf-8")
+        assert detect_spec_details_staleness(proj) == []  # projected+stamped = fresh
+
+    def test_write_then_domain_change_reads_stale(self, tmp_path):
+        # spec projected from OLD domain; doc re-stamped from CHANGED domain → STALE.
+        import json, sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parents[3]
+                                / "skills" / "s_ai-ready-repo" / "scripts"))
+        from ai_ready_helpers import project_domain_skeleton
+        from core.code_intel.json_exporter import _stamp_spec_hashes
+        from core.code_intel.freshness import detect_spec_details_staleness
+        d_old = self._domain()
+        proj = tmp_path / "P"; (proj / "spec-details").mkdir(parents=True)
+        (proj / "spec-details" / "orders.spec.md").write_text(
+            project_domain_skeleton(d_old, [], []), encoding="utf-8")  # spec = OLD
+        d_new = dict(d_old); d_new["summary"] = "CHANGED lifecycle"
+        doc = {"domains": [d_new], "flows": [], "steps": []}
+        _stamp_spec_hashes(doc)  # code-intel.json = NEW hash
+        (proj / "code-intel.json").write_text(json.dumps(doc), encoding="utf-8")
+        assert detect_spec_details_staleness(proj) == ["orders.spec.md"]

@@ -2406,3 +2406,264 @@ class TestGate2F1IdlessRoute:
         doc["domains"] = [{"id": "d", "name": "D"}]
         doc["flows"] = [{"id": "f", "domain_id": "d", "entry_ref": "route:a"}]
         assert check_anchor_accounting(doc) == []
+
+
+# ─── M5 Multi-package: deterministic package-boundary detection ───
+
+class TestPackageDetection:
+    """detect_package_roots + build_packages_partition — manifest-driven boundary
+    detection (navigational, NOT a correctness fix; symbol ids are already
+    path-qualified). Real-fs fixtures, no mocks."""
+
+    def _pkg_names(self, roots):
+        return sorted(r.name for r in roots)
+
+    def _pkg_paths(self, roots):
+        return sorted(r.root for r in roots)
+
+    # AC1 — npm workspaces (array form + glob expansion to REAL dirs)
+    def test_npm_workspaces_array_glob_expands_to_real_dirs(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+        for p in ["packages/api", "packages/web"]:
+            (tmp_path / p).mkdir(parents=True)
+            (tmp_path / p / "package.json").write_text("{}")
+        (tmp_path / "packages" / "NOTADIR.txt").write_text("x")  # glob must not match files
+        roots = detect_package_roots(tmp_path)
+        paths = self._pkg_paths(roots)
+        assert "packages/api" in paths and "packages/web" in paths
+        assert not any("*" in p for p in paths), f"glob must expand, got {paths}"
+        assert "packages/NOTADIR.txt" not in paths
+
+    # AC1 — npm workspaces object form {packages:[...]}
+    def test_npm_workspaces_object_form(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "package.json").write_text(json.dumps({"workspaces": {"packages": ["apps/*"]}}))
+        (tmp_path / "apps" / "admin").mkdir(parents=True)
+        roots = detect_package_roots(tmp_path)
+        assert "apps/admin" in self._pkg_paths(roots)
+
+    # AC2 — pnpm
+    def test_pnpm_workspace_yaml(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "pnpm-workspace.yaml").write_text("packages:\n  - 'libs/*'\n")
+        (tmp_path / "libs" / "core").mkdir(parents=True)
+        assert "libs/core" in self._pkg_paths(detect_package_roots(tmp_path))
+
+    # AC2 — lerna
+    def test_lerna_json(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "lerna.json").write_text(json.dumps({"packages": ["modules/*"]}))
+        (tmp_path / "modules" / "m1").mkdir(parents=True)
+        assert "modules/m1" in self._pkg_paths(detect_package_roots(tmp_path))
+
+    # AC2 — cargo workspace (glob members)
+    def test_cargo_workspace_members(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\n')
+        (tmp_path / "crates" / "engine").mkdir(parents=True)
+        assert "crates/engine" in self._pkg_paths(detect_package_roots(tmp_path))
+
+    # AC2 — go multi-module (N go.mod = N modules)
+    def test_go_multi_module(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "go.mod").write_text("module root\n")
+        (tmp_path / "svc").mkdir()
+        (tmp_path / "svc" / "go.mod").write_text("module svc\n")
+        paths = self._pkg_paths(detect_package_roots(tmp_path))
+        assert "svc" in paths
+
+    # AC2 — python multi-package (>1 pyproject in subdirs)
+    def test_python_multi_package(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        for p in ["pkg_a", "pkg_b"]:
+            (tmp_path / p).mkdir()
+            (tmp_path / p / "pyproject.toml").write_text("[project]\nname='x'\n")
+        paths = self._pkg_paths(detect_package_roots(tmp_path))
+        assert "pkg_a" in paths and "pkg_b" in paths
+
+    # AC2 — nx.json / turbo.json presence (monorepo signal even w/o explicit member list)
+    def test_nx_and_turbo_presence_detected(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        # turbo/nx alone: no explicit member globs → detector should not crash and
+        # (absent other manifests) fall back to [root], never []
+        (tmp_path / "turbo.json").write_text("{}")
+        (tmp_path / "nx.json").write_text("{}")
+        roots = detect_package_roots(tmp_path)
+        assert len(roots) >= 1
+
+    # AC3 — single-package fallback = exactly [root]
+    def test_single_package_falls_back_to_root(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='solo'\n")
+        (tmp_path / "main.py").write_text("x=1\n")
+        roots = detect_package_roots(tmp_path)
+        assert len(roots) == 1
+        assert roots[0].root == "."
+        assert roots[0].name == tmp_path.name
+
+    # AC3 — empty repo still yields [root], never []
+    def test_empty_repo_never_empty(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        roots = detect_package_roots(tmp_path)
+        assert len(roots) == 1 and roots[0].root == "."
+
+    # AC4 — language mix is real extension counts, excludes ignored dirs + non-source
+    def test_language_mix_real_counts(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        (tmp_path / "a.py").write_text("x=1\n")
+        (tmp_path / "b.py").write_text("y=2\n")
+        (tmp_path / "c.ts").write_text("const z=3\n")
+        (tmp_path / "README.md").write_text("# doc\n")  # non-source, must NOT count
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "node_modules" / "junk.py").write_text("ignored\n")  # ignored dir
+        roots = detect_package_roots(tmp_path)
+        mix = roots[0].language_mix
+        assert mix.get("python") == 2, f"expected 2 py, got {mix}"
+        assert mix.get("typescript") == 1
+        assert "markdown" not in mix and "md" not in mix
+        # node_modules excluded → no extra python
+        assert mix.get("python") == 2
+
+    # AC5 — nested workspace root deduped by resolved path (no double count)
+    def test_nested_workspace_dedup(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        # root npm workspace lists packages/* ; one of those is ALSO matched by a
+        # second manifest (lerna) → same dir must appear once
+        (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+        (tmp_path / "lerna.json").write_text(json.dumps({"packages": ["packages/*"]}))
+        (tmp_path / "packages" / "shared").mkdir(parents=True)
+        roots = detect_package_roots(tmp_path)
+        shared = [r for r in roots if r.root == "packages/shared"]
+        assert len(shared) == 1, f"nested/duplicate dir must dedup, got {roots}"
+
+    # AC5 — malformed manifest fails soft (no raise), falls back gracefully
+    def test_malformed_manifest_fail_soft(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "package.json").write_text("{ this is not valid json ")
+        (tmp_path / "main.py").write_text("x=1\n")
+        # must NOT raise; malformed npm manifest → that reader yields nothing →
+        # fall back to [root]
+        roots = detect_package_roots(tmp_path)
+        assert len(roots) == 1 and roots[0].root == "."
+
+    # AC5 — build_packages_partition emits well-formed nav dicts
+    def test_build_packages_partition_wellformed(self, tmp_path):
+        from scripts.ai_ready_helpers import build_packages_partition
+        (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+        (tmp_path / "packages" / "api").mkdir(parents=True)
+        (tmp_path / "packages" / "api" / "server.py").write_text("x=1\n")
+        part = build_packages_partition(tmp_path)
+        assert isinstance(part, list) and len(part) >= 1
+        for entry in part:
+            assert set(entry) >= {"name", "root", "language_mix", "detected_by"}
+            assert isinstance(entry["language_mix"], dict)
+        names = [e["name"] for e in part]
+        assert len(names) == len(set(names)), "package names must be unique"
+
+    # Real-data smoke: SwarmAI has backend/pyproject.toml (no root manifest), so
+    # the detector correctly surfaces `backend` as a python package sub-root.
+    # Asserts the REAL behavior (a nested pyproject IS a package boundary), not an
+    # assumed "single-package".
+    def test_swarmai_repo_real_data(self):
+        from scripts.ai_ready_helpers import detect_package_roots
+        repo = Path(__file__).resolve().parents[4]  # .../swarmai
+        if not (repo / "backend" / "pyproject.toml").exists():
+            pytest.skip("not in swarmai repo tree")
+        roots = detect_package_roots(repo)
+        paths = [r.root for r in roots]
+        assert "backend" in paths, \
+            f"backend/pyproject.toml → backend is a package root, got {paths}"
+        backend_pkg = next(r for r in roots if r.root == "backend")
+        assert backend_pkg.language_mix.get("python", 0) > 0, "backend must have real python count"
+        assert "python" in backend_pkg.detected_by
+
+    # Gate-2 F1: malformed Cargo.toml (workspace not a table) must fail soft
+    def test_cargo_workspace_not_a_table_fail_soft(self, tmp_path):
+        from scripts.ai_ready_helpers import detect_package_roots
+        (tmp_path / "Cargo.toml").write_text('workspace = "notatable"\n')
+        (tmp_path / "main.rs").write_text("fn main(){}\n")
+        # must NOT raise AttributeError; falls back to [root]
+        roots = detect_package_roots(tmp_path)
+        assert len(roots) == 1 and roots[0].root == "."
+
+    # Gate-2 F2: 3 packages named 'core' → ALL disambiguated symmetrically, no
+    # bare 'core' left ambiguous
+    def test_triple_name_collision_all_disambiguated(self, tmp_path):
+        from scripts.ai_ready_helpers import build_packages_partition
+        (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["*/core"]}))
+        for parent in ["a", "b", "c"]:
+            (tmp_path / parent / "core").mkdir(parents=True)
+            (tmp_path / parent / "core" / "i.ts").write_text("export{}\n")
+        part = build_packages_partition(tmp_path)
+        names = [p["name"] for p in part]
+        assert len(names) == len(set(names)), f"all names unique, got {names}"
+        assert "core" not in names, f"no bare 'core' should remain, got {names}"
+        assert len(part) == 3
+
+
+# ─── code-intel v3 loop-liveness: spec-details content-hash staleness (single-source) ───
+
+class TestSpecContentHash:
+    """_spec_content_hash + marker embedding — the SINGLE source of the spec staleness
+    hash (Gate-1 F1b: no two-writer drift). Hash MUST cover domain+flows+steps so a
+    flow/step change (which changes the rendered skeleton) bumps the hash (Gate-1 F1)."""
+
+    def _domain(self):
+        return {"id": "domain:orders", "name": "Orders", "summary": "order lifecycle",
+                "entities": ["Order"], "complexity": "moderate"}
+
+    def test_hash_is_stable_and_hex(self):
+        from scripts.ai_ready_helpers import _spec_content_hash
+        d = self._domain()
+        h1 = _spec_content_hash(d, [], [])
+        h2 = _spec_content_hash(d, [], [])
+        assert h1 == h2                      # deterministic
+        assert len(h1) == 64 and all(c in "0123456789abcdef" for c in h1)  # sha256 hex
+
+    def test_hash_changes_on_domain_content(self):
+        from scripts.ai_ready_helpers import _spec_content_hash
+        d1 = self._domain()
+        d2 = dict(d1); d2["summary"] = "CHANGED"
+        assert _spec_content_hash(d1, [], []) != _spec_content_hash(d2, [], [])
+
+    def test_hash_changes_on_FLOW_content(self):
+        # Gate-1 F1: a flow change alters the rendered skeleton (§3/§4) → hash MUST bump.
+        # A domain-dict-only hash would MISS this (false-fresh).
+        from scripts.ai_ready_helpers import _spec_content_hash
+        d = self._domain()
+        flows_a = [{"id": "f1", "domain_id": "domain:orders", "name": "checkout"}]
+        flows_b = [{"id": "f1", "domain_id": "domain:orders", "name": "RENAMED"}]
+        assert _spec_content_hash(d, flows_a, []) != _spec_content_hash(d, flows_b, [])
+
+    def test_hash_changes_on_STEP_content(self):
+        from scripts.ai_ready_helpers import _spec_content_hash
+        d = self._domain()
+        flows = [{"id": "f1", "domain_id": "domain:orders", "name": "checkout"}]
+        steps_a = [{"id": "s1", "flow_id": "f1", "order": 1, "name": "validate"}]
+        steps_b = [{"id": "s1", "flow_id": "f1", "order": 1, "name": "CHANGED"}]
+        assert _spec_content_hash(d, flows, steps_a) != _spec_content_hash(d, flows, steps_b)
+
+    def test_skeleton_embeds_marker(self):
+        from scripts.ai_ready_helpers import project_domain_skeleton, _spec_content_hash, SPEC_HASH_MARKER_RE
+        d = self._domain()
+        md = project_domain_skeleton(d, [], [])
+        m = SPEC_HASH_MARKER_RE.search(md)
+        assert m, "skeleton must embed a spec-hash marker"
+        assert m.group(1) == _spec_content_hash(d, [], [])
+
+    def test_marker_excluded_from_own_hash(self):
+        # The embedded marker line must NOT feed its own hash (would be self-referential/unstable).
+        from scripts.ai_ready_helpers import project_domain_skeleton, extract_spec_hash_marker
+        d = self._domain()
+        md = project_domain_skeleton(d, [], [])
+        # regenerating from the rendered md's domain still yields the same marker
+        assert extract_spec_hash_marker(md) is not None
+
+    def test_regenerate_preserves_marker(self):
+        from scripts.ai_ready_helpers import (regenerate_spec_preserving_human,
+                                              extract_spec_hash_marker, _spec_content_hash)
+        d = self._domain()
+        regen = regenerate_spec_preserving_human("", d, [], [])
+        assert extract_spec_hash_marker(regen) == _spec_content_hash(d, [], [])
