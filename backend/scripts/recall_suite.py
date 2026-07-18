@@ -142,7 +142,9 @@ def run_suite(cases: list[dict]) -> dict:
 # consistent per run; a frozen fixture for a versioned baseline is a later run).
 #
 # domain "ddd"           → doc ∈ {TECH,PRODUCT,IMPROVEMENT,PROJECT}.md (project DDD)
-# domain "context_files" → doc ∈ {MEMORY,KNOWLEDGE}.md (.context/)
+# domain "context_files" → doc = MEMORY.md ONLY (.context/). KNOWLEDGE.md is NOT
+#   a served recall path (recall_context only serves MEMORY.md) — see the Gate-2
+#   note at the KNOWLEDGE exclusion below.
 _SEED_QUERIES = [
     # ── ddd · easy (title overlaps query) ──
     ("how does the autonomous pipeline work — its stages", "ddd", "TECH.md", "Architecture", "easy"),
@@ -167,16 +169,25 @@ _SEED_QUERIES = [
     ("what cognitive principles govern judgment", "context_files", "MEMORY.md", "Principles", "easy"),
     ("what past corrections were captured", "context_files", "MEMORY.md", "Corrections", "easy"),
     ("what open threads are being tracked", "context_files", "MEMORY.md", "Open Threads", "easy"),
-    ("how does the hook system work", "context_files", "KNOWLEDGE.md", "Hook System [model]", "easy"),
-    ("what is the database schema", "context_files", "KNOWLEDGE.md", "Database Schema [model]", "easy"),
+    ("what decisions have been recorded", "context_files", "MEMORY.md", "Decisions", "easy"),
+    ("what standing guidelines does the agent follow", "context_files", "MEMORY.md", "Guidelines", "easy"),
     # ── context_files · hard (title mismatch) ──
     ("what recurring mistakes keep happening to the agent", "context_files", "MEMORY.md", "Pitfalls", "hard"),
-    ("how is the React UI component tree organized", "context_files", "KNOWLEDGE.md", "Frontend Architecture [model]", "hard"),
-    ("what undocumented model limits can silently truncate output", "context_files", "KNOWLEDGE.md", "Claude Code CLI Hidden Defaults [constraint]", "hard"),
+    ("what post-incident reviews exist", "context_files", "MEMORY.md", "COE Registry", "hard"),
+    ("what standing user preferences are on record", "context_files", "MEMORY.md", "Standing Preferences", "easy"),
+    # NOTE (Gate-2, run_a616dc6b): KNOWLEDGE.md is DELIBERATELY excluded from the
+    # context_files domain. recall_context / production _recall_context_files ONLY
+    # ever serve MEMORY.md (recall_multi.py:443 "MEMORY is the canonical one"); the
+    # scorer is MEMORY-index-shaped, so feeding KNOWLEDGE text yields an EMPTY index
+    # → guaranteed rank 0 for ANY query. Benchmarking KNOWLEDGE here would score a
+    # NONEXISTENT recall path as "failure" and falsely damn the number. If KNOWLEDGE
+    # recall is ever wanted, it needs its own served path first (a separate run).
 ]
 
 _DDD_DOCS = ("TECH.md", "PRODUCT.md", "IMPROVEMENT.md", "PROJECT.md")
-_CONTEXT_DOCS = ("MEMORY.md", "KNOWLEDGE.md")
+# context_files recall serves MEMORY.md ONLY (recall_multi._recall_context_files);
+# KNOWLEDGE.md has no served recall path, so it's not a benchmarkable doc here.
+_CONTEXT_DOCS = ("MEMORY.md",)
 
 
 def _load_corpora(project: str = "SwarmAI") -> tuple[dict, dict]:
