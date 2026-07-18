@@ -157,7 +157,16 @@ def record_ddd_hit(
         key = anchor_text
         iso = hit_date.isoformat()
         with md_lock(path) as _got:  # blocking → always True
-            data = _load_raw(path)
+            data, load_ok = _load_raw_checked(path)
+            # Don't-clobber-on-corruption (Gate-2 adversarial HIGH): if the file
+            # EXISTS but failed to parse (load_ok=False), overwriting it with a
+            # single fresh entry would silently discard the whole usage history.
+            # A usage cache self-heals over time, but a distinguishable-corrupt
+            # file must not be wiped by a bump — skip the write, let it be
+            # repaired/aged out rather than truncated. (A cleanly-empty/absent
+            # file has load_ok=True with {} → normal first write proceeds.)
+            if not load_ok:
+                return
             data[key] = iso
             if len(data) > _USAGE_CAP:
                 data = _evict_oldest(data, _USAGE_CAP)
@@ -189,14 +198,35 @@ def load_ddd_usage(project: str) -> dict[str, date]:
 
 # ── internal helpers ────────────────────────────────────────────────────────
 def _load_raw(path: Path) -> dict[str, str]:
-    """Load the raw ``{key: iso_date_str}`` dict; ``{}`` on any error."""
+    """Load the raw ``{key: iso_date_str}`` dict; ``{}`` on any error.
+
+    Used by the READ path (load_ddd_usage) where a corrupt/absent file simply
+    means "no usage data" → no bumps this cycle, which is safe. The WRITE path
+    uses _load_raw_checked instead, because there ``{}`` on corruption would
+    cause a destructive overwrite (see record_ddd_hit).
+    """
+    return _load_raw_checked(path)[0]
+
+
+def _load_raw_checked(path: Path) -> tuple[dict[str, str], bool]:
+    """Load the raw dict AND report whether the load was clean.
+
+    Returns ``(data, ok)``:
+    - absent file      → ``({}, True)``   — a clean empty state (first write OK)
+    - valid JSON dict  → ``(data, True)``
+    - valid JSON non-dict / parse error / read error → ``({}, False)`` —
+      the file exists but is unusable; callers that would OVERWRITE must NOT
+      (don't clobber a corrupt-but-present file with a single fresh entry).
+    """
     try:
         if not path.is_file():
-            return {}
+            return {}, True  # absent = clean empty, safe to write fresh
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, dict):
+            return data, True
+        return {}, False  # present but wrong shape → corrupt, don't clobber
     except Exception:
-        return {}
+        return {}, False  # present but unparseable/unreadable → don't clobber
 
 
 def _evict_oldest(data: dict[str, str], cap: int) -> dict[str, str]:

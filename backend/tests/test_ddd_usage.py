@@ -223,6 +223,30 @@ def test_cap_evicts_oldest(tmp_path, monkeypatch):
     assert f"anchor number {n - 1}" in usage
 
 
+def test_corrupt_file_not_clobbered(tmp_path, monkeypatch):
+    """Gate-2 adversarial HIGH regression: a bump must NOT overwrite a
+    present-but-corrupt .ddd-usage.json with a single fresh entry (that would
+    silently discard the whole history). A corrupt file is left intact; a clean
+    empty/absent file still accepts the first write."""
+    from core import ddd_usage
+
+    monkeypatch.setattr(ddd_usage, "get_projects_dir", lambda: tmp_path)
+    proj = tmp_path / "SwarmAI"
+    proj.mkdir()
+    usage_file = proj / ".ddd-usage.json"
+
+    # Corrupt (unparseable) file present → record must NOT clobber it.
+    usage_file.write_text("{not valid json at all", encoding="utf-8")
+    ddd_usage.record_ddd_hit("SwarmAI", "some anchor", date(2026, 7, 18))
+    # File is unchanged (still the corrupt bytes), NOT overwritten to 1 entry.
+    assert usage_file.read_text(encoding="utf-8") == "{not valid json at all"
+
+    # Clean empty state (valid empty dict) → first write proceeds normally.
+    usage_file.write_text("{}", encoding="utf-8")
+    ddd_usage.record_ddd_hit("SwarmAI", "some anchor", date(2026, 7, 18))
+    assert ddd_usage.load_ddd_usage("SwarmAI") == {"some anchor": date(2026, 7, 18)}
+
+
 def test_record_best_effort_never_raises(tmp_path, monkeypatch):
     """A write to an unwritable location must be swallowed — recall must never
     be blocked by the usage log (recall_multi.py:24 principle)."""
