@@ -427,6 +427,71 @@ class TestRunUpdateCarryForward:
         assert build.get("status") != "completed", "status must NOT carry forward from the old record"
 
 
+class TestCompletionGateBoolAdversarialReview:
+    """run_ca0190fb: the deliver-stage auto-aggregation (cmd_run_update, status=
+    completed) called `_adv.get('findings')` / `_audit.get('criteria_met')` with NO
+    isinstance guard. But the goal-path completion gate (:1479) and its OWN error
+    message (:1487) explicitly tell users to pass `adversarial_review: true` — a
+    BOOL. A bool deliver adversarial_review therefore crashed the completion with
+    `AttributeError: 'bool' object has no attribute 'get'`. The two completion paths
+    must agree: a bool adversarial_review is valid and must never crash."""
+
+    def _update_args(self, workspace, run_id, stage_json=None, status=None):
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated files_touched fixed force_checkpoint "
+                 "frontend full indicators "
+                 "lessons limit modules outcome overlap partial probes producer profile "
+                 "project reason requirement resolved retries review_count rp_violations "
+                 "run_id scope stage stage_json state status summary taste_decision "
+                 "timestamp tokens_consumed topic type types user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.stage_json = stage_json
+        ns.status = status
+        return ns
+
+    def _all_stages_done(self):
+        # bugfix profile (the auto-aggregation block only runs for full/bugfix — :1205):
+        # evaluate, think, plan, build, review, test, deliver, reflect
+        base = [{"stage": s, "status": "completed", "stage_doc_consumed": True}
+                for s in ("evaluate", "think", "plan", "build", "review", "test")]
+        # REFLECT needs a substantive lesson (>20 chars, actionable) or its own gate blocks
+        base.append({"stage": "reflect", "status": "completed", "stage_doc_consumed": True,
+                     "lessons": ["A bool adversarial_review must not crash the completion "
+                                 "auto-aggregation — guard with isinstance before .get()."]})
+        # deliver carries a BOOL adversarial_review (the shape the goal-path docs promote)
+        deliver = {"stage": "deliver", "status": "completed", "stage_doc_consumed": True,
+                   "adversarial_review": True,
+                   "ac_verification": {"AC1": "ok"}}
+        return base + [deliver]
+
+    def test_bool_adversarial_review_does_not_crash_completion(self, workspace, monkeypatch):
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        rf = _create_run(workspace, "TestProject", "run_booladv", "running",
+                         stages=self._all_stages_done())
+        # bugfix profile: matches seeded stages AND enables the auto-aggregation
+        # block (:1205 gates it to full/bugfix) — the bool crash site.
+        data = _read_run(rf); data["profile"] = "bugfix"; rf.write_text(json.dumps(data))
+        # completion also requires REPORT.md present — seed one so execution reaches
+        # the deliver auto-aggregation (the bool crash site), not the report gate.
+        (rf.parent / "REPORT.md").write_text(
+            "# Pipeline Report\n\n## TL;DR\nBool adversarial_review completion guard.\n\n"
+            "## Requirement\n" + ("Guard the completion auto-aggregation against a bool "
+            "adversarial_review so it cannot crash. " * 6) + "\n\n## Pipeline Execution\n"
+            "| stage | status |\n|---|---|\n| build | done |\n| deliver | done |\n\n"
+            "## Quality Gates\nAdversarial passed.\n\n## Lessons\nGuard isinstance before .get().\n")
+        args = self._update_args(workspace, "run_booladv", status="completed")
+        # Before the fix: AttributeError: 'bool' object has no attribute 'get'
+        cli.cmd_run_update(args, reg)
+        assert _read_run(rf)["status"] == "completed"
+
+
 class TestPublishBackfillsArtifactIdIntoExistingRecord:
     """run_b7620c6e (dogfood-surfaced): the REAL stage order is gate-1 writes a
     stage record (e.g. build + gate1_verdict) via run-update BEFORE publish runs.
