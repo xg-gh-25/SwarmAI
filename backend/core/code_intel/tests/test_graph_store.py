@@ -726,3 +726,82 @@ class TestModuleEdges:
         me = store.get_module_edges()
         assert all(e["from"] != e["to"] for e in me), \
             "intra-module edges must be excluded (skeleton = cross-module only)"
+
+    # ── confidence enrichment + god-node guard (run_2392a203) ─────────────
+    # Ported from graphify: every module edge carries a confidence label
+    # (EXTRACTED/INFERRED) + score, and a god-node guard drops confidence<=0.5
+    # bare/unresolved targets (str/mkdir/get) whose _mod_of would otherwise
+    # fabricate a module. See graph_store.get_module_edges + parser.py:1044.
+
+    def test_each_edge_carries_confidence_label_and_score(self, store):
+        """AC1: every module_edge has confidence (EXTRACTED|INFERRED) + confidence_score."""
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+            _make_node("backend/jobs/b.py::g", file_path="backend/jobs/b.py", name="g"),
+        ])
+        store.upsert_edges([
+            _make_edge("backend/core/a.py::f", "backend/jobs/b.py::g", confidence=1.0),
+        ])
+        me = store.get_module_edges()
+        assert me, "expected at least one kept module edge"
+        e = me[0]
+        assert e["confidence"] in ("EXTRACTED", "INFERRED"), \
+            "each module_edge must carry a confidence label (AMBIGUOUS is guarded out)"
+        assert "confidence_score" in e and isinstance(e["confidence_score"], (int, float)), \
+            "each module_edge must carry a numeric confidence_score"
+        assert e["confidence"] == "EXTRACTED" and e["confidence_score"] == 1.0, \
+            "a qualified (1.0) edge → EXTRACTED, score 1.0"
+
+    def test_god_node_guard_excludes_bare_low_confidence_target(self, store):
+        """AC2 (the load-bearing test): a confidence<=0.5 bare target (str/mkdir)
+        must NOT appear as a fake module endpoint. This is the mutation anchor —
+        remove the guard and this edge reappears."""
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+        ])
+        store.upsert_edges([
+            # bare unresolved builtin call: target has no "::", confidence 0.5
+            _make_edge("backend/core/a.py::f", "str", confidence=0.5),
+            _make_edge("backend/core/a.py::f", "mkdir", confidence=0.5),
+        ])
+        me = store.get_module_edges()
+        endpoints = {e["to"] for e in me} | {e["from"] for e in me}
+        assert "str" not in endpoints and "mkdir" not in endpoints, \
+            "god-node guard must drop confidence<=0.5 bare targets (fake modules)"
+        assert me == [], "an all-bare (<=0.5) pair must vanish entirely under the guard"
+
+    def test_resolved_edge_survives_guard(self, store):
+        """Guard boundary: a 0.6 (INFERRED) qualified cross-module edge is KEPT."""
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+            _make_node("backend/jobs/b.py::g", file_path="backend/jobs/b.py", name="g"),
+        ])
+        store.upsert_edges([
+            _make_edge("backend/core/a.py::f", "backend/jobs/b.py::g", confidence=0.6),
+        ])
+        me = store.get_module_edges()
+        pair = {(e["from"], e["to"]): e for e in me}
+        assert ("backend/core", "backend/jobs") in pair, \
+            "a resolved 0.6 edge must survive the guard (only <=0.5 is dropped)"
+        assert pair[("backend/core", "backend/jobs")]["confidence"] == "INFERRED", \
+            "0.6 → INFERRED label"
+        assert pair[("backend/core", "backend/jobs")]["confidence_score"] == 0.6
+
+    def test_mixed_pair_takes_max_confidence(self, store):
+        """AC (Gate-1 required): a pair with a 0.6 AND a 1.0 edge → MAX → EXTRACTED,
+        score 1.0. Locks the MAX-vs-MIN choice so it is intentional."""
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+            _make_node("backend/jobs/b.py::g", file_path="backend/jobs/b.py", name="g"),
+            _make_node("backend/jobs/c.py::h", file_path="backend/jobs/c.py", name="h"),
+        ])
+        store.upsert_edges([
+            _make_edge("backend/core/a.py::f", "backend/jobs/b.py::g", confidence=0.6),
+            _make_edge("backend/core/a.py::f", "backend/jobs/c.py::h", confidence=1.0),
+        ])
+        me = store.get_module_edges()
+        pair = {(e["from"], e["to"]): e for e in me}
+        edge = pair[("backend/core", "backend/jobs")]
+        assert edge["confidence_score"] == 1.0, "MAX confidence across the pair"
+        assert edge["confidence"] == "EXTRACTED", "score>=1.0 → EXTRACTED"
+        assert edge["count"] == 2, "both kept edges counted"

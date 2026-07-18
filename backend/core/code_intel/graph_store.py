@@ -715,6 +715,18 @@ class GraphStore:
             )
         return modules
 
+    # God-node guard threshold (ported from graphify, run_2392a203).
+    # code_edges.confidence semantics (parser.py): 1.0 = target is qualified
+    # (has "::", an EXACT reference), 0.8 = single-candidate cross-file resolved,
+    # 0.6 = regex-fallback inferred call, 0.5 = bare/unresolved/N-candidate
+    # ambiguous. A 0.5 edge is DEFINITIONALLY bare (parser.py:1044 sets 0.5 iff
+    # the target has no "::"), so `_mod_of` turns its bare target (`str`, `mkdir`,
+    # `get`) into a FABRICATED single-token module — 87% of the pre-guard module
+    # skeleton was such garbage. Excluding <=0.5 edges from the AGGREGATION (not
+    # from code_edges — they are legit per-symbol data) is graphify's god-node
+    # guard: len(candidates) != 1 -> bail (extract.py:2107).
+    _MODULE_EDGE_MIN_CONFIDENCE = 0.5
+
     def get_module_edges(self) -> list[dict]:
         """Aggregate code_edges up to 2-level module-prefix pairs — the compact
         ARCHITECTURAL SKELETON (which module calls which), NOT a raw per-symbol
@@ -723,9 +735,23 @@ class GraphStore:
         the readable JSON 10x. Cross-module only (intra-module edges excluded —
         they're implementation detail, not architecture).
 
-        Returns list of {"from": mod, "to": mod, "count": n} sorted by count desc.
-        The module prefix mirrors get_module_map: 2-level dir prefix of the node's
-        file, derived from the ``file::symbol`` id encoding.
+        Confidence-aware (run_2392a203, ported from graphify): each code_edge
+        carries a per-symbol ``confidence`` float; this rolls up to a
+        per-module-pair label + score and applies a god-node guard.
+
+        - **God-node guard:** edges with confidence <= ``_MODULE_EDGE_MIN_CONFIDENCE``
+          (0.5 bare/unresolved targets like ``str``/``mkdir``/``get``) are EXCLUDED,
+          so a bare builtin never becomes a fake module endpoint.
+        - **confidence_score:** the MAX float confidence among the pair's kept edges
+          ("is there ANY solid evidence this module link is real"). MAX not MIN:
+          one exact edge shouldn't be masked by a weaker sibling.
+        - **confidence label:** ``EXTRACTED`` if score >= 1.0 (an exact/qualified
+          reference), else ``INFERRED`` (0.6–0.99, resolved-but-deduced).
+          ``AMBIGUOUS`` (<=0.5) never appears — it is guarded out.
+
+        Returns list of {"from", "to", "count", "confidence", "confidence_score"}
+        sorted by count desc. The module prefix mirrors get_module_map: 2-level
+        dir prefix of the node's file, derived from the ``file::symbol`` id.
         """
         def _mod_of(node_id: str) -> str:
             # node id is "<file_path>::<symbol>"; module = 2-level dir prefix of file
@@ -736,17 +762,34 @@ class GraphStore:
             return parts[0] if parts else ""
 
         rows = self._conn.execute(
-            "SELECT source_id, target_id FROM code_edges"
+            "SELECT source_id, target_id, confidence FROM code_edges"
         ).fetchall()
-        counts: dict[tuple[str, str], int] = {}
-        for src, tgt in rows:
+        # per module pair: [count of kept edges, max confidence]
+        agg: dict[tuple[str, str], list] = {}
+        for src, tgt, conf in rows:
+            score = conf if conf is not None else 1.0
+            # god-node guard: drop bare/unresolved edges (fake-module endpoints)
+            if score <= self._MODULE_EDGE_MIN_CONFIDENCE:
+                continue
             sm, tm = _mod_of(src), _mod_of(tgt)
             if not sm or not tm or sm == tm:
                 continue  # skip intra-module + unresolvable
-            counts[(sm, tm)] = counts.get((sm, tm), 0) + 1
+            entry = agg.get((sm, tm))
+            if entry is None:
+                agg[(sm, tm)] = [1, score]
+            else:
+                entry[0] += 1
+                if score > entry[1]:
+                    entry[1] = score
         return [
-            {"from": sm, "to": tm, "count": n}
-            for (sm, tm), n in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+            {
+                "from": sm, "to": tm, "count": n,
+                "confidence": "EXTRACTED" if score >= 1.0 else "INFERRED",
+                "confidence_score": round(score, 2),
+            }
+            for (sm, tm), (n, score) in sorted(
+                agg.items(), key=lambda kv: kv[1][0], reverse=True
+            )
         ]
 
     # ── codebase summary ─────────────────────────────────────────────────

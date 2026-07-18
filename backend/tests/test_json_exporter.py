@@ -47,9 +47,11 @@ def _make_mock_graph():
         ],
     }
 
-    # get_module_edges (architectural skeleton — run_4344d341)
+    # get_module_edges (architectural skeleton — run_4344d341; confidence-enriched
+    # run_2392a203: each edge carries confidence label + score, god-node-guarded).
     graph.get_module_edges.return_value = [
-        {"from": "backend/routers", "to": "backend/core", "count": 3},
+        {"from": "backend/routers", "to": "backend/core", "count": 3,
+         "confidence": "EXTRACTED", "confidence_score": 1.0},
     ]
 
     # get_routes
@@ -212,6 +214,9 @@ class TestJsonExporter:
         me = data["module_edges"]
         assert me and me[0]["from"] == "backend/routers" and me[0]["to"] == "backend/core"
         assert me[0]["count"] == 3
+        # run_2392a203: confidence enrichment must pass through the exporter unchanged
+        assert me[0]["confidence"] == "EXTRACTED", "confidence label preserved through export"
+        assert me[0]["confidence_score"] == 1.0, "confidence_score preserved through export"
 
     def test_export_schema_version(self, tmp_path):
         """JSON output declares v2 schema."""
