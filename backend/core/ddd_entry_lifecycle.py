@@ -7,11 +7,13 @@ Each bullet entry can have:
 - Last referenced date: when this entry was last used
 - Decay state: active → dormant → archived
 
-Decay rules:
-- active → dormant: 90 days without reference (180d if ref >= 10)
-- dormant → archived: 90 more days (180 total / 360 for high-ref)
+Decay rules (see DORMANT_THRESHOLD_DAYS / ARCHIVED_THRESHOLD_DAYS below — the SoT):
+- active → dormant: 60 days without reference (tunable per-doc, e.g. 45 for MEMORY.md)
+- dormant → archived: 150 days TOTAL since last reference (NOT additional-after-dormant)
 - New entries (< 30 days old): immune to decay (grace period)
 - Evergreen sections: entries within are immune
+  (The ref>=10 "2x grace" and the 90/180 windows were removed 2026-06; ref_count has
+   no live producer, so decay is age + evergreen + grace only — see assess_decay.)
 
 Public API:
     EntryMetadata        — dataclass for per-entry state
