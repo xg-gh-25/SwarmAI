@@ -179,6 +179,37 @@ SYSTEM_JOBS: list[Job] = [
         config={"window_days": 7},
     ),
 
+    # --- DDD Self-Audit (per-project LLM semantic-drift REVIEW across ALL projects) ---
+    # The real mechanism for SEMANTIC drift (run_b2e85d61 proved it is NOT a mechanizable
+    # grep-detector — prose-truth needs JUDGMENT). Loops every DDD project, runs a bounded
+    # READ-ONLY (Read/Grep) review subprocess per project (domain-aware: code-backed =
+    # prose-vs-code, non-code = internal-contradiction), and surfaces drift as Radar todos
+    # + a report. DETECT-ONLY: the agent has no Write/Edit — the fix is human via s_persist.
+    # In-process loop (~8 projects) blocks the serial scheduler ~20-30min → scheduled as a
+    # LATE Monday slot (after the light AM jobs, before eval-scheduled's 10:30 heavy slot).
+    Job(
+        id="ddd-self-audit",
+        name="DDD Self-Audit",
+        type="ddd_self_audit",
+        schedule="0 9 * * 1",           # Monday UTC 09:00 = ICT 17:00 (trailing, pre-eval)
+        enabled=True,
+        category="system",
+        config={
+            "create_todos": True,
+            "todo_source_type": "ai_detected",
+            "todo_priority": "medium",
+            "todo_max": 40,
+        },
+        safety=JobSafety(
+            # Outer envelope only — the per-project inner claude spawns are bounded in the
+            # handler (_PER_PROJECT_TIMEOUT_S / _PER_PROJECT_BUDGET_USD). JobSafety.timeout
+            # does NOT bound inner subprocesses (eval-scheduled precedent).
+            timeout_seconds=2400,
+            max_budget_usd=5.00,
+            allowed_tools=["Read", "Grep", "Glob"],
+        ),
+    ),
+
     # --- SwarmAI Monthly Report (comprehensive health + progress MBR) ---
     # Covers all 12 subsystems. Runs 1st of month after all weekly jobs have
     # populated their data for the prior month.

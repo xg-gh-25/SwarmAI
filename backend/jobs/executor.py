@@ -264,6 +264,18 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "ddd_self_audit":
+            from .handlers.ddd_self_audit import run_ddd_self_audit
+            audit_result = run_ddd_self_audit(config=job.config)
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if audit_result.get("status") == "success" else "skipped",
+                summary=audit_result.get("summary", "DDD self-audit"),
+                output_path=audit_result.get("output_path"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "swarmai_monthly_report":
             from .handlers.swarmai_monthly_report import run_swarmai_monthly_report
             report_result = run_swarmai_monthly_report(config=job.config)
