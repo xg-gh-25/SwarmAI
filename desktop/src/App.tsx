@@ -40,15 +40,27 @@ export function shouldShowOnboarding(status: SystemStatus | undefined): boolean 
 
 /**
  * What AppRoutes should render given the onboarding-status query state.
+ * 'error' → the status query failed after all retries (no blank-screen dead-end);
  * 'loading' → render nothing (avoid the new-user ChatPage flash while status is
  * undefined); 'onboarding' → wizard; 'app' → ChatPage. Pure, so it's testable
  * without wiring a full useQuery render.
+ *
+ * `isError` is checked FIRST and BEFORE the `status === undefined` clause: on a
+ * failed query react-query leaves status=undefined + isLoading=false, which would
+ * otherwise fall into 'loading' and render null forever (the only no-exit dead-end
+ * in the startup chain — the overlay has already faded). It defaults to false so
+ * every existing 2-arg caller/test behaves identically. `isLoading` still wins over
+ * `isError` so a mid-retry tick never flashes the error card, and a resolved status
+ * (success) is never overridden by a stale error flag.
  */
 export function routeDecision(
   status: SystemStatus | undefined,
   isLoading: boolean,
-): 'loading' | 'onboarding' | 'app' {
-  if (isLoading || status === undefined) return 'loading';
+  isError = false,
+): 'loading' | 'onboarding' | 'app' | 'error' {
+  if (isLoading) return 'loading';
+  if (isError && status === undefined) return 'error';
+  if (status === undefined) return 'loading';
   return shouldShowOnboarding(status) ? 'onboarding' : 'app';
 }
 
@@ -193,7 +205,7 @@ function PostUpdateToast() {
  * Must be inside QueryClientProvider for useQuery.
  */
 function AppRoutes() {
-  const { data: status, isLoading, refetch } = useQuery({
+  const { data: status, isLoading, isError, refetch } = useQuery({
     queryKey: ['system-status-onboarding'],
     queryFn: systemService.getStatus,
     staleTime: 1000 * 60 * 10, // 10 min — only check once
@@ -204,9 +216,44 @@ function AppRoutes() {
   // through to ChatPage. Otherwise a brand-new user (status undefined until the
   // query resolves) would see a sub-second flash of the unusable, un-onboarded
   // ChatPage before the wizard appears (meta-review MED, run_61c4c939).
-  const decision = routeDecision(status, isLoading);
+  const decision = routeDecision(status, isLoading, isError);
   if (decision === 'loading') {
     return null;
+  }
+  // The status query failed all retries after the overlay already faded. Without
+  // this branch routeDecision returned 'loading' → render null → permanent blank
+  // screen with no exit (the only no-exit dead-end in the startup chain). Give the
+  // user a visible Retry that re-runs the query (recovers to app/onboarding the
+  // moment the backend responds). Plain div — renders in place of the route tree,
+  // needs no router context.
+  if (decision === 'error') {
+    return (
+      <div
+        role="alert"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-bg)]"
+      >
+        <div className="flex flex-col items-center gap-4 max-w-md px-8 text-center">
+          <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl text-red-400">error</span>
+          </div>
+          <p className="text-red-400 font-medium">Couldn’t reach the backend</p>
+          <p className="text-[var(--color-text-muted)] text-sm">
+            SwarmAI couldn’t load its status. The backend may still be starting or may have
+            stopped.{' '}
+            {isDesktop()
+              ? <>Check the logs at <code className="text-primary">~/.swarm-ai/logs/</code>.</>
+              : <>It may be restarting — retry in a moment, or contact your administrator if this persists.</>}
+          </p>
+          <button
+            onClick={() => refetch()}
+            className="mt-2 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined text-xl">refresh</span>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
   if (decision === 'onboarding') {
     return <OnboardingPage onComplete={() => refetch()} />;

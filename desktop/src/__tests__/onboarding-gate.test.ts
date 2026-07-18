@@ -57,3 +57,28 @@ describe('routeDecision — no new-user ChatPage flash', () => {
     expect(routeDecision(status({ onboardingComplete: true }), false)).toBe('app');
   });
 });
+
+describe('routeDecision — error state (no blank-screen dead-end)', () => {
+  it('query errored + not loading + no status → error (not a permanent blank)', () => {
+    // The bug: retry:2 exhausts → status=undefined, isLoading=false, isError=true.
+    // Without the error branch this returned 'loading' → AppRoutes rendered null forever.
+    expect(routeDecision(undefined, false, true)).toBe('error');
+  });
+
+  it('isError defaults to false → existing 2-arg callers unchanged (backward-compat)', () => {
+    // The existing call site routeDecision(status, isLoading) must behave identically.
+    expect(routeDecision(undefined, false)).toBe('loading');
+    expect(routeDecision(status({ onboardingComplete: true }), false)).toBe('app');
+  });
+
+  it('still loading wins over error → no error-card flash during retries', () => {
+    // react-query keeps isError=false until retries exhaust, but guard anyway:
+    // loading must take precedence so a mid-retry tick never flashes the error card.
+    expect(routeDecision(undefined, true, true)).toBe('loading');
+  });
+
+  it('error ignored once status resolved successfully → app/onboarding, not error', () => {
+    // A stale isError alongside a resolved status must not trap the user on the card.
+    expect(routeDecision(status({ onboardingComplete: true }), false, true)).toBe('app');
+  });
+});
