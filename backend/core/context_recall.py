@@ -230,7 +230,12 @@ def recall_context(
         # AGENTIC re-search (the caller nudges the agent to re-grep with synonyms),
         # not by a vector leg. ``allow_embed`` is retained in the signature for
         # caller compatibility but is now INERT (no embed path exists to gate).
-        scores = memory_index._keyword_section_scores(query, index_block, superseded)
+        # section_name_signal=True: the RECALL read path benefits from a query
+        # naming a category (run_94e602ad). SAFE here (unlike injection): recall
+        # returns scoped sections to a deliberate recall query, it does not inject
+        # into every session's system prompt on an incidental category noun.
+        scores = memory_index._keyword_section_scores(
+            query, index_block, superseded, section_name_signal=True)
         hit_layer = "keyword" if scores else "none"
 
         # Bare-date fallback (run_2f4d92da): date aliases were dropped from the

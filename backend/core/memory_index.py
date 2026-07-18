@@ -935,24 +935,41 @@ def _keyword_section_scores(
     user_message: str,
     index_block: str,
     superseded_keys: set[str] | None = None,
+    *,
+    section_name_signal: bool = False,
 ) -> dict[str, float]:
     """Score sections by keyword matching, applying temporal weight.
 
     Entries marked as superseded (via P2 temporal validity) score at
     0.1x weight, preventing stale decisions from dominating section selection.
+
+    ``section_name_signal`` (default False, run_94e602ad Gate-2): when True, ALSO
+    score the query against each section's own NAME (a query that names a
+    category — "what cognitive PRINCIPLES govern judgment" — surfaces the
+    Principles section even when no per-entry summary shares the query's words).
+    This is ONLY safe on the RECALL READ path (recall_context), NOT the L1
+    INJECTION path: `select_memory_sections` injects EVERY returned section into
+    the system prompt (score discarded, :1160), so a name signal there would
+    spuriously inject a section whenever a normal chat message happens to contain
+    a category noun ("the *principles* of good API design" → inject Principles).
+    Default OFF keeps the injection path byte-identical to pre-fix behavior; the
+    recall caller opts in. (Two-consumer defect caught by Gate-2.)
     """
     index_entries = _parse_index_entries(index_block)
     matched: dict[str, float] = {}
     _superseded = superseded_keys or set()
-    sections_present: set[str] = set()
+    # A section is name-eligible ONLY if it has >=1 NON-superseded entry — else a
+    # section of purely stale/reversed content would re-surface at full strength
+    # via its name, bypassing the superseded 0.1x guard (Gate-2 defect #2).
+    live_sections: set[str] = set()
 
     for entry in index_entries:
         score = keyword_relevance(
             user_message, entry["summary"], entry["aliases"]
         )
         sec_name = _key_to_section(entry["key"])
-        if sec_name:
-            sections_present.add(sec_name)
+        if sec_name and entry["key"] not in _superseded:
+            live_sections.add(sec_name)
         # Apply temporal weight: superseded entries get 0.1x.
         if entry["key"] in _superseded:
             score *= SUPERSEDED_WEIGHT
@@ -960,21 +977,17 @@ def _keyword_section_scores(
             if sec_name and (sec_name not in matched or score > matched[sec_name]):
                 matched[sec_name] = score
 
-    # Section-NAME signal (run_94e602ad): a query that NAMES a category
-    # ("what cognitive PRINCIPLES govern judgment" → the Principles section) must
-    # be able to surface that section, even when no per-entry SUMMARY shares the
-    # query's words. Before this, the section title was known via _key_to_section
-    # but never matchable — so category-naming queries scored 0 (recall-suite
-    # measured context_files recall@5 = 0.00). ADDITIVE + max-merge: this can only
-    # RAISE a section's score, never drop or reorder an existing summary/alias
-    # match, so the primary selective-injection path is unchanged. (It does NOT
-    # bridge the synonym gap — "mistakes"→Pitfalls still needs the deferred
-    # semantic leg — only the case where the query uses the section's own name.)
-    for sec_name in sections_present:
-        name_score = keyword_relevance(user_message, sec_name, [])
-        if name_score >= KEYWORD_THRESHOLD:
-            if sec_name not in matched or name_score > matched[sec_name]:
-                matched[sec_name] = name_score
+    # Section-NAME signal — recall READ path only (see docstring). Only sections
+    # with a live (non-superseded) entry are name-eligible. Additive max-merge:
+    # can only RAISE a section already scoreable, never lower a summary hit. Does
+    # NOT bridge the synonym gap ("mistakes"→Pitfalls needs the deferred semantic
+    # leg) — only the case where the query uses the section's own name.
+    if section_name_signal:
+        for sec_name in live_sections:
+            name_score = keyword_relevance(user_message, sec_name, [])
+            if name_score >= KEYWORD_THRESHOLD:
+                if sec_name not in matched or name_score > matched[sec_name]:
+                    matched[sec_name] = name_score
 
     return matched
 

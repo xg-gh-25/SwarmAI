@@ -850,9 +850,13 @@ class TestSectionNameSignal:
     signal, so a category-naming query ("what cognitive PRINCIPLES govern
     judgment") scored 0 across all entries → context_files recall@5 = 0.00.
 
-    Layer-1 fix (in _keyword_section_scores): additively score the query against
-    each present section's own NAME and max-merge. Additive = can only RAISE a
-    section's score, never drop/reorder an existing summary/alias match.
+    Fix (in _keyword_section_scores): score the query against each LIVE section's
+    own NAME and max-merge — but ONLY when section_name_signal=True. Gate-2 caught
+    that this scorer feeds BOTH recall AND the L1 injection path: the signal is
+    enabled only on the recall READ path (recall_context), OFF by default so the
+    injection path can't spuriously inject a section on an incidental category
+    noun; and only sections with a NON-superseded entry are name-eligible so the
+    superseded 0.1x guard isn't bypassed.
 
     NOTE (Gate-1 BLOCK): the layer-2 slicer carve-out (return head entries for a
     name-matched section) was REJECTED — a name match proves the SECTION is
@@ -874,7 +878,8 @@ class TestSectionNameSignal:
 
     def test_category_name_query_scores_its_section(self):
         from core.memory_index import _keyword_section_scores
-        scores = _keyword_section_scores("what cognitive principles govern judgment", self._index())
+        scores = _keyword_section_scores("what cognitive principles govern judgment",
+                                         self._index(), section_name_signal=True)
         assert "Principles" in scores, \
             "a query naming the 'principles' category must score the Principles section (name signal)"
         assert scores["Principles"] >= 0.15
@@ -883,14 +888,45 @@ class TestSectionNameSignal:
         """A query matching an ENTRY SUMMARY must keep scoring via the summary —
         the name signal only max-merges, never replaces a stronger summary hit."""
         from core.memory_index import _keyword_section_scores
-        # 'read path differentiator' matches PRI01's summary strongly; name signal
-        # for 'Principles' shouldn't erase or lower it.
-        scores = _keyword_section_scores("the read path is the differentiator", self._index())
+        scores = _keyword_section_scores("the read path is the differentiator",
+                                         self._index(), section_name_signal=True)
         assert scores.get("Principles", 0) >= 0.15, "summary match must survive the name-signal merge"
 
-    def test_unrelated_query_scores_nothing(self):
-        """The name signal must not inject sections for a query that names none."""
+    def test_name_signal_OFF_by_default_injection_path_unchanged(self):
+        """Gate-2 defect #1: the INJECTION path must NOT get the name signal. With
+        the default (signal off), a query naming a category must score NOTHING —
+        else a normal chat message ('the principles of good API design') would
+        spuriously inject the MEMORY Principles section into the system prompt."""
         from core.memory_index import _keyword_section_scores
-        scores = _keyword_section_scores("how do I deploy the kubernetes cluster", self._index())
-        assert scores == {} or all(v >= 0.15 for v in scores.values()), \
-            "no spurious section from an unrelated query"
+        scores = _keyword_section_scores("what are the principles of good API design",
+                                         self._index())  # default: signal OFF
+        assert "Principles" not in scores, \
+            "default (injection) path must NOT surface a section via its name alone"
+        assert scores == {}, "no section from a name-only match on the injection path"
+
+    def test_superseded_section_not_name_surfaced(self):
+        """Gate-2 defect #2: a section whose entries are ALL superseded must NOT
+        surface via its name (the name score would bypass the 0.1x superseded
+        guard). Only sections with a live entry are name-eligible."""
+        from core.memory_index import _keyword_section_scores
+        idx = (
+            "<!-- MEMORY_INDEX_START -->\n"
+            "- [DEC01] Chose SQLite WAL over Postgres | sqlite, wal\n"
+            "<!-- MEMORY_INDEX_END -->\n"
+        )
+        scores = _keyword_section_scores("what decisions have been recorded", idx,
+                                         superseded_keys={"DEC01"}, section_name_signal=True)
+        assert "Decisions" not in scores, \
+            "an all-superseded section must not re-surface via its name (superseded guard)"
+
+    def test_live_section_still_name_surfaces(self):
+        """Counterpart: a section WITH a live entry IS name-eligible (guard not over-broad)."""
+        from core.memory_index import _keyword_section_scores
+        idx = (
+            "<!-- MEMORY_INDEX_START -->\n"
+            "- [DEC01] Chose SQLite WAL over Postgres | sqlite, wal\n"
+            "<!-- MEMORY_INDEX_END -->\n"
+        )
+        scores = _keyword_section_scores("what decisions have been recorded", idx,
+                                         section_name_signal=True)  # DEC01 live
+        assert scores.get("Decisions", 0) >= 0.15, "a live section must be name-eligible"
