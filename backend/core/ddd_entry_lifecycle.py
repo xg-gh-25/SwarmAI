@@ -772,7 +772,7 @@ def archive_entries(
     else:
         header = "# Archived Knowledge Entries\n\n"
         header += "_Entries archived by the Knowledge Lifecycle decay engine. "
-        header += "These entries had no references for 180+ days._\n\n"
+        header += "These entries had no references for 150+ days._\n\n"
         archive_path.write_text(
             header + new_content, encoding="utf-8"
         )
