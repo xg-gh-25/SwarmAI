@@ -128,18 +128,31 @@ export default function App() {
           <AudioKeepAlive />
           {/* Desktop-only overlays — Tauri imports crash in browser (Hive mode) */}
           {isDesktop() && <ShutdownOverlay />}
-          {/* Backend startup overlay - production mode only */}
+          {/* Backend startup overlay - production mode only.
+              NOT wrapped in an isolating ErrorBoundary: it is the SOLE trigger of
+              setIsBackendReady (onReady below), and AppRoutes mounts only once
+              isBackendReady=true. Swallowing its crash to null would strand
+              isBackendReady=false forever → permanent boot hang with no exit.
+              It stays under the app-level ErrorBoundary above, which offers Reload. */}
           {!isDev && <BackendStartupOverlay onReady={() => setIsBackendReady(true)} />}
+          {/* Passive global banners — each isolated in its OWN ErrorBoundary so a
+              crash in one degrades to that banner disappearing (componentDidCatch
+              logs it — not silent), instead of the app-level boundary escalating a
+              single-banner crash to a full-screen "Something went wrong". These are
+              root-mounted (outside LayoutProvider); the boot-crash class they belong
+              to is also guarded loudly by root-mounted-no-shell-context.test.ts.
+              Safe to isolate (unlike the startup overlay): each already renders null
+              conditionally and none gates app mount. */}
           {/* Non-blocking banner for background daemon version-sync status.
               Sibling to the overlay — overlay dismissal is independent of
               upgrade lifetime (see daemon-startup-timeout-regression fix). */}
-          {!isDev && isDesktop() && <BackendUpgradeBanner />}
+          {!isDev && isDesktop() && <ErrorBoundary fallback={null}><BackendUpgradeBanner /></ErrorBoundary>}
           {/* Credential-expiry banner — health-poll driven (reads health.auth).
               Not gated on isDev/isDesktop: expired creds matter in every mode
               and the data comes from /health, not a Tauri event. */}
-          <CredentialBanner />
+          <ErrorBoundary fallback={null}><CredentialBanner /></ErrorBoundary>
           {/* Update notification — Desktop only (Tauri plugin imports) */}
-          {!isDev && isDesktop() && <UpdateNotification />}
+          {!isDev && isDesktop() && <ErrorBoundary fallback={null}><UpdateNotification /></ErrorBoundary>}
           {/* Post-update welcome toast (both Desktop and Hive) — inside backend gate */}
           {/* Only render routes after backend is ready to prevent race conditions */}
           {isBackendReady && <>

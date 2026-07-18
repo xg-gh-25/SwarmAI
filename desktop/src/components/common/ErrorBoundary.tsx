@@ -86,8 +86,15 @@ export class ErrorBoundary extends Component<Props, State> {
         );
       }
 
-      // variant === 'default': existing behavior
-      if (this.props.fallback) {
+      // variant === 'default': existing behavior.
+      // Use `'fallback' in props`, NOT truthiness — an explicit `fallback={null}`
+      // (used by App-root banner isolation to degrade a crash to "render nothing")
+      // is a deliberate render-null instruction. A truthiness check (`if
+      // (this.props.fallback)`) treats null/0/'' as "no fallback" and wrongly falls
+      // through to the full-screen ErrorFallback — which for a root banner would
+      // escalate a single-banner crash to the whole-app "Something went wrong" this
+      // boundary exists to prevent.
+      if ('fallback' in this.props) {
         return this.props.fallback;
       }
 
