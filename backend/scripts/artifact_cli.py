@@ -1210,10 +1210,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     None,
                 )
                 if deliver_stage_rec and not deliver_stage_rec.get("artifact_id"):
-                    # Auto-aggregate from stage-json fields
+                    # Auto-aggregate from stage-json fields.
+                    # Normalize to dicts FIRST (run_ca0190fb): the goal-path gate
+                    # (:1479) and its own error message (:1487) tell users to pass
+                    # `adversarial_review: true` — a BOOL. A truthy non-dict here means
+                    # "review happened, details unrecorded" → coerce to a minimal dict
+                    # so the `.get()` calls below never crash ('bool' has no .get). The
+                    # two completion paths (goal flag / deliver dict) now agree.
                     _adv = deliver_stage_rec.get("adversarial_review", {})
+                    if not isinstance(_adv, dict):
+                        _adv = {"spawned": bool(_adv), "findings": []}
                     _audit = deliver_stage_rec.get("completion_audit", {})
+                    if not isinstance(_audit, dict):
+                        _audit = {}
                     _ac = deliver_stage_rec.get("ac_verification", {})
+                    if not isinstance(_ac, dict):
+                        _ac = {}
                     if (_adv and _adv.get("findings")) or (_audit and _audit.get("criteria_met")) or _ac:
                         # Build delivery artifact data
                         auto_delivery = {
