@@ -1,7 +1,7 @@
 ---
 title: "DDD Cultivation Engine — Domain Expertise as Infrastructure"
 created: 2026-05-12
-updated: 2026-07-17
+updated: 2026-07-19
 tags: [architecture, ddd, cultivation, knowledge-lifecycle, autonomous-delivery]
 project: SwarmAI
 status: PE-review
@@ -15,6 +15,8 @@ status: PE-review
 
 | Date | Change | Sections Affected |
 |------|--------|-------------------|
+| 2026-07-19 | Scope correction (§3 L2 Knowledge Graph Relations, verified vs `knowledge_graph.py`): fixed relation name `superseded_by`→`supersedes` + listed all 10; relocated impl note (schema/batch ops in `knowledge_graph.py`, not `ddd_entry_lifecycle.py`); added honest status box — only storage + recall-hint layer is live; auto-grow, relevance-boost, contradiction-detection, and visualization are designed-but-not-wired. | §3 L2 |
+| 2026-07-19 | Drift fix (code SoT `ddd_entry_lifecycle.py`): decay windows tightened 90/180 → **60/150 total** (dormant at 60d idle, archived at 150d total-since-ref, not additional-after-dormant); **removed** the Ebbinghaus/Hebbian/Cepeda scoring model and the ref≥10 "2× veteran grace" — `ref_count` has no live body-entry producer, so decay is now age + evergreen + grace only. Freshness (`last`) is now driven by real recall access-hits (access-decay hit-log, `ddd_usage.py`), not pipeline-stage prose bumps. | §9b |
 | 2026-07-17 | Drift fix: entry classification 5→7 types (added principle, correction); Channel 8 fires on TIMER_30MIN+SESSION_CLOSE (not GIT_COMMIT); auto-approval gate rewritten to match code (confidence >=8/10 + mechanical append-only + skip semantic sections); noted 11 runtime channels vs 8 conceptual feeds. | §3 L3, §6 Feeds, §7 Approval, §9b, §10 |
 | 2026-06-10 | Added: Knowledge Graph relations layer, Auto-approval gate, Memory decay (Ebbinghaus+Hebbian), Three-tier KNOWLEDGE index, Entry lifecycle channel. Updated channel count 7→8. | §3 L2, §6 Feeds, §7 Approval, new §9b |
 | 2026-05-12 | Initial PE-review version. 8 feed channels, 4 pillars, progressive loading, pipeline integration. | All |
@@ -92,7 +94,9 @@ Without Layer 2, the four documents would follow the same decay trajectory as an
 
 **Maturity Tracking** — Per-section confidence levels that gate AI autonomy. A [Sparse] section means "ask before using this as a decision basis." An [Evergreen] section means "act with full confidence."
 
-**Knowledge Graph Relations** *(added 2026-05-19)* — Cross-entry relationship tracking stored in `.knowledge-graph.yaml`. 10 relation types (`applies_to`, `motivated_by`, `superseded_by`, `extends`, `conflicts_with`, etc.). Relations grow automatically as pipeline stages reference entries — creating `applies_to` edges to the files being worked on. Enables: (1) relevance boost during injection (entry related to current file ranks higher), (2) contradiction detection across entries, (3) knowledge cluster visualization. Implementation: `ddd_entry_lifecycle.py` + batch operations for bulk relation creation. Not a graph database — a flat YAML file that fits in context.
+**Knowledge Graph Relations** *(added 2026-05-19; scope corrected 2026-07-19)* — Cross-entry relationship tracking stored in `.context/.knowledge-graph.yaml`. 10 relation types defined in `knowledge_graph.py` (`applies_to`, `motivated_by`, `supersedes`, `extends`, `conflicts_with`, `addresses`, `serves_thesis`, `requires`, `informs`, `produced_by`). Not a graph database — a flat YAML file that fits in context. Implementation split: the schema, load/save, `add_relation`, `batch_add_relations`, and `backfill_from_entries` live in `knowledge_graph.py`; `ddd_entry_lifecycle.py::bump_references()` is the intended auto-extraction integration point.
+
+> **Implementation status (honest, verified 2026-07-19):** Only the **storage + relation-authoring layer** is production-wired — the YAML store loads/saves and `session_router` reads it to surface related-entry *hint text* during recall. The rest is **designed but not live**: (a) the auto-grow loop (`bump_references(..., context_files, graph_path)` creating `applies_to` edges from pipeline usage) exists but **no production caller passes those params** — it fires only in tests; (b) the relevance-boost-during-injection was **removed** as dead code (2026-05-19, selective-mode path); (c) contradiction detection (`conflicts_with`) and (d) cluster visualization have **no consumer code** — the `conflicts_with` predicate is authored but never queried, and health-doc contradiction scoring is a hardcoded placeholder. Treat relations today as a queryable store + recall hint, NOT an active ranking/detection/visualization system.
 
 ### Layer 3: Orchestration (What Makes It Self-Sustaining)
 
@@ -549,9 +553,9 @@ Individual bullet entries within DDD documents (primarily IMPROVEMENT.md) have t
 
 | Field | Meaning | Source |
 |-------|---------|--------|
-| `ref` | Reference count — how many times this entry influenced a decision | Auto-incremented by pipeline stages |
-| `last` | Last referenced date | Auto-updated on reference |
-| `decay` | Lifecycle state: `active` → `dormant` → `archived` | Computed by decay engine |
+| `ref` | Reference count — legacy display counter. **No live producer for body entries** (see decay engine below); retained for readability, not consumed by decay. | Historical / display only |
+| `last` | Last referenced date — the live decay input | Auto-updated from real recall access-hits (access-decay hit-log, `ddd_usage.py` → Channel 8) |
+| `decay` | Lifecycle state: `active` → `dormant` → `archived` | Computed by decay engine (age + evergreen + grace) |
 
 ### 7-Type Classification
 
@@ -571,25 +575,20 @@ Type classification is automatic via signal-word detection (`_TYPE_SIGNALS` in `
 
 ### Decay Engine — Darwinian Knowledge Management
 
-Linear decay (the original design) was replaced in 2026-06-07 with **Ebbinghaus + Hebbian** scoring from neuroscience research:
+Decay is deliberately **simple and honestly observable** — age + evergreen + grace, with fixed thresholds. A richer scoring model (Ebbinghaus forgetting curve + Hebbian potentiation + Cepeda spacing) was designed and briefly shipped in 2026-06, then **removed** (run_e50621b6): every one of those mechanisms depended on a live `ref_count` signal, and there is **no live producer that reaches body entries** — so honoring `ref_count` only preserved toxic prose residue as undeserved decay grace. The rule of the engine is now: never gate decay on a dead signal. (If a real body-entry reference producer is wired later, a reference-weighted multiplier can be re-introduced *then*.)
 
-| Mechanism | What It Does | Effect |
-|-----------|-------------|--------|
-| **Ebbinghaus forgetting curve** | `score = exp(-days_idle / stability)` | Entries decay exponentially when not referenced |
-| **Hebbian potentiation** | Each reference increases `stability` | Frequently-used entries resist decay more strongly |
-| **Cepeda spacing effect** | References from distinct sessions count more than bursts | Prevents gaming by referencing 10x in one session |
-| **Strength floor** | Score never reaches 0 (floor = 0.05) | Entries are never fully forgotten, just deprioritized |
+The freshness input that *does* work is the `last` date, now driven by **real recall access-hits** — when an entry's content is actually surfaced during recall, the access-decay hit-log (`ddd_usage.py`) records it, and Channel 8 bumps `last_referenced` before decay assessment reads it.
 
-**Decay thresholds:**
+**Decay thresholds (code SoT: `ddd_entry_lifecycle.py`):**
 
-| Condition | Transition | Grace |
+| Condition | Transition | Notes |
 |-----------|-----------|-------|
-| Entry < 30 days old | Immune to all decay | Grace period for new knowledge |
-| 90 days idle, ref < 10 | active → dormant | Standard threshold |
-| 180 days idle, ref ≥ 10 | active → dormant | Veteran bonus (2× grace) |
-| 90 more days in dormant | dormant → archived | Moved to archive file |
+| Entry < 30 days old | Immune to all decay | `GRACE_PERIOD_DAYS` — grace for new knowledge |
+| In an Evergreen section | Immune to all decay | Meta-cognitive / evergreen entries never decay |
+| 60 days idle | active → dormant | `DORMANT_THRESHOLD_DAYS` (tunable per-doc, e.g. 45 for MEMORY.md) |
+| 150 days total since last reference | dormant → archived | `ARCHIVED_THRESHOLD_DAYS` — **total** since-ref, NOT additional-after-dormant |
 
-**What dormant means:** Entry stays searchable but is NOT auto-injected into pipeline stages. Only `active` entries are injected. This automatically keeps prompt cost flat as knowledge accumulates — the active set stays ~80 entries (steady state), regardless of total historical entries.
+**What dormant means:** Entry stays searchable but is NOT auto-injected into pipeline stages. Only `active` entries are injected. This automatically keeps prompt cost flat as knowledge accumulates — the active set stays bounded (steady state), regardless of total historical entries.
 
 ### Three-Tier KNOWLEDGE.md Index *(added 2026-05-30)*
 
@@ -608,8 +607,8 @@ This is the progressive loading principle (Section 5) applied to workspace-level
 The 8th cultivation channel (`entry_lifecycle`). Fires on `TIMER_30MIN` and `SESSION_CLOSE`:
 
 1. Scans all project IMPROVEMENT.md files for entry metadata comments
-2. Bumps `ref` count for entries whose text appears in recent pipeline contexts
-3. Runs decay assessment → transitions entries between states
+2. Bumps `last_referenced` for entries that were actually surfaced during recall — read from the access-decay hit-log (`.ddd-usage.json`, keyed by content anchor) BEFORE decay assessment reads `last_referenced`
+3. Runs decay assessment → transitions entries between states (age + evergreen + grace)
 4. Moves archived entries to `Knowledge/Archives/` with provenance trail
 5. Reports transitions in session briefing (e.g., "3 entries → dormant this week")
 
