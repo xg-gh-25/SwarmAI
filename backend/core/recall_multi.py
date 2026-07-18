@@ -68,6 +68,57 @@ class BucketedRecall:
 # ── DDD domain: generic ##-section keyword scorer ─────────────────────
 
 
+def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int) -> list[dict]:
+    """Entry-level BM25 over the ``- [type]``/``- ``-prefixed entries of MULTIPLE
+    DDD docs, scored in ONE shared corpus so scores are COMPARABLE across docs.
+
+    The section leg (``_ddd_section_scores``) scores whole ``## sections`` — so a
+    fresh 1-line cultivated lesson buried in a 1000+-line section (IMPROVEMENT.md
+    'What Failed'/'What Worked') is DILUTED to oblivion and unrecallable even by its
+    exact words (run_97a6b1db: the loop's own cultivate→recall output was lost).
+    This scores each ENTRY independently and emits the top matches as
+    content-carrying hits, so a matching entry surfaces regardless of section size —
+    the same entry-level cure context_recall already applies on the MEMORY read path.
+
+    ``docs_text`` maps doc-name → full text; ALL entries across all docs share one
+    ``_bm25_scores`` corpus (single normalization) — per-doc scoring would make a
+    top entry in every doc tie at 1.0 and the cross-doc max pick arbitrarily
+    (the cross-normalized-score trap). Returns [{"doc","section","score","content"}]
+    highest-first; empty when no entry shares query vocabulary (precision > coverage —
+    never emit head-biased non-matches). Pure keyword, never embeds.
+    """
+    import re as _re
+    from core import memory_index
+
+    entries: dict[str, str] = {}           # key → entry text
+    entry_doc: dict[str, str] = {}         # key → owning doc
+    entry_section: dict[str, str] = {}     # key → owning section name
+    for doc, doc_text in docs_text.items():
+        sections = memory_index.parse_memory_sections(doc_text)
+        if not sections:
+            continue
+        for section, body in sections.items():
+            # Split on line-anchored entry starts ('- ' at col 0); lookahead keeps
+            # the delimiter so each chunk is a whole entry incl. its metadata line.
+            for chunk in _re.split(r"(?m)^(?=- )", body):
+                e = chunk.strip()
+                if not e.startswith("- "):
+                    continue
+                k = str(len(entries))
+                entries[k] = e
+                entry_doc[k] = doc
+                entry_section[k] = section
+    if not entries:
+        return []
+    raw = memory_index._bm25_scores(query, entries)   # ONE corpus → comparable scores
+    if not raw:
+        return []  # no entry shares vocabulary → precision: emit nothing
+    norm = memory_index._normalize_bm25_scores(raw)
+    ranked = sorted(norm, key=lambda k: norm[k], reverse=True)[:max(1, top_n)]
+    return [{"doc": entry_doc[k], "section": entry_section[k], "score": norm[k],
+             "content": entries[k]} for k in ranked if norm[k] > 0]
+
+
 def _ddd_section_scores(query: str, doc_text: str) -> dict[str, float]:
     """Score the ``## sections`` of a DDD doc against ``query`` by BM25.
 
@@ -388,6 +439,11 @@ def _recall_ddd(query: str, project: Optional[str],
 
     from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
     scored: list[tuple[str, str, float]] = []  # (doc, section, score)
+    # entry_hits carry CONTENT (the entry text) so a fresh cultivated lesson buried
+    # in a huge section is recallable by its own words, not diluted at section-BM25
+    # (run_97a6b1db). Reserved a slot below like the domain leg so it isn't crowded
+    # out by whole-doc section scores at the default max_sections.
+    _docs_text: dict[str, str] = {}
     for doc in DDD_CANONICAL_DOCS:
         p = base / doc
         if not p.exists():
@@ -396,8 +452,12 @@ def _recall_ddd(query: str, project: Optional[str],
             text = p.read_text(encoding="utf-8")
         except OSError:
             continue
+        _docs_text[doc] = text
         for section, score in _ddd_section_scores(query, text).items():
             scored.append((doc, section, score))
+    # Entry-level leg: score ALL docs' entries in one shared corpus (comparable
+    # scores across docs) so a matching cultivated lesson surfaces from any doc.
+    entry_hits: list[dict] = _ddd_entry_hits(query, _docs_text, max_sections)
 
     # ② KNOWLEDGE deep-reference leg: s_ddd-persist routes "reference material →
     # Projects/<X>/Knowledge/" — without this scan that write target is unrecallable
@@ -435,8 +495,14 @@ def _recall_ddd(query: str, project: Optional[str],
     # a recall orphan (verified SUPPORTED, run_6602eeab). Score it here, in the
     # ddd bucket, so business-rule/issue/gap content surfaces. verified:false
     # assertions are GATED (rendered as [llm-inferred, UNVERIFIED], not fact).
+    # Tracked separately (run_89e28075): the domain/spec legs are the SPECIALIZED
+    # business-semantic layer — at the default max_sections=3 they lose the flat
+    # ranking to whole-doc BM25 (which normalizes to ~1.0) and get crowded out
+    # ENTIRELY, defeating the DoD ("recall 命中其独有业务词"). So the single best
+    # domain/spec hit gets a RESERVED slot below (never crowded to zero).
+    domain_scored: list[tuple[str, str, float]] = []
     for dh in _score_domains(query, base, max_sections):
-        scored.append((dh["doc"], dh["section"], dh["score"]))
+        domain_scored.append((dh["doc"], dh["section"], dh["score"]))
 
     # ④ spec-details [human]-block leg (Run 3, §8.1): index ONLY human-authored
     # blocks (backtick-fenced `[human]` list-items) — the [llm] skeleton is
@@ -444,13 +510,46 @@ def _recall_ddd(query: str, project: Optional[str],
     # (r3 §8.1 correction). A [human] business rule that lives ONLY in a .spec.md
     # was unrecallable → orphan (§8.9 sentinel red baseline).
     for hh in _score_spec_details_human(query, base, max_sections):
-        scored.append((hh["doc"], hh["section"], hh["score"]))
+        domain_scored.append((hh["doc"], hh["section"], hh["score"]))
 
-    if not scored:
+    scored.extend(domain_scored)
+    if not scored and not entry_hits:
         return hits, "none"
     scored.sort(key=lambda t: t[2], reverse=True)
+    top = scored[:max_sections]
+    # RESERVED SLOT: if the specialized domain/spec layer produced a positive-scoring
+    # hit but the flat cut dropped ALL of them, graft the best one in (replacing the
+    # weakest doc hit) so a business-flow query always surfaces its domain. Mirrors
+    # leg ②'s anti-crowding intent, in the opposite direction. (run_89e28075 DoD.)
+    domain_best = max(domain_scored, key=lambda t: t[2], default=None)
+    if (max_sections >= 1 and domain_best is not None and domain_best[2] > 0
+            and domain_best not in top):
+        top = top[:max_sections - 1] + [domain_best]
+        top.sort(key=lambda t: t[2], reverse=True)  # keep hits score-descending post-graft
     hits = [{"doc": d, "section": s, "score": round(sc, 4)}
-            for d, s, sc in scored[:max_sections]]
+            for d, s, sc in top]
+    # RESERVED SLOT for the best ENTRY-level hit (run_97a6b1db): entry hits carry the
+    # entry TEXT as `content`, so a fresh cultivated lesson buried in a giant section
+    # surfaces verbatim rather than as a diluted section pointer. Graft the single
+    # best matching entry if it isn't already represented by a section hit for the
+    # same (doc, section) — mirrors the domain reserved-slot so it can't be crowded
+    # out at the default max_sections.
+    entry_best = max(entry_hits, key=lambda h: h["score"], default=None)
+    if max_sections >= 1 and entry_best is not None and entry_best["score"] > 0:
+        already = any(h.get("content") == entry_best["content"] for h in hits)
+        if not already:
+            entry_hit = {"doc": entry_best["doc"], "section": entry_best["section"],
+                         "score": round(entry_best["score"], 4),
+                         "content": entry_best["content"]}
+            # Drop a bare section-POINTER hit for the SAME (doc, section) — the entry
+            # carries that section's verbatim text, so keeping both renders the
+            # content line AND a redundant "doc § section" pointer (Gate-2 LOW).
+            hits = [h for h in hits
+                    if not (not h.get("content")
+                            and h.get("doc") == entry_hit["doc"]
+                            and h.get("section") == entry_hit["section"])]
+            hits = (hits[:max_sections - 1] + [entry_hit]) if hits else [entry_hit]
+            hits.sort(key=lambda h: h["score"], reverse=True)
     return hits, "keyword"
 
 

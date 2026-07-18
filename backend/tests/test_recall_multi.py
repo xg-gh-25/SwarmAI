@@ -642,3 +642,64 @@ class TestRun3RecallLegsE2E:
         self._make_project(tmp_path, monkeypatch, with_domains=False, with_human=False)
         hits, layer = _recall_ddd("anything", "Proj", 5)
         assert isinstance(hits, list)  # no crash when neither leg has data
+
+    def test_domain_hit_survives_full_doc_pool_at_default_max(self, tmp_path, monkeypatch):
+        """Regression (run_89e28075): the domain leg is the specialized business-
+        semantic layer — a query about a business flow MUST surface its domain even
+        when full DDD docs saturate the flat top-max_sections pool. At the DEFAULT
+        max_sections=3 with 4 canonical docs each hitting the query word, the domain
+        hit (score <= a whole-doc BM25 ~1.0) used to be crowded OUT entirely → the
+        DoD 'recall 命中其独有业务词' failed in real usage. A domain hit that scored
+        > 0 must get a reserved slot."""
+        from core import recall_multi
+        proj = tmp_path / "Proj"
+        proj.mkdir()
+        # The real crowding-out condition: the query words are COMMON — they appear
+        # heavily in the DDD docs (whole-doc BM25 → ~1.0, filling all 3 slots) AND in
+        # the domain (shorter doc → lower score). NOT a unique sentinel (which would
+        # trivially win). This is how a real business query behaves.
+        qw = "scheduler circuit breaker failures cooldown"
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (proj / doc).write_text(f"## S\n{(qw + ' ') * 40}\n## T\n{(qw + ' ') * 40}\n", encoding="utf-8")
+        ci = {
+            "version": 3.0, "routes": [{"id": "route:jobs-run-a1"}],
+            "domains": [{"id": "domain:services-jobs", "name": "Scheduled Jobs", "summary": qw,
+                         "business_rules": [{"rule": f"{qw} invariant",
+                                             "anchor": "s.py:1", "verified": True}]}],
+            "flows": [], "steps": [],
+        }
+        (proj / "code-intel.json").write_text(json.dumps(ci), encoding="utf-8")
+        import core.project_registry as pr
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
+        # DEFAULT max_sections=3 — the crowding-out condition
+        hits, layer = recall_multi._recall_ddd(qw, "Proj", 3)
+        docs = [h.get("doc", "") for h in hits]
+        assert any("code-intel.json" in d for d in docs), \
+            f"domain hit must survive the full-doc pool at default max=3, got {docs}"
+
+    def test_cultivated_entry_recallable_from_large_section(self, tmp_path, monkeypatch):
+        """Regression (run_97a6b1db): the DDD leg scored whole ## sections via BM25,
+        so a fresh 1-line CULTIVATED lesson buried in a 1000+-line 'What Failed' /
+        'What Worked' section was diluted to oblivion — the loop's OWN output
+        (cultivate → recall) was unrecallable even by its exact words at the default
+        max_sections=3. Entry-level scoring must surface the matching ENTRY (carrying
+        its text as `content`) regardless of how big its section is."""
+        from core import recall_multi
+        proj = tmp_path / "Proj"
+        proj.mkdir()
+        (proj / "PRODUCT.md").write_text("## Vision\nunrelated product vision text\n", encoding="utf-8")
+        # a HUGE What Failed section (noise) + one distinctive cultivated entry at the bottom
+        noise = "\n".join(f"- generic prior lesson number {i} about various unrelated topics"
+                          for i in range(400))
+        target = ("- [guideline] **zCULTSENTINEL55 reserved-slot entry-level recall fix** — "
+                  "the ddd leg diluted a fresh lesson in a giant section; entry-level scoring "
+                  "surfaces zCULTSENTINEL55 regardless of section size. (2026-07-18, auto-cultivated)")
+        (proj / "IMPROVEMENT.md").write_text(
+            f"## What Worked\nunrelated\n\n## What Failed\n{noise}\n{target}\n", encoding="utf-8")
+        import core.project_registry as pr
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
+        hits, layer = recall_multi._recall_ddd(
+            "zCULTSENTINEL55 reserved-slot entry-level recall", "Proj", 3)
+        blob = " ".join(str(h.get("content", "")) + str(h.get("section", "")) for h in hits)
+        assert "zCULTSENTINEL55" in blob, \
+            f"cultivated entry must be recallable from a large section, got {[str(h.get('section'))[:30] for h in hits]}"
