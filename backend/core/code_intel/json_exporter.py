@@ -220,6 +220,17 @@ def export_code_intel_json(
 
     if holes:
         doc["coverage_ledger"] = holes
+
+    # ── graph_analysis: topology "understanding" layer (run_dd13fb03, §24.2) ──
+    # Additive key. Computed AFTER the v3 domains/risk_areas are in `doc` (surprising
+    # connections derive a file→domain map from them). Fail-open: analysis is a
+    # convenience layer, never a reason to sink the whole export (O030 spirit).
+    try:
+        from .graph_analysis import analyze_graph
+        doc["graph_analysis"] = analyze_graph(doc, graph_store)
+    except Exception as e:  # noqa: BLE001 — one analysis error must not lose the doc
+        logger.warning("graph_analysis failed (non-fatal, doc still exported): %s", e)
+
     doc["status"] = status
 
     # Serialize and check size cap
