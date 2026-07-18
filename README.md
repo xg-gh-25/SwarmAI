@@ -100,7 +100,7 @@ If you're also using AI to write code, make content, or run operations — these
 |---|--------|-------------|-----------|
 | 1 | **Context Management** | 11-file prompt architecture, 100K budget, 3-tier ownership | [docs](./docs/DDD-Platform-Overview.md) |
 | 2 | **Memory Pipeline** | 4-tier persistence: DailyActivity → distillation → compound recall | [docs](./docs/Memory-Management-Design.md) |
-| 3 | **DDD Cultivation** | Self-growing domain knowledge, 7-type ontology, Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
+| 3 | **DDD Cultivation** | Self-growing domain knowledge, 7-type × 3-layer ontology (classification × relations), Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
 | 4 | **Autonomous Pipeline** | One requirement → push-ready code. 9 stages · 3 gates (framing/plan/build) · 2 modes (Full + Goal Loop) | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | 5 | **Pollinate Engine** | One message → multi-format brand content. 9 stages · 11 tracks · 3-tier gates · DDD flywheel | [docs](./docs/Pollinate-Content-Engine.md) · [diagram](./assets/pollinate-architecture.svg) |
 | 6 | **Self-Evolution** | Cognitive L0→L3 patching. 42 corrections → recurring classes become structural gates | [docs](./docs/Self-Evolution-Harness-Design.md) |
