@@ -364,6 +364,55 @@ class TestFTS:
         store.search_symbols('OR "drop table"')
         store.search_symbols("NOT *")
 
+    def test_prod_symbol_outranks_test_symbol(self, store):
+        """run_fc313f42: a verbose TEST symbol name must NOT out-rank the real prod
+        symbol on an NL query — test symbols are down-weighted (not excluded)."""
+        store.upsert_nodes([
+            _make_node("p1", file_path="backend/core/task_manager.py", name="cancel_task"),
+            # a test whose name packs MORE query terms than the prod symbol
+            _make_node("t1", file_path="backend/tests/test_x.py",
+                       name="test_task_cancellation_and_cleanup_completed"),
+        ])
+        store.rebuild_fts()
+        results = store.search_symbols("task cancellation cleanup")
+        names = [r["name"] for r in results]
+        assert "cancel_task" in names and "test_task_cancellation_and_cleanup_completed" in names, \
+            "both must be returned (down-weight, not exclude)"
+        assert names.index("cancel_task") < names.index("test_task_cancellation_and_cleanup_completed"), \
+            "prod symbol must rank above the verbose test symbol"
+
+    def test_test_symbols_still_returned(self, store):
+        """Down-weight must NOT exclude — a query that only matches test symbols
+        still returns them."""
+        store.upsert_nodes([
+            _make_node("t1", file_path="backend/tests/test_x.py", name="test_only_widget"),
+        ])
+        store.rebuild_fts()
+        results = store.search_symbols("widget")
+        assert any(r["name"] == "test_only_widget" for r in results), \
+            "a test-only match must still be returned"
+
+    def test_test_intent_query_not_penalized(self, store):
+        """Gate-2 HIGH (run_fc313f42): a query that WANTS tests ('...tested', 'test
+        ...') must NOT down-weight test symbols — else 'how is X tested' returned
+        ZERO test symbols. The strongly-matching test symbol must rank #1."""
+        store.upsert_nodes([
+            _make_node("p1", file_path="backend/core/task_manager.py", name="cancel_task"),
+            _make_node("t1", file_path="backend/tests/test_x.py",
+                       name="test_task_cancellation_and_cleanup"),
+        ])
+        store.rebuild_fts()
+        # explicit test intent → test symbol keeps its natural (higher) rank
+        res = store.search_symbols("how is task cancellation tested")
+        names = [r["name"] for r in res]
+        assert names[0] == "test_task_cancellation_and_cleanup", \
+            "a test-intent query must surface the test symbol first (no penalty)"
+        # control: same match WITHOUT test intent → prod wins (penalty applies)
+        res2 = store.search_symbols("task cancellation cleanup")
+        n2 = [r["name"] for r in res2]
+        assert n2.index("cancel_task") < n2.index("test_task_cancellation_and_cleanup"), \
+            "a non-test-intent query still demotes the test symbol"
+
 
 # ── Keyword search ───────────────────────────────────────────────────────
 

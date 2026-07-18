@@ -37,6 +37,42 @@ def _sanitize_name(name: str) -> str:
     return _UNSAFE_RE.sub("", name)[:256]
 
 
+# FTS `rank` is negative (more-negative = better). This positive penalty is ADDED
+# to test-file symbol rows so they sort below comparable prod symbols WITHOUT being
+# excluded (run_fc313f42). CALIBRATED to the live DB (Gate-2 HIGH): the whole
+# relevant BM25 spread is only ~5-11 and the typical prod-vs-test gap is ~3-4, so a
+# large penalty (8.0) shoved a strongly-matching test past ~30 weak prod symbols.
+# 3.0 is a TIE-BREAKER: demotes a test roughly tied with a prod symbol, but a
+# genuinely-stronger test still surfaces. AND the penalty is SKIPPED entirely when
+# the query itself carries test intent (see _query_wants_tests) — else "how is X
+# tested" returned ZERO test symbols in the top-8 (the exact regression Gate-2 found).
+_TEST_SYMBOL_RANK_PENALTY = 3.0
+
+# Query tokens that signal the user WANTS test symbols — penalty is skipped then.
+_TEST_INTENT_TOKENS = frozenset({"test", "tests", "tested", "testing", "spec",
+                                 "fixture", "fixtures", "mock", "mocks", "conftest"})
+
+
+def _query_wants_tests(query: str) -> bool:
+    """True if the query explicitly signals test intent — then test symbols must
+    NOT be down-weighted (Gate-2 HIGH: 'how is X tested' must return tests)."""
+    toks = {t for t in _sanitize_name(query).lower().split() if t}
+    return bool(toks & _TEST_INTENT_TOKENS)
+
+
+def _is_test_symbol_path(file_path: str) -> bool:
+    """True if a symbol's file is a TEST file — segment-anchored, NOT a bare 'test'
+    substring (which false-matches attestation.py / latest_run.py; the same lesson
+    as json_exporter._is_test_path, run_4344d341)."""
+    fp = (file_path or "").lower()
+    segments = fp.split("/")
+    if "tests" in segments or "test" in segments or "__tests__" in segments:
+        return True
+    fname = fp.rsplit("/", 1)[-1]
+    return (fname.startswith("test_") or fname.endswith("_test.py")
+            or fname == "conftest.py" or ".test." in fname or ".spec." in fname)
+
+
 # ── Schema DDL ───────────────────────────────────────────────────────────
 
 _SCHEMA_SQL = """
@@ -961,20 +997,38 @@ class GraphStore:
         fts_query = " OR ".join(f'"{t}"' for t in tokens if t)
         if not fts_query:
             return []
+        # Fetch MORE than `limit` so the test-symbol demotion below can pull a
+        # prod symbol up from beyond the raw-BM25 cutoff (run_fc313f42). Bounded
+        # so a hot-path query can't scan unboundedly.
+        fetch_n = min(max(limit * 4, limit + 20), 200)
         try:
             rows = self._conn.execute(
                 "SELECT name, id, file_path, rank "
                 "FROM code_fts WHERE code_fts MATCH ? "
                 "ORDER BY rank LIMIT ?",
-                (fts_query, limit),
+                (fts_query, fetch_n),
             ).fetchall()
         except sqlite3.OperationalError:
             # FTS table out of sync — fall back to keyword search.
             logger.warning("FTS5 query failed, falling back to keyword search")
             return self.keyword_search(query, limit)
-        return [
-            {"name": r[0], "id": r[1], "file_path": r[2], "rank": r[3]}
+        # Test-symbol demotion (run_fc313f42): FTS `rank` is negative (more-negative
+        # = better). A verbose TEST symbol name can pack more query terms than the
+        # real prod symbol and out-rank it (test symbols are the majority of matches).
+        # Add a small tie-breaker penalty to test-file rows so they sort BELOW
+        # COMPARABLE prod symbols — WITHOUT excluding them (a test-only query still
+        # returns tests). SKIP the penalty when the query itself wants tests (Gate-2
+        # HIGH: "how is X tested" must return tests, not bury them).
+        penalty = 0.0 if _query_wants_tests(query) else _TEST_SYMBOL_RANK_PENALTY
+        adjusted = [
+            (r[0], r[1], r[2], r[3] + (penalty
+                                       if _is_test_symbol_path(r[2]) else 0.0))
             for r in rows
+        ]
+        adjusted.sort(key=lambda t: t[3])  # ascending: most-negative (best) first
+        return [
+            {"name": a[0], "id": a[1], "file_path": a[2], "rank": a[3]}
+            for a in adjusted[:limit]
         ]
 
     def keyword_search(self, query: str, limit: int = 20) -> list[dict]:
