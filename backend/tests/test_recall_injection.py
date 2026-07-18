@@ -83,6 +83,29 @@ class TestExtractQueryKeywords:
 class TestMaybeInjectRecall:
     """Test the pre-response recall injection hook."""
 
+    @pytest.fixture(autouse=True)
+    def _force_recall_fallback_leg(self):
+        """Deterministically route recall through the leg these tests mock.
+
+        Runtime recall now tries ``_unified_recall_body`` FIRST (strangler-fig,
+        run_ccd1b6c5) and only falls back to ``_recall_for_query`` when the
+        unified leg returns empty. Every test below mocks ``_recall_for_query``
+        to control the recall result, but NOT the unified leg — so without this
+        the unified leg runs against the REAL filesystem, the mocked result is
+        bypassed, and the assertions become machine-state-dependent (the
+        2026-07-18 GS_RCALL canary staleness: green on one machine, red on
+        another). Forcing the unified leg empty makes the code fall through to
+        the mocked ``_recall_for_query`` on every run — restoring determinism
+        without changing any test's intent. The provenance header, degraded
+        counter, and opener-unlatch behaviors under test all live in the shared
+        post-recall code, so mutation-proofing is preserved either leg.
+
+        Autouse-safe: tests that never reach recall (channel/opener/second-msg
+        early-returns) simply never call the patched leg.
+        """
+        with patch("core.session_router._unified_recall_body", return_value=""):
+            yield
+
     @pytest.fixture
     def mock_unit(self):
         unit = MagicMock()
