@@ -176,7 +176,11 @@ if __name__ == "__main__":  # pragma: no cover — manual/scheduled invocation
     import json
     out = run_suite(_build_seed_cases())
     agg = out["aggregate"]
-    print(json.dumps({"recall_at_5": agg["mean_recall_at_k"], "mrr": agg["mrr"],
-                      "n": agg["n"]}, indent=2))
+    # Tag the number by scope (Gate-2): this is ddd-section recall over the seed
+    # set, NOT whole-system recall (session/codeintel deferred) — never let 0.71
+    # be misread as system-wide recall quality.
+    print(json.dumps({"ddd_recall_at_5": agg["mean_recall_at_k"], "ddd_mrr": agg["mrr"],
+                      "n": agg["n"], "domains": ["ddd"], "scope": "seed query set, ddd domain only"},
+                     indent=2))
     for r in out["per_case"]:
         print(f"  {'✓' if r['recall_at_k'] else '✗'} rank={r['rank']}  {r['notes']}")
