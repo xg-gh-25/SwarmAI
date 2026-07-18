@@ -233,7 +233,11 @@ _SEED_QUERIES = [
     # recall is ever wanted, it needs its own served path first (a separate run).
 ]
 
-_DDD_DOCS = ("TECH.md", "PRODUCT.md", "IMPROVEMENT.md", "PROJECT.md")
+# Run-0 single-source rule: never hardcode the canonical-4 tuple (order-independent
+# detector in test_ddd_canonical_docs_single_source). Used only as dict keys below,
+# so order is irrelevant. core.* is importable here (see the core.context_recall
+# import at module top).
+from core.project_registry import DDD_CANONICAL_DOCS as _DDD_DOCS
 # context_files recall serves MEMORY.md ONLY (recall_multi._recall_context_files);
 # KNOWLEDGE.md has no served recall path, so it's not a benchmarkable doc here.
 _CONTEXT_DOCS = ("MEMORY.md",)

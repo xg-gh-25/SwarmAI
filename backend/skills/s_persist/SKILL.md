@@ -16,22 +16,42 @@ misleads; fresh → it costs upkeep; and if it never drove a judgment, it was wo
 the moment it was written. The best fix for a misleading stale entry is to never store
 it. **Most passing facts should NOT be persisted.** (AGENT R30#4 / P6.)
 
-**REJECT (do not persist) — volatile, zero-decision-value data:**
-- Counts that drift continuously: LOC, file/test/skill counts, line numbers, star/fork
+> **This is JUDGMENT, not a gate.** No regex or hook can decide it — the same string
+> (`91K`) is a liability as a *usage snapshot* and fine as a *budget cap*. It cannot be
+> mechanically enforced, so it lives here as a norm you must **apply, not check off**.
+> Reading this as a denylist is the failure mode: don't pattern-match the examples
+> below, ask the one question.
+
+**THE ONE QUESTION (apply to every number / status / fact before storing it):**
+
+> **Is this value dynamic — AND does it change no future judgment?**
+> If both → **REJECT.** A value earns a place ONLY if it's *decision-relevant* (it will
+> change how the agent or user judges/acts later) AND *stable* (it won't be wrong next
+> week without anyone touching it). Both must hold. The conjunction is the whole test:
+> - *dynamic + drives-no-judgment* → REJECT (a token count, a star snapshot).
+> - *dynamic + decision-relevant* → keep, but store the **method** not the frozen value
+>   (a version bump matters, so record "run `X` to get it", never the number itself).
+> - *stable + decision-relevant* → keep (a convention, an architecture decision, a
+>   failure lesson, a principle).
+> - *stable + drives-no-judgment* → still SKIP (trivia is not knowledge).
+
+**Examples of REJECT (illustrations of the question, NOT a checklist to match):**
+- Continuously-drifting counts: LOC, file/test/skill counts, line numbers, star/fork
   snapshots, token sizes, "N sessions / N commits", percentages-of-the-moment.
-- A raw number whose only use is "to know the number." If it doesn't change a future
-  *decision*, it's not knowledge — it's a measurement, and measurements are taken live.
-- Status that's true only right now: "daemon is up", "CI is green", "3 tabs open".
+- A raw number whose only use is "to know the number" — that's a measurement, taken live.
+- Status true only right now: "daemon is up", "CI is green", "3 tabs open".
 - One-off transient context with no cross-session reuse.
 
 **For a drifting-but-occasionally-needed metric:** store the **reproducible method**
 (the command / query that regenerates it), NEVER the frozen output. Or describe it
-qualitatively ("runs in production daily") instead of with a number.
+qualitatively ("runs in production daily") instead of with a number. A number stored
+with a "⚠️ don't trust, re-measure" warning next to it is STILL a liability — the
+warning does not travel with the value when it's later read and quoted.
 
-**ADMIT (persist) only if BOTH hold:**
-1. **Decision-relevant** — it will change how the agent or user judges/acts later.
-2. **Stable** — it won't be wrong next week without anyone touching it (a convention,
-   an architecture decision, a failure lesson, a principle — not a live metric).
+> **Live anchor (2026-07-19):** a `~91K token` snapshot sat in KNOWLEDGE.md next to its
+> own "⚠️ do NOT trust as current" warning. The agent read it, ignored the warning, and
+> quoted `91K` as current to the user (real value: 50K). The warning failed; only NOT
+> STORING the number would have. This is why the norm is "don't let it in", not "label it".
 
 When in doubt → **SKIP** and say so briefly. Under-persisting costs a re-derivation;
 over-persisting poisons recall with stale noise. **If Step 0 says SKIP → stop here, do

@@ -190,7 +190,10 @@ class TestBindCliExitCode:
     are covered — the branch bind_project's unit tests structurally cannot reach.
     """
 
-    REPO = Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai")
+    # Dynamic repo root — this file lives at <repo>/backend/tests/, so parents[2]
+    # is the repo root on any machine/CI runner (was a hardcoded /Users/gawan path
+    # that FileNotFoundError'd off this box).
+    REPO = Path(__file__).resolve().parents[2]
 
     def _run_bind(self, project: str):
         import subprocess
