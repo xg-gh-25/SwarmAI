@@ -237,19 +237,171 @@ class MechanicalRefresher:
         """Run all mechanical detection patterns. Returns list of fixes (applied or not)."""
         results: list[RefreshResult] = []
 
-        # Pattern 1: Pipeline stage count (context-filtered)
-        results.extend(self._check_stage_count())
+        # Pattern 1: Pipeline stage count — DISABLED (run_254f5e52). "stage count" is
+        # NOT deterministically derivable from the filesystem: stages/ holds 8 stage
+        # files + goal_cycle.md (loop container) + complete.md (terminal step) = 10
+        # files, but the canonical count is 9 (ADVERSARIAL executes EMBEDDED in DELIVER
+        # with NO own file — MOD02). File-count gives 8 or 10, never the correct 9, so
+        # this verifier would auto-rewrite the CORRECT "9-stage" to a wrong value.
+        # A FIXABLE verifier's source MUST be a true single-source-of-truth, not a
+        # count that merely happens to be measurable. "9 stages" is SEMANTIC (its
+        # meaning depends on the embedded-adversarial fact) — it belongs to the LLM
+        # tier, never here. (Found by dog-fooding the drift scan on our own DDD.)
+        # results.extend(self._check_stage_count())
 
         # Pattern 2: Specialist count (disabled — too broad without context filtering)
         # TODO: re-enable with context word filter when specialist mentions are unambiguous
         # results.extend(self._check_specialist_count())
 
-        # Pattern 3: Review pattern count (RP1-RPN) — specific enough to be safe
-        results.extend(self._check_rp_count())
+        # Pattern 3: Review pattern count (RP1-RPN) — DISABLED (run_254f5e52). Thought
+        # "specific enough to be safe", but dog-fooding the scan on our own DDD proved
+        # otherwise: `RP1-RP49` / `RP1-RP37` in DDD prose are almost always HISTORICAL
+        # references — a pitfall entry quoting review.md's literal code AT THE TIME, a
+        # guideline's dated snapshot, an example in a comparison table — NOT a live
+        # "there are currently N patterns" claim. Auto-swapping them to RP1-RP51 would
+        # FALSIFY the historical record + desync a quote from the code it cites. Same
+        # lesson as stage/decay: a number being measurable does NOT make it a live,
+        # auto-rewritable claim. "Which RP refs are live vs historical?" is SEMANTIC.
+        # results.extend(self._check_rp_count())
 
         # Pattern 4: Skill count (disabled — "N skills" too ambiguous in natural text)
         # results.extend(self._check_skill_count())
 
+        # Pattern 5: App version stamp (run_254f5e52) — the `### Version:` HEADER line
+        # only. NOT a bare "v1.21.0" grep-swap (that would corrupt release-narrative
+        # prose that legitimately cites old versions, e.g. "v1.20.1→v1.21.0").
+        results.extend(self._check_version_stamp())
+
+        # Pattern 6: Decay-window constants — DISABLED (run_254f5e52). Dog-fooding the
+        # scan on our own MEMORY.md proved this is NOT deterministically fixable: a
+        # single prose line routinely carries MULTIPLE distinct day-windows with
+        # different meanings — "90d dormant (180d if ref≥10), <30d immune", plus
+        # per-section tuning ("45d global"), archived ("180d"), grace ("30d"). A
+        # context-word gate cannot tell WHICH window a given number is, so it
+        # cross-mapped them all toward one value (180→60, 30→60, archived 150→60) —
+        # corrupting correct text. "Which decay window is this number?" is SEMANTIC;
+        # it belongs to the LLM tier, never a deterministic grep. (Same lesson as
+        # stage-count above: measurable ≠ a true single-source-of-truth.)
+        # results.extend(self._check_decay_windows())
+
+        return results
+
+    def _check_version_stamp(self) -> list[RefreshResult]:
+        """Fix a `### Version: vX.Y.Z` HEADER stamp that drifts from the VERSION file.
+
+        Source of truth: the repo `VERSION` file. Scoped to a line that BOTH starts
+        with a `Version:` header marker AND carries a version token — so historical
+        release-narrative prose citing old versions (e.g. "v1.20.1→v1.21.0 release")
+        is never touched. Only the current-version stamp is corrected.
+        """
+        version_file = self._swarmai_root / "VERSION"
+        if not version_file.is_file():
+            return []
+        try:
+            current = version_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return []
+        if not re.fullmatch(r"\d+\.\d+\.\d+", current):
+            return []  # SoT malformed → do nothing (never guess)
+
+        results: list[RefreshResult] = []
+        # header line: "### Version: v1.21.0 ..." or "Version: 1.21.0"
+        header = re.compile(r"(?i)^#*\s*Version:\s*v?(\d+\.\d+\.\d+)")
+        ver_tok = re.compile(r"\bv?(\d+\.\d+\.\d+)\b")
+        for file_path in self._get_refreshable_files():
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for line in content.splitlines():
+                m = header.match(line)
+                if not m or m.group(1) == current:
+                    continue
+                # Replace ONLY the first version token on that header line.
+                vm = ver_tok.search(line)
+                if not vm or vm.group(1) == current:
+                    continue
+                old_tok = vm.group(0)                       # e.g. "v1.21.0"
+                new_tok = ("v" if old_tok.startswith("v") else "") + current
+                try:
+                    rel_path = str(file_path.relative_to(self._workspace_root))
+                except ValueError:
+                    continue
+                if not ValueGate.is_worth_refreshing(rel_path, self._workspace_root):
+                    continue
+                results.append(RefreshResult(
+                    target_file=rel_path,
+                    old_value=line,
+                    new_value=line.replace(old_tok, new_tok, 1),
+                    evidence=f"version stamp: cat VERSION = {current}",
+                    layer=1,
+                    applied=False,
+                    confidence=1.0,
+                ))
+        return results
+
+    # Decay context: only correct "Nd dormant/archived" when the line is about the
+    # decay lifecycle (not any other N-day number).
+    _DECAY_CONTEXT_WORDS = re.compile(
+        r"(?i)(?:decay|dormant|archiv|reclaim|days.idle|ref_count|lifecycle)"
+    )
+
+    def _check_decay_windows(self) -> list[RefreshResult]:
+        """Fix dormant/archived day-window numbers that drift from the real constants.
+
+        Source of truth: ddd_entry_lifecycle.DORMANT_THRESHOLD_DAYS /
+        ARCHIVED_THRESHOLD_DAYS. Scoped to decay-context lines so an unrelated
+        "90 days" elsewhere is never touched.
+        """
+        try:
+            from core.ddd_entry_lifecycle import (
+                DORMANT_THRESHOLD_DAYS as _DORM,
+                ARCHIVED_THRESHOLD_DAYS as _ARCH,
+            )
+        except Exception:
+            return []
+
+        results: list[RefreshResult] = []
+        # "90d" / "90 day" / "90-day" forms, capturing the number
+        num = re.compile(r"\b(\d+)\s*d(?:ays?)?\b|\b(\d+)-day\b", re.IGNORECASE)
+        for file_path in self._get_refreshable_files():
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for line in content.splitlines():
+                if not self._DECAY_CONTEXT_WORDS.search(line):
+                    continue
+                low = line.lower()
+                # Only correct a number when the line names WHICH window it is,
+                # so 90→dormant(60) and 180→archived(150) don't cross-map.
+                for m in num.finditer(line):
+                    found = int(m.group(1) or m.group(2))
+                    target = None
+                    if ("dormant" in low or "idle" in low) and found != _DORM:
+                        target = _DORM
+                    elif ("archiv" in low) and found != _ARCH:
+                        target = _ARCH
+                    if target is None:
+                        continue
+                    try:
+                        rel_path = str(file_path.relative_to(self._workspace_root))
+                    except ValueError:
+                        continue
+                    if not ValueGate.is_worth_refreshing(rel_path, self._workspace_root):
+                        continue
+                    old_tok = m.group(0)
+                    new_tok = old_tok.replace(str(found), str(target), 1)
+                    results.append(RefreshResult(
+                        target_file=rel_path,
+                        old_value=line,
+                        new_value=line.replace(old_tok, new_tok, 1),
+                        evidence=f"decay window: ddd_entry_lifecycle "
+                                 f"{'DORMANT' if target == _DORM else 'ARCHIVED'}_THRESHOLD_DAYS = {target}",
+                        layer=1,
+                        applied=False,
+                        confidence=1.0,
+                    ))
         return results
 
     def _check_stage_count(self) -> list[RefreshResult]:
@@ -263,7 +415,9 @@ class MechanicalRefresher:
         if not stages_dir.is_dir():
             return []
 
-        # Count .md files in stages/ (excluding specialists/ subdirectory)
+        # NOTE: this verifier is DISABLED at the detect_and_fix call site (see there):
+        # file-count cannot yield the canonical 9 (embedded adversarial has no file).
+        # Kept for reference / potential future context-aware reinstatement.
         actual_count = len([
             f for f in stages_dir.iterdir()
             if f.suffix == ".md" and f.is_file()

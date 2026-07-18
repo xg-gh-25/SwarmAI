@@ -122,15 +122,17 @@ class TestValueGate:
 
 
 class TestMechanicalRefresher:
-    def test_detects_stale_stage_count(self, workspace, swarmai_root):
+    def test_stage_count_verifier_disabled_in_pipeline(self, workspace, swarmai_root):
+        """stage-count is DISABLED in detect_and_fix (run_254f5e52): file-count can't
+        yield the canonical 9 (embedded adversarial has no file), so it would corrupt
+        a correct "9-stage". The method still works if called directly, but must NOT
+        run in the auto-fix pipeline."""
         refresher = MechanicalRefresher(swarmai_root, workspace)
-        results = refresher._check_stage_count()
-
-        # Should find "8-stage" in TECH.md and MEMORY.md
-        stale = [r for r in results if r.old_value == "8-stage"]
-        assert len(stale) >= 1
-        assert stale[0].new_value == "9-stage"
-        assert stale[0].confidence == 1.0
+        results = refresher.detect_and_fix()
+        # no stage-count fix should be produced by the pipeline
+        assert not any("stage count" in r.evidence for r in results), (
+            "stage-count must stay disabled — it cannot be deterministically correct"
+        )
 
     def test_detects_stale_specialist_count(self, workspace, swarmai_root):
         refresher = MechanicalRefresher(swarmai_root, workspace)
@@ -140,27 +142,41 @@ class TestMechanicalRefresher:
         assert len(stale) >= 1
         assert "9" in stale[0].new_value
 
-    def test_detects_stale_rp_count(self, workspace, swarmai_root):
+    def test_rp_count_verifier_disabled_in_pipeline(self, workspace, swarmai_root):
+        """RP-count is DISABLED in detect_and_fix (run_254f5e52): RP1-RPN refs in DDD
+        prose are mostly HISTORICAL (quoting code-at-the-time / dated snapshots), not
+        live counts — auto-swapping falsifies the record. The method still works if
+        called directly, but must NOT run in the auto-fix pipeline."""
         refresher = MechanicalRefresher(swarmai_root, workspace)
-        results = refresher._check_rp_count()
+        # method intact when called directly
+        assert isinstance(refresher._check_rp_count(), list)
+        # but the pipeline must not emit any RP fix
+        assert not any(
+            "review pattern" in r.evidence.lower() or "RP1-RP" in r.new_value
+            for r in refresher.detect_and_fix()
+        )
 
-        stale = [r for r in results if "RP1-RP29" in r.old_value]
-        assert len(stale) >= 1
-        assert stale[0].new_value == "RP1-RP37"
+    def test_apply_fixes_modifies_file(self, tmp_path):
+        """apply_fixes writes a real correction to disk — via version-stamp, the ONLY
+        FIXABLE verifier active in the pipeline (stage/decay/RP all disabled as unsafe)."""
+        swarmai = tmp_path / "swarmai"
+        swarmai.mkdir()
+        (swarmai / "VERSION").write_text("1.25.0\n")
+        ws = tmp_path / "ws"
+        proj = ws / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True)
+        project_md = proj / "PROJECT.md"
+        project_md.write_text("### Version: v1.21.0 | stale stamp\n")
 
-    def test_apply_fixes_modifies_file(self, workspace, swarmai_root):
-        refresher = MechanicalRefresher(swarmai_root, workspace)
+        refresher = MechanicalRefresher(swarmai, ws)
         results = refresher.detect_and_fix()
-
         assert len(results) > 0
         applied = refresher.apply_fixes(results)
         assert applied > 0
 
-        # Verify file was actually modified
-        tech_md = workspace / "Projects" / "SwarmAI" / "TECH.md"
-        content = tech_md.read_text()
-        assert "9-stage" in content
-        assert "8-stage" not in content
+        content = project_md.read_text()
+        assert "v1.25.0" in content
+        assert "v1.21.0" not in content
 
     def test_no_false_positives_when_current(self, swarmai_root, tmp_path):
         """If values are already correct, no results."""
@@ -598,3 +614,81 @@ class TestCollectMetrics:
             f"core_modules={core_modules} is NOT smaller than the tests-IN "
             f"caliber ({tests_in_mods}) — core-internal test files re-included"
         )
+
+
+# ── Version + Decay drift verifiers (run_254f5e52) ──────────────────────────
+
+
+class TestVersionAndDecayDrift:
+    """FIXABLE-tier verifiers added for DDD zero-drift: version stamp + decay windows.
+    Deterministic (filesystem SoT), context-scoped to avoid corrupting narrative prose."""
+
+    def _mk_roots(self, tmp_path, version="1.25.0"):
+        swarmai = tmp_path / "swarmai"
+        swarmai.mkdir()
+        (swarmai / "VERSION").write_text(version + "\n")
+        # decay constants live in ddd_entry_lifecycle — the real module is the SoT
+        # for _check_decay_windows (imported at call time), so no fixture needed.
+        ws = tmp_path / "ws"
+        proj = ws / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True)
+        return swarmai, ws, proj
+
+    def test_detects_and_fixes_stale_version_stamp(self, tmp_path):
+        swarmai, ws, proj = self._mk_roots(tmp_path, version="1.25.0")
+        (proj / "PROJECT.md").write_text(
+            "### Version: v1.21.0 (pending release) | Core Engine\n"
+            "Narrative: v1.20.1→v1.21.0 was a big release.\n"  # must NOT be touched
+        )
+        r = MechanicalRefresher(swarmai, ws)
+        results = r.detect_and_fix()
+        vfix = [x for x in results if "version stamp" in x.evidence]
+        assert len(vfix) == 1, f"expected 1 version fix, got {[x.old_value for x in vfix]}"
+        assert "v1.25.0" in vfix[0].new_value
+        assert vfix[0].new_value.startswith("### Version:")
+        # narrative line untouched: the fix targets only the header line
+        assert "v1.20.1" not in vfix[0].old_value
+
+    def test_version_stamp_no_false_positive_on_narrative(self, tmp_path):
+        swarmai, ws, proj = self._mk_roots(tmp_path, version="1.25.0")
+        # No `Version:` header — only narrative prose citing old versions
+        (proj / "PROJECT.md").write_text(
+            "The v1.20.1→v1.21.0 release shipped 274 commits. See Issue #77.\n"
+        )
+        r = MechanicalRefresher(swarmai, ws)
+        vfix = [x for x in r.detect_and_fix() if "version stamp" in x.evidence]
+        assert vfix == [], f"narrative prose wrongly flagged: {[x.old_value for x in vfix]}"
+
+    def test_version_already_current_no_fix(self, tmp_path):
+        swarmai, ws, proj = self._mk_roots(tmp_path, version="1.25.0")
+        (proj / "PROJECT.md").write_text("### Version: v1.25.0 | current\n")
+        r = MechanicalRefresher(swarmai, ws)
+        assert [x for x in r.detect_and_fix() if "version stamp" in x.evidence] == []
+
+    def test_decay_window_verifier_disabled_in_pipeline(self, tmp_path):
+        """decay-window is DISABLED in detect_and_fix (run_254f5e52): a prose line
+        carries multiple distinct day-windows (dormant/archived/grace/per-section)
+        and a context-word gate cross-maps them, corrupting correct text. It is
+        SEMANTIC, routed to the LLM tier — must NOT run in the deterministic pipeline."""
+        swarmai, ws, proj = self._mk_roots(tmp_path)
+        (proj / "TECH.md").write_text(
+            "Decay: 90d dormant (180d if ref>=10), <30d immune. Archived after 180d.\n"
+        )
+        r = MechanicalRefresher(swarmai, ws)
+        assert not any("decay window" in x.evidence for x in r.detect_and_fix()), (
+            "decay-window must stay disabled — it cannot be deterministically correct"
+        )
+
+    def test_seeded_version_drift_auto_repairs_end_to_end(self, tmp_path):
+        """DoD-E proof: seed a version drift, run detect_and_fix + apply_fixes
+        directly (no scheduler), assert the file is corrected on disk."""
+        swarmai, ws, proj = self._mk_roots(tmp_path, version="1.25.0")
+        project_md = proj / "PROJECT.md"
+        project_md.write_text("### Version: v1.21.0 | stale\n")
+        r = MechanicalRefresher(swarmai, ws)
+        results = r.detect_and_fix()
+        applied = r.apply_fixes(results)
+        assert applied >= 1
+        # the loop closed: the file on disk now reflects the SoT, zero human action
+        assert "v1.25.0" in project_md.read_text()
+        assert "v1.21.0" not in project_md.read_text()
