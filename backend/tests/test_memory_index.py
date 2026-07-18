@@ -841,3 +841,56 @@ class TestKeyToSectionLiveSchema:
         mappable = sum(1 for e in entries if _key_to_section(e["key"]))
         ratio = mappable / len(entries)
         assert ratio >= 0.95, f"only {mappable}/{len(entries)} ({ratio:.1%}) mappable — keyword leg still dead"
+
+
+class TestSectionNameSignal:
+    """run_94e602ad: a query that NAMES a section/category must be able to surface
+    that section, even when no per-ENTRY summary shares the query's words. Before
+    this, the section title was known (_key_to_section) but never a matchable
+    signal, so a category-naming query ("what cognitive PRINCIPLES govern
+    judgment") scored 0 across all entries → context_files recall@5 = 0.00.
+
+    Layer-1 fix (in _keyword_section_scores): additively score the query against
+    each present section's own NAME and max-merge. Additive = can only RAISE a
+    section's score, never drop/reorder an existing summary/alias match.
+
+    NOTE (Gate-1 BLOCK): the layer-2 slicer carve-out (return head entries for a
+    name-matched section) was REJECTED — a name match proves the SECTION is
+    relevant but says nothing about which ENTRIES answer, so head entries = the
+    exact head-position bias context_recall.py:99 forbids. So a name-matched
+    section still only surfaces if an entry ALSO matches; pure name-only queries
+    (Decisions with no matching entry) remain an honest miss for the deferred
+    semantic leg. This test guards LAYER-1 only."""
+
+    def _index(self):
+        # a minimal MEMORY-index block: a Principle entry whose SUMMARY shares no
+        # words with a "principles" category query.
+        return (
+            "<!-- MEMORY_INDEX_START -->\n"
+            "- [PRI01] The READ path is THE differentiator | read-path, contract\n"
+            "- [DEC01] Chose SQLite WAL over Postgres for the local store | sqlite, wal\n"
+            "<!-- MEMORY_INDEX_END -->\n"
+        )
+
+    def test_category_name_query_scores_its_section(self):
+        from core.memory_index import _keyword_section_scores
+        scores = _keyword_section_scores("what cognitive principles govern judgment", self._index())
+        assert "Principles" in scores, \
+            "a query naming the 'principles' category must score the Principles section (name signal)"
+        assert scores["Principles"] >= 0.15
+
+    def test_name_signal_is_additive_not_reordering(self):
+        """A query matching an ENTRY SUMMARY must keep scoring via the summary —
+        the name signal only max-merges, never replaces a stronger summary hit."""
+        from core.memory_index import _keyword_section_scores
+        # 'read path differentiator' matches PRI01's summary strongly; name signal
+        # for 'Principles' shouldn't erase or lower it.
+        scores = _keyword_section_scores("the read path is the differentiator", self._index())
+        assert scores.get("Principles", 0) >= 0.15, "summary match must survive the name-signal merge"
+
+    def test_unrelated_query_scores_nothing(self):
+        """The name signal must not inject sections for a query that names none."""
+        from core.memory_index import _keyword_section_scores
+        scores = _keyword_section_scores("how do I deploy the kubernetes cluster", self._index())
+        assert scores == {} or all(v >= 0.15 for v in scores.values()), \
+            "no spurious section from an unrelated query"
