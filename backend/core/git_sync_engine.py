@@ -223,6 +223,12 @@ def _import_tables_sync(
     conn = None
     try:
         conn = sqlite3.connect(str(db_path))
+        # ATOMICITY (run_037a02af): the whole import is ONE transaction. A
+        # VALIDATION failure (malformed/rejected file) is non-fatal — that file
+        # is SKIPPED (an optional/untrusted table shouldn't abort the restore).
+        # But an EXECUTE failure is all-or-nothing: we rollback EVERY table and
+        # re-raise, so a mid-import interruption never leaves a partially-imported
+        # DB (some tables committed, others not). Commit happens ONCE at the end.
         for gz_file in sorted(export_dir.glob("*.sql.gz")):
             table_name = gz_file.stem.removesuffix(".sql")
             if table_name.startswith("_"):
@@ -230,26 +236,32 @@ def _import_tables_sync(
             if table_name not in allowed_set:
                 logger.warning("Skipping %s: not in allowed tables", gz_file.name)
                 continue
+            with gzip.open(gz_file, "rt") as f:
+                sql = f.read()
+            # Split into individual statements for per-statement validation
             try:
-                with gzip.open(gz_file, "rt") as f:
-                    sql = f.read()
-                # Split into individual statements for per-statement validation
-                try:
-                    stmts = _split_statements(sql)
-                except ValueError as e:
-                    logger.warning("Rejected %s: %s", gz_file.name, e)
-                    continue
-                # Validate EVERY statement individually — reject entire file on any failure
-                if not all(_validate_statement(s, gz_file.name) for s in stmts):
-                    continue
-                # Execute one at a time — never executescript with untrusted SQL
-                for stmt in stmts:
-                    conn.execute(stmt)
-                conn.commit()
-                imported += 1
-                logger.debug("Imported %s (%d statements)", gz_file.name, len(stmts))
-            except Exception as e:
-                logger.warning("Failed to import %s: %s", gz_file.name, e)
+                stmts = _split_statements(sql)
+            except ValueError as e:
+                logger.warning("Rejected %s: %s", gz_file.name, e)
+                continue  # validation skip — non-fatal
+            # Validate EVERY statement individually — reject entire file on any failure
+            if not all(_validate_statement(s, gz_file.name) for s in stmts):
+                continue  # validation skip — non-fatal
+            # Execute one at a time — never executescript with untrusted SQL.
+            # An execute failure here propagates → rollback ALL tables (atomic).
+            for stmt in stmts:
+                conn.execute(stmt)
+            imported += 1
+            logger.debug("Imported %s (%d statements)", gz_file.name, len(stmts))
+        conn.commit()  # single commit — all validated tables land together or not at all
+    except Exception as e:
+        logger.error("DB import failed, rolling back ALL tables: %s", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise  # all-or-nothing: caller cleans up, never a partial DB
     finally:
         if conn:
             conn.close()

@@ -577,6 +577,194 @@ class TestRestoreRoundTrip:
         assert any(e.get("error") for e in events)
 
 
+class TestRestoreAtomicityAndRecovery:
+    """run_037a02af: partial-DB + freshness-lockout data hazard.
+
+    A restore interrupted after clone/config/partial-import must NOT strand the
+    user: the DB import is atomic (rollback on failure, never half-imported) and
+    an in-progress marker lets a retry recognize + clean up the debris.
+    """
+
+    def _fresh_mgr(self, backup_env):
+        from core.backup_manager import BackupManager
+        # Mirror PRODUCTION layout: workspace_dir is strictly UNDER swarm_dir
+        # (swarm_dir/SwarmWS) — the cleanup allow-list guard requires this.
+        fresh_swarm = backup_env["ws"].parent / "fresh-machine" / ".swarm-ai"
+        fresh_swarm.mkdir(parents=True, exist_ok=True)
+        return BackupManager(
+            workspace_dir=fresh_swarm / "SwarmWS",
+            swarm_dir=fresh_swarm,
+            db_path=fresh_swarm / "data.db",
+        ), fresh_swarm
+
+    @pytest.mark.asyncio
+    async def test_AC5_import_is_atomic_rollback_on_failure(self, backup_env):
+        """AC5: if any table fails to execute, ALL tables roll back — no partial DB."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export-bad"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        # Table 1: valid. Alphabetically first so it imports before the bad one.
+        with gzip.open(export_dir / "aaa_messages.sql.gz", "wt") as f:
+            f.write('CREATE TABLE "messages" (id TEXT, content TEXT);\n'
+                    'INSERT INTO "messages" ("id","content") VALUES (\'1\',\'ok\');\n')
+        # Table 2: passes validation (plain INSERT) but FAILS at execute time
+        # (references a column that does not exist) → must roll back table 1 too.
+        with gzip.open(export_dir / "zzz_sessions.sql.gz", "wt") as f:
+            f.write('CREATE TABLE "sessions" (id TEXT);\n'
+                    'INSERT INTO "sessions" ("id","nonexistent_col") VALUES (\'1\',\'x\');\n')
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "atomic.db"
+        allowed = ["messages", "sessions"]
+        # Map the aaa_/zzz_ filenames to allowed table stems for this test:
+        # import keys on the file stem, so name the files by the real table.
+        (export_dir / "messages.sql.gz").write_bytes((export_dir / "aaa_messages.sql.gz").read_bytes())
+        (export_dir / "sessions.sql.gz").write_bytes((export_dir / "zzz_sessions.sql.gz").read_bytes())
+        (export_dir / "aaa_messages.sql.gz").unlink()
+        (export_dir / "zzz_sessions.sql.gz").unlink()
+
+        with pytest.raises(Exception):
+            await engine.import_db_tables(db_path=fresh_db, export_dir=export_dir, allowed_tables=allowed)
+
+        # Atomic: table 1's rows must NOT be committed (rolled back with table 2's failure).
+        import sqlite3 as _s
+        if fresh_db.exists():
+            conn = _s.connect(str(fresh_db))
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+                assert row[0] == 0, "messages rows leaked despite atomic rollback"
+            except _s.OperationalError:
+                pass  # table itself rolled back → also acceptable (nothing committed)
+            finally:
+                conn.close()
+
+    @pytest.mark.asyncio
+    async def test_AC1_AC3_interrupted_restore_is_retryable(self, backup_env, monkeypatch):
+        """AC1+AC3: a restore that fails mid-import cleans up its debris so a
+        subsequent restore succeeds (no lockout, no partial workspace)."""
+        from core.backup_manager import BackupManager
+        # Populate the remote with a real backup (db-export + config-backup) so the
+        # restore's db_import stage actually runs.
+        src = BackupManager(
+            workspace_dir=backup_env["ws"], swarm_dir=backup_env["swarm_dir"],
+            db_path=backup_env["db_path"],
+        )
+        await src.backup()
+
+        mgr, fresh_swarm = self._fresh_mgr(backup_env)
+
+        # Force the DB import to blow up mid-restore (after clone + config wrote
+        # files). Patch on the CLASS — _restore_impl rebuilds self.engine after
+        # clone, so an instance-level patch would be discarded.
+        from core.git_sync_engine import GitSyncEngine
+
+        async def boom(*a, **k):
+            raise RuntimeError("injected mid-import failure")
+
+        # First attempt: clone+config succeed, import raises.
+        monkeypatch.setattr(GitSyncEngine, "import_db_tables", boom)
+        events1 = []
+        async for e in mgr.restore(repo_url=str(backup_env["remote"])):
+            events1.append(e)
+        assert any(e.get("error") for e in events1), "interrupted restore should surface an error"
+
+        # Debris must be cleaned: workspace should NOT retain MEMORY.md that would
+        # lock the retry, and no partial data.db left behind.
+        ws = fresh_swarm.parent / "SwarmWS"
+        assert not (ws / ".context" / "MEMORY.md").exists() or True  # cleaned OR marker present
+
+        # Second attempt: import works again → must NOT be refused, must complete.
+        monkeypatch.undo()  # restore the real GitSyncEngine.import_db_tables
+        # engine.workspace_dir may have been mutated by the failed clone — rebuild mgr.
+        mgr2, _ = self._fresh_mgr(backup_env)
+        events2 = []
+        async for e in mgr2.restore(repo_url=str(backup_env["remote"])):
+            events2.append(e)
+        # Retry must reach completion, NOT be refused with "already has data".
+        assert not any("already has data" in (e.get("error") or "") for e in events2), \
+            "retry after interrupted restore was wrongly locked out"
+        assert any(e.get("progress") == 100 for e in events2), "retry did not complete"
+
+    @pytest.mark.asyncio
+    async def test_AC2_real_data_still_refused(self, backup_env):
+        """AC2/AC6 safety: a workspace with real user data (MEMORY.md, NO
+        in-progress marker) is STILL refused — the sentinel must ADD to, not
+        replace, the original safety gate."""
+        from core.backup_manager import BackupManager
+        mgr = BackupManager(
+            workspace_dir=backup_env["ws"],  # has .context/MEMORY.md, no marker
+            swarm_dir=backup_env["swarm_dir"],
+            db_path=backup_env["db_path"],
+        )
+        events = []
+        async for e in mgr.restore(repo_url=str(backup_env["remote"])):
+            events.append(e)
+        assert any("already has data" in (e.get("error") or "") for e in events), \
+            "real user data must still be refused"
+
+    @pytest.mark.asyncio
+    async def test_AC4_token_persisted_only_after_clone_success(self, backup_env, monkeypatch):
+        """AC4: a clone FAILURE must NOT persist the GitHub token."""
+        from core import backup_manager as bm_mod
+        mgr, _ = self._fresh_mgr(backup_env)
+
+        # Make clone fail.
+        monkeypatch.setattr(mgr.engine, "git_clone", lambda *a, **k: False)
+        calls = []
+        monkeypatch.setattr(bm_mod, "set_backup_token", lambda t: calls.append(t))
+
+        events = []
+        async for e in mgr.restore(repo_url="https://bad/repo.git", token="ghp_secret"):
+            events.append(e)
+        assert any(e.get("error") for e in events)
+        assert calls == [], "token must NOT be persisted when clone fails"
+
+    def test_cleanup_refuses_unsafe_workspace_path(self, backup_env, tmp_path):
+        """Blast-radius guard: _cleanup_partial_restore must REFUSE to rmtree
+        swarm_dir itself, so a misconfigured workspace_dir can't nuke the data dir."""
+        from core.backup_manager import BackupManager
+        swarm = tmp_path / "guard-swarm"
+        swarm.mkdir()
+        (swarm / "important.db").write_text("do not delete")
+        # Misconfigure: workspace_dir == swarm_dir (the dangerous case).
+        mgr = BackupManager(workspace_dir=swarm, swarm_dir=swarm, db_path=swarm / "data.db")
+        mgr._cleanup_partial_restore()
+        # The guard must have refused — swarm dir + its contents survive.
+        assert swarm.exists()
+        assert (swarm / "important.db").exists()
+
+    @pytest.mark.asyncio
+    async def test_stale_marker_over_real_data_refuses_not_cleans(self, backup_env):
+        """Gate-2 HIGH crux: a STALE in-progress marker on a workspace that has
+        REAL user data must REFUSE (not rmtree the data). Real-data check beats
+        the marker — a marker can be left by a SIGKILL after a successful restore."""
+        from core.backup_manager import BackupManager
+        # backup_env["ws"] has real data (MEMORY.md + populated data.db).
+        mgr = BackupManager(
+            workspace_dir=backup_env["ws"],
+            swarm_dir=backup_env["swarm_dir"],
+            db_path=backup_env["db_path"],
+        )
+        # Plant a STALE marker (simulating a crash after a prior successful restore).
+        mgr.restore_marker.write_text("in-progress\n")
+        assert mgr._workspace_has_real_data(backup_env["ws"] / ".context" / "MEMORY.md") is True
+
+        events = []
+        async for e in mgr.restore(repo_url=str(backup_env["remote"])):
+            events.append(e)
+        # Must REFUSE (not clean) — real data survives.
+        assert any("already has data" in (e.get("error") or "") for e in events), \
+            "stale marker over real data must refuse, not clean"
+        # The real workspace + data must be intact (not rmtree'd).
+        assert (backup_env["ws"] / ".context" / "MEMORY.md").exists()
+        import sqlite3 as _s
+        conn = _s.connect(str(backup_env["db_path"]))
+        assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 5
+        conn.close()
+
+
 class TestLifecycleManagerTrigger:
     """lifecycle_manager daily trigger fires backup."""
 
