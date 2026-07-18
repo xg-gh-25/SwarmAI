@@ -24,7 +24,12 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'dark';
+  // Guard BOTH "no window" (SSR/JSDOM) AND "window present but matchMedia absent"
+  // (some embedded WebViews / non-standard hosts). This runs in ThemeProvider's
+  // render-time state initializer, and ThemeProvider is ABOVE the app-level
+  // ErrorBoundary — so an unguarded throw here is a raw white screen with no
+  // Reload, not a catchable error. Fall back to the app's default theme.
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -96,6 +101,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   }, [accentColor]);
 
   useEffect(() => {
+    // Host may lack matchMedia (see getSystemTheme) — skip the system-theme
+    // listener rather than throw. Theme still works (defaults + explicit choice).
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
     const handleChange = () => {

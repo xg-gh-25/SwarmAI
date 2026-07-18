@@ -20,7 +20,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { HealthState, BackendStatus, AuthStatus } from '../types';
-import { getApiBaseUrl, setBackendPort, tauriService } from '../services/tauri';
+import { getApiBaseUrl, isDesktop, setBackendPort, tauriService } from '../services/tauri';
 import { useToast } from '../contexts/ToastContext';
 
 /** Default polling interval in milliseconds. */
@@ -262,9 +262,14 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   // ------------------------------------------------------------------
 
   useEffect(() => {
-    // Only relevant in production (Tauri daemon mode)
+    // Only relevant in production Tauri DESKTOP (daemon mode). Guard on
+    // isDesktop(), not just isDev: in Hive (production browser, isDev=false, no
+    // Tauri), tauriService.onBackend*() → Tauri listen() calls
+    // window.__TAURI_INTERNALS__.transformCallback (undefined in a browser) and
+    // throws → 4 unhandled promise rejections on every Hive boot. Every sibling
+    // (BackendStartupOverlay, App.tsx overlays) guards with isDesktop(); match it.
     const isDev = import.meta.env.DEV;
-    if (isDev) return;
+    if (isDev || !isDesktop()) return;
 
     const unlisteners: Array<Promise<() => void>> = [];
 

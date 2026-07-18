@@ -628,6 +628,21 @@ const COLD_START_DEAD_STREAK: u32 = 8;
 /// Poll cadence for the adaptive probe.
 #[cfg(target_os = "macos")]
 const PROBE_INTERVAL_SECS: u64 = 2;
+/// Grace period for the OLD daemon to drain on a version-upgrade bootout before
+/// we escalate to SIGKILL. bootout's SIGTERM triggers FastAPI lifespan shutdown
+/// → `session_registry.disconnect_all()`, which fires end-of-conversation hooks
+/// (DailyActivity flush, workspace auto-commit, distillation) and persists each
+/// session's `--resume` identity. Those hooks on an ACTIVE session (a long agent
+/// turn mid-tool-call, a large generation) can legitimately take longer than the
+/// old hardcoded 15s — SIGKILL at 15s hard-cut a draining turn, skipping the
+/// remaining hooks (A1 startup-hazard, run_2d3417d9). The poll loop breaks the
+/// INSTANT the process self-exits, so this ceiling only ever bites a daemon that
+/// is genuinely still draining; raising it costs nothing on the common fast-exit
+/// path and gives an active session room to finish cleanly. NOT a full
+/// pre-bootout active-session gate (that would defeat "the update eventually wins"
+/// — Gate-0 verdict): update still wins, just with a humane drain window.
+#[cfg(target_os = "macos")]
+const DAEMON_UPGRADE_DRAIN_SECS: u32 = 45;
 
 /// Outcome of a single health probe attempt, combining the HTTP result with
 /// daemon process liveness. Pure classification — unit-tested.
@@ -1019,8 +1034,8 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
                 println!("[Tauri] Daemon process exited after {}s", waited);
                 break;
             }
-            if waited >= 15 {
-                println!("[Tauri] Daemon PID {} still alive after {}s — sending SIGKILL", pid, waited);
+            if waited >= DAEMON_UPGRADE_DRAIN_SECS {
+                println!("[Tauri] Daemon PID {} still alive after {}s (drain ceiling) — sending SIGKILL", pid, waited);
                 let _ = std::process::Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .output();

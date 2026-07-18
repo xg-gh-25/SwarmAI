@@ -456,6 +456,65 @@ def _get_seed_database_path() -> Path | None:
     return get_resource_file("seed.db", dev_seed_path)
 
 
+def _db_is_intact(db_path: Path) -> bool:
+    """Cheap boot-time integrity probe for a non-empty data.db.
+
+    Runs ``PRAGMA quick_check`` (fast, page-level; NOT the O(n) full
+    integrity_check) with a short timeout. Returns True only if SQLite can open
+    the file AND quick_check reports "ok". Any failure (malformed header,
+    truncated page, not-a-database, lock timeout) → False → the caller re-seeds
+    instead of trusting a corrupt DB into a KeepAlive crash-loop.
+
+    Fail-SAFE toward re-seed on a genuine corruption signal, but distinguishes a
+    transient lock (busy) from corruption: a lock/operational error is treated as
+    "intact" (don't nuke a DB just because it's momentarily busy).
+    """
+    try:
+        # Read-only-ish connection with a short busy timeout; quick_check does
+        # not write. isolation autocommit is fine for a PRAGMA.
+        conn = sqlite3.connect(str(db_path), timeout=2.0)
+        try:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+            return bool(row) and row[0] == "ok"
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as e:
+        # Locked/busy/permission — NOT proof of corruption. Don't destroy a DB
+        # that may just be momentarily busy; treat as intact and proceed.
+        # ⚠️ ORDER IS LOAD-BEARING: OperationalError IS A SUBCLASS of DatabaseError,
+        # so this MUST come first — otherwise the DatabaseError clause below catches
+        # "database is locked" and returns False → a valid-but-locked DB gets
+        # unlink()+re-seeded → USER DATA DESTROYED. (Adversarial-caught HIGH, run_2d3417d9.)
+        logger.warning("DB integrity probe inconclusive (operational) for %s: %s — treating as intact", db_path, e)
+        return True
+    except sqlite3.DatabaseError as e:
+        # Malformed / not-a-database / truncated → definitively corrupt.
+        logger.warning("DB integrity probe failed for %s: %s", db_path, e)
+        return False
+
+
+async def _init_db_bounded(skip_schema: bool, timeout: float = 45.0) -> None:
+    """Run initialize_database() under a wall-clock timeout, for BOTH boot paths.
+
+    Both the fast path (skip_schema=True) and full-init acquire an exclusive
+    migration flock; a stale lock holder can hang the call forever. The full-init
+    path was already bounded (asyncio.wait_for 45s) but the fast path was NOT —
+    so a wedged lock hung boot indefinitely with no health signal. Route both
+    through this helper so the fast path gets the same bound. On breach: raise
+    RuntimeError (launchd KeepAlive then surfaces a bounded restart, not an
+    infinite "initializing" hang).
+    """
+    try:
+        await asyncio.wait_for(initialize_database(skip_schema=skip_schema), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error(
+            "Database initialization timed out after %ss (skip_schema=%s) — "
+            "likely a stale migration lock; check for a wedged prior process",
+            timeout, skip_schema,
+        )
+        raise RuntimeError("Database initialization timed out")
+
+
 def _ensure_database_initialized() -> bool:
     """Ensure the user database exists, copying from seed if needed.
 
@@ -482,10 +541,28 @@ def _ensure_database_initialized() -> bool:
 
     # --- Returning user: preserve existing data.db, skip init pipeline ---
     if user_db_path.exists():
-        # Guard against 0-byte corrupt DB (e.g. from a failed previous startup)
+        # Guard against a corrupt DB from a failed previous startup. Two cases:
+        #   (a) 0-byte  — an interrupted create.
+        #   (b) non-zero but MALFORMED (torn WAL write / truncated page) — passes
+        #       the size check, but the first real query (migrations) then raises
+        #       sqlite3.DatabaseError → lifespan aborts → launchd KeepAlive
+        #       restarts into the SAME corrupt DB → infinite crash-loop, user
+        #       stuck at "initializing". So probe integrity here, not later.
+        # Either → remove + fall through to re-seed (same recovery as 0-byte).
+        # MUST also remove the -wal/-shm sidecars: a malformed DB from a crash
+        # mid-write is EXACTLY when a hot -wal exists, and a leftover foreign -wal
+        # beside the fresh seed copy would be replayed into it → re-corruption
+        # (adversarial-caught HIGH, run_2d3417d9).
+        def _purge_corrupt_db(reason: str) -> None:
+            logger.warning("%s at %s — removing (incl. -wal/-shm) and re-seeding", reason, user_db_path)
+            user_db_path.unlink(missing_ok=True)
+            for suffix in ("-wal", "-shm"):
+                Path(str(user_db_path) + suffix).unlink(missing_ok=True)
+
         if user_db_path.stat().st_size == 0:
-            logger.warning(f"Empty database at {user_db_path} — removing and re-seeding")
-            user_db_path.unlink()
+            _purge_corrupt_db("Empty database")
+        elif not _db_is_intact(user_db_path):
+            _purge_corrupt_db("Malformed database (prevents a KeepAlive crash-loop)")
         else:
             logger.info(f"Using existing user database at {user_db_path}")
             return True
@@ -709,7 +786,8 @@ async def lifespan(app: FastAPI):
         # Fast startup path — seed-sourced or returning user.
         # Create the DB instance (connection pool) without running DDL or migrations.
         logger.info("Fast startup (seed-sourced) — skipping schema DDL, migrations, and full init")
-        await initialize_database(skip_schema=True)
+        # Bounded (was unbounded): a stale migration flock must not hang boot forever.
+        await _init_db_bounded(skip_schema=True)
         logger.info("Database instance created (schema skipped)")
 
         t_db = time.monotonic()
@@ -745,11 +823,7 @@ async def lifespan(app: FastAPI):
         # Full initialization path — dev-mode fallback (no seed.db available).
         # Preserve the existing init pipeline exactly.
         logger.info("Full initialization (runtime) — running schema DDL + migrations + init")
-        try:
-            await asyncio.wait_for(initialize_database(), timeout=45.0)
-        except asyncio.TimeoutError:
-            logger.error("Database initialization timed out after 45 seconds — check migrations")
-            raise RuntimeError("Database initialization timed out")
+        await _init_db_bounded(skip_schema=False)
         logger.info("Database initialized")
 
         t_db = time.monotonic()
