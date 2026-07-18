@@ -342,6 +342,15 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
   const [restoring, setRestoring] = useState(false);
   const [events, setEvents] = useState<RestoreEvent[]>([]);
   const [done, setDone] = useState(false);
+  // AbortController for the in-flight restore. On unmount (e.g. the user hits
+  // "Skip — start fresh", which unmounts this component) we abort it — that
+  // errors the fetch inside restoreBackup, so the reader.read() the generator
+  // is parked on rejects and the generator exits (its finally releases the
+  // stream). A fire-and-forget for-await loop is NOT closed by React unmount,
+  // and .return() on a generator parked at `await` cannot abort it — only an
+  // external signal can. Without this, the fetch lingers to the 90s stall-guard.
+  const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
   // Pre-fill from backup status
   useEffect(() => {
@@ -350,18 +359,33 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
     }).catch(() => {});
   }, []);
 
+  // On unmount: abort any in-flight restore so the fetch/stream is released.
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
+
   const handleRestore = async () => {
     if (!repoUrl) return;
     setRestoring(true);
     setEvents([]);
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
-      for await (const event of systemService.restoreBackup(repoUrl, token || undefined)) {
+      for await (const event of systemService.restoreBackup(repoUrl, token || undefined, ac.signal)) {
+        if (!mountedRef.current) break; // component gone — stop consuming
         setEvents(prev => [...prev, event]);
         if (event.error) break;
         if (event.progress === 100) setDone(true);
       }
     } catch { /* handled via events */ }
-    setRestoring(false);
+    finally {
+      abortRef.current = null;
+      if (mountedRef.current) setRestoring(false);
+    }
   };
 
   if (done) {
@@ -428,10 +452,24 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
             </div>
           ))}
           {restoring && (
-            <div className="w-full bg-[var(--color-bg-secondary)] rounded-full h-2">
-              <div className="bg-[var(--color-primary)] h-2 rounded-full transition-all duration-300"
-                style={{ width: `${events[events.length - 1]?.progress ?? 0}%` }} />
-            </div>
+            <>
+              <div className="w-full bg-[var(--color-bg-secondary)] rounded-full h-2">
+                <div className="bg-[var(--color-primary)] h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${events[events.length - 1]?.progress ?? 0}%` }} />
+              </div>
+              {/* Escape hatch DURING restore — never trap the user behind a
+                  progress bar if the stream is slow or silently stalled. The
+                  stall-guard (system.ts) bounds a true hang at 90s, but the
+                  user can bail immediately. onSkip unmounts StepRestore, and
+                  the unmount effect .return()s the active generator → its
+                  finally aborts the fetch (no zombie stream). */}
+              <div className="pt-1">
+                <button onClick={onSkip}
+                  className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                  Skip — start fresh
+                </button>
+              </div>
+            </>
           )}
           {/* Show escape hatch when restore failed (not restoring, has error) */}
           {!restoring && events.some(e => e.error) && (

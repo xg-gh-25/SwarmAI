@@ -19,6 +19,7 @@ const mockGetAuthHint = vi.fn();
 const mockGetAPIConfiguration = vi.fn();
 const mockUpdateAPIConfiguration = vi.fn();
 const mockChannelsList = vi.fn();
+const mockRestoreBackup = vi.fn();
 
 vi.mock('../../services/system', () => ({
   systemService: {
@@ -29,7 +30,7 @@ vi.mock('../../services/system', () => ({
     getAuthHint: (...args: unknown[]) => mockGetAuthHint(...args),
     persistApiKey: vi.fn().mockResolvedValue(undefined),
     setAuthMethod: vi.fn().mockResolvedValue(undefined),
-    restoreBackup: vi.fn(),
+    restoreBackup: (...args: unknown[]) => mockRestoreBackup(...args),
   },
   RestoreEvent: {},
 }));
@@ -287,5 +288,71 @@ describe('OnboardingPage — no dead-ends', () => {
     // Should still show Channels, NOT Auth
     expect(screen.queryByText('LLM Authentication')).not.toBeInTheDocument();
     expect(screen.getByText('Connect Channels')).toBeInTheDocument();
+  });
+
+  // ── Restore step (run_da5da0b1): no deadlock during restore ──
+
+  // Drive step1→2→3(Restore). Requires a detected backup (non-hive).
+  async function advanceToRestoreStep() {
+    mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
+    mockGetBackupStatus.mockResolvedValue({ repoUrl: 'https://github.com/u/swarm-brain.git', lastBackup: '2026-07-01T00:00:00Z' });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    // step1 → step2 (auth) auto-advances on healthy status
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    // step2 → step3 (Restore) — backup was detected
+    await waitFor(() => screen.getByText('Restore from Backup'));
+  }
+
+  it('AC2: a Skip — start fresh escape is reachable WHILE restoring (no deadlock behind the progress bar)', async () => {
+    // restoreBackup stays pending forever — simulates a slow/stalled stream.
+    mockRestoreBackup.mockImplementation(() => ({
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      async *[Symbol.asyncIterator]() { await new Promise(() => {}); },
+    }));
+    await advanceToRestoreStep();
+    // Kick off the restore (the Restore button)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/ })); });
+    // While restoring (stream pending), the escape button must be present + clickable.
+    const skip = await screen.findByText('Skip — start fresh');
+    expect(skip).toBeInTheDocument();
+    await act(async () => { fireEvent.click(skip.closest('button')!); });
+    // onSkip advances past the restore step → Channels (no longer trapped).
+    await waitFor(() => expect(screen.queryByText('Restore from Backup')).not.toBeInTheDocument());
+  });
+
+  it('AC2b: unmounting mid-restore (skip) ABORTS the restore signal (fetch released, no zombie)', async () => {
+    // Capture the AbortSignal the component passes as restoreBackup's 3rd arg.
+    // The real fix aborts it on unmount → the generator's fetch errors + exits.
+    let capturedSignal: AbortSignal | undefined;
+    async function* stallingGen(_url: string, _tok: string | undefined, signal?: AbortSignal) {
+      capturedSignal = signal;
+      yield { stage: 'cloning', progress: 20 };
+      await new Promise(() => {}); // stall (real generator would exit when signal aborts the fetch)
+    }
+    mockRestoreBackup.mockImplementation((...args: unknown[]) =>
+      stallingGen(args[0] as string, args[1] as string | undefined, args[2] as AbortSignal | undefined));
+    await advanceToRestoreStep();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/ })); });
+    const skip = await screen.findByText('Skip — start fresh');
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(false);
+    await act(async () => { fireEvent.click(skip.closest('button')!); });
+    // Skip unmounts StepRestore → unmount effect aborts the signal → fetch released.
+    await waitFor(() => expect(capturedSignal!.aborted).toBe(true));
+  });
+
+  it('AC4: happy-path restore reaching progress=100 shows Restore Complete (no regression)', async () => {
+    mockRestoreBackup.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { stage: 'cloning', progress: 50, detail: 'cloning repo' };
+        yield { stage: 'done', progress: 100, messagesCount: 12, sessionsCount: 3, todosCount: 5 };
+      },
+    }));
+    await advanceToRestoreStep();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/ })); });
+    await waitFor(() => expect(screen.getByText('Restore Complete')).toBeInTheDocument());
+    // The completion summary + Continue button (not a dead progress bar).
+    expect(screen.getByText('Continue')).toBeInTheDocument();
   });
 });

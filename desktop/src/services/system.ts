@@ -243,6 +243,11 @@ export interface SessionBriefing {
 
 const STATUS_TIMEOUT_MS = 5000;
 
+/** Idle (between-events) stall timeout for the restore SSE stream. Matches the
+ * chat stream's STALL_TIMEOUT_MS (chat.ts:47). This is a HANG-guard on IDLE
+ * time, reset on every event — NOT a cap on total restore duration (O030). */
+export const RESTORE_STALL_TIMEOUT_MS = 90_000;
+
 export interface MaxTabsInfo {
   maxTabs: number;
   /** Max chat tabs allowed (maxTabs - 1, reserving 1 slot for channels). */
@@ -596,37 +601,118 @@ export const systemService = {
     });
   },
 
-  /** Restore from backup repo. Returns async iterator of SSE progress events. */
-  async *restoreBackup(repoUrl: string, token?: string): AsyncGenerator<RestoreEvent> {
+  /** Restore from backup repo. Returns async iterator of SSE progress events.
+   *
+   * Stall-guard: the read loop is bounded by an IDLE timeout
+   * (RESTORE_STALL_TIMEOUT_MS) that RESETS on every event — a legitimately slow
+   * but progressing restore (git clone + db import can take minutes) is never
+   * killed; only a stream that goes silent for the full idle window is. On idle
+   * timeout we abort the underlying fetch (releasing the reader) and yield a
+   * terminal `.error` event — the field StepRestore keys on (OnboardingPage.tsx
+   * :360 break + :437 escape UI). This is a hang-guard, NOT a total-duration cap
+   * (O030: never guillotine slow-but-progressing work). */
+  async *restoreBackup(repoUrl: string, token?: string, externalSignal?: AbortSignal): AsyncGenerator<RestoreEvent> {
     const baseUrl = api.defaults.baseURL || '';
+    const controller = new AbortController();
+    // Link an optional caller-owned signal (e.g. component unmount) to our
+    // controller. Aborting it errors the fetch → the in-flight reader.read()
+    // rejects → the generator exits promptly. This is the ONLY way to abort a
+    // generator parked at `await reader.read()`: .return() alone queues behind
+    // the pending await and never runs until the read settles.
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
     const response = await fetch(`${baseUrl}/system/backup/restore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repo_url: repoUrl, token }),
+      signal: controller.signal,
     });
 
     if (!response.ok || !response.body) {
-      yield { stage: 'error', progress: 0, detail: `HTTP ${response.status}` };
+      // Include the `.error` field (not just `detail`/`stage`) so the consumer's
+      // `if (event.error) break` + the escape UI both trigger on HTTP failure too.
+      yield { stage: 'error', progress: 0, detail: `HTTP ${response.status}`, error: `Restore failed: HTTP ${response.status}` };
       return;
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let lastProgress = 0;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            yield JSON.parse(line.slice(6)) as RestoreEvent;
-          } catch { /* skip malformed */ }
+    // IDLE stall-guard: a promise that rejects when no event arrives within the
+    // idle window. clearTimeout-before-reschedule per read (chat.ts:240-249
+    // pattern) so a fast stream doesn't accumulate abandoned timers.
+    let idleTimerId: ReturnType<typeof setTimeout> | null = null;
+    let stalled = false;
+    const clearIdle = () => { if (idleTimerId !== null) { clearTimeout(idleTimerId); idleTimerId = null; } };
+
+    try {
+      while (true) {
+        // Race the real read against the idle timer. On idle: controller.abort()
+        // fires (rejecting reader.read()), stalled=true is latched, and we emit
+        // the terminal error event below. `settled` guards the late-timer race:
+        // if the read WINS the race, the timer callback must NOT still latch
+        // stalled/abort (which would kill a healthy stream on the next read).
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+            let settled = false;
+            clearIdle();
+            idleTimerId = setTimeout(() => {
+              if (settled) return;          // read already won — do not abort a healthy stream
+              settled = true;
+              stalled = true;
+              controller.abort();
+              reject(new Error('restore-idle-timeout'));
+            }, RESTORE_STALL_TIMEOUT_MS);
+            reader.read().then(
+              (v) => { if (settled) return; settled = true; clearIdle(); resolve(v); },
+              (e) => { if (settled) return; settled = true; clearIdle(); reject(e); },
+            );
+          });
+        } catch {
+          // Either the idle timer fired, or the abort rejected the read.
+          if (stalled) {
+            yield {
+              stage: 'error',
+              progress: lastProgress,
+              error: `Restore stalled — no progress for ${RESTORE_STALL_TIMEOUT_MS / 1000}s. The backup server may be unreachable.`,
+            };
+          }
+          return;
+        }
+
+        const { done, value } = readResult;
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Bound buffer growth — a malformed/hostile stream with no line breaks
+        // must not grow the buffer without limit (renderer OOM guard). A single
+        // SSE line far larger than this is not a legitimate restore event.
+        if (buffer.length > 1_000_000) {
+          stalled = true;
+          yield { stage: 'error', progress: lastProgress, error: 'Restore stream malformed (oversized frame). Aborting.' };
+          return;
+        }
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const evt = JSON.parse(line.slice(6)) as RestoreEvent;
+              if (typeof evt.progress === 'number') lastProgress = evt.progress;
+              yield evt;
+            } catch { /* skip malformed */ }
+          }
         }
       }
+    } finally {
+      // Release the stream on ANY exit (done / stall / consumer `break` /
+      // component unmount closing the generator) — no zombie fetch.
+      clearIdle();
+      controller.abort();
     }
   },
 };
