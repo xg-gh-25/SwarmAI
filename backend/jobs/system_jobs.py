@@ -201,14 +201,13 @@ SYSTEM_JOBS: list[Job] = [
             "todo_max": 40,
         },
         safety=JobSafety(
-            # Outer envelope only — the per-project inner claude spawns are bounded in the
-            # handler (_PER_PROJECT_TIMEOUT_S=240s / _PER_PROJECT_BUDGET_USD=$2.00 each).
-            # JobSafety.{timeout,max_budget} do NOT bound inner subprocess.run spawns
-            # (eval-scheduled precedent) — they are the JOB-LEVEL ceiling for accounting.
-            # Real worst case = N_projects × $2.00 (≈$16 at 8 projects); set the outer
-            # cap to match that truth rather than understate it at $5.
+            # max_budget_usd=0: NO per-job dollar cap (matches sibling jobs). Cost is
+            # governed centrally by the scheduler's global monthly budget, not by a
+            # per-job/per-call dollar number. timeout_seconds is the ONLY real control
+            # here — it bounds a genuine hang of the outer job (the per-project inner
+            # spawns each carry their own _PER_PROJECT_TIMEOUT_S hang guard).
             timeout_seconds=2400,
-            max_budget_usd=16.00,
+            max_budget_usd=0,
             allowed_tools=["Read", "Grep", "Glob"],
         ),
     ),

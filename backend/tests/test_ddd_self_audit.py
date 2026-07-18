@@ -16,7 +16,6 @@ import pytest
 
 from jobs.handlers.ddd_self_audit import (
     _AUDIT_TOOLS,
-    _PER_PROJECT_BUDGET_USD,
     _build_audit_prompt,
     _classify_review_result,
     _count_parseable_findings,
@@ -121,34 +120,20 @@ class TestNoMutation:
 
 
 class TestReviewResultClassification:
-    """run_271c39df: the handler used to treat exit-1 as a binary fail and never
-    parse stdout — so a budget-exhaust (which carries real PARTIAL analysis + the
-    errors field) was discarded as opaque 'review failed (exit 1)'."""
+    """Two-state classification (clean / failed). We parse stdout on ANY exit code
+    purely for OBSERVABILITY — a failure surfaces its real cause, not an opaque
+    'exit N'. There is deliberately NO cost/budget branch: cost is governed centrally
+    (scheduler monthly budget), a hang by the subprocess timeout (run_271c39df:
+    a per-call dollar cap was WRONG — it截断 real work as a disaster-recovery control)."""
 
-    def test_budget_exhaust_by_subtype_is_partial_and_keeps_result(self):
-        """AC1: budget-exhaust exit-1 (via subtype) → 'partial', partial analysis retained."""
-        output = {
-            "result": "Found drift: TECH.md says X but code says Y.",
-            "subtype": "error_max_budget_usd",
-            "total_cost_usd": 0.69,
-            "errors": ["Reached maximum budget ($0.5)"],
-        }
-        v = _classify_review_result(1, output, "")
-        assert v["status"] == "partial"
-        assert "Found drift" in v["result_text"]  # analysis NOT discarded
-        assert v["cost"] == 0.69
-
-    def test_budget_exhaust_by_errors_substring_is_partial(self):
-        """AC1: fallback path — detect budget-exhaust from the errors array even
-        if subtype is absent (robustness against CLI shape drift)."""
-        output = {"result": "partial analysis", "errors": ["Reached maximum budget ($2)"]}
-        v = _classify_review_result(1, output, "")
-        assert v["status"] == "partial"
-        assert v["result_text"] == "partial analysis"
+    def test_clean_exit_is_clean(self):
+        v = _classify_review_result(0, {"result": "no drift found"}, "")
+        assert v["status"] == "clean"
+        assert v["result_text"] == "no drift found"
 
     def test_genuine_exit1_surfaces_error_detail_not_opaque(self):
-        """AC2: a non-budget exit-1 (e.g. MCP/auth) → 'failed' WITH a real error
-        detail (stderr tail), never an opaque 'exit 1'."""
+        """A non-zero exit → 'failed' WITH a real error detail (stderr tail), never
+        an opaque 'exit 1'. This is the kept observability improvement."""
         v = _classify_review_result(1, {"result": ""}, "MCP server failed to connect: timeout")
         assert v["status"] == "failed"
         assert "MCP server failed" in v["error_detail"]
@@ -159,38 +144,44 @@ class TestReviewResultClassification:
         assert v["status"] == "failed"
         assert "Auth error" in v["error_detail"]
 
-    def test_clean_exit_is_clean(self):
-        v = _classify_review_result(0, {"result": "no drift found"}, "")
-        assert v["status"] == "clean"
-        assert v["result_text"] == "no drift found"
-
-    def test_budget_exhaust_wins_over_returncode(self):
-        """A budget-exhaust with returncode 0 (CLI variance) is still 'partial', not 'clean' —
-        the label must reflect incompleteness regardless of exit code."""
-        output = {"result": "partial", "subtype": "error_max_budget_usd", "total_cost_usd": 2.1}
-        v = _classify_review_result(0, output, "")
-        assert v["status"] == "partial"
-
-    def test_unrelated_maximum_budget_error_is_NOT_partial(self):
-        """Gate-2 CRITICAL: an unrelated error merely containing 'maximum budget' must
-        NOT be misclassified as a budget-exhaust partial. We match the CLI's actual
-        phrase 'reached maximum budget', and subtype is authoritative."""
-        output = {"result": "", "errors": ["DB pool maximum budget exceeded for connections"]}
-        v = _classify_review_result(1, output, "some stderr")
-        assert v["status"] == "failed", "loose substring caused a false-positive salvage"
-
-    def test_non_string_errors_dont_crash_or_false_match(self):
-        """Gate-2 MED: errors may carry non-string items (dicts/ints) — they must be
-        filtered out of substring matching, not str()-matched."""
+    def test_non_string_errors_dont_crash(self):
+        """errors may carry non-string items (dicts/ints) — must not crash the join."""
         output = {"result": "", "errors": [{"code": 500}, 42, None]}
         v = _classify_review_result(1, output, "real failure")
         assert v["status"] == "failed"
         assert "real failure" in v["error_detail"]
 
+    def test_no_budget_status_exists(self):
+        """Regression guard (run_271c39df cleanup): a former budget-exhaust input must
+        NOT produce a special 'partial' status — there is no cost branch anymore.
+        A returncode-0 budget-labeled result is simply 'clean'; a nonzero is 'failed'."""
+        budget_shaped = {"result": "x", "subtype": "error_max_budget_usd",
+                         "errors": ["Reached maximum budget ($0.5)"]}
+        assert _classify_review_result(0, budget_shaped, "")["status"] == "clean"
+        assert _classify_review_result(1, budget_shaped, "")["status"] == "failed"
+
+
+class TestNoPerCallBudgetControl:
+    """run_271c39df cleanup: cost must NOT be controlled per-call inside this handler.
+    No --max-budget-usd flag, no _PER_PROJECT_BUDGET_USD constant."""
+
+    def test_no_budget_flag_in_command(self):
+        import jobs.handlers.ddd_self_audit as mod
+        src = Path(mod.__file__).read_text()
+        assert "--max-budget-usd" not in src, "per-call dollar cap must not be reintroduced"
+        assert "_PER_PROJECT_BUDGET_USD" not in src, "per-call budget constant must not return"
+
+    def test_timeout_is_the_only_per_call_bound(self):
+        """A hang guard (timeout) is legitimate; a cost cap is not. Assert the hang
+        guard exists and is the sole per-call control constant."""
+        from jobs.handlers.ddd_self_audit import _PER_PROJECT_TIMEOUT_S
+        assert isinstance(_PER_PROJECT_TIMEOUT_S, int) and _PER_PROJECT_TIMEOUT_S > 0
+
 
 class TestParseableFindingCount:
-    """Gate-2 HIGH: n_findings must reflect ACTUAL parseable todos, not raw '"title"'
-    substrings — a budget cap can truncate the RADAR_TODOS JSON mid-block."""
+    """n_findings must reflect ACTUAL parseable todos, not raw '"title"' substrings —
+    output can be interrupted mid-JSON (e.g. subprocess timeout), and a malformed
+    block must count 0, not the substring count."""
 
     def test_valid_block_counts_findings(self):
         text = ('drift found\n<!-- RADAR_TODOS\n'
@@ -216,12 +207,3 @@ class TestParseableFindingCount:
 
     def test_no_block_counts_zero(self):
         assert _count_parseable_findings("clean review, no drift") == []
-
-
-class TestBudgetCap:
-    def test_budget_cap_exceeds_observed_review_cost(self):
-        """AC3: the per-project cap must exceed the observed real review cost
-        ($0.69 on a 46KB project, run_271c39df) — else normal reviews trip it."""
-        assert _PER_PROJECT_BUDGET_USD >= 0.69, (
-            "budget cap is below observed review cost — reviews will exit-1"
-        )
