@@ -61,6 +61,29 @@ class TestFileDomainMap:
         assert fld["backend/core/eval.py"] == "domain:eval", "anchor file:line must be split"
         assert fld["backend/core/router.py"] == "domain:chat", "step→flow→domain mapping"
 
+    def test_business_rule_wins_over_step_for_same_file(self):
+        """Gate-2: precedence is business_rules > issues > steps (first-writer-wins
+        via setdefault). A file cited by BOTH a business_rule (domain A) and a step
+        (domain B) maps to A, not B — else a step silently overrides the rule."""
+        doc = {
+            "domains": [{"id": "domain:A", "business_rules": [{"anchor": "shared.py"}]}],
+            "flows": [{"id": "flow:1", "domain_id": "domain:B"}],
+            "steps": [{"flow_id": "flow:1", "file_path": "shared.py"}],
+        }
+        fld = _build_file_domain_map(doc)
+        assert fld["shared.py"] == "domain:A", "business_rule must win over step (precedence)"
+
+    def test_sort_tolerates_none_confidence(self):
+        """Gate-2: code_edges.confidence has no NOT NULL constraint — a NULL among
+        floats must not crash the surprising-edge sort."""
+        edges = [
+            ("a.py::f", "b.py::g", None),   # cross-domain, NULL confidence
+            ("a.py::h", "b.py::i", 0.6),
+        ]
+        fld = {"a.py": "domain:A", "b.py": "domain:B"}
+        result = _surprising_connections(edges, fld, top_n=10)  # must not raise
+        assert len(result["edges"]) == 2
+
 
 class TestSurprisingConnections:
     def test_cross_domain_edge_flagged_with_coverage(self):

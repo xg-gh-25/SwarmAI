@@ -106,6 +106,10 @@ def _build_file_domain_map(doc: dict) -> dict[str, str]:
     def _bare(p: str) -> str:
         return p.split(":", 1)[0] if p else ""
 
+    # setdefault (NOT plain assignment): keep the FIRST/highest-precedence writer
+    # so the documented order holds (business_rules > issues > steps). Plain
+    # last-writer-wins would let a step silently override a business_rule anchor
+    # for a file cited by two domains (Gate-2 finding).
     for dom in doc.get("domains") or []:
         did = dom.get("id")
         if not did:
@@ -113,18 +117,18 @@ def _build_file_domain_map(doc: dict) -> dict[str, str]:
         for br in dom.get("business_rules") or []:
             anchor = br.get("anchor")
             if anchor:
-                fld[_bare(anchor)] = did
+                fld.setdefault(_bare(anchor), did)
         for iss in dom.get("issues") or []:
             f = iss.get("file")
             if f:
-                fld[_bare(f)] = did
+                fld.setdefault(_bare(f), did)
 
     flow_domain = {f.get("id"): f.get("domain_id") for f in (doc.get("flows") or [])}
     for step in doc.get("steps") or []:
         fp = step.get("file_path")
         did = flow_domain.get(step.get("flow_id"))
         if fp and did:
-            fld[_bare(fp)] = did
+            fld.setdefault(_bare(fp), did)
 
     return fld
 
@@ -166,8 +170,11 @@ def _surprising_connections(
             })
 
     # Rank: lower-confidence cross-domain edges are MORE surprising (an inferred
-    # link jumping domains is the higher-signal anomaly).
-    surprising.sort(key=lambda e: e["confidence"])
+    # link jumping domains is the higher-signal anomaly). Coalesce a NULL
+    # confidence to 1.0 — code_edges.confidence has no NOT NULL constraint, and an
+    # un-guarded sort would TypeError on None-vs-float (Gate-2; matches the None
+    # guard in _suggested_questions).
+    surprising.sort(key=lambda e: e["confidence"] if e["confidence"] is not None else 1.0)
     return {
         "coverage": {
             "mapped_endpoints": len(mapped),
