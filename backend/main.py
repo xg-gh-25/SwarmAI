@@ -456,41 +456,55 @@ def _get_seed_database_path() -> Path | None:
     return get_resource_file("seed.db", dev_seed_path)
 
 
-def _db_is_intact(db_path: Path) -> bool:
-    """Cheap boot-time integrity probe for a non-empty data.db.
+def _purge_corrupt_db(db_path: Path, reason: str) -> None:
+    """Remove a corrupt data.db AND its -wal/-shm sidecars, so a fresh seed
+    copy is not re-corrupted by a leftover foreign WAL replay.
 
-    Runs ``PRAGMA quick_check`` (fast, page-level; NOT the O(n) full
-    integrity_check) with a short timeout. Returns True only if SQLite can open
-    the file AND quick_check reports "ok". Any failure (malformed header,
-    truncated page, not-a-database, lock timeout) → False → the caller re-seeds
-    instead of trusting a corrupt DB into a KeepAlive crash-loop.
-
-    Fail-SAFE toward re-seed on a genuine corruption signal, but distinguishes a
-    transient lock (busy) from corruption: a lock/operational error is treated as
-    "intact" (don't nuke a DB just because it's momentarily busy).
+    A malformed DB from a crash mid-write is EXACTLY when a hot -wal exists; a
+    leftover -wal beside the fresh seed copy would be replayed into it →
+    re-corruption (adversarial-caught HIGH, run_2d3417d9). So purge all three.
     """
-    try:
-        # Read-only-ish connection with a short busy timeout; quick_check does
-        # not write. isolation autocommit is fine for a PRAGMA.
-        conn = sqlite3.connect(str(db_path), timeout=2.0)
-        try:
-            row = conn.execute("PRAGMA quick_check").fetchone()
-            return bool(row) and row[0] == "ok"
-        finally:
-            conn.close()
-    except sqlite3.OperationalError as e:
-        # Locked/busy/permission — NOT proof of corruption. Don't destroy a DB
-        # that may just be momentarily busy; treat as intact and proceed.
-        # ⚠️ ORDER IS LOAD-BEARING: OperationalError IS A SUBCLASS of DatabaseError,
-        # so this MUST come first — otherwise the DatabaseError clause below catches
-        # "database is locked" and returns False → a valid-but-locked DB gets
-        # unlink()+re-seeded → USER DATA DESTROYED. (Adversarial-caught HIGH, run_2d3417d9.)
-        logger.warning("DB integrity probe inconclusive (operational) for %s: %s — treating as intact", db_path, e)
-        return True
-    except sqlite3.DatabaseError as e:
-        # Malformed / not-a-database / truncated → definitively corrupt.
-        logger.warning("DB integrity probe failed for %s: %s", db_path, e)
+    logger.warning("%s at %s — removing (incl. -wal/-shm) and re-seeding", reason, db_path)
+    db_path.unlink(missing_ok=True)
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
+def _reseed_from_seed(user_db_path: Path) -> bool:
+    """Atomically copy seed.db → user_db_path and set WAL pragmas.
+
+    Returns True on success (db ready), False if no seed is available (dev mode
+    → caller falls back to runtime init). Shared by first-launch and the
+    corruption-recovery path so both re-seed identically.
+    """
+    seed_db_path = _get_seed_database_path()
+    if not seed_db_path or not seed_db_path.exists():
+        logger.warning("Seed database not found, falling back to runtime initialization")
         return False
+
+    tmp_path = user_db_path.with_suffix(".db.tmp")
+    try:
+        shutil.copy2(seed_db_path, tmp_path)
+        os.replace(tmp_path, user_db_path)  # atomic on POSIX
+        logger.info(f"Copied seed database from {seed_db_path} to {user_db_path}")
+    except Exception as e:
+        logger.error(f"Failed to copy seed database: {e}")
+        try:
+            tmp_path.unlink(missing_ok=True)
+            user_db_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.warning("Will fall back to runtime initialization")
+        return False
+
+    try:
+        with sqlite3.connect(str(user_db_path)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        logger.info("Set WAL mode and busy_timeout on seed-copied database")
+    except Exception as e:
+        logger.warning(f"Failed to set database pragmas (non-fatal): {e}")
+    return True
 
 
 async def _init_db_bounded(skip_schema: bool, timeout: float = 45.0) -> None:
@@ -503,6 +517,23 @@ async def _init_db_bounded(skip_schema: bool, timeout: float = 45.0) -> None:
     through this helper so the fast path gets the same bound. On breach: raise
     RuntimeError (launchd KeepAlive then surfaces a bounded restart, not an
     infinite "initializing" hang).
+
+    Integrity: the migration run inside initialize_database() IS the integrity
+    gate. A malformed/torn data.db makes the very first migration query raise
+    sqlite3.DatabaseError — that IS the crash-loop A2 defends against. We catch
+    it HERE (fast path only, where a seed exists to recover from), purge the
+    corrupt file + sidecars, re-seed, and retry the migration ONCE on the fresh
+    db. If the retry ALSO raises → re-raise (bounded KeepAlive restart, never an
+    infinite loop). This replaces the old O(db-size) PRAGMA quick_check pre-probe
+    that scanned every b-tree page (~47s on a 1.29GB db) to detect exactly this
+    class — the migration detects it for free.
+
+    ⚠️ ORDER IS LOAD-BEARING: sqlite3.OperationalError IS A SUBCLASS of
+    sqlite3.DatabaseError. A momentarily-locked-but-VALID db raises
+    OperationalError ("database is locked"); it must NOT be treated as
+    corruption (that would unlink()+re-seed a valid db → USER DATA DESTROYED,
+    the run_2d3417d9 HIGH). So the OperationalError re-raise clause MUST precede
+    the DatabaseError recovery clause.
     """
     try:
         await asyncio.wait_for(initialize_database(skip_schema=skip_schema), timeout=timeout)
@@ -513,6 +544,38 @@ async def _init_db_bounded(skip_schema: bool, timeout: float = 45.0) -> None:
             timeout, skip_schema,
         )
         raise RuntimeError("Database initialization timed out")
+    except sqlite3.OperationalError:
+        # Locked/busy — NOT corruption. Never destroy a valid-but-busy db.
+        # (Subclass of DatabaseError → MUST be caught before the clause below.)
+        raise
+    except sqlite3.DatabaseError as e:
+        # Malformed / not-a-database / torn page → the migration query raised.
+        # This is the crash-loop trigger. Only the fast path can recover (a seed
+        # exists); full-init has no seed to fall back to, so re-raise there.
+        if not skip_schema:
+            raise
+        user_db_path = get_app_data_dir() / "data.db"
+        logger.warning(
+            "Database migration raised %s: %s — corrupt data.db; purging + re-seeding, retry once",
+            type(e).__name__, e,
+        )
+        _purge_corrupt_db(user_db_path, "Malformed database (migration raised, prevents crash-loop)")
+        if not _reseed_from_seed(user_db_path):
+            # No seed to recover from — re-raise (bounded restart, not a silent hang).
+            raise
+        # Reset the DB INSTANCE's init flag so the retry actually re-runs
+        # migrations on the FRESH db. SQLiteDatabase.initialize() short-circuits
+        # on `if self._initialized: return` (sqlite.py:1738), and the failed
+        # first attempt may have set it — so clear it on the singleton instance
+        # (database.get_database()), not on the module.
+        try:
+            from database import get_database
+            get_database()._initialized = False  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        # Retry ONCE on the fresh db. If THIS raises, let it propagate — a bounded
+        # KeepAlive restart, never an infinite re-seed loop.
+        await asyncio.wait_for(initialize_database(skip_schema=skip_schema), timeout=timeout)
 
 
 def _ensure_database_initialized() -> bool:
@@ -532,6 +595,23 @@ def _ensure_database_initialized() -> bool:
         ``True``  — database is ready; skip the init pipeline.
         ``False`` — no seed available; caller must run runtime init.
 
+    Integrity note: there is intentionally NO content-scanning integrity probe
+    here. The old ``_db_is_intact`` ran ``PRAGMA quick_check`` on every boot,
+    which reads every b-tree page — O(db-size), ~47s on a 1.29GB db — to detect
+    a malformed file. That check is redundant: the migration run by
+    ``_init_db_bounded`` IS the integrity gate. A malformed/torn db makes the
+    first migration query raise ``sqlite3.DatabaseError``, which ``_init_db_bounded``
+    catches → purge + re-seed + retry-once. A transient lock raises
+    ``OperationalError`` and is deliberately NOT treated as corruption. This
+    detects exactly the crash-loop class for free and keeps cold-start at <1s.
+    (Coverage note: ``_run_migrations`` → ``_run_data_cleanups`` runs
+    unconditionally every boot and SELECTs over schema-owned tables — ``tasks``,
+    ``chat_threads``, ``swarm_workspaces``, ``app_settings`` — so a torn page in
+    ANY of those is also caught here as a migration DatabaseError, not just
+    header/schema damage. The only shape NOT detected is a torn page in a table
+    that no migration reads; that cannot crash-loop the boot and would surface
+    later as a specific query error — out of scope for a boot-time guard.)
+
     Validates: Requirements 2.1, 2.2, 2.3, 2.5, 2.7, 2.8
     """
     user_db_path = get_app_data_dir() / "data.db"
@@ -541,65 +621,17 @@ def _ensure_database_initialized() -> bool:
 
     # --- Returning user: preserve existing data.db, skip init pipeline ---
     if user_db_path.exists():
-        # Guard against a corrupt DB from a failed previous startup. Two cases:
-        #   (a) 0-byte  — an interrupted create.
-        #   (b) non-zero but MALFORMED (torn WAL write / truncated page) — passes
-        #       the size check, but the first real query (migrations) then raises
-        #       sqlite3.DatabaseError → lifespan aborts → launchd KeepAlive
-        #       restarts into the SAME corrupt DB → infinite crash-loop, user
-        #       stuck at "initializing". So probe integrity here, not later.
-        # Either → remove + fall through to re-seed (same recovery as 0-byte).
-        # MUST also remove the -wal/-shm sidecars: a malformed DB from a crash
-        # mid-write is EXACTLY when a hot -wal exists, and a leftover foreign -wal
-        # beside the fresh seed copy would be replayed into it → re-corruption
-        # (adversarial-caught HIGH, run_2d3417d9).
-        def _purge_corrupt_db(reason: str) -> None:
-            logger.warning("%s at %s — removing (incl. -wal/-shm) and re-seeding", reason, user_db_path)
-            user_db_path.unlink(missing_ok=True)
-            for suffix in ("-wal", "-shm"):
-                Path(str(user_db_path) + suffix).unlink(missing_ok=True)
-
         if user_db_path.stat().st_size == 0:
-            _purge_corrupt_db("Empty database")
-        elif not _db_is_intact(user_db_path):
-            _purge_corrupt_db("Malformed database (prevents a KeepAlive crash-loop)")
+            # 0-byte = an interrupted create. Purge + fall through to re-seed.
+            # (Malformed-but-nonzero is handled by the migration catch in
+            # _init_db_bounded, not by an expensive pre-scan here.)
+            _purge_corrupt_db(user_db_path, "Empty database")
         else:
             logger.info(f"Using existing user database at {user_db_path}")
             return True
 
-    # --- First launch: attempt atomic seed copy ---
-    seed_db_path = _get_seed_database_path()
-
-    if not seed_db_path or not seed_db_path.exists():
-        logger.warning("Seed database not found, falling back to runtime initialization")
-        return False
-
-    tmp_path = user_db_path.with_suffix(".db.tmp")
-    try:
-        shutil.copy2(seed_db_path, tmp_path)
-        os.replace(tmp_path, user_db_path)  # atomic on POSIX
-        logger.info(f"Copied seed database from {seed_db_path} to {user_db_path}")
-    except Exception as e:
-        logger.error(f"Failed to copy seed database: {e}")
-        # Clean up partial file to avoid leaving corrupted state
-        try:
-            tmp_path.unlink(missing_ok=True)
-            user_db_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        logger.warning("Will fall back to runtime initialization")
-        return False
-
-    # --- Set WAL mode and busy_timeout on the freshly copied database ---
-    try:
-        with sqlite3.connect(str(user_db_path)) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-        logger.info("Set WAL mode and busy_timeout on seed-copied database")
-    except Exception as e:
-        logger.warning(f"Failed to set database pragmas (non-fatal): {e}")
-
-    return True
+    # --- First launch (or post-purge): atomic seed copy ---
+    return _reseed_from_seed(user_db_path)
 
 
 async def _deferred_refresh_defaults(label: str) -> None:
