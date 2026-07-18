@@ -196,15 +196,21 @@ else
     source .venv/bin/activate
 fi
 
-# Install dependencies using uv
-# This ensures local modules (routers, core, etc.) remain as top-level modules in current dir
-echo "Installing dependencies with uv..."
+# Install dependencies using uv FROM THE LOCKFILE (uv.lock), not a fresh resolve.
+# This ensures local modules (routers, core, etc.) remain as top-level modules in current dir.
+echo "Installing dependencies with uv (locked)..."
 
-# Install ALL dependencies from pyproject.toml (main + dev).
-# Previously this was a hardcoded list that drifted from pyproject.toml,
-# causing deps like pytest-xdist and psutil to be declared but never installed.
-# Single source of truth: pyproject.toml [dependencies] + [project.optional-dependencies.dev]
-uv pip install -e ".[dev]"
+# WHY `uv sync` instead of the old `uv pip install -e ".[dev]"`:
+#   `uv pip install` IGNORES uv.lock and re-resolves the LATEST of every unpinned
+#   dep on each build. botocore ships a new release almost daily, so every build
+#   re-fetched botocore's huge PyPI index and re-downloaded a fresh ~14MB wheel —
+#   the main source of "why is build so slow". `uv sync` installs the EXACT
+#   versions pinned in uv.lock: cache hits every time, reproducible, no churn.
+#   (When pyproject.toml deps change, uv sync auto-updates this throwaway copy's
+#   lock and resolves correctly — so it can't silently ship a missing dep.)
+# --extra dev mirrors the old ".[dev]" (pulls pytest/httpx/hypothesis/bandit/etc.).
+# uv.lock is the single source of truth; regenerate with `cd backend && uv lock`.
+uv sync --extra dev
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
