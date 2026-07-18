@@ -835,6 +835,144 @@ def _resolve_call_target(
     return call_name  # bare — Layer 2 will try
 
 
+# ── Inheritance / module-level edge config (dead-code FP fixes, run_8e023234) ──
+#
+# Two dead-code false-positive fixes share the edge-creation surface in _walk:
+#   (Fix 1) `extends` edges: a subclass -> its base class(es). A base class with
+#           live subclasses used to get ZERO incoming edges (the parser never
+#           edged `class Sub(Base)` -> Base), so find_dead_code flagged every base
+#           class as dead (AuthException/ConflictException etc.).
+#   (Fix 3) module-level `calls` edges: a callee invoked ONLY at module scope had
+#           no edge because the calls branch was gated on `enclosing_func`. Now a
+#           module-level call sources from a MODULE SENTINEL id (file::<module>).
+#
+# Both feature flags default True; tests flip them to prove the edges are
+# non-vacuous (mutation → edge vanishes). Deferred (NOT here): argument-reference
+# edges (register(handler) -> handler) and string-literal dynamic dispatch — the
+# Fix-2 family, twice-blocked (Gate-0 EXTREME FP risk + Gate-1 self-edge risk).
+_EMIT_EXTENDS_EDGES = True
+_EMIT_MODULE_LEVEL_CALL_EDGES = True
+
+# The synthetic source_id for a module-level (no enclosing function) edge. By
+# design this is NOT a real code_node — find_dead_code / orphan-cleanup /
+# blast_radius all key on target_id, so a synthetic SOURCE is safe (verified:
+# graph_store.py:1132 orphan-cleanup checks target_id only; find_callers CTE
+# tolerates a source with no matching node). This is why we deliberately do NOT
+# add a source_id orphan-cleanup (Gate-1 skeptic's literal Fix-3 suggestion):
+# doing so would delete these intentional module-level edges. We adopt the
+# skeptic's CONCERN (no dangling references) by keeping the sentinel target-safe,
+# not its literal fix (O031: verify the skeptic's claim, adopt the intent).
+_MODULE_SENTINEL = "<module>"
+
+# Per-language node types that hold a class's base/parent list. Verified via live
+# tree-sitter AST: python bases sit directly in an `argument_list` child of
+# `class_definition`; ts/js wrap them in `class_heritage` > extends_clause/
+# implements_clause. A language absent here simply emits no extends edges
+# (feature-absent, never broken) — same fail-safe posture as LANG_VALUE_SPEC.
+_CLASS_BASE_CONTAINER_TYPES = {
+    "python": frozenset({"argument_list"}),
+    "typescript": frozenset({"class_heritage", "extends_clause", "implements_clause"}),
+    "javascript": frozenset({"class_heritage", "extends_clause", "implements_clause"}),
+}
+
+
+def _extract_base_names(class_node, language: str) -> list[str]:
+    """Return the base/parent class names declared on a class definition node.
+
+    Walks the language's base-container child (argument_list / class_heritage),
+    collecting plain identifier leaves and the TRAILING name of a dotted base
+    (`pkg.Other` -> `Other`, `a.b.Other` -> `Other`, TS `React.Component` ->
+    `Component`, `ns.Deep.Base` -> `Base`), matching how _resolve_call_target/
+    _qualify key on the bare symbol name. Keyword arguments in a python class
+    arglist (metaclass=...) are skipped — only positional base identifiers count.
+    """
+    containers = _CLASS_BASE_CONTAINER_TYPES.get(language)
+    if not containers:
+        return []
+    names: list[str] = []
+
+    # A dotted base's CLASS NAME is the trailing segment: python `a.b.Other`→`Other`
+    # (attribute > … > identifier), TS `ns.Deep.Base`→`Base` (member_expression > …
+    # > property_identifier). The trailing name leaf differs per grammar — python
+    # uses `identifier`, TS uses `property_identifier` — so accept both here (a plain
+    # `identifier` is in _IDENTIFIER_LEAF_TYPES; `property_identifier`/`type_identifier`
+    # are the TS member/heritage trailing-name types). Verified via live AST.
+    _NAME_LEAF_TYPES = _IDENTIFIER_LEAF_TYPES | {"property_identifier", "type_identifier"}
+
+    # A parameterized base is subscripted/generic — the CLASS NAME is the thing
+    # being subscripted (the `value`), NOT a type argument: python `Dict[str,User]`
+    # → `Dict` (a `subscript` node), `Generic[T]` → `Generic`. Recurse into the
+    # value, never scan the arg list (Gate-2 red-team HIGH: the trailing-leaf scan
+    # picked the last type ARG — `User`/`T`/`State` — a spurious base).
+    _SUBSCRIPT_TYPES = {"subscript", "generic_type"}
+
+    def _leaf_name(n):
+        # A parameterized base (subscript/generic): the name is the subscripted
+        # value = the FIRST named child, recurse into it (skip the type args).
+        if n.type in _SUBSCRIPT_TYPES:
+            for c in n.children:
+                if c.is_named:
+                    return _leaf_name(c)
+            return None
+        # plain leaf → its text; a dotted/attribute/member base → its LAST trailing
+        # name leaf (the class name, not the package). The LAST direct name-leaf
+        # child of a member/attribute node is the trailing segment (a.b.Other: the
+        # `attribute` node's own direct children are [inner-attribute, '.', Other]
+        # → last name-leaf is `Other`). Do NOT early-return into the nested member
+        # (that yields the HEAD/middle segment — the run_8e023234 Gate-2 HIGH bug).
+        if n.type in _NAME_LEAF_TYPES:
+            return _sanitize_name(n.text.decode("utf-8", errors="replace")) if n.text else None
+        last_name = None
+        for c in n.children:
+            if c.type in _NAME_LEAF_TYPES and c.text:
+                last_name = c.text  # keep scanning → ends on the trailing segment
+        if last_name is not None:
+            return _sanitize_name(last_name.decode("utf-8", errors="replace"))
+        return None
+
+    # TS type-argument / type-parameter containers are NOT bases — a
+    # `React.Component<Props, State>` heritage has [member_expression, type_arguments];
+    # scanning type_arguments would emit a spurious base `State` (Gate-2 red-team MED).
+    _SKIP_CONTAINER_TYPES = {"type_arguments", "type_parameters"}
+
+    def _collect(node):
+        for c in node.children:
+            if c.type in containers:
+                for b in c.children:
+                    # skip punctuation, keywords, and python keyword_argument
+                    # (metaclass=X, **kwargs) — only positional bases.
+                    if b.type in ("keyword_argument", "comment") or b.is_named is False:
+                        continue
+                    if b.type in _SKIP_CONTAINER_TYPES:
+                        continue
+                    if b.type in ("extends_clause", "implements_clause", "class_heritage"):
+                        _collect_from(b, names)
+                        continue
+                    nm = _leaf_name(b)
+                    if nm:
+                        names.append(nm)
+
+    def _collect_from(container, out):
+        for b in container.children:
+            if b.type in ("extends_clause", "implements_clause"):
+                _collect_from(b, out)
+                continue
+            if b.type in ("comment",) or b.is_named is False:
+                continue
+            if b.type in _SKIP_CONTAINER_TYPES:
+                continue
+            if b.type in ("extends", "implements", "class_heritage"):
+                continue
+            nm = _leaf_name(b)
+            if nm:
+                out.append(nm)
+
+    _collect(class_node)
+    # dedup preserving order
+    seen = set()
+    return [n for n in names if not (n in seen or seen.add(n))]
+
+
 # ── Tree-sitter AST Extraction ──────────────────────────────────────────
 
 def _extract_from_tree(tree, path_str: str, language: str,
@@ -1037,21 +1175,43 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 )
                 nodes.append(code_node)
 
+                # Fix 1: inheritance `extends` edges (dead-code FP #1). MUST be
+                # emitted HERE — inside the `if name:` block, before the recursion
+                # + early `return` below (Gate-1: code after the return is dead).
+                if is_class and _EMIT_EXTENDS_EDGES:
+                    for base_name in _extract_base_names(node, language):
+                        if base_name == name:
+                            continue  # a class cannot extend itself (self-edge guard)
+                        target = _resolve_call_target(
+                            base_name, path_str, import_map, defined_names,
+                            enclosing_class=None,
+                        )
+                        edges.append(CodeEdge(
+                            source_id=qn, target_id=target,
+                            edge_type="extends",
+                            confidence=1.0 if QUALIFIED_SEPARATOR in target else 0.5,
+                            line_number=node.start_point[0] + 1,
+                        ))
+
                 new_class = name if is_class else enclosing_class
                 new_func = qn if not is_class else enclosing_func
                 for child in node.children:
                     _walk(child, enclosing_func=new_func, enclosing_class=new_class)
                 return
 
-        # Calls (only inside functions/methods → module-level calls produce no edges)
-        if ntype in call_types and enclosing_func:
+        # Calls. Inside a function/method → source is the enclosing func. At MODULE
+        # scope (no enclosing_func) → Fix 3: source from the module sentinel so the
+        # callee still gets an incoming edge (dead-code FP #3). Before, module-level
+        # calls produced NO edge, so a module-level-only callee looked dead.
+        if ntype in call_types and (enclosing_func or _EMIT_MODULE_LEVEL_CALL_EDGES):
             call_name = _get_call_name(node, language)
             if call_name:
                 call_name = _sanitize_name(call_name)
                 target = _resolve_call_target(call_name, path_str, import_map,
                                              defined_names, enclosing_class)
+                source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
                 edges.append(CodeEdge(
-                    source_id=enclosing_func, target_id=target,
+                    source_id=source, target_id=target,
                     edge_type="calls",
                     confidence=1.0 if QUALIFIED_SEPARATOR in target else 0.5,
                     line_number=node.start_point[0] + 1,
@@ -1656,12 +1816,11 @@ def resolve_bare_targets(graph_store: GraphStore) -> int:
     """
     Delegate to GraphStore.resolve_bare_targets() — all SQL stays in the store.
 
-    Find all CALLS edges where target has no "::".
-    Build global lookup: bare_name -> [qualified_name_1, ...].
-    Disambiguate:
-      - 1 candidate -> resolve directly
+    Resolves calls/extends/references targets that match no node id (bare, OR
+    qualified-but-dangling from the import-map/node-id mismatch) by bare name:
+      - 1 candidate -> resolve directly (confidence 0.8)
       - N candidates -> prefer the one whose file is imported by caller's file
-      - 0 or ambiguous -> leave bare, set confidence=0.5
+      - 0 or ambiguous -> leave unresolved (orphan-cleanup drops it)
     Returns count of resolved edges.
     """
     return graph_store.resolve_bare_targets(QUALIFIED_SEPARATOR)

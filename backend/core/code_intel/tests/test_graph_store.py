@@ -805,3 +805,154 @@ class TestModuleEdges:
         assert edge["confidence_score"] == 1.0, "MAX confidence across the pair"
         assert edge["confidence"] == "EXTRACTED", "score>=1.0 → EXTRACTED"
         assert edge["count"] == 2, "both kept edges counted"
+
+
+# ── Layer-2 resolution of extends/references edges + dead-code FP fixes ─────
+# (run_8e023234) resolve_bare_targets originally resolved edge_type='calls' ONLY.
+# Widened to also resolve 'extends' and 'references' bare targets (unique-only),
+# so base classes / string-dispatched symbols get a resolved incoming edge and
+# are no longer flagged as dead. Orphan-cleanup drops any that stay unresolvable.
+
+
+class TestLayer2ResolvesExtendsReferences:
+    def test_bare_extends_target_resolved(self, store):
+        """A bare `extends` target (Base with a single global def) resolves to the
+        qualified Base node id at confidence 0.8 (was: calls-only, never touched)."""
+        store.upsert_nodes([
+            _make_node("m.py::Base", file_path="m.py", name="Base", node_type="class"),
+            _make_node("m.py::Sub", file_path="m.py", name="Sub", node_type="class"),
+        ])
+        store.upsert_edges([
+            {"source_id": "m.py::Sub", "target_id": "Base",
+             "edge_type": "extends", "confidence": 0.5, "line_number": None},
+        ])
+        store.resolve_bare_targets("::")
+        rows = store._conn.execute(
+            "SELECT target_id, confidence FROM code_edges WHERE edge_type='extends'"
+        ).fetchall()
+        assert rows == [("m.py::Base", 0.8)], f"bare extends must resolve to m.py::Base @0.8, got {rows}"
+
+    def test_ambiguous_bare_reference_left_bare(self, store):
+        """A bare `references` target whose name has >1 global definition is
+        ambiguous → left bare (NOT resolved) → orphan-cleanup will drop it. This is
+        the FP guard (skeptic's extreme-risk concern) enforced structurally."""
+        store.upsert_nodes([
+            _make_node("a.py::get", file_path="a.py", name="get"),
+            _make_node("b.py::get", file_path="b.py", name="get"),
+            _make_node("c.py::caller", file_path="c.py", name="caller"),
+        ])
+        store.upsert_edges([
+            {"source_id": "c.py::caller", "target_id": "get",
+             "edge_type": "references", "confidence": 0.6, "line_number": None},
+        ])
+        store.resolve_bare_targets("::")
+        rows = store._conn.execute(
+            "SELECT target_id FROM code_edges WHERE edge_type='references'"
+        ).fetchall()
+        assert rows == [("get",)], f"ambiguous name must stay bare, got {rows}"
+
+    def test_calls_resolution_unchanged(self, store):
+        """No regression: the original calls-only resolution still works."""
+        store.upsert_nodes([
+            _make_node("u.py::helper", file_path="u.py", name="helper"),
+            _make_node("v.py::caller", file_path="v.py", name="caller"),
+        ])
+        store.upsert_edges([_make_edge("v.py::caller", "helper", confidence=0.5)])
+        n = store.resolve_bare_targets("::")
+        assert n == 1
+        rows = store._conn.execute(
+            "SELECT target_id, confidence FROM code_edges WHERE edge_type='calls'"
+        ).fetchall()
+        assert rows == [("u.py::helper", 0.8)]
+
+    def test_dangling_qualified_target_resolved(self, store):
+        """The import-map/node-id mismatch (PRE-EXISTING cross-file bug): a target
+        that HAS a separator but matches no node (`base::Animal` from
+        `from base import Animal`, real node `base.py::Animal`) resolves by bare
+        name — unique-only. This is what made cross-file base classes stay dead."""
+        store.upsert_nodes([
+            _make_node("base.py::Animal", file_path="base.py", name="Animal", node_type="class"),
+            _make_node("dog.py::Dog", file_path="dog.py", name="Dog", node_type="class"),
+        ])
+        store.upsert_edges([
+            {"source_id": "dog.py::Dog", "target_id": "base::Animal",
+             "edge_type": "extends", "confidence": 1.0, "line_number": 3},
+        ])
+        store.resolve_bare_targets("::")
+        rows = store._conn.execute(
+            "SELECT target_id FROM code_edges WHERE edge_type='extends'"
+        ).fetchall()
+        assert rows == [("base.py::Animal",)], f"dangling qualified target must resolve to real node, got {rows}"
+
+    def test_dangling_qualified_method_resolved_by_bare_name(self, store):
+        """Gate-2 recall LOW: a dangling qualified METHOD target `x::Cls.method`
+        resolves — CodeNode.name for a method is the bare `method`, so the fallback
+        after the last '.' must be tried when the full segment misses."""
+        store.upsert_nodes([
+            _make_node("impl.py::Handler.run", file_path="impl.py", name="run", node_type="method"),
+            _make_node("caller.py::c", file_path="caller.py", name="c"),
+        ])
+        store.upsert_edges([
+            {"source_id": "caller.py::c", "target_id": "other::Handler.run",
+             "edge_type": "calls", "confidence": 0.5, "line_number": 1},
+        ])
+        store.resolve_bare_targets("::")
+        rows = store._conn.execute(
+            "SELECT target_id FROM code_edges WHERE edge_type='calls'"
+        ).fetchall()
+        assert rows == [("impl.py::Handler.run",)], f"dangling qualified method must resolve, got {rows}"
+
+    def test_already_resolved_target_untouched(self, store):
+        """A target that IS a real node id is left alone (not re-resolved / no
+        confidence stomp)."""
+        store.upsert_nodes([
+            _make_node("a.py::f", file_path="a.py", name="f"),
+            _make_node("b.py::g", file_path="b.py", name="g"),
+        ])
+        store.upsert_edges([_make_edge("a.py::f", "b.py::g", edge_type="calls", confidence=1.0)])
+        n = store.resolve_bare_targets("::")
+        assert n == 0, "a target that is a real node must not be re-resolved"
+        rows = store._conn.execute(
+            "SELECT target_id, confidence FROM code_edges WHERE edge_type='calls'"
+        ).fetchall()
+        assert rows == [("b.py::g", 1.0)], "confidence must be preserved for already-resolved edge"
+
+
+class TestDeadCodeFalsePositiveFixes:
+    """find_dead_code no longer flags base classes / module-referenced symbols."""
+
+    def test_base_class_with_subclass_not_dead(self, store):
+        """AC1: an exported base class with a live subclass (via extends edge) is
+        NOT in find_dead_code — was the #1 false-positive."""
+        store.upsert_nodes([
+            _make_node("m.py::Base", file_path="m.py", name="Base", node_type="class"),
+            _make_node("m.py::Sub", file_path="m.py", name="Sub", node_type="class"),
+        ])
+        store.upsert_edges([
+            {"source_id": "m.py::Sub", "target_id": "m.py::Base",
+             "edge_type": "extends", "confidence": 1.0, "line_number": None},
+        ])
+        dead = {d["id"] for d in store.find_dead_code()}
+        assert "m.py::Base" not in dead, "base class with a subclass (extends edge) must NOT be dead"
+
+    def test_base_class_without_subclass_still_dead(self, store):
+        """Non-regression of the DETECTOR: a base with NO incoming edge is still
+        flagged (we add edges, we don't gut the detector — AC5)."""
+        store.upsert_nodes([
+            _make_node("m.py::Orphan", file_path="m.py", name="Orphan", node_type="class"),
+        ])
+        dead = {d["id"] for d in store.find_dead_code()}
+        assert "m.py::Orphan" in dead, "a genuinely unreferenced class must still be flagged dead"
+
+    def test_module_level_referenced_symbol_not_dead(self, store):
+        """AC4: a symbol whose ONLY incoming edge is from a module-sentinel source
+        (a module-level register(X)) is not flagged dead."""
+        store.upsert_nodes([
+            _make_node("m.py::handler", file_path="m.py", name="handler"),
+        ])
+        store.upsert_edges([
+            {"source_id": "m.py::<module>", "target_id": "m.py::handler",
+             "edge_type": "calls", "confidence": 1.0, "line_number": 5},
+        ])
+        dead = {d["id"] for d in store.find_dead_code()}
+        assert "m.py::handler" not in dead, "module-level-referenced symbol must not be dead"

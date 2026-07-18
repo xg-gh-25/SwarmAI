@@ -1265,31 +1265,59 @@ class GraphStore:
     # ── bare target resolution (Layer 2) ──────────────────────────────────
 
     def resolve_bare_targets(self, qualified_separator: str) -> int:
-        """Resolve CALLS edges whose target has no qualified separator.
+        """Resolve unresolved calls/extends/references targets to real node ids.
 
-        For each bare target, build a global name-to-qualified-id lookup.
-        Disambiguate using file import relationships:
+        A target qualifies as unresolved if it does NOT match any code_node id —
+        either bare (no separator, e.g. `helper`) OR qualified-but-dangling (has a
+        separator but points at nothing, e.g. `base::Animal` when the real node is
+        `base.py::Animal` — the import-map/node-id mismatch). Both resolve by the
+        target's bare NAME via a global name-to-qualified-id lookup:
           - 1 candidate: resolve directly (confidence 0.8)
           - N candidates: prefer the one whose file is imported by the caller
-          - 0 or ambiguous: leave bare (confidence 0.5)
+          - 0 or ambiguous: leave unresolved (orphan-cleanup drops it)
 
-        Returns count of resolved edges.
+        Covers edge_type IN (calls, extends, references) — extends/references were
+        added by the dead-code false-positive fixes (run_8e023234). Returns count
+        of resolved edges.
         """
-        bare_edges = self._conn.execute(
-            "SELECT rowid, source_id, target_id FROM code_edges "
-            "WHERE edge_type = 'calls' AND target_id NOT LIKE ?",
-            (f"%{qualified_separator}%",)
-        ).fetchall()
-
-        if not bare_edges:
-            return 0
-
         all_nodes = self._conn.execute(
             "SELECT id, name FROM code_nodes"
         ).fetchall()
         name_to_ids: dict[str, list[str]] = {}
         for node_id, name in all_nodes:
             name_to_ids.setdefault(name, []).append(node_id)
+
+        # Resolve targets for calls AND the two edge types added by the dead-code
+        # FP fixes (run_8e023234): `extends` (Sub->Base) and `references`. TWO
+        # kinds of unresolved target qualify:
+        #   1. BARE — no separator (`Animal`, `helper`): the classic Layer-1 leftover.
+        #   2. QUALIFIED-BUT-DANGLING — has a separator but matches NO node
+        #      (`base::Animal` from `from base import Animal`, where the real node
+        #      is `base.py::Animal`). This import-map/node-id mismatch was a
+        #      PRE-EXISTING bug that made cross-file `calls` targets dangle too; it
+        #      surfaced via `extends` (a base class stayed "dead" cross-file). Both
+        #      resolve by the target's bare NAME (last path segment) — unique-only.
+        # An ambiguous name (N>1 defs) is LEFT unresolved → orphan-cleanup drops it
+        # (the structural FP guard). Resolving a dangling target is strictly safe:
+        # it currently points at nothing and would be orphan-deleted regardless.
+        # Push the "unresolved" anti-join into SQL so we don't materialize the full
+        # (already-resolved) edge set in Python every re-index — SQLite evaluates
+        # `target_id NOT IN (SELECT id FROM code_nodes)` and returns ONLY the
+        # unresolved rows (bare `Animal` + dangling `base::Animal` alike). This is
+        # exactly the old `NOT LIKE '%::%'` intent, but correct for the dangling
+        # case too (a dangling target HAS a separator, so NOT LIKE would wrongly
+        # skip it). Perf: O(unresolved) not O(all edges) (Gate-2 perf finding).
+        # NOT EXISTS (not NOT IN): NULL-safe (a NULL code_nodes.id would make
+        # `NOT IN (…, NULL)` never-true and silently disable ALL resolution — Gate-2
+        # red-team LOW) and a friendly anti-join plan. Returns ONLY unresolved rows.
+        bare_edges = self._conn.execute(
+            "SELECT rowid, source_id, target_id FROM code_edges e "
+            "WHERE e.edge_type IN ('calls', 'extends', 'references') "
+            "AND NOT EXISTS (SELECT 1 FROM code_nodes n WHERE n.id = e.target_id)"
+        ).fetchall()
+
+        if not bare_edges:
+            return 0
 
         file_imports: dict[str, set[str]] = {}
         import_edges = self._conn.execute(
@@ -1301,8 +1329,16 @@ class GraphStore:
             file_imports.setdefault(src_file, set()).add(tgt_file)
 
         resolved_count = 0
-        for rowid, source_id, target_name in bare_edges:
+        for rowid, source_id, target_id in bare_edges:
+            # bare name = last separator-segment (handles bare `Animal` and dangling
+            # `base::Animal` → `Animal`). CodeNode.name for a method is the bare
+            # method name (id is `file::Cls.method`, name is `method`), so if the
+            # segment still carries a `Cls.` prefix (a dangling qualified METHOD
+            # target), fall back to the part after the last dot (Gate-2 recall LOW).
+            target_name = target_id.rsplit(qualified_separator, 1)[-1]
             candidates = name_to_ids.get(target_name, [])
+            if not candidates and "." in target_name:
+                candidates = name_to_ids.get(target_name.rsplit(".", 1)[-1], [])
 
             if len(candidates) == 1:
                 self._conn.execute(

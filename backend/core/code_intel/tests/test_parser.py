@@ -1605,3 +1605,210 @@ class TestExtensionlessSourceLedger:
         result = parse_repo_with_coverage(tmp_path)
         refs = {h["ref"] for h in result.coverage_holes}
         assert "LICENSE" not in refs, "LICENSE is not source — must stay silent (no ledger spam)"
+
+
+# ── Inheritance (extends) edges + module-level edges (dead-code FP fixes) ───
+
+
+class TestInheritanceEdges:
+    """`extends` edges: a subclass -> its base class(es).
+
+    Fixes the #1 dead-code false-positive: a base class with live subclasses had
+    ZERO incoming edges (the parser never edged `class Sub(Base)` -> Base), so
+    find_dead_code flagged every base class as dead. (run_8e023234)
+    """
+
+    def _parse_src(self, tmp_path, src, name="m.py"):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        f = tmp_path / name
+        f.write_text(src)
+        return P.parse_file(f, tmp_path)
+
+    def _extends(self, result):
+        return [e for e in result.edges if e.edge_type == "extends"]
+
+    def test_extends_edge_emitted_for_local_base(self, tmp_path):
+        r = self._parse_src(tmp_path, "class Base:\n    pass\n\nclass Sub(Base):\n    pass\n")
+        ex = self._extends(r)
+        # Sub -> Base, resolved to the local Base node id (m.py::Base)
+        assert any(
+            e.source_id.endswith("Sub") and e.target_id == f"m.py{QUALIFIED_SEPARATOR}Base"
+            for e in ex
+        ), f"expected extends Sub->m.py::Base, got {[(e.source_id, e.target_id) for e in ex]}"
+
+    def test_extends_edge_qualified_confidence(self, tmp_path):
+        """A base resolved to a local definition is a qualified target (conf 1.0)."""
+        r = self._parse_src(tmp_path, "class Base:\n    pass\n\nclass Sub(Base):\n    pass\n")
+        ex = [e for e in self._extends(r) if e.target_id == f"m.py{QUALIFIED_SEPARATOR}Base"]
+        assert ex and ex[0].confidence == 1.0, f"local base = qualified = conf 1.0, got {ex}"
+
+    def test_multiple_bases_each_edged(self, tmp_path):
+        r = self._parse_src(
+            tmp_path,
+            "class A:\n    pass\n\nclass B:\n    pass\n\nclass C(A, B):\n    pass\n",
+        )
+        tgts = {e.target_id.split(QUALIFIED_SEPARATOR)[-1] for e in self._extends(r)
+                if e.source_id.endswith("C")}
+        assert {"A", "B"} <= tgts, f"C(A,B) must edge both bases, got {tgts}"
+
+    def test_no_bases_no_extends_edge(self, tmp_path):
+        r = self._parse_src(tmp_path, "class Solo:\n    pass\n")
+        assert self._extends(r) == [], "a base-less class must produce no extends edge"
+
+    def test_dotted_base_uses_trailing_name(self, tmp_path):
+        """Gate-2 HIGH (run_8e023234): a dotted base's CLASS NAME is the TRAILING
+        segment, not the head. `class S(a.b.Other)` extends `Other`, NOT `a`/`b`.
+        The original _leaf_name returned the head → the real base kept zero incoming
+        edges → still a dead-code false-positive (defeated Fix 1 for qualified bases).
+        """
+        import core.code_intel.parser as P
+        pytest.importorskip("tree_sitter_language_pack")
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        import tree_sitter_language_pack as tslp, tree_sitter
+        p = tree_sitter.Parser(tslp.get_language("python"))
+        t = p.parse(b"class S(a.b.Other):\n    pass\n")
+        cls = t.root_node.children[0]
+        assert P._extract_base_names(cls, "python") == ["Other"], \
+            "dotted python base must resolve to the trailing class name, not the head package"
+
+    def test_generic_base_uses_subscripted_value(self, tmp_path):
+        """Gate-2 red-team HIGH: a parameterized base's class name is the SUBSCRIPTED
+        VALUE, not a type argument. `class S(Dict[str, User])` extends `Dict`, NOT
+        `User`; `Generic[T]` extends `Generic`, NOT `T`. The trailing-leaf scan
+        greedily picked the last type-arg → spurious edge to `User`."""
+        import core.code_intel.parser as P
+        pytest.importorskip("tree_sitter_language_pack")
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        import tree_sitter_language_pack as tslp, tree_sitter
+        p = tree_sitter.Parser(tslp.get_language("python"))
+        for src, expected in [
+            (b"class S(Dict[str, User]):\n    pass\n", ["Dict"]),
+            (b"class S(Generic[T]):\n    pass\n", ["Generic"]),
+        ]:
+            t = p.parse(src)
+            cls = t.root_node.children[0]
+            assert P._extract_base_names(cls, "python") == expected, \
+                f"{src!r} → expected {expected}, generic base must use the subscripted value"
+
+    def test_typescript_generic_base_ignores_type_args(self, tmp_path):
+        """Gate-2 red-team MED: TS `extends React.Component<Props, State>` extends
+        `Component` only — type_arguments must NOT emit a spurious base `State`."""
+        import core.code_intel.parser as P
+        pytest.importorskip("tree_sitter_language_pack")
+        if not P._tree_sitter_live("typescript"):
+            pytest.skip("tree-sitter typescript grammar not live in this env")
+        import tree_sitter_language_pack as tslp, tree_sitter
+        p = tree_sitter.Parser(tslp.get_language("typescript"))
+        t = p.parse(b"class S extends React.Component<Props, State> {}\n")
+        def _find(n):
+            if "class" in n.type and n.type not in ("class", "class_heritage"):
+                return n
+            for c in n.children:
+                r = _find(c)
+                if r:
+                    return r
+        cls = _find(t.root_node)
+        assert P._extract_base_names(cls, "typescript") == ["Component"], \
+            "TS generic base must ignore type_arguments (no spurious 'State' base)"
+
+    def test_typescript_dotted_base_uses_trailing_name(self, tmp_path):
+        """Gate-2 HIGH: TS `class S extends React.Component` extends `Component`.
+        TS trailing names are `property_identifier`, not `identifier` — the original
+        code only accepted `identifier` and returned the head `React`."""
+        import core.code_intel.parser as P
+        pytest.importorskip("tree_sitter_language_pack")
+        if not P._tree_sitter_live("typescript"):
+            pytest.skip("tree-sitter typescript grammar not live in this env")
+        import tree_sitter_language_pack as tslp, tree_sitter
+        p = tree_sitter.Parser(tslp.get_language("typescript"))
+        t = p.parse(b"class S extends React.Component {}\n")
+        def _find(n):
+            if "class" in n.type and n.type not in ("class", "class_heritage"):
+                return n
+            for c in n.children:
+                r = _find(c)
+                if r:
+                    return r
+        cls = _find(t.root_node)
+        assert P._extract_base_names(cls, "typescript") == ["Component"], \
+            "TS dotted base must resolve to the trailing property_identifier, not the head"
+
+    def test_extends_edges_absent_when_disabled_mutation(self, tmp_path, monkeypatch):
+        """Mutation guard: with DEFINITION emit disabled the extends edge vanishes —
+        proves the test is non-vacuous (goes RED on revert)."""
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        monkeypatch.setattr(P, "_EMIT_EXTENDS_EDGES", False, raising=False)
+        f = tmp_path / "m.py"
+        f.write_text("class Base:\n    pass\n\nclass Sub(Base):\n    pass\n")
+        r = P.parse_file(f, tmp_path)
+        assert [e for e in r.edges if e.edge_type == "extends"] == [], \
+            "extends edges must be gated by _EMIT_EXTENDS_EDGES (mutation → none)"
+
+
+class TestModuleLevelEdges:
+    """Module-level CALLS create an incoming edge on the callee.
+
+    Fixes dead-code FP #3: a function invoked ONLY at module scope (a
+    registration call at import time, or a cross-module call at module level)
+    had zero incoming edges because the parser gated the `calls` edge on
+    `enclosing_func`. Now a module-level call emits a `calls` edge from a
+    module-sentinel source (`file::<module>`) to the callee. (run_8e023234)
+
+    Scope note: this edges the CALLEE (register in `register(handler)`), NOT the
+    argument identifier (handler). Argument-reference extraction is the
+    string-literal/dynamic-dispatch family, deferred with Fix 2 (twice-blocked).
+    """
+
+    def _parse_src(self, tmp_path, src, name="m.py"):
+        pytest.importorskip("tree_sitter_language_pack")
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        f = tmp_path / name
+        f.write_text(src)
+        return P.parse_file(f, tmp_path)
+
+    def test_module_level_call_creates_edge_to_callee(self, tmp_path):
+        """A module-level `register(...)` call emits a calls edge to the callee
+        `register` (was dropped entirely because there's no enclosing_func)."""
+        r = self._parse_src(
+            tmp_path,
+            "def register(x):\n    return x\n\nregister(1)\n",
+        )
+        call_edges = [e for e in r.edges if e.edge_type == "calls"]
+        assert any(e.target_id.split(QUALIFIED_SEPARATOR)[-1] == "register" for e in call_edges), \
+            f"module-level call `register(...)` must emit a calls edge, got {[(e.source_id, e.target_id) for e in call_edges]}"
+
+    def test_module_level_source_is_sentinel_not_enclosing_func(self, tmp_path):
+        """The module-level edge's source_id is a module sentinel (file::<module>),
+        never an (absent) enclosing function."""
+        r = self._parse_src(
+            tmp_path,
+            "def register(x):\n    return x\n\nregister(1)\n",
+        )
+        ml = [e for e in r.edges if e.edge_type == "calls"
+              and e.target_id.split(QUALIFIED_SEPARATOR)[-1] == "register"]
+        assert ml, "module-level call to register must emit an edge"
+        assert any(e.source_id == f"m.py{QUALIFIED_SEPARATOR}<module>" for e in ml), \
+            f"module-level edge source must be m.py::<module> sentinel, got {[e.source_id for e in ml]}"
+
+    def test_call_inside_function_still_uses_enclosing_func(self, tmp_path):
+        """Non-regression: a call INSIDE a function still sources from the
+        enclosing function, NOT the module sentinel."""
+        r = self._parse_src(
+            tmp_path,
+            "def helper():\n    return 1\n\ndef caller():\n    return helper()\n",
+        )
+        edges = [e for e in r.edges if e.edge_type == "calls"
+                 and e.target_id.split(QUALIFIED_SEPARATOR)[-1] == "helper"]
+        assert edges, "in-function call must still emit an edge"
+        assert all(e.source_id == f"m.py{QUALIFIED_SEPARATOR}caller" for e in edges), \
+            f"in-function call source must be the enclosing func, got {[e.source_id for e in edges]}"
