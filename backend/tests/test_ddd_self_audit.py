@@ -16,7 +16,10 @@ import pytest
 
 from jobs.handlers.ddd_self_audit import (
     _AUDIT_TOOLS,
+    _PER_PROJECT_BUDGET_USD,
     _build_audit_prompt,
+    _classify_review_result,
+    _count_parseable_findings,
     _discover_ddd_projects,
     _is_code_backed,
     _source_repo_for,
@@ -115,3 +118,110 @@ class TestNoMutation:
 
         after = hashlib.md5(doc.read_bytes()).hexdigest()
         assert before == after, "DDD doc was mutated — detect-only invariant broken"
+
+
+class TestReviewResultClassification:
+    """run_271c39df: the handler used to treat exit-1 as a binary fail and never
+    parse stdout — so a budget-exhaust (which carries real PARTIAL analysis + the
+    errors field) was discarded as opaque 'review failed (exit 1)'."""
+
+    def test_budget_exhaust_by_subtype_is_partial_and_keeps_result(self):
+        """AC1: budget-exhaust exit-1 (via subtype) → 'partial', partial analysis retained."""
+        output = {
+            "result": "Found drift: TECH.md says X but code says Y.",
+            "subtype": "error_max_budget_usd",
+            "total_cost_usd": 0.69,
+            "errors": ["Reached maximum budget ($0.5)"],
+        }
+        v = _classify_review_result(1, output, "")
+        assert v["status"] == "partial"
+        assert "Found drift" in v["result_text"]  # analysis NOT discarded
+        assert v["cost"] == 0.69
+
+    def test_budget_exhaust_by_errors_substring_is_partial(self):
+        """AC1: fallback path — detect budget-exhaust from the errors array even
+        if subtype is absent (robustness against CLI shape drift)."""
+        output = {"result": "partial analysis", "errors": ["Reached maximum budget ($2)"]}
+        v = _classify_review_result(1, output, "")
+        assert v["status"] == "partial"
+        assert v["result_text"] == "partial analysis"
+
+    def test_genuine_exit1_surfaces_error_detail_not_opaque(self):
+        """AC2: a non-budget exit-1 (e.g. MCP/auth) → 'failed' WITH a real error
+        detail (stderr tail), never an opaque 'exit 1'."""
+        v = _classify_review_result(1, {"result": ""}, "MCP server failed to connect: timeout")
+        assert v["status"] == "failed"
+        assert "MCP server failed" in v["error_detail"]
+
+    def test_genuine_exit1_prefers_errors_field_over_stderr(self):
+        output = {"result": "", "errors": ["Auth error: token expired"]}
+        v = _classify_review_result(1, output, "some stderr noise")
+        assert v["status"] == "failed"
+        assert "Auth error" in v["error_detail"]
+
+    def test_clean_exit_is_clean(self):
+        v = _classify_review_result(0, {"result": "no drift found"}, "")
+        assert v["status"] == "clean"
+        assert v["result_text"] == "no drift found"
+
+    def test_budget_exhaust_wins_over_returncode(self):
+        """A budget-exhaust with returncode 0 (CLI variance) is still 'partial', not 'clean' —
+        the label must reflect incompleteness regardless of exit code."""
+        output = {"result": "partial", "subtype": "error_max_budget_usd", "total_cost_usd": 2.1}
+        v = _classify_review_result(0, output, "")
+        assert v["status"] == "partial"
+
+    def test_unrelated_maximum_budget_error_is_NOT_partial(self):
+        """Gate-2 CRITICAL: an unrelated error merely containing 'maximum budget' must
+        NOT be misclassified as a budget-exhaust partial. We match the CLI's actual
+        phrase 'reached maximum budget', and subtype is authoritative."""
+        output = {"result": "", "errors": ["DB pool maximum budget exceeded for connections"]}
+        v = _classify_review_result(1, output, "some stderr")
+        assert v["status"] == "failed", "loose substring caused a false-positive salvage"
+
+    def test_non_string_errors_dont_crash_or_false_match(self):
+        """Gate-2 MED: errors may carry non-string items (dicts/ints) — they must be
+        filtered out of substring matching, not str()-matched."""
+        output = {"result": "", "errors": [{"code": 500}, 42, None]}
+        v = _classify_review_result(1, output, "real failure")
+        assert v["status"] == "failed"
+        assert "real failure" in v["error_detail"]
+
+
+class TestParseableFindingCount:
+    """Gate-2 HIGH: n_findings must reflect ACTUAL parseable todos, not raw '"title"'
+    substrings — a budget cap can truncate the RADAR_TODOS JSON mid-block."""
+
+    def test_valid_block_counts_findings(self):
+        text = ('drift found\n<!-- RADAR_TODOS\n'
+                '[{"title":"a","description":"x"},{"title":"b","description":"y"}]\n-->')
+        assert len(_count_parseable_findings(text)) == 2
+
+    def test_no_close_marker_counts_zero(self):
+        """A block cut off before the closing --> (no regex match) yields 0."""
+        text = 'partial analysis\n<!-- RADAR_TODOS\n[{"title":"a","description":"x"'
+        assert _count_parseable_findings(text) == []
+
+    def test_malformed_json_inside_block_counts_zero(self):
+        """The load-bearing case: the marker CLOSES (regex matches) but the JSON
+        inside is invalid (e.g. trailing comma / truncated obj) — json.loads fails,
+        so we count 0, NOT the raw '"title"' substrings. This is what makes the
+        parse (vs substring-count) actually matter."""
+        # regex captures [...]; inside is invalid JSON but contains two '"title"'
+        text = ('drift\n<!-- RADAR_TODOS\n'
+                '[{"title":"a","description":"x"},{"title":"b",BROKEN]\n-->')
+        assert _count_parseable_findings(text) == [], (
+            "malformed JSON must count 0, not the substring count of '\"title\"'"
+        )
+
+    def test_no_block_counts_zero(self):
+        assert _count_parseable_findings("clean review, no drift") == []
+
+
+class TestBudgetCap:
+    def test_budget_cap_exceeds_observed_review_cost(self):
+        """AC3: the per-project cap must exceed the observed real review cost
+        ($0.69 on a 46KB project, run_271c39df) — else normal reviews trip it."""
+        assert _PER_PROJECT_BUDGET_USD >= 0.69, (
+            "budget cap is below observed review cost — reviews will exit-1"
+        )

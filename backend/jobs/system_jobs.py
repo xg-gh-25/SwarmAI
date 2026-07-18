@@ -202,10 +202,13 @@ SYSTEM_JOBS: list[Job] = [
         },
         safety=JobSafety(
             # Outer envelope only — the per-project inner claude spawns are bounded in the
-            # handler (_PER_PROJECT_TIMEOUT_S / _PER_PROJECT_BUDGET_USD). JobSafety.timeout
-            # does NOT bound inner subprocesses (eval-scheduled precedent).
+            # handler (_PER_PROJECT_TIMEOUT_S=240s / _PER_PROJECT_BUDGET_USD=$2.00 each).
+            # JobSafety.{timeout,max_budget} do NOT bound inner subprocess.run spawns
+            # (eval-scheduled precedent) — they are the JOB-LEVEL ceiling for accounting.
+            # Real worst case = N_projects × $2.00 (≈$16 at 8 projects); set the outer
+            # cap to match that truth rather than understate it at $5.
             timeout_seconds=2400,
-            max_budget_usd=5.00,
+            max_budget_usd=16.00,
             allowed_tools=["Read", "Grep", "Glob"],
         ),
     ),

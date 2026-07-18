@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,8 +43,73 @@ PROJECTS_DIR = SWARMWS / "Projects"
 _AUDIT_TOOLS = ["Read", "Grep", "Glob"]
 
 # Per-project budget cap (USD). Bounds the in-handler loop cost; summed across projects.
-_PER_PROJECT_BUDGET_USD = 0.50
+# Set to 2.00: a real DDD review (read 4 docs + grep source) was observed to cost
+# ~$0.69 on a 46KB non-code project (run_271c39df); $0.50 was below that floor and
+# tripped 5/8 projects into a budget-exhaust exit. $2.00 gives ~3x headroom for the
+# larger code-backed projects. Any review that STILL exceeds this is salvaged as a
+# labeled "partial" (see the parse-first branch below) — so the exact cap value is a
+# cost bound, NOT a correctness dependency.
+_PER_PROJECT_BUDGET_USD = 2.00
 _PER_PROJECT_TIMEOUT_S = 240
+
+
+def _classify_review_result(returncode: int, output: dict, stderr: str) -> dict:
+    """Classify one per-project review subprocess result — pure, no I/O.
+
+    Three outcomes:
+      - ``clean``   : returncode 0, use the full result.
+      - ``partial`` : budget-exhausted (subtype ``error_max_budget_usd`` OR an
+        ``errors`` entry mentioning "maximum budget"). The review produced real
+        partial analysis before hitting the cap — SALVAGE it, don't discard.
+      - ``failed``  : any other non-zero exit (MCP/auth/crash). Carries an
+        ``error_detail`` (the CLI ``errors`` field, else a stderr tail) so the
+        report shows the REAL cause instead of an opaque "exit N".
+
+    Extracted from the loop so the branch logic is unit-testable without spawning
+    a subprocess (run_271c39df — the exit-1 black-box + budget-loss bug).
+    """
+    result_text = output.get("result", "") or ""
+    subtype = output.get("subtype", "") or ""
+    # Only string error entries participate in substring matching (a dict/int entry
+    # is not a budget signal and str()-ing it could false-match).
+    errors = [e for e in (output.get("errors", []) or []) if isinstance(e, str)]
+    cost = output.get("total_cost_usd", 0) or 0
+
+    # Prefer the CLI's structured subtype. The errors-substring is a narrow fallback
+    # for CLI shape variance: match the CLI's ACTUAL phrase "reached maximum budget"
+    # (not a loose "maximum budget", which could false-match an unrelated error like
+    # "connection pool maximum budget exceeded").
+    budget_exhausted = subtype == "error_max_budget_usd" or any(
+        "reached maximum budget" in e.lower() for e in errors
+    )
+    if budget_exhausted:
+        return {"status": "partial", "result_text": result_text, "cost": cost}
+    if returncode != 0:
+        stderr_tail = (stderr or "").strip()[-200:]
+        error_detail = "; ".join(str(e) for e in errors) if errors else (stderr_tail or "no stderr")
+        return {"status": "failed", "error_detail": error_detail, "cost": cost}
+    return {"status": "clean", "result_text": result_text, "cost": cost}
+
+
+_RADAR_TODOS_RE = re.compile(r"<!--\s*RADAR_TODOS\s*(\[.*?\])\s*-->", re.DOTALL)
+
+
+def _count_parseable_findings(result_text: str) -> list:
+    """Return the list of findings that will ACTUALLY become todos — i.e. a
+    RADAR_TODOS block that parses as valid JSON. A budget cap can truncate the
+    block mid-JSON; a truncated block yields 0 (matching _parse_structured_todos,
+    which returns [] on JSONDecodeError), so the reported count never over-states
+    findings that won't materialize. Pure, no I/O — unit-testable."""
+    if "RADAR_TODOS" not in result_text:
+        return []
+    m = _RADAR_TODOS_RE.search(result_text)
+    if not m:
+        return []
+    try:
+        parsed = json.loads(m.group(1))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _discover_ddd_projects() -> list[tuple[str, Path]]:
@@ -224,20 +290,43 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
                 except OSError:
                     pass
 
-        if proc.returncode != 0:
-            report_lines.append(f"## {project_name} — ⚠️ review failed (exit {proc.returncode})")
+        # Classify the result FIRST, regardless of exit code (parse-first). A
+        # budget-exhaust exit-1 still returns usable partial analysis + an
+        # errors/subtype field; the old `if returncode != 0: continue` threw that
+        # away AND hid the real cause behind an opaque "exit N". Pure helper →
+        # unit-tested without subprocess mocking.
+        verdict = _classify_review_result(
+            proc.returncode, _parse_cli_output(proc.stdout), proc.stderr or ""
+        )
+        kind = "code-backed" if code_backed else "non-code"
+
+        if verdict["status"] == "failed":
+            # Genuine failure (MCP/auth/crash) — surface the REAL cause, not "exit N".
+            report_lines.append(
+                f"## {project_name} — ⚠️ review failed (exit {proc.returncode}): {verdict['error_detail']}"
+            )
+            report_lines.append("")
             continue
 
-        output = _parse_cli_output(proc.stdout)
-        result_text = output.get("result", "") or ""
+        # Clean success OR budget-exhausted-with-partial: both carry usable output.
+        result_text = verdict["result_text"]
         reviewed += 1
-        kind = "code-backed" if code_backed else "non-code"
-        n_findings = result_text.count('"title"') if "RADAR_TODOS" in result_text else 0
+        # Count ACTUAL parseable findings, not raw '"title"' substrings — a budget
+        # cap can truncate the RADAR_TODOS JSON mid-block, and a truncated block
+        # yields 0 todos downstream (_parse_structured_todos returns [] on
+        # JSONDecodeError). Counting substrings would over-report findings that
+        # never materialize as todos.
+        n_findings = len(_count_parseable_findings(result_text))
         total_findings += n_findings
-        report_lines.append(f"## {project_name} ({kind}) — {n_findings} finding(s)")
+        if verdict["status"] == "partial":
+            header = (f"## {project_name} ({kind}) — ⚠️ budget-exhausted "
+                      f"(partial, ${verdict['cost']:.2f}) — {n_findings} finding(s)")
+        else:
+            header = f"## {project_name} ({kind}) — {n_findings} finding(s)"
+        report_lines.append(header)
         report_lines.append(result_text.strip() or "_(no output)_")
         report_lines.append("")
-        if n_findings and "RADAR_TODOS" in result_text:
+        if n_findings:  # only queue todo-creation when findings actually parse
             per_project_results.append((project_name, result_text))
 
     report_lines.insert(2, f"Reviewed {reviewed}/{len(projects)} projects · {total_findings} drift finding(s). "
