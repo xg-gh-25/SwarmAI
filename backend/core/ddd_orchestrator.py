@@ -913,6 +913,36 @@ class DddCultivationOrchestrator:
                     # site passed graph_path but NOT context_files, so it never
                     # triggered the G1 graph auto-extraction (which is gated on
                     # context_files) — removing it loses no graph behavior.
+                    #
+                    # ACCESS-DECAY bump (run_644bfea6): the HONEST usage signal
+                    # for DDD entries. recall records which entries it actually
+                    # surfaced into .ddd-usage.json (keyed by content anchor);
+                    # here we bump each matching entry's last_referenced to its
+                    # recorded hit date BEFORE assess_decay reads last_referenced
+                    # (ddd_entry_lifecycle.py:695). This keeps genuinely-used
+                    # lessons alive instead of decaying them on age alone.
+                    # Anchor MUST use the same normalizer as the write side.
+                    # best-effort: any failure leaves age-only decay intact.
+                    try:
+                        from core.ddd_usage import (
+                            entry_anchor_text,
+                            load_ddd_usage,
+                        )
+                        _usage = load_ddd_usage(project_dir.name)
+                        if _usage:
+                            for _e in entries:
+                                # Anchor IS the key (no section — recall and
+                                # parse_entries disagree on sub-section names,
+                                # so keying on section silently mismatched).
+                                _anchor = entry_anchor_text(_e.raw_text)
+                                _hit = _usage.get(_anchor) if _anchor else None
+                                if _hit and (
+                                    _e.last_referenced is None
+                                    or _hit > _e.last_referenced
+                                ):
+                                    _e.last_referenced = _hit
+                    except Exception:  # noqa: BLE001 — best-effort usage bump
+                        pass
                     transitions = assess_decay(entries, today)
                     if transitions:
                         # Separate archival transitions from dormant transitions

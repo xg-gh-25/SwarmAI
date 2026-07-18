@@ -74,17 +74,39 @@ _META_LINE_RE = re.compile(r"\s*<!--\s*ref:.*?-->\s*", re.DOTALL)
 _TRAILING_STAMP_RE = re.compile(r"\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$")
 _WS_RE = re.compile(r"\s+")
 
+# TRACKABLE-ENTRY SHAPE GATE — single source of truth shared with the decay
+# engine. recall's _ddd_entry_hits surfaces ANY `^- ` line, but the decay engine
+# (ddd_entry_lifecycle.parse_entries, default include_prose=False) ONLY tracks
+# entries shaped `- [type] **Title** ...` / `- **Title** ...`. An entry the decay
+# engine can't parse can NEVER be bumped — so anchoring it would only write a
+# dead key that fills the cap and evicts a real one. We import parse_entries'
+# OWN regex so "anchorable ⟺ decay-trackable" stays true by construction, not by
+# a hand-copied duplicate that could drift (SMOKE run_644bfea6: 40/64 recall
+# entry-hits were non-bold lines that would never match on read).
+from core.ddd_entry_lifecycle import _ENTRY_RE as _TRACKABLE_ENTRY_RE  # noqa: E402
+
 
 def entry_anchor_text(text: str) -> str:
     """The SINGLE shared normalizer — MUST be called identically on both the
     write side (recall content, WITH metadata) and the read side (raw_text,
     WITHOUT metadata) so the anchors match.
 
-    Strips: the ``<!-- ref:... -->`` metadata comment, the trailing
-    ``(date, run_id)`` stamp, then collapses whitespace and lowercases. Returns
-    the first ``_ANCHOR_PREFIX`` characters. Deterministic + pure.
+    Returns ``""`` for content that is NOT a decay-trackable entry (i.e. not
+    matching ``ddd_entry_lifecycle._ENTRY_RE`` — no ``**Title**``). The write
+    side skips empty anchors (record_ddd_hit no-ops on ""), so a recall hit on a
+    non-bold line is never written as a dead key. The read side only ever passes
+    ``EntryMetadata.raw_text`` (already a parsed bold entry), so it is unaffected.
+
+    For a trackable entry: strips the ``<!-- ref:... -->`` metadata comment and
+    the trailing ``(date, run_id)`` stamp, collapses whitespace, lowercases, and
+    returns the first ``_ANCHOR_PREFIX`` characters. Deterministic + pure.
     """
     if not text:
+        return ""
+    # Shape gate: the FIRST line must be a trackable entry (bold title). recall
+    # content and raw_text both start with the `- [type] **Title**` line.
+    first_line = text.lstrip().split("\n", 1)[0]
+    if not _TRACKABLE_ENTRY_RE.match(first_line):
         return ""
     t = _META_LINE_RE.sub(" ", text)
     t = t.strip()
@@ -98,10 +120,6 @@ def entry_anchor_text(text: str) -> str:
     return t[:_ANCHOR_PREFIX]
 
 
-def _make_key(doc: str, section: str, anchor: str) -> str:
-    return f"{doc}|{section}|{anchor}"
-
-
 def _usage_path(project: str) -> Optional[Path]:
     try:
         return get_projects_dir() / project / _USAGE_FILENAME
@@ -111,8 +129,6 @@ def _usage_path(project: str) -> Optional[Path]:
 
 def record_ddd_hit(
     project: str,
-    doc: str,
-    section: str,
     anchor_text: str,
     hit_date: date,
 ) -> None:
@@ -120,8 +136,12 @@ def record_ddd_hit(
     by recall on ``hit_date``. best-effort: NEVER raises — recall must not be
     blocked by usage bookkeeping.
 
-    ``anchor_text`` is the OUTPUT of ``entry_anchor_text()`` (callers normalize
-    before calling, so the write and read sides share one normalization point).
+    ``anchor_text`` is the OUTPUT of ``entry_anchor_text()`` and IS the key —
+    the anchor is a content fingerprint (proven 0 collisions across the real
+    IMPROVEMENT.md, run_644bfea6), so doc/section are NOT part of the key. This
+    is deliberate: recall's _ddd_entry_hits and parse_entries assign sub-section
+    entries to DIFFERENT section names (parent vs sub-header), so keying on
+    section caused silent read/write mismatches. Anchor-only is divergence-proof.
     """
     try:
         if not anchor_text:
@@ -134,7 +154,7 @@ def record_ddd_hit(
             # Do not create project dirs from here — a missing project is a
             # no-op, not an error to surface.
             return
-        key = _make_key(doc, section, anchor_text)
+        key = anchor_text
         iso = hit_date.isoformat()
         with md_lock(path) as _got:  # blocking → always True
             data = _load_raw(path)
@@ -149,7 +169,7 @@ def record_ddd_hit(
 
 def load_ddd_usage(project: str) -> dict[str, date]:
     """Return ``{key: last_hit_date}`` for a project. best-effort: returns ``{}``
-    on any error. Key format: ``"<doc>|<section>|<anchor>"``.
+    on any error. Key = the entry content anchor (see record_ddd_hit).
     """
     try:
         path = _usage_path(project)

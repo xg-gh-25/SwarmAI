@@ -32,8 +32,8 @@ def test_anchor_equal_across_metadata():
     from core.ddd_usage import entry_anchor_text
 
     raw_text = (
-        "- [guideline] Verify-first is a TWO-WAY gate on a fix-all sweep — a bug "
-        "report can be WRONG-FRAME just as often as real. (2026-07-18, run_2d3417d9)"
+        "- [guideline] **Verify-first is a TWO-WAY gate** on a fix-all sweep — a "
+        "bug report can be WRONG-FRAME just as often as real. (2026-07-18, run_x)"
     )
     content_with_meta = (
         raw_text + "\n  <!-- ref:3 | last:2026-07-18 | decay:active | source:manual -->"
@@ -49,8 +49,8 @@ def test_anchor_ignores_trailing_date_run_stamp():
     the stamp is not part of the entry's identity."""
     from core.ddd_usage import entry_anchor_text
 
-    a = "- [pitfall] Python except-clause ORDER is a data-loss trap (2026-07-18, run_aaaa1111)"
-    b = "- [pitfall] Python except-clause ORDER is a data-loss trap (2026-07-01, run_bbbb2222)"
+    a = "- [pitfall] **Python except-clause ORDER** is a data-loss trap (2026-07-18, run_aaaa1111)"
+    b = "- [pitfall] **Python except-clause ORDER** is a data-loss trap (2026-07-01, run_bbbb2222)"
     assert entry_anchor_text(a) == entry_anchor_text(b)
 
 
@@ -58,9 +58,91 @@ def test_anchor_distinguishes_different_entries():
     """Different entries must NOT collapse to the same anchor (no false bumps)."""
     from core.ddd_usage import entry_anchor_text
 
-    a = "- [guideline] A fail-closed generation gate surfaces the real coverage gap"
-    b = "- [pitfall] A delete-the-corrupt-DB recovery must also delete the -wal/-shm sidecars"
+    a = "- [guideline] **A** fail-closed generation gate surfaces the real coverage gap"
+    b = "- [pitfall] **B** delete-the-corrupt-DB recovery must also delete the -wal/-shm sidecars"
     assert entry_anchor_text(a) != entry_anchor_text(b)
+
+
+def test_non_trackable_entry_yields_empty_anchor():
+    """SMOKE regression (run_644bfea6): recall's _ddd_entry_hits surfaces ANY
+    `^- ` line, but the decay engine (parse_entries, default) only tracks
+    `- [type] **Title**` / `- **Title**` entries. A non-bold line must yield ""
+    so the write side skips it — else it writes a dead key that can never be
+    bumped and evicts a real anchor at the cap. 40/64 recall hits in the real
+    IMPROVEMENT.md were non-bold lines; without this gate they'd be dead writes."""
+    from core.ddd_usage import entry_anchor_text
+
+    non_bold = "- `git checkout <file>` to undo a mutation test reverts to HEAD"
+    assert entry_anchor_text(non_bold) == ""
+
+    bold_typed = "- [guideline] **Real** trackable entry with a bold title"
+    assert entry_anchor_text(bold_typed) != ""
+
+    bold_untyped = "- **Trackable** entry, bold title, no type prefix"
+    assert entry_anchor_text(bold_untyped) != ""
+
+
+def test_e2e_real_improvement_md_anchor_symmetry():
+    """SMOKE→regression (run_644bfea6): the write side (recall's _ddd_entry_hits
+    content) and read side (parse_entries raw_text) MUST anchor-agree on real
+    data, with ZERO cross-entry collisions (a collision = false bump of the
+    wrong entry). Runs against the real SwarmAI IMPROVEMENT.md if present; skips
+    otherwise (CI has no workspace)."""
+    import re as _re
+    from pathlib import Path
+
+    from core import memory_index, recall_multi
+    from core.ddd_entry_lifecycle import parse_entries
+    from core.ddd_usage import entry_anchor_text
+
+    imp = Path("/Users/gawan/.swarm-ai/SwarmWS/Projects/SwarmAI/IMPROVEMENT.md")
+    if not imp.is_file():
+        pytest.skip("real IMPROVEMENT.md not present (no workspace)")
+    text = imp.read_text(encoding="utf-8")
+
+    # READ side: every parsed entry's anchor IS the key (no section — recall and
+    # parse_entries disagree on sub-section names). ZERO collisions is the
+    # invariant that guarantees no false bumps.
+    entries = parse_entries(text)
+    read_keys = {}
+    collisions = 0
+    for e in entries:
+        a = entry_anchor_text(e.raw_text)
+        if not a:
+            continue
+        if a in read_keys and read_keys[a] != e.raw_text[:40]:
+            collisions += 1
+        read_keys[a] = e.raw_text[:40]
+    assert collisions == 0, f"{collisions} anchor collisions = false-bump risk"
+
+    # WRITE side: for every recall entry-hit carrying content, if the shape gate
+    # accepts it (non-empty anchor), it MUST match a read-side key. A non-empty
+    # write anchor with no read match would be a silent dead bump.
+    docs = {"IMPROVEMENT.md": text}
+    queries = [
+        "adversarial gate caught bug", "recall ddd section decay",
+        "pipeline gate blocked plan", "test theater mutation",
+        "deploy verify binary mtime", "anchor mismatch silent noop",
+    ]
+    checked = 0
+    matched = 0
+    for q in queries:
+        for h in recall_multi._ddd_entry_hits(q, docs, 8):
+            c = h.get("content")
+            if not c:
+                continue
+            a = entry_anchor_text(c)
+            if not a:  # shape gate rejected → correctly skipped, not a dead write
+                continue
+            checked += 1
+            if a in read_keys:
+                matched += 1
+    # Every shape-accepted write anchor must resolve on the read side.
+    assert checked > 0, "no trackable entry-hits surfaced — query set too narrow?"
+    assert matched == checked, (
+        f"{checked - matched}/{checked} shape-accepted write anchors had NO read "
+        f"match = silent dead bumps"
+    )
 
 
 # ── AC2: recall hit persists to .ddd-usage.json ─────────────────────────────
@@ -72,11 +154,10 @@ def test_record_and_load_roundtrip(tmp_path, monkeypatch):
     proj.mkdir()
 
     hit_date = date(2026, 7, 18)
-    ddd_usage.record_ddd_hit("SwarmAI", "IMPROVEMENT.md", "What Failed",
-                             "some entry anchor text", hit_date)
+    ddd_usage.record_ddd_hit("SwarmAI", "some entry anchor text", hit_date)
 
     usage = ddd_usage.load_ddd_usage("SwarmAI")
-    key = "IMPROVEMENT.md|What Failed|some entry anchor text"
+    key = "some entry anchor text"  # anchor IS the key (no doc/section)
     assert key in usage
     assert usage[key] == hit_date
 
@@ -133,13 +214,13 @@ def test_cap_evicts_oldest(tmp_path, monkeypatch):
     # Write CAP + 10 anchors, each with an increasing date.
     n = ddd_usage._USAGE_CAP + 10
     for i in range(n):
-        ddd_usage.record_ddd_hit("SwarmAI", "IMPROVEMENT.md", "S",
-                                 f"anchor number {i}", base + timedelta(days=i))
+        ddd_usage.record_ddd_hit("SwarmAI", f"anchor number {i}",
+                                 base + timedelta(days=i))
     usage = ddd_usage.load_ddd_usage("SwarmAI")
     assert len(usage) <= ddd_usage._USAGE_CAP
     # The OLDEST (anchor number 0) must have been evicted; the newest kept.
-    assert "IMPROVEMENT.md|S|anchor number 0" not in usage
-    assert f"IMPROVEMENT.md|S|anchor number {n - 1}" in usage
+    assert "anchor number 0" not in usage
+    assert f"anchor number {n - 1}" in usage
 
 
 def test_record_best_effort_never_raises(tmp_path, monkeypatch):
@@ -154,6 +235,6 @@ def test_record_best_effort_never_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(ddd_usage, "get_projects_dir", lambda: bogus)
 
     # Must NOT raise.
-    ddd_usage.record_ddd_hit("SwarmAI", "IMPROVEMENT.md", "S", "x", date(2026, 7, 18))
+    ddd_usage.record_ddd_hit("SwarmAI", "x", date(2026, 7, 18))
     # And load from a broken location returns empty, not crash.
     assert ddd_usage.load_ddd_usage("SwarmAI") == {}
