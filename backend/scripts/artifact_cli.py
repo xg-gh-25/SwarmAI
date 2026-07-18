@@ -1211,12 +1211,18 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 )
                 if deliver_stage_rec and not deliver_stage_rec.get("artifact_id"):
                     # Auto-aggregate from stage-json fields.
-                    # Normalize to dicts FIRST (run_ca0190fb): the goal-path gate
-                    # (:1479) and its own error message (:1487) tell users to pass
-                    # `adversarial_review: true` — a BOOL. A truthy non-dict here means
-                    # "review happened, details unrecorded" → coerce to a minimal dict
-                    # so the `.get()` calls below never crash ('bool' has no .get). The
-                    # two completion paths (goal flag / deliver dict) now agree.
+                    # Normalize to dicts FIRST (run_ca0190fb): an agent may set
+                    # `adversarial_review: true` (a BOOL) on the DELIVER stage — a habit
+                    # reinforced by the goal-path gate, which accepts a bool
+                    # `adversarial_review` on the goal_cycle stage (a DIFFERENT,
+                    # mutually-exclusive profile — so this coercion defends against the
+                    # by-analogy habit, NOT a value that gate feeds into this path). A
+                    # truthy non-dict means "review happened, details unrecorded" →
+                    # coerce to a minimal dict so the `.get()` calls below never crash
+                    # ('bool' has no .get). Safety is preserved downstream: the Rule-23
+                    # validator still rejects a findings-less/evidence-less delivery, so
+                    # the coercion defers to that clean error — it never launders an
+                    # unreviewed delivery past the gate.
                     _adv = deliver_stage_rec.get("adversarial_review", {})
                     if not isinstance(_adv, dict):
                         _adv = {"spawned": bool(_adv), "findings": []}
