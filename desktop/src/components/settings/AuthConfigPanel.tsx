@@ -95,6 +95,10 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       const configUpdate: Record<string, unknown> = {
         use_bedrock: isBedrock,
         aws_region: region,
+        // Always send the selected method so the backend's method-aware
+        // verify-error remediation resolves the REAL method (not None →
+        // generic fallback that loses the `aws sso login` hint). F1b.
+        auth_method: method,
       };
       if (method === 'ada') {
         configUpdate.ada_account = adaAccount;
@@ -105,11 +109,10 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       if (method === 'apikey' && apiKey.trim()) {
         configUpdate.anthropic_api_key = apiKey.trim();
       }
-      // For Bedrock API Key, pass the bearer token + auth_method so the backend
+      // For Bedrock API Key, also pass the bearer token so the backend
       // temp-injects AWS_BEARER_TOKEN_BEDROCK to verify a not-yet-persisted token.
-      // It is a Bedrock method (use_bedrock stays true).
+      // (auth_method is already set above; use_bedrock stays true.)
       if (method === 'bedrock_api_key' && bearerToken.trim()) {
-        configUpdate.auth_method = 'bedrock_api_key';
         configUpdate.aws_bearer_token_bedrock = bearerToken.trim();
       }
 
@@ -524,14 +527,32 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
 
       {/* One-click deployment-context switch — for an internal employee on a
           machine that hasn't run ada/mwinit yet, or an external user misdetected
-          as internal. Auto-detection is a default, not a lock (AC2). */}
+          as internal. Auto-detection is a default, not a lock (AC2).
+          When detection was LOW-confidence (we only DEFAULTED to external, no
+          ~/.ada|~/.midway|SSO signal), surface a prominent confirm-your-
+          environment prompt so a pre-mwinit Amazon employee actually finds the
+          toggle instead of the tiny dotted link (F3). */}
       {mode === 'onboarding' && authHint?.runMode !== 'hive' && (
-        <button
-          onClick={toggleContext}
-          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors underline decoration-dotted"
-        >
-          {context === 'external' ? 'Amazon employee? Switch to internal options' : 'Not internal? Switch to external options'}
-        </button>
+        authHint?.detectionConfidence === 'low' ? (
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+            <span className="text-[var(--color-text)]">
+              We couldn't detect your environment — which are you?
+            </span>{' '}
+            <button
+              onClick={toggleContext}
+              className="text-[var(--color-primary)] hover:underline font-medium"
+            >
+              {context === 'external' ? 'I\'m an Amazon employee (internal)' : 'I\'m external'}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={toggleContext}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors underline decoration-dotted"
+          >
+            {context === 'external' ? 'Amazon employee? Switch to internal options' : 'Not internal? Switch to external options'}
+          </button>
+        )
       )}
     </div>
   );

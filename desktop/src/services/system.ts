@@ -268,7 +268,10 @@ export interface AuthHintResponse {
   hasSsoCache: boolean;
   hasApiKey: boolean;
   deploymentContext: 'internal' | 'external';
-  suggestedMethod: 'ada' | 'sso' | 'apikey' | 'iam_role';
+  // "high" when a positive internal/SSO signal was detected; "low" when we only
+  // DEFAULTED to external (no signal). Frontend elevates the context toggle on "low".
+  detectionConfidence?: 'high' | 'low';
+  suggestedMethod: 'ada' | 'sso' | 'apikey' | 'iam_role' | 'bedrock_api_key';
   adaDetails?: {
     accountId?: string;
     roleName?: string;

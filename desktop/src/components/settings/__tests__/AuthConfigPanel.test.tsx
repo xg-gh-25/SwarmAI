@@ -147,6 +147,59 @@ describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
     }));
     expect(mockSetAuthMethod).toHaveBeenCalledWith('bedrock_api_key', 'external');
   });
+
+  // ── F1b: verify override must carry auth_method for ada/sso too (not only
+  //    bedrock_api_key), so the backend's method-aware remediation resolves the
+  //    real method instead of None (→ generic fallback, losing the SSO hint). ──
+  it('SSO verify sends auth_method:sso in the override body', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('AWS SSO').closest('button')!); });
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await waitFor(() => expect(mockVerifyAuth).toHaveBeenCalled());
+    expect(mockVerifyAuth).toHaveBeenCalledWith(expect.objectContaining({
+      use_bedrock: true, auth_method: 'sso',
+    }));
+  });
+
+  it('ADA verify sends auth_method:ada in the override body', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true, runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Ada').closest('button')!); });
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await waitFor(() => expect(mockVerifyAuth).toHaveBeenCalled());
+    expect(mockVerifyAuth).toHaveBeenCalledWith(expect.objectContaining({ auth_method: 'ada' }));
+  });
+});
+
+describe('AuthConfigPanel — F3 low-confidence detection makes the toggle prominent', () => {
+  it('low confidence: shows a discoverable "which environment?" prompt near the toggle', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false,
+      detectionConfidence: 'low', runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    // A low-confidence hint surfaces a prominent confirm-your-environment prompt
+    // (not just the tiny dotted link), so a pre-mwinit Amazon employee finds it.
+    expect(screen.getByText(/couldn't detect|not sure|which environment|confirm your environment/i)).toBeInTheDocument();
+  });
+
+  it('high confidence: does NOT show the prominent prompt (toggle stays subtle)', async () => {
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true,
+      detectionConfidence: 'high', runMode: 'desktop',
+    });
+    render(<AuthConfigPanel mode="onboarding" />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    expect(screen.queryByText(/couldn't detect|which environment|confirm your environment/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('AuthConfigPanel — AC4 SSO account input', () => {

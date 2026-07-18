@@ -51,6 +51,13 @@ vi.mock('../../components/common', () => ({
   Dropdown: ({ label }: { label: string }) => <div data-testid="dropdown">{label}</div>,
 }));
 
+// Step4Ready reads the REAL theme via useTheme() — mock it (component isn't
+// rendered inside a ThemeProvider in this test).
+const mockUseTheme = vi.fn();
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => mockUseTheme(),
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
   // Defaults: system healthy, no backup, auth hint = sso
@@ -65,6 +72,7 @@ beforeEach(() => {
   mockChannelsList.mockResolvedValue([]);
   mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latency_ms: 200 });
   mockSetOnboardingComplete.mockResolvedValue(undefined);
+  mockUseTheme.mockReturnValue({ theme: 'system' });
 });
 
 describe('OnboardingPage — no dead-ends', () => {
@@ -218,6 +226,21 @@ describe('OnboardingPage — no dead-ends', () => {
       expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument();
     });
     expect(screen.queryByText('us-east-1')).not.toBeInTheDocument();
+  });
+
+  it('F5: Step4 Ready shows the REAL theme and drops the fabricated Language line', async () => {
+    mockUseTheme.mockReturnValue({ theme: 'dark' });
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await waitFor(() => screen.getByText('Skip for now'));
+    await act(async () => { fireEvent.click(screen.getByText('Skip for now').closest('button')!); });
+    await waitFor(() => screen.getByText("You're All Set!"));
+    // Real theme label is shown…
+    await waitFor(() => expect(screen.getByText(/dark/i)).toBeInTheDocument());
+    // …and the fabricated "Language: English" line is gone (no locale state exists).
+    expect(screen.queryByText('Language')).not.toBeInTheDocument();
+    expect(screen.queryByText('English')).not.toBeInTheDocument();
   });
 
   it('double-clicking "Configure later" fires onboarding-complete only ONCE', async () => {

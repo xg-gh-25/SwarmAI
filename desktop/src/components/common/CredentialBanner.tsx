@@ -23,7 +23,19 @@ import { systemService } from '../../services/system';
 type Method = 'ada' | 'sso' | 'apikey' | 'iam_role';
 
 // Frontend mirror of backend auth_remediation.remediation_for — kept minimal.
-function remediation(method: Method | undefined): { title: string; body: React.ReactNode } {
+// `configured` = whether ANY credential signal was detected. When false, the
+// user never set creds up (NoCredentialsError → auth='expired' too), so the
+// copy must say CONFIGURE, not "expired/refresh" for a session they never had (F2).
+function remediation(
+  method: Method | undefined,
+  configured: boolean,
+): { title: string; body: React.ReactNode } {
+  if (!configured) {
+    return {
+      title: 'No credentials configured',
+      body: <>Set up authentication in Settings → AI &amp; Models to get started.</>,
+    };
+  }
   switch (method) {
     case 'ada':
       return {
@@ -57,13 +69,21 @@ export default function CredentialBanner() {
   const { health } = useHealth();
   const { setSettingsTab } = useLayout();
   const [method, setMethod] = useState<Method | undefined>(undefined);
+  // undefined until the hint resolves; then true iff ANY credential was detected.
+  const [configured, setConfigured] = useState<boolean>(true);
 
   // Fetch the active method once when the banner becomes relevant.
   useEffect(() => {
     if (health.auth !== 'expired') return;
     let cancelled = false;
     systemService.getAuthHint()
-      .then((h) => { if (!cancelled) setMethod(h.suggestedMethod as Method); })
+      .then((h) => {
+        if (cancelled) return;
+        setMethod(h.suggestedMethod as Method);
+        // No ada/sso/apikey signal → the user never configured creds (a
+        // NoCredentialsError, not an expiry). Show "configure", not "refresh".
+        setConfigured(Boolean(h.hasAdaDir || h.hasSsoCache || h.hasApiKey));
+      })
       .catch(() => { /* fall back to the generic remediation */ });
     return () => { cancelled = true; };
   }, [health.auth]);
@@ -71,7 +91,7 @@ export default function CredentialBanner() {
   // Render ONLY on a definitive expired signal. valid/unknown/undefined → nothing.
   if (health.auth !== 'expired') return null;
 
-  const { title, body } = remediation(method);
+  const { title, body } = remediation(method, configured);
 
   return (
     <div

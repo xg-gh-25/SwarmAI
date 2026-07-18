@@ -12,6 +12,7 @@ import { channelsService } from '../services/channels';
 import type { Channel } from '../types';
 import AuthConfigPanel from '../components/settings/AuthConfigPanel';
 import ChannelConfigForm from '../components/settings/ChannelConfigForm';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface OnboardingPageProps {
   onComplete: () => void;
@@ -455,6 +456,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
 
 function Step4Ready({ onStart }: { onStart: () => void }) {
   const [starting, setStarting] = useState(false);
+  const { theme } = useTheme();  // real theme, not a hardcoded "System" string
   // Show the ACTUAL configured model + region (persisted by Step2 on verify),
   // not hardcoded strings that lie when the user picked a different region.
   // Fallbacks match backend DEFAULT_CONFIG (app_config_manager.py) so the
@@ -490,11 +492,7 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
           </div>
           <div>
             <span className="text-[var(--color-text-muted)]">Theme</span>
-            <p className="text-[var(--color-text)]">System</p>
-          </div>
-          <div>
-            <span className="text-[var(--color-text-muted)]">Language</span>
-            <p className="text-[var(--color-text)]">English</p>
+            <p className="text-[var(--color-text)] capitalize">{theme}</p>
           </div>
         </div>
       </div>
