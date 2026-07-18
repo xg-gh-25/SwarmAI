@@ -60,4 +60,40 @@ describe('root banner isolation — a crashing banner does not take down sibling
       spy.mockRestore();
     }
   });
+
+  // Footgun guard: `'fallback' in props` must NOT treat an EXPLICIT
+  // `fallback={undefined}` as "render nothing" — otherwise a default-variant
+  // caller writing `fallback={cond ? <X/> : undefined}` would, on error, silently
+  // render empty and SWALLOW the crash to a blank screen. undefined === "no
+  // fallback" (identical to omitting the prop → full-screen ErrorFallback); only
+  // null / a real node is a deliberate render instruction.
+  it('fallback={undefined} falls through to the full-screen ErrorFallback (not blank)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallback={undefined}>
+          <Boom />
+        </ErrorBoundary>,
+      );
+      // Must escalate to the visible error UI, NOT swallow to empty.
+      expect(screen.getByText('Something went wrong')).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fallback={null} still renders nothing (banner-isolation contract preserved)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ErrorBoundary fallback={null}>
+          <Boom />
+        </ErrorBoundary>,
+      );
+      // null is a deliberate render-nothing — must NOT fall through to ErrorFallback.
+      expect(screen.queryByText('Something went wrong')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

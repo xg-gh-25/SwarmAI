@@ -86,15 +86,20 @@ export class ErrorBoundary extends Component<Props, State> {
         );
       }
 
-      // variant === 'default': existing behavior.
-      // Use `'fallback' in props`, NOT truthiness — an explicit `fallback={null}`
-      // (used by App-root banner isolation to degrade a crash to "render nothing")
-      // is a deliberate render-null instruction. A truthiness check (`if
-      // (this.props.fallback)`) treats null/0/'' as "no fallback" and wrongly falls
-      // through to the full-screen ErrorFallback — which for a root banner would
-      // escalate a single-banner crash to the whole-app "Something went wrong" this
-      // boundary exists to prevent.
-      if ('fallback' in this.props) {
+      // variant === 'default'. Three cases, deliberately distinguished:
+      //   • prop omitted          → fall through to full-screen ErrorFallback
+      //   • fallback={undefined}  → fall through to full-screen ErrorFallback
+      //   • fallback={null}|node  → render it (deliberate "render nothing"/custom)
+      //
+      // Use `'fallback' in props` NOT truthiness, so an explicit `fallback={null}`
+      // (App-root banner isolation degrading a crash to "render nothing") is honored
+      // — a truthiness check would treat null as "no fallback" and escalate a single
+      // banner crash to the whole-app "Something went wrong". BUT an explicit
+      // `fallback={undefined}` (e.g. `fallback={cond ? <X/> : undefined}`) must NOT
+      // silently render empty and swallow the crash to blank — undefined is treated
+      // as "no fallback", identical to omitting the prop. Only null / a real node
+      // is a deliberate render instruction.
+      if ('fallback' in this.props && this.props.fallback !== undefined) {
         return this.props.fallback;
       }
 
