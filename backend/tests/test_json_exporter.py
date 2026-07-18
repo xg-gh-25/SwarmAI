@@ -36,16 +36,21 @@ def _make_mock_graph():
         "last_indexed": "1717000000.0",
     }
 
-    # get_module_map
+    # get_module_map (carries is_entry_point — run_4344d341)
     graph.get_module_map.return_value = {
         "backend/core": [
-            {"id": "n1", "file_path": "backend/core/handler.py", "node_type": "function", "name": "handle_request"},
-            {"id": "n2", "file_path": "backend/core/handler.py", "node_type": "class", "name": "RequestHandler"},
+            {"id": "n1", "file_path": "backend/core/handler.py", "node_type": "function", "name": "handle_request", "is_entry_point": 1},
+            {"id": "n2", "file_path": "backend/core/handler.py", "node_type": "class", "name": "RequestHandler", "is_entry_point": 0},
         ],
         "backend/routers": [
-            {"id": "n3", "file_path": "backend/routers/api.py", "node_type": "function", "name": "get_items"},
+            {"id": "n3", "file_path": "backend/routers/api.py", "node_type": "function", "name": "get_items", "is_entry_point": 0},
         ],
     }
+
+    # get_module_edges (architectural skeleton — run_4344d341)
+    graph.get_module_edges.return_value = [
+        {"from": "backend/routers", "to": "backend/core", "count": 3},
+    ]
 
     # get_routes
     graph.get_routes.return_value = [
@@ -139,6 +144,74 @@ class TestJsonExporter:
         core_mod = next((m for m in modules if m["name"] == "backend/core"), None)
         assert core_mod is not None
         assert "symbols" in core_mod or "symbol_count" in core_mod
+
+    def test_export_populates_entry_points(self, tmp_path):
+        """run_4344d341: entry_points was always [] because get_module_map dropped
+        is_entry_point. With it carried, is_entry_point=1 nodes must export."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        graph = _make_mock_graph()
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(graph, "test-project", output)
+        data = json.loads(output.read_text())
+        eps = data["entry_points"]
+        assert len(eps) == 1, "the single is_entry_point=1 node must be exported"
+        assert eps[0]["name"] == "handle_request"
+
+    def test_entry_points_exclude_test_entries(self, tmp_path):
+        """run_4344d341: test_* / conftest entries are TEST entries, not
+        architectural ones — they must NOT bloat exported entry_points."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        graph = _make_mock_graph()
+        graph.get_module_map.return_value = {
+            "backend/core": [
+                {"id": "e1", "file_path": "backend/core/main.py", "node_type": "function", "name": "main", "is_entry_point": 1},
+            ],
+            "backend/tests": [
+                {"id": "t1", "file_path": "backend/tests/test_x.py", "node_type": "function", "name": "test_foo", "is_entry_point": 1},
+                {"id": "t2", "file_path": "backend/tests/conftest.py", "node_type": "function", "name": "fixture_db", "is_entry_point": 1},
+            ],
+        }
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(graph, "test-project", output)
+        eps = json.loads(output.read_text())["entry_points"]
+        names = {e["name"] for e in eps}
+        assert "main" in names, "architectural entry (main) must be kept"
+        assert "test_foo" not in names, "test_ entry must be excluded"
+        assert "fixture_db" not in names, "conftest entry must be excluded"
+
+    def test_entry_points_no_false_exclusion_on_test_substring(self, tmp_path):
+        """run_4344d341 Gate-2 MEDIUM: a bare 'test' substring false-excludes real
+        files (attestation.py, latest_run.py, contest/engine.py). Segment-anchored
+        check must KEEP a real main in such a file."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        graph = _make_mock_graph()
+        graph.get_module_map.return_value = {
+            "backend/core": [
+                {"id": "a1", "file_path": "backend/core/attestation.py", "node_type": "function", "name": "main", "is_entry_point": 1},
+                {"id": "a2", "file_path": "backend/core/latest_run.py", "node_type": "function", "name": "cli", "is_entry_point": 1},
+            ],
+            "backend/tests": [
+                {"id": "t1", "file_path": "backend/tests/test_x.py", "node_type": "function", "name": "test_foo", "is_entry_point": 1},
+            ],
+        }
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(graph, "test-project", output)
+        names = {e["name"] for e in json.loads(output.read_text())["entry_points"]}
+        assert "main" in names and "cli" in names, "real entries in test-substring paths must be kept"
+        assert "test_foo" not in names, "genuine test entry still excluded"
+
+    def test_export_includes_module_edges(self, tmp_path):
+        """run_4344d341: edges were never assembled into the doc. module_edges[]
+        (architectural skeleton) must be present with from/to/count shape."""
+        from core.code_intel.json_exporter import export_code_intel_json
+        graph = _make_mock_graph()
+        output = tmp_path / "code-intel.json"
+        export_code_intel_json(graph, "test-project", output)
+        data = json.loads(output.read_text())
+        assert "module_edges" in data, "doc must carry module_edges (was missing → edges=0)"
+        me = data["module_edges"]
+        assert me and me[0]["from"] == "backend/routers" and me[0]["to"] == "backend/core"
+        assert me[0]["count"] == 3
 
     def test_export_schema_version(self, tmp_path):
         """JSON output declares v2 schema."""

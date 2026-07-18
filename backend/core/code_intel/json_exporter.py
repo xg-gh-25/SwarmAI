@@ -119,6 +119,11 @@ def export_code_intel_json(
         "modules": modules,
         "routes": built_routes,
         "entry_points": entry_points,
+        # module_edges = the architectural skeleton (which module calls which),
+        # aggregated from code_edges to 2-level module pairs (run_4344d341). NOT a
+        # raw per-symbol edge dump — that would bloat the readable JSON ~10x. The
+        # per-symbol graph lives in code_intel.db for callers that need it.
+        "module_edges": graph_store.get_module_edges(),
         "hot_zones": hot_zones,
         "risk_areas": risk_areas,
         "dead_code": _build_dead_code(dead_code),
@@ -392,17 +397,48 @@ def _build_routes(routes: list[dict]) -> list[dict]:
     ]
 
 
+def _is_test_path(file_path: str, name: str) -> bool:
+    """A test entry point (test_*, *.test.*, conftest, TestX/Benchmark) — a TEST
+    entry, not an ARCHITECTURAL one. run_4344d341: the parser marks these
+    is_entry_point=1 (correctly, for its own purpose), but they dominate the count
+    (~11.2K of 11.3K) and are noise in the exported architectural entry_points."""
+    fp = file_path.lower()
+    fname = fp.rsplit("/", 1)[-1]
+    # Anchor to path SEGMENTS / filename patterns — NOT a bare "test" substring,
+    # which false-excludes real entries like attestation.py / latest_run.py /
+    # contest/engine.py (Gate-2 MEDIUM, run_4344d341: "any-repo" skill must not
+    # silently drop a real main in such a file).
+    segments = fp.split("/")
+    if "tests" in segments or "test" in segments or "__tests__" in segments:
+        return True
+    if (fname.startswith("test_") or fname.endswith("_test.py")
+            or fname == "conftest.py" or ".test." in fname or ".spec." in fname):
+        return True
+    if name.startswith("test_") or name.startswith("Test") or name.startswith("Benchmark"):
+        return True
+    return False
+
+
 def _build_entry_points(module_map: dict[str, list[dict]]) -> list[dict]:
-    """Extract entry points (is_entry_point nodes) from module map."""
+    """Extract ARCHITECTURAL entry points (is_entry_point nodes) from the module
+    map, EXCLUDING test entries. run_4344d341: is_entry_point=1 covers ~11.3K nodes
+    (mostly test_* functions the parser flags as test entries); dumping all of them
+    bloated code-intel.json ~7.5x (244K→1.8MB) and buried the ~117 real entries
+    (main/cli/app) that a reader actually wants. Test entries stay in the DB (the
+    parser's is_entry_point is unchanged); this export just surfaces the
+    architectural ones."""
     entry_points = []
     for nodes in module_map.values():
         for n in nodes:
-            if n.get("is_entry_point"):
-                entry_points.append({
-                    "name": n.get("name", ""),
-                    "file_path": n.get("file_path", ""),
-                    "type": n.get("node_type", "function"),
-                })
+            if not n.get("is_entry_point"):
+                continue
+            if _is_test_path(n.get("file_path", ""), n.get("name", "")):
+                continue
+            entry_points.append({
+                "name": n.get("name", ""),
+                "file_path": n.get("file_path", ""),
+                "type": n.get("node_type", "function"),
+            })
     return entry_points
 
 

@@ -666,16 +666,52 @@ class GraphStore:
         E.g. ``backend/core/foo.py`` -> key ``backend/core``.
         """
         rows = self._conn.execute(
-            "SELECT id, file_path, node_type, name FROM code_nodes ORDER BY file_path"
+            "SELECT id, file_path, node_type, name, is_entry_point "
+            "FROM code_nodes ORDER BY file_path"
         ).fetchall()
         modules: dict[str, list[dict]] = {}
         for row in rows:
             parts = row[1].split("/")
             prefix = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if parts else ""
             modules.setdefault(prefix, []).append(
-                {"id": row[0], "file_path": row[1], "node_type": row[2], "name": row[3]}
+                {"id": row[0], "file_path": row[1], "node_type": row[2],
+                 "name": row[3], "is_entry_point": row[4]}
             )
         return modules
+
+    def get_module_edges(self) -> list[dict]:
+        """Aggregate code_edges up to 2-level module-prefix pairs — the compact
+        ARCHITECTURAL SKELETON (which module calls which), NOT a raw per-symbol
+        edge dump. run_4344d341: code-intel.json emitted edges=0 because no
+        module-level aggregation existed and a raw dump (~25K edges) would bloat
+        the readable JSON 10x. Cross-module only (intra-module edges excluded —
+        they're implementation detail, not architecture).
+
+        Returns list of {"from": mod, "to": mod, "count": n} sorted by count desc.
+        The module prefix mirrors get_module_map: 2-level dir prefix of the node's
+        file, derived from the ``file::symbol`` id encoding.
+        """
+        def _mod_of(node_id: str) -> str:
+            # node id is "<file_path>::<symbol>"; module = 2-level dir prefix of file
+            fpath = node_id.split("::", 1)[0]
+            parts = fpath.split("/")
+            if len(parts) > 2:
+                return "/".join(parts[:2])
+            return parts[0] if parts else ""
+
+        rows = self._conn.execute(
+            "SELECT source_id, target_id FROM code_edges"
+        ).fetchall()
+        counts: dict[tuple[str, str], int] = {}
+        for src, tgt in rows:
+            sm, tm = _mod_of(src), _mod_of(tgt)
+            if not sm or not tm or sm == tm:
+                continue  # skip intra-module + unresolvable
+            counts[(sm, tm)] = counts.get((sm, tm), 0) + 1
+        return [
+            {"from": sm, "to": tm, "count": n}
+            for (sm, tm), n in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        ]
 
     # ── codebase summary ─────────────────────────────────────────────────
 

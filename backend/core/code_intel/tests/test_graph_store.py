@@ -624,3 +624,56 @@ class TestFullRebuildPersistsFileHash:
         }])
         rows = store.get_nodes_by_file("b.py")
         assert rows[0]["file_hash"] == "explicit123"
+
+
+class TestModuleMapEntryPoint:
+    """run_4344d341: get_module_map dropped is_entry_point (SELECT omitted it), so
+    json_exporter._build_entry_points always saw None → entry_points exported as []
+    despite the DB carrying is_entry_point=1 nodes."""
+
+    def test_module_map_carries_is_entry_point(self, store):
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::ep", file_path="backend/core/a.py",
+                       name="ep", is_entry_point=1),
+            _make_node("backend/core/a.py::plain", file_path="backend/core/a.py",
+                       name="plain", is_entry_point=0),
+        ])
+        mm = store.get_module_map()
+        nodes = mm.get("backend/core", [])
+        by_name = {n["name"]: n for n in nodes}
+        assert by_name["ep"].get("is_entry_point") == 1, \
+            "get_module_map must carry is_entry_point so entry_points can be exported"
+        assert by_name["plain"].get("is_entry_point") == 0
+
+
+class TestModuleEdges:
+    """run_4344d341: code-intel.json emitted edges=0 — no module-level edge
+    aggregation existed. get_module_edges rolls code_edges up to 2-level module
+    prefixes (the architectural skeleton), NOT a raw 25K-edge dump."""
+
+    def test_aggregates_cross_module_edges(self, store):
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+            _make_node("backend/jobs/b.py::g", file_path="backend/jobs/b.py", name="g"),
+            _make_node("backend/jobs/c.py::h", file_path="backend/jobs/c.py", name="h"),
+        ])
+        store.upsert_edges([
+            _make_edge("backend/core/a.py::f", "backend/jobs/b.py::g"),
+            _make_edge("backend/core/a.py::f", "backend/jobs/c.py::h"),
+        ])
+        me = store.get_module_edges()
+        pair = {(e["from"], e["to"]): e for e in me}
+        assert ("backend/core", "backend/jobs") in pair, \
+            "cross-module edges must aggregate to module-prefix pairs"
+        assert pair[("backend/core", "backend/jobs")]["count"] == 2, \
+            "two edges core→jobs must aggregate to count=2"
+
+    def test_excludes_intra_module_edges(self, store):
+        store.upsert_nodes([
+            _make_node("backend/core/a.py::f", file_path="backend/core/a.py", name="f"),
+            _make_node("backend/core/a.py::g", file_path="backend/core/a.py", name="g"),
+        ])
+        store.upsert_edges([_make_edge("backend/core/a.py::f", "backend/core/a.py::g")])
+        me = store.get_module_edges()
+        assert all(e["from"] != e["to"] for e in me), \
+            "intra-module edges must be excluded (skeleton = cross-module only)"
