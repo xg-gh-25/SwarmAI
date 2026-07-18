@@ -2,7 +2,7 @@
 title: "DDD Cultivation Engine — Domain Expertise as Infrastructure"
 created: 2026-05-12
 updated: 2026-07-19
-tags: [architecture, ddd, cultivation, knowledge-lifecycle, autonomous-delivery]
+tags: [architecture, ddd, cultivation, knowledge-lifecycle, ontology, autonomous-delivery]
 project: SwarmAI
 status: PE-review
 ---
@@ -15,6 +15,7 @@ status: PE-review
 
 | Date | Change | Sections Affected |
 |------|--------|-------------------|
+| 2026-07-19 | Ontology made explicit (aligns doc to the classification model in Discussion #96 + code SoT `ddd_entry_lifecycle.py:50-59`): added §3 L2 subsection "The Lightweight Ontology — Classification × Relations" (the 7-type classification + 10 relation types together ARE a lightweight, agent-consumable ontology — no OWL/Neo4j); rewrote the §9b 7-type table to add the **Cognitive Layer** + **Evergreen** columns (meta-cognitive / cognitive / operational — "layer = lifecycle = staged injection"), matching `MEMORY_SECTIONS`; added the "three views of one ontology" note (Memory / DDD / Code-Intel). | §3 L2, §9b |
 | 2026-07-19 | Scope correction (§3 L2 Knowledge Graph Relations, verified vs `knowledge_graph.py`): fixed relation name `superseded_by`→`supersedes` + listed all 10; relocated impl note (schema/batch ops in `knowledge_graph.py`, not `ddd_entry_lifecycle.py`); added honest status box — only storage + recall-hint layer is live; auto-grow, relevance-boost, contradiction-detection, and visualization are designed-but-not-wired. | §3 L2 |
 | 2026-07-19 | Drift fix (code SoT `ddd_entry_lifecycle.py`): decay windows tightened 90/180 → **60/150 total** (dormant at 60d idle, archived at 150d total-since-ref, not additional-after-dormant); **removed** the Ebbinghaus/Hebbian/Cepeda scoring model and the ref≥10 "2× veteran grace" — `ref_count` has no live body-entry producer, so decay is now age + evergreen + grace only. Freshness (`last`) is now driven by real recall access-hits (access-decay hit-log, `ddd_usage.py`), not pipeline-stage prose bumps. | §9b |
 | 2026-07-17 | Drift fix: entry classification 5→7 types (added principle, correction); Channel 8 fires on TIMER_30MIN+SESSION_CLOSE (not GIT_COMMIT); auto-approval gate rewritten to match code (confidence >=8/10 + mechanical append-only + skip semantic sections); noted 11 runtime channels vs 8 conceptual feeds. | §3 L3, §6 Feeds, §7 Approval, §9b, §10 |
@@ -97,6 +98,31 @@ Without Layer 2, the four documents would follow the same decay trajectory as an
 **Knowledge Graph Relations** *(added 2026-05-19; scope corrected 2026-07-19)* — Cross-entry relationship tracking stored in `.context/.knowledge-graph.yaml`. 10 relation types defined in `knowledge_graph.py` (`applies_to`, `motivated_by`, `supersedes`, `extends`, `conflicts_with`, `addresses`, `serves_thesis`, `requires`, `informs`, `produced_by`). Not a graph database — a flat YAML file that fits in context. Implementation split: the schema, load/save, `add_relation`, `batch_add_relations`, and `backfill_from_entries` live in `knowledge_graph.py`; `ddd_entry_lifecycle.py::bump_references()` is the intended auto-extraction integration point.
 
 > **Implementation status (honest, verified 2026-07-19):** Only the **storage + relation-authoring layer** is production-wired — the YAML store loads/saves and `session_router` reads it to surface related-entry *hint text* during recall. The rest is **designed but not live**: (a) the auto-grow loop (`bump_references(..., context_files, graph_path)` creating `applies_to` edges from pipeline usage) exists but **no production caller passes those params** — it fires only in tests; (b) the relevance-boost-during-injection was **removed** as dead code (2026-05-19, selective-mode path); (c) contradiction detection (`conflicts_with`) and (d) cluster visualization have **no consumer code** — the `conflicts_with` predicate is authored but never queried, and health-doc contradiction scoring is a hardcoded placeholder. Treat relations today as a queryable store + recall hint, NOT an active ranking/detection/visualization system.
+
+### The Lightweight Ontology: Classification × Relations
+
+The two mechanisms above — the **7-type classification** (Section 9b) and the **10 relation types** (Knowledge Graph Relations) — are not two separate features. Together they *are* a lightweight ontology: the layer that lets the agent understand *what kind of thing* a piece of knowledge is and *how it connects* to others, before it ever reasons over the content.
+
+In semantic-web terms, an ontology is the **schema layer** (the classes, relations, and constraints that describe *how a domain is described*), while a knowledge graph is the **data layer** (the specific facts organized under that schema). The DDD engine deliberately implements the schema layer as **two flat, grep-able, context-loadable structures** rather than an OWL/RDF formalism:
+
+| Ontology element | Semantic-web formalism | DDD Engine implementation |
+|------------------|------------------------|---------------------------|
+| **Classes** (what kinds of knowledge exist) | OWL classes | 7 entry types × 3 cognitive layers (`MEMORY_SECTIONS`, `ddd_entry_lifecycle.py`) |
+| **Relations** (how entries connect) | RDF triples / object properties | 10 relation types in `.knowledge-graph.yaml` (`knowledge_graph.py`) |
+| **Constraints** (rules the schema enforces) | SHACL / axioms | Layer → lifecycle rules: evergreen *sections* never decay; and only operational entries (guideline/pitfall/process) are ever reclaimed — the keep-set `{principle, correction, decision, model}` is permanent (decay engine, `_KEEP_TYPES`) |
+| **Query** | SPARQL / Cypher | Plain text loaded into context + keyword/FTS recall — the agent *is* the query engine |
+
+**Why not a formal ontology (OWL, Neo4j)?** The same reasoning as D4 (Entity Index is a routing table, not a graph): agents consume text and reason natively, so a computable axiom/inference engine adds operational weight for expressiveness the agent does not need. The classification tells the agent *how to treat* an entry (trust it forever vs. let it decay; inject it at EVALUATE vs. at BUILD); the relations tell it *what else to pull*. That is exactly enough ontology to route and govern knowledge, and no more.
+
+**Three views of one ontology.** The same classify-plus-relate schema projects onto three subsystems, which is why they interoperate rather than duplicate:
+
+| View | Nodes | Edges | Governance |
+|------|-------|-------|-----------|
+| **Memory / DDD** | 7-type entries (this doc) | 10 relation types | Darwinian decay (fade → forget) |
+| **Code Intelligence** | code symbols (`code_intel/graph_store.py`) | call / import / dependency edges | Rebuilt on change (no fade) |
+| **Entity Index** | domain concepts | concept → project/doc/section routes | Refreshed by Code Intelligence channel |
+
+Memory, DDD, and Code Intelligence are three views of one ontology — each a classification of entities plus a set of typed relations — differing only in *what* they classify (knowledge vs. code vs. concepts) and *how* the entries age.
 
 ### Layer 3: Orchestration (What Makes It Self-Sustaining)
 
@@ -557,21 +583,26 @@ Individual bullet entries within DDD documents (primarily IMPROVEMENT.md) have t
 | `last` | Last referenced date — the live decay input | Auto-updated from real recall access-hits (access-decay hit-log, `ddd_usage.py` → Channel 8) |
 | `decay` | Lifecycle state: `active` → `dormant` → `archived` | Computed by decay engine (age + evergreen + grace) |
 
-### 7-Type Classification
+### 7-Type Classification (the Ontology's Class Layer)
 
-Every entry is classified into one of 7 MECE types that determine injection behavior:
+Every entry is classified into one of 7 MECE types. This classification is the **class layer** of the lightweight ontology (Section 3, Layer 2): it is not merely a label — it is a three-layer *cognitive* structure where **the layer determines both the lifecycle (how fast the entry fades) and the injection route (when the agent reads it)**. Code SoT: `MEMORY_SECTIONS` in `ddd_entry_lifecycle.py:50-59`, where every type carries a `layer` and an `evergreen` flag.
 
-| Type | Description | Injected During | Lives In |
-|------|-------------|-----------------|----------|
-| `guideline` | "Do this" | BUILD, REVIEW | IMPROVEMENT.md (What Worked) |
-| `pitfall` | "Don't do this" | BUILD, REVIEW, TEST | IMPROVEMENT.md (What Failed) |
-| `decision` | "We chose A over B because..." | EVALUATE, PLAN | PRODUCT.md |
-| `model` | "This is what it looks like" | BUILD, DEBUG | TECH.md |
-| `process` | "These are the steps" | BUILD, DELIVER | TECH.md |
-| `principle` | "Design philosophy / first principle" | EVALUATE, THINK | Principles (evergreen, meta-cognitive) |
-| `correction` | "Cognitive bias / self-correction to avoid" | all stages | Corrections (evergreen, meta-cognitive) |
+| Cognitive Layer | Type (prefix) | Description | Evergreen | Injected During | Lives In |
+|-----------------|---------------|-------------|:---------:|-----------------|----------|
+| 🔴 **Meta-cognitive**<br>*how I think / how I erred* | `principle` (PRI) | "Design philosophy / first principle" | ✅ never decays | EVALUATE, THINK | Principles |
+| 🔴 **Meta-cognitive** | `correction` (COR) | "Cognitive bias / self-correction to avoid" | ✅ never decays | all stages | Corrections |
+| 🟡 **Cognitive**<br>*what I decided / how I model it* | `decision` (DEC) | "We chose A over B because..." | fades by relevance | EVALUATE, PLAN | PRODUCT.md |
+| 🟡 **Cognitive** | `model` (MOD) | "This is what it looks like" | fades by relevance | BUILD, DEBUG | TECH.md |
+| 🟢 **Operational**<br>*how the concrete work gets done* | `guideline` (GUI) | "Do this" | fades fastest | BUILD, REVIEW | IMPROVEMENT.md (What Worked) |
+| 🟢 **Operational** | `pitfall` (PIT) | "Don't do this" | fades fastest | BUILD, REVIEW, TEST | IMPROVEMENT.md (What Failed) |
+| 🟢 **Operational** | `process` (PRC) | "These are the steps" | fades fastest | BUILD, DELIVER | TECH.md |
 
-Type classification is automatic via signal-word detection (`_TYPE_SIGNALS` in `ddd_entry_lifecycle.py`), with a priority chain (pitfall → decision → correction → principle → guideline → process → model). `guideline` is the fallback — most entries are lessons/recommendations. The two meta-cognitive types (`principle`, `correction`) are evergreen and treated as permanent (never archived by the decay engine).
+**Why the layering exists (three reasons):**
+1. **MECE** — each entry has exactly one home, so storage and retrieval are unambiguous.
+2. **Layer = lifecycle** — the cognitive layer drives the Darwinian fading speed: meta-cognitive knowledge (how to think, how I erred) is evergreen and permanent; cognitive knowledge (decisions, models) fades by current relevance; operational knowledge (concrete how-to) fades fastest. Two distinct mechanisms enforce this, and they are not the same thing: (a) **decay** transitions any non-evergreen entry active → dormant → archived by age (so cognitive entries *do* decay); (b) **reclaim** — the physical eviction of noise — touches *only* operational entries, because the keep-set `_KEEP_TYPES = {principle, correction, decision, model}` protects both meta-cognitive and cognitive types permanently (see Decay Engine below).
+3. **Staged injection** — the classification doubles as a routing table for *what to read when*: principles at EVALUATE/THINK, pitfalls at BUILD/REVIEW/TEST, and so on.
+
+Classification is automatic via signal-word detection (`_TYPE_SIGNALS`), with a priority chain (pitfall → decision → correction → principle → guideline → process → model). `guideline` is the fallback — most entries are lessons/recommendations. A few sections override the layer of their default type by evergreen intent: `COE Registry` (post-mortems) and `Standing Preferences` are treated as meta-cognitive/evergreen, and `Open Threads` as evergreen-operational, so they are never archived by the decay engine.
 
 ### Decay Engine — Darwinian Knowledge Management
 
