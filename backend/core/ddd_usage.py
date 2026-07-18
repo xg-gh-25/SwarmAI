@@ -30,6 +30,25 @@ strips the metadata comment line + the trailing `(YYYY-MM-DD, run_id)` stamp +
 collapses whitespace, then takes a bounded prefix. See test_ddd_usage.py
 ::test_anchor_equal_across_metadata (the regression guard).
 
+"USED" PROXY — SOUNDNESS + KNOWN LIMITATION (Gate-2 meta-review)
+----------------------------------------------------------------
+The signal is "recall surfaced this entry", not "the agent cited it". A weaker
+proxy than MEMORY's [ID]-citation model — but MEMORY's model is unavailable here
+(DDD entries have no stable IDs). Why it is still sound, NOT an "immortal entry"
+hazard: recall's `_recall_ddd` grafts only the SINGLE best-BM25 entry (`entry_best`,
+score>0) into the injected bucket per query — so at most ONE entry is bumped per
+session, and it is the single MOST-RELEVANT lesson to what the user is actually
+working on. To stay alive across the 60-day dormant window an entry must be the
+top match across many DIFFERENT sessions' queries — which is the definition of a
+genuinely load-bearing lesson, exactly what we WANT to keep. A broadly-keyworded
+but useless entry does not survive: it rarely wins top-1 against a more specific
+match. KNOWN LIMITATION (accepted, not mitigated by a mechanism — over-engineering
+a frequency-cap/citation-gate would be premature): a lesson that is persistently
+the top match for a recurring real workstream stays active as long as that work
+continues, then decays normally once it stops being recalled. That is correct
+access-decay, not a leak. (If future data shows a specific entry bumped every
+session for months while provably irrelevant, revisit — do not pre-build for it.)
+
 DESIGN CONSTRAINTS
 ------------------
 - Pure filesystem + keyword anchor. Zero embeddings, zero Bedrock (recall is
