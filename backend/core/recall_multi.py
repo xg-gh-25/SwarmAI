@@ -8,8 +8,10 @@ SwarmAI has three pre-existing single-domain recall engines:
 Two domains had NO recall reader, and the three engines were invoked at three
 scattered sites with no unified fan-out. This module closes that gap (READ-only):
 
-- ``_ddd_section_scores``  — a GENERIC ``## section`` keyword scorer for DDD docs
-  (Projects/*/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md). DDD docs are not MEMORY-keyed,
+- ``_ddd_section_scores_multi`` — the GENERIC ``## section`` keyword scorer for DDD
+  docs (Projects/*/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md), scoring ALL docs in ONE
+  shared corpus (comparable scores; run_9092cb25). The single-doc ``_ddd_section_scores``
+  remains as a standalone unit (still directly tested). DDD docs are not MEMORY-keyed,
   so the MEMORY index scorer no-ops on them; this scores sections by BM25 over the
   section body text. Pure keyword — never embeds.
 - ``_codeintel_recall``    — buckets ``load_project_graph().search_symbols`` +
@@ -72,7 +74,7 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int) -> list[d
     """Entry-level BM25 over the ``- [type]``/``- ``-prefixed entries of MULTIPLE
     DDD docs, scored in ONE shared corpus so scores are COMPARABLE across docs.
 
-    The section leg (``_ddd_section_scores``) scores whole ``## sections`` — so a
+    The section leg (``_ddd_section_scores_multi``) scores whole ``## sections`` — so a
     fresh 1-line cultivated lesson buried in a 1000+-line section (IMPROVEMENT.md
     'What Failed'/'What Worked') is DILUTED to oblivion and unrecallable even by its
     exact words (run_97a6b1db: the loop's own cultivate→recall output was lost).
@@ -140,6 +142,44 @@ def _ddd_section_scores(query: str, doc_text: str) -> dict[str, float]:
     if not raw:
         return {}
     return memory_index._normalize_bm25_scores(raw)
+
+
+def _ddd_section_scores_multi(query: str,
+                              docs_text: dict[str, str]) -> list[tuple[str, str, float]]:
+    """Score the ``## sections`` of MULTIPLE DDD docs in ONE SHARED corpus, so the
+    scores are COMPARABLE across docs (run_9092cb25).
+
+    The per-doc ``_ddd_section_scores`` normalizes each doc independently → every
+    doc's top section pegs at 1.0 regardless of absolute relevance. So on an
+    implementation query, PRODUCT.md's weakly-matching marketing section
+    ("Strategic Positioning") scored 1.0 and tied/beat TECH.md's genuinely-relevant
+    "Architecture" (also 1.0) and crowded out the domain layer. Pooling every
+    section into one ``{doc::section: body}`` corpus and normalizing ONCE fixes the
+    incomparability — the marketing section falls to its true (low) rank.
+
+    Same shared-corpus fix pattern as ``_ddd_entry_hits`` (run_97a6b1db). Pure
+    keyword: NEVER embeds. Returns ``[(doc, section, score in [0,1]), ...]``.
+    """
+    from core import memory_index
+
+    corpus: dict[str, str] = {}
+    key_map: dict[str, tuple[str, str]] = {}
+    for doc, text in docs_text.items():
+        for section, body in memory_index.parse_memory_sections(text).items():
+            key = f"{doc}\x00{section}"  # NUL-join: unambiguous split (no path/section collision)
+            corpus[key] = body
+            key_map[key] = (doc, section)
+    if not corpus:
+        return []
+    raw = memory_index._bm25_scores(query, corpus)
+    if not raw:
+        return []
+    out: list[tuple[str, str, float]] = []
+    for key, score in memory_index._normalize_bm25_scores(raw).items():
+        doc, section = key_map[key]
+        out.append((doc, section, score))
+    out.sort(key=lambda t: t[2], reverse=True)
+    return out
 
 
 # ── CodeIntel domain: bucket graph search results ─────────────────────
@@ -453,8 +493,11 @@ def _recall_ddd(query: str, project: Optional[str],
         except OSError:
             continue
         _docs_text[doc] = text
-        for section, score in _ddd_section_scores(query, text).items():
-            scored.append((doc, section, score))
+    # Shared-corpus section scoring (run_9092cb25): normalize ONCE across all
+    # canonical docs so scores are comparable — a weakly-matching marketing section
+    # can no longer peg at 1.0 per-doc and crowd out a genuinely-relevant section /
+    # the domain layer. (Was: per-doc _ddd_section_scores → every doc's top = 1.0.)
+    scored.extend(_ddd_section_scores_multi(query, _docs_text))
     # Entry-level leg: score ALL docs' entries in one shared corpus (comparable
     # scores across docs) so a matching cultivated lesson surfaces from any doc.
     entry_hits: list[dict] = _ddd_entry_hits(query, _docs_text, max_sections)

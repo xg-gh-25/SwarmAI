@@ -142,6 +142,46 @@ class TestDDDGenericScorer:
         assert spy["n"] == 0
 
 
+class TestDDDSharedCorpusScorer:
+    """run_9092cb25: per-doc BM25 normalization gives EVERY doc's top section
+    score 1.0 regardless of absolute relevance, so a weakly-matching marketing
+    section in one doc ties a genuinely-relevant section in another. The
+    shared-corpus scorer normalizes ONCE across all docs → scores comparable."""
+
+    _PRODUCT = ("# PRODUCT.md\n\n## Strategic Positioning\n"
+                "SwarmAI is the market-leading agent OS; our vision and positioning "
+                "beats every competitor in the category.\n\n"
+                "## Target Users\nBuilders who want an AI team.\n")
+    _TECH = ("# TECH.md\n\n## Architecture\n"
+             "Task cancellation sends SIGTERM then cancels the asyncio task and "
+             "cleans up buffers; subprocess cleanup is serialized.\n\n"
+             "## Conventions\nsnake_case for Python.\n")
+
+    def test_relevant_section_outranks_irrelevant_marketing_across_docs(self):
+        from core.recall_multi import _ddd_section_scores_multi
+        docs = {"PRODUCT.md": self._PRODUCT, "TECH.md": self._TECH}
+        scored = _ddd_section_scores_multi("task cancellation cleanup subprocess", docs)
+        # scored: list of (doc, section, score) — the impl section must rank #1,
+        # the marketing section must NOT tie it.
+        assert scored, "shared-corpus scorer must return hits"
+        top_doc, top_section, top_score = scored[0]
+        assert top_doc == "TECH.md" and "Architecture" in top_section, \
+            f"impl query must surface TECH Architecture, got {top_doc}::{top_section}"
+        # marketing section, if present, must score strictly below the impl top
+        mkt = [s for (d, sec, s) in scored if d == "PRODUCT.md" and "Positioning" in sec]
+        if mkt:
+            assert mkt[0] < top_score, \
+                "weak marketing section must NOT tie the relevant impl section (per-doc-norm bug)"
+
+    def test_scores_comparable_not_all_one(self):
+        """No two unrelated docs both peg their top section at 1.0 (the bug)."""
+        from core.recall_multi import _ddd_section_scores_multi
+        docs = {"PRODUCT.md": self._PRODUCT, "TECH.md": self._TECH}
+        scored = _ddd_section_scores_multi("task cancellation subprocess", docs)
+        ones = [(d, sec) for (d, sec, s) in scored if s == 1.0]
+        assert len(ones) <= 1, f"at most one section may be the corpus max, got {ones}"
+
+
 # ===========================================================================
 # Cycle 3 — AC2: CodeIntel recall verb buckets graph results
 # ===========================================================================
