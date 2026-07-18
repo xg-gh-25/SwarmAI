@@ -86,17 +86,28 @@ class TestCodeIntelStats:
                 assert symbols == 5
                 assert edges == 3
 
-    def test_capabilities_block_includes_measured_stats(self):
-        """Capabilities block uses measured stats, not a hardcoded string."""
+    def test_capabilities_block_uses_static_description(self):
+        """Capabilities block uses the STATIC engine description — no live counts.
+
+        Volatile code-graph counts must NOT be injected here (they belong in the
+        metrics table), so the block stays stable in the context-loaded AGENTS.md.
+        """
         metrics = {
-            "engines": [{"name": "Code Intelligence (AST graph)", "path": "backend/core/code_intel/__init__.py", "description": "placeholder"}],
+            "engines": [{"name": "Code Intelligence (AST graph)", "path": "backend/core/code_intel/__init__.py", "description": "Deterministic graph traversal for code context retrieval"}],
             "code_intel_symbols": 12345,
             "code_intel_edges": 6789,
         }
         block = _generate_capabilities_block(metrics)
-        assert "12,345 symbols" in block
-        assert "6,789 edges" in block
-        assert "placeholder" not in block  # Description was replaced
+        assert "Deterministic graph traversal for code context retrieval" in block
+        assert "12,345 symbols" not in block  # counts live in the metrics table now
+        assert "6,789 edges" not in block
+
+    def test_metrics_block_includes_code_graph_counts(self):
+        """Code-graph symbol/edge counts appear in the metrics block, not capabilities."""
+        metrics = collect_metrics()
+        block = _generate_metrics_block(metrics)
+        assert "Code graph" in block
+        assert "symbols" in block and "edges" in block
 
 
 class TestMetricsConsistency:
@@ -107,15 +118,16 @@ class TestMetricsConsistency:
         metrics = collect_metrics()
         output = _generate_metrics_block(metrics)
 
-        # These are consumed by the output
+        # These are consumed by the metrics output block
         used_keys = {
             "commit_count", "duration_days", "core_modules", "core_loc",
             "total_backend_loc", "test_files", "skill_count", "hooks_count",
             "react_components", "platform_modes", "pipeline_spec_lines",
             "session_unit_lines", "context_loader_lines", "job_count",
+            "code_intel_symbols", "code_intel_edges",
         }
-        # These are consumed by capabilities block or staleness checks
-        intermediate_keys = {"engines", "code_intel_symbols", "code_intel_edges"}
+        # These are consumed by the capabilities block or staleness checks
+        intermediate_keys = {"engines"}
 
         all_keys = set(metrics.keys())
         assert all_keys == used_keys | intermediate_keys, (

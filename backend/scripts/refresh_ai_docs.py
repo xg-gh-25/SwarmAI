@@ -1,9 +1,17 @@
-"""Auto-refresh AI_CONTEXT.md and AGENTS.md with live codebase metrics.
+"""Auto-refresh live codebase metrics + capability list into marker-delimited docs.
 
 Scans the repo for quantitative data (commit count, LOC, skill count, etc.)
-and updates marker-delimited sections in both files. Prose outside markers
-is NEVER touched — but staleness warnings are emitted when key code patterns
-diverge from documented expectations.
+and updates marker-delimited sections. Prose outside markers is NEVER touched —
+but staleness warnings are emitted when key code patterns diverge from
+documented expectations.
+
+Write targets (deliberately split so volatile numbers stay out of context):
+  METRICS      → docs/CODEBASE_METRICS.md ONLY. These numbers churn daily, so
+                 they live in a standalone file and are NOT written into the
+                 context-loaded AGENTS.md (nor AI_CONTEXT.md). Both of those
+                 just carry a static pointer to the metrics file.
+  CAPABILITIES → AI_CONTEXT.md + AGENTS.md. The engine list is stable and
+                 actionable, so it stays inline where readers/agents expect it.
 
 Markers:
   <!-- METRICS_START --> ... <!-- METRICS_END -->
@@ -37,6 +45,8 @@ _SCRIPT_TIMEOUT: float = 8.0  # Leave 2s margin for caller
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 AI_CONTEXT = REPO_ROOT / "AI_CONTEXT.md"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
+# Volatile metrics live here ONLY — kept out of the context-loaded AGENTS.md.
+METRICS_FILE = REPO_ROOT / "docs" / "CODEBASE_METRICS.md"
 ENGINES_YAML = Path(__file__).resolve().parent / "engines.yaml"
 
 # Code Intelligence DB locations (checked in order)
@@ -296,24 +306,25 @@ def _generate_metrics_block(metrics: dict) -> str:
 | Largest state machine | {metrics['session_unit_lines']} lines | `wc -l backend/core/session_unit.py` |
 | Context system | {metrics['context_loader_lines']} lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | {metrics['platform_modes']} | |
-| Background jobs | {metrics['job_count']} handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |"""
+| Background jobs | {metrics['job_count']} handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
+| Code graph | {metrics['code_intel_symbols']:,} symbols, {metrics['code_intel_edges']:,} edges | `code_intel.db` (code_nodes / code_edges tables) |"""
 
 
 def _generate_capabilities_block(metrics: dict) -> str:
-    """Generate the capabilities/engines replacement block."""
+    """Generate the capabilities/engines replacement block.
+
+    Descriptions are STATIC (straight from engines.yaml) — no live counts are
+    injected. This keeps the block (which lives inline in the context-loaded
+    AGENTS.md) stable: it only changes when an engine is added, removed, or
+    re-described. Volatile measurements like the code-graph symbol/edge counts
+    belong in the metrics table (docs/CODEBASE_METRICS.md), not here.
+    """
     lines = ["| Engine | Path | What It Does |", "|--------|------|-------------|"]
 
     for engine in metrics.get("engines", []):
         name = engine.get("name", "")
         path = engine.get("path", "")
         desc = engine.get("description", "")
-
-        # Enrich Code Intelligence description with measured stats
-        if "Code Intelligence" in name and metrics.get("code_intel_symbols"):
-            symbols = metrics["code_intel_symbols"]
-            edges = metrics["code_intel_edges"]
-            desc = f"{symbols:,} symbols, {edges:,} edges — deterministic graph traversal for code context retrieval"
-
         lines.append(f"| {name} | `{path}` | {desc} |")
     return "\n".join(lines)
 
@@ -422,28 +433,24 @@ def refresh(dry_run: bool = False, staleness_only: bool = False) -> dict:
     capabilities_block = _generate_capabilities_block(metrics)
     results["metrics"] = metrics
 
-    for filepath in [AI_CONTEXT, AGENTS_MD]:
+    # Per-file section plan. METRICS is volatile and churns daily, so it is
+    # written ONLY to the standalone docs/CODEBASE_METRICS.md — never into the
+    # context-loaded AGENTS.md (or AI_CONTEXT.md), which just point to it.
+    # CAPABILITIES (stable, actionable) stays inline in both prose docs.
+    write_plan: list[tuple[Path, list[tuple[str, str, str]]]] = [
+        (METRICS_FILE, [("<!-- METRICS_START -->", "<!-- METRICS_END -->", metrics_block)]),
+        (AI_CONTEXT, [("<!-- CAPABILITIES_START -->", "<!-- CAPABILITIES_END -->", capabilities_block)]),
+        (AGENTS_MD, [("<!-- CAPABILITIES_START -->", "<!-- CAPABILITIES_END -->", capabilities_block)]),
+    ]
+
+    for filepath, sections in write_plan:
         if not filepath.exists():
             continue
 
         original = filepath.read_text(encoding="utf-8")
         updated = original
-
-        # Replace metrics section
-        updated = _replace_section(
-            updated,
-            "<!-- METRICS_START -->",
-            "<!-- METRICS_END -->",
-            metrics_block,
-        )
-
-        # Replace capabilities section
-        updated = _replace_section(
-            updated,
-            "<!-- CAPABILITIES_START -->",
-            "<!-- CAPABILITIES_END -->",
-            capabilities_block,
-        )
+        for start_marker, end_marker, block in sections:
+            updated = _replace_section(updated, start_marker, end_marker, block)
 
         if updated != original:
             if dry_run:

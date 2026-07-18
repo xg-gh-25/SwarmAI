@@ -57,23 +57,10 @@ The codebase is both the product AND the evidence. The interesting parts are not
 
 ### Scale Indicators (not vanity metrics)
 
-<!-- METRICS_START -->
-| Metric | Value | How to Verify |
-|--------|-------|---------------|
-| Total commits | 2940+ | `git log --oneline | wc -l` |
-| Duration | ~146 days | First commit to latest (1 human contributor) |
-| Backend core modules | 139 Python files, 78247 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 207941 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
-| Test files | 390 | `find backend/tests -name "*.py" | wc -l` |
-| Skills (agent capabilities) | 91 | `ls -d backend/skills/s_* | wc -l` |
-| Post-session hooks | 14 | `ls backend/hooks/*.py | wc -l` |
-| React components | 207 | `find desktop/src -name "*.tsx" | wc -l` |
-| Pipeline spec depth | 1553 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 4467 lines | `wc -l backend/core/session_unit.py` |
-| Context system | 1220 lines | `wc -l backend/core/context_directory_loader.py` |
-| Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
-| Background jobs | 12 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-<!-- METRICS_END -->
+Live numbers (commits, LOC, file counts) are auto-refreshed in
+[`docs/CODEBASE_METRICS.md`](docs/CODEBASE_METRICS.md). They live in that
+standalone file rather than inline here so they can change constantly without
+churning this document or the agent-context `AGENTS.md`.
 
 ## What Makes This Different From Other Agent Harnesses
 
@@ -99,7 +86,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 | Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
 | GitHub Community Engine | `backend/skills/s_github_community/scripts/monitor.py` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
 | Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
-| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | 19,250 symbols, 23,460 edges — deterministic graph traversal for code context retrieval |
+| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
 | Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
