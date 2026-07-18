@@ -924,6 +924,10 @@ async fn probe_daemon_health_with_progress(
 
 /// Extract the daemon version from the /health JSON response.
 /// Returns None if the version field is missing or unparseable.
+/// macOS-only: part of the daemon cold-start/upgrade path (Win/Linux use the
+/// subprocess spawn path). Gating avoids E0425 on the macos-only symbols it
+/// shares a call graph with (`probe_daemon_health_adaptive`, `DAEMON_UPGRADE_DRAIN_SECS`).
+#[cfg(target_os = "macos")]
 async fn get_daemon_version() -> Option<String> {
     let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
     let client = reqwest::Client::builder()
@@ -946,6 +950,9 @@ async fn get_daemon_version() -> Option<String> {
 /// background wrapper (`sync_daemon_version_background`).  Event emission
 /// has been moved to the wrapper, so this function no longer emits
 /// `backend-upgrading` or `backend-upgraded` directly.
+/// macOS-only: the daemon cold-start/upgrade path exists only on macOS
+/// (Win/Linux use the subprocess spawn path); its sole caller is macos-gated.
+#[cfg(target_os = "macos")]
 async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
     let daemon_version = get_daemon_version().await
         .unwrap_or_else(|| "unknown".to_string());
@@ -1190,6 +1197,9 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
 /// Safety: this function never returns an error. All failure modes are
 /// converted into events so that the Tauri runtime cannot surface an
 /// uncaught background error.
+/// macOS-only: wraps `sync_daemon_version` (daemon upgrade path is macOS-only);
+/// its sole caller in `start_backend` is already macos-gated.
+#[cfg(target_os = "macos")]
 async fn sync_daemon_version_background(
     app: tauri::AppHandle,
     app_version: String,
