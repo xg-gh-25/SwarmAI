@@ -556,6 +556,13 @@ async def _verify_bedrock(config: dict) -> dict:
         }
     except Exception as e:
         error_str = str(e)
+        # #4b: the raw boto/botocore exception string routinely carries the
+        # inference-profile ARN, account-id, and request-id. Log it server-side
+        # for debugging, but NEVER return it in the client-facing `error` field
+        # (it is forwarded to the frontend and into frontend.log). The actionable
+        # guidance lives in fix_hint; error_type below is classified from the RAW
+        # string BEFORE generalization, so classification is unaffected.
+        logger.warning("Bedrock verify failed (raw): %s", error_str)
 
         # Remediation must match the user's ACTUAL auth method — never hardcode
         # ADA (an Amazon-internal command) for an SSO / bedrock_api_key user
@@ -567,9 +574,9 @@ async def _verify_bedrock(config: dict) -> dict:
         _rem_fix = remediation_for(config.get("auth_method"))["fix_text"]
 
         if "ExpiredToken" in error_str or "expired" in error_str.lower():
-            return _auth_error(error_str, "expired_credentials", _rem_fix)
+            return _auth_error("Credentials expired.", "expired_credentials", _rem_fix)
         if "InvalidIdentityToken" in error_str or "UnrecognizedClient" in error_str:
-            return _auth_error(error_str, "invalid_credentials", _rem_fix)
+            return _auth_error("Credentials invalid.", "invalid_credentials", _rem_fix)
         if "not authorized" in error_str.lower() or "AccessDenied" in error_str:
             run_mode = os.environ.get("SWARMAI_MODE", "daemon")
             if run_mode == "hive":
@@ -580,8 +587,9 @@ async def _verify_bedrock(config: dict) -> dict:
                 )
             else:
                 hint = "Model access not enabled in this region. Check Bedrock console."
-            return _auth_error(error_str, "access_denied", hint)
-        return _auth_error(error_str, "unknown", "Check AWS configuration and try again.")
+            return _auth_error("Access denied by Bedrock.", "access_denied", hint)
+        return _auth_error("Bedrock verification failed.", "unknown",
+                           "Check AWS configuration and try again.")
 
 
 async def _verify_anthropic_api(config: dict) -> dict:
@@ -626,21 +634,29 @@ async def _verify_anthropic_api(config: dict) -> dict:
 
         body = resp.json()
         error_msg = body.get("error", {}).get("message", resp.text)
+        # #4b: log the raw provider message server-side, but return a
+        # generalized, identifier-free message to the client. Classification is
+        # by HTTP status (below), not by the message text, so generalizing is safe.
+        logger.warning("Anthropic verify failed (status=%s, raw): %s",
+                       resp.status_code, error_msg)
 
         if resp.status_code == 401:
-            return _auth_error(error_msg, "invalid_key",
+            return _auth_error("API key rejected (401).", "invalid_key",
                                "API key is invalid. Check the key at console.anthropic.com.")
         if resp.status_code == 403:
-            return _auth_error(error_msg, "forbidden",
+            return _auth_error("Access forbidden (403).", "forbidden",
                                "API key doesn't have access to this model.")
 
-        return _auth_error(error_msg, "api_error", "Check Anthropic API status.")
+        return _auth_error(f"Anthropic API error (status {resp.status_code}).",
+                           "api_error", "Check Anthropic API status.")
 
     except httpx.ConnectError:
         return _auth_error("Cannot reach API endpoint", "network",
                            f"Check network connectivity to {base_url}")
     except Exception as e:
-        return _auth_error(str(e), "unknown", "Check API configuration.")
+        logger.warning("Anthropic verify failed (raw): %s", e)
+        return _auth_error("Anthropic verification failed.", "unknown",
+                           "Check API configuration.")
 
 
 @router.get("/auth-hint")
@@ -687,9 +703,13 @@ async def get_auth_hint():
     else:
         suggested = "sso"  # safest default (in both internal & external card sets)
 
-    # Probe real credential details for display
-    ada_details = _probe_ada_details() if has_ada else None
-    aws_profiles = _probe_aws_profiles()  # checks config for real SSO profiles
+    # Probe real credential details for display. Run OFF the event loop:
+    # _probe_ada_details shells out (subprocess.run, timeout=5, up to 2×) and
+    # _probe_aws_profiles does file IO — a slow/hung ada CLI would otherwise
+    # block ALL backend requests for up to ~10s. Mirrors _probe_iam_instance_role
+    # below, which already uses to_thread for the same reason.
+    ada_details = await asyncio.to_thread(_probe_ada_details) if has_ada else None
+    aws_profiles = await asyncio.to_thread(_probe_aws_profiles)  # config file IO, off-loop
 
     # Detect run mode so frontend can adjust auth UX
     run_mode = os.environ.get("SWARMAI_MODE", "daemon")
@@ -698,8 +718,7 @@ async def get_auth_hint():
     # Run in thread to avoid blocking the event loop (3 sync httpx calls, 1s timeout each).
     iam_details = None
     if run_mode == "hive":
-        import asyncio as _asyncio
-        iam_details = await _asyncio.to_thread(_probe_iam_instance_role)
+        iam_details = await asyncio.to_thread(_probe_iam_instance_role)
         # On Hive, ALWAYS suggest iam_role even if IMDS probe fails —
         # it's the only valid auth method. Desktop methods are noise.
         suggested = "iam_role"

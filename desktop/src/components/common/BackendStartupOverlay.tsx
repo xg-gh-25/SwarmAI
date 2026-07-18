@@ -204,6 +204,32 @@ export function classifyHealth(
   return 'alive';
 }
 
+/**
+ * #4a: absolute wall-clock ceiling for the health-check phase (pollHealth).
+ *
+ * pollHealth's only give-up was `noResponseStreak >= maxNoResponse`, which an
+ * `alive` reply resets to 0 — so a backend flapping between `alive` and
+ * `no_response` polls forever and never reaches the readiness phase (which owns
+ * the readinessTimeout ceiling). On desktop the Rust COLD_START_CEILING is the
+ * backstop; Hive/browser mode has none → infinite spinner. This helper gives
+ * pollHealth the SAME absolute bound (readinessTimeout) so the total overlay
+ * lifetime is bounded regardless of flapping — NOT a second independent timer.
+ *
+ * Uses `performance.now()` deltas (monotonic) at the call site; a null start
+ * (before the first poll) never trips, so a slow Tauri cold start that hasn't
+ * begun polling is never false-fatal'd.
+ *
+ * @param elapsedMs  performance.now() - firstPollTime, or null if polling hasn't started
+ * @param ceilingMs  the absolute budget (TIMING.readinessTimeout)
+ */
+export function hasExceededStartupCeiling(
+  elapsedMs: number | null,
+  ceilingMs: number,
+): boolean {
+  if (elapsedMs === null) return false;
+  return elapsedMs >= ceilingMs;
+}
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -414,6 +440,27 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
       if (!firstPollTimeRef.current) {
         firstPollTimeRef.current = performance.now();
+      }
+
+      // #4a: absolute wall-clock ceiling for the health phase. Without this, a
+      // backend flapping between `alive` and `no_response` resets the
+      // noResponseStreak every `alive` and polls forever (Hive/browser mode has
+      // no Rust COLD_START_CEILING backstop). Uses the monotonic performance.now
+      // delta from the first poll. NOTE: this bounds the HEALTH phase alone; the
+      // readiness phase has its own separate startTimeRef-based readinessTimeout
+      // (:381), so the two phases are independent windows — worst-case total
+      // overlay lifetime is ~2×readinessTimeout. That is acceptable (each phase
+      // is generously bounded); the point of THIS ceiling is that the health
+      // phase, previously unbounded under alive/no_response flapping, now has ANY
+      // ceiling at all.
+      const healthElapsed = firstPollTimeRef.current !== null
+        ? performance.now() - firstPollTimeRef.current
+        : null;
+      if (hasExceededStartupCeiling(healthElapsed, TIMING.readinessTimeout)) {
+        console.error('[Health Check] Startup ceiling reached after', healthElapsed, 'ms without readiness');
+        setStatus('error');
+        setErrorMessage(t('startup.initializationTimeout', { seconds: Math.round((healthElapsed ?? 0) / 1000) }));
+        return;
       }
 
       const healthResult = await checkHealth();

@@ -291,6 +291,59 @@ class TestSecretStore:
         with pytest.raises(ValueError):
             mgr.set_secret("aws_region", "us-west-2")  # not a secret key
 
+    # ── #3: cross-process lock around the read-modify-write ──
+    def test_set_secret_serializes_on_lockfile(self, tmp_config: Path):
+        """set_secret's read-modify-write MUST be guarded by an exclusive lock
+        on a persistent sibling lockfile (secrets.json.lock). Non-theater proof:
+        THIS test grabs the exclusive lock first, then calls set_secret from a
+        worker thread and asserts it BLOCKS while the lock is held and only
+        completes after release. Without the prod lock, set_secret ignores the
+        held lock and completes immediately → this test fails.
+
+        POSIX-only mechanism (fcntl.flock via utils.file_lock); skip on Windows
+        where the daemon runs as a subprocess and this race is not exercised."""
+        import sys as _sys
+        if _sys.platform.startswith("win"):
+            pytest.skip("flock semantics differ on Windows; race not exercised there")
+        import threading
+        import time
+        from utils.file_lock import flock_exclusive, flock_unlock
+
+        mgr = AppConfigManager(config_path=tmp_config)
+        mgr.load()
+        # Seed the store so the lockfile path is established next to secrets.json.
+        mgr.set_secret("anthropic_api_key", "seed")
+        lock_path = tmp_config.parent / "secrets.json.lock"
+
+        done = threading.Event()
+
+        def _writer():
+            # Runs in a worker thread; blocks on the same exclusive lock.
+            mgr.set_secret("aws_bearer_token", "racer")
+            done.set()
+
+        lock_fd = open(lock_path, "w")
+        try:
+            flock_exclusive(lock_fd)          # test holds the lock
+            t = threading.Thread(target=_writer, daemon=True)
+            t.start()
+            # While WE hold the lock, set_secret must NOT complete.
+            blocked = not done.wait(timeout=1.0)
+            assert blocked, (
+                "set_secret completed while an exclusive lock was held — it is "
+                "NOT serializing its read-modify-write on secrets.json.lock")
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
+        # After release, the writer must finish promptly.
+        assert done.wait(timeout=5.0), "set_secret did not complete after lock release"
+        t.join(timeout=5.0)
+        # Both keys survived — no lost update.
+        mgr2 = AppConfigManager(config_path=tmp_config)
+        mgr2.load()
+        assert mgr2.get("anthropic_api_key") == "seed"
+        assert mgr2.get("aws_bearer_token") == "racer"
+
     def test_config_json_never_contains_secret_after_set_secret(self, tmp_config: Path):
         """Gate-2 R4: even after a normal update() writes config.json, the
         secret set via set_secret must be absent from the config file."""

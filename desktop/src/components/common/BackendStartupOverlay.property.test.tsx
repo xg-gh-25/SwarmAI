@@ -35,7 +35,7 @@ import { describe, it, expect } from 'vitest';
 import * as fc from 'fast-check';
 // Import the REAL exported classifier (NOT a local re-implementation) so that
 // reverting the production classifyHealth turns these tests RED (no test-theater).
-import { classifyHealth } from './BackendStartupOverlay';
+import { classifyHealth, hasExceededStartupCeiling } from './BackendStartupOverlay';
 
 // ============== Shared Type Definitions ==============
 
@@ -582,6 +582,50 @@ describe('classifyHealth (3-way, run_e3dbc009 false-fatal fix)', () => {
         return r === 'ready';
       }),
       { numRuns: 30 },
+    );
+  });
+});
+
+/**
+ * #4a: pollHealth wall-clock ceiling. Before this fix, pollHealth (the
+ * health-check phase) had NO absolute time bound — its only give-up was
+ * `noResponseStreak >= maxNoResponse (60)`, and an `alive` reply RESETS that
+ * streak to 0. So a backend flapping between `alive` and `no_response` never
+ * accumulates 60 consecutive no-responses and never reaches the readiness
+ * phase (which has the readinessTimeout ceiling). On desktop the Rust
+ * COLD_START_CEILING is the backstop, but Hive/browser mode has no Rust gate →
+ * infinite spinner.
+ *
+ * The fix extracts the ceiling decision into an exported pure helper wired into
+ * pollHealth. These tests exercise the REAL export (imported above), so
+ * reverting the production wiring / helper turns them RED (no test-theater —
+ * no local re-derivation of the comparison).
+ */
+describe('hasExceededStartupCeiling (#4a — pollHealth wall-clock ceiling)', () => {
+  it('returns false below the ceiling, true at/above it', () => {
+    expect(hasExceededStartupCeiling(0, 300000)).toBe(false);
+    expect(hasExceededStartupCeiling(299999, 300000)).toBe(false);
+    expect(hasExceededStartupCeiling(300000, 300000)).toBe(true);
+    expect(hasExceededStartupCeiling(300001, 300000)).toBe(true);
+  });
+
+  it('a never-started clock (null start) never trips the ceiling', () => {
+    // firstPollTimeRef is null before the first poll — must NOT false-fatal.
+    expect(hasExceededStartupCeiling(null, 300000)).toBe(false);
+  });
+
+  it('property: monotone in elapsed — once tripped, stays tripped', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 600000 }),
+        fc.integer({ min: 1, max: 600000 }),
+        (elapsed, ceiling) => {
+          const tripped = hasExceededStartupCeiling(elapsed, ceiling);
+          expect(tripped).toBe(elapsed >= ceiling);
+          return tripped === elapsed >= ceiling;
+        },
+      ),
+      { numRuns: 50 },
     );
   });
 });

@@ -61,6 +61,67 @@ class TestVerifyAuthBedrock:
         assert data["error_type"] == "expired_credentials"
         assert "fix_hint" in data
 
+    def test_verify_bedrock_error_does_not_leak_arn_or_account(self, client):
+        """#4b: raw provider exception text (ARN / account-id / request-id) must
+        NOT appear in the client-facing `error` field. The actionable guidance
+        lives in fix_hint; error_type (derived from the raw string BEFORE
+        generalization) must still classify correctly. Reverting the fix (passing
+        error_str back into `error`) re-leaks the sentinel → this test fails."""
+        sentinel = ("ExpiredTokenException: The security token in "
+                    "arn:aws:sts::123456789012:assumed-role/Secret-Role/xyz "
+                    "expired (request-id abc-000-secret)")
+        mock_client = MagicMock()
+        mock_client.invoke_model.side_effect = Exception(sentinel)
+
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        # error_type classification survives generalization (derived from raw str)
+        assert data["error_type"] == "expired_credentials"
+        assert "fix_hint" in data and data["fix_hint"]
+        # The identifiers must be gone from the client-facing error field.
+        err = data.get("error", "") or ""
+        assert "arn:aws:sts::123456789012" not in err, "leaked ARN/account-id"
+        assert "123456789012" not in err, "leaked account-id"
+        assert "abc-000-secret" not in err, "leaked request-id"
+
+    def test_verify_anthropic_error_does_not_leak_raw(self, client):
+        """#4b (Anthropic-direct path): a raw provider exception must not surface
+        its text in the client `error` field; error_type + fix_hint stay intact."""
+        sentinel = "InternalServerError: trace-id 987-secret-token host 10.1.2.3"
+
+        class _DummyConnectError(Exception):
+            pass
+
+        with patch("routers.system.httpx") as mock_httpx, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": False, "anthropic_api_key": "sk-ant-x",
+                 "default_model": "claude-opus-4-6",
+             }):
+            # ConnectError must be a DISTINCT class so a generic Exception falls
+            # through to `except Exception` (the raw-leak branch), not the
+            # network branch. (A prior version aliased ConnectError=Exception,
+            # which caught the sentinel early and made the test vacuous.)
+            mock_httpx.ConnectError = _DummyConnectError
+            mock_httpx.AsyncClient.side_effect = Exception(sentinel)
+            resp = client.post("/api/system/verify-auth")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is False
+        err = data.get("error", "") or ""
+        assert "987-secret-token" not in err, "leaked trace-id"
+        assert "10.1.2.3" not in err, "leaked host IP"
+        assert "fix_hint" in data
+
     def test_verify_auth_bedrock_access_denied(self, client):
         """Model not enabled → error_type: access_denied."""
         mock_client = MagicMock()
@@ -305,6 +366,69 @@ class TestDeploymentContext:
         # can't be sure. The frontend uses this to elevate the toggle.
         d = self._hint_with_home(client, set())
         assert d["detection_confidence"] == "low"
+
+
+class TestAuthHintNonBlocking:
+    """#2: get_auth_hint must NOT run the synchronous credential probes
+    (_probe_ada_details subprocess, _probe_aws_profiles file IO) directly on
+    the event loop — they must be dispatched via asyncio.to_thread, mirroring
+    the existing _probe_iam_instance_role:702 pattern. A ~10s ada CLI hang would
+    otherwise block ALL backend requests.
+
+    Non-theater design: each probe is replaced with a spy that records whether
+    it executed inside the running event loop (asyncio.get_running_loop succeeds)
+    or off it (RuntimeError → worker thread). Sync-on-loop → in_loop=True (RED);
+    to_thread → in_loop=False (GREEN). Reverting the prod fix flips this."""
+
+    def _probe_where(self, client, present):
+        """Call auth-hint with the two probes replaced by loop-detecting spies.
+        Returns {'ada': bool_in_loop, 'aws': bool_in_loop} — True == ran ON the
+        event loop (the bug)."""
+        import asyncio as _asyncio
+
+        seen = {}
+
+        def _spy(name, ret):
+            def _fn(*a, **k):
+                try:
+                    _asyncio.get_running_loop()
+                    seen[name] = True   # ran ON the event loop == blocking
+                except RuntimeError:
+                    seen[name] = False  # ran in a worker thread == off-loop
+                return ret
+            return _fn
+
+        def joinpath_side_effect(p):
+            m = MagicMock()
+            m.is_dir.return_value = (p in present)
+            m.glob.return_value = []
+            return m
+
+        with patch("routers.system.Path") as mock_path_cls, \
+             patch("routers.system._probe_ada_details",
+                   side_effect=_spy("ada", {"account": "x"})), \
+             patch("routers.system._probe_aws_profiles",
+                   side_effect=_spy("aws", ["p"])):
+            home = MagicMock()
+            home.joinpath.side_effect = joinpath_side_effect
+            mock_path_cls.home.return_value = home
+            with patch.dict(os.environ, {}, clear=True):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                os.environ["SWARMAI_MODE"] = "daemon"
+                client.get("/api/system/auth-hint").json()
+        return seen
+
+    def test_probe_ada_details_runs_off_event_loop(self, client):
+        # ~/.ada present so _probe_ada_details is invoked.
+        seen = self._probe_where(client, {".ada"})
+        assert seen.get("ada") is False, (
+            "_probe_ada_details ran ON the event loop — it must be dispatched "
+            "via asyncio.to_thread (subprocess up to ~10s would block all requests)")
+
+    def test_probe_aws_profiles_runs_off_event_loop(self, client):
+        seen = self._probe_where(client, set())
+        assert seen.get("aws") is False, (
+            "_probe_aws_profiles ran ON the event loop — must use asyncio.to_thread")
 
 
 # ── AC5: verify-auth is stateless — accepts an optional override body ──

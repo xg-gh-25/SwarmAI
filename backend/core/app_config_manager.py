@@ -258,37 +258,71 @@ class AppConfigManager:
             self.load()
         assert self._cache is not None
         self._cache[key] = value
-        # Read-modify-write the secret store, preserving other secrets.
-        existing: dict[str, Any] = {}
-        try:
-            raw = self._secret_path.read_text(encoding="utf-8").strip()
-            if raw:
-                loaded = json.loads(raw)
-                if isinstance(loaded, dict):
-                    existing = loaded
-        except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
-            existing = {}
-        existing[key] = value
         self._secret_path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic 0o600 write: write to a temp file created 0o600, then os.replace
-        # onto the target (rename is atomic on the same filesystem). A crash can
-        # never leave a truncated secrets.json → the persisted key is durable.
+        # Serialize the read-modify-write across processes. The lock is held on a
+        # PERSISTENT sibling lockfile (secrets.json.lock) — NOT on secrets.json
+        # itself, because the RMW ends in os.replace() which swaps the inode, so a
+        # lock on secrets.json's fd would guard the wrong (old) inode. The lockfile
+        # is never replaced, so its inode is stable. Cross-platform via
+        # utils.file_lock (fcntl on POSIX, msvcrt on Windows) — imported here (not
+        # module-top) so app_config_manager stays importable even where the lock
+        # primitive is unavailable, and to avoid a hard dependency at boot. Without
+        # this, two concurrent set_secret calls each read the old dict, add their
+        # own key, and replace → last writer wins, first key lost (classic
+        # lost-update on the shared secret store).
+        from utils.file_lock import flock_exclusive, flock_unlock
         import os as _os
-        tmp_path = str(self._secret_path) + ".tmp"
-        fd = _os.open(tmp_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+        lock_path = str(self._secret_path) + ".lock"
         try:
-            with _os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(existing, indent=2) + "\n")
-                fh.flush()
-                _os.fsync(fh.fileno())
-            _os.replace(tmp_path, str(self._secret_path))
-            _os.chmod(str(self._secret_path), 0o600)  # re-assert after replace
+            lock_fd = open(lock_path, "w")
+        except OSError as e:
+            # A non-writable app-data dir (misprovisioned Hive box, wrong perms)
+            # would otherwise surface as a bare 500 on the setup-wizard call.
+            # Re-raise with an actionable message instead. set_secret is only
+            # invoked from request handlers (never at boot), so this cannot crash
+            # the daemon.
+            raise RuntimeError(
+                f"Cannot open secret lockfile {lock_path!r} — the app data "
+                f"directory is not writable ({e}). Check permissions on "
+                f"{self._secret_path.parent}."
+            ) from e
+        try:
+            flock_exclusive(lock_fd)
+            # Read-modify-write the secret store, preserving other secrets.
+            existing: dict[str, Any] = {}
+            try:
+                raw = self._secret_path.read_text(encoding="utf-8").strip()
+                if raw:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, dict):
+                        existing = loaded
+            except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+                existing = {}
+            existing[key] = value
+            # Atomic 0o600 write: write to a temp file created 0o600, then os.replace
+            # onto the target (rename is atomic on the same filesystem). A crash can
+            # never leave a truncated secrets.json → the persisted key is durable.
+            tmp_path = str(self._secret_path) + ".tmp"
+            fd = _os.open(tmp_path, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+            try:
+                with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps(existing, indent=2) + "\n")
+                    fh.flush()
+                    _os.fsync(fh.fileno())
+                _os.replace(tmp_path, str(self._secret_path))
+                _os.chmod(str(self._secret_path), 0o600)  # re-assert after replace
+            finally:
+                if _os.path.exists(tmp_path):
+                    try:
+                        _os.unlink(tmp_path)
+                    except OSError:
+                        pass
         finally:
-            if _os.path.exists(tmp_path):
-                try:
-                    _os.unlink(tmp_path)
-                except OSError:
-                    pass
+            try:
+                flock_unlock(lock_fd)
+            except OSError:
+                pass
+            lock_fd.close()
         logger.info("Secret persisted: %s (secrets.json, 0o600)", key)
 
     def get(self, key: str, default: Any = None) -> Any:
