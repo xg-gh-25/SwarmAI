@@ -234,9 +234,9 @@ _SEED_QUERIES = [
 ]
 
 # Run-0 single-source rule: never hardcode the canonical-4 tuple (order-independent
-# detector in test_ddd_canonical_docs_single_source). Used only as dict keys below,
-# so order is irrelevant. core.* is importable here (see the core.context_recall
-# import at module top).
+# detector in test_ddd_canonical_docs_single_source). Used only as dict keys below
+# (_load_corpora), so tuple order is irrelevant. core.* resolves on the same sys.path
+# this module already relies on for its deferred core.context_recall import.
 from core.project_registry import DDD_CANONICAL_DOCS as _DDD_DOCS
 # context_files recall serves MEMORY.md ONLY (recall_multi._recall_context_files);
 # KNOWLEDGE.md has no served recall path, so it's not a benchmarkable doc here.
