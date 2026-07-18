@@ -79,6 +79,80 @@ class TestVerifyAuthBedrock:
         assert data["success"] is False
         assert data["error_type"] == "access_denied"
 
+    # ── F1: verify-error remediation must be METHOD-AWARE, not hardcoded ADA ──
+    # An external SSO user who fails a Bedrock verify must NOT be told to run
+    # `ada credentials update` (an Amazon-internal command they can't run).
+    def test_verify_bedrock_expired_sso_gets_sso_not_ada(self, client):
+        """method=sso + expired → fix_hint says `aws sso login`, NEVER `ada`."""
+        mock_client = MagicMock()
+        mock_client.invoke_model.side_effect = Exception(
+            "ExpiredTokenException: token has expired")
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "sso",
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")
+        data = resp.json()
+        assert data["error_type"] == "expired_credentials"
+        assert "ada credentials update" not in data["fix_hint"]
+        assert "aws sso login" in data["fix_hint"].lower()
+
+    def test_verify_bedrock_invalid_sso_gets_sso_not_ada(self, client):
+        """method=sso + invalid identity → fix_hint is SSO-specific, not ADA."""
+        mock_client = MagicMock()
+        mock_client.invoke_model.side_effect = Exception(
+            "UnrecognizedClientException: The security token included in the request is invalid")
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "sso",
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")
+        data = resp.json()
+        assert data["error_type"] == "invalid_credentials"
+        assert "ada" not in data["fix_hint"].lower()
+        assert "aws sso login" in data["fix_hint"].lower()
+
+    def test_verify_bedrock_expired_ada_still_gets_ada(self, client):
+        """Regression guard: method=ada must STILL get the ADA refresh command."""
+        mock_client = MagicMock()
+        mock_client.invoke_model.side_effect = Exception(
+            "ExpiredTokenException: token has expired")
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "ada",
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")
+        data = resp.json()
+        assert data["error_type"] == "expired_credentials"
+        assert "ada credentials update" in data["fix_hint"]
+
+    def test_verify_bedrock_expired_bedrock_key_gets_bearer_msg(self, client):
+        """method=bedrock_api_key + expired → bearer-token remediation, not ADA."""
+        mock_client = MagicMock()
+        mock_client.invoke_model.side_effect = Exception(
+            "ExpiredTokenException: bearer token has expired")
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                 "auth_method": "bedrock_api_key",
+             }):
+            mock_boto3.client.return_value = mock_client
+            resp = client.post("/api/system/verify-auth")
+        data = resp.json()
+        assert data["error_type"] == "expired_credentials"
+        assert "ada credentials update" not in data["fix_hint"]
+        assert "bearer" in data["fix_hint"].lower() or "bedrock" in data["fix_hint"].lower()
+
 
 class TestVerifyAuthAnthropicAPI:
     """Test POST /api/system/verify-auth with Anthropic API key path."""
@@ -181,6 +255,56 @@ class TestDeploymentContext:
         # flip an external user to internal (Gate-1 FIX-E).
         d = self._hint_with_home(client, {".toolbox"})
         assert d["deployment_context"] == "external"
+
+    # ── F4: suggested_method must be CONSISTENT with the deployment_context ──
+    # The apikey card only shows for external context. If the machine is
+    # internal (~/.ada present) AND an ANTHROPIC_API_KEY is exported, the old
+    # logic suggested "apikey" (has_api_key wins first) — but the frontend then
+    # snaps to the first internal card, silently discarding the suggestion.
+    # The suggestion must never be a method absent from the resulting card set.
+    def _hint_with_home_and_env(self, client, present: set, env: dict):
+        def joinpath_side_effect(p):
+            m = MagicMock()
+            m.is_dir.return_value = (p in present)
+            m.glob.return_value = []
+            return m
+        with patch("routers.system.Path") as mock_path_cls:
+            home = MagicMock()
+            home.joinpath.side_effect = joinpath_side_effect
+            mock_path_cls.home.return_value = home
+            with patch.dict(os.environ, {}, clear=True):
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+                os.environ["SWARMAI_MODE"] = "daemon"
+                for k, v in env.items():
+                    os.environ[k] = v
+                return client.get("/api/system/auth-hint").json()
+
+    def test_internal_machine_with_api_key_does_not_suggest_apikey(self, client):
+        # ~/.ada → internal; apikey card is NOT offered internally.
+        d = self._hint_with_home_and_env(
+            client, {".ada"}, {"ANTHROPIC_API_KEY": "sk-ant-xyz"})
+        assert d["deployment_context"] == "internal"
+        assert d["suggested_method"] != "apikey"
+        assert d["suggested_method"] in ("ada", "sso", "bedrock_api_key")
+
+    def test_external_machine_with_api_key_still_suggests_apikey(self, client):
+        # Regression guard: on external context apikey IS a valid card.
+        d = self._hint_with_home_and_env(
+            client, set(), {"ANTHROPIC_API_KEY": "sk-ant-xyz"})
+        assert d["deployment_context"] == "external"
+        assert d["suggested_method"] == "apikey"
+
+    # ── F3/F4: detection_confidence exposes low-confidence detection so the
+    #    frontend can make the internal/external toggle discoverable. ──
+    def test_auth_hint_confidence_high_when_internal_signal_present(self, client):
+        d = self._hint_with_home(client, {".ada"})
+        assert d["detection_confidence"] == "high"
+
+    def test_auth_hint_confidence_low_when_no_signal(self, client):
+        # No ~/.ada|~/.midway and no SSO cache → we DEFAULTED to external and
+        # can't be sure. The frontend uses this to elevate the toggle.
+        d = self._hint_with_home(client, set())
+        assert d["detection_confidence"] == "low"
 
 
 # ── AC5: verify-auth is stateless — accepts an optional override body ──

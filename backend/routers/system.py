@@ -557,16 +557,19 @@ async def _verify_bedrock(config: dict) -> dict:
     except Exception as e:
         error_str = str(e)
 
+        # Remediation must match the user's ACTUAL auth method — never hardcode
+        # ADA (an Amazon-internal command) for an SSO / bedrock_api_key user
+        # (F1). _verify_bedrock is only reached for Bedrock methods
+        # (ada/sso/iam_role/bedrock_api_key), so remediation_for covers the set;
+        # a None method (unpersisted onboarding) returns the safe generic
+        # fallback rather than ADA jargon.
+        from core.auth_remediation import remediation_for
+        _rem_fix = remediation_for(config.get("auth_method"))["fix_text"]
+
         if "ExpiredToken" in error_str or "expired" in error_str.lower():
-            return _auth_error(
-                error_str, "expired_credentials",
-                "Refresh credentials: ada credentials update --account=ACCOUNT --role=ROLE"
-            )
+            return _auth_error(error_str, "expired_credentials", _rem_fix)
         if "InvalidIdentityToken" in error_str or "UnrecognizedClient" in error_str:
-            return _auth_error(
-                error_str, "invalid_credentials",
-                "Credentials are invalid. Re-authenticate with ada or aws sso login."
-            )
+            return _auth_error(error_str, "invalid_credentials", _rem_fix)
         if "not authorized" in error_str.lower() or "AccessDenied" in error_str:
             run_mode = os.environ.get("SWARMAI_MODE", "daemon")
             if run_mode == "hive":
@@ -661,14 +664,28 @@ async def get_auth_hint():
     # (a generic name non-Amazon tools use → false-positives, Gate-1 FIX-E).
     deployment_context = "internal" if (has_ada or has_midway) else "external"
 
-    if has_api_key:
+    # detection_confidence: "high" iff a POSITIVE internal signal (~/.ada|~/.midway)
+    # or an SSO cache was found — i.e. we detected something, not just defaulted.
+    # "low" when we saw NO signal and fell back to external — the frontend uses
+    # this to make the internal/external toggle discoverable for a pre-mwinit
+    # Amazon employee on a fresh machine (F3).
+    detection_confidence = (
+        "high" if (has_ada or has_midway or has_sso_cache) else "low"
+    )
+
+    # Suggested method MUST be consistent with deployment_context — the wizard
+    # only renders the apikey card for EXTERNAL context, so suggesting "apikey"
+    # on an internal machine (because ANTHROPIC_API_KEY happens to be exported)
+    # would be silently discarded by the frontend's snap-to-first (F4). Only
+    # suggest a method that will actually be in the resulting card set.
+    if has_api_key and deployment_context == "external":
         suggested = "apikey"
     elif has_ada:
         suggested = "ada"
     elif has_sso_cache:
         suggested = "sso"
     else:
-        suggested = "sso"  # safest default for external users
+        suggested = "sso"  # safest default (in both internal & external card sets)
 
     # Probe real credential details for display
     ada_details = _probe_ada_details() if has_ada else None
@@ -688,12 +705,15 @@ async def get_auth_hint():
         suggested = "iam_role"
         ada_details = None
         aws_profiles = None
+        # Hive's auth method is unambiguous (IAM instance role) — no toggle needed.
+        detection_confidence = "high"
 
     return {
         "has_ada_dir": has_ada if run_mode != "hive" else False,
         "has_sso_cache": has_sso_cache if run_mode != "hive" else False,
         "has_api_key": has_api_key,
         "deployment_context": deployment_context,
+        "detection_confidence": detection_confidence,
         "suggested_method": suggested,
         "ada_details": ada_details,
         "aws_profiles": aws_profiles,
