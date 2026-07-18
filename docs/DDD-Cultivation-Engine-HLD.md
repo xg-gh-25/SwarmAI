@@ -101,6 +101,8 @@ Without Layer 2, the four documents would follow the same decay trajectory as an
 
 ### The Lightweight Ontology: Classification × Relations
 
+![Figure 11: The Lightweight Ontology — Classification × Relations](diagrams-ddd-v2/11-ontology-layers.svg)
+
 The two mechanisms above — the **7-type classification** (Section 9b) and the **10 relation types** (Knowledge Graph Relations) — are not two separate features. Together they *are* a lightweight ontology: the layer that lets the agent understand *what kind of thing* a piece of knowledge is and *how it connects* to others, before it ever reasons over the content.
 
 In semantic-web terms, an ontology is the **schema layer** (the classes, relations, and constraints that describe *how a domain is described*), while a knowledge graph is the **data layer** (the specific facts organized under that schema). The DDD engine deliberately implements the schema layer as **two flat, grep-able, context-loadable structures** rather than an OWL/RDF formalism:

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 500" font-family="sans-serif">
+  <rect width="820" height="500" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="410" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">The Lightweight Ontology: Classification × Relations</text>
+  <text x="410" y="50" text-anchor="middle" fill="#8b949e" font-size="10">7-type classes + 10 relation types — an agent-consumable ontology, no OWL/Neo4j</text>
+
+  <!-- ================= LEFT: Classification (3 cognitive layers) ================= -->
+  <text x="235" y="78" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">CLASSES — 3 cognitive layers × 7 types</text>
+
+  <!-- Meta-cognitive layer -->
+  <rect x="30" y="90" width="410" height="80" rx="8" fill="#2d1a1a" stroke="#f78166" stroke-width="2"/>
+  <text x="45" y="110" fill="#f78166" font-size="12" font-weight="bold">Meta-cognitive</text>
+  <text x="45" y="126" fill="#8b949e" font-size="9">how I think / how I erred</text>
+  <text x="45" y="158" fill="#f78166" font-size="9" font-weight="bold">EVERGREEN — never decays</text>
+  <rect x="250" y="102" width="80" height="26" rx="5" fill="#1a1a2e" stroke="#f78166" stroke-width="1"/>
+  <text x="290" y="119" text-anchor="middle" fill="#e6edf3" font-size="9">principle</text>
+  <rect x="340" y="102" width="90" height="26" rx="5" fill="#1a1a2e" stroke="#f78166" stroke-width="1"/>
+  <text x="385" y="119" text-anchor="middle" fill="#e6edf3" font-size="9">correction</text>
+  <text x="250" y="150" fill="#8b949e" font-size="8">EVALUATE · THINK · all-stages</text>
+
+  <!-- Cognitive layer -->
+  <rect x="30" y="180" width="410" height="80" rx="8" fill="#2a2618" stroke="#e3b341" stroke-width="2"/>
+  <text x="45" y="200" fill="#e3b341" font-size="12" font-weight="bold">Cognitive</text>
+  <text x="45" y="216" fill="#8b949e" font-size="9">what I decided / how I model it</text>
+  <text x="45" y="248" fill="#e3b341" font-size="9" font-weight="bold">fades by current relevance</text>
+  <rect x="250" y="192" width="80" height="26" rx="5" fill="#1a1a2e" stroke="#e3b341" stroke-width="1"/>
+  <text x="290" y="209" text-anchor="middle" fill="#e6edf3" font-size="9">decision</text>
+  <rect x="340" y="192" width="90" height="26" rx="5" fill="#1a1a2e" stroke="#e3b341" stroke-width="1"/>
+  <text x="385" y="209" text-anchor="middle" fill="#e6edf3" font-size="9">model</text>
+  <text x="250" y="240" fill="#8b949e" font-size="8">EVALUATE · PLAN · BUILD · DEBUG</text>
+
+  <!-- Operational layer -->
+  <rect x="30" y="270" width="410" height="90" rx="8" fill="#182a1e" stroke="#7ee787" stroke-width="2"/>
+  <text x="45" y="290" fill="#7ee787" font-size="12" font-weight="bold">Operational</text>
+  <text x="45" y="306" fill="#8b949e" font-size="9">how the concrete work gets done</text>
+  <text x="45" y="340" fill="#7ee787" font-size="9" font-weight="bold">fades fastest — reclaimable</text>
+  <rect x="250" y="282" width="80" height="26" rx="5" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
+  <text x="290" y="299" text-anchor="middle" fill="#e6edf3" font-size="9">guideline</text>
+  <rect x="340" y="282" width="90" height="26" rx="5" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
+  <text x="385" y="299" text-anchor="middle" fill="#e6edf3" font-size="9">pitfall</text>
+  <rect x="295" y="314" width="80" height="26" rx="5" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
+  <text x="335" y="331" text-anchor="middle" fill="#e6edf3" font-size="9">process</text>
+
+  <!-- lifecycle arrow (down = fades faster) -->
+  <line x1="18" y1="95" x2="18" y2="355" stroke="#8b949e" stroke-width="1.5"/>
+  <polygon points="14,348 18,358 22,348" fill="#8b949e"/>
+  <text x="12" y="230" fill="#8b949e" font-size="8" transform="rotate(-90 12 230)" text-anchor="middle">layer = lifecycle (fades faster ↓)</text>
+
+  <!-- ================= RIGHT: Relations ================= -->
+  <text x="640" y="78" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">RELATIONS — 10 typed edges</text>
+  <rect x="470" y="90" width="330" height="180" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="485" y="112" fill="#8b949e" font-size="9">.knowledge-graph.yaml — flat, grep-able, context-loadable</text>
+  <text x="490" y="138" fill="#d2a8ff" font-size="10">motivated_by · supersedes · extends</text>
+  <text x="490" y="160" fill="#d2a8ff" font-size="10">addresses · serves_thesis · applies_to</text>
+  <text x="490" y="182" fill="#d2a8ff" font-size="10">conflicts_with · requires · informs</text>
+  <text x="490" y="204" fill="#d2a8ff" font-size="10">produced_by</text>
+  <text x="485" y="238" fill="#8b949e" font-size="9">Classes tell the agent HOW to treat an entry;</text>
+  <text x="485" y="252" fill="#8b949e" font-size="9">relations tell it WHAT ELSE to pull.</text>
+
+  <!-- classification x relations = ontology brace -->
+  <text x="640" y="300" text-anchor="middle" fill="#e6edf3" font-size="11">classification × relations = <tspan fill="#58a6ff" font-weight="bold">lightweight ontology</tspan></text>
+
+  <!-- ================= BOTTOM: three views ================= -->
+  <text x="410" y="385" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">Three views of ONE ontology</text>
+  <rect x="60" y="400" width="220" height="72" rx="8" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="170" y="422" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">Memory / DDD</text>
+  <text x="170" y="440" text-anchor="middle" fill="#8b949e" font-size="9">nodes: 7-type entries</text>
+  <text x="170" y="454" text-anchor="middle" fill="#8b949e" font-size="9">edges: 10 relations</text>
+  <text x="170" y="467" text-anchor="middle" fill="#e3b341" font-size="8">Darwinian decay (fade → forget)</text>
+
+  <rect x="300" y="400" width="220" height="72" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="410" y="422" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">Code Intelligence</text>
+  <text x="410" y="440" text-anchor="middle" fill="#8b949e" font-size="9">nodes: code symbols</text>
+  <text x="410" y="454" text-anchor="middle" fill="#8b949e" font-size="9">edges: call / import / dep</text>
+  <text x="410" y="467" text-anchor="middle" fill="#e3b341" font-size="8">rebuilt on change (no fade)</text>
+
+  <rect x="540" y="400" width="220" height="72" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="650" y="422" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Entity Index</text>
+  <text x="650" y="440" text-anchor="middle" fill="#8b949e" font-size="9">nodes: domain concepts</text>
+  <text x="650" y="454" text-anchor="middle" fill="#8b949e" font-size="9">edges: concept → doc/section</text>
+  <text x="650" y="467" text-anchor="middle" fill="#e3b341" font-size="8">refreshed by Code-Intel channel</text>
+</svg>
