@@ -16,10 +16,10 @@ vi.mock('../../services/system', () => ({
   systemService: { getAuthHint: (...a: unknown[]) => mockGetAuthHint(...a) },
 }));
 
-const mockSetSettingsTab = vi.fn();
-vi.mock('../../contexts/LayoutContext', () => ({
-  useLayout: () => ({ setSettingsTab: mockSetSettingsTab }),
-}));
+// NOTE: CredentialBanner deliberately does NOT import LayoutContext — it is
+// mounted at the app root (outside LayoutProvider); calling useLayout() there
+// crashed the app at boot. The "Open Settings" deep-link is a window event
+// (see the deep-link test below), so there is no useLayout mock here.
 
 function setAuth(auth?: AuthStatus) {
   const health: HealthState = {
@@ -111,13 +111,25 @@ describe('CredentialBanner', () => {
     expect(txt).toContain('aws sso login');
   });
 
-  it('has an Open Settings button that deep-links to AI & Models', async () => {
+  it('Open Settings button dispatches the swarm:open-settings deep-link event (no useLayout)', async () => {
+    // Regression: the banner is mounted OUTSIDE LayoutProvider (app root), so it
+    // must NOT call setSettingsTab via useLayout (that threw at boot). It fires a
+    // window event the app shell handles instead. This test also guards the wire
+    // contract: event name + { tab: 'ai-models' } detail.
     mockGetAuthHint.mockResolvedValue({ deploymentContext: 'external', suggestedMethod: 'sso' });
     setAuth('expired');
-    render(<CredentialBanner />);
-    const btn = await screen.findByRole('button', { name: /settings/i });
-    await act(async () => { fireEvent.click(btn); });
-    expect(mockSetSettingsTab).toHaveBeenCalledWith('ai-models');
+    const onOpen = vi.fn();
+    window.addEventListener('swarm:open-settings', onOpen);
+    try {
+      render(<CredentialBanner />);
+      const btn = await screen.findByRole('button', { name: /settings/i });
+      await act(async () => { fireEvent.click(btn); });
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      const evt = onOpen.mock.calls[0][0] as CustomEvent<{ tab?: string }>;
+      expect(evt.detail?.tab).toBe('ai-models');
+    } finally {
+      window.removeEventListener('swarm:open-settings', onOpen);
+    }
   });
 
   it('renders nothing when auth is valid', () => {

@@ -11,6 +11,7 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 import FileEditorModal from '../common/FileEditorModal';
 import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
+import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
@@ -546,8 +547,22 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId, settingsTab } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId, settingsTab, openModal, setSettingsTab } = useLayout();
   const { addToast } = useToast();
+
+  // CredentialBanner is mounted at the app root (outside LayoutProvider), so its
+  // "Open Settings" deep-link can't call setSettingsTab directly — it dispatches
+  // OPEN_SETTINGS_EVENT, which we handle here (inside the provider that owns the
+  // settings modal). Harmless no-op if this shell isn't mounted (onboarding).
+  useEffect(() => {
+    const onOpenSettings = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      setSettingsTab(tab);
+      openModal('settings');
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings);
+  }, [openModal, setSettingsTab]);
 
   // Integrated terminal: global Ctrl/Cmd-` toggle (AC5). The panel is now always
   // mounted and self-hides on panelOpen, so this scope no longer needs the

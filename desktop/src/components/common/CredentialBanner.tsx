@@ -11,14 +11,28 @@
  * never an Amazon-internal command they can't run. Also offers a one-click
  * "Open Settings" deep-link to Settings → AI & Models so the fix is in-app.
  *
+ * PLACEMENT: this banner is mounted at the APP ROOT (all modes, ungated) so it
+ * can surface expiry during onboarding/loading too. It therefore must NOT depend
+ * on LayoutContext (which only exists inside ThreeColumnLayout) — calling
+ * useLayout() here threw "useLayout must be used within a LayoutProvider" and
+ * crashed the whole app at boot (regression from the method-aware rework). The
+ * "Open Settings" deep-link is dispatched as a `swarm:open-settings` window event
+ * that the app shell (ThreeColumnLayoutInner) listens for; when the shell isn't
+ * mounted yet (onboarding), the click is a harmless no-op (no settings modal to
+ * open there anyway).
+ *
  * Note: in API-key (Anthropic-direct) mode the backend no longer runs the AWS
  * STS check, so `auth` is never 'expired' for those users — this banner is a
  * Bedrock-path (ada/sso/iam) concern in practice.
  */
 import { useEffect, useState } from 'react';
 import { useHealth } from '../../contexts/HealthContext';
-import { useLayout } from '../../contexts/LayoutContext';
 import { systemService } from '../../services/system';
+
+// Deep-link event: the app shell (ThreeColumnLayoutInner) listens for this and
+// opens Settings on the given tab. Decouples this root-mounted banner from
+// LayoutContext (which only exists inside the app shell) — see file docstring.
+export const OPEN_SETTINGS_EVENT = 'swarm:open-settings';
 
 type Method = 'ada' | 'sso' | 'apikey' | 'iam_role' | 'bedrock_api_key';
 
@@ -72,7 +86,6 @@ function remediation(
 
 export default function CredentialBanner() {
   const { health } = useHealth();
-  const { setSettingsTab } = useLayout();
   const [method, setMethod] = useState<Method | undefined>(undefined);
   // undefined until the hint resolves; then true iff ANY credential was detected.
   const [configured, setConfigured] = useState<boolean>(true);
@@ -115,7 +128,9 @@ export default function CredentialBanner() {
       </div>
       <div className="mt-2 flex justify-end">
         <button
-          onClick={() => setSettingsTab('ai-models')}
+          onClick={() => window.dispatchEvent(
+            new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'ai-models' } }),
+          )}
           className="px-2.5 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary)]/80"
         >
           Open Settings
