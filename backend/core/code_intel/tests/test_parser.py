@@ -17,7 +17,9 @@ from core.code_intel.parser import (
     _sanitize_name,
     _should_skip_dir,
     parse_file,
+    parse_file_with_status,
     parse_repo,
+    parse_repo_with_coverage,
 )
 
 
@@ -1518,3 +1520,88 @@ class TestValueRefCStaticConst:
         false-emit). If pointer-consts are needed later, extend the binding path."""
         assert self._refs(tmp_path,
             'const char *NAME="x";\nint f(){ return NAME==0; }\n') == []
+
+
+class TestPartialErrorTreeSalvage:
+    """DoD-B (run_dd13fb03, §24.4 graphify ERROR-node fallback): a file that
+    tree-sitter parses into an error-riddled tree must KEEP its parseable symbols
+    (nodes salvaged, edges dropped for dangling-target safety) instead of being
+    discarded whole — while STILL being recorded as a coverage hole (degraded, not
+    silent-ok). Before this fix, parse_file_with_status returned an empty
+    ParseResult + status 'failed' on any has_error tree, throwing away the good
+    top-level symbols.
+
+    Guarded: only exercises the salvage path when tree-sitter is live for python
+    AND actually reports an error on the fixture (skips honestly otherwise —
+    GUI29: don't assert on a runtime-unreachable branch)."""
+
+    _PARTIAL = (
+        # Two clean top-level defs, then a genuinely broken one → tree-sitter
+        # recovers the good defs and marks the tree has_error.
+        "def alpha():\n"
+        "    return 1\n"
+        "\n"
+        "def beta():\n"
+        "    return 2\n"
+        "\n"
+        "def broken(:\n"          # syntax error — unparseable param list
+        "    @@@ !!! not python\n"
+    )
+
+    def _has_error_live(self, path: Path, repo: Path) -> bool:
+        from core.code_intel.parser import _tree_sitter_live, _get_cached_parser, _tree_has_error
+        if not _tree_sitter_live("python"):
+            return False
+        parser = _get_cached_parser("python")
+        if parser is None:
+            return False
+        tree = parser.parse(path.read_bytes())
+        return _tree_has_error(tree)
+
+    def test_partial_tree_keeps_parseable_symbols(self, tmp_path):
+        src = tmp_path / "partial.py"
+        src.write_text(self._PARTIAL)
+        if not self._has_error_live(src, tmp_path):
+            pytest.skip("tree-sitter not live for python or fixture parsed clean — salvage path unreachable")
+        res, st = parse_file_with_status(src, tmp_path)
+        names = {n.name for n in res.nodes}
+        assert st == "degraded", f"a salvageable error-tree must report 'degraded', got {st!r}"
+        assert "alpha" in names and "beta" in names, \
+            f"parseable top-level symbols must be salvaged, got {names}"
+        assert res.edges == [], "edges dropped on degraded parse (dangling-target safety)"
+
+    def test_degraded_file_still_recorded_as_hole(self, tmp_path):
+        """The salvage must NOT become a silent-ok: the file is still a coverage
+        hole (understood-partially), so status stays 'partial'."""
+        src = tmp_path / "partial.py"
+        src.write_text(self._PARTIAL)
+        if not self._has_error_live(src, tmp_path):
+            pytest.skip("salvage path unreachable in this environment")
+        result = parse_repo_with_coverage(tmp_path)
+        assert result.status == "partial", "a degraded file must mark the repo partial"
+        holes = {h["ref"] for h in result.coverage_holes}
+        assert "partial.py" in holes, "degraded file must appear in the coverage ledger"
+        # AND its salvaged symbols must be present in results (kept, not dropped)
+        all_names = {n.name for r in result.results for n in r.nodes}
+        assert "alpha" in all_names, "salvaged symbols must survive into results"
+
+
+class TestExtensionlessSourceLedger:
+    """DoD-C (run_dd13fb03, §24.3): extensionless BUILD files (Makefile, Dockerfile,
+    …) are source-like but were silently dropped at the `not suffix` branch. They
+    must now be accounted in the coverage ledger via a positive filename allowlist —
+    while LICENSE / README (also extensionless) stay silent (no ledger spam)."""
+
+    def test_makefile_recorded_in_ledger(self, tmp_path):
+        (tmp_path / "Makefile").write_text("all:\n\tgcc main.c\n")
+        (tmp_path / "real.py").write_text("def x():\n    return 1\n")  # a real source file so repo isn't empty
+        result = parse_repo_with_coverage(tmp_path)
+        refs = {h["ref"] for h in result.coverage_holes}
+        assert "Makefile" in refs, "an allowlisted extensionless build file must be accounted, not silently dropped"
+
+    def test_license_not_recorded(self, tmp_path):
+        (tmp_path / "LICENSE").write_text("MIT License\n\nCopyright ...\n")
+        (tmp_path / "real.py").write_text("def x():\n    return 1\n")
+        result = parse_repo_with_coverage(tmp_path)
+        refs = {h["ref"] for h in result.coverage_holes}
+        assert "LICENSE" not in refs, "LICENSE is not source — must stay silent (no ledger spam)"

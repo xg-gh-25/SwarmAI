@@ -483,6 +483,18 @@ _NON_SOURCE_EXTENSIONS = {
 # anti-noise). The aggregate row always states the TRUE total count.
 _MAX_UNKNOWN_EXT_EXAMPLES = 5
 
+# DoD-C (run_dd13fb03, §24.3): extensionless files that ARE build/config source.
+# A POSITIVE allowlist by exact filename — NOT `not suffix` (which would spam the
+# ledger with LICENSE/README/AUTHORS/binaries; Gate-1 finding). Matched on
+# `path.name` so these are accounted as coverage holes (source-like, no AST parser)
+# instead of silently dropped; every other extensionless file stays silent.
+_EXTENSIONLESS_SOURCE_NAMES = frozenset({
+    "Makefile", "makefile", "GNUmakefile", "Makefile.am", "Makefile.in",
+    "Dockerfile", "Containerfile", "Rakefile", "Jenkinsfile", "Vagrantfile",
+    "Gemfile", "Guardfile", "Procfile", "Brewfile", "Justfile", "justfile",
+    "CMakeLists.txt",  # has an ext but is build-source; harmless to include
+})
+
 # ── Data Types ──────────────────────────────────────────────────────────
 
 
@@ -1369,7 +1381,19 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
             # file into an error-riddled tree (root has_error) on a non-empty file =
             # a genuine parse failure → coverage hole, not silent "ok".
             if _tree_has_error(tree) and content.strip():
-                logger.debug(f"Tree-sitter parse has errors on {path} → failed")
+                # DoD-B (run_dd13fb03, §24.4 graphify ERROR-node fallback): tree-sitter
+                # error-recovery still parsed the well-formed top-level symbols into
+                # `nodes`. SALVAGE them (a partially-broken file keeps its parseable
+                # symbols) instead of discarding the whole file — BUT still record it
+                # as a coverage hole so this is NOT a silent-ok (status stays partial).
+                # Edges are DROPPED: a broken tail can leave an edge pointing at a node
+                # that was never created (dangling target), and get_module_edges guards
+                # such bare targets out anyway — nodes carry the durable value.
+                if nodes:
+                    logger.debug(f"Tree-sitter partial-error on {path} → degraded (salvaged {len(nodes)} symbols)")
+                    return ParseResult(nodes=nodes, edges=[], language=lang, file_path=rel_path), "degraded"
+                # nothing salvageable → genuine failure (unchanged)
+                logger.debug(f"Tree-sitter parse has errors on {path}, no salvageable symbols → failed")
                 return ParseResult(file_path=rel_path, language=lang), "failed"
             # Clean parse — "ok" EVEN IF 0 nodes (comment-only/__init__.py is
             # legitimately empty; Gate-1 Check-3: absence of nodes ≠ failure).
@@ -1461,6 +1485,15 @@ def parse_repo_with_coverage(
             if lang_filter and LANGUAGE_MAP[suffix] not in lang_filter:
                 continue
             files_to_parse.append(path)
+        elif path.name in _EXTENSIONLESS_SOURCE_NAMES:
+            # DoD-C (run_dd13fb03, §24.3): a source-like build/config file with no
+            # AST parser (Makefile/Dockerfile/…). Account it as a hole — never a
+            # silent drop — but bounded (one row per name, like unknown-ext).
+            rel = str(path.relative_to(repo_root))
+            unknown_ext_counts[path.name] = unknown_ext_counts.get(path.name, 0) + 1
+            ex = unknown_ext_examples.setdefault(path.name, [])
+            if len(ex) < _MAX_UNKNOWN_EXT_EXAMPLES:
+                ex.append(rel)
         elif suffix in _NON_SOURCE_EXTENSIONS or not suffix:
             # Known non-source (docs/data/assets) or extensionless — out of scope,
             # legitimately not a hole.
@@ -1574,6 +1607,19 @@ def parse_repo_with_coverage(
                 "ref": rel, "kind": "file",
                 "reason": "parse failed (tree-sitter error + regex fallback empty on "
                           "non-empty file) — content not understood",
+            })
+        elif st == "degraded":
+            # DoD-B (run_dd13fb03): partial error-tree — KEEP the salvaged symbols
+            # AND record the hole (understood-partially, NOT silent-ok). Both, not
+            # either: the nodes carry value, the hole keeps the coverage honest.
+            status = "partial"
+            if res.nodes:
+                results.append(res)
+            coverage_holes.append({
+                "ref": rel, "kind": "file",
+                "reason": (f"parse degraded (tree-sitter error-tree; {len(res.nodes)} "
+                           "top-level symbol(s) salvaged, call edges dropped, broken "
+                           "region opaque) — understood PARTIALLY, not fully"),
             })
 
     # Serial and parallel paths MUST behave identically (Gate-1 Check-3): both use
