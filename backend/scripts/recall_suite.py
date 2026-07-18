@@ -36,15 +36,34 @@ from __future__ import annotations
 from typing import Optional
 
 
-def _rank_of_gold_context_files(query: str, corpus: str, gold: str, k: int) -> int:
-    """Return the 1-based rank of the gold section title among recall_context's
-    top-K sections, or 0 if absent. Pinned: parses the passed-in corpus, no disk."""
+def _gold_titles(gold) -> tuple[str, ...]:
+    """Normalize a gold spec to a tuple of section titles.
+
+    gold may be a single section title (str) — the common case — OR an
+    ACCEPTABLE-SET (list/tuple of titles) for a genuinely cross-cutting query.
+    run_79de25f8: a production task query ("修 context_files 召回") legitimately
+    maps to more than one section (Guidelines OR Pitfalls OR Corrections); forcing
+    a single "primary" gold would be arbitrary and make the case brittle. The
+    acceptable-set is labeled INTENT-FIRST (from the query, before running recall)
+    and a hit = ANY member appears in top-K. This is the M3-skeptic-endorsed model:
+    a single primary section is not well-defined for cross-cutting task queries.
+    """
+    if isinstance(gold, (list, tuple)):
+        return tuple(gold)
+    return (gold,)
+
+
+def _rank_of_gold_context_files(query: str, corpus: str, gold, k: int) -> int:
+    """Return the 1-based rank of the FIRST acceptable gold section among
+    recall_context's top-K sections, or 0 if none present. gold = a section title
+    (str) or an acceptable-set (list). Pinned: parses the passed-in corpus, no disk."""
     from core.context_recall import recall_context
     res = recall_context("MEMORY.md", query, memory_content=corpus, max_sections=k)
     if not res.allowed:
         return 0
+    acceptable = set(_gold_titles(gold))
     for i, sec in enumerate(res.sections[:k], start=1):
-        if sec == gold:
+        if sec in acceptable:
             return i
     return 0
 
@@ -165,16 +184,46 @@ _SEED_QUERIES = [
     ("how does the app differentiate from a chatbot", "ddd", "PRODUCT.md", "What Makes SwarmAI Different", "hard"),
     ("who is this built for, which people use it", "ddd", "PRODUCT.md", "Target Users", "hard"),
     ("what past data leaks or breaches happened", "ddd", "IMPROVEMENT.md", "Security History", "hard"),
-    # ── context_files · easy ──
-    ("what cognitive principles govern judgment", "context_files", "MEMORY.md", "Principles", "easy"),
-    ("what past corrections were captured", "context_files", "MEMORY.md", "Corrections", "easy"),
-    ("what open threads are being tracked", "context_files", "MEMORY.md", "Open Threads", "easy"),
-    ("what decisions have been recorded", "context_files", "MEMORY.md", "Decisions", "easy"),
-    ("what standing guidelines does the agent follow", "context_files", "MEMORY.md", "Guidelines", "easy"),
-    # ── context_files · hard (title mismatch) ──
-    ("what recurring mistakes keep happening to the agent", "context_files", "MEMORY.md", "Pitfalls", "hard"),
-    ("what post-incident reviews exist", "context_files", "MEMORY.md", "COE Registry", "hard"),
-    ("what standing user preferences are on record", "context_files", "MEMORY.md", "Standing Preferences", "easy"),
+    # ── context_files · NAME-SIGNAL class (category-browse) ──────────────────
+    # run_79de25f8: these were the ORIGINAL self-authored context_files cases. They
+    # are category-browse queries ("what X are recorded") — a REAL but LOW-PRODUCTION
+    # shape: a repro over 500+ real user messages found 0.0% are this shape (production
+    # recall is triggered by task-shaped chat, not category browsing). They are KEPT
+    # (not deleted — M3 skeptic synthesis) as a labeled 'name-signal' class that guards
+    # against regression in section-title/name-signal recall (memory_index.py:985
+    # section_name_signal). They score LOW by design (most are name-matched-then-
+    # slicer-dropped, a Gate-1-adjudicated head-position-bias tradeoff — NOT a bug,
+    # see Knowledge/Designs/2026-07-19-recall-synonym-gap-decision.md). Reported
+    # SEPARATELY from 'task' so a low name-signal number is visible as a known-miss
+    # class, never averaged into a scary headline.
+    ("what cognitive principles govern judgment", "context_files", "MEMORY.md", "Principles", "name-signal"),
+    ("what past corrections were captured", "context_files", "MEMORY.md", "Corrections", "name-signal"),
+    ("what open threads are being tracked", "context_files", "MEMORY.md", "Open Threads", "name-signal"),
+    ("what decisions have been recorded", "context_files", "MEMORY.md", "Decisions", "name-signal"),
+    ("what standing guidelines does the agent follow", "context_files", "MEMORY.md", "Guidelines", "name-signal"),
+    ("what recurring mistakes keep happening to the agent", "context_files", "MEMORY.md", "Pitfalls", "name-signal"),
+    ("what post-incident reviews exist", "context_files", "MEMORY.md", "COE Registry", "name-signal"),
+    ("what standing user preferences are on record", "context_files", "MEMORY.md", "Standing Preferences", "name-signal"),
+    # ── context_files · TASK class (production-shaped, sampled VERBATIM) ─────────
+    # run_79de25f8: queries taken WORD-FOR-WORD from the production transcript DB
+    # (the shape recall actually sees). gold is labeled INTENT-FIRST (what section
+    # SHOULD answer this, reasoned from the query text with recall NOT run) — a TIGHT
+    # single title, or a 2-set ONLY where genuinely cross-cutting (see _gold_titles).
+    # ⚠️ Gate-2 (run_79de25f8) caught my FIRST attempt: the golds were reverse-tuned
+    # to recall's output (acceptable_union ⊇ everything recall returns → task recall
+    # =1.00, the exact circularity this run exists to KILL — the authorship trap).
+    # These are the CORRECTED tight golds: the union INCLUDES sections recall does
+    # NOT return (e.g. Corrections for the test-theater query, which MISSES) so the
+    # set cannot be a superset of the ranker output. Structurally guarded by
+    # test_task_golds_not_superset_of_recall_output. Honest number: 7/8 = 0.88.
+    ("我们recall 怎么这么多问题 到底还剩什么", "context_files", "MEMORY.md", "Open Threads", "task"),
+    ("frontend reconcile race 复发 streaming tab", "context_files", "MEMORY.md", ["Open Threads", "Pitfalls"], "task"),
+    ("session 资源仲裁 多 tab 隔离", "context_files", "MEMORY.md", "Open Threads", "task"),
+    ("为什么最近跑的几个 pipeline 都没生效", "context_files", "MEMORY.md", ["Pitfalls", "COE Registry"], "task"),
+    ("修 restore 超时 消除死锁窗口", "context_files", "MEMORY.md", ["Pitfalls", "COE Registry"], "task"),
+    ("起 bugfix pipeline 修 partial-DB freshness-lockout", "context_files", "MEMORY.md", "Pitfalls", "task"),
+    ("ddd recall leg 对宽泛查询被 PRODUCT 营销段挤占", "context_files", "MEMORY.md", ["Pitfalls", "Guidelines"], "task"),
+    ("adversarial gate 抓到 test-theater", "context_files", "MEMORY.md", "Corrections", "task"),
     # NOTE (Gate-2, run_a616dc6b): KNOWLEDGE.md is DELIBERATELY excluded from the
     # context_files domain. recall_context / production _recall_context_files ONLY
     # ever serve MEMORY.md (recall_multi.py:443 "MEMORY is the canonical one"); the
@@ -237,17 +286,32 @@ if __name__ == "__main__":  # pragma: no cover — manual/scheduled invocation
         return aggregate_recall(res)
     ddd = [c for c in cases if c["verification"]["domain"] == "ddd"]
     cf = [c for c in cases if c["verification"]["domain"] == "context_files"]
-    hard = [c for c in cases if c["difficulty"] == "hard"]
-    easy = [c for c in cases if c["difficulty"] == "easy"]
+    # Split context_files by CLASS — the whole point of run_79de25f8. name-signal
+    # (category-browse, low-production) and task (production-shaped) are reported
+    # SEPARATELY so a low name-signal number can't masquerade as "recall is broken".
+    cf_name_signal = [c for c in cf if c["difficulty"] == "name-signal"]
+    cf_task = [c for c in cf if c["difficulty"] == "task"]
     report = {
         "overall": {"recall_at_5": out["aggregate"]["mean_recall_at_k"],
-                    "mrr": out["aggregate"]["mrr"], "n": out["aggregate"]["n"]},
+                    "mrr": out["aggregate"]["mrr"], "n": out["aggregate"]["n"],
+                    "warning": "overall AVERAGES name-signal (non-production browse) "
+                               "into the number — read context_files_by_class instead"},
         "by_domain": {"ddd": _agg(ddd), "context_files": _agg(cf)},
-        "by_difficulty": {"easy": _agg(easy), "hard": _agg(hard)},
+        "context_files_by_class": {
+            "task_PRODUCTION_SHAPED": _agg(cf_task),
+            "name_signal_category_browse_LOW_PRODUCTION": _agg(cf_name_signal),
+            "note": "task = the query shape production actually issues (recall's honest "
+                    "number). name-signal = category-browse; 0/500 real msgs are this "
+                    "shape, most are name-matched-then-slicer-dropped by design (NOT a bug).",
+        },
         "scope": "seed query set — ddd + context_files domains (session/codeintel deferred)",
     }
     print(json.dumps(report, indent=2))
     for c, r in zip(cases, out["per_case"]):
         v = c["verification"]
-        g = v["gold"] if isinstance(v["gold"], str) else "/".join(v["gold"])
-        print(f"  {'✓' if r['recall_at_k'] else '✗'} rank={r['rank']} [{c['difficulty']:4}] {v['domain']:13} {g[:34]:34} ← \"{v['query'][:38]}\"")
+        # ddd gold = [doc, section]; context_files gold = title (str) or acceptable-set (list)
+        if v["domain"] == "ddd":
+            g = "/".join(v["gold"])
+        else:
+            g = v["gold"] if isinstance(v["gold"], str) else "|".join(v["gold"])
+        print(f"  {'✓' if r['recall_at_k'] else '✗'} rank={r['rank']} [{c['difficulty']:11}] {v['domain']:13} {g[:34]:34} ← \"{v['query'][:38]}\"")
