@@ -473,6 +473,95 @@ class TestMermaidNodeAnchoring:
             "backslash-path hallucinated node must still be flagged"
 
 
+class TestBusinessRuleAnchorFiles:
+    """run_9a9e314c DoD5: `verified:true` business_rules only check anchor NON-BLANK
+    (check_llm_assertion_guards) — a fabricated anchor to a NON-EXISTENT FILE sails
+    through CLEAN. This is the non-theater backstop: check the anchor's FILE part
+    exists (NOT line-resolve — line-resolve is theater per signature-first design).
+    Mirrors check_mermaid_node_anchoring's containment discipline (no absolute/../
+    escape)."""
+
+    def _doc_with_rule(self, anchor: str) -> dict:
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "business_rules": [{"rule": "x", "anchor": anchor, "verified": True}]}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        return doc
+
+    def test_fabricated_file_flagged(self, tmp_path):
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        doc = self._doc_with_rule("backend/core/ghost_nonexistent.py:42")
+        errors = check_business_rule_anchor_files(doc, repo_root=tmp_path)
+        assert any("ghost_nonexistent.py" in e for e in errors), \
+            "a business_rule anchor to a non-existent file must be flagged"
+
+    def test_real_file_passes(self, tmp_path):
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        (tmp_path / "backend" / "core").mkdir(parents=True)
+        (tmp_path / "backend" / "core" / "real.py").write_text("# real\n")
+        doc = self._doc_with_rule("backend/core/real.py:10")
+        assert check_business_rule_anchor_files(doc, repo_root=tmp_path) == [], \
+            "a business_rule anchor to a real on-disk file must pass"
+
+    def test_file_in_doc_anchors_passes(self):
+        # a file already known to the doc (module/route/entry) resolves without disk
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        doc = self._doc_with_rule("backend/routers/chat.py:5")
+        doc["routes"] = [{"id": "route:r", "method": "POST", "path": "/x",
+                          "file_path": "backend/routers/chat.py"}]
+        assert check_business_rule_anchor_files(doc) == [], \
+            "anchor to a file already in the doc's known files must pass"
+
+    def test_no_repo_root_no_disk_check(self):
+        # backward-compatible: repo_root=None → only doc-known files resolve, but a
+        # file NOT in the doc is NOT flagged as fabricated (can't prove absence w/o disk)
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        doc = self._doc_with_rule("backend/core/unknown.py:1")
+        # pure mode must not false-flag (we only assert fabrication WITH repo_root)
+        assert check_business_rule_anchor_files(doc) == []
+
+    def test_absolute_path_escape_rejected(self, tmp_path):
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        outside = tmp_path / "outside.py"
+        outside.write_text("# real but outside repo\n")
+        repo = tmp_path / "repo"; repo.mkdir()
+        doc = self._doc_with_rule(f"{outside}:1")
+        assert check_business_rule_anchor_files(doc, repo_root=repo), \
+            "an absolute anchor path escaping repo_root must be flagged"
+
+    def test_verified_false_not_checked(self, tmp_path):
+        # verified:false rules carry absence_evidence, not a code anchor → not checked
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        doc = _minimal_v2_doc()
+        doc["version"] = "3.0"
+        doc["domains"] = [{"id": "domain:o", "name": "O",
+                           "business_rules": [{"rule": "x", "verified": False,
+                                               "absence_evidence": "grep=0"}]}]
+        doc["flows"] = [{"id": "flow:x", "domain_id": "domain:o"}]
+        assert check_business_rule_anchor_files(doc, repo_root=tmp_path) == []
+
+    def test_wired_into_main_validator(self, tmp_path):
+        from scripts.ai_ready_helpers import validate_code_intel_json
+        doc = self._doc_with_rule("backend/core/ghost_nonexistent.py:42")
+        errors = validate_code_intel_json(doc, repo_root=tmp_path)
+        assert any("ghost_nonexistent.py" in e for e in errors), \
+            "main validator must run the business-rule anchor-file guard"
+
+    def test_multiline_anchor_spec_not_false_flagged(self, tmp_path):
+        """A real file with a multi-line anchor spec (`file.ts:216,232` or
+        `file.ts:216-232` or `file.ts:L216`) must NOT be false-flagged — the
+        line-spec parser must strip comma/range/L-prefixed line refs, not just
+        bare digits (real regression: message-store uses `...MessageStore.ts:216,232`)."""
+        from scripts.ai_ready_helpers import check_business_rule_anchor_files
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "Store.ts").write_text("// real\n")
+        for spec in ("src/Store.ts:216,232", "src/Store.ts:216-232", "src/Store.ts:L216"):
+            doc = self._doc_with_rule(spec)
+            assert check_business_rule_anchor_files(doc, repo_root=tmp_path) == [], \
+                f"multi-line anchor spec {spec!r} on a real file must not be flagged"
+
+
 # ─── AC4: Git log parsing for WHEN/RISK/BECAUSE ───
 
 class TestGitLogParsing:

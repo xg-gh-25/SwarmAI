@@ -202,6 +202,7 @@ def validate_code_intel_json(doc: dict, repo_root=None) -> list[str]:
         errors.extend(check_domain_referential_integrity(doc))
         errors.extend(check_llm_assertion_guards(doc))
         errors.extend(check_mermaid_node_anchoring(doc, repo_root=repo_root))
+        errors.extend(check_business_rule_anchor_files(doc, repo_root=repo_root))
         errors.extend(check_anchor_accounting(doc))
         errors.extend(validate_coverage_ledger(doc))
 
@@ -488,6 +489,92 @@ def check_mermaid_node_anchoring(doc: dict, repo_root=None) -> list[str]:
     for fl in doc.get("flows", []) or []:
         if isinstance(fl, dict):
             _check_diagram("flow", fl.get("id", "?"), fl)
+    return errors
+
+
+def check_business_rule_anchor_files(doc: dict, repo_root=None) -> list[str]:
+    """run_9a9e314c DoD5 — the non-theater fabrication backstop for verified:true
+    business_rules (+ preconditions/rules). check_llm_assertion_guards only asserts
+    the `anchor` string is NON-BLANK; a fabricated anchor to a NON-EXISTENT FILE
+    (e.g. `backend/core/ghost.py:42`) sails through CLEAN. This guard checks the
+    anchor's FILE part is real.
+
+    SCOPE (deliberate, mirrors the mermaid-resolver's honesty):
+      * FILE-EXISTS, NOT line-resolve. Line-resolution is theater (signature-first
+        anchoring — line drift false-rejects intended drift; Run-C M3 verdict). We
+        catch WHOLESALE FABRICATION (the anchored file doesn't exist), not prose truth.
+      * A file resolves if it's in the doc's known anchors (modules/routes/entry/steps)
+        OR exists on disk UNDER repo_root. repo_root=None → pure/doc-only (no disk IO),
+        and CANNOT prove a doc-absent file fabricated → not flagged (backward-compat).
+      * Containment is load-bearing (same Gate-2 F1 lesson as the mermaid guard): an
+        absolute anchor (`/tmp/x.py`) or `../` traversal that escapes repo_root is
+        REJECTED even if the target exists — else is_file() accepts any file on the
+        machine, defeating the anti-hallucination purpose.
+
+    Pure w.r.t. the doc; the optional disk check is the only IO (repo_root=None → pure,
+    unit-testable + mutation-verifiable).
+    """
+    errors: list[str] = []
+    anchors = _collect_doc_file_anchors(doc)
+    _root_resolved = Path(repo_root).resolve() if repo_root is not None else None
+
+    def _file_of(anchor: str) -> str:
+        # anchor is "file:line" or "file:start-end" or bare "file". Strip a trailing
+        # ":<digits>" or ":<digits>-<digits>" line-spec; keep the file path (which may
+        # itself contain no colon on posix). rsplit once from the right on ':'.
+        if ":" in anchor:
+            head, tail = anchor.rsplit(":", 1)
+            # only treat tail as a line-spec if it's a line reference — digits with
+            # optional range/list separators (`216`, `216-232`, `216,232`, `L216`).
+            # Else the colon was part of the path (rare) — keep whole.
+            probe = tail.lstrip("Ll")
+            if probe and all(c.isdigit() or c in "-," for c in probe):
+                return head
+        return anchor
+
+    def _resolves(f: str) -> bool:
+        base = f.rsplit("/", 1)[-1]
+        if f in anchors or base in anchors:
+            return True
+        if _root_resolved is not None:
+            try:
+                cand = (_root_resolved / f).resolve()
+                cand.relative_to(_root_resolved)  # ValueError if outside repo
+                if cand.is_file():
+                    return True
+            except (OSError, ValueError):
+                pass
+        return False
+
+    def _check_node(node: dict, nid: str) -> None:
+        for _akey, lst in _iter_assertion_lists(node):
+            for a in lst:
+                if not isinstance(a, dict) or a.get("verified") is not True:
+                    continue
+                anchor = a.get("anchor")
+                if not _nonblank(anchor):
+                    continue  # non-blank check is check_llm_assertion_guards' job
+                f = _file_of(anchor.strip())
+                # only judge anchors that NAME a code file (carry an extension or path
+                # sep) — a bare symbol-name anchor isn't a file claim (anti-false-flag).
+                if not _CODE_TOKEN_RE.search(f) and "/" not in f:
+                    continue
+                # in pure mode (no repo_root) we can't prove a doc-absent file fake,
+                # so only flag when we have disk OR the file is genuinely un-resolvable
+                # against the doc AND we have a root to check against.
+                if _root_resolved is None:
+                    if f not in anchors and f.rsplit("/", 1)[-1] not in anchors:
+                        continue  # can't prove absence without disk
+                if not _resolves(f):
+                    errors.append(
+                        f"{nid}.{_akey}: verified:true anchor '{anchor}' names file '{f}' "
+                        f"which is not in code-intel.json or on disk under repo_root "
+                        f"(fabricated/hallucinated anchor, DoD5 anti-fabrication)")
+
+    for scope_key in ("domains", "flows", "steps"):
+        for node in doc.get(scope_key, []) or []:
+            if isinstance(node, dict):
+                _check_node(node, node.get("id", "?"))
     return errors
 
 
@@ -3697,10 +3784,11 @@ def detect_package_roots(repo_root) -> list[PackageRoot]:
 
 
 def build_packages_partition(repo_root) -> list[dict]:
-    """Wrap detect_package_roots() into navigation-metadata dicts suitable for a
-    code-intel.json `packages[]` partition (skill-layer only — NOT emitted into
-    the core single-repo doc this run). Names are made unique (path-suffixed on
-    collision) so two packages both named 'core' stay distinguishable."""
+    """Wrap detect_package_roots() into navigation-metadata dicts for a
+    code-intel.json `packages[]` partition. Emitted into code-intel.json by BOTH
+    producers (run_a9fe5ad3): the core reindex writer (json_exporter.export_code_intel_json)
+    and the skill GENERATE path (INSTRUCTIONS §4.6). Names are made unique
+    (path-suffixed on collision) so two packages both named 'core' stay distinguishable."""
     roots = detect_package_roots(repo_root)
     # Two-pass (Gate-2 F2): disambiguate ALL colliding names symmetrically, not
     # just the 2nd+ occurrence — otherwise the first 'core' keeps the bare name
