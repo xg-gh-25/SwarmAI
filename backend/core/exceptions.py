@@ -79,16 +79,6 @@ class TokenExpiredException(AuthException):
     suggested_action = "Please refresh your token or log in again"
 
 
-# Authorization Errors (403)
-class ForbiddenException(AppException):
-    """Raised when user lacks permission."""
-
-    code = "FORBIDDEN"
-    message = "You do not have permission to perform this action"
-    status_code = 403
-    suggested_action = "Contact an administrator if you believe this is an error"
-
-
 # Not Found Errors (404)
 class NotFoundException(AppException):
     """Base class for not found errors."""
@@ -104,20 +94,6 @@ class AgentNotFoundException(NotFoundException):
 
     code = "AGENT_NOT_FOUND"
     message = "The requested agent could not be found"
-
-
-class SkillNotFoundException(NotFoundException):
-    """Raised when a skill is not found."""
-
-    code = "SKILL_NOT_FOUND"
-    message = "The requested skill could not be found"
-
-
-class MCPServerNotFoundException(NotFoundException):
-    """Raised when an MCP server is not found."""
-
-    code = "MCP_SERVER_NOT_FOUND"
-    message = "The requested MCP server could not be found"
 
 
 class SessionNotFoundException(NotFoundException):
@@ -166,13 +142,6 @@ class ServiceUnavailableException(AppException):
     message = "Service temporarily unavailable. Please try again later."
     status_code = 503
     suggested_action = "Please wait a moment and retry"
-
-
-class DatabaseUnavailableException(ServiceUnavailableException):
-    """Raised when the database is unavailable."""
-
-    code = "DATABASE_UNAVAILABLE"
-    message = "Database service is temporarily unavailable"
 
 
 class ResourceExhaustedException(ServiceUnavailableException):

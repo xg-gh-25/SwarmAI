@@ -86,24 +86,6 @@ class AgentConfig(BaseModel):
     })
 
 
-class SandboxNetworkConfigRequest(BaseModel):
-    """Request model for sandbox network configuration."""
-
-    allow_local_binding: bool | None = None
-    allow_unix_sockets: list[str] | None = None
-    allow_all_unix_sockets: bool | None = None
-
-
-class SandboxConfigRequest(BaseModel):
-    """Request model for sandbox configuration."""
-
-    enabled: bool | None = None
-    auto_allow_bash_if_sandboxed: bool | None = None
-    excluded_commands: list[str] | None = None
-    allow_unsandboxed_commands: bool | None = None
-    network: SandboxNetworkConfigRequest | None = None
-
-
 class AgentCreateRequest(BaseModel):
     """Request model for creating an agent."""
 
@@ -155,24 +137,6 @@ class AgentUpdateRequest(BaseModel):
     # sandbox_enabled and sandbox REMOVED — sandbox is app-level (config.json).
     status: Literal["active", "inactive"] | None = None
     # Note: is_system_agent is intentionally not included here - it should not be updatable by users
-
-
-class SandboxNetworkConfigResponse(BaseModel):
-    """Response model for sandbox network configuration."""
-
-    allow_local_binding: bool = False
-    allow_unix_sockets: list[str] = Field(default_factory=list)
-    allow_all_unix_sockets: bool = False
-
-
-class SandboxConfigResponse(BaseModel):
-    """Response model for sandbox configuration."""
-
-    enabled: bool = False
-    auto_allow_bash_if_sandboxed: bool = True
-    excluded_commands: list[str] = Field(default_factory=list)
-    allow_unsandboxed_commands: bool = False
-    network: SandboxNetworkConfigResponse = Field(default_factory=SandboxNetworkConfigResponse)
 
 
 class AgentResponse(BaseModel):
