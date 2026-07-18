@@ -3451,10 +3451,11 @@ def detect_package_roots(repo_root) -> list[PackageRoot]:
 
 
 def build_packages_partition(repo_root) -> list[dict]:
-    """Wrap detect_package_roots() into navigation-metadata dicts suitable for a
-    code-intel.json `packages[]` partition (skill-layer only — NOT emitted into
-    the core single-repo doc this run). Names are made unique (path-suffixed on
-    collision) so two packages both named 'core' stay distinguishable."""
+    """Wrap detect_package_roots() into navigation-metadata dicts for a
+    code-intel.json `packages[]` partition. Emitted into code-intel.json by BOTH
+    producers (run_a9fe5ad3): the core reindex writer (json_exporter.export_code_intel_json)
+    and the skill GENERATE path (INSTRUCTIONS §4.6). Names are made unique
+    (path-suffixed on collision) so two packages both named 'core' stay distinguishable."""
     roots = detect_package_roots(repo_root)
     # Two-pass (Gate-2 F2): disambiguate ALL colliding names symmetrically, not
     # just the 2nd+ occurrence — otherwise the first 'core' keeps the bare name

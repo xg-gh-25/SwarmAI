@@ -211,3 +211,91 @@ was RIGHT on 4 counts, all confirmed against source:
 - Autonomy must stay REVERSIBLE (archive+.bak) — autonomous ≠ unrecoverable.
 - Caps stay as disaster-floors (P6): auto-retire/rewrite per-run caps prevent a runaway scan
   from mass-mutating on one bad signal.
+
+---
+
+## 4. Semantic-drift tier — Gate-0 RESHAPE (run_b2e85d61, XG chose 甲, 2026-07-18)
+
+**Gate-0 killed the naive "LLM auto-rewrites trunk + auto-commits" version — and was RIGHT.**
+Live-verified, the fatal holes:
+1. **Two disjoint pipelines.** The gates I claimed (CitationVerifier + classify_confidence)
+   live on `LlmRefreshProposer`→`_apply_llm_proposal`. But the pipeline that actually
+   auto-`git commit`s is `ddd_refresh.py`→`ddd-refresh-*.md`→`_auto_apply_ddd_proposals`,
+   gated ONLY by an LLM self-reported `"confidence": 8` (ddd_refresh.py:286) — the prompt
+   never asks for a citation. The safety story was on the wrong path.
+2. **CitationVerifier is existence-theater** (auto_refresh.py:111-140): it proves "line 151
+   exists" / "string appears somewhere", NOT "the sentence about line 151 is TRUE". It cannot
+   bind a claim to its truth.
+3. **`is_mechanical` only auto-applies APPEND-shape** (ddd_orchestrator.py:530) — a trunk
+   REWRITE is currently BLOCKED. Shipping auto-rewrite would require DELETING the last real guard.
+
+**The irreducible truth (why this is a cognition decision, not an engineering one):**
+grep cannot verify whether a sentence about the system is true. Version-string is machine-
+provable (read VERSION); "is code-intel v2 built" / "is this architecture description accurate"
+is NOT. So fully-autonomous LLM-rewrite-of-trunk-with-auto-commit is **CLASS A automated** —
+"what I wrote = correct" turned into a cron job. Refused.
+
+### 甲 — the shipped shape
+- **NEW = a semantic-drift DETECTOR only.** It emits `{claim, location, falsifying_evidence}`
+  for a trunk claim a cheap grep/symbol-check falsifies, **independent of file mtime** (closes
+  the real gap: a factually-wrong claim in a freshly-touched file was never flagged — the
+  2-month rot). It NEVER writes a DDD doc.
+- **The fix is human, via `s_persist`.** Findings surface WHERE I work (in-band, in the active
+  channel / session — NEVER a passive dashboard/queue that rots unread; AGENT signal-in-channel
+  rule + "靠人不靠谱" applies to CHORES, not to the one irreducible judgment: is this
+  un-verifiable prose true?). I one-shot the correction with the evidence already in hand.
+- **Deterministic tier (version-stamp) stays fully auto** (run_254f5e52, shipped).
+- **Detect-only ⇒ 100% safe:** a wrong detection wastes a look; it can never corrupt trunk.
+
+### Explicitly REFUSED / deferred
+- **丙 (full-auto rewrite + auto-commit): REFUSED as a direction** — un-verifiable prose truth
+  has no real gate; this is CLASS A wearing a self-healing costume.
+- **乙 (LLM rewrite → PR I approve): a valid FUTURE step, its OWN run** — needs the two pipelines
+  unified + a real claim-binding citation-verify (not existence-theater) built FIRST. Not
+  smuggled into this run (C042: don't build the mechanism until it's earned).
+
+### DoD (甲 — reshaped)
+- **DoD-A:** a semantic-drift detector — extracts checkable trunk claims (status booleans like
+  "not yet built", named-mechanism claims) + flags ones a grep/symbol-check falsifies,
+  INDEPENDENT of mtime. Pure function → `{claim, location, evidence}`. WRITES NOTHING.
+- **DoD-B:** findings surfaced in-band where the agent works (session-visible, evidence attached,
+  a ready `s_persist` action) — NOT a passive panel. Verify it does NOT route to any auto-write.
+- **DoD-C:** detector is periodic — wired to context_health deep-check (already daily) so drift
+  is caught continuously, not on-demand-only.
+- **DoD-D:** proven on the REAL current drifts (e.g. a seeded "X not yet built" in a fresh file
+  → detected with the falsifying evidence). Test asserts detect + evidence, and asserts NO file
+  mutation occurs.
+- **DoD-E:** docs-truth — design doc + TECH.md describe the two-tier reality (deterministic auto
+  + semantic detect-only-→-s_persist) and the explicit refusal of full-auto trunk rewrite.
+
+---
+
+## 5. Semantic-drift DETECTOR — NO-GO (run_b2e85d61 Gate-1, 2026-07-18)
+
+Even the SAFE detect-only reshape (甲) was BLOCKED by Gate-1 and, on verification, RIGHTLY
+abandoned. Two adversarial gates converged on ONE truth:
+
+**"grep cannot verify whether a sentence about the system is true" applies to DETECTION,
+not only to rewriting.** A detector that flags "X not yet built" when symbol X exists in
+source false-positives on real trunk — verified live on our OWN TECH.md:
+- `:1509` "PURE-FILESYSTEM… NO vector leg" is a TRUE statement, but inert `vector_*` symbols
+  still exist → the rule flags a CORRECT sentence.
+- `:817` is a narrated CORRECTION that still contains the old phrase → flagged.
+- `:26` "ablation NOT yet built" is a deliberate NON-GOAL → flagged.
+A present symbol does not prove a prose claim false (it may be inert, a non-goal, or
+true-when-written). And AC5's "writes nothing" was itself false: `_get_health_highlights`
+(proactive_intelligence.py:1330) auto-creates a Radar todo for `critical` findings.
+
+**Decision: DO NOT BUILD a semantic-drift detector.** Of the 5 real audit drifts the safe
+rule targeted ~1 and misfired on the 2 nearest — the honest version is either noise or
+near-empty. Mechanizing this judgment at acceptable false-positive cost is not possible.
+
+### What actually closes the semantic-drift gap (the real, shipped answer)
+- **Deterministic drift** (version-stamp) → **fully auto** (run_254f5e52, shipped).
+- **Semantic drift** → the **periodic full DDD self-audit** — the exact 4-subagent
+  fresh-context audit (recall/cultivation/code-intel/completeness vs live code) that STARTED
+  this whole effort. An LLM reading code + prose and judging "is this true" IS the only thing
+  that verifies prose-truth; that is a periodic *review*, not a mechanized detector. The human
+  (or a scheduled review agent) runs it and fixes findings via `s_persist`.
+- **The lesson**: not everything decays into a mechanizable check. Prose-truth is one of them.
+  The right response to that is a periodic judgment pass, not a grep dressed as a detector.
