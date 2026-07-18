@@ -20,7 +20,7 @@ import { useHealth } from '../../contexts/HealthContext';
 import { useLayout } from '../../contexts/LayoutContext';
 import { systemService } from '../../services/system';
 
-type Method = 'ada' | 'sso' | 'apikey' | 'iam_role';
+type Method = 'ada' | 'sso' | 'apikey' | 'iam_role' | 'bedrock_api_key';
 
 // Frontend mirror of backend auth_remediation.remediation_for — kept minimal.
 // `configured` = whether ANY credential signal was detected. When false, the
@@ -57,6 +57,11 @@ function remediation(
         title: 'Anthropic API key not working',
         body: <>Update your API key in Settings → AI &amp; Models.</>,
       };
+    case 'bedrock_api_key':
+      return {
+        title: 'Bedrock API key not working',
+        body: <>Your bearer token expired (max 12h). Generate a new one and enter it in Settings → AI &amp; Models.</>,
+      };
     default:
       return {
         title: 'Credentials aren\'t working',
@@ -82,7 +87,12 @@ export default function CredentialBanner() {
         setMethod(h.suggestedMethod as Method);
         // No ada/sso/apikey signal → the user never configured creds (a
         // NoCredentialsError, not an expiry). Show "configure", not "refresh".
-        setConfigured(Boolean(h.hasAdaDir || h.hasSsoCache || h.hasApiKey));
+        // EXCEPT Hive/iam_role: has_ada_dir/has_sso_cache are forced false on
+        // Hive but the IAM instance role IS a valid credential — it's always
+        // "configured" (there's no in-app setup for it), so never show the
+        // configure copy for it (Gate-2 HIGH regression fix).
+        const isIamRole = h.suggestedMethod === 'iam_role' || h.runMode === 'hive';
+        setConfigured(isIamRole || Boolean(h.hasAdaDir || h.hasSsoCache || h.hasApiKey));
       })
       .catch(() => { /* fall back to the generic remediation */ });
     return () => { cancelled = true; };

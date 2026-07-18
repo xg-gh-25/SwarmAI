@@ -81,6 +81,23 @@ describe('CredentialBanner', () => {
     expect(txt).not.toContain('aws sso login');
   });
 
+  it('Hive iam_role: never shows "configure" (instance role IS configured)', async () => {
+    // On Hive, has_ada_dir/has_sso_cache are forced false and has_api_key is
+    // false, but the IAM instance role IS a valid credential. A false-driven
+    // "No credentials configured / set up" banner would be a dead-end (there's
+    // no in-app setup for an instance role). Must show the IAM-policy fix instead.
+    mockGetAuthHint.mockResolvedValue({
+      deploymentContext: 'external', suggestedMethod: 'iam_role', runMode: 'hive',
+      hasAdaDir: false, hasSsoCache: false, hasApiKey: false,
+    });
+    setAuth('expired');
+    render(<CredentialBanner />);
+    await screen.findByRole('alert');
+    const txt = screen.getByRole('alert').textContent!.toLowerCase();
+    expect(txt).not.toMatch(/no credentials configured|set up authentication/);
+    expect(txt).toContain('bedrock:invokemodel');
+  });
+
   it('creds present but rejected (hasSsoCache): keeps the refresh wording', async () => {
     // Regression guard: a real expired SSO session (cache exists) still says refresh.
     mockGetAuthHint.mockResolvedValue({
