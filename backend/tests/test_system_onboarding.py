@@ -430,6 +430,45 @@ class TestAuthPersistEndpoints:
         assert resp.status_code == 200
         assert updates.get("auth_method") == "bedrock_api_key"
 
+    # ── Meta-review MED: switching AWAY from bedrock_api_key eagerly pops the
+    #    token WE injected (shrinks the stale-token window for managed services
+    #    that snapshot os.environ before the next lazy spawn-clear). ──
+    def test_switch_away_from_bedrock_eagerly_clears_injected_token(self, client):
+        from core import claude_environment as _ce
+        saved = _ce._injected_bearer_token
+        try:
+            with patch("core.app_config_manager.AppConfigManager.update", new=lambda self, d: None):
+                # Simulate a prior bedrock spawn: we injected this exact token.
+                _ce._injected_bearer_token = "bearer-we-injected"
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "bearer-we-injected"
+                resp = client.post("/api/system/auth-method",
+                                   json={"method": "sso", "deployment_context": "external"})
+                assert resp.status_code == 200
+                # Eager-clear fired: env popped AND marker reset.
+                assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") is None
+                assert _ce._injected_bearer_token is None
+        finally:
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            _ce._injected_bearer_token = saved
+
+    def test_switch_away_does_NOT_clobber_ambient_bearer_token(self, client):
+        """If the token in env is NOT the one we injected (user's own ambient
+        export), switching auth-method must NOT pop it."""
+        from core import claude_environment as _ce
+        saved = _ce._injected_bearer_token
+        try:
+            with patch("core.app_config_manager.AppConfigManager.update", new=lambda self, d: None):
+                _ce._injected_bearer_token = "bearer-we-injected"
+                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "bearer-USER-AMBIENT"
+                resp = client.post("/api/system/auth-method",
+                                   json={"method": "sso", "deployment_context": "external"})
+                assert resp.status_code == 200
+                # Value differs from our marker → left untouched.
+                assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "bearer-USER-AMBIENT"
+        finally:
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            _ce._injected_bearer_token = saved
+
     # ── AC2: POST /system/bedrock-api-key persists the bearer token (secret) ──
     def test_set_bedrock_api_key_persists_and_not_echoed(self, client):
         called = {}
@@ -504,6 +543,39 @@ class TestVerifyBedrockBearerToken:
             resp = client.post("/api/system/verify-auth")
         assert resp.status_code == 200
         assert seen["token"] is None, "ada verify must not inject a bearer token"
+
+    def test_sigv4_verify_clears_residual_bearer_then_restores(self, client):
+        """Gate-2 fix: an ada/sso verify must REMOVE a residual
+        AWS_BEARER_TOKEN_BEDROCK (left by a prior bedrock_api_key spawn in this
+        long-lived daemon) before boto3.client() — else botocore prefers the
+        stale bearer over sigv4 and tests the wrong identity. Env restored after."""
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "residual-from-prior-spawn"
+        env_at_ctor = {}
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"content":[{"text":"hi"}]}'),
+        }
+        def fake_client(service, **kwargs):
+            env_at_ctor["token"] = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            return mock_client
+        try:
+            with patch("routers.system.boto3") as mock_boto3, \
+                 patch("routers.system._get_auth_config", return_value={
+                     "use_bedrock": True, "aws_region": "us-east-1",
+                     "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+                     "auth_method": "sso",  # sigv4 method, no bearer token
+                     "aws_bearer_token_bedrock": None,
+                 }):
+                mock_boto3.client.side_effect = fake_client
+                resp = client.post("/api/system/verify-auth")
+            assert resp.status_code == 200
+            # residual token was REMOVED during client construction (sigv4 tested)
+            assert env_at_ctor["token"] is None
+            # ...and RESTORED to its prior value afterward
+            assert os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == "residual-from-prior-spawn"
+        finally:
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
 
 
 # ── AC2: auth-hint detects ADA dir, SSO cache, API key ──

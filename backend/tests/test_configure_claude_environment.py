@@ -53,9 +53,13 @@ MANAGED_VARS = [
 
 @pytest.fixture(autouse=True)
 def _clean_env():
-    """Save and restore env vars around every test."""
+    """Save and restore env vars + the module bearer-inject marker around every test."""
+    import core.claude_environment as ce
     saved = {k: os.environ.get(k) for k in MANAGED_VARS}
+    saved_marker = ce._injected_bearer_token
+    ce._injected_bearer_token = None
     yield
+    ce._injected_bearer_token = saved_marker
     for k, v in saved.items():
         if v is not None:
             os.environ[k] = v
@@ -177,23 +181,53 @@ class TestBedrockBearerInjection:
         assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
 
     def test_stale_bearer_we_injected_is_cleared_on_switch_away(self):
-        """Switching bedrock_api_key → ada must pop the token WE injected."""
-        cfg = _make_config({
+        """Switching bedrock_api_key → ada must pop the token WE injected —
+        keyed on the module 'we-injected' marker, so it fires via a REAL prior
+        inject (not a hand-set env)."""
+        import core.claude_environment as ce
+        # Spawn 1: bedrock_api_key mode injects + records the marker.
+        _configure_claude_environment(_make_config({
+            "use_bedrock": True, "auth_method": "bedrock_api_key",
+            "aws_bearer_token_bedrock": "our-token",
+        }))
+        assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "our-token"
+        assert ce._injected_bearer_token == "our-token"
+        # Spawn 2: switch to ada → our injected token is cleared.
+        _configure_claude_environment(_make_config({
             "use_bedrock": True, "auth_method": "ada",
             "aws_bearer_token_bedrock": "our-token",
-        })
-        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "our-token"  # simulate prior inject
-        _configure_claude_environment(cfg)
+        }))
         assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+        assert ce._injected_bearer_token is None
+
+    def test_stale_bearer_cleared_even_if_persisted_token_vanished(self):
+        """Gate-2 fix: if the persisted secret is dropped from cache while the
+        daemon lives, a token WE injected is STILL cleared on switch-away
+        (cleanup keys on the marker, not the current persisted value)."""
+        import core.claude_environment as ce
+        _configure_claude_environment(_make_config({
+            "use_bedrock": True, "auth_method": "bedrock_api_key",
+            "aws_bearer_token_bedrock": "our-token",
+        }))
+        assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "our-token"
+        # Persisted token vanished (reset/restore) → config has None now.
+        _configure_claude_environment(_make_config({
+            "use_bedrock": True, "auth_method": "ada",
+            "aws_bearer_token_bedrock": None,
+        }))
+        assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
+        assert ce._injected_bearer_token is None
 
     def test_legit_ambient_bearer_not_clobbered(self):
-        """A user's own ambient AWS_BEARER_TOKEN_BEDROCK (≠ persisted) survives."""
-        cfg = _make_config({
+        """A user's own ambient AWS_BEARER_TOKEN_BEDROCK survives — we never
+        recorded it in the marker, so we never pop it."""
+        import core.claude_environment as ce
+        ce._injected_bearer_token = None  # ensure clean marker (autouse env fixture handles os.environ)
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "user-own-export"  # NOT ours
+        _configure_claude_environment(_make_config({
             "use_bedrock": True, "auth_method": "ada",
             "aws_bearer_token_bedrock": "our-token",
-        })
-        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = "user-own-export"  # NOT ours
-        _configure_claude_environment(cfg)
+        }))
         assert os.environ["AWS_BEARER_TOKEN_BEDROCK"] == "user-own-export"
 
 

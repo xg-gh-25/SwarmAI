@@ -43,6 +43,15 @@ logger = logging.getLogger(__name__)
 # to prevent concurrent sessions from seeing each other's env mutations.
 _env_lock = asyncio.Lock()
 
+# Tracks the exact AWS_BEARER_TOKEN_BEDROCK value WE injected into the long-lived
+# daemon's os.environ (bedrock_api_key mode). Cleanup is keyed on THIS marker, not
+# on the currently-persisted token — so a token we injected is always cleared when
+# switching away, even if the persisted secret has since been dropped from cache
+# (reload/reset/restore). This is the "only pop what WE set" guard that also can't
+# clobber a user's own ambient AWS_BEARER_TOKEN_BEDROCK export (that value is never
+# recorded here, so it's never popped). None = we have not injected one.
+_injected_bearer_token: str | None = None
+
 
 class _ClaudeClientWrapper:
     """Wrapper to handle anyio cleanup errors when ClaudeSDKClient is used with asyncio tasks.
@@ -219,16 +228,25 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
         # AWS_BEARER_TOKEN_BEDROCK so the CLI subprocess authenticates to
         # bedrock-runtime with the bearer token instead of the sigv4 credential
         # chain (verified: the CLI reads this env var; botocore does too). Only
-        # active when auth_method=="bedrock_api_key"; all other Bedrock methods
-        # (ada/sso/iam_role) must NOT carry it, so we clear a token WE injected.
-        # Guard the clear with "== persisted" (mirror the ANTHROPIC_API_KEY logic
-        # above) so a user's legitimate ambient AWS_BEARER_TOKEN_BEDROCK export is
-        # never clobbered when they switch to ada/sso/iam_role.
+        # active when auth_method=="bedrock_api_key" with a real token; all other
+        # Bedrock methods (ada/sso/iam_role) must NOT carry it.
+        #
+        # Cleanup is keyed on `_injected_bearer_token` (what WE set), NOT on the
+        # currently-persisted value — so a token we injected is ALWAYS cleared when
+        # switching away, even if the persisted secret vanished from cache
+        # (reload/reset/restore) while this long-lived daemon kept running. A stale
+        # injected token would otherwise be preferred by botocore/CLI over sigv4 and
+        # silently hijack an ada/sso spawn (Gate-2 correctness finding). We never
+        # record a user's own ambient export here, so we never clobber it.
+        global _injected_bearer_token
         _bearer = config.get("aws_bearer_token_bedrock")
         if config.get("auth_method") == "bedrock_api_key" and _bearer:
             os.environ["AWS_BEARER_TOKEN_BEDROCK"] = _bearer
-        elif _bearer and os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _bearer:
+            _injected_bearer_token = _bearer
+        elif _injected_bearer_token is not None and \
+                os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _injected_bearer_token:
             os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            _injected_bearer_token = None
     else:
         os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
 

@@ -278,6 +278,20 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "Reconnecting automatically. If this persists, try restarting the app.",
     ),
     (
+        # Bedrock BEARER-TOKEN expiry at runtime (bedrock_api_key mode). A
+        # short-term AWS_BEARER_TOKEN_BEDROCK expires in <=12h, but the daemon is
+        # 24/7 — so an always-on session WILL hit mid-stream expiry. The STS
+        # pre-flight is skipped for bedrock_api_key (no sigv4 identity), so this
+        # bedrock-runtime error is the FIRST signal. It must NOT be mapped to the
+        # generic "ada credentials update" hint — the recovery is re-entering the
+        # bearer token. Ordered BEFORE the Anthropic pattern so the Bedrock-specific
+        # ExpiredToken/bearer signature wins. (Meta-review HIGH, run_9d9f7dff.)
+        r"(?:ExpiredToken(?:Exception)?|bedrock.{0,40}(?:bearer|token)|(?:bearer|token).{0,40}(?:expired|invalid)|AWS_BEARER_TOKEN_BEDROCK)",
+        "Your Bedrock API key (bearer token) has expired or isn't working.",
+        "Bedrock bearer tokens are short-lived (max 12h). Generate a new one and "
+        "update it in Settings → AI & Models, then send your message again.",
+    ),
+    (
         # Anthropic-direct auth failure at runtime — a key valid at setup but
         # later revoked/rotated. In API-key mode the STS pre-flight and the
         # /health auth check are both skipped, so this SDK error is the FIRST

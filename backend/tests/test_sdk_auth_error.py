@@ -27,3 +27,26 @@ def test_unrelated_error_still_generic():
     friendly, action = _sanitize_sdk_error(raw)
     # unchanged generic fallback (not the auth message)
     assert "settings" not in (action or "").lower()
+
+
+def test_bedrock_bearer_expiry_maps_to_bedrock_message_not_ada():
+    """Meta-review HIGH: a 24/7 daemon + <=12h bearer token WILL expire
+    mid-stream. The bedrock-runtime ExpiredToken error must map to a
+    Bedrock-specific 'generate a new token' hint — NOT the ada/mwinit hint,
+    and NOT the Anthropic-API-key hint."""
+    raw = "botocore.errorfactory.ExpiredTokenException: The bearer token has expired"
+    friendly, action = _sanitize_sdk_error(raw)
+    assert "bedrock" in friendly.lower()
+    assert action and "settings" in action.lower()
+    assert "mwinit" not in (action or "").lower()
+    # must be the Bedrock message, not the Anthropic one
+    assert "anthropic api key" not in (action or "").lower()
+
+
+def test_bedrock_expiry_ordered_before_anthropic_pattern():
+    """The Bedrock bearer signature must win over the generic 401/auth pattern
+    (it's listed first) so a bedrock-runtime 403/expired isn't mislabeled as an
+    Anthropic key problem."""
+    raw = "AWS_BEARER_TOKEN_BEDROCK token invalid or expired (403)"
+    friendly, action = _sanitize_sdk_error(raw)
+    assert "bedrock" in friendly.lower()

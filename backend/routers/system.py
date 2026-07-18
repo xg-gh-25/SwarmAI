@@ -440,6 +440,21 @@ async def set_auth_method(req: SetAuthMethodRequest):
     if req.deployment_context in ("internal", "external"):
         updates["deployment_context"] = req.deployment_context
     AppConfigManager.instance().update(updates)
+
+    # Eager cleanup on switch AWAY from bedrock_api_key (Meta-review MED,
+    # run_9d9f7dff): the spawn-path clear in _configure_claude_environment is
+    # LAZY (fires only on the next chat spawn). Between the switch and that
+    # spawn, job executors / managed services that snapshot os.environ would
+    # inherit the now-wrong bearer token. Pop it immediately (under _env_lock,
+    # keyed on the "we-injected" marker so a user's ambient export is untouched)
+    # to shrink the stale window to zero.
+    if req.method != "bedrock_api_key":
+        from core import claude_environment as _ce
+        async with _ce._env_lock:
+            if _ce._injected_bearer_token is not None and \
+                    os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _ce._injected_bearer_token:
+                os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+                _ce._injected_bearer_token = None
     return {"status": "ok", "auth_method": req.method}
 
 
@@ -491,26 +506,31 @@ async def _verify_bedrock(config: dict) -> dict:
             read_timeout=10,
             retries={"max_attempts": 1},
         )
-        if bearer_token:
-            from core.claude_environment import _env_lock
-            _KEY = "AWS_BEARER_TOKEN_BEDROCK"
-            async with _env_lock:
-                _prev = os.environ.get(_KEY, _MISSING)
+        from core.claude_environment import _env_lock
+        _KEY = "AWS_BEARER_TOKEN_BEDROCK"
+        async with _env_lock:
+            # Set the bearer token for a bedrock_api_key verify; for a sigv4
+            # method (ada/sso), REMOVE any residual token so botocore can't
+            # prefer a leftover bearer (injected by a prior bedrock_api_key
+            # spawn in this long-lived daemon) over the sigv4 creds we mean to
+            # test (Gate-2 correctness finding). Either way, restore os.environ
+            # to its prior state after the client is constructed (token frozen
+            # into the signer at construction, so this window is minimal).
+            _prev = os.environ.get(_KEY, _MISSING)
+            if bearer_token:
                 os.environ[_KEY] = bearer_token
-                try:
-                    # botocore freezes the token into the signer HERE.
-                    client = boto3.client(
-                        "bedrock-runtime", region_name=region, config=_verify_cfg
-                    )
-                finally:
-                    if _prev is _MISSING:
-                        os.environ.pop(_KEY, None)
-                    else:
-                        os.environ[_KEY] = _prev
-        else:
-            client = boto3.client(
-                "bedrock-runtime", region_name=region, config=_verify_cfg
-            )
+            else:
+                os.environ.pop(_KEY, None)
+            try:
+                # botocore freezes the token/creds into the signer HERE.
+                client = boto3.client(
+                    "bedrock-runtime", region_name=region, config=_verify_cfg
+                )
+            finally:
+                if _prev is _MISSING:
+                    os.environ.pop(_KEY, None)
+                else:
+                    os.environ[_KEY] = _prev
 
         def _invoke():
             return client.invoke_model(
