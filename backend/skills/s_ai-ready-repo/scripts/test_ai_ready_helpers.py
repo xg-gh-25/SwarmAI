@@ -967,58 +967,167 @@ class TestStalenessDetection:
 class TestMultiPackage:
     """Run engine on multiple packages with cross-package synthesis."""
 
+    def _make_npm_monorepo(self, tmp_path, members):
+        """Build a real npm-workspaces monorepo (root package.json globs packages/*)
+        so run_multi_package's AUTO-DETECT (detect_package_roots) surfaces >=2 members
+        — not a hand-fed list. Each member is a git repo with a main.py."""
+        import json as _json
+        (tmp_path / "package.json").write_text(
+            _json.dumps({"name": "mono", "workspaces": ["packages/*"]})
+        )
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        for name, body in members.items():
+            repo = tmp_path / "packages" / name
+            repo.mkdir(parents=True)
+            (repo / "main.py").write_text(body)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init mono"], cwd=tmp_path, capture_output=True)
+
     def test_multi_package_produces_per_pkg_output(self, tmp_path):
-        """Each package gets independent analysis."""
+        """AUTO-DETECT: one repo_root → per-package analysis via detect_package_roots."""
         from scripts.ai_ready_helpers import run_multi_package
 
-        # Create 2 mini repos
-        for name in ["frontend", "backend"]:
-            repo = tmp_path / name
-            repo.mkdir()
-            subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
-            (repo / "main.py").write_text(f"# {name}\nimport shared\n")
-            subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"init {name}"], cwd=repo, capture_output=True)
+        self._make_npm_monorepo(tmp_path, {
+            "frontend": "# frontend\nimport shared\n",
+            "backend": "# backend\nimport shared\n",
+        })
 
         output = tmp_path / "output"
-        result = run_multi_package(
-            [tmp_path / "frontend", tmp_path / "backend"],
-            output,
-            project_name="my-system",
-        )
+        # NOTE: single repo_root, NOT a hand-fed list — the whole point of AC4.
+        result = run_multi_package(tmp_path, output, project_name="my-system")
 
         assert len(result["packages"]) == 2
         assert result["project_name"] == "my-system"
-        # Each package has stats
+        assert {p["name"] for p in result["packages"]} == {"frontend", "backend"}
+        # partition is surfaced alongside the analyzed packages
+        assert len(result["partition"]) == 2
+        # Each package has stats + detection metadata
         for pkg in result["packages"]:
             assert "stats" in pkg
             assert pkg["stats"]["files"] >= 1
+            assert pkg["detected_by"]  # e.g. "npm"
+            assert pkg["root"].startswith("packages/")
 
     def test_cross_package_finds_shared_deps(self, tmp_path):
-        """Shared imports across packages are detected."""
+        """Shared imports across auto-detected packages are detected."""
         from scripts.ai_ready_helpers import run_multi_package
 
-        # Create 2 repos that both import "shared_lib"
-        for name in ["svc_a", "svc_b"]:
-            repo = tmp_path / name
-            repo.mkdir()
-            subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-            subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
-            (repo / "app.py").write_text("import shared_lib\nimport common_utils\n")
-            subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"init {name}"], cwd=repo, capture_output=True)
+        self._make_npm_monorepo(tmp_path, {
+            "svc_a": "import shared_lib\nimport common_utils\n",
+            "svc_b": "import shared_lib\nimport common_utils\n",
+        })
 
-        result = run_multi_package(
-            [tmp_path / "svc_a", tmp_path / "svc_b"],
-            tmp_path / "out",
-        )
+        result = run_multi_package(tmp_path, tmp_path / "out")
 
         # Both import shared_lib and common_utils → should appear in shared_deps
         assert "shared_lib" in result["cross_package"]["shared_deps"]
         assert "common_utils" in result["cross_package"]["shared_deps"]
+
+    def test_single_package_repo_degrades_to_one_root(self, tmp_path):
+        """A repo with no workspace manifest → exactly one package rooted at '.'."""
+        from scripts.ai_ready_helpers import run_multi_package
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "main.py").write_text("# solo\nimport os\n")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        result = run_multi_package(tmp_path, tmp_path / "out")
+        assert len(result["packages"]) == 1
+        assert result["packages"][0]["root"] == "."
+
+    def test_root_app_with_nested_tool_manifest_keeps_root(self, tmp_path):
+        """Gate-2 F1: root app.py + tools/gen/pyproject.toml must NOT drop the root.
+        A lone nested manifest previously surfaced ONLY the nested dir, silently
+        losing the root application from the partition."""
+        from scripts.ai_ready_helpers import detect_package_roots
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "app.py").write_text("import flask\ndef main(): pass\n")
+        (tmp_path / "server.py").write_text("import app\n")
+        tool = tmp_path / "tools" / "gen"
+        tool.mkdir(parents=True)
+        (tool / "pyproject.toml").write_text("[project]\nname='gen'\n")
+        (tool / "gen.py").write_text("print('gen')\n")
+
+        roots = detect_package_roots(tmp_path)
+        rootset = {r.root for r in roots}
+        assert "." in rootset, f"root dropped — got {rootset}"
+        assert "tools/gen" in rootset
+
+    def test_true_monorepo_gets_no_spurious_root(self, tmp_path):
+        """The F1 guard must NOT add a root package to a genuine monorepo whose code
+        lives entirely in packages/* (root has only package.json, no source)."""
+        from scripts.ai_ready_helpers import detect_package_roots
+        import json as _json
+        (tmp_path / "package.json").write_text(
+            _json.dumps({"name": "mono", "workspaces": ["packages/*"]})
+        )
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        for n in ["api", "web"]:
+            d = tmp_path / "packages" / n
+            d.mkdir(parents=True)
+            (d / "main.py").write_text(f"# {n}\n")
+        roots = detect_package_roots(tmp_path)
+        assert "." not in {r.root for r in roots}, "spurious root added to true monorepo"
+        assert {r.root for r in roots} == {"packages/api", "packages/web"}
+
+    def test_root_member_name_collision_distinct_names_and_outputs(self, tmp_path):
+        """Meta-review F-1: repo dir 'X' + a nested member also named 'X' must yield
+        DISTINCT package names AND distinct output_paths in run_multi_package — else
+        the second package clobbers the first (silent coverage loss). The root-coverage
+        F1 guard activates this path by prepending a root package named after the repo."""
+        from scripts.ai_ready_helpers import run_multi_package
+        repo = tmp_path / "widget"          # repo dir name
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        (repo / "app.py").write_text("import flask\n")
+        (repo / "core.py").write_text("import os\n")
+        member = repo / "sub" / "widget"    # member with the SAME name as the repo
+        member.mkdir(parents=True)
+        (member / "pyproject.toml").write_text("[project]\nname='widget'\n")
+        (member / "m.py").write_text("print('m')\n")
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "i"], cwd=repo, capture_output=True)
+
+        mp = run_multi_package(repo, tmp_path / "out")
+        ok = [p for p in mp["packages"] if "error" not in p]
+        names = [p["name"] for p in ok]
+        outs = [p["output_path"] for p in ok]
+        assert len(names) == len(set(names)), f"duplicate package names: {names}"
+        assert len(outs) == len(set(outs)), f"duplicate output_paths: {outs}"
+
+
+class TestValidateRepoPath:
+    """_validate_repo_path contract (run_a9fe5ad3): a git ROOT or a monorepo MEMBER
+    (subdir inside a git work-tree) is accepted; a non-git dir is still rejected."""
+
+    def test_git_root_accepted(self, tmp_path):
+        from scripts.ai_ready_helpers import _validate_repo_path
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        assert _validate_repo_path(tmp_path) == tmp_path.resolve()
+
+    def test_monorepo_member_without_own_git_accepted(self, tmp_path):
+        """A subdir with NO .git of its own, inside a git work-tree, is accepted."""
+        from scripts.ai_ready_helpers import _validate_repo_path
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        member = tmp_path / "packages" / "svc"
+        member.mkdir(parents=True)
+        assert not (member / ".git").exists()
+        assert _validate_repo_path(member) == member.resolve()
+
+    def test_non_git_dir_still_rejected(self, tmp_path):
+        """Security intent preserved: a dir outside any git work-tree is rejected."""
+        from scripts.ai_ready_helpers import _validate_repo_path
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        with pytest.raises(ValueError, match="Not a git repository"):
+            _validate_repo_path(plain)
 
 
 # ─── Verification Tasks (M3) ───
@@ -1522,6 +1631,30 @@ class TestFinalizeV3:
         out = finalize_v3(base, domains, flows, steps)
         assert out["version"] == "3.0"
         assert out["domains"][0]["id"] == "domain:orders"
+
+    def test_finalize_stamps_spec_hash_on_every_domain(self):
+        """Regression (run_97a6b1db): finalize_v3 is the sanctioned agent domain-
+        authoring path, but it did NOT stamp domains[].spec_hash — only the core
+        json_exporter (reindex path) did. So an agent authoring domains via the
+        documented skill flow produced staleness-BLIND domains (freshness treats an
+        unstamped domain as unjudgeable → silently exempt from staleness detection).
+        finalize_v3 must stamp spec_hash at assembly (the chokepoint where domain +
+        flows + steps are all in hand), matching the reindex path. The stamp MUST
+        equal _spec_content_hash(domain, flows, steps) so it matches the marker a
+        regenerated .spec.md carries (else staleness false-flags)."""
+        from scripts.ai_ready_helpers import (
+            backfill_route_ids, finalize_v3, _spec_content_hash)
+        base = backfill_route_ids(self._complete_v2_base(
+            routes=[{"method": "GET", "path": "/a", "file_path": "x.py"}]))
+        rid = base["routes"][0]["id"]
+        domains = [{"id": "domain:orders", "name": "Orders", "summary": "order lifecycle"}]
+        flows = [{"id": "flow:create", "domain_id": "domain:orders", "entry_ref": rid, "entry_type": "http"}]
+        steps = [{"id": "step:1", "flow_id": "flow:create"}]
+        out = finalize_v3(base, domains, flows, steps)
+        dom = out["domains"][0]
+        assert dom.get("spec_hash"), "finalize_v3 must stamp spec_hash (staleness-blind otherwise)"
+        # stamp must equal the single-source content hash (so it matches the .spec.md marker)
+        assert dom["spec_hash"] == _spec_content_hash(dom, out["flows"], out["steps"])
 
     def test_dangling_entry_ref_rejected(self):
         from scripts.ai_ready_helpers import finalize_v3
@@ -2266,6 +2399,19 @@ class TestUnifiedCoverageLedger:
         errors = validate_coverage_ledger(doc)
         assert any("kind" in e.lower() for e in errors)
 
+    def test_ledger_accepts_gitignored_kind(self):
+        # producer/validator contract: parser.py emits kind='gitignored' for files
+        # excluded by the repo's .gitignore (parser.py:1496). The validator MUST
+        # accept it — a validator that rejects its own producer's output is the bug
+        # (R27 producer/consumer contract; surfaced live on the real code-intel.json
+        # during run_89e28075, blocking finalize_v3).
+        from scripts.ai_ready_helpers import validate_coverage_ledger
+        doc = self._v3()
+        doc["coverage_ledger"] = [{
+            "ref": "backend/skills/_shared/project_paths.py", "kind": "gitignored",
+            "reason": "ignored by the repo's .gitignore — out of scope by the repo's own rules, recorded not dropped"}]
+        assert validate_coverage_ledger(doc) == []
+
     # --- route-kind entries in the ledger must still be REAL anchors (mirrors unclassified) ---
     def test_ledger_route_kind_must_be_real_anchor(self):
         from scripts.ai_ready_helpers import validate_coverage_ledger
@@ -2667,3 +2813,161 @@ class TestSpecContentHash:
         d = self._domain()
         regen = regenerate_spec_preserving_human("", d, [], [])
         assert extract_spec_hash_marker(regen) == _spec_content_hash(d, [], [])
+
+
+# ─── §12 domain-coverage completeness (run_89e28075): subsystem breadth anchor ───
+
+class TestSubsystemCoverage:
+    """compute_subsystem_coverage: which load-bearing subsystems have a domain vs
+    are gaps vs are explicitly out-of-scope. Breadth anchor = seed subsystem map
+    (from arch docs) matched against domains' evidence files (steps[].file_path +
+    flows/routes). Honest-lossy: out-of-scope subsystems are RECORDED, not silent."""
+
+    def _doc(self):
+        # a domain whose flow's step touches backend/core/streaming_orchestrator.py
+        return {
+            "domains": [{"id": "domain:chat-session", "name": "Chat & Session"}],
+            "flows": [{"id": "f1", "domain_id": "domain:chat-session",
+                       "entry_ref": "route:post-x"}],
+            "steps": [{"id": "s1", "flow_id": "f1",
+                       "file_path": "backend/core/streaming_orchestrator.py"}],
+            "routes": [{"id": "route:post-x", "file_path": "backend/core/session_router.py"}],
+        }
+
+    def _seed(self):
+        # seed subsystem map: name -> {globs, tier}
+        return [
+            {"name": "session", "tier": "spine",
+             "globs": ["backend/core/session_*.py", "backend/core/streaming_orchestrator.py"]},
+            {"name": "context-memory", "tier": "spine",
+             "globs": ["backend/core/context_*.py", "backend/core/recall_multi.py"]},
+            {"name": "utils", "tier": "out-of-scope",
+             "globs": ["backend/utils/*.py"]},
+        ]
+
+    def test_covered_subsystem_detected(self):
+        from scripts.ai_ready_helpers import compute_subsystem_coverage
+        cov = compute_subsystem_coverage(self._doc(), self._seed())
+        # session has a domain (streaming_orchestrator.py is in a domain's step)
+        by = {s["name"]: s for s in cov["subsystems"]}
+        assert by["session"]["status"] == "covered"
+        assert by["session"]["domain_id"] == "domain:chat-session"
+
+    def test_gap_subsystem_flagged(self):
+        from scripts.ai_ready_helpers import compute_subsystem_coverage
+        cov = compute_subsystem_coverage(self._doc(), self._seed())
+        by = {s["name"]: s for s in cov["subsystems"]}
+        # context-memory is a spine subsystem with NO domain → gap (not silent)
+        assert by["context-memory"]["status"] == "gap"
+
+    def test_out_of_scope_recorded_not_silent(self):
+        from scripts.ai_ready_helpers import compute_subsystem_coverage
+        cov = compute_subsystem_coverage(self._doc(), self._seed())
+        by = {s["name"]: s for s in cov["subsystems"]}
+        # utils is tier=out-of-scope → recorded as out-of-scope, NOT gap, NOT silent
+        assert by["utils"]["status"] == "out-of-scope"
+
+    def test_summary_counts(self):
+        from scripts.ai_ready_helpers import compute_subsystem_coverage
+        cov = compute_subsystem_coverage(self._doc(), self._seed())
+        # 3 seeds: 1 covered, 1 gap, 1 out-of-scope
+        assert cov["total"] == 3
+        assert cov["covered"] == 1
+        assert cov["gaps"] == 1
+        assert cov["out_of_scope"] == 1
+        # gap queue is non-empty and names the missing subsystem (non-silent)
+        assert "context-memory" in cov["gap_queue"]
+
+    def test_no_seed_returns_empty_not_crash(self):
+        from scripts.ai_ready_helpers import compute_subsystem_coverage
+        cov = compute_subsystem_coverage(self._doc(), [])
+        assert cov["total"] == 0 and cov["subsystems"] == []
+
+
+class TestBlindSpotScan:
+    """blind_spot_scan (AC4): Spec Studio-style REVERSE coverage — code HAS a risky
+    behavior (risk_areas / hot_zones) but the domain layer (steps[].file_path or
+    business_rules[].anchor) does NOT document it → report it (route to SME queue).
+
+    Design constraints (§11.2 / §12.4):
+      - REPORT-ONLY, never fail-closed (the gate version is DEFERRED as C042).
+      - DETERMINISTIC — keys off existing risk_areas/hot_zones facts, NOT an LLM
+        negative assertion ("does X exist" negatives are systematically unreliable, r6).
+      - Honest: a risky file documented by a step OR a business_rule anchor = covered;
+        otherwise = blind spot (never silently dropped)."""
+
+    def _doc(self):
+        return {
+            "domains": [{
+                "id": "domain:chat-session",
+                "business_rules": [
+                    {"rule": "single-writer", "anchor": "desktop/src/stores/MessageStore.ts",
+                     "verified": True},
+                ],
+            }],
+            "flows": [{"id": "f1", "domain_id": "domain:chat-session"}],
+            "steps": [{"id": "s1", "flow_id": "f1",
+                       "file_path": "backend/core/streaming_orchestrator.py"}],
+            # two risky spans: one documented (MessageStore via business_rule),
+            # one NOT documented anywhere in the domain layer (session_unit.py).
+            "risk_areas": [
+                {"name": "append", "file_path": "desktop/src/stores/MessageStore.ts",
+                 "risk_score": 1.0, "reason": "High fan-in: 3744 callers"},
+                {"name": "force_kill_tree", "file_path": "backend/core/session_unit.py",
+                 "risk_score": 0.9, "reason": "process kill path"},
+            ],
+            "hot_zones": [
+                {"name": "append", "file_path": "desktop/src/stores/MessageStore.ts",
+                 "callers": 3744},
+            ],
+        }
+
+    def test_documented_risk_not_flagged(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        res = blind_spot_scan(self._doc())
+        blind_files = {b["file_path"] for b in res["blind_spots"]}
+        # MessageStore.ts is covered by a business_rule anchor → NOT a blind spot
+        assert "desktop/src/stores/MessageStore.ts" not in blind_files
+
+    def test_undocumented_risk_flagged(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        res = blind_spot_scan(self._doc())
+        blind_files = {b["file_path"] for b in res["blind_spots"]}
+        # session_unit.py has a risky span but no step/anchor documents it → blind spot
+        assert "backend/core/session_unit.py" in blind_files
+        # the flagged item carries WHY (reason preserved, not silent)
+        bs = next(b for b in res["blind_spots"] if b["file_path"] == "backend/core/session_unit.py")
+        assert bs.get("reason")
+        assert bs.get("name") == "force_kill_tree"
+
+    def test_summary_counts_and_clean_flag(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        res = blind_spot_scan(self._doc())
+        # 2 risky spans: 1 documented, 1 blind
+        assert res["total_risky"] == 2
+        assert res["documented"] == 1
+        assert res["blind"] == 1
+        assert res["clean"] is False
+
+    def test_clean_when_all_documented(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        doc = {
+            "domains": [{"id": "d1", "business_rules": [
+                {"rule": "r", "anchor": "backend/core/session_unit.py", "verified": True}]}],
+            "flows": [], "steps": [],
+            "risk_areas": [{"name": "x", "file_path": "backend/core/session_unit.py",
+                            "risk_score": 0.9, "reason": "kill path"}],
+            "hot_zones": [],
+        }
+        res = blind_spot_scan(doc)
+        assert res["blind"] == 0
+        assert res["clean"] is True
+
+    def test_no_risk_areas_returns_clean_not_crash(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        res = blind_spot_scan({"domains": [], "flows": [], "steps": [],
+                               "risk_areas": [], "hot_zones": []})
+        assert res["total_risky"] == 0
+        assert res["blind"] == 0
+        assert res["clean"] is True
+        assert res["blind_spots"] == []

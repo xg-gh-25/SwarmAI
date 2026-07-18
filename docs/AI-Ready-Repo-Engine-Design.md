@@ -1,7 +1,7 @@
 ---
 title: "AI-Ready-Repo Engine — Making Any Codebase Agent-Ready AND Human-Signable"
 created: 2026-05-29
-updated: 2026-07-16
+updated: 2026-07-18
 tags: [ai-ready, ddd, code-intel, delivery-engine, reverse-documentation-engineering, spec-generation]
 project: SwarmAI
 status: approved
@@ -187,13 +187,16 @@ This is not our invention — it is the convergent design of every serious code�
 We implement the thesis as a strict, fail-closed pipeline. **Stages 1, 2, and 4 are code** (`ai_ready_helpers.py` + `parser.py`/`route_parser.py`) — deterministic, verifiable, and enforced. **Stage 3 is the agent's judgment step in `INSTRUCTIONS.md` prose** — it is *not* enforced code; the guarantee re-attaches at Stage 4, which rejects any Stage-3 output that references a non-existent anchor. So the property is an **end-state guarantee (Stage 4 rejects bad output), not a process guarantee (Stage 3 is trusted to behave).** The LLM can enrich freely; it cannot get structural fabrication *past* Stage 4.
 
 ```
-STAGE 1 — DETERMINISTIC READ (no LLM) — two deterministic extractors, both parser-grade:
+STAGE 1 — DETERMINISTIC READ (no LLM) — three deterministic extractors, all parser-grade:
   (a) tree-sitter AST over source → CodeNode/CodeEdge with line + sha256
       (CodeNode/CodeEdge dataclasses `parser.py:107-127`; LANGUAGE_MAP `:30-51`; parse logic
        `parse_file`/`parse_repo` `:522-590`; 12+ langs, per-lang regex fallback) → modules[], dependencies[], symbols
   (b) deterministic REGEX route extraction (route_parser.py; framework-aware:
       FastAPI/Express/Next.js Day 1) → routes[], entry_points[]
-  Both are deterministic (no LLM) and produce verified structural facts with file:line —
+  (c) value-ref extraction (parser.py, 2-pass descriptor-driven, §4.5.5) — emits a
+      `constant` node per distinctive module-scope const + a `references` edge per reader
+      ("change this const → who breaks"). AST-grade (tree-sitter), NOT LLM.
+  All three are deterministic (no LLM) and produce verified structural facts with file:line —
   regex here is not "the LLM's impression," it is a fixed pattern over source. (The routes
   set is regex, NOT tree-sitter — see §5.2/§5.5; it is still parser-grade determinism.)
         │
@@ -252,6 +255,26 @@ The distinction matters for PE review: the *anchor-and-label* discipline (§6/§
 **The ambiguous-reference trade-off is a genuine philosophical fork, worth stating explicitly** (it recurs in dead-code detection, below): the reference engine optimizes for *"trustworthy enough to write into a signed document"* → **宁缺勿错** (when unsure, omit — 0 false edges, some silent misses). Our graph optimizes for *"a signal an agent can filter, never a silent failure"* → **宁留勿漏** (keep the ambiguous edge but score it low, so nothing vanishes silently). Neither is universally right; they follow from the consumer (human sign-off vs agent context). For the *spec-details sign-off* use case, our domain layer inherits the omit-when-unsure posture via the §6 anchoring gates (unverified ≠ fact); for the *code-graph blast-radius* use case, the low-confidence-but-present edge is the better default.
 
 The net (honest): our **read→ground→gate** chain is stronger and more transparent than the precedent; the reference engine's **verification of the resulting spec** (bidirectional adversarial) is ahead of ours, which is why §11.4 adopts it.
+
+### 4.5.5 Value-ref — the "change-this-const → who-breaks" edge (Stage-1 extractor (c))
+
+A third deterministic Stage-1 extractor (added incrementally 2026-07; not in the v2 foundation) closes a blast-radius gap the module/route extractors miss: **which readers break if you change a constant's value.** It is AST-grade (tree-sitter), descriptor-driven, and emits a `constant` node per distinctive module-scope const + a `references` edge per reader — feeding the same graph the blast-radius CTE traverses.
+
+**How it works (a 2-pass, order-independent collector, `parser.py`):**
+- **Pass 1** collects distinctive module-scope const bindings (direct children of the module root, after unwrapping per-language wrappers), minus a *shadow set* — names also bound in a nested scope or as a parameter (a file-scope edge there would be a false positive). Collect-all-before-emit makes it order-independent.
+- **Pass 2** emits a `constant` node per surviving const + a `references` edge for every reader inside a function/method body.
+- **Descriptor-driven, never hardcoded:** every per-language node type (binding shape, reader node type, member-access guard, parameter container) comes from a `LangValueSpec` descriptor — so adding a language is data, not new control flow.
+
+**Enabled languages (10, live-verified in `LANG_VALUE_SPEC`):** `c`, `go`, `javascript`, `kotlin`, `php`, `python`, `ruby`, `rust`, `swift`, `typescript`. A language absent from `LANG_VALUE_SPEC` simply emits no value-ref edges — **feature-absent, never broken** (same honest-degradation posture as §4.5.3). Enablement is gated behind real per-language false-positive guards (e.g. a leading-const in a member/receiver position is NOT a bare const read), each caught by adversarial review or dog-fooding before the language was turned on.
+
+**Scope decisions — what is deliberately NOT covered (Tier B), and why:**
+
+| Case | Decision | Reason (source-verified) |
+|---|---|---|
+| **java / c# class-field const** | **DEFERRED** (not in `LANG_VALUE_SPEC`) | Neither language has a **module scope** — a const lives only as a class field (`field_declaration` in a class body), so the module-scope collector finds nothing. Class-scope value-ref is a genuinely different collector strategy (higher false-positive risk) and there is **no real Java/C# repo to validate FP-rate against** — this engine's only indexed repo is SwarmAI (Python/TS/+4 Rust files, 0 java/cs). EVALUATE verdict 2026-07-18: **DEFER, not REJECT** — the design is sound; it earns a GO only when real Java/C# corpus exists to validate behind the harness. Locked by `test_deferred_languages_emit_nothing` (asserts java/cs emit 0 const / 0 edge = feature-absent). |
+| **c `#define` macro-const** | **NO-GO (permanent)** | A `#define` is a `preproc_def` — a preprocessor node with no field-based name path, a genuinely separate extraction path from the AST const gate. C's `static const` / `const` IS covered (via a `qualifier_gate` requiring a `type_qualifier` whose text is exactly `const` — `volatile` excluded); the macro path is not. Locked by `test_c_define_emits_nothing`. |
+
+**Why this is a floor, not a ceiling:** value-ref inherits the §4.5.4 **宁留勿漏 / 宁缺勿错** consumer split. For c specifically, the const detector deliberately drops const-arrays and const-pointers rather than risk a false edge (documented in-code) — the conservative "drop-never-false-emit" posture, consistent with the sign-off consumer needing precision over recall (§6.1).
 
 ---
 
@@ -540,7 +563,7 @@ There are **5 loops / ≥6 hard-coded 4-doc tuples across 4 files** — not 2. W
 | 1 | **recall** (read side) | domain leg + `[human]`-marker leg | spec-details invisible to AI = orphan |
 | 2 | **cultivation** (governance) | independent refresh path (domain-merge triggered, NOT the generic lesson classifier) | domain specs misrouted to TECH.md → never refreshed = rot |
 | 3 | **DDD index / bindings** | project DDD index row shows `spec-details/ (N domains)` | system "doesn't know it exists" |
-| 4 | **orchestrator staleness/refresh** | independent path — staleness judged by "code-intel mtime > spec.md mtime", not canonical-4 checksum | staleness/auto-apply/refresh channels skip spec-details |
+| 4 | **orchestrator staleness/refresh** | independent path — staleness judged by **content-hash** (a domain's `spec_hash` vs the `<!-- spec-hash: X -->` marker embedded in its `.spec.md`), NOT mtime, and NOT the canonical-4 checksum | staleness/auto-apply/refresh channels skip spec-details |
 | 5 | **completeness gate** | **explicitly EXCLUDED** — spec-details is a directory/derived projection, not counted in canonical-4 | (correct exclusion — else false DDD-INCOMPLETE reports) |
 
 **Root-cause fix (Run 0, before everything else):** a single source of truth — `DDD_CANONICAL_DOCS = ("PRODUCT.md","TECH.md","IMPROVEMENT.md","PROJECT.md")` + `SPEC_DETAILS_DIR = "spec-details"` in one module — replaces all ≥6 hard-coded copies, plus a grep-CI gate asserting the literal tuple appears **0 times** in source (outside the constant definition). This structurally prevents the next doc addition from re-scattering hard-codes.
@@ -797,7 +820,7 @@ Point-in-time correctness is not enough; quality must not *regress*. The Siala &
 ### 11.6 Coverage over time — freshness (correct ≠ correct-forever)
 
 A spec that was correct at generation is *wrong* once the code moves under it — and a confidently-wrong spec is worse than none. Coverage therefore includes a time axis:
-- **Staleness detection** (`detect_spec_details_staleness`, shipped Run 4b): `spec.md mtime < code-intel.json mtime` ⇒ stale; surfaced as a per-session log signal (honest: detection lives in core, regeneration stays skill-owned — no dead event with no consumer, §9 loop-liveness lesson).
+- **Staleness detection** (`detect_spec_details_staleness`, `freshness.py:224`, shipped Run 4b; content-hash reshape run_fe26ed6c): a spec is stale iff the `<!-- spec-hash: X -->` marker embedded in its `.spec.md` is missing or ≠ its domain's `spec_hash` (stamped at export from the domain + flows + steps). **Content-hash, NOT mtime** — a reindex bumps `code-intel.json`'s mtime while preserving identical `domains[]`, so the original mtime detector false-fired every spec after any rebuild (the exact bug the content-hash version replaced). Surfaced as a per-session log signal (honest: detection lives in core, regeneration stays skill-owned — no dead event with no consumer, §9 loop-liveness lesson).
 - **Decay markers** in content (§18.1): a gotcha whose code was refactored but not re-verified → `[⚠️ unverified Nd]`; the agent treats it as "verify before relying."
 - the reference engine's parallel: `STALE/FRESH` classification by (last-gen age vs commits since), default 7d + ≥1 commit → auto-queue regeneration.
 
@@ -811,6 +834,39 @@ A spec that was correct at generation is *wrong* once the code moves under it �
 | Behavioral equivalence | ⚠️ scoring logic shipped + unit-tested, honest-by-construction | no main-path caller yet feeds a live `observations` map (needs a test-runner that executes the domain's tests); pure-static legacy domains → `unchecked` by design |
 | Adversarial (4-detector, bidirectional) | ⚠️ restraint skeleton ✅ shipped (§11.4a, `deliver.md:401`); 4 detectors NOT built by design (§11.4b-d: Contradiction/Blind-Spot vacuous on current data, False-Promise/Weak-Spec runtime-deferred) | see §11.4 Adoption status (run_d9bd27da) — building an empty gate is the anti-pattern; activation triggers documented |
 | Org-level coverage (fleet of repos) | ❌ single-repo only | the reference engine's discovery-agent + gap-backfill is ahead; build only when serving many repos (§15) |
+
+### 11.8 Gap-closure priority (ratified 2026-07-18) — the framing that decides what to build next
+
+> **The framing correction that produced this ordering (recorded so it is not re-derived wrong).** An earlier prioritization pass judged every gap against *SwarmAI's own repo* as the validation input — and since SwarmAI is a single Python/TS/Rust repo (not a monorepo, no COBOL, sparse `contract.status_codes`), it DEFERRED almost everything. **That framing is wrong and is explicitly rejected here.** This is a **product capability whose job is to understand *arbitrary external* repos — mono/multi-repo, multi-package, multi-language, legacy.** The validation input for any gap is therefore *"pick a real repo of that class"* (a real monorepo, a test-rich repo, an open COBOL repo), NOT SwarmAI itself. "We have no corpus" is never a valid DEFER reason for a product capability — GitHub is the corpus. A gap is deferred only for **cost** or **dependency ordering**, never for "SwarmAI itself doesn't exercise it."
+
+**Decision framework:** `(target-use-case prevalence × coverage leverage) ÷ (cost × validation difficulty)`, subject to dependency topology. Validation difficulty collapses to "smoke-test one real repo of that class" (R16 smoke-each spirit).
+
+**Dependency topology:**
+
+```
+① multi-package boundary detection (§23.3)
+     ├─→ M5 per-package artifacts + fan-out (§18.3)
+     └─→ G5 cross-module rule chains (§23 legacy)
+② §4.5.3 unknown-ext → coverage-hole signal → LLM-fallback
+     └─→ G1 COBOL degraded coverage (credibility floor) → G1b COBOL tree-sitter AST
+③ §7 equivalence live-wiring (test-runner produces observations)
+     ├─→ §11.2 behavior-coverage (needs entry_ref + runtime)
+     └─→ §11.4 False-Promise / Weak-Spec detectors (need runtime)
+④ §23 G2–G4 data-lineage / CRUD / compliance-map (legacy vertical, largest)
+```
+
+| Priority | Gap | Verdict | Rationale (product-facing) & GO-trigger |
+|:---:|-----|---------|------|
+| ~~P0~~ **SHIPPED** | Multi-package boundary detection (§23.3) | ✅ **DONE (run_a9fe5ad3, 2026-07-18)** | Detection (run_693e08de) is now wired end-to-end: `packages[]` on BOTH `code-intel.json` producers, `run_multi_package` auto-detects, INSTRUCTIONS §4.9 fan-out, `_validate_repo_path` monorepo-member fix. Unblocks M5 fan-out + G5 cross-module chains. Remaining: per-package **v3** LLM generation + a real external-OSS-monorepo smoke (in-repo real-manifest smoke passed). |
+| **P0** | §4.5.3 unknown-ext → coverage-hole signal, then LLM-fallback | 🟢 **GO — second** | External repos' language diversity ≫ SwarmAI's; a non-`LANGUAGE_MAP` file is **silently dropped from the graph** = silent coverage loss (P4). Also the **credibility floor for G1 COBOL** (§23 G1: ship unknown-ext LLM-fallback FIRST). Split: **Run A** = route unknown-ext into the coverage ledger + emit a coverage-hole signal (stop the *silence*, small); **Run B** = cheap-model schema-constrained LLM-fallback (fill the hole, larger — mirror the reference engine's fail-soft path §4.5.3). |
+| **P1** | M5 per-package artifacts + fan-out (§17, §18.3) | 🟢 **GO — follows ①** | Depends on boundary detection. Today `run_multi_package` is a stats-only stub; this makes it emit per-package v3 code-intel/DDD/spec-details + wires the INSTRUCTIONS.md fan-out. The monorepo "last mile." |
+| **P1** | §7 behavioral-equivalence live-wiring | 🟢 **GO (downgraded from DEFER)** | Targets **test-rich repos (abundant)** — the earlier "7 assertions / 3 steps" number was SwarmAI-specific and is NOT the product's ceiling. Real ROI exists. Cost: build a test-runner harness that captures `(step_id, code) → passed`. Ranked after breadth (①②) because it *deepens quality on already-covered repos* while ①② *expand which repos can be covered*. |
+| **P2** | §23 G1 COBOL/PL-I AST parsing | 🟡 **CONDITIONAL** | Flagship legacy market (§1.2, finance-driven). Two-step: G1a = COBOL gets *degraded* output via ②'s LLM-fallback (no silent drop); G1b = COBOL tree-sitter grammar for AST-grade anchors (large). **GO-trigger:** a real legacy/COBOL target repo (open-source or customer). |
+| **P2** | §11.2 behavior-coverage / §11.4 remaining detectors | 🟡 **unlocks after ③** | behavior-coverage needs runtime + `step.entry_ref` populated at generation; False-Promise/Weak-Spec need runtime. Naturally unlocked once ③'s test-runner harness exists. Building them before is C042 empty-gate over-engineering (§11.4 already ruled this). |
+| **P3** | §23 G2–G4 data-lineage / CRUD / compliance-map | 🟡 **awaits customer commitment** | Mandatory deliverables for the legacy/bank vertical; largest investment (DB-schema + PL-SQL + config ingesters + regulation↔code mapping). **DEFER is a *cost* decision, not a corpus decision** — invest when a real legacy-modernization commitment exists. |
+| — | java/c# class-scope value-ref (§4.5.5) | 🔴 **DEFER (corrected rationale)** | Still deferred, but NOT for "no corpus" — it's a *low-leverage edge increment* to value-ref language coverage, below the ROI of laying the whole multi-package / multi-language foundation. GO-trigger unchanged: a real Java/C# repo where class-field value-ref FP-rate can be validated. |
+
+**The one-line reading:** ①② are buildable *now* and are the product's breadth foundation (monorepo + language diversity), validated by smoking one real repo of each class; ③④ are quality-depth and vertical-market, gated by dependency order and (for G2–G4) a real customer commitment — never by "SwarmAI itself doesn't have that input."
 
 ---
 
@@ -962,6 +1018,9 @@ Our dead-code detector (`dead_code.py`) intentionally **over-reports** (宁错�
 - **Decision 1 (boundary):** spec-details ↔ 4-file DDD = **orthogonal, not subsume** (§8.1). AI+human co-read rich layer; domain-level vs project-level; cooperate by reference.
 - **Decision 2 (HTML aggregate view):** **A — no HTML** (§12). mermaid-embedding carries core visualization, zero infrastructure. Original HTML build unit removed.
 
+**Ratified (2026-07-18) — value-ref scope:**
+- **Decision 3 (value-ref language scope):** enable module-scope value-ref for the **10 languages that have a module scope**; **DEFER** java/c# class-field value-ref (no module scope + no validation corpus — GO only when real Java/C# repo exists); **NO-GO** on c `#define` (separate preproc extraction path, permanent) (§4.5.5). Rationale: value-ref precision must be validated against a real repo before a higher-FP-risk collector strategy ships — the engine's only indexed repo (SwarmAI) has zero java/cs files.
+
 **Honest corrections made during design (recorded, not hidden — these are the value of the adversarial gate):**
 - "domains[] is the only v3 structural change" was **wrong** — `routes[]`/`entry_points[]` also need `id` (§5.1/§5.5). Second structural change, declared.
 - "spec-details is a single-source projection" was **wrong** — it's a controlled dual-source with a clear ownership boundary (§8.3).
@@ -984,7 +1043,7 @@ Our dead-code detector (`dead_code.py`) intentionally **over-reports** (宁错�
 | M2: IDE install | `install.sh` auto-detect Claude Code/Kiro, merge hooks | ✅ DONE |
 | M3: Verified output | Sub-agent VERIFY (fresh agent + 3 git-log tasks) | ✅ DONE |
 | M4: Self-maintaining | staleness detection + refresh trigger | ✅ DONE |
-| M5: Multi-package | per-package + cross-package synthesis | ⚠️ **HELPER-ONLY, NOT WIRED** — `run_multi_package()` (`ai_ready_helpers.py:2581`) exists + unit-tested, but it produces only per-package **stats** (`gather_repo_info`/`extract_import_graph`/`parse_git_gotchas` counts) + a shared-dep synthesis; it does **NOT** emit per-package v3 code-intel.json/DDD/spec-details, does **NOT** auto-detect package boundaries, and is **NOT** called from INSTRUCTIONS.md (grep: 0 refs). Corrected 2026-07-17 (was falsely "✅ DONE"). Deterministic foundation (boundary detection + `packages[]` partition) tracked in §23.3 / run_693e08de; per-package v3 generation + fan-out orchestration deferred to a follow-up run. |
+| M5: Multi-package | per-package + cross-package synthesis | ✅ **WIRED (run_a9fe5ad3, 2026-07-18)** — `run_multi_package(repo_root)` now auto-detects boundaries (`detect_package_roots`, no hand-fed list) + emits per-package material + cross-package synthesis; `packages[]` lands on BOTH `code-intel.json` producers; INSTRUCTIONS.md §4.9 fan-out + Step 1.1b branch added. Deterministic layer complete. Remaining deferred: per-package full **v3** (domains/flows/steps) generation is the LLM fan-out layer (§4.9 orchestration, not a deterministic helper). |
 | M6: Published standard | GitHub Discussion + spec repo + rubric + templates | ✅ DONE |
 
 ### v3 domain + spec-details layer (2026-07-16) — FOUNDATION SHIPPED (equivalence live-wiring + blind-spot / 4-detector gates pending — see §11.7)
@@ -1002,6 +1061,20 @@ Delivered as an ordered chain of pipeline runs (Run 0 → 5), each independently
 | + | mermaid-node-anchoring gate (fail-closed, containment-safe) | `7764630b` |
 
 **Live evidence (verified 2026-07-16 against `Projects/SwarmAI/code-intel.json`):** `version 3.0`; 6 domains / 10 flows / 14 steps populated; all 6 domains carry a `diagram`; `issues`/`gaps` are populated only where the LLM ∩ risk_areas/dead_code intersection actually found something (currently 1 domain has `issues`, 1 has `gaps` — these fields are *evidence-gated*, not always-present by design, see §5.4); 208 `routes[]` all carry `id`; 8 `spec-details/*.spec.md` generated. `entry_points[]` is currently empty for this repo (see §5.5 note) — the `id` contract is exercised on `routes[]`, which is the populated anchor set.
+
+### v3.1 grounding-layer hardening (2026-07, incremental) — value-ref + reindex
+
+Small, independently-committed hardening runs on the Stage-1 deterministic layer (each bugfix/trivial profile, adversarial-gated + mutation-verified):
+
+| Area | Deliverable | Status |
+|---|---|---|
+| **Value-ref extractor (§4.5.5)** | 2-pass descriptor-driven const→reader edge extraction; enabled for 10 module-scope languages (c/go/js/kotlin/php/python/ruby/rust/swift/ts); per-language FP guards | ✅ SHIPPED — each language gated behind adversarial review + `test_deferred_languages_emit_nothing` / `test_c_define_emits_nothing` locking the Tier-B boundary |
+| **c/cpp base extraction** | declarator-descent + struct-as-class classification (fixes Rust/C++ struct mislabeled as function) | ✅ SHIPPED |
+| **java/c# class-scope value-ref** | class-field const→reader (the "only run that touches collector architecture") | ⏸️ **DEFERRED** — Decision 3 (§16, §4.5.5): no module scope + no Java/C# validation corpus. GO trigger = a real java/c# repo onboarded to code-intel |
+| **c `#define` value-ref** | macro-const readers | 🟢 **NO-GO (permanent)** — separate preproc path, intentional scope boundary |
+| **reindex `repo_path` parsing** | endpoint reused a broken single-format regex (`**Repo Path:**`) that matched 0/8 real projects → reindex silently dead for every project. Fixed: extract a pure `extract_repo_path()` multi-format helper (`**Local:**` / `## Codebase Location` bare-path / legacy label), reused by both `_run_reindex` + the project-path cache | ✅ SHIPPED (`7f8131ae`) — mutation-verified; closed a zero-coverage gap (prior reindex tests mocked `_run_reindex` wholesale) |
+
+**Live evidence (reindexed 2026-07-18, `Projects/SwarmAI/code_intel.db`):** full reindex over 1017 files → 19,135 nodes / 22,769 edges, of which **2,210 `constant` nodes + 2,664 `references` edges** (the value-ref layer, populated by the 10-language extractor). SwarmAI's own repo is Python/TS/+4 Rust — so the value-ref edges are Python/TS/Rust module-scope consts; the c/php/swift/etc. paths are shipped-but-unexercised on this repo (no such source files), exactly the "feature-absent, never broken" posture.
 
 ---
 
@@ -1138,6 +1211,8 @@ The unifying defense is Principle 20: **deterministic supplies the anchor, LLM s
 
 ### 23.1 The gaps (what the flagship RDE case needs that we lack)
 
+> **Priority + framing (§11.8):** G1–G5 are prioritized in §11.8, not here. The load-bearing framing: the validation corpus for these is *a real legacy/COBOL/monorepo repo* (open-source or customer), never SwarmAI's own repo — "we lack the input" is not a reason to defer a product capability. G1 (COBOL) and multi-package (§23.3, G5's prerequisite) land via the §11.8 P0/P2 ordering; G2–G4 (lineage/CRUD/compliance) are P3, deferred on **cost** pending a real legacy-modernization commitment, not on corpus.
+
 | # | Gap | Why it's load-bearing for legacy/bank | Current state | Fix direction |
 |---|-----|----------------------------------------|---------------|---------------|
 | **G1** | **COBOL / PL-I / PL-SQL parsing** | These ARE the legacy languages. Our grounding floor is tree-sitter (12 modern langs) + regex routes. §4.5.3: a file whose extension is not in `LANGUAGE_MAP` is **silently skipped** (`parser.py: if not lang: return`); the LLM-fallback is target-state, **not shipped**. So the flagship input produces a silent coverage hole, not a spec. | ❌ not parseable; ⚠️ LLM-fallback designed only (§4.5.3, §15.2 #2) | Ship the unknown-extension → cheap-model LLM-fallback + coverage-hole signal FIRST (credibility floor). COBOL tree-sitter grammar as a later hardening. |
@@ -1173,9 +1248,9 @@ Grep-verified in `backend/core/code_intel/` + `ddd_bindings.py` + `s_ai-ready-re
 |---|---|---|
 | Single repo | ✅ full | `parser.parse_repo(repo_root: Path)` — single-root `rglob` |
 | Multiple independent repos (via `bindings.yaml`) | ⚠️ partial | `ddd_bindings.bind_repo` supports an array, but **each repo → its own `{repo}.code_intel.db`; no cross-repo merge, no cross-repo edge resolution** (a call from repo-A into repo-B is a bare unresolved edge) |
-| Monorepo (1 `.git`, N packages) | ❌ none | **no package-boundary detection** — does not read `package.json` workspaces / `pyproject` / `go.mod` / `Cargo [workspace]` / nx / lerna / turbo. Flattens the whole tree. |
+| Monorepo (1 `.git`, N packages) | ✅ **boundary detection SHIPPED** (run_a9fe5ad3) | `detect_package_roots()` reads `package.json` workspaces / `pnpm-workspace.yaml` / `lerna.json` / `Cargo [workspace]` / nested `go.mod` / subdir `pyproject`; nx/turbo as signals. `run_multi_package(repo_root)` auto-detects (no hand-fed list) + emits per-package material + cross-package synthesis. |
 | git submodules | ❌ none | no `.gitmodules` parse, no `--recursive` clone |
-| `code-intel.json` schema | ❌ single `repo` key | no `repos[]` / `packages[]` partition; modules/routes flattened into one namespace |
+| `code-intel.json` schema | ✅ **`packages[]` partition SHIPPED** (run_a9fe5ad3) | BOTH producers carry it — core `export_code_intel_json` (reindex) + skill INSTRUCTIONS §4.6. Single-repo → `[{name, root:"."}]`; monorepo → one entry per detected package. Cross-repo `repos[]` merge still absent. |
 
 **What actually degrades on a monorepo (Gate-0-corrected — the earlier draft over-claimed several "collisions" that source-tracing REFUTED):**
 
@@ -1189,7 +1264,15 @@ Grep-verified in `backend/core/code_intel/` + `ddd_bindings.py` + `s_ai-ready-re
 
 **The honest reframe:** there is **no correctness bug** on a monorepo — path-qualified ids already prevent the collisions the earlier draft claimed. The real gap is **navigational/organizational**: nothing auto-detects package boundaries (so §18.3 fan-out can't auto-run on a monorepo — the caller must hand `run_multi_package` the package list), and `code-intel.json` has no per-package partition for per-package build commands / language mix.
 
-**The fix (M5 done for real — scoped as a DETERMINISTIC-FOUNDATION run, run_693e08de):** `run_multi_package()` today is a **stats-only stub** (per-package `gather_repo_info`/`import_graph`/`gotcha` counts + shared-dep synthesis) — it emits no per-package v3 artifacts and detects no boundaries. This run delivers the deterministic foundation: (1) auto-detect package roots from workspace manifests (`package.json` workspaces / pyproject PEP621 / `go.mod` / `Cargo [workspace]` / `pnpm-workspace.yaml` / `lerna.json` / `nx.json` / `turbo.json`; fallback `[root]` for a single-package repo); (2) an optional `packages[]` partition on `code-intel.json` (name / root / language mix) — **navigation metadata, NOT a collision fix**. Deferred to a follow-up run (explicitly out of scope here): per-package full v3 generation + the INSTRUCTIONS.md fan-out orchestration. Boundary detection is still the enabler for G5 (cross-module rule chains) on an inherently multi-module legacy core.
+**The fix (M5 end-to-end wired — run_a9fe5ad3, 2026-07-18):** the deterministic foundation (run_693e08de) is now **wired into user-facing output**:
+1. **`packages[]` on `code-intel.json`, BOTH producers** — core `export_code_intel_json` (the reindex writer, fail-open via `graph_store.get_meta('repo_root')`) AND the skill INSTRUCTIONS §4.6 v2 doc template. Single-repo → `[{name, root:"."}]`; monorepo → one entry per detected package (name / root / language_mix / detected_by). **Navigation metadata, NOT a collision fix.**
+2. **`run_multi_package(repo_root)` auto-detects** — composes `detect_package_roots` (no hand-fed list; the two were shipped separately in run_693e08de and never wired). Returns per-package raw material (`gather_repo_info`/`import_graph`/`gotchas`) + the partition + cross-package `{shared_deps, dep_order}`. **Skill-native, core-free (C046).**
+3. **INSTRUCTIONS.md monorepo fan-out** — Step 1.1b detects boundaries + branches; §4.9 loops GENERATE per package + writes `CROSS-PACKAGE.md`. Single-repo path unchanged (additive).
+4. **Bug fixed en route:** `_validate_repo_path` rejected every monorepo *member* (no `.git` of its own); now accepts a subdir inside a git work-tree (`git rev-parse --is-inside-work-tree`), non-git dirs still rejected.
+
+Still deferred: per-package full **v3** generation is the LLM fan-out layer (INSTRUCTIONS §4.9 orchestration, not a deterministic helper); cross-repo `repos[]` merge + cross-package edge resolution (Layer-2 scope). Boundary detection remains the enabler for G5 (cross-module rule chains).
+
+> **Priority (§11.8): ✅ SHIPPED (run_a9fe5ad3, 2026-07-18).** Multi-package boundary detection was ranked P0 and is now wired end-to-end (see "The fix" above). It unblocks M5 fan-out (§18.3) and G5 cross-module rule chains (§23 G5). Remaining tail: per-package **v3** LLM generation + a real external-OSS-monorepo smoke (the in-repo real-manifest smoke passed). See §11.8 for the full gap-closure ordering.
 
 ---
 

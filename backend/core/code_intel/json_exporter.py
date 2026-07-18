@@ -125,6 +125,28 @@ def export_code_intel_json(
         "dependencies": dependencies,
     }
 
+    # ── packages[] partition (multi-package / monorepo navigation, run_a9fe5ad3) ──
+    # Additive key: a monorepo yields one entry per detected package boundary; a
+    # single-package repo yields exactly [{name, root: "."}]. Derived from the SAME
+    # skill helper the skill/GENERATE producer uses (build_packages_partition), via
+    # the identical lazy fail-open sys.path import the v3 validation below relies on
+    # (core→skill is the ONE legal direction; skill→core stays forbidden — C046).
+    # Fail-open: a detection failure must NEVER corrupt the export — packages[] is
+    # navigation metadata, not a coverage guarantee, so absence degrades gracefully.
+    _pkg_repo_root = graph_store.get_meta("repo_root") if hasattr(graph_store, "get_meta") else None
+    if _pkg_repo_root:
+        try:
+            from importlib import import_module
+            import sys as _sys
+            _skill_scripts = str(Path(__file__).resolve().parents[2]
+                                 / "skills" / "s_ai-ready-repo" / "scripts")
+            if _skill_scripts not in _sys.path:
+                _sys.path.insert(0, _skill_scripts)
+            _arh_pkg = import_module("ai_ready_helpers")
+            doc["packages"] = _arh_pkg.build_packages_partition(_pkg_repo_root)
+        except Exception as e:  # noqa: BLE001 — fail-open by design (nav metadata)
+            logger.debug("packages[] partition skipped: %s: %s", type(e).__name__, e)
+
     # ── PRESERVE the v3 business-semantic layer from the prior doc (Gate-1 Check-2
     # ROOT fix). Without this a reindex silently reverts a backfilled coverage layer. ──
     v3_preserved = False

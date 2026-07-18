@@ -121,6 +121,28 @@ If user specifies a language, ALL generated text (summaries, conventions, gotcha
 architecture descriptions) must be in that language. Technical terms (function names,
 file paths, framework names) stay in English. Store as `output_language` for GENERATE.
 
+#### Step 1.1b: Detect package boundaries (monorepo fan-out decision)
+
+Before ingesting, detect whether this repo is a **monorepo** with multiple package
+boundaries. This is a deterministic manifest read — no LLM, no code parsing:
+
+```python
+from ai_ready_helpers import detect_package_roots
+packages = detect_package_roots(repo_root)   # always >=1 PackageRoot
+```
+
+- **Single package** (`len(packages) == 1`, `root == "."`): proceed with the normal
+  single-repo flow below. Nothing changes.
+- **Monorepo** (`len(packages) >= 2`): switch to the **MONOREPO FAN-OUT** path
+  (Phase 4 §4.9). Tell the user: *"Detected N packages ({names}) — I'll generate
+  per-package AI-ready artifacts + a cross-package synthesis."* Confirm before fanning
+  out (per-package GENERATE is N× the work).
+
+Store `packages` for GENERATE. The boundary set comes ONLY from workspace manifests
+(npm/pnpm/lerna workspaces, Cargo `[workspace]`, nested go.mod, subdir pyproject) —
+never invented. nx/turbo presence is a signal but members still come from the package
+manager's workspace list.
+
 #### Step 1.2: Signal collection (multi-select)
 
 After getting the repo path, present the signal menu. The user picks what they have — more signals = richer output (Level 1 → Level 3).
@@ -552,7 +574,7 @@ End with: `<!-- user: Your additions below — refresh preserves this section --
 Build the v2 document from UNDERSTAND phase analysis:
 
 ```python
-from ai_ready_helpers import validate_code_intel_json
+from ai_ready_helpers import validate_code_intel_json, build_packages_partition
 
 doc = {
     "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
@@ -567,6 +589,10 @@ doc = {
     "risk_areas": [...],
     "dead_code": [],
     "dependencies": {...},
+    # packages[] — monorepo boundary partition (additive; parity with the core
+    # reindex producer json_exporter, so BOTH producers of code-intel.json carry it).
+    # Single-package repo → [{name, root: "."}]; monorepo → one entry per package.
+    "packages": build_packages_partition(repo_root),
 }
 
 # MANDATORY: validate before writing
@@ -699,6 +725,47 @@ Generate a human-readable report covering:
 - Review assignments (who should verify which file)
 - Improvement recommendations (prioritized)
 - Known gaps (what the engine couldn't determine)
+
+#### 4.9: MONOREPO FAN-OUT (only when Step 1.1b detected ≥2 packages)
+
+Skip this section entirely for a single-package repo (the flow above already
+produced its artifacts). For a monorepo, GENERATE runs **per package** + one
+cross-package synthesis:
+
+```python
+from ai_ready_helpers import run_multi_package
+# Deterministic per-package material + cross-package synthesis (auto-detects
+# boundaries; do NOT hand it a package list — it calls detect_package_roots).
+mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-ready" / "packages")
+# mp["packages"]     → [{name, root, path, language_mix, detected_by, stats}]
+# mp["partition"]    → the packages[] navigation partition
+# mp["cross_package"]→ {shared_deps, dep_order}
+```
+
+**Fan-out loop — for EACH package in `mp["packages"]`:**
+1. Run UNDERSTAND (Phase 3) scoped to `package.path` (its subtree only).
+2. GENERATE §4.1–§4.6 into a **per-package dir keyed on a UNIQUE segment** — use
+   `package.name` (already disambiguated by `run_multi_package`: a root/member name
+   collision is path-suffixed, e.g. `sub/core` → dir `sub__core`) OR, safest, key the
+   dir on `package.root` (always unique). Do NOT key on a raw repo-dir name — two
+   packages can share it (a repo dir `x` + a nested member `x`), and keying on the raw
+   name would make the second clobber the first, silently violating coverage below.
+   Each package's `code-intel.json` carries its own `packages: [{name, root:"."}]`
+   (it is a self-contained unit from its own root).
+3. **Coverage is mandatory** — account for EVERY detected package, never a subset
+   (same discipline as §4.6.5 entry-point coverage). Verify N distinct output dirs
+   for N packages (a collision that dropped one = coverage violated). Silently
+   skipping packages = "we understand the repo" being false.
+
+**Cross-package synthesis — write `{output_path}/.ai-ready/CROSS-PACKAGE.md`:**
+- The package inventory (`mp["partition"]` — name, root, language_mix, detected_by).
+- Shared dependencies (`mp["cross_package"]["shared_deps"]`) — libs used by ≥2 packages.
+- Dependency order (`mp["cross_package"]["dep_order"]`) — which package imports which
+  (the build/change-blast-radius order).
+- Root-level `code-intel.json` keeps the full `packages[]` partition so a top-level
+  agent sees all boundaries at once.
+
+The single-repo GENERATE path (§4.1–§4.8) is unchanged; this section is purely additive.
 
 ### Phase 5: VERIFY (sub-agent quality gate)
 

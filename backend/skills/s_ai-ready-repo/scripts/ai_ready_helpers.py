@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 # ─── Input Validation ───
 
 def _validate_repo_path(repo_path: Path) -> Path:
-    """Validate repo path: must exist, be a directory, and contain .git.
+    """Validate repo path: must exist, be a directory, and be git-tracked — EITHER
+    a repo root (has its own .git) OR a subdirectory inside a git work-tree (a
+    monorepo package member, whose .git lives at the repo root — run_a9fe5ad3).
+
+    A monorepo member has no .git of its own but git ls-files / log scoped to it
+    work against the parent repo, so the analysis functions are fully functional.
+    The old .git-must-exist check wrongly rejected every detected monorepo member.
 
     Resolves symlinks to prevent traversal attacks.
     Raises ValueError if validation fails.
@@ -38,10 +44,19 @@ def _validate_repo_path(repo_path: Path) -> Path:
         raise ValueError(f"Path does not exist: {repo_path}")
     if not repo_path.is_dir():
         raise ValueError(f"Path is not a directory: {repo_path}")
-    if not (repo_path / ".git").exists():
-        raise ValueError(f"Not a git repository (no .git): {repo_path}")
-
-    return repo_path
+    if (repo_path / ".git").exists():
+        return repo_path
+    # Not a repo root — accept iff inside a git work-tree (monorepo member).
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        if inside.returncode == 0 and inside.stdout.strip() == "true":
+            return repo_path
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # fall through to the strict rejection below
+    raise ValueError(f"Not a git repository (no .git): {repo_path}")
 
 
 def _safe_file_read(file_path: Path, repo_root: Path, max_size: int = 10 * 1024 * 1024) -> str | None:
@@ -540,7 +555,7 @@ def _is_substantive_reason(reason) -> bool:
 # regardless of source, and ONE reader iter_coverage_ledger(doc) that yields the
 # complete hole set in that shape. That is the honest "single ledger" a consumer sees.
 
-_COVERAGE_HOLE_KINDS = {"route", "file", "repo", "query"}
+_COVERAGE_HOLE_KINDS = {"route", "file", "repo", "query", "gitignored"}
 
 
 def validate_coverage_ledger(doc: dict) -> list[str]:
@@ -738,6 +753,186 @@ def check_anchor_accounting(doc: dict) -> list[str]:
                       f"not in unclassified[] with a reason (silent-omission = coverage hole; "
                       f"classify it into a flow OR park it in unclassified:[{{id,reason}}])")
     return errors
+
+
+def compute_subsystem_coverage(doc: dict, seed: list[dict]) -> dict:
+    """§12.2 BREADTH anchor: how much of the repo's load-bearing SUBSYSTEM menu has
+    a domain — the completeness axis that `compute_anchor_accounting` (route axis)
+    does NOT measure. The route axis answers "is each HTTP route in a flow"; this
+    answers "does each load-bearing subsystem have a domain+spec at all".
+
+    Why a SEED list, not graph-clustering (design §12.1, probed live): backend/core
+    is 116 flat .py files — dir-anchor (22 top-level dirs, core=149 files), filename-
+    prefix (62% singletons), and import connected-components (1×97-file blob + 49
+    singletons) ALL fail to partition it. The seed is the existing, maintained
+    architecture map (KNOWLEDGE.md "Codebase Navigation" + TECH.md "Key Subsystems"):
+    evidence that pre-dates this run, each entry pointing at real files. This is the
+    Spec-Studio "enumerate the org's packages" move, adapted — our flat core's
+    "packages" live in the arch doc, not the directory tree.
+
+    Args:
+      doc:  a code-intel.json (reads domains[] + flows[] + steps[] + routes[]).
+      seed: [{"name": str, "tier": "spine"|"extension"|"out-of-scope",
+              "globs": [fnmatch patterns over repo-relative file paths]}].
+            tier="out-of-scope" = a support layer we deliberately DON'T spec
+            (utils/middleware/schemas) — recorded honestly, never silently dropped
+            (§12.2 honest-lossy, Spec-Studio pattern).
+
+    A subsystem is COVERED iff any file matching its globs appears as evidence of a
+    domain — i.e. in a domain's flow's step.file_path, OR a domain's flow's
+    entry_ref route.file_path. (Domains carry no file list directly; their flows'
+    steps/routes ARE the file evidence — verified against real code-intel.json.)
+
+    Returns a report (pure, no I/O, no mutation):
+      total / covered / gaps / out_of_scope — counts
+      subsystems: [{name, tier, status, domain_id?, evidence_files[]}]
+                  status ∈ covered | gap | out-of-scope
+      gap_queue:  sorted names of spine/extension subsystems with NO domain
+                  (the non-silent gap list — pkgs-gaps-status style, §12.2 AC2)
+    """
+    import fnmatch as _fnmatch
+
+    domains = doc.get("domains") or []
+    flows = doc.get("flows") or []
+    steps = doc.get("steps") or []
+    routes = {r.get("id"): r for r in (doc.get("routes") or []) if isinstance(r, dict)}
+
+    # Build: file_path -> domain_id, from each domain's flows' evidence (steps + entry route).
+    file_to_domain: dict[str, str] = {}
+    flows_by_domain: dict[str, list] = {}
+    for fl in flows:
+        if isinstance(fl, dict):
+            flows_by_domain.setdefault(fl.get("domain_id"), []).append(fl)
+    for dom in domains:
+        if not isinstance(dom, dict):
+            continue
+        did = dom.get("id")
+        for fl in flows_by_domain.get(did, []):
+            fid = fl.get("id")
+            # entry route file
+            r = routes.get(fl.get("entry_ref"))
+            if r and _nonblank(r.get("file_path")):
+                file_to_domain.setdefault(r["file_path"], did)
+            # step files
+            for st in steps:
+                if isinstance(st, dict) and st.get("flow_id") == fid \
+                        and _nonblank(st.get("file_path")):
+                    file_to_domain.setdefault(st["file_path"], did)
+
+    subsystems = []
+    for s in (seed or []):
+        if not isinstance(s, dict) or not s.get("name"):
+            continue
+        globs = s.get("globs") or []
+        tier = s.get("tier") or "extension"
+        # which domain (if any) has evidence in a file matching this subsystem's globs
+        matched_domain = None
+        evidence = []
+        for fp, did in file_to_domain.items():
+            if any(_fnmatch.fnmatch(fp, g) for g in globs):
+                matched_domain = matched_domain or did
+                evidence.append(fp)
+        if tier == "out-of-scope":
+            status = "out-of-scope"          # honest-lossy: recorded, not specced
+        elif matched_domain:
+            status = "covered"
+        else:
+            status = "gap"                   # load-bearing but no domain — non-silent
+        entry = {"name": s["name"], "tier": tier, "status": status}
+        if matched_domain:
+            entry["domain_id"] = matched_domain
+            entry["evidence_files"] = sorted(set(evidence))
+        subsystems.append(entry)
+
+    covered = sum(1 for s in subsystems if s["status"] == "covered")
+    gaps = sum(1 for s in subsystems if s["status"] == "gap")
+    oos = sum(1 for s in subsystems if s["status"] == "out-of-scope")
+    gap_queue = sorted(s["name"] for s in subsystems if s["status"] == "gap")
+    return {
+        "total": len(subsystems),
+        "covered": covered,
+        "gaps": gaps,
+        "out_of_scope": oos,
+        "subsystems": subsystems,
+        "gap_queue": gap_queue,
+    }
+
+
+def blind_spot_scan(doc: dict) -> dict:
+    """AC4 — Spec Studio-style REVERSE coverage check (code→doc direction).
+
+    For each risky code span the AST layer already knows about (``risk_areas`` +
+    ``hot_zones`` — deterministic facts, NOT an LLM negative assertion), ask: does the
+    domain layer document the file that owns it? A file is "documented" iff it is
+    touched by a ``steps[].file_path`` OR named by a ``business_rules[].anchor``. If
+    neither → it's a blind spot (code has a risky behavior the spec never mentions).
+
+    Design constraints (§11.2 / §12.4, both load-bearing):
+      * REPORT-ONLY — this returns a report; it is NEVER a fail-closed gate. The
+        fail-closed ``behavior_coverage`` gate was DEFERRED as C042 (gating an LLM
+        negative assertion over sparse step data). Callers must not BLOCK on it.
+      * DETERMINISTIC — keys off ``risk_areas``/``hot_zones`` (real fan-in/risk facts),
+        so it never asserts "X does not exist" from an LLM (the r6 unreliability lesson).
+      * HONEST / non-silent — every risky span is either ``documented`` or listed in
+        ``blind_spots`` with its ``reason`` preserved; nothing is dropped.
+
+    Returns: ``{total_risky, documented, blind, clean, blind_spots:[{name,file_path,
+    reason,risk_score}]}``. ``clean`` is True iff zero blind spots (a valid, honest
+    outcome — zero findings is not failure).
+    """
+    # 1. Build the set of files the domain layer documents (steps + rule anchors).
+    documented_files: set[str] = set()
+    for st in doc.get("steps") or []:
+        fp = st.get("file_path")
+        if fp:
+            documented_files.add(fp)
+    for dm in doc.get("domains") or []:
+        for br in dm.get("business_rules") or []:
+            anchor = br.get("anchor")
+            if anchor:
+                documented_files.add(anchor)
+
+    # 2. Collect risky spans (dedup by (name, file_path); risk_areas carry the reason,
+    #    hot_zones contribute high-fan-in files not already flagged).
+    risky: dict[tuple, dict] = {}
+    for ra in doc.get("risk_areas") or []:
+        fp = ra.get("file_path")
+        if not fp:
+            continue
+        key = (ra.get("name"), fp)
+        risky[key] = {
+            "name": ra.get("name"),
+            "file_path": fp,
+            "reason": ra.get("reason") or "",
+            "risk_score": ra.get("risk_score"),
+        }
+    for hz in doc.get("hot_zones") or []:
+        fp = hz.get("file_path")
+        if not fp:
+            continue
+        key = (hz.get("name"), fp)
+        if key not in risky:
+            risky[key] = {
+                "name": hz.get("name"),
+                "file_path": fp,
+                "reason": f"High fan-in: {hz.get('callers')} callers",
+                "risk_score": None,
+            }
+
+    # 3. Split documented vs blind (a span is documented iff its file is documented).
+    blind_spots = [
+        span for span in risky.values()
+        if span["file_path"] not in documented_files
+    ]
+    total = len(risky)
+    blind = len(blind_spots)
+    return {
+        "total_risky": total,
+        "documented": total - blind,
+        "blind": blind,
+        "clean": blind == 0,
+        "blind_spots": sorted(blind_spots, key=lambda b: b["file_path"]),
+    }
 
 
 def derive_route_id(method: str, path: str, file_path: str) -> str:
@@ -1035,10 +1230,32 @@ def finalize_v3(doc: dict, domains: list, flows: list, steps: list, repo_root=No
                 f"{type(_val).__name__} (fail-closed §1.5)"
             )
     out = _copy.deepcopy(doc)
-    out["domains"] = list(domains or [])
-    out["flows"] = list(flows or [])
-    out["steps"] = list(steps or [])
+    # deep-copy the layer args too (not just list()): the spec_hash stamp below
+    # mutates each domain dict, and the docstring promises "never mutates input" —
+    # a shallow list() would share the caller's dict objects and inject spec_hash
+    # into them (Gate-2 HIGH, run_97a6b1db). deepcopy keeps finalize_v3 pure.
+    out["domains"] = _copy.deepcopy(list(domains or []))
+    out["flows"] = _copy.deepcopy(list(flows or []))
+    out["steps"] = _copy.deepcopy(list(steps or []))
     out["version"] = "3.0"
+    # ── stamp each domain's spec_hash at ASSEMBLY (run_97a6b1db) ──
+    # finalize_v3 is the sanctioned AGENT domain-authoring chokepoint (domain +
+    # flows + steps all in hand). Historically only the core json_exporter (reindex
+    # path) stamped spec_hash, so a doc authored HERE shipped staleness-BLIND —
+    # freshness.detect_spec_details_staleness treats an unstamped domain as
+    # unjudgeable and silently exempts it. Stamp here too, using THIS module's
+    # single-source _spec_content_hash (no cross-boundary import — json_exporter
+    # reaches in for the same fn), so authoring-path and reindex-path agree and the
+    # stamp matches the marker a regenerate_spec_preserving_human .spec.md carries.
+    # Fail-open per-domain: one bad domain must never sink the assembly.
+    _o_flows = out["flows"]
+    _o_steps = out["steps"]
+    for _dom in out["domains"]:
+        if isinstance(_dom, dict):
+            try:
+                _dom["spec_hash"] = _spec_content_hash(_dom, _o_flows, _o_steps)
+            except Exception:  # noqa: BLE001 — fail-open (unstamped = unjudgeable, never wrong)
+                pass
     errors = validate_code_intel_json(out, repo_root=repo_root)
     if errors:
         raise ValueError(
@@ -2638,45 +2855,70 @@ def generate_learning_tour(import_graph: dict[str, Any]) -> list[dict[str, str]]
 # ─── Multi-Package Support (P4) ───
 
 def run_multi_package(
-    repo_paths: list[Path],
+    repo_root: Path,
     output_base: Path,
     project_name: str | None = None,
 ) -> dict[str, Any]:
-    """Run engine analysis on multiple packages, produce per-package output + cross-package synthesis.
+    """Run engine analysis on a (mono)repo — AUTO-DETECTS package boundaries, then
+    produces per-package material + cross-package synthesis. No hand-fed package list.
 
-    Each package gets independent file/edge budgets.
-    Cross-package context identifies shared dependencies across packages.
+    Composes detect_package_roots() (workspace-manifest boundary detection) so the
+    caller passes ONE repo root, not a pre-computed member list (run_a9fe5ad3 — the
+    detector and this runner were shipped separately and never wired; now they are).
+    A single-package repo degrades to exactly one package rooted at ".".
+
+    Skill-native + core-free by design (C046): uses the skill's own gather_repo_info /
+    extract_import_graph / parse_git_gotchas — never core.code_intel. The LLM GENERATE
+    fan-out (per-package code-intel.json doc assembly) consumes THIS material; it is
+    the INSTRUCTIONS.md orchestration layer, not this deterministic function.
 
     Args:
-        repo_paths: list of paths to package roots
+        repo_root: the (mono)repo root — package boundaries are detected from it
         output_base: base directory for all output
-        project_name: optional system name (default: parent dir name)
+        project_name: optional system name (default: repo_root dir name)
 
     Returns:
         {
-            "packages": [{name, path, output_path, stats}],
+            "packages": [{name, root, path, output_path, language_mix, detected_by, stats}],
+            "partition": [build_packages_partition dicts],  # the raw navigation partition
             "cross_package": {shared_deps, dep_order},
-            "output_path": str
+            "output_path": str,
+            "project_name": str,
         }
     """
+    repo_root = Path(repo_root)
     output_base = Path(output_base)
     output_base.mkdir(parents=True, exist_ok=True)
 
     if not project_name:
-        # Use common parent directory name
-        parents = [p.parent for p in repo_paths]
-        project_name = parents[0].name if parents else "multi-package"
+        project_name = repo_root.name or "multi-package"
+
+    # AUTO-DETECT package boundaries (was: hand-fed repo_paths list).
+    detected = detect_package_roots(repo_root)
+    partition = build_packages_partition(repo_root)
+
+    # Use the partition's DISAMBIGUATED names (path-suffixed on collision) as the
+    # single source of package names — meta-review F-1: the F1 root-coverage guard
+    # can prepend a root package whose name collides with a member (repo dir 'x' +
+    # a member also named 'x'); raw pkg.name would then produce two identical names
+    # → same pkg_output dir → the second clobbers the first. `root` is unique, so key
+    # the disambiguated name by root.
+    name_by_root = {p["root"]: p["name"] for p in partition}
 
     packages = []
     all_imports: dict[str, set] = {}  # package_name → set of external imports
 
-    for repo_path in repo_paths:
-        repo_path = Path(repo_path)
+    for pkg in detected:
+        # pkg.root is POSIX-relative to repo_root ("." for a single-package repo).
+        repo_path = repo_root if pkg.root == "." else (repo_root / pkg.root)
         if not repo_path.exists():
             continue
 
-        pkg_name = repo_path.name
-        pkg_output = output_base / pkg_name
+        pkg_name = name_by_root.get(pkg.root, pkg.name)
+        # Filesystem-safe output dir: a disambiguated name can contain '/' (e.g.
+        # 'sub/core') or ':' (':.') — flatten so pkg_output is a single dir segment.
+        _safe_seg = pkg_name.replace("/", "__").replace(":", "__")
+        pkg_output = output_base / _safe_seg
 
         # Run per-package analysis (each gets full budget)
         try:
@@ -2684,7 +2926,8 @@ def run_multi_package(
             graph = extract_import_graph(repo_path)
             gotchas = parse_git_gotchas(repo_path)
         except (ValueError, OSError):
-            packages.append({"name": pkg_name, "path": str(repo_path), "error": "analysis failed"})
+            packages.append({"name": pkg_name, "root": pkg.root,
+                             "path": str(repo_path), "error": "analysis failed"})
             continue
 
         # Track external imports for cross-package synthesis
@@ -2697,8 +2940,11 @@ def run_multi_package(
 
         packages.append({
             "name": pkg_name,
+            "root": pkg.root,
             "path": str(repo_path),
             "output_path": str(pkg_output),
+            "language_mix": pkg.language_mix,
+            "detected_by": pkg.detected_by,
             "stats": {
                 "files": len(info["file_tree"]),
                 "edges": graph["stats"]["edges_found"],
@@ -2727,6 +2973,7 @@ def run_multi_package(
 
     return {
         "packages": packages,
+        "partition": partition,
         "cross_package": {
             "shared_deps": sorted(shared_deps),
             "dep_order": dep_order,
@@ -3148,14 +3395,14 @@ def evaluate_verification_response(
 # Navigational, NOT a correctness fix. Symbol ids are already path-qualified
 # (parser.py:_qualify uses rel_path=relative_to(repo_root)) and route.id hashes
 # file_path, so a monorepo does NOT collide — verified by Gate-0 (run_693e08de).
-# The real gap this closes: nothing auto-detects package roots from workspace
-# manifests, so run_multi_package() requires the CALLER to hand it the package
-# list. This detector produces that list from the manifests.
+# Wired end-to-end (run_a9fe5ad3): run_multi_package(repo_root) AUTO-DETECTS via
+# detect_package_roots (no hand-fed list); packages[] IS emitted into code-intel.json
+# by BOTH producers (core json_exporter reindex + skill INSTRUCTIONS §4.6); the
+# INSTRUCTIONS.md §4.9 monorepo fan-out orchestrates per-package GENERATE.
 #
-# Scope boundary: this is skill-layer only. It does NOT emit packages[] into the
-# core single-repo code-intel.json (parser/graph_store/json_exporter untouched).
-# Per-package v3 generation + INSTRUCTIONS.md fan-out orchestration are a
-# deliberate follow-up run.
+# Still skill-layer + core-free (C046): detection uses only stdlib + yaml/tomllib.
+# Deferred: per-package full v3 (domains/flows/steps) generation is the LLM fan-out
+# layer (§4.9 orchestration), not a deterministic helper.
 
 import fnmatch as _fnmatch
 from dataclasses import dataclass, field
@@ -3427,6 +3674,24 @@ def detect_package_roots(repo_root) -> list[PackageRoot]:
             root=_rel_posix(d, repo_root),
             language_mix=_language_mix(d),
             detected_by=",".join(sorted(set(by))),
+        ))
+
+    # Root-coverage guard (Gate-2 F1): a lone nested manifest (e.g. root app.py +
+    # tools/gen/pyproject.toml) surfaces the nested dir as the ONLY member, silently
+    # dropping the root application from the partition — the repo gets mislabeled a
+    # monorepo whose main code vanishes. If the root carries substantive source that
+    # NO detected member contains, include the root itself as a package so nothing is
+    # lost. Language-mix comparison uses the root's OWN files vs the union of members'.
+    root_mix = _language_mix(repo_root)
+    member_total = sum(sum(r.language_mix.values()) for r in roots)
+    root_total = sum(root_mix.values())
+    if root_total > member_total:
+        # The root has source files beyond what the members account for → represent it.
+        roots.insert(0, PackageRoot(
+            name=repo_root.name,
+            root=".",
+            language_mix=root_mix,
+            detected_by=(",".join(sorted(signals)) if signals else "root"),
         ))
     return roots
 
