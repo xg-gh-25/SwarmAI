@@ -128,59 +128,115 @@ def run_suite(cases: list[dict]) -> dict:
     return {"per_case": per_case, "aggregate": aggregate_recall(per_case)}
 
 
-# ── seed query set (intent-first gold; ddd domain) ────────────────────────
-# Each query is what a person SHOULD be able to recall; gold = the (doc, section)
-# that genuinely answers it (verified to exist). Corpus is the LIVE DDD docs,
-# pinned at run time into a snapshot dict so a single run is internally
-# consistent. For a versioned regression baseline, freeze the docs into a fixture
-# (Run 4). Intent-first hint terms locate the real section name per doc.
+# ── seed query set (intent-first gold; ddd + context_files domains) ───────
+# Each record: (query, domain, doc, gold_section, difficulty).
+#   • gold is EXPLICIT (the real section that answers the query) — NOT auto-picked
+#     from title-keyword hints, so a HARD query whose gold title does NOT contain
+#     the query words is possible (run_a616dc6b).
+#   • difficulty: "easy" = the gold section TITLE lexically overlaps the query
+#     (title lookup); "hard" = it does NOT (answer lives in the BODY — this tests
+#     real body recall AND structurally defeats circularity: gold cannot be
+#     reverse-derived from the query text, so the set can't be tuned to the ranker).
+#   • gold sections are asserted to exist by a canary test — a typo fails loudly.
+# Corpus is pinned at run time from the live docs into a snapshot (internally
+# consistent per run; a frozen fixture for a versioned baseline is a later run).
+#
+# domain "ddd"           → doc ∈ {TECH,PRODUCT,IMPROVEMENT,PROJECT}.md (project DDD)
+# domain "context_files" → doc ∈ {MEMORY,KNOWLEDGE}.md (.context/)
 _SEED_QUERIES = [
-    ("how does the autonomous pipeline work stages and gates", "TECH.md", ("pipeline", "autonomous", "architecture")),
-    ("what are the runtime traps and gotchas", "TECH.md", ("runtime trap", "trap", "gotcha")),
-    ("what is the product vision", "PRODUCT.md", ("vision",)),
-    ("what are the non-goals", "PRODUCT.md", ("non-goal",)),
-    ("what failed before past mistakes", "IMPROVEMENT.md", ("what failed", "failed")),
-    ("what worked well", "IMPROVEMENT.md", ("what worked", "worked")),
-    ("current focus and open items", "PROJECT.md", ("current focus", "open item", "focus")),
+    # ── ddd · easy (title overlaps query) ──
+    ("how does the autonomous pipeline work — its stages", "ddd", "TECH.md", "Architecture", "easy"),
+    ("what are the runtime traps and gotchas", "ddd", "TECH.md", "Runtime Traps", "easy"),
+    ("what tech stack does the project use", "ddd", "TECH.md", "Stack", "easy"),
+    ("what are the coding conventions", "ddd", "TECH.md", "Conventions", "easy"),
+    ("what is the product vision", "ddd", "PRODUCT.md", "Vision", "easy"),
+    ("what are the non-goals", "ddd", "PRODUCT.md", "Non-Goals", "easy"),
+    ("what are the strategic priorities", "ddd", "PRODUCT.md", "Strategic Priorities", "easy"),
+    ("what approaches failed before", "ddd", "IMPROVEMENT.md", "What Failed", "easy"),
+    ("what has worked well", "ddd", "IMPROVEMENT.md", "What Worked", "easy"),
+    ("what are the current known issues", "ddd", "IMPROVEMENT.md", "Known Issues", "easy"),
+    ("what is the current focus", "ddd", "PROJECT.md", "Current Focus", "easy"),
+    ("what is blocking progress", "ddd", "PROJECT.md", "Blocked By", "easy"),
+    # ── ddd · hard (gold title does NOT contain the query terms; answer in body) ──
+    ("how do I start the app locally and rebuild it", "ddd", "TECH.md", "Dev Commands", "hard"),
+    ("how is the daemon and session lifecycle structured", "ddd", "TECH.md", "Key Subsystems", "hard"),
+    ("how does the app differentiate from a chatbot", "ddd", "PRODUCT.md", "What Makes SwarmAI Different", "hard"),
+    ("who is this built for, which people use it", "ddd", "PRODUCT.md", "Target Users", "hard"),
+    ("what past data leaks or breaches happened", "ddd", "IMPROVEMENT.md", "Security History", "hard"),
+    # ── context_files · easy ──
+    ("what cognitive principles govern judgment", "context_files", "MEMORY.md", "Principles", "easy"),
+    ("what past corrections were captured", "context_files", "MEMORY.md", "Corrections", "easy"),
+    ("what open threads are being tracked", "context_files", "MEMORY.md", "Open Threads", "easy"),
+    ("how does the hook system work", "context_files", "KNOWLEDGE.md", "Hook System [model]", "easy"),
+    ("what is the database schema", "context_files", "KNOWLEDGE.md", "Database Schema [model]", "easy"),
+    # ── context_files · hard (title mismatch) ──
+    ("what recurring mistakes keep happening to the agent", "context_files", "MEMORY.md", "Pitfalls", "hard"),
+    ("how is the React UI component tree organized", "context_files", "KNOWLEDGE.md", "Frontend Architecture [model]", "hard"),
+    ("what undocumented model limits can silently truncate output", "context_files", "KNOWLEDGE.md", "Claude Code CLI Hidden Defaults [constraint]", "hard"),
 ]
+
+_DDD_DOCS = ("TECH.md", "PRODUCT.md", "IMPROVEMENT.md", "PROJECT.md")
+_CONTEXT_DOCS = ("MEMORY.md", "KNOWLEDGE.md")
+
+
+def _load_corpora(project: str = "SwarmAI") -> tuple[dict, dict]:
+    """Return (ddd_docs, context_docs) as {doc: text}, pinned from live files."""
+    import os
+    from pathlib import Path
+    base = Path(os.path.expanduser(f"~/.swarm-ai/SwarmWS/Projects/{project}"))
+    ctx = Path(os.path.expanduser("~/.swarm-ai/SwarmWS/.context"))
+    ddd = {d: (base / d).read_text() for d in _DDD_DOCS if (base / d).exists()}
+    cf = {d: (ctx / d).read_text() for d in _CONTEXT_DOCS if (ctx / d).exists()}
+    return ddd, cf
 
 
 def _build_seed_cases(project: str = "SwarmAI") -> list[dict]:
-    import os
-    from pathlib import Path
-    from core import memory_index
-    base = Path(os.path.expanduser(f"~/.swarm-ai/SwarmWS/Projects/{project}"))
-    docs: dict[str, str] = {}
-    for d in ("TECH.md", "PRODUCT.md", "IMPROVEMENT.md", "PROJECT.md"):
-        p = base / d
-        if p.exists():
-            docs[d] = p.read_text()
-
-    def pick_gold(doc: str, hints: tuple) -> Optional[str]:
-        secs = list(memory_index.parse_memory_sections(docs.get(doc, "")).keys())
-        for s in secs:
-            if any(h in s.lower() for h in hints):
-                return s
-        return secs[0] if secs else None
-
+    """Build recall cases from the explicit seed. ddd cases carry the whole ddd
+    docs dict as corpus (shared-corpus BM25); context_files cases carry that one
+    file's text."""
+    ddd_docs, cf_docs = _load_corpora(project)
     cases = []
-    for q, doc, hints in _SEED_QUERIES:
-        g = pick_gold(doc, hints)
-        if g:
-            cases.append({"verification": {"domain": "ddd", "query": q,
-                                           "gold": [doc, g], "k": 5, "corpus": docs}})
+    for query, domain, doc, gold, difficulty in _SEED_QUERIES:
+        if domain == "ddd":
+            if doc not in ddd_docs:
+                continue
+            corpus = ddd_docs
+            gold_ref = [doc, gold]
+        elif domain == "context_files":
+            if doc not in cf_docs:
+                continue
+            corpus = cf_docs[doc]
+            gold_ref = gold
+        else:
+            continue
+        cases.append({"verification": {"domain": domain, "file": doc, "query": query,
+                                       "gold": gold_ref, "k": 5, "corpus": corpus},
+                      "difficulty": difficulty})
     return cases
 
 
 if __name__ == "__main__":  # pragma: no cover — manual/scheduled invocation
     import json
-    out = run_suite(_build_seed_cases())
-    agg = out["aggregate"]
-    # Tag the number by scope (Gate-2): this is ddd-section recall over the seed
-    # set, NOT whole-system recall (session/codeintel deferred) — never let 0.71
-    # be misread as system-wide recall quality.
-    print(json.dumps({"ddd_recall_at_5": agg["mean_recall_at_k"], "ddd_mrr": agg["mrr"],
-                      "n": agg["n"], "domains": ["ddd"], "scope": "seed query set, ddd domain only"},
-                     indent=2))
-    for r in out["per_case"]:
-        print(f"  {'✓' if r['recall_at_k'] else '✗'} rank={r['rank']}  {r['notes']}")
+    cases = _build_seed_cases()
+    out = run_suite(cases)
+    # Per-domain + per-difficulty breakout — a low context_files score must not
+    # hide behind ddd, and the hard-query score is the honest body-recall signal.
+    def _agg(subset):
+        res = [score_recall_case(c["verification"]) for c in subset]
+        return aggregate_recall(res)
+    ddd = [c for c in cases if c["verification"]["domain"] == "ddd"]
+    cf = [c for c in cases if c["verification"]["domain"] == "context_files"]
+    hard = [c for c in cases if c["difficulty"] == "hard"]
+    easy = [c for c in cases if c["difficulty"] == "easy"]
+    report = {
+        "overall": {"recall_at_5": out["aggregate"]["mean_recall_at_k"],
+                    "mrr": out["aggregate"]["mrr"], "n": out["aggregate"]["n"]},
+        "by_domain": {"ddd": _agg(ddd), "context_files": _agg(cf)},
+        "by_difficulty": {"easy": _agg(easy), "hard": _agg(hard)},
+        "scope": "seed query set — ddd + context_files domains (session/codeintel deferred)",
+    }
+    print(json.dumps(report, indent=2))
+    for c, r in zip(cases, out["per_case"]):
+        v = c["verification"]
+        g = v["gold"] if isinstance(v["gold"], str) else "/".join(v["gold"])
+        print(f"  {'✓' if r['recall_at_k'] else '✗'} rank={r['rank']} [{c['difficulty']:4}] {v['domain']:13} {g[:34]:34} ← \"{v['query'][:38]}\"")

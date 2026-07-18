@@ -114,3 +114,60 @@ class TestAggregateRecall:
     def test_empty_is_honest_zero(self):
         agg = aggregate_recall([])
         assert agg["n"] == 0 and agg["mean_recall_at_k"] == 0.0 and agg["mrr"] == 0.0
+
+
+class TestSeedQuerySet:
+    """run_a616dc6b: the expanded seed (~24 queries, both domains, easy+hard).
+    Canary that gold refs are REAL + the set is composed as claimed — a gold typo
+    or a domain gap fails loudly instead of silently un-scoring a query."""
+
+    def test_all_gold_sections_exist(self):
+        """AC3 canary: every seed gold section must actually parse from its doc
+        (skips honestly if the live docs aren't in this env)."""
+        from scripts.recall_suite import _SEED_QUERIES, _load_corpora
+        from core import memory_index
+        ddd_docs, cf_docs = _load_corpora()
+        if not ddd_docs and not cf_docs:
+            pytest.skip("no live corpus in this env")
+        missing = []
+        for query, domain, doc, gold, _diff in _SEED_QUERIES:
+            src = ddd_docs.get(doc) if domain == "ddd" else cf_docs.get(doc)
+            if src is None:
+                continue  # doc not present in this env — not a gold error
+            secs = set(memory_index.parse_memory_sections(src).keys())
+            if gold not in secs:
+                missing.append((doc, gold))
+        assert not missing, f"seed gold sections that do not exist (typo?): {missing}"
+
+    def test_covers_both_domains(self):
+        from scripts.recall_suite import _SEED_QUERIES
+        domains = {d for _q, d, _doc, _g, _diff in _SEED_QUERIES}
+        assert {"ddd", "context_files"} <= domains, "seed must cover BOTH domains"
+
+    def test_has_hard_queries(self):
+        from scripts.recall_suite import _SEED_QUERIES
+        hard = [q for q in _SEED_QUERIES if q[4] == "hard"]
+        assert len(hard) >= 5, "need >=5 hard (title-mismatch) queries for anti-circularity"
+
+    def test_hard_queries_are_actually_title_mismatched(self):
+        """A 'hard' query is only meaningful if its gold section TITLE does NOT
+        lexically contain the query's content words — else it's secretly easy.
+        This structurally verifies the anti-circularity claim, not just the tag."""
+        import re
+        from scripts.recall_suite import _SEED_QUERIES
+        stop = {"what", "how", "where", "the", "a", "an", "is", "are", "do", "does",
+                "i", "find", "of", "to", "for", "and", "has", "have", "been", "there",
+                "can", "us", "we", "its", "with", "in", "on"}
+        offenders = []
+        for query, _domain, _doc, gold, diff in _SEED_QUERIES:
+            if diff != "hard":
+                continue
+            qwords = {w for w in re.findall(r"[a-z]+", query.lower()) if w not in stop}
+            gwords = set(re.findall(r"[a-z]+", gold.lower()))
+            if qwords & gwords:
+                offenders.append((query, gold, qwords & gwords))
+        assert not offenders, f"'hard' queries whose title lexically overlaps the query (not really hard): {offenders}"
+
+    def test_size_20_to_30(self):
+        from scripts.recall_suite import _SEED_QUERIES
+        assert 20 <= len(_SEED_QUERIES) <= 30, f"seed should be 20-30 queries, got {len(_SEED_QUERIES)}"
