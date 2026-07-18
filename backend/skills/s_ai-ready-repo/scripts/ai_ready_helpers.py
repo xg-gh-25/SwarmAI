@@ -1455,6 +1455,14 @@ def _md_cell(v) -> str:
     return str(v).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
+def _md_inline_code(v) -> str:
+    """Wrap a value in an inline-code span `...` for a markdown TABLE cell, SAFELY.
+    Strips backticks (which would prematurely close the span) and pipe-escapes the
+    rest via _md_cell. A symbol name / file path containing a backtick therefore can
+    never corrupt the table (Gate-2 LOW, run_d7b78923)."""
+    return "`" + _md_cell(str(v).replace("`", "")) + "`"
+
+
 def _fmt_assertion_row(a) -> str:
     """One assertion (rule/precondition/exception) as inline text, HONESTLY labeled
     so no assertion is ever read as a machine-verified fact (Run C, semantic-boundary
@@ -3809,3 +3817,76 @@ def build_packages_partition(repo_root) -> list[dict]:
             "detected_by": r.detected_by,
         })
     return out
+
+
+def render_blind_spots_md(scan: dict, package_name: str) -> str:
+    """Render a PER-PACKAGE ``BLIND-SPOTS.md`` from a ``blind_spot_scan`` result.
+
+    This is the human-facing consumer for the reverse-coverage detector (run_d7b78923).
+    ``blind_spot_scan`` was fully implemented + tested but had ZERO callers — its result
+    died unreferenced. This renderer + the INSTRUCTIONS Phase-5/6 wiring give it a durable
+    home, one file PER package's own ``.ai-ready/`` dir (blind spots are that repo's own —
+    NEVER a shared/global file).
+
+    Two shapes, both honest:
+      - ``blind>0`` → a table listing EVERY blind spot (file / symbol / reason / risk).
+        Nothing is silently dropped — the honesty constraint of the scan carries into the
+        render (the caller can route these to an SME queue).
+      - ``clean`` → an explicit "no reverse-coverage blind spots" statement + the coverage
+        counts. NEVER an empty file: zero findings is a valid, STATED outcome (the Spec
+        Studio "generating zero is a valid expected result" discipline).
+
+    REPORT-ONLY: this is an artifact, never a fail-closed gate (blind_spot_scan's own
+    C042-deferred constraint, docstring §11.2). Pure — takes the scan dict, returns md.
+    """
+    total = scan.get("total_risky", 0)
+    documented = scan.get("documented", 0)
+    blind = scan.get("blind", 0)
+    blind_spots = scan.get("blind_spots") or []
+
+    lines = [
+        f"# Blind Spots — `{package_name}`",
+        "",
+        "> **Reverse-coverage check** (code→doc direction): risky code spans "
+        "(high fan-in / flagged risk) that the DDD domain layer does NOT document. "
+        "Report-only — these are candidates for an SME to document, not build errors.",
+        "",
+        f"- Risky spans checked: **{total}**",
+        f"- Documented (covered by a step or business-rule anchor): **{documented}**",
+        f"- **Blind spots (risky but undocumented): {blind}**",
+        "",
+    ]
+
+    if not blind_spots:
+        lines.append(
+            "✅ **No reverse-coverage blind spots.** Every risky code span in this "
+            "package is documented by the domain layer. (Zero findings is a valid, "
+            "expected outcome — not an empty check.)")
+        return "\n".join(lines) + "\n"
+
+    lines.append("## Undocumented risky spans")
+    lines.append("")
+    lines.append("| Symbol | File | Risk | Why it's risky |")
+    lines.append("|--------|------|------|----------------|")
+    for b in blind_spots:  # blind_spots is already sorted by file_path in the scan
+        risk = b.get("risk_score")
+        # Coerce defensively: a numeric STRING ("0.9") should still render, not drop to
+        # "—" (Gate-2 LOW — blind_spot_scan emits float|None, but a hand-built scan dict
+        # or a future producer may pass a string; never silently lose the value).
+        try:
+            risk_cell = f"{float(risk):.2f}"
+        except (TypeError, ValueError):
+            risk_cell = "—"
+        # `_md_inline_code` strips backticks before wrapping in `...` so a symbol/path
+        # containing a backtick can't prematurely close the inline-code span (Gate-2 LOW).
+        lines.append(
+            f"| {_md_inline_code(b.get('name') or '?')} "
+            f"| {_md_inline_code(b.get('file_path') or '?')} "
+            f"| {risk_cell} "
+            f"| {_md_cell(b.get('reason') or '')} |")
+    lines.append("")
+    lines.append(
+        "_Each row is a code behavior that carries risk (fan-in / flagged) but has no "
+        "step or business-rule documenting it. Route to the SME queue to document — or "
+        "confirm it is intentionally out of scope._")
+    return "\n".join(lines) + "\n"

@@ -726,6 +726,41 @@ Generate a human-readable report covering:
 - Improvement recommendations (prioritized)
 - Known gaps (what the engine couldn't determine)
 
+#### 4.8.5: BLIND-SPOTS.md (reverse-coverage — code→doc direction)
+
+Write a **per-package** `{output_path}/.ai-ready/BLIND-SPOTS.md` — the Spec Studio-style
+reverse-coverage check: risky code spans (high fan-in / flagged risk) that the DDD domain
+layer does NOT document. This is the human-facing consumer for `blind_spot_scan`; it runs
+off the SAME `code-intel.json` doc built in §4.6/§4.6.5 (needs `risk_areas`/`hot_zones` +
+`steps`/`business_rules`).
+
+```python
+import json
+from pathlib import Path
+from ai_ready_helpers import blind_spot_scan, render_blind_spots_md
+
+doc = json.loads((Path(output_path) / ".ai-ready" / "code-intel.json").read_text())
+scan = blind_spot_scan(doc)                       # {total_risky, documented, blind, clean, blind_spots}
+# TITLE ARG = the name of THIS unit. Single-repo path → project_name. In the §4.9
+# monorepo fan-out → package.name (NOT project_name — else every package's doc is
+# titled with the repo name; Gate-2 MED, run_d7b78923). The FILE is already per-package
+# because output_path is the per-package dir inside the fan-out loop.
+md = render_blind_spots_md(scan, unit_name)        # unit_name = project_name | package.name
+(Path(output_path) / ".ai-ready" / "BLIND-SPOTS.md").write_text(md)
+# carry scan["blind"] into the Phase-6 DELIVER summary line for THIS package
+```
+
+Rules (load-bearing):
+- **PER-PACKAGE, never shared.** Blind spots are that repo's own — one `BLIND-SPOTS.md`
+  per package `.ai-ready/` dir. In the §4.9 monorepo fan-out, each package writes its own
+  (inside its per-package dir); there is NO global/merged BLIND-SPOTS.md.
+- **REPORT-ONLY, never a gate.** `blind_spot_scan` is deterministic (keys off real
+  risk_areas/hot_zones, not an LLM negative assertion) and explicitly NOT fail-closed
+  (the gate version was deferred as C042). Do NOT BLOCK generation on blind spots — they
+  are SME-documentation candidates, surfaced honestly.
+- **Zero blind spots is a valid, STATED outcome** — `render_blind_spots_md` emits an
+  explicit "no reverse-coverage blind spots" doc, never an empty file.
+
 #### 4.9: MONOREPO FAN-OUT (only when Step 1.1b detected ≥2 packages)
 
 Skip this section entirely for a single-package repo (the flow above already
@@ -744,7 +779,7 @@ mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-ready" / 
 
 **Fan-out loop — for EACH package in `mp["packages"]`:**
 1. Run UNDERSTAND (Phase 3) scoped to `package.path` (its subtree only).
-2. GENERATE §4.1–§4.6 into a **per-package dir keyed on a UNIQUE segment** — use
+2. GENERATE §4.1–§4.6 **+ §4.8.5 (per-package BLIND-SPOTS.md — pass `unit_name=package.name`, NOT project_name, or every package's doc is mistitled with the repo name)** into a **per-package dir keyed on a UNIQUE segment** — use
    `package.name` (already disambiguated by `run_multi_package`: a root/member name
    collision is path-suffixed, e.g. `sub/core` → dir `sub__core`) OR, safest, key the
    dir on `package.root` (always unique). Do NOT key on a raw repo-dir name — two
@@ -854,13 +889,18 @@ Output: {output_path}/
 │   ├── PROJECT.md
 │   ├── code-intel.json (N modules, M routes)
 │   ├── ai-ready.json
-│   └── REVIEW-REPORT.md
+│   ├── REVIEW-REPORT.md
+│   └── BLIND-SPOTS.md ({blind} reverse-coverage blind spots)
 
 Next steps:
 1. Review REVIEW-REPORT.md for confidence levels and gaps
-2. Have PM review PRODUCT.md, engineer review TECH.md
-3. Install to your IDE: copy to project root
+2. Review BLIND-SPOTS.md — {blind} risky code span(s) the docs don't cover (SME queue)
+3. Have PM review PRODUCT.md, engineer review TECH.md
+4. Install to your IDE: copy to project root
 ```
+
+> The `{blind}` count comes from §4.8.5's `scan["blind"]`. For a monorepo, name each
+> package's own BLIND-SPOTS.md + its count (per-package, not merged).
 
 ## Scoring (9 Dimensions)
 

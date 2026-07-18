@@ -3060,3 +3060,63 @@ class TestBlindSpotScan:
         assert res["blind"] == 0
         assert res["clean"] is True
         assert res["blind_spots"] == []
+
+
+class TestRenderBlindSpotsMd:
+    """render_blind_spots_md (run_d7b78923): renders a PER-PACKAGE BLIND-SPOTS.md from
+    a blind_spot_scan result. Report-only artifact (never a gate). Two shapes:
+      - blind>0 → a table listing EVERY blind spot (file / symbol / reason / risk),
+        so nothing is silently dropped (the honesty constraint carries into the render).
+      - clean → an explicit 'no reverse-coverage blind spots' line + the coverage
+        counts, NOT an empty file (zero findings is a valid, stated outcome)."""
+
+    def _scan_blind(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        return blind_spot_scan({
+            "domains": [{"id": "d1", "business_rules": [
+                {"rule": "r", "anchor": "a/documented.py", "verified": True}]}],
+            "flows": [], "steps": [{"id": "s1", "flow_id": "f1", "file_path": "a/documented.py"}],
+            "risk_areas": [
+                {"name": "documented_fn", "file_path": "a/documented.py",
+                 "risk_score": 0.8, "reason": "fan-in"},
+                {"name": "force_kill_tree", "file_path": "core/session_unit.py",
+                 "risk_score": 0.9, "reason": "process kill path"},
+            ],
+            "hot_zones": [],
+        })
+
+    def test_blind_spots_all_appear_in_render(self):
+        from scripts.ai_ready_helpers import render_blind_spots_md, blind_spot_scan
+        scan = self._scan_blind()
+        md = render_blind_spots_md(scan, "my-package")
+        # per-package: the package name is in the doc (not a shared/global title)
+        assert "my-package" in md
+        # EVERY blind spot must be rendered — nothing silently dropped (honesty)
+        for b in scan["blind_spots"]:
+            assert b["file_path"] in md, f"blind spot {b['file_path']} missing from render (silent drop)"
+            assert b["name"] in md
+        # the reason (WHY it's risky) survives into the human-facing doc
+        assert "process kill path" in md
+        # a documented risky file is NOT listed in the blind-spots TABLE (real check:
+        # split on the table header, not the title which also says "Blind Spots")
+        table = md.split("## Undocumented risky spans")[-1] if "## Undocumented risky spans" in md else ""
+        assert "a/documented.py" not in table, "documented risky file must not appear in the blind-spots table"
+
+    def test_render_is_not_vacuous_mutation(self):
+        """Mutation guard: if the renderer ignored the blind_spots list (rendered only
+        the summary counts), this asserts it would be caught — the specific file path
+        of a blind spot MUST appear, not just the count."""
+        from scripts.ai_ready_helpers import render_blind_spots_md
+        scan = self._scan_blind()
+        md = render_blind_spots_md(scan, "pkg")
+        assert "core/session_unit.py" in md  # a count-only render would fail this
+
+    def test_clean_render_is_honest_not_empty(self):
+        from scripts.ai_ready_helpers import render_blind_spots_md, blind_spot_scan
+        clean = blind_spot_scan({"domains": [], "flows": [], "steps": [],
+                                 "risk_areas": [], "hot_zones": []})
+        md = render_blind_spots_md(clean, "pkg")
+        assert md.strip(), "clean render must NOT be empty — zero findings is a stated outcome"
+        assert "pkg" in md
+        # an explicit clean statement, not just whitespace
+        assert "no" in md.lower() and "blind" in md.lower()
