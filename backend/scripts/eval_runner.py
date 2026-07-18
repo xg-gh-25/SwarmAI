@@ -308,6 +308,23 @@ def eval_keyword_match(case: dict, simulated_response: str | None = None) -> dic
         }
 
 
+def eval_recall_at_k(case: dict, root: Path | None = None) -> dict:
+    """Mechanical recall@K for a gold-annotated recall case (§24.1.1 Run 1).
+
+    Delegates to recall_suite.score_recall_case — the actual recall@K/MRR logic
+    lives there so the standalone suite and this evaluator share ONE
+    implementation (no drift). Non-circular: gold-in-top-K is a deterministic rank
+    check over a PINNED corpus, no LLM judge. Suite-level mean/MRR is computed by
+    recall_suite.aggregate_recall (compute_scores is status-count-only).
+
+    Returns the standard {status, notes} contract + extra numeric fields
+    (recall_at_k, reciprocal_rank, rank) that downstream consumers ignore
+    (compute_scores reads only status).
+    """
+    from scripts.recall_suite import score_recall_case
+    return score_recall_case(case.get("verification", {}))
+
+
 def eval_trajectory(case: dict, actual_trajectory: list[str] | None = None) -> dict:
     """Check if actual tool-call trajectory matches expected trajectory.
 
@@ -1111,7 +1128,7 @@ Respond in this exact JSON format:
 
 PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
                            "trajectory_exact", "trajectory_in_order", "trajectory_any_order",
-                           "runtime_health"}
+                           "runtime_health", "recall_at_k"}
 LLM_EVALUATORS = {"goal_success", "quality_score"}
 
 # Fail-fast read timeout (seconds) for the LLM judge's Bedrock call. The shared
@@ -1470,6 +1487,13 @@ def evaluate_case(case: dict, root: Path, *,
             result = eval_runtime_health(case, root, timeout_override=canary_timeout)
             if result["status"] != "skipped":
                 result["evaluator"] = "runtime_health"
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
+        elif ev == "recall_at_k":
+            result = eval_recall_at_k(case, root)
+            if result["status"] != "skipped":
+                result["evaluator"] = "recall_at_k"
                 result["duration_ms"] = int((time.time() - start) * 1000)
                 return result
 
