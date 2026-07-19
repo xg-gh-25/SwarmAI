@@ -94,6 +94,14 @@ def _status_of(report: dict, check_name_substr: str) -> str:
     raise AssertionError(f"no check matching {check_name_substr!r} in {[c['name'] for c in report['checks']]}")
 
 
+def _detail_of(report: dict, check_name_substr: str) -> str:
+    """Find the detail string of the first check whose name contains the substring."""
+    for c in report["checks"]:
+        if check_name_substr.lower() in c["name"].lower():
+            return c["detail"]
+    raise AssertionError(f"no check matching {check_name_substr!r} in {[c['name'] for c in report['checks']]}")
+
+
 # ── Core invariant: data-agent / pure-knowledge NOT failed for missing code-intel ──
 
 def test_data_agent_passes_without_code_intel(tmp_path):
@@ -162,6 +170,42 @@ governed_assets:
     report = gate.verify_project(d)
     assert _status_of(report, "code-intel") == "PASS"
     assert report["overall"] == "PASS"
+
+
+def test_delivery_detail_shows_kind_and_name(tmp_path):
+    """⑤ detail lists each asset as kind:name — two distinct code-repos are
+    distinguishable, not a phantom 'code-repo, code-repo' duplicate."""
+    bindings = """
+ddd_spec_version: "1.0"
+brain_kind: knowledge-primary
+governed_assets:
+  - kind: code-repo
+    name: adlc-workflows
+  - kind: code-repo
+    name: GCRAIDLCPreset
+"""
+    d = _make_ddd(tmp_path, "TwoRepos", bindings_yaml=bindings, code_intel=True)
+    detail = _detail_of(gate.verify_project(d), "Delivery")
+    assert "code-repo:adlc-workflows" in detail, detail
+    assert "code-repo:GCRAIDLCPreset" in detail, detail
+    # the old kind-only phantom-duplicate must be gone
+    assert "code-repo, code-repo" not in detail, detail
+
+
+def test_delivery_detail_falls_back_to_kind_when_name_absent(tmp_path):
+    """An asset with no name field falls back to bare kind (no dangling colon)."""
+    bindings = """
+ddd_spec_version: "1.0"
+governed_assets:
+  - kind: skill-set
+    name: my-skills
+  - kind: data-source
+"""
+    d = _make_ddd(tmp_path, "MixedNames", bindings_yaml=bindings, skills=["s_foo"],
+                  aim={"name": "MixedNames", "plugins": {"native_skills": [], "domain_skills": ["s_foo"]}})
+    detail = _detail_of(gate.verify_project(d), "Delivery")
+    assert "skill-set:my-skills" in detail, detail
+    assert "data-source" in detail and "data-source:" not in detail, detail
 
 
 def test_code_intel_found_recursively(tmp_path):
@@ -314,21 +358,53 @@ def test_genuine_stub_still_fails(tmp_path):
     assert _status_of(report, "knowledge") == "FAIL", report
 
 
-# ── Real-project dog-food ────────────────────────────────────────────────────
+# ── Real-project dog-food (environment-robust) ───────────────────────────────
 
 REAL_PROJECTS = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects"
 
 
-@pytest.mark.skipif(not (REAL_PROJECTS / "IVTHub").exists(), reason="IVTHub project not present")
-def test_dogfood_ivthub_passes_code_intel_na(tmp_path):
-    """DOG-FOOD: real IVTHub (data-source + skill-set, no bound code-repo) → PASS, code-intel N/A."""
-    report = gate.verify_project(REAL_PROJECTS / "IVTHub")
-    assert _status_of(report, "code-intel") == "N/A", report
-    assert report["overall"] == "PASS", report
+def _real_ddd_projects() -> list[Path]:
+    """Real DDD project dirs present in THIS workspace.
+
+    Projects/ is gitignored + machine-specific, so both the SET of projects and
+    each project's asset shape differ per host (e.g. IVTHub is a pure data-agent
+    on one machine but has bound a code-repo on another). The dogfood test below
+    must therefore assert only PORTABLE properties — never a hardcoded per-project
+    shape (the old test asserted "IVTHub → code-intel N/A" and false-failed the
+    moment IVTHub bound a code-repo asset).
+    """
+    if not REAL_PROJECTS.is_dir():
+        return []
+    return [p for p in sorted(REAL_PROJECTS.iterdir())
+            if p.is_dir() and (p / "aim.json").exists()]
 
 
-@pytest.mark.skipif(not (REAL_PROJECTS / "CMHK_SalesIntel").exists(), reason="CMHK project not present")
-def test_dogfood_cmhk_passes_code_intel_na(tmp_path):
-    report = gate.verify_project(REAL_PROJECTS / "CMHK_SalesIntel")
-    assert _status_of(report, "code-intel") == "N/A", report
-    assert report["overall"] == "PASS", report
+@pytest.mark.skipif(not _real_ddd_projects(), reason="no real DDD projects in this workspace")
+@pytest.mark.parametrize("project_dir", _real_ddd_projects(), ids=lambda p: p.name)
+def test_dogfood_real_project_code_intel_consistent(project_dir):
+    """DOG-FOOD (environment-robust): drive the REAL gate against whatever real DDDs
+    exist on THIS machine, asserting only properties that hold for ANY asset shape.
+
+    This exercises the gate end-to-end on real bindings.yaml files / real on-disk
+    layouts (the value of a dogfood) WITHOUT encoding a machine-specific assumption.
+    Portable properties (true for every DDD regardless of its governed assets):
+      1. the gate never raises and returns a well-formed report;
+      2. the ⑥ code-intel status is a valid status and is NEVER FAIL — the
+         load-bearing invariant: a brain is never failed for its projection;
+      3. that status is CONSISTENT with the project's REAL governed-asset inventory:
+           governs a code-repo asset → PASS or PENDING (never N/A)
+           governs NO code-repo asset → N/A.
+    Notably it does NOT assert overall==PASS: a genuinely half-built real project
+    should not turn this test red — that is a real incompleteness, not a gate bug.
+    """
+    report = gate.verify_project(project_dir)  # 1. must not raise
+    assert set(report) >= {"checks", "overall", "exit_code", "counts"}, report
+    ci = _status_of(report, "code-intel")
+    # 2. valid status, and code-intel is never itself a FAIL
+    assert ci in (gate.STATUS_PASS, gate.STATUS_PENDING, gate.STATUS_NA), report
+    # 3. consistent with the project's REAL governed-asset inventory
+    assets = gate._governed_assets(gate._read_bindings_raw(project_dir))
+    if gate._has_code_repo_asset(assets):
+        assert ci in (gate.STATUS_PASS, gate.STATUS_PENDING), report
+    else:
+        assert ci == gate.STATUS_NA, report

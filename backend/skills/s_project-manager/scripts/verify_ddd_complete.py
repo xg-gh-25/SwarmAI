@@ -250,8 +250,16 @@ def _check_delivery(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, st
     if has_bindings and not assets:
         # bindings.yaml exists but declares no governed_assets — could be a bindings: repo project
         return ("⑤ Delivery Contract", STATUS_PASS, "bindings.yaml present (repo/empty governed_assets)")
+    # Format each asset as kind:name so two distinct same-kind assets (e.g. two
+    # independent code-repos) are distinguishable — a bare kind list rendered
+    # them as a phantom "code-repo, code-repo" duplicate. Fall back to bare kind
+    # when an asset declares no name.
+    def _label(a: dict[str, Any]) -> str:
+        kind = a.get("kind", "?")
+        name = a.get("name")
+        return f"{kind}:{name}" if name else kind
     return ("⑤ Delivery Contract", STATUS_PASS,
-            f"{len(assets)} governed asset(s): {', '.join(a.get('kind', '?') for a in assets)}")
+            f"{len(assets)} governed asset(s): {', '.join(_label(a) for a in assets)}")
 
 
 def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, str]:
