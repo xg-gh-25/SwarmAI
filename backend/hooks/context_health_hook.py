@@ -173,6 +173,14 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: DDD skill registry refresh failed: %s", exc)
 
+        # DDD JOB-registry rebuild — MUST run AFTER the skill registry above (job
+        # records resolve depends_on_skill against the freshly-rebuilt skill
+        # manifest). Same unconditional + fail-soft discipline. (J1, run_5ec6b7ad)
+        try:
+            self._refresh_ddd_job_registry(root)
+        except Exception as exc:
+            logger.warning("context_health: DDD job registry refresh failed: %s", exc)
+
         # ── MEMORY.md lifecycle: ref bump + decay (same engine as DDD) ──
         # Extends ddd_entry_lifecycle to MEMORY.md. Same parse/bump/decay.
         try:
@@ -2188,6 +2196,32 @@ class ContextHealthHook:
             ddd_skill_registry.build_manifest(root, builtin)
         except Exception as exc:  # noqa: BLE001 — must never break context-health
             logger.debug("context_health: DDD skill registry refresh skipped: %s", exc)
+
+    def _refresh_ddd_job_registry(self, root: Path) -> None:
+        """Rebuild the DDD JOB-registry manifest from every DDD's bindings.yaml.
+
+        The manifest (``.context/ddd_job_registry.json``) is a read-on-demand
+        ownership index of every mounted DDD's ``kind: job`` governed assets — which
+        DDD owns which scheduled job + which domain skill each job depends on
+        (``depends_on_skill_resolved`` surfaces a dangling job whose skill isn't
+        discoverable). Option A / J1: this is a SIDECAR index consumed by
+        diagnostics / s_ddd-manager / distribution tooling — NOT by the scheduler
+        (scheduler is first-source-wins; making it DDD-aware is J1a/J2). See
+        ``core/ddd_job_registry.py`` + design 2026-07-19-ddd-jobs-tools-registry.
+
+        MUST run AFTER ``_refresh_ddd_registry`` (called below it in _light_refresh):
+        job records resolve ``depends_on_skill`` against the freshly-rebuilt skill
+        manifest. If the skill manifest is stale/missing, resolution degrades to
+        False (dangling, surfaced not crashed) — never fatal. Cheap (per-project
+        yaml read + one atomic write, no LLM/network) + fail-soft: a job-registry
+        failure must NEVER take down the rest of context-health refresh.
+        (run_5ec6b7ad, J1)
+        """
+        try:
+            from core import ddd_job_registry
+            ddd_job_registry.build_manifest_jobs(root)
+        except Exception as exc:  # noqa: BLE001 — must never break context-health
+            logger.debug("context_health: DDD job registry refresh skipped: %s", exc)
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.
