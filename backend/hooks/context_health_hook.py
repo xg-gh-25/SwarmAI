@@ -163,6 +163,16 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
 
+        # DDD skill-registry rebuild runs unconditionally here (like the memory
+        # index above) — it must catch uncommitted aim.json domain_skills edits +
+        # newly-added DDDs, which otherwise stay invisible to skill discovery until
+        # the daemon restarts (build_manifest was startup-only). Self-contained
+        # fail-soft (see the method) — never blocks the rest of the refresh.
+        try:
+            self._refresh_ddd_registry(root)
+        except Exception as exc:
+            logger.warning("context_health: DDD skill registry refresh failed: %s", exc)
+
         # ── MEMORY.md lifecycle: ref bump + decay (same engine as DDD) ──
         # Extends ddd_entry_lifecycle to MEMORY.md. Same parse/bump/decay.
         try:
@@ -2149,6 +2159,35 @@ class ContextHealthHook:
 
         if archived:
             logger.info("context_health: expired %d stale proposals (>14d)", archived)
+
+    def _refresh_ddd_registry(self, root: Path) -> None:
+        """Rebuild the DDD skill-registry manifest from every DDD's aim.json.
+
+        The manifest (``.context/ddd_skill_registry.json``) is what SkillManager's
+        ddd-tier scan reads to discover a DDD's domain skills. WITHOUT this, the
+        manifest was only built at daemon startup (``refresh_builtin_defaults`` →
+        ``build_manifest``), so a DDD's ``aim.json plugins.domain_skills`` change,
+        or a newly-added DDD, was NOT reflected until the daemon restarted (a new
+        DDD's skills stayed invisible to discovery). Rebuilding here — in the
+        per-session light-refresh, unconditionally, like ``_refresh_memory_index``
+        — closes that gap: an uncommitted aim.json edit is picked up next session.
+
+        ``build_manifest`` is cheap (walk ``Projects/*/aim.json``, JSON reads + one
+        atomic write, no LLM/network) and idempotent (tmp + os.replace), and it now
+        carries an empty-overwrite guard (won't wipe a good cache on a transient
+        Projects/ read error). Fail-soft: a registry refresh failure must NEVER take
+        down the rest of context-health refresh, so any error is logged and
+        swallowed. (run_669e29f6)
+        """
+        try:
+            from core import ddd_skill_registry
+            from core.skill_manager import skill_manager
+            builtin = skill_manager.builtin_path
+            if builtin is None:
+                return  # skill_manager not wired yet → no-op (production-safe)
+            ddd_skill_registry.build_manifest(root, builtin)
+        except Exception as exc:  # noqa: BLE001 — must never break context-health
+            logger.debug("context_health: DDD skill registry refresh skipped: %s", exc)
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.

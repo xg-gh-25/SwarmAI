@@ -341,9 +341,14 @@ the whole canonical six-section structure (DDD-agent-brain spec §3.6) — there
 no per-section READMEs; every section is documented here.
 
 ## What this DDD is
-{project_name}'s domain **brain / control plane** — it OWNs cognition (①-④) and
-GOVERNs the physical repo (⑤-⑥). It never contains source code and never runs a
-deploy pipeline (指+治, 不含+不跑).
+{project_name}'s domain **brain / control plane** — a UNIVERSAL brain with the same
+six-section structure for every product and domain. It **OWNs cognition** (①-④) and
+**GOVERNs its `0..N` governed assets** (⑤-⑥) — each asset an open `kind` (`code-repo`,
+`data-source`, `skill-set`, `document-corpus`, `external-service`, `process`, …). It
+never contains the asset itself and never runs its pipeline (指+治, 不含+不跑). A brain
+with **zero** governed assets (pure knowledge) is complete, not degraded; ⑤⑥ are
+asset-derived, so they are no-ops until an asset is bound. (Paradigm: SwarmAI
+SWARMAI.md § "SwarmAI & DDD" + spec §3.6.)
 
 ## The six sections
 | # | Section | OWN/GOVERN | Members | What belongs / accretion rule |
@@ -352,8 +357,8 @@ deploy pipeline (指+治, 不含+不跑).
 | ② | Knowledge | OWN | `PRODUCT/TECH/IMPROVEMENT/PROJECT.md` + `Knowledge/` | 冷启动 + judgment BORN here as prose |
 | ③ | Gates (the moat) | OWN | `gates/<gate>.py\\|sh` + tests + `gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the 养成 ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
 | ④ | Capabilities | OWN | `skills/` (portable `s_<name>/SKILL.md`) | validated portable skills the DDD distributes. Accretes as capabilities are bound. |
-| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` | full per-repo delivery 全貌 (build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND. |
-| ⑥ | Code-Intel Refresher | GOVERN | `REFRESHER.md` | a self-contained mechanism that REGENERATES `code-intel.json` from code. Ships the refresher, not the projection. Activates on BIND. |
+| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` | per-asset delivery 全貌 for whatever assets are bound (e.g. build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND; absent for a 0-asset brain. |
+| ⑥ | Refresher | GOVERN | `REFRESHER.md` | a self-contained mechanism that REGENERATES the asset's projection from its source (code→code-intel.json, data→schema, …). Ships the refresher, not the projection. Shape follows the bound asset kind; no-op when there is no asset. |
 
 ## Default native skills (the self-養成 / self-propagation set — ④, copied into `skills/`)
 - **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
@@ -385,19 +390,21 @@ _What changed and why._
 - [ ] _How this was verified._
 """,
     # ── ⑥ CODE-INTEL REFRESHER (shape-neutral marker) ────────────────────────
-    "REFRESHER.md": """# ⑥ Code-Intel Refresher — {project_name}
+    "REFRESHER.md": """# ⑥ Refresher — {project_name}
 
-Section ⑥ GOVERNs the physical repo's code-intel projection. It is a
-**self-contained mechanism that REGENERATES `code-intel.json` from code** — it
-ships the refresher (capability), never the projection (derived data). The
-default refresher is `s_ai-ready-repo` (narrow refresh mode; see `aim.json`
-native_skills).
+Section ⑥ GOVERNs the projection of whatever **governed asset** this DDD is bound
+to. It is a **self-contained mechanism that REGENERATES the projection from the
+asset's source** — its shape follows the asset `kind`: a `code-repo` →
+`code-intel.json` from code; a `data-source` → a schema/semantic projection; a
+`document-corpus` → an index. It ships the refresher (capability), never the
+projection (derived data). The default code refresher is `s_ai-ready-repo` (narrow
+refresh mode; see `aim.json` native_skills).
 
-**Activation:** ⑥ activates when a repo is BOUND (see ⑤ `bindings.yaml`). For a
-**no-repo project it is a no-op** — there is no code to refresh, so this file is
-just a placeholder honoring the canonical structure. Once a repo is bound and a
-dev-consumer profile pulls this DDD, the refresher regenerates the projection
-LOCALLY (never PR-flowed-back — the derived-projection rule, spec §3.6).
+**Activation:** ⑥ activates when an asset is BOUND (see ⑤ `bindings.yaml`). For a
+**0-asset brain (pure knowledge) it is a no-op** — there is no source to refresh, so
+this file is just a placeholder honoring the canonical six-section structure. Once an
+asset is bound and a dev-consumer profile pulls this DDD, the refresher regenerates
+the projection LOCALLY (never PR-flowed-back — the derived-projection rule, spec §3.6).
 """,
 }
 

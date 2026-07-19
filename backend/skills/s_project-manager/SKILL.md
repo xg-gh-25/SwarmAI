@@ -112,6 +112,52 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 
 ---
 
+## The DDD Setup Flow — 6 phases, each with an exit-gate
+
+> **Why this exists (a real failure):** a DDD was once hand-built by reading a
+> source spec straight into the four docs + skills — and shipped with an EMPTY ⑤
+> delivery contract and a no-op ⑥, yet "looked done." The omission was invisible
+> because there was no ordered flow and no completeness gate. This section is the
+> canonical order for standing up ANY DDD; **P6 is a code-enforced gate**
+> (`scripts/verify_ddd_complete.py`), not an honor-system checklist.
+>
+> **The load-bearing principle: the flow FORKS on the governed-asset set.** ⑤ and
+> ⑥ are ASSET-DERIVED (spec §3.6). So P3/P4 are **CONDITIONAL** — a data-agent or
+> pure-knowledge brain does NOT map a repo and does NOT build code-intel, and must
+> never be treated as incomplete for lacking them. Decide the assets FIRST (P0),
+> and everything downstream follows from that decision.
+
+| Phase | Do | Exit-gate (must pass to proceed) |
+|-------|----|----------------------------------|
+| **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
+| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 5 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
+| **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. | All 4 docs substantive — **no placeholders** (P6 ② check FAILs on a stub). |
+| **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
+| **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_ai-ready-repo` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
+| **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
+| **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `python backend/skills/s_project-manager/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
+
+**P6 gate — the exit门禁 for the whole flow:**
+
+```bash
+python backend/skills/s_project-manager/scripts/verify_ddd_complete.py --project <NAME>
+# or, on a foreign host / arbitrary path:
+python .../scripts/verify_ddd_complete.py --project-dir /abs/path/to/DDD  [--json]
+```
+
+It checks the six sections and classifies each `PASS` / `FAIL` / `PENDING` / `N/A`.
+**Only a `FAIL` is fatal** (exit 1); `PENDING` (a code-repo whose projection isn't
+built yet) and `N/A` (a section that doesn't apply to this brain's asset shape) both
+pass. Asset-awareness is the whole point — see the script's module docstring.
+
+> **Relationship to the passive health scan:** `context_health_hook._check_ddd_completeness`
+> is a *daily background* scan that only flags half-created projects (1–3 of 4 docs) in
+> the session briefing. This P6 gate is the *on-demand* superset (full six-section +
+> asset-aware ⑤/⑥) you run as the setup flow's exit criterion. Different cadence + scope
+> — they do not compete.
+
+---
+
 ## Commands
 
 ### Create a New Project

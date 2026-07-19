@@ -1513,3 +1513,39 @@ class TestEntityIndexIntegration:
                 end = content.index("---", start)
                 entity_section = content[start:end]
                 assert len(entity_section) <= 8000
+
+
+class TestAssetNeutralScaffold:
+    """DDD provisioning templates must be asset-neutral (paradigm decision 2026-07-19).
+
+    A DDD is a universal brain governing 0..N assets of an open kind; the CREATE-time
+    scaffold does NOT know the asset set (bindings are added at BIND), so the AGENTS.md
+    and REFRESHER.md templates must state the paradigm asset-neutrally and must NOT
+    hardcode "the physical repo" (that re-breaks data-agent and pure-knowledge brains).
+    Regression guard for the swarm_workspace_manager.py SECTION_SCAFFOLD templates.
+    """
+
+    def test_agents_template_not_repo_presupposing(self):
+        from core.swarm_workspace_manager import SECTION_SCAFFOLD
+        agents = SECTION_SCAFFOLD["AGENTS.md"].lower()
+        # NEGATIVE: no repo-presupposition, in ANY phrasing (not just the exact old string).
+        # "the physical repo" is the paradigm-forbidden presupposition — assert it is gone
+        # wholesale, so a differently-worded repo assumption can't slip past (Gate-2 MED).
+        assert "physical repo" not in agents, (
+            "AGENTS.md template presupposes a repo — breaks data-agent/pure-knowledge brains"
+        )
+        # POSITIVE: states the 0..N open-kind asset paradigm (single, non-redundant assertion)
+        assert "0..n" in agents, "AGENTS.md template must state the 0..N governed-assets model"
+        assert "governed asset" in agents
+
+    def test_refresher_template_not_repo_presupposing(self):
+        from core.swarm_workspace_manager import SECTION_SCAFFOLD
+        refresher = SECTION_SCAFFOLD["REFRESHER.md"].lower()
+        # NEGATIVE: no repo-presupposition in ANY phrasing (Gate-2 MED — the old test only
+        # caught the verbatim string; a reworded repo assumption would have passed).
+        assert "physical repo" not in refresher, (
+            "REFRESHER.md template presupposes a repo — must be asset-kind-neutral"
+        )
+        # POSITIVE: shape-follows-kind + zero-asset no-op semantics (not merely the word 'asset')
+        assert "kind" in refresher, "REFRESHER.md must say the refresher shape follows the asset kind"
+        assert "no-op" in refresher, "REFRESHER.md must state the 0-asset no-op case"

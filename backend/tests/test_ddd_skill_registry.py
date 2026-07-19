@@ -156,3 +156,72 @@ class TestReadManifestFailSoft:
         reg.build_manifest(ws, builtin)
         out = reg.read_manifest(ws)
         assert {r["skill"] for r in out} == {"s_cmhk-a", "s_cmhk-b"}
+
+
+class TestEmptyOverwriteGuard:
+    """A zero-result scan must NOT wipe a good manifest (run_669e29f6 skeptic
+    finding). build_manifest's fail-soft guaranteed 'never raises', NOT 'never
+    destroys the cache' — a transient Projects/ read error would overwrite a good
+    manifest with []. The guard keeps the existing cache on the 'was non-empty,
+    now suddenly 0' transition, while still writing empty for a legit 0-domain
+    workspace (nothing existed to protect)."""
+
+    def test_transient_empty_scan_does_not_wipe_good_manifest(self, tmp_path, monkeypatch):
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        _mk_ddd(ws, "CMHK", ["s_cmhk-a", "s_cmhk-b"])
+        # 1) Build a GOOD, non-empty manifest.
+        reg.build_manifest(ws, builtin)
+        assert {r["skill"] for r in reg.read_manifest(ws)} == {"s_cmhk-a", "s_cmhk-b"}
+
+        # 2) Simulate a transient Projects/ read failure: iterdir raises OSError,
+        #    so the scan resolves ZERO records.
+        real_iterdir = Path.iterdir
+
+        def _boom(self):
+            if self.name == "Projects":
+                raise OSError("transient: Projects/ momentarily unreadable")
+            return real_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", _boom)
+        result = reg.build_manifest(ws, builtin)
+
+        # 3) The guard must have kept the good cache — NOT overwritten it with [].
+        assert {r["skill"] for r in reg.read_manifest(ws)} == {"s_cmhk-a", "s_cmhk-b"}
+        # build_manifest returns the preserved records too (not []).
+        assert {r["skill"] for r in result} == {"s_cmhk-a", "s_cmhk-b"}
+
+    def test_legit_zero_domain_workspace_still_writes_empty(self, tmp_path):
+        # A workspace whose DDDs declare NO domain skills: nothing pre-exists to
+        # protect, so the guard must NOT fire — an empty manifest is the correct,
+        # truthful result (read_manifest returns [] beforehand → guard skipped).
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        _mk_ddd(ws, "PhysicalAI", [])  # 0-asset pure-knowledge brain
+        result = reg.build_manifest(ws, builtin)
+        assert result == []
+        # The manifest file was written (exists) and reads back as empty.
+        assert reg.read_manifest(ws) == []
+
+    def test_legit_removal_of_all_skills_updates_manifest(self, tmp_path):
+        # THE SEMANTIC GAP (Gate-2 finding, run_669e29f6): a DDD that HAD domain
+        # skills legitimately drops them all (aim.json edited). Projects/ is fully
+        # readable — this is a REAL 0, not a transient error — so the manifest MUST
+        # update to remove the stale skill. The guard must NOT fire here (it gates
+        # on scan_failure, not on records==0). A guard gated on `records==0` alone
+        # would keep the stale skill FOREVER (self-perpetuating staleness).
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-a"])
+        reg.build_manifest(ws, builtin)
+        assert {r["skill"] for r in reg.read_manifest(ws)} == {"s_cmhk-a"}  # non-empty
+
+        # Operator removes the skill from aim.json; Projects/ still fully readable.
+        (pdir / "aim.json").write_text(json.dumps(
+            {"name": "CMHK", "plugins": {"native_skills": [], "domain_skills": []}}
+        ))
+        result = reg.build_manifest(ws, builtin)
+
+        # The manifest MUST reflect the removal — NOT keep the stale skill.
+        assert result == []
+        assert reg.read_manifest(ws) == []

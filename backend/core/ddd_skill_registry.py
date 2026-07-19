@@ -107,11 +107,15 @@ def build_manifest(workspace_root: Path, builtin_dir: Path) -> list[dict[str, An
     whatever it could resolve (possibly empty) and NEVER raises.
     """
     records: list[dict[str, Any]] = []
+    scan_failed = False  # True ONLY if we could not even enumerate Projects/ —
+    # the transient-read signal the empty-overwrite guard gates on. Distinct from
+    # "enumerated fine, genuinely resolved 0 skills" (a legit 0 → must write empty).
     projects_dir = workspace_root / "Projects"
     try:
         project_dirs = sorted(p for p in projects_dir.iterdir() if p.is_dir())
     except OSError:
         project_dirs = []
+        scan_failed = True
 
     for project_dir in project_dirs:
         aim = project_dir / "aim.json"
@@ -134,6 +138,34 @@ def build_manifest(workspace_root: Path, builtin_dir: Path) -> list[dict[str, An
             })
 
     records.sort(key=lambda r: (r["skill"], r["owner_ddd"]))
+
+    # Empty-overwrite guard — gated on SCAN FAILURE, not on `records == 0`.
+    # If we could not even enumerate Projects/ (iterdir OSError → scan_failed),
+    # a resolved-0 result is a transient read failure (mid-checkout / permission
+    # blip / unreadable mount), NOT a real state. Overwriting the manifest with []
+    # would wipe every domain skill from discovery until the next successful
+    # rebuild — worse than staleness. So on scan_failed + an existing non-empty
+    # manifest, keep the good cache.
+    #
+    # CRITICAL — this must NOT fire on a LEGITIMATE removal. If Projects/
+    # enumerated fine (scan_failed=False) but genuinely resolved 0 skills — e.g.
+    # a DDD's aim.json was edited to drop all domain_skills, or the last domain
+    # DDD was decommissioned — that is a REAL 0 and MUST be written, else the
+    # manifest keeps a stale skill forever (every later scan also sees 0 and the
+    # guard would re-preserve it — self-perpetuating staleness, the exact inverse
+    # of the bug this whole change fixes). Gating on `records == 0` alone conflated
+    # these two; gating on scan_failed separates them. (Gate-2 adversarial finding,
+    # run_669e29f6 — the first guard traded a transient wipe for a permanent stale.)
+    if scan_failed and not records:
+        existing = read_manifest(workspace_root)
+        if existing:
+            logger.warning(
+                "ddd_registry: could not enumerate Projects/ (transient read "
+                "failure) and a non-empty manifest exists — keeping existing "
+                "cache (NOT overwriting with empty)."
+            )
+            return existing
+
     _write_manifest_atomic(workspace_root, records)
     return records
 
