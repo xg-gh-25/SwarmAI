@@ -278,6 +278,56 @@ def test_aidlc_bindings_yaml_is_valid():
 # code_intel field removal (DDD-agent-brain spec §3.6 ⑤ + derived-projection rule)
 # ---------------------------------------------------------------------------
 
+def test_self_hosted_main_and_local_script_are_valid():
+    """A self-hosted main-only repo built by a repo-local script (SwarmAI's shape)
+    must be expressible with HONEST Literal values — no fudging to github-pr/none.
+    remote_kind='self-hosted-main' + build_system='local-script' must construct."""
+    dc = DeliveryContract(
+        remote_kind="self-hosted-main", build_system="local-script", branch="main",
+        review_path="s_autonomous-pipeline", auto_send="manual-push",
+    )
+    assert dc.remote_kind == "self-hosted-main"
+    assert dc.build_system == "local-script"
+
+
+def test_local_script_build_is_not_deferred(tmp_path: Path):
+    """AC3: only brazil/internal defer. A self-hosted external repo built by a
+    local script must NOT raise NotImplementedError — its worktree already exists,
+    it is not an unbuildable Midway target. (Uses a real local git fixture so bind
+    proceeds past the deferral gate.)"""
+    repo = tmp_path / "selfhosted"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "m.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], cwd=repo, check=True)
+    binding = Binding(
+        repo="selfhosted", kind="external", clone=str(repo),
+        delivery_contract=DeliveryContract(
+            remote_kind="self-hosted-main", build_system="local-script", branch="main",
+            review_path="s_autonomous-pipeline", auto_send="manual-push",
+        ),
+    )
+    # must NOT raise NotImplementedError (the brazil/internal deferral must not fire)
+    result = bind_repo(binding, tmp_path / "bindings")
+    assert result is not None
+
+
+def test_swarmai_bindings_yaml_is_valid():
+    """The de-fudged SwarmAI bindings.yaml parses with the honest values."""
+    from jobs.paths import PROJECTS_DIR
+
+    p = PROJECTS_DIR / "SwarmAI" / "bindings.yaml"
+    if not p.exists():
+        pytest.skip("SwarmAI/bindings.yaml not present")
+    doc = load_bindings(p)
+    assert len(doc.bindings) >= 1
+    dc = doc.bindings[0].delivery_contract
+    assert dc.remote_kind == "self-hosted-main"
+    assert dc.build_system == "local-script"
+
+
 def test_delivery_contract_new_fields_default_none():
     """AC1: DeliveryContract gains deploy_pipeline + refresh_policy — both Optional,
     default None. A minimal contract (no new fields) must still construct and leave

@@ -54,6 +54,17 @@ class DeliveryContract(BaseModel):
     ``build_system`` is ORTHOGONAL to ``remote_kind``: a Brazil package is still
     reviewed via a code.amazon.com CR, so both are recorded independently.
 
+    ``remote_kind`` values: ``github-pr`` (public GitHub, PR-flow) / ``code-amazon-cr``
+    (Amazon-internal, reviewed via a code.amazon.com CR) / ``self-hosted-main``
+    (main-only auto-commit, no PR/CR — e.g. SwarmAI's own product source, governed by
+    STEERING #5's commit=auto/push=user rule). ``build_system`` values: ``brazil`` /
+    ``none`` / ``local-script`` (built by a repo-local script — e.g. SwarmAI's
+    ``prod.sh`` / ``npm run build:all`` — NOT a hosted build system; the exact command
+    is recorded in ``deploy_pipeline``). NOTE: skill ROUTING on these values lives in
+    SKILL.md prose today (only github-pr/code-amazon-cr are routed); a ``self-hosted-main``
+    repo loads + governs correctly but is not yet auto-routed by a review skill — that
+    routing is a separate, deferred prose change.
+
     ``deploy_pipeline`` + ``refresh_policy`` (§3.6 ⑤ field list) are pointer DATA:
     ``deploy_pipeline`` names/refs the physical deploy pipeline (e.g. a pipelines.amazon.com
     id) the DDD GOVERNs but never runs; ``refresh_policy`` names when the ⑥ code-intel
@@ -61,8 +72,8 @@ class DeliveryContract(BaseModel):
     bindings.yaml that omits them still loads (backward-compat).
     """
 
-    remote_kind: Literal["github-pr", "code-amazon-cr"]
-    build_system: Literal["brazil", "none"] = "none"
+    remote_kind: Literal["github-pr", "code-amazon-cr", "self-hosted-main"]
+    build_system: Literal["brazil", "none", "local-script"] = "none"
     branch: str
     version_set: Optional[str] = None
     deploy_pipeline: Optional[str] = None  # ⑤ pointer: physical deploy pipeline ref/id (GOVERNed, never run here)
