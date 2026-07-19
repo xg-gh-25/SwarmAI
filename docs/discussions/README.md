@@ -42,7 +42,7 @@
 | 32 | [人格陷阱：为什么 "有主见的 AI Agent" 会破坏指令遵从](32-人格陷阱为什么-有主见的-ai-agent-会破坏指令遵从.md) | Show and tell | 2026-05-20 |
 | 33 | [What Is an Agent Harness? The Self-Driving Car Analogy for AI Autonomy Levels](33-what-is-an-agent-harness-the-self-driving-car-analogy-for-ai.md) | General | 2026-05-21 |
 | 34 | [Agent Harness 是什么？用自动驾驶的思路理解 AI Agent 自治五级](34-agent-harness-是什么用自动驾驶的思路理解-ai-agent-自治五级.md) | General | 2026-05-21 |
-| 35 | [Reading Matrix — 3 Paths Through 72 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-72-discussions.md) | General | 2026-05-21 |
+| 35 | [Reading Matrix — 3 Paths Through 75 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-72-discussions.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
@@ -87,6 +87,8 @@
 | 98 | [AI Agent for Data 续篇:把 L3 契约层和 L2 受约束 NL2SQL 真正做出来(带牙齿)](98-ai-agent-for-data-sequel-l3-contract-l2-constrained.md) | Ideas | 2026-07-10 |
 | 99 | [Ontology 不是知识图谱,是决策层 —— 一套轻量本体如何撑起整个 SwarmAI OS](99-ontology-不是知识图谱-是决策层.md) | Show and tell | 2026-07-10 |
 | 100 | [Ontology isn't a knowledge graph — it's a decision layer: how one lightweight ontology runs an entire self-evolving Agent OS](100-ontology-isnt-a-knowledge-graph-its-a-decision-layer.md) | Show and tell | 2026-07-10 |
+| 102 | [How SwarmAI's living knowledge compares to code-understanding tools (Graphify, Understand-Anything, xx-Spec-Studio)](102-how-swarmai-s-living-knowledge-compares-to-code.md) | Show and tell | 2026-07-18 |
+| 103 | [SwarmAI 的「活知识」对比几款代码理解工具(Graphify、Understand-Anything、xx-Spec-Studio)](103-swarmai-的-活知识-对比几款代码理解工具-graphify-understand-anything-xx.md) | Show and tell | 2026-07-18 |
 
 ---
 

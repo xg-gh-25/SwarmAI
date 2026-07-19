@@ -1,7 +1,7 @@
 ---
 title: "The Ontology that runs SwarmAI's Memory, DDD & Code Intelligence (🏷️Classification + 🕸️Relations, no Neo4j)"
 created: 2026-07-08
-updated: 2026-07-09
+updated: 2026-07-19
 status: published
 ---
 <!-- GitHub Discussion #95: https://github.com/xg-gh-25/SwarmAI/discussions/95 -->
@@ -85,6 +85,31 @@ That's the value of "relations": ask me to change the signature of `SessionUnit.
 Same graph, different question, different capability: count **in-edges** (who calls me) → more = riskier (`SessionUnit.kill` has 44 = high-risk node); count **out-edges** = 0 with no callers → dead code, safe to delete. "What will this break," "is this still used," "how risky is this change" — all answered by a graph query, no human reading code.
 
 **Why a separate engine, not shared with the knowledge side?** The knowledge side cares "**should this be forgotten?**" (hence fade rules); the code side cares "**who is connected to whom right now?**" (a code change invalidates old edges immediately — no "fade"). They share the ontology *idea* (nodes + edges + classification) but have opposite lifecycle needs, so they're two engines.
+
+---
+
+## Appendix · Formal-ontology view (aligns with the design doc §3 L2)
+
+The two layers of rules above (🏷️ classification + 🕸️ relations), in semantic-web terms, are the **schema layer of an ontology** — we just deliberately skip OWL/RDF and implement it as two flat, grep-able, context-loadable structures:
+
+| Ontology element | Semantic-web formalism | Our implementation |
+|---|---|---|
+| **Classes** (what kinds of knowledge exist) | OWL classes | 7 types × 3 cognitive layers (`MEMORY_SECTIONS`) |
+| **Relations** (how entries connect) | RDF triples | 10 relation types in `.knowledge-graph.yaml` |
+| **Constraints** (rules the schema enforces) | SHACL / axioms | layer → lifecycle: evergreen sections never decay; only operational entries (guideline/pitfall/process) are ever reclaimed — the keep-set `{principle, correction, decision, model}` is permanent |
+| **Query** | SPARQL / Cypher | plain text loaded into context + keyword/FTS recall — the agent *is* the query engine |
+
+**One thing that's easy to conflate: decay ≠ reclaim.** Any non-evergreen entry *decays* active → dormant → archived by age (so even decisions/models fade); but *physical reclaim* (actually deleting noise) touches only the operational layer — because the keep-set permanently protects both the meta-cognitive and cognitive layers.
+
+**Same ontology, three views** (the design doc completes it to three — one more than this post's original two: the Entity Index):
+
+| View | Nodes | Edges | Governance |
+|---|---|---|---|
+| **Memory / DDD** | 7-type entries | 10 relation types | Darwinian decay (fade → forget) |
+| **Code Intelligence** | code symbols | call / import / dependency | rebuilt on change (no fade) |
+| **Entity Index** | domain concepts | concept → project/doc/section routes | refreshed by the Code-Intel channel |
+
+> Full design: [DDD Cultivation Engine HLD §3 L2 + §9b](https://github.com/xg-gh-25/SwarmAI/blob/main/docs/DDD-Cultivation-Engine-HLD.md).
 
 ---
 

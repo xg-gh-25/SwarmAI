@@ -1,7 +1,7 @@
 ---
 title: "撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology(🏷️分类 + 🕸️关系,不上 Neo4j)"
 created: 2026-07-08
-updated: 2026-07-09
+updated: 2026-07-18
 status: published
 ---
 <!-- GitHub Discussion #96: https://github.com/xg-gh-25/SwarmAI/discussions/96 -->
@@ -85,6 +85,29 @@ _maintenance_loop ─calls▸ _check_ttl ─calls▸ SessionUnit.kill 🔥(44处
 同一张图换个角度问就是不同能力：数**入边**（谁调我）→ 越多越危险（`SessionUnit.kill` 44 条 = 高风险点）；数**出边**为 0 且没人调 → 死代码，可安全删。「改这会炸到哪」「这还有人用吗」「风险多高」这些判断，全都图一算就出，不用人读代码。
 
 **为什么它是独立引擎、不和知识侧共用？** 知识侧关心的是「**该不该忘**」（配了褪色规则）；代码侧关心的是「**当前谁连着谁**」（代码一改旧连线立刻失效重建，没有"褪色"一说）。两者共享 ontology 的**思想**（点+边+分类），但生命周期需求相反，所以是两套引擎。
+
+## 附 · 形式本体视角（对齐设计文档 §3 L2）
+
+前面两层规矩（🏷️分类 + 🕸️关系）用语义网的话说，就是一套**本体的 schema 层** —— 只是我们故意不上 OWL/RDF，而是做成两个扁平、可 grep、可直接塞进 context 的结构：
+
+| 本体要素 | 语义网形式化 | 我们的实现 |
+|---|---|---|
+| **类 Classes**（有哪些知识） | OWL classes | 7 类型 × 3 认知层（`MEMORY_SECTIONS`） |
+| **关系 Relations**（怎么连） | RDF 三元组 | `.knowledge-graph.yaml` 里 10 种关系 |
+| **约束 Constraints**（schema 的规则） | SHACL / 公理 | 层级→生命周期：常青段永不衰减；只有操作层（经验/坑/流程）会被回收，keep-set `{原则,纠错,决定,心智模型}` 永久保留 |
+| **查询 Query** | SPARQL / Cypher | 纯文本塞进 context + 关键词/FTS 召回 —— agent 本身就是查询引擎 |
+
+**一个容易搞混的点：衰减 ≠ 回收。** 任何非常青条目都会按年龄 active→dormant→archived 地**衰减**（所以决定/心智模型也会褪色）；但**物理回收**（真删掉噪音）只碰操作层 —— 因为 keep-set 把元认知 + 认知两层都永久护住了。
+
+**同一套本体，三个视图**（设计文档里补全为三个 —— 比本讨论早先的两个多了 Entity Index）：
+
+| 视图 | 点 | 边 | 治理 |
+|---|---|---|---|
+| **记忆 / DDD** | 7 类型条目 | 10 种关系 | 达尔文式衰减（褪色→遗忘） |
+| **代码智能** | 代码符号 | 调用/import/依赖 | 改动即重建（不褪色） |
+| **Entity Index** | 领域概念 | 概念→项目/文档/段 路由 | 由代码智能通道刷新 |
+
+> 完整设计见 [DDD Cultivation Engine HLD §3 L2 + §9b](https://github.com/xg-gh-25/SwarmAI/blob/main/docs/DDD-Cultivation-Engine-HLD.md)。
 
 ---
 

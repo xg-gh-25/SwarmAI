@@ -1,13 +1,14 @@
 ---
-title: "Reading Matrix — 3 Paths Through 74 Discussions (Builder / Architect / Leader)"
+title: "Reading Matrix — 3 Paths Through 75 Discussions (Builder / Architect / Leader)"
 created: 2026-06-20
-updated: 2026-07-10
+updated: 2026-07-18
 status: published
 ---
+<!-- GitHub Discussion #35: https://github.com/xg-gh-25/SwarmAI/discussions/35 -->
 
 ---
 
-> 74 discussions, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 77 discussions, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -205,6 +206,9 @@ Then pick your path ↓
 | [96](https://github.com/xg-gh-25/SwarmAI/discussions/96) | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96) | CN | 同 #95 中文版 | → [#19](https://github.com/xg-gh-25/SwarmAI/discussions/19), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
 | [100](https://github.com/xg-gh-25/SwarmAI/discussions/100) | [Ontology isn't a knowledge graph — it's a decision layer](https://github.com/xg-gh-25/SwarmAI/discussions/100) | EN | The verb layer: 4-rung ruler (predict→infer→simulate→decide) across the whole OS; why we reach the decision layer | → [#95](https://github.com/xg-gh-25/SwarmAI/discussions/95), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59), ~ [#36](https://github.com/xg-gh-25/SwarmAI/discussions/36) |
 | [99](https://github.com/xg-gh-25/SwarmAI/discussions/99) | [Ontology 不是知识图谱,是决策层](https://github.com/xg-gh-25/SwarmAI/discussions/99) | CN | 同 #100 中文版 | → [#96](https://github.com/xg-gh-25/SwarmAI/discussions/96), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59), ~ [#36](https://github.com/xg-gh-25/SwarmAI/discussions/36) |
+| [98](https://github.com/xg-gh-25/SwarmAI/discussions/98) | [AI Agent for Data 续篇 — L3 契约层 + L2 受约束 NL2SQL](https://github.com/xg-gh-25/SwarmAI/discussions/98) | CN | 把 L3 契约层和 L2 受约束 NL2SQL 真正做出来(带牙齿) | → [#36](https://github.com/xg-gh-25/SwarmAI/discussions/36) |
+| [102](https://github.com/xg-gh-25/SwarmAI/discussions/102) | [How SwarmAI's Living Knowledge Compares to Code-Understanding Tools](https://github.com/xg-gh-25/SwarmAI/discussions/102) | EN | Living knowledge vs Graphify / Understand-Anything / Spec-Studio | ~ [#49](https://github.com/xg-gh-25/SwarmAI/discussions/49), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [103](https://github.com/xg-gh-25/SwarmAI/discussions/103) | [SwarmAI 的「活知识」对比几款代码理解工具](https://github.com/xg-gh-25/SwarmAI/discussions/103) | CN | 同 #102 中文版 | ~ [#50](https://github.com/xg-gh-25/SwarmAI/discussions/50), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [36](https://github.com/xg-gh-25/SwarmAI/discussions/36) | [AI Agent for Data — 从幻觉到精准](https://github.com/xg-gh-25/SwarmAI/discussions/36) | Mix | Semantic contracts + certified queries for data agents | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | EN | Full memory implementation: injection → progressive → FTS5 → RAG | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
 | [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | EN | 3-layer engine, 7 channels, 4 failures, real metrics | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
@@ -381,17 +385,18 @@ Then pick your path ↓
 | [96](https://github.com/xg-gh-25/SwarmAI/discussions/96) | [撑起 SwarmAI 记忆 / DDD / 代码智能的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96) | Architecture | CN |
 | [100](https://github.com/xg-gh-25/SwarmAI/discussions/100) | [Ontology isn't a knowledge graph — it's a decision layer](https://github.com/xg-gh-25/SwarmAI/discussions/100) | Architecture | EN |
 | [99](https://github.com/xg-gh-25/SwarmAI/discussions/99) | [Ontology 不是知识图谱,是决策层](https://github.com/xg-gh-25/SwarmAI/discussions/99) | Architecture | CN |
+| [98](https://github.com/xg-gh-25/SwarmAI/discussions/98) | [AI Agent for Data 续篇 — L3 契约层 + L2 受约束 NL2SQL](https://github.com/xg-gh-25/SwarmAI/discussions/98) | Architecture | CN |
+| [102](https://github.com/xg-gh-25/SwarmAI/discussions/102) | [How SwarmAI's Living Knowledge Compares to Code-Understanding Tools](https://github.com/xg-gh-25/SwarmAI/discussions/102) | Architecture | EN |
+| [103](https://github.com/xg-gh-25/SwarmAI/discussions/103) | [SwarmAI 的「活知识」对比几款代码理解工具](https://github.com/xg-gh-25/SwarmAI/discussions/103) | Architecture | CN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 74 (including Welcome + Reading Matrix)
-- **Content articles:** 72
-- **Bilingual pairs (EN+CN):** 20 pairs (40 discussions)
+- **Total discussions:** 77 (including Welcome + Reading Matrix)
+- **Content articles:** 75
+- **Bilingual pairs (EN+CN):** 21 pairs (42 discussions)
 - **English only:** 29
-- **Themes:** Foundations (8), Architecture (45), Governance (11), Strategy (5), Community (4)
+- **Themes:** Foundations (8), Architecture (48), Governance (11), Strategy (5), Community (4)
 - **Avg reading time per article:** ~5-8 min
 - **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~47 min
-
-
