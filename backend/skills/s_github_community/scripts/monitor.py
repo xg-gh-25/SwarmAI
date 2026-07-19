@@ -8,6 +8,7 @@ Usage:
 """
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -15,32 +16,123 @@ from pathlib import Path
 from typing import Any
 
 
-# Source Matrix — Tier 1 repos to scan every cycle
-TIER1_REPOS = [
-    "NousResearch/hermes-agent",
-    "anthropics/skills",
-    "MemPalace/mempalace",
-    "garrytan/gstack",
-    "obra/superpowers",
-    "awslabs/aidlc-workflows",
-]
+# --- Source Matrix (single source of truth = TECH.md) ---
+#
+# The repos to scan are DERIVED AT RUNTIME from the GitHub_Community project's
+# TECH.md "### Current Roster" table — NOT hardcoded here. This kills the drift
+# where the roster (TECH.md) and the scan list (this file) diverged: a repo added
+# to TECH.md is now picked up automatically on the next monitor cycle, with no
+# second list to hand-maintain. Tier 3 is intentionally excluded (not scanned).
+# See Projects/GitHub_Community/TECH.md § "Three Matrices — DO NOT MERGE THEM".
 
-# Tier 2 — scan daily but lower priority
-TIER2_REPOS = [
-    "anthropics/claude-code",
-    "bytedance/deer-flow",
-    "mattpocock/skills",
-    "forrestchang/andrej-karpathy-skills",
-    "crewAIInc/crewAI",
-    "volcengine/OpenViking",
-    "nexu-io/open-design",
-    "Panniantong/Agent-Reach",
-    "santifer/career-ops",
-    "danielmiessler/Personal_AI_Infrastructure",
-    "aws-samples/sample-ai-plc",
-    "aws-samples/sample-eval-first-building-enterprise-agents-with-agentcore",
-    "future-agi/future-agi",
-]
+# Default location of the authoritative roster (workspace tree, same base as the
+# signals.json output path used in monitor() below).
+_TECH_MD_PATH = (
+    Path.home()
+    / ".swarm-ai"
+    / "SwarmWS"
+    / "Projects"
+    / "GitHub_Community"
+    / "TECH.md"
+)
+
+# Minimum plausible roster size — a parse yielding fewer than this means the table
+# format changed or the section was not found, and we FAIL LOUD rather than
+# silently scan almost nothing (the prior hardcoded Tier-1 alone was 6 repos).
+_MIN_PLAUSIBLE_REPOS = 5
+
+# owner/name: GitHub slug chars only (letters, digits, ., _, -), exactly one slash.
+_REPO_RE = re.compile(r"([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)")
+# Prefer the repo named in a github.com URL — robust to truncated link TEXT.
+_URL_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)")
+
+
+def _extract_repo_from_cell(cell: str) -> str | None:
+    """Extract owner/name from a roster table's repo cell (column 2).
+
+    Handles: `[text](https://github.com/OWNER/NAME)`, a bare `owner/name`, and a
+    truncated link text where the full name lives only in the URL (URL wins).
+    Operates on the CELL ONLY (never the whole row) so links embedded in a
+    description column can't leak. Returns None if no repo slug is found.
+    """
+    cell = cell.strip()
+    m = _URL_REPO_RE.search(cell)  # URL-first — survives truncated link text
+    if m:
+        return m.group(1)
+    m = _REPO_RE.search(cell)  # bare owner/name fallback
+    if m:
+        return m.group(1)
+    return None
+
+
+def load_tracked_repos(
+    tech_md_path: "Path | str | None" = None,
+) -> "tuple[list[str], list[str]]":
+    """Parse the TECH.md Source Matrix and return (tier1_repos, tier2_repos).
+
+    Section-scoped to the "### Current Roster" table: parsing starts at that
+    heading and stops at the next `##`/`###` heading — this structurally excludes
+    the Hot Topics/Rankings table (which shares the `| N |` row shape but whose
+    column 2 is topic prose, not a repo) and the "Source Matrix Notes" prose below.
+
+    Repo names are extracted from column 2 only (URL-first). Tier is the leading
+    `| N |` digit; only Tier 1 and Tier 2 are returned (Tier 3 is not scanned).
+    Order is preserved and duplicates removed.
+
+    Raises RuntimeError if fewer than _MIN_PLAUSIBLE_REPOS are found (a parse that
+    small means the format changed — fail loud instead of scanning nothing).
+    """
+    path = Path(tech_md_path) if tech_md_path else _TECH_MD_PATH
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # Isolate the Current Roster section: from its heading to the next heading.
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^#{2,3}\s+Current Roster\b", line.strip()):
+            start = i + 1
+            break
+    if start is None:
+        raise RuntimeError(
+            f"load_tracked_repos: '### Current Roster' section not found in {path}"
+        )
+    end = len(lines)
+    for j in range(start, len(lines)):
+        if re.match(r"^#{2,3}\s+", lines[j].strip()):
+            end = j
+            break
+    roster = lines[start:end]
+
+    tier1: list[str] = []
+    tier2: list[str] = []
+    seen: set[str] = set()
+    for line in roster:
+        # A roster row looks like: | 1 | <repo cell> | stars | category | last |
+        cells = [c.strip() for c in line.split("|")]
+        # split on '|' of a well-formed row yields ['', '1', '<repo>', ...] —
+        # need a leading tier digit in cells[1] and a repo cell in cells[2].
+        if len(cells) < 4:
+            continue
+        if cells[1] not in ("1", "2", "3"):
+            continue
+        repo = _extract_repo_from_cell(cells[2])
+        if not repo or repo in seen:
+            continue
+        seen.add(repo)
+        if cells[1] == "1":
+            tier1.append(repo)
+        elif cells[1] == "2":
+            tier2.append(repo)
+        # tier 3: tracked but not scanned — intentionally dropped
+
+    total = len(tier1) + len(tier2)
+    if total < _MIN_PLAUSIBLE_REPOS:
+        raise RuntimeError(
+            f"load_tracked_repos: only {total} repos parsed from {path} "
+            f"(< {_MIN_PLAUSIBLE_REPOS}); the Source Matrix table format likely "
+            f"changed — refusing to scan an implausibly small set."
+        )
+    return tier1, tier2
 
 # Topic keywords for signal matching
 TOPIC_KEYWORDS = {
@@ -392,14 +484,17 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
     """Run full monitor cycle — scan signals + track hot topics + dashboard feed."""
     all_signals = []
 
+    # Derive the scan list from TECH.md at runtime (single source of truth).
+    tier1_repos, tier2_repos = load_tracked_repos()
+
     # Tier 1: full scan (signals for engagement)
-    all_signals.extend(scan_repos(TIER1_REPOS, tier=1))
+    all_signals.extend(scan_repos(tier1_repos, tier=1))
 
     # Tier 2: daily scan
-    all_signals.extend(scan_repos(TIER2_REPOS, tier=2, since_hours=24))
+    all_signals.extend(scan_repos(tier2_repos, tier=2, since_hours=24))
 
     # Dashboard feed: dynamic signals from GitHub activity feed
-    known_repos = set(TIER1_REPOS + TIER2_REPOS)
+    known_repos = set(tier1_repos + tier2_repos)
     dashboard_events = fetch_dashboard_feed()
     dashboard_signals = dashboard_to_signals(dashboard_events, known_repos)
 
@@ -412,7 +507,7 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
     all_signals.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
 
     # Hot Topics: scan discussions for demand-side tracking
-    discussion_repos = [r for r in TIER1_REPOS + TIER2_REPOS]
+    discussion_repos = [r for r in tier1_repos + tier2_repos]
     hot_discussions = fetch_hot_discussions(discussion_repos)
     hot_topics = compute_hot_topics(hot_discussions)
 
