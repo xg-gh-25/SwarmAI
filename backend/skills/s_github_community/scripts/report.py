@@ -13,6 +13,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# SSOT: the repo/tier/stars roster comes from ONE parser (monitor.load_source_matrix),
+# the same one the daily scan uses — never a hardcoded copy in this file.
+from skills.s_github_community.scripts.monitor import (
+    _MIN_PLAUSIBLE_REPOS,
+    load_source_matrix,
+    load_topic_matrix,
+)
+
 DDD_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "GitHub_Community"
 ARTIFACTS_DIR = DDD_DIR / ".artifacts"
 REPORT_DIR = ARTIFACTS_DIR / "retro_weekly"
@@ -306,8 +314,8 @@ li {{ margin: 8px 0; line-height: 1.5; }}
         <tr><td>PROJECT.md</td><td>{ddd_health.get('project_updated', '—')}</td><td>{ddd_health.get('project_completeness', '—')}</td><td class="health-good">OK</td></tr>
     </table>
     <h2 style="margin-top:16px;">Matrix Sizes</h2>
-    <div class="metric"><div class="metric-value">{ddd_health.get('source_matrix_size', 14)}</div><div class="metric-label">Source Repos</div></div>
-    <div class="metric"><div class="metric-value">{ddd_health.get('topic_matrix_size', 11)}</div><div class="metric-label">Topics</div></div>
+    <div class="metric"><div class="metric-value">{ddd_health.get('source_matrix_size', 0)}</div><div class="metric-label">Tracked Repos (all tiers)</div></div>
+    <div class="metric"><div class="metric-value">{ddd_health.get('topic_matrix_size', 0)}</div><div class="metric-label">Topics</div></div>
     <div class="metric"><div class="metric-value">{ddd_health.get('patterns_count', 0)}</div><div class="metric-label">Patterns in IMPROVEMENT</div></div>
 </div>
 
@@ -395,33 +403,29 @@ def _compute_live_source_matrix(engagement_log: list[dict], track_results: dict)
         if score.get("reply_count", 0) > 0:
             repo_replies[score["repo"]] += score["reply_count"]
 
-    # Static repo info (from TECH.md — would be parsed in production)
-    REPO_INFO = {
-        "NousResearch/hermes-agent": {"tier": 1, "stars": 154000},
-        "anthropics/skills": {"tier": 1, "stars": 136000},
-        "forrestchang/andrej-karpathy-skills": {"tier": 3, "stars": 133000},
-        "anthropics/claude-code": {"tier": 2, "stars": 124000},
-        "garrytan/gstack": {"tier": 1, "stars": 98000},
-        "mattpocock/skills": {"tier": 2, "stars": 88000},
-        "bytedance/deer-flow": {"tier": 2, "stars": 68000},
-        "MemPalace/mempalace": {"tier": 1, "stars": 52000},
-        "crewAIInc/crewAI": {"tier": 2, "stars": 52000},
-        "volcengine/OpenViking": {"tier": 2, "stars": 24000},
-        "addyosmani/agent-skills": {"tier": 3, "stars": 43000},
-        "tirth8205/code-review-graph": {"tier": 3, "stars": 17000},
-        "kayba-ai/agentic-context-engine": {"tier": 3, "stars": 2200},
-        "Agents365-ai/video-podcast-maker": {"tier": 3, "stars": 1000},
-    }
+    # Repo/tier/stars come from the SSOT parser (TECH.md Current Roster) — the SAME
+    # one the daily scan uses. No hardcoded copy here. Live engagement (comments /
+    # replies / last_engaged) is layered on top, keyed by owner/name.
+    roster = load_source_matrix()
+    if len(roster) < _MIN_PLAUSIBLE_REPOS:
+        # Not a silent empty table: if the SSOT parse collapsed, say so loudly.
+        print(
+            f"[report] WARNING: load_source_matrix returned only {len(roster)} repos "
+            f"(< {_MIN_PLAUSIBLE_REPOS}) — TECH.md Current Roster may have changed; "
+            f"Source Matrix tab will be incomplete.",
+            file=sys.stderr,
+        )
 
     matrix = []
-    for repo, info in sorted(REPO_INFO.items(), key=lambda x: x[1]["stars"], reverse=True):
+    for entry in sorted(roster, key=lambda e: e["stars"], reverse=True):
+        repo = entry["repo"]
         comments = repo_comments.get(repo, 0)
         replies = repo_replies.get(repo, 0)
         reply_rate = f"{(replies / max(comments, 1)) * 100:.0f}%" if comments > 0 else "—"
         matrix.append({
-            "name": repo,
-            "tier": info["tier"],
-            "stars": info["stars"],
+            "name": repo,                      # report.py renders repo['name']
+            "tier": entry["tier"],
+            "stars": entry["stars"],
             "last_engaged": repo_last_engaged.get(repo, "—"),
             "reply_rate": reply_rate,
             "engagement_score": f"{comments}c/{replies}r",
@@ -459,11 +463,11 @@ def _compute_ddd_health() -> dict:
 
             # Extract metrics from specific files
             if key == "tech":
-                # Count Source Matrix entries (lines with | T1/T2/T3 pattern)
-                source_count = sum(1 for l in lines if "| 1 |" in l or "| 2 |" in l or "| 3 |" in l
-                                   or "T1" in l or "T2" in l or "T3" in l
-                                   if l.strip().startswith("|"))
-                # Count topic entries
+                # Source Matrix size from the SSOT parser — same source as the
+                # Source Matrix tab, not a separate hand-rolled `"| 1 |" in l`
+                # counter (which also matched the Hot Topics table).
+                source_count = len(load_source_matrix())
+                # Count topic entries (Our Topic Matrix rows)
                 topic_count = sum(1 for l in lines if l.strip().startswith("| T-"))
             elif key == "improvement":
                 # Count pattern entries (lines starting with -)
@@ -472,8 +476,8 @@ def _compute_ddd_health() -> dict:
             health[f"{key}_updated"] = "—"
             health[f"{key}_completeness"] = "Missing"
 
-    health["source_matrix_size"] = max(source_count, 14)  # Minimum from known repos
-    health["topic_matrix_size"] = max(topic_count, 11)
+    health["source_matrix_size"] = source_count  # live from SSOT, no magic floor
+    health["topic_matrix_size"] = topic_count
     health["patterns_count"] = patterns_count
 
     return health
@@ -557,17 +561,32 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
         if topic:
             topic_engagement[topic] += 1
 
-    topic_matrix = [
-        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 3, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1056", "total_engagement": topic_engagement.get("T-MEM", 0)},
-        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 12, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-MvS", 0)},
-        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 4, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-CBB", 0)},
-        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "bytedance/deer-flow", "discussion_num": 6, "hot_thread_url": "https://github.com/bytedance/deer-flow/issues/3011", "total_engagement": topic_engagement.get("T-CUL", 0)},
-        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "anthropics/claude-code", "discussion_num": 8, "hot_thread_url": "https://github.com/anthropics/claude-code/issues/16288", "total_engagement": topic_engagement.get("T-6SX", 0)},
-        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "discussion_num": 9, "hot_thread_url": "https://github.com/anthropics/skills/discussions/380", "total_engagement": topic_engagement.get("T-DDD", 0)},
-        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 10, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1384", "total_engagement": topic_engagement.get("T-CMP", 0)},
-        {"id": "T-SOV", "name": "Memory Sovereignty", "temperature": "🔥🔥", "status": "CANDIDATE", "best_repo": "MemPalace/mempalace", "discussion_num": None, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/759", "total_engagement": topic_engagement.get("T-SOV", 0)},
-        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "garrytan/gstack", "discussion_num": 11, "hot_thread_url": "", "total_engagement": topic_engagement.get("T-SxT", 0)},
-    ]
+    # Topic Matrix from the SSOT (TECH.md Our Topic Matrix) — no hardcoded copy.
+    # best_repo is resolved from the short-name Primary Repos column to a full
+    # owner/name (unresolvable → plain text, never a broken link). temperature is
+    # DERIVED from live engagement (not a frozen 🔥 count). hot_thread_url is
+    # dropped: there is no live source for it, and a stale hardcoded URL is worse
+    # than none — the engagement number stays, unlinked.
+    def _temp_from_engagement(n: int) -> str:
+        return "🔥🔥🔥" if n >= 5 else "🔥🔥" if n >= 2 else "🔥" if n >= 1 else "—"
+
+    topic_matrix = []
+    for t in load_topic_matrix():
+        eng = topic_engagement.get(t["id"], 0)
+        primary = t.get("primary_repos") or []
+        raw = t.get("primary_repos_raw") or []
+        # First resolved full name links; else show the raw short name(s) as text.
+        best_repo = primary[0] if primary else (raw[0] if raw else "—")
+        topic_matrix.append({
+            "id": t["id"],
+            "name": t["name"],
+            "temperature": _temp_from_engagement(eng),
+            "status": t["status"],
+            "best_repo": best_repo,
+            "discussion_num": None,  # linked dynamically elsewhere; no hardcoded map
+            "hot_thread_url": "",    # no live source — omit rather than link stale
+            "total_engagement": eng,
+        })
 
     # Compute activity from live data
     activity = {

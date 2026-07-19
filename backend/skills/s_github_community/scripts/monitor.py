@@ -65,26 +65,43 @@ def _extract_repo_from_cell(cell: str) -> str | None:
     return None
 
 
-def load_tracked_repos(
+def _parse_stars(s: str) -> int:
+    """Parse a Current Roster stars cell to an int. Robust by construction:
+    strips markdown bold/commas, handles K/k suffix (incl. decimals like 25.5K),
+    bare integers, and returns 0 for missing/em-dash/unparseable (NEVER raises —
+    a bad stars cell must not crash the whole matrix parse)."""
+    s = s.strip().strip("*").replace(",", "").strip()
+    if not s or s in ("—", "-"):
+        return 0
+    try:
+        if s[-1] in ("K", "k"):
+            return int(float(s[:-1]) * 1000)
+        return int(s)
+    except (ValueError, IndexError):
+        return 0
+
+
+def load_source_matrix(
     tech_md_path: "Path | str | None" = None,
-) -> "tuple[list[str], list[str]]":
-    """Parse the TECH.md Source Matrix and return (tier1_repos, tier2_repos).
+) -> "list[dict]":
+    """THE single parser for the TECH.md Source Matrix — the SSOT consumed by BOTH
+    monitor (scan list, via load_tracked_repos) and report (Source Matrix tab +
+    DDD health). Returns the FULL roster (all tiers incl. 3) as
+    [{"repo": str, "tier": int, "stars": int}], insertion-ordered, deduped
+    (first occurrence wins).
 
     Section-scoped to the "### Current Roster" table: parsing starts at that
-    heading and stops at the next `##`/`###` heading — this structurally excludes
-    the Hot Topics/Rankings table (which shares the `| N |` row shape but whose
-    column 2 is topic prose, not a repo) and the "Source Matrix Notes" prose below.
+    heading and stops at the next `##`/`###` heading — structurally excluding the
+    Hot Topics/Rankings table (shares the `| N |` row shape but column 2 is topic
+    prose) and the "Source Matrix Notes" prose below. Repo is extracted from
+    column 2 only (URL-first); tier from the leading `| N |` digit; stars from
+    column 3 via _parse_stars.
 
-    Repo names are extracted from column 2 only (URL-first). Tier is the leading
-    `| N |` digit; only Tier 1 and Tier 2 are returned (Tier 3 is not scanned).
-    Order is preserved and duplicates removed.
-
-    Raises RuntimeError if fewer than _MIN_PLAUSIBLE_REPOS are found (a parse that
-    small means the format changed — fail loud instead of scanning nothing).
+    Pure parse — NO fail-loud here (callers decide). load_tracked_repos keeps the
+    scan-list fail-loud; report warns on an implausibly small result.
     """
     path = Path(tech_md_path) if tech_md_path else _TECH_MD_PATH
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
 
     # Isolate the Current Roster section: from its heading to the next heading.
     start = None
@@ -93,24 +110,19 @@ def load_tracked_repos(
             start = i + 1
             break
     if start is None:
-        raise RuntimeError(
-            f"load_tracked_repos: '### Current Roster' section not found in {path}"
-        )
+        return []
     end = len(lines)
     for j in range(start, len(lines)):
         if re.match(r"^#{2,3}\s+", lines[j].strip()):
             end = j
             break
-    roster = lines[start:end]
 
-    tier1: list[str] = []
-    tier2: list[str] = []
+    matrix: list[dict] = []
     seen: set[str] = set()
-    for line in roster:
+    for line in lines[start:end]:
         # A roster row looks like: | 1 | <repo cell> | stars | category | last |
         cells = [c.strip() for c in line.split("|")]
-        # split on '|' of a well-formed row yields ['', '1', '<repo>', ...] —
-        # need a leading tier digit in cells[1] and a repo cell in cells[2].
+        # split on '|' of a well-formed row yields ['', '1', '<repo>', '<stars>', ...]
         if len(cells) < 4:
             continue
         if cells[1] not in ("1", "2", "3"):
@@ -119,11 +131,28 @@ def load_tracked_repos(
         if not repo or repo in seen:
             continue
         seen.add(repo)
-        if cells[1] == "1":
-            tier1.append(repo)
-        elif cells[1] == "2":
-            tier2.append(repo)
-        # tier 3: tracked but not scanned — intentionally dropped
+        matrix.append({"repo": repo, "tier": int(cells[1]), "stars": _parse_stars(cells[3])})
+    return matrix
+
+
+def load_tracked_repos(
+    tech_md_path: "Path | str | None" = None,
+) -> "tuple[list[str], list[str]]":
+    """Return (tier1_repos, tier2_repos) for the monitor scan list — a thin
+    wrapper over load_source_matrix() (the SSOT). Tier 3 is tracked but NOT
+    scanned, so it is filtered out here. Order preserved, deduped (via
+    load_source_matrix's single-pass dedup, so cross-tier dupes keep first
+    occurrence — same semantics as before the extraction).
+
+    Raises RuntimeError if fewer than _MIN_PLAUSIBLE_REPOS tier1+tier2 repos are
+    found (parse broke — fail loud instead of scanning nothing). The threshold is
+    counted on tier1+tier2 ONLY (not the tier3-inclusive full matrix), preserving
+    the exact pre-refactor behavior.
+    """
+    path = Path(tech_md_path) if tech_md_path else _TECH_MD_PATH
+    matrix = load_source_matrix(path)
+    tier1 = [m["repo"] for m in matrix if m["tier"] == 1]
+    tier2 = [m["repo"] for m in matrix if m["tier"] == 2]
 
     total = len(tier1) + len(tier2)
     if total < _MIN_PLAUSIBLE_REPOS:
@@ -133,6 +162,100 @@ def load_tracked_repos(
             f"changed — refusing to scan an implausibly small set."
         )
     return tier1, tier2
+
+
+def resolve_repo_short_name(
+    short: str, source_matrix: "list[dict] | None" = None
+) -> "str | None":
+    """Resolve a TECH.md Our-Topic-Matrix short repo name (e.g. 'hermes',
+    'MemPalace') to a full owner/name from the Source Matrix roster.
+
+    The Our Topic Matrix 'Primary Repos' column uses short names; the roster uses
+    owner/name. Match case-insensitively against the name half (after '/'), then
+    against the owner half as a fallback. Returns None if unresolvable (caller
+    renders it as plain text — never a broken link).
+    """
+    short = short.strip()
+    if not short:
+        return None
+    if "/" in short:  # already a full name
+        return short
+    matrix = source_matrix if source_matrix is not None else load_source_matrix()
+    low = short.lower()
+    # EXACT matches only (name-half, then owner-half). We deliberately do NOT do
+    # substring/fuzzy matching: a generic word in the Primary-Repos column (e.g.
+    # "enterprise", "skills ecosystem") would substring-match an unrelated repo
+    # (aws-samples/...-enterprise-agents-...) and render a wrong link — the exact
+    # kind of drift this SSOT work removes. Unresolvable → None (caller shows the
+    # raw short name as plain text). The fix for a real repo that doesn't resolve
+    # is to write its exact name in TECH.md, not to loosen this matcher.
+    for m in matrix:
+        if m["repo"].split("/", 1)[-1].lower() == low:  # name-half exact
+            return m["repo"]
+    for m in matrix:
+        if m["repo"].split("/", 1)[0].lower() == low:  # owner-half exact
+            return m["repo"]
+    return None
+
+
+def load_topic_matrix(
+    tech_md_path: "Path | str | None" = None,
+) -> "list[dict]":
+    """Parse the TECH.md '### Current Topics' table (under 'Our Topic Matrix') —
+    the SSOT for OUR topics (supply side). Returns
+    [{"id","name","status","thesis","primary_repos":[full owner/name...],
+      "primary_repos_raw":[short...]}], insertion-ordered.
+
+    Section-scoped from the '### Current Topics' heading to the next heading.
+    primary_repos are resolved from short names to full owner/name via the Source
+    Matrix roster (unresolvable ones are dropped from primary_repos but kept in
+    primary_repos_raw for display). This replaces report.py's hardcoded 9-item
+    topic_matrix array so the two never drift.
+    """
+    path = Path(tech_md_path) if tech_md_path else _TECH_MD_PATH
+    lines = path.read_text(encoding="utf-8").splitlines()
+
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^#{2,3}\s+Current Topics\b", line.strip()):
+            start = i + 1
+            break
+    if start is None:
+        return []
+    end = len(lines)
+    for j in range(start, len(lines)):
+        if re.match(r"^#{2,3}\s+", lines[j].strip()):
+            end = j
+            break
+
+    roster = load_source_matrix(path)  # for short-name resolution
+    topics: list[dict] = []
+    seen: set[str] = set()
+    for line in lines[start:end]:
+        cells = [c.strip() for c in line.split("|")]
+        # | ID | Topic | Status | Thesis | Primary Repos | Hot Topic Match |
+        if len(cells) < 7:
+            continue
+        tid = cells[1]
+        if not re.match(r"^T-[A-Za-z0-9]+$", tid) or tid in seen:
+            continue
+        seen.add(tid)
+        raw_repos = [r.strip() for r in cells[5].split(",") if r.strip()]
+        resolved = []
+        for r in raw_repos:
+            full = resolve_repo_short_name(r, roster)
+            if full and full not in resolved:
+                resolved.append(full)
+        topics.append({
+            "id": tid,
+            "name": cells[2],
+            "status": cells[3],
+            "thesis": cells[4],
+            "primary_repos": resolved,
+            "primary_repos_raw": raw_repos,
+        })
+    return topics
+
 
 # Topic keywords for signal matching
 TOPIC_KEYWORDS = {
@@ -201,13 +324,94 @@ def match_topics(title: str, body: str = "") -> list[str]:
     return matched
 
 
+# --- Signal quality gate (single admission threshold for ALL producers) ---
+#
+# Every produced signal — matrix scan (issues + discussions), dashboard discovery,
+# AND the hot-topics discussion feed — must pass is_valuable_signal(). This closes
+# the drift where the dashboard branch exempted unknown-repo signals from the topic
+# check, letting bot/PR noise through (42% of a real run: dependabot, auto-release
+# PRs, eks-distro-pr-bot). "Unfamiliar repo" is NOT a value signal.
+
+# Auto-release PR titles from CI bots (dependabot, eks-distro-pr-bot, etc.).
+# Anchored so a human "Update X to reflect Y" without the release/latest tail does
+# not match — but "Bump/Update ... to latest|release" (the machine pattern) does.
+_RELEASE_BOT_TITLE_RE = re.compile(
+    r"^(\[.*?\]\s*)?(Bump|Update)\b.*\b(to latest|latest release|release)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_bot_author(author: str) -> bool:
+    """True if the author login is a machine account.
+
+    GitHub App bots end in '[bot]' (dependabot[bot]), but org CI machine-users do
+    NOT (eks-distro-pr-bot — 19% of a real run's noise). Both endings are covered.
+    """
+    if not author:
+        return False
+    a = author.lower()
+    return a.endswith("[bot]") or a.endswith("-bot")
+
+
+def _is_release_bot_title(title: str) -> bool:
+    """True if the title matches an automated dependency-bump / release-bump PR."""
+    if not title:
+        return False
+    return bool(_RELEASE_BOT_TITLE_RE.match(title))
+
+
+def _is_new(created_at: str, within_hours: int = 24) -> bool:
+    """True if created_at is within the last `within_hours`.
+
+    Empty/malformed created_at → False (never raise). This matters because the
+    discussion path historically hardcoded created_at="" — an unguarded
+    datetime.fromisoformat("") would crash the whole monitor cycle.
+    """
+    if not created_at:
+        return False
+    try:
+        ts = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts >= datetime.now(timezone.utc) - timedelta(hours=within_hours)
+
+
+def is_valuable_signal(signal: dict) -> tuple[bool, str]:
+    """The single admission gate. Returns (keep?, reason).
+
+    Layered, ORDER MATTERS — bot must be checked BEFORE activity, or a brand-new
+    bot issue would slip through the is_new branch:
+      1. not a PR       (url contains '/pull/')
+      2. topics present (matched_topics non-empty)
+      3. not a bot      (author login OR auto-release title)
+      4. has activity   (existing_comments > 0 OR is_new)
+
+    Operates on the NORMALIZED signal dict (author / existing_comments / title /
+    url / matched_topics / created_at) — the shape all producers emit — so the
+    same call is correct for scan and dashboard signals alike.
+    """
+    if "/pull/" in signal.get("url", ""):
+        return False, "rejected: pull request (not an engageable issue/discussion)"
+    if not signal.get("matched_topics"):
+        return False, "rejected: no topic match (off our demand/supply intersection)"
+    author = signal.get("author", "")
+    title = signal.get("title", "")
+    if _is_bot_author(author) or _is_release_bot_title(title):
+        return False, f"rejected: bot/automated (author={author!r})"
+    if signal.get("existing_comments", 0) > 0 or _is_new(signal.get("created_at", "")):
+        return True, "ok"
+    return False, "rejected: inactive (0 comments and not newly opened)"
+
+
 def fetch_recent_discussions(repo: str, since_hours: int = 24) -> list[dict]:
     """Fetch discussions updated in the last N hours via GraphQL."""
     owner, name = repo.split("/", 1) if "/" in repo else ("", repo)
     query = """query($owner: String!, $name: String!) {
       repository(owner: $owner, name: $name) {
         discussions(first: 15, orderBy: {field: UPDATED_AT, direction: DESC}) {
-          nodes { number title body comments { totalCount } updatedAt url
+          nodes { number title body comments { totalCount } createdAt updatedAt url
                   author { login } }
         }
       }
@@ -234,6 +438,7 @@ def fetch_recent_discussions(repo: str, since_hours: int = 24) -> list[dict]:
                     "title": d.get("title", ""),
                     "user": d.get("author", {}).get("login", "unknown") if d.get("author") else "unknown",
                     "comments": d.get("comments", {}).get("totalCount", 0),
+                    "created_at": d.get("createdAt", ""),
                     "updated_at": updated,
                     "html_url": d.get("url", ""),
                     "type": "discussion",
@@ -250,42 +455,42 @@ def scan_repos(repos: list[str], tier: int, since_hours: int = 24) -> list[dict]
         # Scan Issues
         issues = fetch_recent_issues(repo, since_hours)
         for issue in issues:
-            topics = match_topics(issue.get("title", ""))
-            if topics:
-                signals.append({
-                    "repo": repo,
-                    "tier": tier,
-                    "issue_number": issue["number"],
-                    "title": issue["title"],
-                    "url": issue.get("html_url", ""),
-                    "author": issue.get("user", "unknown"),
-                    "existing_comments": issue.get("comments", 0),
-                    "created_at": issue.get("created_at", ""),
-                    "updated_at": issue.get("updated_at", ""),
-                    "matched_topics": topics,
-                    "signal_type": "issue",
-                    "scanned_at": datetime.now(timezone.utc).isoformat(),
-                })
+            signal = {
+                "repo": repo,
+                "tier": tier,
+                "issue_number": issue["number"],
+                "title": issue["title"],
+                "url": issue.get("html_url", ""),
+                "author": issue.get("user", "unknown"),
+                "existing_comments": issue.get("comments", 0),
+                "created_at": issue.get("created_at", ""),
+                "updated_at": issue.get("updated_at", ""),
+                "matched_topics": match_topics(issue.get("title", "")),
+                "signal_type": "issue",
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if is_valuable_signal(signal)[0]:
+                signals.append(signal)
 
         # Scan Discussions (where most community activity happens)
         discussions = fetch_recent_discussions(repo, since_hours)
         for disc in discussions:
-            topics = match_topics(disc.get("title", ""))
-            if topics:
-                signals.append({
-                    "repo": repo,
-                    "tier": tier,
-                    "issue_number": disc["number"],
-                    "title": disc["title"],
-                    "url": disc.get("html_url", ""),
-                    "author": disc.get("user", "unknown"),
-                    "existing_comments": disc.get("comments", 0),
-                    "created_at": "",
-                    "updated_at": disc.get("updated_at", ""),
-                    "matched_topics": topics,
-                    "signal_type": "discussion",
-                    "scanned_at": datetime.now(timezone.utc).isoformat(),
-                })
+            signal = {
+                "repo": repo,
+                "tier": tier,
+                "issue_number": disc["number"],
+                "title": disc["title"],
+                "url": disc.get("html_url", ""),
+                "author": disc.get("user", "unknown"),
+                "existing_comments": disc.get("comments", 0),
+                "created_at": disc.get("created_at", ""),
+                "updated_at": disc.get("updated_at", ""),
+                "matched_topics": match_topics(disc.get("title", "")),
+                "signal_type": "discussion",
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if is_valuable_signal(signal)[0]:
+                signals.append(signal)
     return signals
 
 
@@ -313,7 +518,8 @@ def fetch_hot_discussions(repos: list[str], limit: int = 10) -> list[dict]:
         query = """query($owner: String!, $name: String!) {
           repository(owner: $owner, name: $name) {
             discussions(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
-              nodes { number title body comments { totalCount } updatedAt category { name } }
+              nodes { number title body comments { totalCount } updatedAt category { name }
+                      author { login } }
             }
           }
         }"""
@@ -329,6 +535,11 @@ def fetch_hot_discussions(repos: list[str], limit: int = 10) -> list[dict]:
             if result.returncode == 0 and result.stdout.strip():
                 discussions = json.loads(result.stdout)
                 for d in discussions:
+                    # Hot-topics is the 4th signal path — it must ALSO exclude bot
+                    # discussions, or bot noise inflates the topic-engagement ranks.
+                    author = d.get("author", {}).get("login", "") if d.get("author") else ""
+                    if _is_bot_author(author) or _is_release_bot_title(d.get("title", "")):
+                        continue
                     hot_data.append({
                         "repo": repo,
                         "number": d.get("number"),
@@ -440,39 +651,41 @@ def fetch_dashboard_feed() -> list[dict]:
 
 
 def dashboard_to_signals(events: list[dict], known_repos: set[str]) -> list[dict]:
-    """Convert dashboard events to signals, separating known vs discovery.
+    """Convert dashboard events to signals via the unified quality gate.
 
-    - Events from Source Matrix repos → merged as regular signals (tagged source=dashboard)
-    - Events from NEW repos → tagged as "discovery" signals (potential new Source Matrix entries)
+    Both known-repo and discovery (unknown-repo) events must pass
+    is_valuable_signal(). "Unfamiliar repo" is NOT a value signal — the old
+    exemption (let any unknown-repo event through regardless of topic) was the
+    root of the dashboard noise: dependabot / auto-release PRs / eks-distro-pr-bot
+    (42% of a real run). Discovery is preserved for repos that DO pass the gate
+    (topic-matched, non-PR, non-bot, active) — tagged tier=0 / is_discovery.
     """
     signals = []
     for event in events:
         repo = event.get("repo", "")
-        title = event.get("title", "")
-        topics = match_topics(title)
-
-        # Only keep events that match our topics OR are from unknown repos (discovery)
         is_new_repo = repo not in known_repos
-        if not topics and not is_new_repo:
-            continue
-
         signal = {
             "repo": repo,
             "tier": 0 if is_new_repo else None,  # tier 0 = discovery
             "issue_number": event.get("number", 0),
-            "title": title,
+            "title": event.get("title", ""),
             "url": event.get("url", ""),
             "author": event.get("author", "unknown"),
             "existing_comments": event.get("comments", 0),
+            # NB: for an IssueCommentEvent this is the COMMENT/event time, not the
+            # issue's open time — so is_new() here measures feed recency, not issue
+            # age. Harmless (feed events are inherently recent) but don't read it as
+            # "issue opened at".
             "created_at": event.get("created", ""),
             "updated_at": event.get("created", ""),
-            "matched_topics": topics,
+            "matched_topics": match_topics(event.get("title", "")),
             "source": "dashboard",
             "event_type": event.get("type", ""),
             "is_discovery": is_new_repo,
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }
-        signals.append(signal)
+        if is_valuable_signal(signal)[0]:
+            signals.append(signal)
 
     return signals
 
