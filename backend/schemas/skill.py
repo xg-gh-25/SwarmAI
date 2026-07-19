@@ -24,7 +24,7 @@ class SkillResponse(BaseModel):
     name: str
     description: str
     version: str = "1.0.0"
-    source_tier: Literal["built-in", "user", "plugin"]
+    source_tier: Literal["built-in", "ddd", "user", "plugin"]
     read_only: bool
     content: str | None = None
 

@@ -384,6 +384,21 @@ class InitializationManager:
         except Exception as e:
             logger.warning("Failed to clean stale git index.lock: %s", e)
 
+        # Step 0: Build the DDD skill registry manifest (before scan, so the
+        # ddd tier reads a fresh manifest). Fail-soft: a registry error must not
+        # block skill discovery. Wires the workspace root onto the singleton so
+        # its ddd tier (and projection's source validation) can resolve
+        # Projects/*/skills/. (run_597f4ed1, Run 2 REGISTRY+MOUNT)
+        try:
+            from core.skill_manager import skill_manager as _sm0
+            from core import ddd_skill_registry
+            _ws = Path(workspace_path)
+            _sm0.workspace_root = _ws
+            ddd_skill_registry.build_manifest(_ws, _sm0.builtin_path)
+            logger.info("DDD skill registry manifest built during refresh")
+        except Exception as e:
+            logger.error("DDD registry build failed during refresh (non-fatal): %s", e)
+
         # Step 1: Re-scan skills (MUST run before projection)
         _sm = None
         try:

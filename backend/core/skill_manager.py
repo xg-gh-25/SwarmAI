@@ -81,7 +81,7 @@ class SkillInfo:
     name: str
     description: str
     version: str
-    source_tier: Literal["built-in", "user", "plugin"]
+    source_tier: Literal["built-in", "ddd", "user", "plugin"]
     path: Path
     platform: str = "all"  # "all" | "macos" | "desktop"
     content: str | None = None
@@ -206,7 +206,7 @@ def parse_frontmatter(path: Path) -> tuple[dict, str]:
 def parse_skill_md(
     path: Path,
     folder_name: str,
-    source_tier: Literal["built-in", "user", "plugin"],
+    source_tier: Literal["built-in", "ddd", "user", "plugin"],
     load_content: bool = True,
 ) -> SkillInfo:
     """Parse a SKILL.md file into a ``SkillInfo`` instance.
@@ -377,6 +377,7 @@ class SkillManager:
         builtin_path: Path | None = None,
         user_skills_path: Path | None = None,
         plugin_skills_path: Path | None = None,
+        workspace_root: Path | None = None,
     ) -> None:
         """Initialise with configurable tier paths.
 
@@ -417,6 +418,11 @@ class SkillManager:
                 _get_app_data_dir() / "plugin-skills"
             )
 
+        # Workspace root for the DDD skill registry (per-workspace manifest).
+        # None → ddd tier is a pure no-op (production-safe default). The daemon
+        # wires the real SwarmWS root at startup (see the module singleton).
+        self.workspace_root = workspace_root
+
         # Cache state — populated by scan_all(), invalidated on CRUD ops.
         # The lock serialises cache rebuilds so concurrent invalidations
         # don't race.  Readers see either the old or new dict (atomic
@@ -430,11 +436,11 @@ class SkillManager:
     # ------------------------------------------------------------------
 
     async def scan_all(self) -> dict[str, SkillInfo]:
-        """Scan all three tiers, apply precedence, return unified dict.
+        """Scan all tiers, apply precedence, return unified dict.
 
-        Scans built-in, user, and plugin directories in that order.
-        First-seen folder name wins (built-in > user > plugin).  Logs
-        warnings for shadowed skills, missing SKILL.md, and parse errors.
+        Scans built-in, ddd (DDD skill registry), user, and plugin in that
+        order.  First-seen folder name wins (built-in > ddd > user > plugin).
+        Logs warnings for shadowed skills, missing SKILL.md, and parse errors.
         Creates user and plugin directories if they don't exist.
 
         Returns:
@@ -451,18 +457,81 @@ class SkillManager:
                     "Cannot create directory %s: %s", dir_path, exc
                 )
 
-        # Scan tiers in precedence order: built-in first, then user, then plugin
-        tiers: list[tuple[Path, Literal["built-in", "user", "plugin"]]] = [
-            (self.builtin_path, "built-in"),
-            (self.user_skills_path, "user"),
-            (self.plugin_skills_path, "plugin"),
-        ]
-
-        for tier_path, tier_name in tiers:
-            self._scan_tier(tier_path, tier_name, result)
+        # Precedence order: built-in > ddd > user > plugin (first-seen wins).
+        # Built-in is scanned FIRST so an enablement skill's official version
+        # shadows any DDD-carried copy (a domain skill still living in built-in
+        # pre-Run-3 is served by built-in; its ddd entry is a harmless shadow).
+        self._scan_tier(self.builtin_path, "built-in", result)
+        self._scan_ddd_tier(result)  # index 1 — reads the registry manifest
+        self._scan_tier(self.user_skills_path, "user", result)
+        self._scan_tier(self.plugin_skills_path, "plugin", result)
 
         # Return sorted by folder_name for deterministic ordering
         return dict(sorted(result.items()))
+
+    def _scan_ddd_tier(self, result: dict[str, SkillInfo]) -> None:
+        """Merge DOMAIN skills from the DDD skill-registry manifest (source_tier="ddd").
+
+        Reads the per-workspace manifest (NOT a live filesystem walk) — cheap, and
+        the registry engine owns freshness. First-seen wins, so a name already
+        claimed by built-in is skipped here (built-in > ddd precedence).
+
+        Fail-soft: any error is contained — a broken registry must NEVER take down
+        skill discovery (this runs inside scan_all, the choke point for 29 callers).
+        """
+        if self.workspace_root is None:
+            return  # no workspace wired → pure no-op (production-safe default)
+        try:
+            from core import ddd_skill_registry
+            records = ddd_skill_registry.read_manifest(self.workspace_root)
+        except Exception as exc:  # noqa: BLE001 — defense: registry must never break discovery
+            logger.warning("ddd tier: registry read failed, skipping: %s", exc)
+            return
+        # Containment roots the manifest path MUST resolve within (parity with
+        # _scan_tier's per-entry guard): a domain skill legitimately lives under
+        # built-in (pre-Run-3) or <workspace>/Projects (the package). A manifest
+        # poisoned with "../etc" / an absolute path / a symlink escape must NOT
+        # enter the discovery cache (Gate-2 MED — defense in depth; projection
+        # already blocks the COPY, this also blocks the DISCOVERY).
+        _ddd_roots: list[Path] = []
+        for _r in (self.builtin_path, self.workspace_root / "Projects"):
+            try:
+                _ddd_roots.append(_r.resolve())
+            except (OSError, ValueError):
+                continue
+
+        for rec in records:
+            folder_name = rec.get("skill", "")
+            if not folder_name or folder_name in result:
+                continue  # built-in (or earlier ddd) already claimed this name
+            skill_dir = Path(rec["path"])
+            # Reject symlinks + out-of-root paths (mirror _scan_tier's guards).
+            try:
+                if skill_dir.is_symlink():
+                    logger.warning("ddd tier: %s is a symlink — skipped", folder_name)
+                    continue
+                resolved = skill_dir.resolve()
+                if not any(resolved.is_relative_to(root) for root in _ddd_roots):
+                    logger.warning(
+                        "ddd tier: %s path %s outside known roots — skipped",
+                        folder_name, skill_dir,
+                    )
+                    continue
+            except (OSError, ValueError) as exc:
+                logger.warning("ddd tier: %s path check failed: %s", folder_name, exc)
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.is_file():
+                logger.info("ddd tier: %s SKILL.md missing at %s — skipped",
+                            folder_name, skill_dir)
+                continue
+            try:
+                info = parse_skill_md(
+                    skill_md, folder_name, "ddd", load_content=False,
+                )
+                result[folder_name] = info
+            except Exception as exc:  # noqa: BLE001 — one bad skill can't break the tier
+                logger.warning("ddd tier: failed to parse %s: %s", folder_name, exc)
 
     def _scan_tier(
         self,

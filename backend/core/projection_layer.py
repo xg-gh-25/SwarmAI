@@ -251,11 +251,18 @@ class ProjectionLayer:
                 continue
 
             if info.source_tier == "built-in":
-                # Built-in skills are ALWAYS projected
+                # Built-in skills are ALWAYS projected (trusted platform skills)
                 target_skills[folder_name] = info.path
             elif allow_all:
+                # allow_all (e.g. the default desktop agent) projects every tier,
+                # incl. ddd domain skills — so on SwarmAI they are fully available.
                 target_skills[folder_name] = info.path
             elif folder_name in allowed_set:
+                # ddd / user / plugin skills are ALLOW-LIST-GATED — projected only
+                # when explicitly authorized. DDD domain skills are NOT always-on
+                # like built-in: source_tier=="built-in" is the ONLY auth-bypass
+                # signal (see hook_builder builtin_names). Authorization of domain
+                # skills to non-allow_all agents is a distribution-time concern.
                 target_skills[folder_name] = info.path
 
         if skipped_platform:
@@ -342,12 +349,47 @@ class ProjectionLayer:
                         folder_name, exc,
                     )
 
-        # Project _shared/ utilities (used by skill generators for path resolution)
+        # Project _shared/ utilities (used by skill generators for path resolution).
+        # Source resolution order (run_7ec79cc8 / DDD capability-package Run 3):
+        #   1. A DDD PACKAGE's own _shared (Projects/<ddd>/skills/_shared) — once the
+        #      CMHK domain skills migrate INTO their package, _shared lives there and
+        #      is NOT in the daemon bundle anymore, so this must be found first.
+        #   2. The built-in bundle (_MEIPASS/skills/_shared frozen; backend/skills/_shared dev).
+        # Without (1), migrating _shared into the package + dropping it from the bundle
+        # would break every generator's `from project_paths import ...` at runtime.
         import sys as _sys
-        if hasattr(_sys, "_MEIPASS"):
-            shared_source = Path(_sys._MEIPASS) / "skills" / "_shared"
-        else:
-            shared_source = Path(__file__).resolve().parent.parent / "skills" / "_shared"
+        shared_source: Path | None = None
+        ws_root = getattr(self._skill_manager, "workspace_root", None)
+        if ws_root is not None:
+            projects_dir = (Path(ws_root) / "Projects").resolve()
+            try:
+                _matches: list[Path] = []
+                for _proj in sorted(p for p in projects_dir.iterdir() if p.is_dir()):
+                    cand = _proj / "skills" / "_shared"
+                    # Content-validate (must carry project_paths.py) + reject symlink
+                    # escapes — a bare is_dir() first-match would let an unrelated or
+                    # future package silently shadow the real _shared (Gate-2 HIGH).
+                    if (
+                        cand.is_dir()
+                        and (cand / "project_paths.py").is_file()
+                        and cand.resolve().is_relative_to(projects_dir)
+                    ):
+                        _matches.append(cand)
+                if _matches:
+                    shared_source = _matches[0]
+                    if len(_matches) > 1:
+                        logger.warning(
+                            "Multiple DDD _shared packages found (%s) — using %s. "
+                            "Ambiguous _shared ownership should be resolved.",
+                            [str(m) for m in _matches], shared_source,
+                        )
+            except OSError:
+                pass
+        if shared_source is None:
+            if hasattr(_sys, "_MEIPASS"):
+                shared_source = Path(_sys._MEIPASS) / "skills" / "_shared"
+            else:
+                shared_source = Path(__file__).resolve().parent.parent / "skills" / "_shared"
         if shared_source.is_dir():
             shared_dest = skills_dir / "_shared"
             if shared_dest.exists():
@@ -435,6 +477,12 @@ class ProjectionLayer:
             self._skill_manager.user_skills_path,
             self._skill_manager.plugin_skills_path,
         ]
+        # DDD-tier skills live under <workspace>/Projects/*/skills/ — accept that
+        # root too (else a ddd-owned domain skill fails source validation and is
+        # silently dropped from projection). None workspace_root → no ddd root.
+        ws_root = getattr(self._skill_manager, "workspace_root", None)
+        if ws_root is not None:
+            tier_roots.append(ws_root / "Projects")
 
         for tier_root in tier_roots:
             try:

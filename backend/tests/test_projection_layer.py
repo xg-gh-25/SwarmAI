@@ -94,10 +94,12 @@ class _FakeSkillInfo:
 class _FakeSkillManager:
     """Async get_cache() + tier-root attrs so _validate_skill_source passes."""
 
-    def __init__(self, builtin_path: Path, cache: dict[str, _FakeSkillInfo]) -> None:
+    def __init__(self, builtin_path: Path, cache: dict[str, _FakeSkillInfo],
+                 workspace_root: Path | None = None) -> None:
         self.builtin_path = builtin_path
         self.user_skills_path = builtin_path / "_user_none"
         self.plugin_skills_path = builtin_path / "_plugin_none"
+        self.workspace_root = workspace_root
         self._cache = cache
 
     async def get_cache(self) -> dict[str, _FakeSkillInfo]:
@@ -109,6 +111,33 @@ def _projected_bytecode(skills_dir: Path) -> list[Path]:
     hits = list(skills_dir.rglob("*.pyc")) + list(skills_dir.rglob("*.pyo"))
     hits += [p for p in skills_dir.rglob("__pycache__") if p.is_dir()]
     return hits
+
+
+class TestSharedProjectedFromDDDPackage:
+    """C1 fix (run_7ec79cc8): after CMHK domain skills migrate INTO their package,
+    _shared lives at Projects/<ddd>/skills/_shared and is NOT in the bundle. Projection
+    MUST source _shared from the package, else every generator's import breaks."""
+
+    @pytest.mark.asyncio
+    async def test_shared_projected_from_package_when_not_in_bundle(self, tmp_path):
+        # Bundle (builtin) has NO _shared — simulates post-migration/post-rebuild.
+        builtin = tmp_path / "builtin"; builtin.mkdir()
+        # A DDD package carries _shared with the real project_paths module.
+        ws_root = tmp_path / "SwarmWS"
+        pkg_shared = ws_root / "Projects" / "CMHK_SalesIntel" / "skills" / "_shared"
+        pkg_shared.mkdir(parents=True)
+        # Unique sentinel — NOT present in the real backend/skills/_shared fallback,
+        # so this asserts the PACKAGE copy was chosen, not the dev/bundle fallback
+        # (guards against a vacuous pass when the fallback still resolves).
+        sentinel = "PKG_SHARED_SENTINEL_run7ec79cc8 = True"
+        (pkg_shared / "project_paths.py").write_text(sentinel + "\n")
+        mgr = _FakeSkillManager(builtin, {}, workspace_root=ws_root)
+        ws = tmp_path / "ws"
+        await ProjectionLayer(mgr).project_skills(ws, allow_all=True)
+        projected = ws / ".claude" / "skills" / "_shared" / "project_paths.py"
+        assert projected.is_file(), "_shared must be projected from the DDD package"
+        assert sentinel in projected.read_text(), \
+            "projected _shared must come from the PACKAGE, not the bundle fallback"
 
 
 class TestProjectionExcludesBytecode:
