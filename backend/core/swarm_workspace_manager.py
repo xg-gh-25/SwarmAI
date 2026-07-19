@@ -589,7 +589,52 @@ node_modules/
 .claude/mcps/mcp-dev.json
 proactive_state.json
 hook_stats.json
+.swarm_privacy_migrated
+
+# ── Privacy: user-private content — never commit to the public product repo ──
+# The product ships SwarmWS + the default SwarmAI sample Project/DDD publicly.
+# Every OTHER Project a user creates (via s_project_manager) is user-private, and
+# the personal .context files are the user's own cognition/data — none of these
+# may enter the public repo. Pattern verified: `Projects/*` globs child entries
+# (not the parent dir), so `!Projects/SwarmAI/` correctly re-includes the sample.
+Projects/*
+!Projects/SwarmAI/
+.context/MEMORY.md
+.context/USER.md
+.context/EVOLUTION.md
+.context/STEERING.md
+.context/TOOLS.md
 """
+
+# The privacy rule-lines above, as a list — reused by the existing-workspace
+# migration in verify_integrity() to append them to an EXISTING .gitignore that
+# predates this fix. Kept in sync with the block in GITIGNORE_CONTENT.
+_PRIVACY_GITIGNORE_RULES = [
+    "Projects/*",
+    "!Projects/SwarmAI/",
+    ".context/MEMORY.md",
+    ".context/USER.md",
+    ".context/EVOLUTION.md",
+    ".context/STEERING.md",
+    ".context/TOOLS.md",
+]
+
+# Already-tracked personal .context files to untrack on an existing workspace.
+# Framework context files (SOUL/AGENT/IDENTITY/SWARMAI/KNOWLEDGE/TOOLS.example)
+# are DELIBERATELY excluded here — they ship publicly as the product's cognition
+# framework. Only these five are the user's personal data.
+_PRIVATE_CONTEXT_FILES = [
+    ".context/MEMORY.md",
+    ".context/USER.md",
+    ".context/EVOLUTION.md",
+    ".context/STEERING.md",
+    ".context/TOOLS.md",
+]
+
+# Marker written after the one-time privacy untrack pass succeeds, so
+# verify_integrity (which runs every startup) does not re-run `git rm --cached`
+# on every provision.
+_PRIVACY_MIGRATION_MARKER = ".swarm_privacy_migrated"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1869,6 +1914,95 @@ class SwarmWorkspaceManager:
             logger.warning("Git init failed (non-blocking): %s", exc)
             return False
 
+    def _untrack_private_content(self, workspace_path: str) -> None:
+        """Remove already-tracked user-private content from the git index.
+
+        A ``.gitignore`` rule only affects UNtracked paths. On a workspace
+        provisioned before the privacy fix, private Projects (every Project
+        except the default ``SwarmAI`` sample) and the personal ``.context``
+        files (MEMORY/USER/EVOLUTION/STEERING/TOOLS) may already be committed —
+        so ``.gitignore`` alone cannot stop them from being pushed. This runs
+        ``git rm --cached`` (INDEX only) once to untrack them.
+
+        Safety properties (all load-bearing):
+        - **``--cached`` only** — never touches the working tree; disk files stay.
+        - **``git ls-files`` + explicit filter, never a glob** — ``Projects/SwarmAI``
+          is structurally excluded from the removal list, so the shipped sample
+          can never be untracked.
+        - **Per-path fail-open** — a path that is not tracked (``git rm`` exit 128)
+          is skipped, never aborts the pass; git absent / non-git dir returns early.
+        - **Marker-gated** — writes ``.swarm_privacy_migrated`` after a successful
+          pass so ``verify_integrity`` (every startup) does not re-run ``git rm``.
+
+        NOTE (disclaimer): this removes files from the git INDEX, not from git
+        HISTORY. Content committed in a PRIOR commit remains reachable via
+        ``git show <old>:<path>``. Erasing history requires a repo-wide rewrite
+        (``git filter-repo``) — deliberately out of scope for an automatic,
+        every-startup migration (that is a destructive, human-gated operation).
+        """
+        root = Path(workspace_path)
+        git_dir = root / ".git"
+        if not git_dir.exists():
+            return  # not a git repo — nothing to untrack (fail-open)
+        marker = root / _PRIVACY_MIGRATION_MARKER
+        if marker.exists():
+            return  # already migrated — do not re-run git rm every startup
+
+        try:
+            # Enumerate currently-tracked paths under Projects/ and .context/.
+            result = subprocess.run(
+                ["git", "ls-files", "-z", "Projects/", ".context/"],
+                cwd=workspace_path, capture_output=True, timeout=30, text=True,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "privacy-untrack: git ls-files failed (non-blocking): %s",
+                    result.stderr.strip(),
+                )
+                return  # git error — fail-open, do not write marker (retry next time)
+
+            tracked = [p for p in result.stdout.split("\0") if p]
+            private_context = set(_PRIVATE_CONTEXT_FILES)
+            to_untrack = []
+            for path in tracked:
+                # Projects: everything EXCEPT the default SwarmAI sample.
+                if path.startswith("Projects/") and not path.startswith(
+                    "Projects/SwarmAI/"
+                ):
+                    to_untrack.append(path)
+                # .context: only the five personal files (framework files stay).
+                elif path in private_context:
+                    to_untrack.append(path)
+
+            if not to_untrack:
+                # Nothing tracked to untrack — still mark done so we don't rescan
+                # every startup. (A workspace born clean under the new template.)
+                marker.write_text("ok\n", encoding="utf-8")
+                return
+
+            removed = 0
+            for path in to_untrack:
+                rm = subprocess.run(
+                    ["git", "rm", "--cached", "--quiet", "--", path],
+                    cwd=workspace_path, capture_output=True, timeout=30, text=True,
+                )
+                if rm.returncode == 0:
+                    removed += 1
+                # else: path not tracked / already gone — skip (per-path fail-open)
+
+            marker.write_text("ok\n", encoding="utf-8")
+            logger.info(
+                "privacy-untrack: removed %d/%d private path(s) from git index "
+                "(disk files retained; SwarmAI + Knowledge kept tracked)",
+                removed, len(to_untrack),
+            )
+        except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
+            # git binary missing, timeout, or any subprocess/IO error — fail-open.
+            # No marker written, so a later successful startup retries.
+            logger.warning(
+                "privacy-untrack failed (non-blocking): %s", exc
+            )
+
     # ── Context reading (backward compat) ────────────────────────────────
 
     async def read_context_files(self, workspace_path: str) -> str:
@@ -2139,9 +2273,26 @@ class SwarmWorkspaceManager:
         if gitignore.exists():
             try:
                 content = gitignore.read_text(encoding="utf-8")
+                # Match against actual rule LINES, not a substring of the whole
+                # file — a rule mentioned in a COMMENT (e.g. "# exclude Projects/*")
+                # must NOT satisfy the presence check, or the real rule would never
+                # be appended and private files would stay committable (Gate-2
+                # CRITICAL). Compare stripped, comment-excluded lines exactly.
+                existing_rules = {
+                    ln.strip()
+                    for ln in content.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
+                }
                 missing_entries = []
-                for entry in ["proactive_state.json", "hook_stats.json", "*.tmp"]:
-                    if entry not in content:
+                # Runtime-state entries (original migration) + privacy rules
+                # (protect user-private Projects + personal .context on workspaces
+                # provisioned before the privacy fix landed). Each is appended
+                # only if absent — append-only, never rewrites user custom lines.
+                for entry in (
+                    ["proactive_state.json", "hook_stats.json", "*.tmp"]
+                    + _PRIVACY_GITIGNORE_RULES
+                ):
+                    if entry not in existing_rules:
                         missing_entries.append(entry)
                 if missing_entries:
                     append_text = "\n".join(missing_entries) + "\n"
@@ -2156,6 +2307,12 @@ class SwarmWorkspaceManager:
                     logger.info("Appended missing .gitignore entries: %s", missing_entries)
             except OSError as exc:
                 logger.warning("Failed to update .gitignore: %s", exc)
+
+        # Untrack any already-committed private content (one-time, fail-open).
+        # A .gitignore rule only affects UNtracked paths; private Projects /
+        # personal .context files that were committed before the privacy fix
+        # remain in the index until explicitly untracked. Runs once (marker-gated).
+        await anyio.to_thread.run_sync(lambda: self._untrack_private_content(root))
 
         # Ensure default SwarmAI project exists with DDD structure
         await self._ensure_default_project(root)

@@ -850,6 +850,202 @@ class TestEnsureGitRepo:
         assert "Knowledge/notes.md" in result.stdout
 
 
+class TestPrivacyGitignoreAndUntrack:
+    """Privacy fix: provisioned .gitignore excludes user-private Projects (all
+    except the default SwarmAI sample) + personal .context files, and existing
+    workspaces get already-tracked private content untracked via git rm --cached.
+
+    Product invariant: SwarmWS + Projects/SwarmAI ship publicly; every other
+    Project + the 5 personal .context files must never enter the public repo.
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp_path = tempfile.mkdtemp()
+        yield temp_path
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+
+    def _init_git(self, ws: str) -> None:
+        """Init a temp git repo with a committer identity (for commit tests)."""
+        subprocess.run(["git", "init", "-q"], cwd=ws, check=True, timeout=30)
+        subprocess.run(["git", "config", "user.email", "t@t.co"], cwd=ws, timeout=30)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=ws, timeout=30)
+
+    # ── AC1: template content + pattern behaviour ────────────────────────
+
+    def test_gitignore_content_has_privacy_rules(self):
+        """AC1: GITIGNORE_CONTENT carries the Projects + .context privacy rules."""
+        assert "Projects/*" in GITIGNORE_CONTENT
+        assert "!Projects/SwarmAI/" in GITIGNORE_CONTENT
+        for f in ("MEMORY", "USER", "EVOLUTION", "STEERING", "TOOLS"):
+            assert f".context/{f}.md" in GITIGNORE_CONTENT
+
+    def test_provision_ignores_private_keeps_swarmai(self, temp_dir):
+        """AC1: with the template .gitignore, a private Project is IGNORED while
+        Projects/SwarmAI is NOT — verifies the Projects/* + !SwarmAI pattern."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Projects", "SwarmAI"))
+        os.makedirs(os.path.join(ws, "Projects", "CMHK_Private"))
+        (Path(ws) / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        self._init_git(ws)
+        (Path(ws) / "Projects" / "SwarmAI" / "PRODUCT.md").write_text("x", encoding="utf-8")
+        (Path(ws) / "Projects" / "CMHK_Private" / "PRODUCT.md").write_text("y", encoding="utf-8")
+
+        def _ignored(rel: str) -> bool:
+            return subprocess.run(
+                ["git", "check-ignore", "-q", rel], cwd=ws, timeout=30
+            ).returncode == 0
+
+        assert _ignored("Projects/CMHK_Private/PRODUCT.md") is True
+        assert _ignored("Projects/SwarmAI/PRODUCT.md") is False
+        assert _ignored(".context/MEMORY.md") is True
+
+    # ── AC2: untrack already-tracked private content, keep SwarmAI ───────
+
+    def test_migration_untracks_private_keeps_swarmai(self, temp_dir):
+        """AC2: _untrack_private_content removes already-tracked private Projects
+        + personal .context from the index, while Projects/SwarmAI + Knowledge
+        stay tracked."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        for d in ("Projects/SwarmAI", "Projects/CMHK_Private", ".context", "Knowledge"):
+            os.makedirs(os.path.join(ws, d), exist_ok=True)
+        (Path(ws) / "Projects" / "SwarmAI" / "P.md").write_text("s", encoding="utf-8")
+        (Path(ws) / "Projects" / "CMHK_Private" / "P.md").write_text("c", encoding="utf-8")
+        (Path(ws) / ".context" / "MEMORY.md").write_text("m", encoding="utf-8")
+        (Path(ws) / ".context" / "SOUL.md").write_text("soul", encoding="utf-8")
+        (Path(ws) / "Knowledge" / "n.md").write_text("k", encoding="utf-8")
+        self._init_git(ws)
+        # commit EVERYTHING (simulating a pre-fix workspace with no privacy rules)
+        subprocess.run(["git", "add", "-A"], cwd=ws, timeout=30)
+        subprocess.run(["git", "commit", "-qm", "pre-fix"], cwd=ws, timeout=30)
+
+        manager = SwarmWorkspaceManager()
+        manager._untrack_private_content(ws)
+
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=ws, capture_output=True, text=True, timeout=30
+        ).stdout
+        # private content untracked
+        assert "Projects/CMHK_Private/P.md" not in tracked
+        assert ".context/MEMORY.md" not in tracked
+        # public / framework content STILL tracked
+        assert "Projects/SwarmAI/P.md" in tracked
+        assert "Knowledge/n.md" in tracked
+        assert ".context/SOUL.md" in tracked  # framework file, NOT untracked
+
+    def test_rm_cached_keeps_disk_files(self, temp_dir):
+        """AC4: untracking is --cached only — private files remain on disk."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Projects", "CMHK_Private"))
+        os.makedirs(os.path.join(ws, ".context"))
+        priv = Path(ws) / "Projects" / "CMHK_Private" / "P.md"
+        mem = Path(ws) / ".context" / "MEMORY.md"
+        priv.write_text("secret", encoding="utf-8")
+        mem.write_text("mem", encoding="utf-8")
+        self._init_git(ws)
+        subprocess.run(["git", "add", "-A"], cwd=ws, timeout=30)
+        subprocess.run(["git", "commit", "-qm", "x"], cwd=ws, timeout=30)
+
+        SwarmWorkspaceManager()._untrack_private_content(ws)
+
+        assert priv.exists() and priv.read_text(encoding="utf-8") == "secret"
+        assert mem.exists() and mem.read_text(encoding="utf-8") == "mem"
+
+    # ── AC3: fail-open ───────────────────────────────────────────────────
+
+    def test_migration_fail_open_non_git(self, temp_dir):
+        """AC3: running the untrack in a non-git dir must not raise."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Projects", "CMHK_Private"))
+        # no git init
+        SwarmWorkspaceManager()._untrack_private_content(ws)  # must not raise
+
+    def test_migration_fail_open_git_missing_binary(self, temp_dir):
+        """AC3: git binary missing → fail-open, no raise, no marker."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, ".git"))  # looks like a repo
+        manager = SwarmWorkspaceManager()
+        with patch("core.swarm_workspace_manager.subprocess.run",
+                    side_effect=FileNotFoundError("git not found")):
+            manager._untrack_private_content(ws)  # must not raise
+        assert not (Path(ws) / ".swarm_privacy_migrated").exists()
+
+    # ── AC5: idempotency ─────────────────────────────────────────────────
+
+    def test_migration_idempotent(self, temp_dir):
+        """AC5: a second run is a no-op (marker gate) and does not raise."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Projects", "CMHK_Private"))
+        (Path(ws) / "Projects" / "CMHK_Private" / "P.md").write_text("c", encoding="utf-8")
+        self._init_git(ws)
+        subprocess.run(["git", "add", "-A"], cwd=ws, timeout=30)
+        subprocess.run(["git", "commit", "-qm", "x"], cwd=ws, timeout=30)
+        manager = SwarmWorkspaceManager()
+        manager._untrack_private_content(ws)
+        marker = Path(ws) / ".swarm_privacy_migrated"
+        assert marker.exists()
+        # second run — marker gates it, no exception, marker stays
+        manager._untrack_private_content(ws)
+        assert marker.exists()
+
+    def test_migration_marker_written_on_clean_workspace(self, temp_dir):
+        """AC5: a workspace with nothing private tracked still gets the marker
+        (born-clean under the new template) so we don't rescan every startup."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Projects", "SwarmAI"))
+        (Path(ws) / "Projects" / "SwarmAI" / "P.md").write_text("s", encoding="utf-8")
+        (Path(ws) / ".gitignore").write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        self._init_git(ws)
+        subprocess.run(["git", "add", "-A"], cwd=ws, timeout=30)
+        subprocess.run(["git", "commit", "-qm", "clean"], cwd=ws, timeout=30)
+        SwarmWorkspaceManager()._untrack_private_content(ws)
+        assert (Path(ws) / ".swarm_privacy_migrated").exists()
+
+    @pytest.mark.asyncio
+    async def test_migration_append_ignores_comment_false_match(self, temp_dir):
+        """Gate-2 CRITICAL regression: a privacy rule mentioned only in a COMMENT
+        must NOT satisfy the presence check — the real rule must still be appended
+        as an actual line, else private files stay committable. Verifies the
+        line-level (not substring) match in verify_integrity's append logic."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        # Pre-existing .gitignore that MENTIONS the rules only inside comments.
+        preexisting = (
+            "# custom user rules\n"
+            "*.log\n"
+            "# privacy notes: we should exclude Projects/* but keep\n"
+            "# !Projects/SwarmAI/ and ignore .context/MEMORY.md too\n"
+        )
+        os.makedirs(ws)
+        (Path(ws) / ".gitignore").write_text(preexisting, encoding="utf-8")
+        # Minimal structure so verify_integrity runs its .gitignore migration.
+        for d in FOLDER_STRUCTURE:
+            os.makedirs(os.path.join(ws, d), exist_ok=True)
+
+        await SwarmWorkspaceManager().verify_integrity(ws)
+
+        # Parse the resulting .gitignore into actual (non-comment) rule lines.
+        result = (Path(ws) / ".gitignore").read_text(encoding="utf-8")
+        rule_lines = {
+            ln.strip() for ln in result.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        }
+        # The real rules must now be present as ACTUAL lines despite the comments.
+        assert "Projects/*" in rule_lines
+        assert "!Projects/SwarmAI/" in rule_lines
+        assert ".context/MEMORY.md" in rule_lines
+        # User's own custom line preserved (append-only).
+        assert "*.log" in rule_lines
+        # git check-ignore confirms the appended rules actually take effect.
+        self._init_git(ws)
+        os.makedirs(os.path.join(ws, "Projects", "Private"), exist_ok=True)
+        (Path(ws) / "Projects" / "Private" / "x.md").write_text("p", encoding="utf-8")
+        assert subprocess.run(
+            ["git", "check-ignore", "-q", "Projects/Private/x.md"],
+            cwd=ws, timeout=30,
+        ).returncode == 0
+
+
 def _collect_all_files(root: Path) -> dict[str, str]:
     """Walk the workspace and return {relative_path: content} for all files."""
     result = {}
@@ -932,7 +1128,7 @@ class TestInitializationIdempotence:
             # Exclude .legacy_cleaned marker — created once on second init
             files_after_first = {
                 k: v for k, v in _collect_all_files(root).items()
-                if k != ".legacy_cleaned"
+                if k not in (".legacy_cleaned", ".swarm_privacy_migrated")
             }
             dirs_after_first = _collect_all_dirs(root)
 
@@ -942,7 +1138,7 @@ class TestInitializationIdempotence:
             # Snapshot state after second init
             files_after_second = {
                 k: v for k, v in _collect_all_files(root).items()
-                if k != ".legacy_cleaned"
+                if k not in (".legacy_cleaned", ".swarm_privacy_migrated")
             }
             dirs_after_second = _collect_all_dirs(root)
 
