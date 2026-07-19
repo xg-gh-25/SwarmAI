@@ -1249,11 +1249,84 @@ def _is_release_publish(command: str) -> bool:
     return False
 
 
-def _release_marker_authorizes_head() -> tuple[bool, str]:
-    """(authorized, reason). True IFF the CI-green marker's head_sha == git HEAD.
+# Flags on `gh release create/edit` that DECOUPLE the published commit / tag name
+# from the positional tag → the hook cannot locally verify what gh will actually
+# publish, so their presence forces fail-CLOSED (Gate-2 CRITICAL, run_81ad1cfe):
+#   --target <branch|full-sha>  publishes the tag at THAT commit (not the positional tag's)
+#   --tag <name>                renames the published tag
+# Neither is used by the legit s_swarm-release runbook flip (7c is bare
+# `gh release edit v${VERSION} --draft=false --latest`), so denying them costs the
+# flow nothing and closes a real fail-open (publish an unverified commit under a
+# CI-green-looking tag name).
+_RELEASE_DECOUPLING_FLAG_RE = re.compile(r"(?:^|\s)--(?:target|tag)(?:=|\s)", re.IGNORECASE)
 
-    All-local: reads Projects/SwarmAI/.artifacts/.release-ci-green.json + `git
-    rev-parse HEAD`. No network. Any failure → (False, reason) — fail-closed.
+# gh release create/edit flags that take a SPACE-separated VALUE — the value token
+# must NOT be mistaken for the positional tag (Gate-2 HIGH). `=`-attached forms
+# (--title=x) are already `-`-prefixed so the scanner skips them; only the space
+# form needs the value swallowed. ONLY value-taking flags belong here — a BOOLEAN
+# flag (--prerelease/--latest/--draft) listed here would wrongly swallow the real
+# tag as its "value" → false-DENY (Gate-2 re-review LOW). Verified value-flags per
+# `gh release create/edit -h` (gh 2.88.1):
+_RELEASE_VALUE_FLAGS = {
+    "-t", "--title", "-n", "--notes", "-F", "--notes-file", "--target", "--tag",
+    "-R", "--repo", "--discussion-category",
+}
+
+
+def _extract_release_tag(command: str) -> str | None:
+    """Extract the tag arg from a `gh release create/edit <tag> …` publish command.
+    Returns the first positional token after the `create`/`edit` verb, correctly
+    SKIPPING both `--flag=value` (single token, `-`-prefixed) AND `--flag value`
+    (two tokens — the value must not be read as the positional tag). gh's release
+    tag is positional, e.g. `gh release edit v1.26.0 --draft=false`.
+    Quoted spans are stripped first so a tag-lookalike inside --notes is ignored.
+    Returns None if no positional tag is found (→ caller fails CLOSED)."""
+    stripped = _strip_quoted(command)
+    m = re.search(r"\bgh\s+release\s+(?:create|edit)\b(.*)$", stripped,
+                  re.IGNORECASE | re.DOTALL)
+    if not m:
+        return None
+    toks = m.group(1).split()
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if tok.startswith("-"):
+            # A space-valued flag consumes the NEXT token as its value; `=`-attached
+            # flags carry their own value and consume nothing extra.
+            if tok in _RELEASE_VALUE_FLAGS and "=" not in tok:
+                i += 2
+            else:
+                i += 1
+            continue
+        return tok  # first true positional = the tag
+    return None
+
+
+def _release_command_is_decoupled(command: str) -> bool:
+    """True if the publish command carries a --target/--tag flag that decouples the
+    published commit/tag from the positional tag the hook can verify locally."""
+    return bool(_RELEASE_DECOUPLING_FLAG_RE.search(_strip_quoted(command)))
+
+
+def _release_marker_authorizes_head(published_tag: str | None = None) -> tuple[bool, str]:
+    """(authorized, reason). True IFF the CI-green marker attests the commit BEING
+    PUBLISHED.
+
+    Two modes, chosen by whether the marker records a `tag` (written by
+    `release-gate --poll --ref <tag>`):
+
+    - **Tag-anchored** (marker has `tag`): the release verified a specific commit
+      (the tag target), which for a re-pointed tag is NOT the branch tip. Resolve
+      the PUBLISHED tag (from the `gh release` command) to its commit LOCALLY
+      (`git -C <repo_root> rev-parse <tag>^{commit}`) and require it == marker.head_sha.
+      This checks "CI green on the exact commit this publish ships", independent of
+      where `main` HEAD now points. LOCAL git only — NO network (the hook must never
+      hang; the marker is authoritative, the hook does one local deref + compare).
+    - **HEAD-anchored** (legacy, no `tag`): branch-tip release — require
+      marker.head_sha == current HEAD (unchanged behavior).
+
+    All-local: reads Projects/SwarmAI/.artifacts/.release-ci-green.json + `git -C
+    <repo_root> rev-parse`. Any failure → (False, reason) — fail-CLOSED.
     """
     import subprocess
     try:
@@ -1270,19 +1343,46 @@ def _release_marker_authorizes_head() -> tuple[bool, str]:
         return False, f"marker unreadable: {type(e).__name__}"
     marker_head = data.get("head_sha") or ""
     repo_root = data.get("repo_root") or ""
+    marker_tag = data.get("tag") or ""
     if not marker_head or not repo_root:
         return False, "marker missing head_sha/repo_root (stale format — re-poll release-gate)"
-    # CRITICAL: resolve HEAD in the SOURCE repo the marker names (`git -C
-    # <repo_root>`), NOT this process's cwd. The hook runs IN-PROCESS in the daemon
-    # whose cwd is "/" (not a git repo) — a bare `git rev-parse HEAD` here returns
-    # 128 and would DENY every release (adversarial run_9fec1fb1 caught this). The
-    # marker records which repo its head_sha came from; re-resolve against that.
-    try:
-        r = subprocess.run(["git", "-C", repo_root, "rev-parse", "HEAD"],
-                           capture_output=True, text=True, timeout=10)
-        head = r.stdout.strip() if r.returncode == 0 else ""
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, f"cannot resolve HEAD in {repo_root}: {type(e).__name__}"
+
+    # CRITICAL: resolve in the SOURCE repo the marker names (`git -C <repo_root>`),
+    # NOT this process's cwd. The hook runs IN-PROCESS in the daemon whose cwd is "/"
+    # (not a git repo) — a bare `git rev-parse` here returns 128 and would DENY every
+    # release (adversarial run_9fec1fb1 caught this). The marker records which repo
+    # its head_sha came from; re-resolve against that.
+    def _rev_parse(spec: str) -> str | None:
+        try:
+            r = subprocess.run(["git", "-C", repo_root, "rev-parse", spec],
+                               capture_output=True, text=True, timeout=10)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
+    if marker_tag:
+        # Tag-anchored: verify the PUBLISHED tag derefs to the CI-verified commit.
+        if not published_tag:
+            return (False,
+                    f"marker is tag-anchored (tag {marker_tag}) but the publish command "
+                    "names no tag to verify — fail-closed (re-poll release-gate, or the "
+                    "publish must name the tag)")
+        published_commit = _rev_parse(f"{published_tag}^{{commit}}")
+        if not published_commit:
+            return (False,
+                    f"cannot resolve published tag '{published_tag}' in {repo_root} "
+                    "(local tag missing?) — fail-closed")
+        if published_commit != marker_head:
+            return (False,
+                    f"published tag {published_tag} → {published_commit[:8]} != CI-verified "
+                    f"commit {marker_head[:8]} (marker tag {marker_tag}) — CI not green on the "
+                    "commit being published")
+        return (True,
+                f"CI green on {marker_head[:8]} — published tag {published_tag} matches "
+                f"marker tag {marker_tag} (run {data.get('run_id')})")
+
+    # HEAD-anchored (legacy branch-tip release).
+    head = _rev_parse("HEAD")
     if not head:
         return False, f"git HEAD unresolved in marker repo_root {repo_root}"
     if marker_head != head:
@@ -1330,7 +1430,28 @@ async def release_publish_guard(
                        command[:80])
         return {"decision": "approve"}
 
-    ok, reason = _release_marker_authorizes_head()
+    # Gate-2 CRITICAL (run_81ad1cfe): --target/--tag decouple the published commit/tag
+    # from the positional tag the hook verifies locally → the hook CANNOT attest what
+    # gh will actually publish → fail-CLOSED. The legit runbook flip never uses them.
+    if _release_command_is_decoupled(command):
+        logger.warning("[BLOCKED] GitHub Release publish carries --target/--tag (decouples "
+                       "published commit from verifiable tag): %s", command[:80])
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "GitHub Release publish with `--target`/`--tag` → DENY: these flags publish "
+                    "the release at a commit / under a tag name the CI-green gate cannot verify "
+                    "locally (it would let an UNVERIFIED commit ship under a green-looking tag). "
+                    "The s_swarm-release flip is a BARE `gh release edit v${VERSION} --draft=false "
+                    "--latest` — drop --target/--tag. (Deliberate manual case: SWARM_RELEASE_GATE_FORCE=1.)"
+                ),
+            }
+        }
+
+    published_tag = _extract_release_tag(command)
+    ok, reason = _release_marker_authorizes_head(published_tag=published_tag)
     if ok:
         logger.info("[release-gate] publish allowed — %s", reason)
         return {"decision": "approve"}

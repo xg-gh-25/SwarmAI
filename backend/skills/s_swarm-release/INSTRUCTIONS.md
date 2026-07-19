@@ -317,20 +317,18 @@ Two things gate the flip to published: (1) CI green on the current HEAD, (2) the
 draft carries all-platform assets from THIS HEAD.
 
 **CI-green marker** (run_9fec1fb1): `release-gate --poll` is the only thing that writes
-the CI-green marker; 7b is how you EARN it. ⚠️ The marker's *code enforcement* (the
-`release_publish_guard` hook) guards the **legacy `gh release create` verb** — which the
-new flow no longer uses. For the `gh release edit --draft=false` flip that 7c actually
-runs, the marker is **runbook-enforced, not code-enforced** (see the mismatch warning
-below). Treat "poll to PASS before flipping" as a discipline you must follow, not a hook
-that will catch you.
+the CI-green marker; 7b is how you EARN it. The marker's *code enforcement* (the
+`release_publish_guard` hook) DOES cover **both** publish verbs — the legacy `gh release
+create` AND the `gh release edit --draft=false` flip that 7c runs (run_900bb839). So a
+premature flip IS structurally blocked, not just runbook-discouraged.
 
-> **⚠️ Known gate/verb mismatch (owned by a separate bugfix run, do NOT rely on the hook
-> here):** the `release_publish_guard` PreToolUse hook currently DENIES only the *legacy*
-> `gh release create` verb. But the real publish action is now `gh release edit
-> --draft=false` (7c) — which the hook does **NOT** intercept. So the code gate does NOT
-> actually block a premature flip today. Until that gap is fixed, **7b is enforced by
-> YOU following the runbook (poll to PASS before flipping), not by the hook.** Treat
-> the CI-green marker as the real precondition and verify it yourself.
+> **✅ Tag-aware gate (run_81ad1cfe):** when you poll with `--ref v${VERSION}` (below),
+> the gate verifies CI on the **commit the tag points at**, not the moving `main` HEAD,
+> and records the tag in the marker. The publish hook then confirms the tag you're
+> flipping derefs to that same CI-verified commit — LOCALLY, fail-CLOSED. This is what
+> makes a **re-pointed tag** (tag commit ≠ branch tip) releasable: without `--ref` the
+> gate would WAIT forever on unrelated parallel commits that landed on main after the
+> tag was cut (observed live, v1.26.0). Always pass `--ref v${VERSION}` for a tag release.
 
 **Verify the draft's assets (replaces the old local `find *.dmg`):**
 ```bash
@@ -354,13 +352,15 @@ Poll via the CLI (one bounded call per invocation — **do NOT use `gh run watch
 `sleep`-loop in one bash call**; both are multi-minute single foreground calls that get
 silently killed by the foreground timeout). The AGENT drives the loop:
 
-**Each poll = this single call (returns in ~2-3s):**
+**Each poll = this single call (returns in ~2-3s).** Pass `--ref v${VERSION}` so the gate
+verifies the **commit the tag points at** (not the moving `main` tip) and records the tag
+in the marker for the publish hook to cross-check:
 ```bash
-cd $SWARMAI_ROOT && python backend/scripts/artifact_cli.py release-gate --poll --project SwarmAI
+cd $SWARMAI_ROOT && VERSION=$(cat VERSION) && python backend/scripts/artifact_cli.py release-gate --poll --ref "v${VERSION}" --project SwarmAI
 ```
 
 **Read the JSON `state` + exit code:**
-- `state=PASS` (exit 0) → CI green on HEAD, **marker written** → proceed to 7c.
+- `state=PASS` (exit 0) → CI green on the tag's commit, **marker written (with tag)** → proceed to 7c.
 - `state=WAIT` (exit 3) → CI not done / not registered yet. Wait ~30-45s (a short
   standalone `sleep 40` bash call is fine — bounded, not a 10-min loop), then re-poll.
   Give up after ~12-15 polls (~8-10min) → HALT + report.

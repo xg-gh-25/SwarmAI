@@ -1896,13 +1896,22 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
 
     marker = _release_marker_path(args.project)
 
+    ref = getattr(args, "ref", None)  # optional tag/sha of the commit BEING RELEASED
+
     def _head_and_root() -> tuple[str | None, str | None]:
-        """(HEAD sha, repo root) of the CWD's git repo. The CLI is run by the agent
+        """(commit sha, repo root) of the CWD's git repo. The CLI is run by the agent
         via `cd $SWARMAI_ROOT && ...`, so this resolves the SOURCE repo. Both are
-        recorded in the marker so the (differently-cwd'd) hook can re-resolve HEAD
-        against the SAME repo via `git -C <repo_root>` — never its own daemon cwd."""
+        recorded in the marker so the (differently-cwd'd) hook can re-resolve against
+        the SAME repo via `git -C <repo_root>` — never its own daemon cwd.
+
+        When `--ref <tag-or-sha>` is given, resolve THAT ref to its commit
+        (`<ref>^{commit}` — derefs an annotated tag to the commit it points at, and
+        is idempotent on a plain sha). This is the fix for tag-based releases: the
+        gate must verify the commit BEING RELEASED (the tag target), not the moving
+        branch tip. No `--ref` → resolve HEAD (unchanged legacy behavior)."""
+        target = f"{ref}^{{commit}}" if ref else "HEAD"
         try:
-            r = subprocess.run(["git", "rev-parse", "HEAD", "--show-toplevel"],
+            r = subprocess.run(["git", "rev-parse", target, "--show-toplevel"],
                                capture_output=True, text=True, timeout=10)
             if r.returncode != 0:
                 return None, None
@@ -1939,13 +1948,20 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
         print(json.dumps({"head": head, "marker": cur, "authorizes_current_head": matches}))
         return
 
-    # --poll (default): one gh check for the CI run on HEAD
+    # --poll (default): one gh check for the CI run on the target commit.
+    # With --ref, query by the resolved COMMIT (`gh run list --commit <sha>`), NOT
+    # a limited `--branch main` window: a re-pointed tag's commit can sit many
+    # commits behind the moving tip and fall outside `--limit N`, making the gate
+    # falsely WAIT forever (the exact class of bug this fix exists to kill). The
+    # commit-filtered query is exact and window-independent. No --ref → legacy
+    # branch-tip scan (unchanged).
+    gh_cmd = (["gh", "run", "list", "--commit", head, "--limit", "20",
+               "--json", "databaseId,name,headSha,status,conclusion"]
+              if ref else
+              ["gh", "run", "list", "--branch", "main", "--limit", "8",
+               "--json", "databaseId,name,headSha,status,conclusion"])
     try:
-        r = subprocess.run(
-            ["gh", "run", "list", "--branch", "main", "--limit", "8",
-             "--json", "databaseId,name,headSha,status,conclusion"],
-            capture_output=True, text=True, timeout=30,
-        )
+        r = subprocess.run(gh_cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         print(json.dumps({"state": "WAIT", "reason": "gh run list timed out (30s) — retry"}),
               file=sys.stderr)
@@ -1987,6 +2003,12 @@ def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
                    "run_id": ci.get("databaseId"),
                    "conclusion": "success",
                    "ts": datetime.now(timezone.utc).isoformat()}
+        # Record the released ref (tag/sha) so the publish guard can verify the
+        # PUBLISHED tag derefs to this same commit — the marker is authoritative,
+        # the hook does one LOCAL deref and compares (no network). Absent when the
+        # gate ran without --ref (legacy branch-tip release → hook falls back to HEAD).
+        if ref:
+            payload["tag"] = ref
         tmp = marker.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(marker)
@@ -4234,6 +4256,7 @@ def main() -> None:
     p_rel_gate.add_argument("--poll", action="store_true", help="One gh run list check for HEAD; green→write marker (exit 0), red→exit 1, not-done→exit 3")
     p_rel_gate.add_argument("--status", action="store_true", help="Print marker vs HEAD (does it authorize current HEAD?) without touching CI")
     p_rel_gate.add_argument("--clear", action="store_true", help="Delete the marker (call after publish, or to reset)")
+    p_rel_gate.add_argument("--ref", default=None, help="Tag or sha of the commit BEING RELEASED (e.g. v1.26.0). Resolves <ref>^{commit}, polls CI for THAT commit, records it (+the tag) in the marker. Omit for a branch-tip release (legacy HEAD behavior).")
 
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
