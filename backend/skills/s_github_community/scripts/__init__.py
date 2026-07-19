@@ -1,1 +1,0 @@
-"""GitHub Community Engine scripts."""
