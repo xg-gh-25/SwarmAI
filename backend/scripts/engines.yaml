@@ -18,9 +18,11 @@ engines:
     path: "backend/skills/s_pollinate/INSTRUCTIONS.md"
     description: "Message-first media delivery — transforms ideas into posters, videos, narratives, README"
 
-  - name: "GitHub Community Engine"
-    path: "backend/skills/s_github_community/scripts/monitor.py"
-    description: "Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub"
+  # GitHub Community Engine moved to its DDD package
+  # (Projects/GitHub_Community/skills/s_github_community/) — no longer under this
+  # repo, so it can't be a REPO_ROOT-relative engines.yaml entry (refresh_ai_docs
+  # validates existence against REPO_ROOT). Its capability is documented in the
+  # GitHub_Community DDD (PRODUCT.md/TECH.md), not the SwarmAI backend engine list.
 
   - name: "Evolution Pipeline (MINE→ASSESS→ACT→AUDIT)"
     path: "backend/core/evolution_optimizer.py"
@@ -46,9 +48,8 @@ engines:
     path: "backend/jobs/scheduler.py"
     description: "Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports"
 
-  - name: "Star Attribution Tracking"
-    path: "backend/skills/s_github_community/scripts/track.py"
-    description: "Tracks stargazers with timestamps, attributes to engagement activity via shared discussions"
+  # Star Attribution Tracking (track.py) moved to the GitHub_Community DDD package
+  # alongside the rest of s_github_community — see the note above.
 
   - name: "AI Docs Auto-Refresh"
     path: "backend/scripts/refresh_ai_docs.py"

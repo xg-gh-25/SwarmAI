@@ -179,14 +179,12 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 | DDD Cultivation Engine (event-driven v2) | `backend/core/cultivation_dispatcher.py` | Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking |
 | Autonomous Pipeline (9-stage) | `backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` | EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate |
 | Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
-| GitHub Community Engine | `backend/skills/s_github_community/scripts/monitor.py` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
 | Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
 | Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
 | Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
 | Background Job System | `backend/jobs/scheduler.py` | Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports |
-| Star Attribution Tracking | `backend/skills/s_github_community/scripts/track.py` | Tracks stargazers with timestamps, attributes to engagement activity via shared discussions |
 | AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md |
 <!-- CAPABILITIES_END -->
 
