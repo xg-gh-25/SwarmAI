@@ -902,6 +902,15 @@ class SwarmWorkspaceManager:
         # Auto-generate Knowledge Index section of KNOWLEDGE.md
         await self.refresh_knowledge_index(expanded_path)
 
+        # Provision job system default config (Services/swarm-jobs/ + signals/).
+        # MUST run here too, not only in verify_integrity(): the fresh-create path
+        # returns without calling verify_integrity, so omitting this left a
+        # brand-new workspace WITHOUT its job system until a second startup —
+        # an initialization idempotence violation (the file set differed between
+        # the first and second ensure_default_workspace() calls). Idempotent
+        # (all writes are `if not exists`), so it stays a no-op on the heal path.
+        await anyio.to_thread.run_sync(lambda: self._provision_job_system(root))
+
         # Symlink AGENTS.md from codebase to SwarmWS root (shared AI context)
         await anyio.to_thread.run_sync(lambda: self._sync_agents_md(root))
 
