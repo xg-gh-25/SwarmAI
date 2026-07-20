@@ -274,6 +274,59 @@ def _extract_bullet_content(line: str) -> str:
     return text
 
 
+# Leading writeback-hook prefix: "**2026-06-08** (session f1f7201b): " — the
+# improvement_writeback_hook.py format (see _append_lessons there). This prefix
+# sits at the FRONT of the bullet, so _extract_bullet_content's TRAILING-only
+# strip leaves it intact — which is exactly why the two writers' dedups never
+# matched and the archive silted with 43K writeback-format dups (Gate-1 killer
+# finding, run_4c5f81ce). content_signature() strips it so both formats collapse.
+_WRITEBACK_PREFIX_RE = re.compile(
+    r"^\*\*\d{4}-\d{2}-\d{2}\*\*\s*\(session\s+[0-9a-f]+\)\s*:\s*", re.IGNORECASE
+)
+# Leading "[type] " classification marker (cultivation form: "- [pitfall] **T**").
+_TYPE_PREFIX_RE = re.compile(r"^\[[a-z]+\]\s*", re.IGNORECASE)
+
+
+def content_signature(line: str) -> str:
+    """Format-AGNOSTIC dedup signature for a knowledge-entry bullet.
+
+    The two IMPROVEMENT.md writers use different bullet shapes:
+      - cultivation:      ``- [type] **Title** — text (YYYY-MM-DD, run_x, label)``
+      - writeback hook:   ``- **YYYY-MM-DD** (session xxxxxxxx): text``
+    Both must reduce to the SAME signature for the same lesson so a lesson
+    written by one writer dedups against the other. This is the single fix that
+    makes cross-writer dedup real (the old ``_extract_bullet_content`` stripped
+    only the TRAILING attribution, so the writeback FRONT-prefix survived and the
+    signatures never collided — a no-op on the 43K-dup corpus).
+
+    Normalization (whole-string, NOT first-N-chars — a prefix cut would
+    false-merge distinct lessons that share an opening stem, Gate-1 #2):
+      1. strip leading ``- `` bullet marker
+      2. strip the writeback ``**date** (session id):`` FRONT prefix
+      3. strip the trailing ``(date, run, label)`` cultivation attribution
+      4. strip a leading ``[type]`` marker
+      5. drop ``**`` bold markers, lowercase, collapse all whitespace to single spaces
+
+    Deterministic + pure. Empty string in → empty string out.
+    """
+    text = line.lstrip()
+    if text.startswith("- "):
+        text = text[2:]
+    text = text.strip()
+    # 2. writeback front-prefix (the load-bearing strip)
+    text = _WRITEBACK_PREFIX_RE.sub("", text)
+    # 3. trailing cultivation attribution (reuse the same pattern as _extract_bullet_content)
+    m = re.search(r"\s*\((?:\d{4}-\d{2}-\d{2}|[0-9a-f]{6,}|run_)[^)]*\)\s*$", text)
+    if m:
+        text = text[: m.start()]
+    # 4. leading [type] marker
+    text = _TYPE_PREFIX_RE.sub("", text)
+    # 5. drop bold markers, lowercase, collapse whitespace
+    text = text.replace("**", " ")
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return text
+
+
 def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
@@ -353,15 +406,21 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             body_end = next_h.start() if next_h else len(content)
             section_body = content[body_start:body_end]
 
-            # Duplicate detection scoped to THIS section, matched on whole bullet
-            # lines (not raw substring) — a shorter lesson that is a substring of a
-            # longer existing bullet is NOT a duplicate.
-            existing_contents = {
-                _extract_bullet_content(ln)
+            # Duplicate detection scoped to THIS section, matched on a
+            # FORMAT-AGNOSTIC content signature (not raw substring, not
+            # exact-string). content_signature() normalizes BOTH writer formats
+            # (cultivation `- text (date,run)` AND writeback `- **date**
+            # (session): text`) so a lesson written by either writer dedups
+            # against the other. Signing BOTH sides — the existing bullets AND
+            # the incoming content — is what makes it catch the 43K writeback-
+            # format corpus (Gate-1: signing only one side is a no-op).
+            existing_sigs = {
+                content_signature(ln)
                 for ln in section_body.splitlines()
                 if ln.lstrip().startswith("- ")
             }
-            if proposal.content.strip() in existing_contents:
+            existing_sigs.discard("")  # never dedup against empty (blank bullets)
+            if content_signature("- " + proposal.content.strip()) in existing_sigs:
                 return "duplicate"
 
             new_content = content[:body_start] + entry + content[body_start:]
