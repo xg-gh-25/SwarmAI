@@ -329,6 +329,10 @@ SECTION_SCAFFOLD: dict[str, str] = {
       "s_ddd-pollinate",
       "s_ai-ready-repo"
     ]
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
   }
 }
 """,
