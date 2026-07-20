@@ -441,6 +441,18 @@ store.
 > (0.88 task recall); the synonym gap + codeintel-staleness-visibility are the known risks,
 > both addressed by KEM's READ + TIER runs (§11).
 
+**A type-aware re-weight was evaluated and rejected (NO-GO, 2026-07-20).** After the intake +
+decay work made the brain judgment-dense, the obvious next idea was "boost `pitfall`/`correction`
+rank for judgment-shaped queries." A live benchmark + hand-inspection of every miss killed it:
+task recall is already 0.88 (not the bottleneck), and every actual failure is *out of a type-boost's
+reach* — DDD **section** misses carry no `[type]` tag; `name-signal` misses drop by design; and the
+one typed-entry miss is a **vocabulary** gap (query terms absent from the section body), which
+re-ranking cannot fix at zero term-overlap. A type re-weight would fix **none** of the observed
+misses while adding false-positive risk to the healthy 0.88 tier — a mechanism built to "complete a
+plan," not to solve a measured problem. **Current recall is acceptable.** The one real lever, if
+recall is ever revisited, is content/index **vocabulary coverage** (the synonym gap above, → KEM
+Run 2), never type-based ranking.
+
 ---
 
 ## 8. Cultivation — How Knowledge Grows
@@ -550,6 +562,16 @@ Every knowledge change flows through the same lifecycle regardless of source cha
 
 **Auto-approval criteria:** A proposal can be auto-approved when (a) confidence >= 8/10, (b) the change is mechanical append-only — the proposed block is a strict superset whose prefix exactly matches the current block (lines added, none modified or deleted), and (c) the target is not a semantic section (Non-Goals, Vision, and Architecture sections are always excluded from auto-apply). Any change that fails these tests routes to human review.
 
+### The Write-Time Intake Gate — Quality at the Source (hardened 2026-07-20, run_e9cb7e2a)
+
+The lifecycle above is only as good as its admission gate. For months the gate was effectively a **router, not a filter** — it classified every lesson to *some* section and wrote it, almost never REJECTING — so the archives silted to ~170K bullets that deduped to ~700 unique (99.6% the same lesson re-written across dates/sessions/sections). The root fix is at the **one chokepoint every write path crosses** — `apply_to_ddd` (used by pipeline REFLECT, the per-session writeback hook, retire-rewrite, and the HTTP route). Three gates now live *inside that chokepoint*, so every path inherits them:
+
+1. **Doc-wide, format-agnostic dedup.** A `content_signature` normalizes every writer's bullet shape (cultivation `- text (date,run)`, writeback `- **date** (session): text`, `[type]` markers) to one key, and dedup scans the **whole document**, not just the target section. A lesson dedups regardless of which writer/date/section produced it — this is the single change that stops re-accumulation (the old dedup was section-scoped exact-string, the direct silt cause).
+2. **A value floor.** `is_quality_lesson` + a minimum length reject empty / instance-log / narration / sub-5-word fragments — a *floor* (errs toward accept when ambiguous), not a taste judge. The writeback path previously bypassed all quality checks; now it clears the floor like every other path.
+3. **Fail-closed approval.** A gate that cannot evaluate now **escalates**, never silent-writes (was `except: pass # allow through` — the exact "router not filter" leak).
+
+Deliberately **no** per-day append budget or rate cap was added: the doc-wide dedup *is* the volume control, and a count ceiling would be a disaster-recovery threshold masquerading as business logic. The existing ~170K archived silt was then purged whole in a one-time cleanse (verified: zero judgment-type or manual entries existed only in an archive — every one is present in the live doc), and `retire`/`reclaim` no longer write a dated `.bak` (recovery is the forward-append archive + git history, not a third silting copy).
+
 ### The Cultivation Flywheel
 
 The system's self-sustaining nature emerges from a virtuous cycle:
@@ -658,14 +680,16 @@ Every entry is classified into one of 7 MECE types. This classification is the *
 
 **Why the layering exists (three reasons):**
 1. **MECE** — each entry has exactly one home, so storage and retrieval are unambiguous.
-2. **Layer = lifecycle** — the cognitive layer drives the Darwinian fading speed: meta-cognitive knowledge (how to think, how I erred) is evergreen and permanent; cognitive knowledge (decisions, models) fades by current relevance; operational knowledge (concrete how-to) fades fastest. Two distinct mechanisms enforce this, and they are not the same thing: (a) **decay** transitions any non-evergreen entry active → dormant → archived by age (so cognitive entries *do* decay); (b) **reclaim** — the physical eviction of noise — touches *only* operational entries, because the keep-set `_KEEP_TYPES = {principle, correction, decision, model}` protects both meta-cognitive and cognitive types permanently (see Decay Engine below).
+2. **Layer = lifecycle** — the cognitive layer drives the Darwinian fading speed: only **operational** knowledge (concrete how-to: `guideline`/`process`) fades by age; the **five judgment types are evergreen** and never age-decay (revised 2026-07-20 — see Decay Engine below). Two distinct mechanisms enforce this, and they are NOT the same thing, and they use *deliberately different type-sets* (do not unify them): (a) **decay** (active → dormant → archived by age) is now immune for `EVERGREEN_TYPES = {decision, model, principle, correction, pitfall}` — a real judgment must never be buried on a timer merely for not being recalled (Principle 1); (b) **reclaim** — the physical eviction of noise — is gated by `_KEEP_TYPES = {principle, correction, decision, model}` (note: **excludes `pitfall`**, so a legacy pre-stamped-dormant pitfall stays physically removable, which is how Step-2-era archived noise is reclaimable). The two sets differ on `pitfall` by design: evergreen-for-*retention*, reclaimable-for-*strip*.
 3. **Staged injection** *(designed, not yet wired — verified 2026-07-20)* — the classification is **intended to** double as a routing table for *what to read when*: principles at EVALUATE/THINK, pitfalls at BUILD/REVIEW/TEST, and so on. Today this is aspirational: recall does **no** type-aware selection (`recall_multi.py` / `memory_index.py` carry zero type filter), so type currently governs **decay only**, not retrieval routing. Closing this gap is §11 KEM Run 2 (READ).
 
 Classification is automatic via signal-word detection (`_TYPE_SIGNALS`), with a priority chain (pitfall → decision → correction → principle → guideline → process → model). `guideline` is the fallback — most entries are lessons/recommendations. A few sections override the layer of their default type by evergreen intent: `COE Registry` (post-mortems) and `Standing Preferences` are treated as meta-cognitive/evergreen, and `Open Threads` as evergreen-operational, so they are never archived by the decay engine.
 
 ### Decay Engine — Darwinian Knowledge Management
 
-Decay is deliberately **simple and honestly observable** — age + evergreen + grace, with fixed thresholds. A richer scoring model (Ebbinghaus forgetting curve + Hebbian potentiation + Cepeda spacing) was designed and briefly shipped in 2026-06, then **removed** (run_e50621b6): every one of those mechanisms depended on a live `ref_count` signal, and there is **no live producer that reaches body entries** — so honoring `ref_count` only preserved toxic prose residue as undeserved decay grace. The rule of the engine is now: never gate decay on a dead signal. (If a real body-entry reference producer is wired later, a reference-weighted multiplier can be re-introduced *then*.)
+Decay is deliberately **simple and honestly observable** — age + evergreen-section + **evergreen-TYPE** + grace, with fixed thresholds. A richer scoring model (Ebbinghaus forgetting curve + Hebbian potentiation + Cepeda spacing) was designed and briefly shipped in 2026-06, then **removed** (run_e50621b6): every one of those mechanisms depended on a live `ref_count` signal, and there is **no live producer that reaches body entries** — so honoring `ref_count` only preserved toxic prose residue as undeserved decay grace. The rule of the engine is now: never gate decay on a dead signal. (If a real body-entry reference producer is wired later, a reference-weighted multiplier can be re-introduced *then*.)
+
+**Value-aware decay — evergreen by TYPE (added 2026-07-20, run_123652ae).** Age-decay was previously *pure age + evergreen-section only*, so a real `[decision]`/`[pitfall]`/`[correction]` entry decayed on a timer merely for not being recalled in 60 days — the Principle-1 violation (a brain forgetting its best judgment because a counter didn't tick). Now the **five judgment types** (`EVERGREEN_TYPES = {decision, model, principle, correction, pitfall}`) are immune to age-decay in any section/project; only `guideline`/`process` age out. This is safe *because* the intake gate (below) + the one-time archive cleanse guarantee live judgment entries are real, not silt; genuine staleness is handled by evidence-based retire, never by silent age-death.
 
 The freshness input that *does* work is the `last` date, now driven by **real recall access-hits** — when an entry's content is actually surfaced during recall, the access-decay hit-log (`ddd_usage.py`) records it, and Channel 8 bumps `last_referenced` before decay assessment reads it.
 
@@ -675,7 +699,8 @@ The freshness input that *does* work is the `last` date, now driven by **real re
 |-----------|-----------|-------|
 | Entry < 30 days old | Immune to all decay | `GRACE_PERIOD_DAYS` — grace for new knowledge |
 | In an Evergreen section | Immune to all decay | Meta-cognitive / evergreen entries never decay |
-| 60 days idle | active → dormant | `DORMANT_THRESHOLD_DAYS` (tunable per-doc, e.g. 45 for MEMORY.md) |
+| Of an Evergreen TYPE | Immune to all decay | `EVERGREEN_TYPES = {decision, model, principle, correction, pitfall}` — the 5 judgment types never age-decay (2026-07-20). Only `guideline`/`process` reach the age rows below. |
+| 60 days idle | active → dormant | `DORMANT_THRESHOLD_DAYS` (tunable per-doc, e.g. 45 for MEMORY.md) — applies to `guideline`/`process` only |
 | 150 days total since last reference | dormant → archived | `ARCHIVED_THRESHOLD_DAYS` — **total** since-ref, NOT additional-after-dormant |
 
 **What dormant means:** Entry stays searchable but is NOT auto-injected into pipeline stages. Only `active` entries are injected. This automatically keeps prompt cost flat as knowledge accumulates — the active set stays bounded (steady state), regardless of total historical entries.
