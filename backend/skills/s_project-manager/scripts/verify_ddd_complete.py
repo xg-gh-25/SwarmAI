@@ -57,11 +57,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# The 4 canonical ② KNOWLEDGE docs. Inlined (not imported from
-# core.project_registry) so this gate is PORTABLE — it must run inside a
-# distributed DDD package on a foreign host (Kiro / Claude Code) with no SwarmAI
-# backend on the path. SSOT for cross-check: core/project_registry.py:31.
-CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# The 4 canonical ② KNOWLEDGE docs. Single-source guarded import: on SwarmAI the
+# constant comes from core.project_registry (SSOT, enforced by
+# test_ddd_canonical_docs_single_source); the tagged literal fallback only fires
+# when this gate runs PORTABLE — inside a distributed DDD package on a foreign
+# host (Kiro / Claude Code) with no SwarmAI backend on the path.
+try:  # single source of truth (guarded — gate may run standalone off-host)
+    from core.project_registry import DDD_CANONICAL_DOCS as CANONICAL_DOCS
+except ImportError:
+    CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
 
 # Placeholder markers left by the s_project-manager CREATE scaffold. A doc whose
 # body is (almost) only these = not yet written = FAIL.
