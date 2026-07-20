@@ -165,9 +165,13 @@ def test_approve_retarget_overrides_proposal_target(tmp_path, monkeypatch):
     (proj / "PROJECT.md").write_text("# PROJECT\n\n## Recent Decisions\n\n")
 
     # A conversation proposal with a SUGGESTED target of PROJECT.md/Recent Decisions
+    # Content is realistic (>= MIN_LESSON_LENGTH): apply_to_ddd enforces the value
+    # floor on EVERY write path (run_e9cb7e2a chokepoint), incl. human-approved
+    # proposals — a real approved proposal is a full sentence, not a 3-word stub.
     p = CultivationProposal(
         target_doc="PROJECT.md", target_section="Recent Decisions",
-        content="Adopt daily digest.", source_run_id="cs_1",
+        content="Adopt the daily conversation digest job so decisions surface without manual review.",
+        source_run_id="cs_1",
         confidence=0.3, source_stage="conversation",
     )
     write_proposal(p, proj)
@@ -184,7 +188,7 @@ def test_approve_retarget_overrides_proposal_target(tmp_path, monkeypatch):
     ))
     assert resp["status"] == "applied"
     assert resp["target"] == "IMPROVEMENT.md#What to Watch For"
-    assert "Adopt daily digest." in (proj / "IMPROVEMENT.md").read_text()
+    assert "daily conversation digest" in (proj / "IMPROVEMENT.md").read_text()
 
 
 def test_approve_without_override_keeps_suggested_target(tmp_path, monkeypatch):
@@ -202,9 +206,11 @@ def test_approve_without_override_keeps_suggested_target(tmp_path, monkeypatch):
     (proj / ".artifacts" / "proposals").mkdir(parents=True)
     (proj / "IMPROVEMENT.md").write_text("# IMPROVEMENT\n\n## What to Watch For\n\n")
 
+    # Realistic content (>= MIN_LESSON_LENGTH) — see note in the retarget test above.
     p = CultivationProposal(
         target_doc="IMPROVEMENT.md", target_section="What to Watch For",
-        content="Keep suggested target.", source_run_id="cs_2",
+        content="Keep the digest proposal's suggested target when the human approves without an override.",
+        source_run_id="cs_2",
         confidence=0.3, source_stage="conversation",
     )
     write_proposal(p, proj)
@@ -218,4 +224,4 @@ def test_approve_without_override_keeps_suggested_target(tmp_path, monkeypatch):
         p.id, project="SwarmAI", target_doc=None, target_section=None,
     ))
     assert resp["target"] == "IMPROVEMENT.md#What to Watch For"
-    assert "Keep suggested target." in (proj / "IMPROVEMENT.md").read_text()
+    assert "suggested target when the human approves" in (proj / "IMPROVEMENT.md").read_text()
