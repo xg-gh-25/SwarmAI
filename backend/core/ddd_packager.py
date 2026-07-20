@@ -42,6 +42,7 @@ from core.ddd_distribution_policy import (
     TARGET_OPEN_PLUGIN,
     DistributionPolicy,
 )
+from core.project_registry import DDD_CANONICAL_DOCS
 
 logger = logging.getLogger(__name__)
 
@@ -311,7 +312,8 @@ def _read_aim(ddd_dir: Path) -> dict[str, Any]:
 
 
 # Six-section knowledge docs → context/ (deterministic set).
-_KNOWLEDGE_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# Single-source per Run 0 (project_registry.DDD_CANONICAL_DOCS) — no stray literal.
+_KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
 
 
 # ---------------------------------------------------------------------------

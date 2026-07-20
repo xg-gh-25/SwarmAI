@@ -86,7 +86,7 @@ def build_fixture_ddd(
     # class-B domain skills (included); the host-path body plant goes here (Gate-1 H2)
     body = "Output goes to ~/.swarm-ai/SwarmWS/Knowledge/Reports/x.html" if plant_host_path_in_body else ""
     _make_skill(skills, "s_fx-report", body=body)
-    secret_script = 'API_KEY = "AKIAIOSFODNN7EXAMPLE1"\n' if plant_secret else "print('ok')\n"
+    secret_script = 'API_KEY = "AKIAIOSFODNN7EXAMPLE1"\n' if plant_secret else "print('ok')\n"  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
     _make_skill(skills, "s_fx-analyze", script=secret_script)
     # class-A enablement skill on disk (must be excluded)
     _make_skill(skills, "s_ddd-manager")
@@ -263,7 +263,7 @@ class TestGate2ContentSafety:
         # the scan is fail-CLOSED (scan-all-but-binary), not an allow-list.
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
         (ddd / "skills" / "s_fx-report" / "creds.env").write_text(
-            "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")
+            "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE1\n", encoding="utf-8")  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
         with pytest.raises(pk.PackagingError, match="content-safety"):
             pk.package_ddd(ddd, tmp_path / "out", publish=True)
 
@@ -271,7 +271,7 @@ class TestGate2ContentSafety:
         # C1: .pem is not a "content" suffix but must be scanned.
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
         (ddd / "skills" / "s_fx-report" / "key.pem").write_text(
-            "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----\n", encoding="utf-8")
+            "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----\n", encoding="utf-8")  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
         with pytest.raises(pk.PackagingError, match="content-safety"):
             pk.package_ddd(ddd, tmp_path / "out", publish=True)
 
@@ -279,7 +279,7 @@ class TestGate2ContentSafety:
         # H1: an UNQUOTED secret= assignment (the dominant shell/.env form) must match.
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
         (ddd / "skills" / "s_fx-report" / "setup.sh").write_text(
-            "#!/usr/bin/env bash\nexport API_KEY=supersecretvalue123\n", encoding="utf-8")
+            "#!/usr/bin/env bash\nexport API_KEY=supersecretvalue123\n", encoding="utf-8")  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
         with pytest.raises(pk.PackagingError, match="content-safety"):
             pk.package_ddd(ddd, tmp_path / "out", publish=True)
 
@@ -288,7 +288,7 @@ class TestGate2ContentSafety:
         # (still containing the secret) is scanned via errors="replace".
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
         p = ddd / "skills" / "s_fx-report" / "notes.txt"
-        p.write_bytes(b"\xff\xfe garbage byte then AKIAIOSFODNN7EXAMPLE1 secret\n")
+        p.write_bytes(b"\xff\xfe garbage byte then AKIAIOSFODNN7EXAMPLE1 secret\n")  # pragma: allowlist secret  (intentional fake fixture — tests the content-safety gate)
         with pytest.raises(pk.PackagingError, match="content-safety"):
             pk.package_ddd(ddd, tmp_path / "out", publish=True)
 
