@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <marker id="lr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="lrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7ee787"/></marker>
+    <marker id="lrO" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f78166"/></marker>
+  </defs>
+  <rect width="940" height="560" fill="#0d1117" rx="12"/>
+
+  <text x="470" y="30" text-anchor="middle" fill="#f85149" font-size="16" font-weight="bold">🔴 Loop-Liveness — Write, Read, AND Govern</text>
+  <text x="470" y="48" text-anchor="middle" fill="#8b949e" font-size="10">Adding spec-details is only the WRITE side. Unwired read + governance = orphan docs that rot the moment they're generated.</text>
+
+  <!-- WRITE -->
+  <rect x="40" y="72" width="240" height="120" rx="10" fill="#0e1f14" stroke="#7ee787" stroke-width="1.6"/>
+  <text x="160" y="94" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">① WRITE</text>
+  <text x="160" y="110" text-anchor="middle" fill="#8b949e" font-size="8.5">the easy 20%</text>
+  <text x="56" y="132" fill="#e6edf3" font-size="9">generate code-intel.json</text>
+  <text x="56" y="150" fill="#e6edf3" font-size="9">domains[]/flows[]/steps[]</text>
+  <text x="56" y="168" fill="#e6edf3" font-size="9">+ spec-details/*.spec.md</text>
+  <text x="56" y="185" fill="#8b949e" font-size="8">[human] blocks + skeleton zone</text>
+
+  <line x1="280" y1="132" x2="330" y2="132" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#lr)"/>
+
+  <!-- READ -->
+  <rect x="332" y="72" width="270" height="120" rx="10" fill="#0e1a2b" stroke="#58a6ff" stroke-width="1.6"/>
+  <text x="467" y="94" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">② READ — recall (Run 3)</text>
+  <text x="348" y="114" fill="#e6edf3" font-size="9">domain leg: BM25 over summary+</text>
+  <text x="348" y="128" fill="#8b949e" font-size="8.5">business_rules+issues+gaps</text>
+  <text x="348" y="146" fill="#e6edf3" font-size="9">[human]-marker leg: marker-aware</text>
+  <text x="348" y="160" fill="#8b949e" font-size="8.5">chunker (NOT section BM25 → no double-hit)</text>
+  <text x="348" y="180" fill="#f0b429" font-size="8.5">verified:false → [llm-inferred] label, never as fact</text>
+
+  <line x1="602" y1="132" x2="652" y2="132" stroke="#7ee787" stroke-width="1.5" marker-end="url(#lrG)"/>
+
+  <!-- GOVERN -->
+  <rect x="654" y="72" width="246" height="120" rx="10" fill="#170e29" stroke="#d2a8ff" stroke-width="1.6"/>
+  <text x="777" y="94" text-anchor="middle" fill="#d2a8ff" font-size="12" font-weight="bold">③ GOVERN (Run 4)</text>
+  <text x="670" y="114" fill="#e6edf3" font-size="9">cultivation: independent refresh</text>
+  <text x="670" y="128" fill="#8b949e" font-size="8">(domain-merge triggered, NOT lesson classifier)</text>
+  <text x="670" y="146" fill="#e6edf3" font-size="9">decay: skeleton-gone → _archive/</text>
+  <text x="670" y="160" fill="#8b949e" font-size="8">[human] never machine-decayed</text>
+  <text x="670" y="180" fill="#e6edf3" font-size="9">index / bindings show N domains</text>
+
+  <!-- close the loop -->
+  <path d="M777,192 L777,214 L160,214 L160,192" fill="none" stroke="#d2a8ff" stroke-width="1.4" stroke-dasharray="4,3" marker-end="url(#lrO)"/>
+  <text x="470" y="209" text-anchor="middle" fill="#8b949e" font-size="8.5">code changes → recompute → re-project skeleton → the loop stays alive</text>
+
+  <!-- 5-loop inventory -->
+  <text x="40" y="248" fill="#e6edf3" font-size="12" font-weight="bold">The full loop inventory (grep-verified): 5 loops / ≥6 hard-coded 4-doc tuples across 4 files — not 2</text>
+
+  <rect x="40" y="260" width="860" height="150" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <line x1="40" y1="286" x2="900" y2="286" stroke="#30363d" stroke-width="1"/>
+  <text x="56" y="278" fill="#8b949e" font-size="9" font-weight="bold"># · Loop</text>
+  <text x="340" y="278" fill="#8b949e" font-size="9" font-weight="bold">Wiring</text>
+  <text x="660" y="278" fill="#8b949e" font-size="9" font-weight="bold">If not wired</text>
+
+  <text x="56" y="304" fill="#58a6ff" font-size="9">1 · recall (read)</text>
+  <text x="340" y="304" fill="#e6edf3" font-size="9">domain leg + [human]-marker leg</text>
+  <text x="660" y="304" fill="#f85149" font-size="9">invisible to AI = orphan</text>
+
+  <text x="56" y="325" fill="#d2a8ff" font-size="9">2 · cultivation</text>
+  <text x="340" y="325" fill="#e6edf3" font-size="9">independent refresh (domain-merge triggered)</text>
+  <text x="660" y="325" fill="#f85149" font-size="9">misrouted to TECH.md → rot</text>
+
+  <text x="56" y="346" fill="#d2a8ff" font-size="9">3 · DDD index / bindings</text>
+  <text x="340" y="346" fill="#e6edf3" font-size="9">index row: spec-details/ (N domains)</text>
+  <text x="660" y="346" fill="#f85149" font-size="9">system "doesn't know it exists"</text>
+
+  <text x="56" y="367" fill="#d2a8ff" font-size="9">4 · orchestrator staleness</text>
+  <text x="340" y="367" fill="#e6edf3" font-size="9">content-hash (spec_hash vs marker), NOT mtime</text>
+  <text x="660" y="367" fill="#f85149" font-size="9">refresh channels skip specs</text>
+
+  <text x="56" y="388" fill="#7ee787" font-size="9">5 · completeness gate</text>
+  <text x="340" y="388" fill="#e6edf3" font-size="9">EXCLUDED (derived projection, not canonical-4)</text>
+  <text x="660" y="388" fill="#7ee787" font-size="9">correct exclusion — no false alarm</text>
+
+  <text x="56" y="405" fill="#8b949e" font-size="8">Root-cause fix (Run 0): DDD_CANONICAL_DOCS + SPEC_DETAILS_DIR single source of truth (project_registry.py) — replaces ≥6 hard-codes + grep-CI gate (tuple appears 0× elsewhere).</text>
+
+  <!-- empirical proof -->
+  <rect x="40" y="426" width="860" height="110" rx="8" fill="#1a0e0e" stroke="#f85149" stroke-width="1.2"/>
+  <text x="56" y="448" fill="#f85149" font-size="11" font-weight="bold">§9.7 Empirical proof — "unwired = orphan" is MEASURED in 2 real projects, not argued</text>
+  <text x="56" y="467" fill="#8b949e" font-size="9">Planted sentinel "zORPHANWIDGET42 refund idempotency invariant" (exists ONLY in a spec-details file) into SwarmAI + AIDLC, ran REAL recall + cultivation:</text>
+  <text x="56" y="488" fill="#e6edf3" font-size="9">· recall — spec-details sentinel recalled? <tspan fill="#f85149" font-weight="bold">❌ false (both projects)</tspan> — ddd leg hits 4 canonical docs, scan path excludes spec-details</text>
+  <text x="56" y="506" fill="#e6edf3" font-size="9">· cultivation — domain-spec lesson routed to <tspan fill="#f85149" font-weight="bold">TECH.md#Conventions (conf 0.5-0.6)</tspan>, expected spec-details</text>
+  <text x="56" y="526" fill="#7ee787" font-size="9">→ These are the Run 3/4 RED baseline. After wiring they MUST flip to "sentinel recalled" / "on independent refresh path" (red→green, same-commit closure).</text>
+</svg>

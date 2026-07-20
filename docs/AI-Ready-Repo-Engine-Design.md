@@ -1,7 +1,7 @@
 ---
 title: "AI-Ready-Repo Engine — Making Any Codebase Agent-Ready AND Human-Signable"
 created: 2026-05-29
-updated: 2026-07-18
+updated: 2026-07-20
 tags: [ai-ready, ddd, code-intel, delivery-engine, reverse-documentation-engineering, spec-generation]
 project: SwarmAI
 status: approved
@@ -11,18 +11,24 @@ supersedes: "v2 (2026-06-01) — v3 adds the business-semantic layer (domains/fl
 
 # AI-Ready-Repo Engine — Making Any Codebase Agent-Ready AND Human-Signable
 
+> **2026-07-20 (PE-review pass — figures):** Added 4 SVG architecture/flow figures
+> (`diagrams-ai-ready/`) and replaced the heavy inline ASCII diagrams they cover:
+> **Fig 1** three-layer architecture (§Summary/§2), **Fig 2** E2E generation flow (§14),
+> **Fig 3** code-intel v3 Domain→Flow→Step schema (§5), **Fig 4** Loop-Liveness
+> write·read·govern + empirical orphan proof (§9). All figure content was verified
+> against live source (`ai_ready_helpers.py` helper fns, `project_registry.py`
+> `DDD_CANONICAL_DOCS`/`SPEC_DETAILS_DIR`, all 13 cited commit hashes). Per §2.3's own
+> decision, **engine-architecture figures use SVG; engine-*generated* diagrams
+> (domain/user-flow) remain mermaid** (the 2 template examples in Appendix B). The
+> file-tree listing (§ layout) and small inline arrows are kept as text (correct form).
+
 ## Summary
 
 AI-Ready-Repo Engine is a SwarmAI Delivery Engine that transforms any codebase (with optional docs/signals) into structured artifacts that make **both AI agents and humans truly understand a project** — not just navigate code, but comprehend purpose, architecture, history, current state, **and the business-flow semantics that let someone actually dare to change legacy code.**
 
 The engine produces three layers of understanding, at increasing abstraction:
 
-```
-① code-intel.json (domains[]/flows[]/steps[])   —— machine-precise skeleton
-② spec-details/<domain>.spec.md                  —— rich-understanding specs (AI + human co-read)
-③ 4-file DDD (PRODUCT/TECH/IMPROVEMENT/PROJECT)   —— project-level, concern-axis context
-+ AGENTS.md entry point                           —— ≤150-line loader
-```
+![Figure 1: Three Layers of AI-Readiness](diagrams-ai-ready/01-three-layer-architecture.svg)
 
 **Output targets**: Kiro IDE, Claude Code, Codex, Cursor, and future agent-powered IDEs (12+ via install adapters).
 
@@ -89,23 +95,11 @@ This is DDD's 4-file structure — the same names, purpose, and philosophy Swarm
 
 ### 2.2 The v3 addition — a business-semantic layer between skeleton and DDD
 
-The 4-file DDD is **project-level** and organized by **concern** (why/how/lesson/state). It does not carry per-business-flow specifications. v3 adds a layer that is **domain-level** and organized by **business domain**:
+The 4-file DDD is **project-level** and organized by **concern** (why/how/lesson/state). It does not carry per-business-flow specifications. v3 adds a layer that is **domain-level** and organized by **business domain** — the middle layer (②) in Figure 1. The three layers relate as:
 
-```
-① code-intel.json · domains[]/flows[]/steps[]     —— machine-precise skeleton
-     id / file:line / edges / mermaid source / issues / gaps  (structured data)
-     use: deterministic lookup · recall index · incremental-merge anchor · fact skeleton
-                          │  generate + LLM-thicken + human-augment
-                          ▼
-② spec-details/<domain>.spec.md    —— rich-understanding layer ⭐ (AI + human co-read)
-     business rules / interface contracts / exceptions / architecture diagram /
-     user-flow diagram / potential issues / gaps / improvement areas
-     use: AI recall for judgment + human decision/sign-off. Both read the SAME artifact.
-                          │  domain issue escalates → reference-up (never copy)
-                          ▼
-③ 4-file DDD (PRODUCT/TECH/IMPROVEMENT/PROJECT)   —— project-level · concern-axis
-     use: project-level why/how/lesson/state. Orthogonal to ② (see §8 boundary decision).
-```
+- **① code-intel.json** `domains[]/flows[]/steps[]` — machine-precise skeleton (id / file:line / edges / mermaid source / issues / gaps). Use: deterministic lookup · recall index · incremental-merge anchor · fact skeleton.
+- **② spec-details/`<domain>`.spec.md** ⭐ — rich-understanding layer (AI + human co-read the SAME artifact): business rules / contracts / exceptions / architecture + user-flow diagrams / issues / gaps. Generated from ①, LLM-thickened, human-augmented. A domain issue escalates → **reference-up** to ③ (never copy).
+- **③ 4-file DDD** — project-level, concern-axis (why/how/lesson/state). Orthogonal to ② (see §8 boundary decision).
 
 ### 2.3 The reframe that matters: spec-details is NOT a "human-only projection"
 
@@ -279,6 +273,8 @@ A third deterministic Stage-1 extractor (added incrementally 2026-07; not in the
 ---
 
 ## 5. code-intel.json v3 Schema — the Domain Layer
+
+![Figure 3: code-intel.json v3 — Domain → Flow → Step ontology + anchoring](diagrams-ai-ready/03-code-intel-v3-schema.svg)
 
 ### 5.1 v2 → v3 is additive, with one necessary v2 micro-change
 
@@ -553,6 +549,8 @@ The two field classes **do not overlap → they never overwrite each other.** Th
 ## 9. 🔴 Loop-Liveness — Write, Read, AND Govern (highest priority)
 
 > **This is the highest-priority section.** Adding spec-details / domains[] is only the *write* side. If the *read* side (recall) and *governance* side (cultivation, index, decay) are not wired to the new architecture in the same delivery, the new documents are **orphans** — the AI can't recall them, cultivation never refreshes them → they rot the moment they're generated. This is the reversal of two recurring failure classes in our own system: **write→read mismatch** and **"added a write, never wired the read" (L0 dead-end).**
+
+![Figure 4: Loop-Liveness — Write · Read · Govern, the 5-loop inventory + empirical orphan proof](diagrams-ai-ready/04-loop-liveness.svg)
 
 ### 9.1 The full loop inventory (grep-verified, not inferred)
 
@@ -901,44 +899,7 @@ A spec that was correct at generation is *wrong* once the code moves under it �
 
 ## 14. E2E Generation Flow
 
-```
-User: "make [repo] AI-ready"
-  │
-  ├─ INPUT (Human Touchpoint #1) — repo path (required) + optional signals + output language
-  │
-  ├─ INGEST (deterministic — ai_ready_helpers.py)
-  │    ├─ gather_repo_info()      → file tree, tech stack, git stats
-  │    ├─ parse_git_gotchas()     → evidence-grounded WHEN/RISK/BECAUSE
-  │    └─ extract_import_graph()  → dependency edges from actual import statements
-  │
-  ├─ UNDERSTAND (LLM reads actual code — minimum 8 files)
-  │    ├─ Function-level tables for top hot-zone files
-  │    ├─ Route extraction (regex-first: FastAPI/Express/Next.js Day 1) → routes[] + route.id
-  │    ├─ Domain classification (entry-point grounding §5.2) → domains[]/flows[]/steps[]
-  │    ├─ Anchor every LLM assertion (§6) — verified/absence_evidence
-  │    └─ Data-flow diagrams (mermaid)
-  │
-  ├─ GENERATE
-  │    ├─ AGENTS.md (≤150 lines, entry point)
-  │    ├─ .ai-ready/PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md
-  │    ├─ .ai-ready/code-intel.json (v3 schema, validated — domains/flows/steps)
-  │    ├─ .ai-ready/spec-details/<domain>.spec.md (8 sections, mermaid embedded)
-  │    └─ .ai-ready/ai-ready.json + REVIEW-REPORT.md
-  │
-  ├─ VERIFY (sub-agent quality gate — fresh agent, ONLY the output, 3 tasks from git log)
-  │    └─ + equivalence check where tests/runtime exist (§7) → equivalence_score
-  │
-  └─ DELIVER
-       ├─ resolve_output_path() → deterministic location
-       ├─ install.sh → 12 IDEs via platforms_table
-       └─ generate_learning_tour() → topological onboarding order
-
-Post-install maintenance (self-maintaining):
-  ├─ check_staleness()        → per-file fresh/stale status
-  ├─ incremental_update()     → batch-existing + keep-last merge, changed files only (§10)
-  ├─ recall + cultivation     → domain leg + [human]-marker leg + independent refresh (§9)
-  └─ decay / archive          → skeleton-gone → _archive/; [human] never silently lost (§9.4)
-```
+![Figure 2: E2E Generation Flow — INPUT → INGEST → UNDERSTAND → GENERATE → VERIFY → DELIVER + self-maintaining loop](diagrams-ai-ready/02-e2e-generation-flow.svg)
 
 ---
 
