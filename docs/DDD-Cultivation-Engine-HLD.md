@@ -471,6 +471,8 @@ Eight channels nourish DDD from the natural flow of work. No channel requires de
 
 **Channel priority:** Corrections (Ch6) have highest priority because they represent explicit human judgment. Pipeline Delivery (Ch3) is the richest feed because REFLECT stage output is already structured and contextualized. Entry Lifecycle (Ch8) runs on a timer and maintains knowledge freshness without human input.
 
+> **Ch7 contract — deterministic drift signals ONLY, never LLM content ingestion (explicit to preempt a common misreading).** Channel 7 (`code_intel_feed.detect_tech_drift`) does **not** ingest the LLM-generated `domains[]`/`flows[]` from `code-intel.json` into DDD knowledge. It emits **three deterministic structural facts** derived from the AST code graph (`load_project_graph`): (1) modules with ≥5 functions not mentioned in TECH.md, (2) backtick-symbols in TECH.md absent from the graph (renamed/deleted/typo), (3) new entry points undocumented. Each becomes a low-confidence *proposal* ("consider documenting X") routed through the same auto-approval gate as every other channel — never an auto-write of model-authored prose. **There is therefore no path by which AI-Ready-Repo's LLM classification error rate propagates into cultivated DDD content** — the code-intel `domains[]` projection is a *third-view read surface* (§ "three views of one ontology"), not a cultivation input. A reviewer worried about "LLM domains[] → poisoned IMPROVEMENT.md → poisoned Pipeline" is reading a pipe that does not exist; the anchoring/explicit/gap→SME guardrails (§6.2) govern the AI-Ready-Repo READ surface, and cultivation never consumes it as WRITE.
+
 > **Implementation note:** These 8 are the *conceptual* feed channels. At runtime the orchestrator registers **11** channels (`ddd_orchestrator.py`) — the 8 feeds above plus three operational refresh channels (`mechanical_refresh`, `memory_refresh`, `llm_refresh`) that keep indexes and derived state current. The count grew as the engine matured; the 8-feed model remains the design-level abstraction.
 
 ### Pillar 2: Health
@@ -886,6 +888,26 @@ in 30 seconds. Next time anyone touches AcmeCorp's API Gateway, this knowledge i
 
 *(added 2026-07-20 — root-cause design for the 4 cross-cutting knowledge-quality defects. Status: DESIGN, not yet built. Rollout Run 0→4 below.)*
 
+> ⚠️ **Read the implementation dive-deep before trusting this section's scope:**
+> `Knowledge/Designs/2026-07-20-kem-implementation-design.md` (verified against
+> `ddd_cultivation.py` · `ddd_entry_lifecycle.py` · `knowledge_graph.py` · `recall_multi.py` ·
+> `memory_index.py` · `context_recall.py` · `knowledge_store.py`, all read 2026-07-20). That
+> verification found **the "one bug, four faces" framing is half-true — 2 of the 4 defects
+> below are already fixed or misfiled**, so the real buildable scope is **2 focused recall-READ
+> changes, not a 5-run migration.** The corrections are folded into the defect table (11.1) and
+> root-cause table (11.2) inline. This §11 stays as the *conceptual* pitch; the dive-deep is the
+> *implementation truth*.
+>
+> - **Defect ③ (append-only, rewrite disabled) — ALREADY SHIPPED, cut from KEM.** `ddd_cultivation.py`
+>   carries live RETIRE/REWRITE (`change_type: append|retire|rewrite`, `run_ecc7a32b`): archive → dated
+>   `.bak` → strip, reversible, `auto_apply_ok` for unambiguous non-keep-class, capped
+>   `MAX_AUTO_RETIRES_PER_RUN=2`/`_PER_DAY=3` else escalate. `supersedes`/`lifecycle` already exist as
+>   `VALID_PREDICATES` in `knowledge_graph.py`. There is no "WRITE/supersede" work to build.
+> - **Defect ④ (archive dead to recall) — REAL, but the number is wrong.** `Knowledge/Archives/MEMORY-archive-*.md`
+>   (~330 KB) ARE in library FTS5. The dead corpus is `Projects/*/IMPROVEMENT-archive.md` (~65 MB, SwarmAI ~48 MB)
+>   which `knowledge_store` does not scan — the fix is scoped to a down-weighted cold FTS5 leg over `Projects/` archives.
+> - **Defects ① (type invisible to recall) + ② (rationale→gate)** stand as written — ① is the real recall-READ win; ② is a data-agent/③Gates-layer concern, deferred (§11.7), NOT KEM.
+
 ### 11.1 Why this section exists — the 2026-07-20 assessment
 
 A 6-dimension system assessment (DDD structure / ontology / data-agent architecture /
@@ -896,8 +918,8 @@ look independent:
 |---|----------------------|-------------------|
 | 1 | Ontology's 7-type classification drives **decay** but is **invisible to recall** — `memory_index` / `recall_multi` do zero type-aware ranking. Classification is cosmetic at read time. | §5, §8.4 vs recall |
 | 2 | The data-agent moat's *rationale* ("this filter is P0 — omit it → a query-execution error") lives as **prose in `knowledge/` files**, not as a machine field the gate (the SQL-validator) can consume. ~20 tables carry only 3 traps where a mature domain needs 40+/domain. *(This is a **data-agent-layer** defect, adjacent to but outside DDD-cultivation scope — included because it is the SAME root, prose-not-fields, and KEM's `severity`/`rationale` fields are the shared fix. Compiling it into a gate is §11.7-deferred.)* | data-agent L3 |
-| 3 | Cultivation is **append-only**: it detects "X was wrong, now Y" and appends Y — X stays forever, accreting contradictions. The `rewrite` branch is disabled because delete-then-append has a partial-state trap. | §7, cultivation |
-| 4 | Archived knowledge (SwarmAI `IMPROVEMENT-archive.md` = **46.9 MB**, measured 2026-07-20) is **not in any recall index** — "in git, dead to retrieval." Note the §8.4 distinction: **dormant** entries stay in-doc + searchable; the defect is the tier BEYOND dormant — content physically moved to `IMPROVEMENT-archive.md`, which no recall index covers. | §8.4 tiering vs recall |
+| 3 | ~~Cultivation is **append-only**; the `rewrite` branch is disabled because delete-then-append has a partial-state trap.~~ **❌ STALE (corrected 2026-07-20) — already shipped.** `ddd_cultivation.py` has live reversible RETIRE/REWRITE (`run_ecc7a32b`; dated `.bak` → strip, capped auto-apply else escalate) and `supersedes`/`lifecycle` predicates in `knowledge_graph.py`. **Cut from KEM.** | §7, cultivation |
+| 4 | ⚠️ **PARTLY TRUE, number corrected (2026-07-20).** Archived knowledge is **not in any recall index** — but `Knowledge/Archives/MEMORY-archive-*.md` (~330 KB) IS in library FTS5. The genuinely recall-dead corpus is `Projects/*/IMPROVEMENT-archive.md` (**~65 MB total, SwarmAI ~48 MB** — the earlier "46.9 MB" was one file), which `knowledge_store` does not scan. Fix scoped to a down-weighted cold FTS5 leg over `Projects/` archives. | §8.4 tiering vs recall |
 
 ### 11.2 Root cause — one bug, not four
 
