@@ -54,6 +54,50 @@ cognition itself, not just a reply.
   Designs, Learned, Reports, Notes, Signals, Library. Scanned + indexed on startup,
   recalled on demand.
 
+### 🧠 PRINCIPLE 1 (the one every DDD change is measured against) — a DDD is my cognitive brain, not a document store
+**A DDD exists for ONE purpose: to be the sedimented knowledge that helps ME (the agent)
+JUDGE better.** It is a *cognitive organ*, not a filing cabinet, not a search index, not a
+bug to fix. Every change to any DDD mechanism — decay, cultivation, recall, archive,
+tiering, KEM, anything — is measured against a single test: **does this make the knowledge
+that reaches my judgment MORE true, MORE load-bearing, MORE likely to make me decide
+right?** If a change merely improves *coverage / retrievability / storage* without
+improving *the quality of judgment the brain enables*, it does not serve Principle 1 and is
+probably the wrong change.
+
+Corollaries (violating any of these breaks Principle 1):
+- **Quality over coverage.** Indexing more (e.g. a 48MB archive of 108K decayed entries) is
+  NOT the goal — feeding my judgment the *few hundred truly load-bearing* pieces is. Making
+  a graveyard searchable re-poisons the brain; it does not enrich it.
+- **Value, not age, decides what survives.** A decay/retention signal based purely on time
+  (or a dead `ref_count`) buries hard-won judgment ("Prevention over recovery",
+  "Strangler-fig") alongside genuine noise. A brain that forgets its best judgment because a
+  counter didn't tick is failing Principle 1.
+- **Sediment must flow UP, not just OUT.** Archiving is only half a memory system. Without a
+  mechanism that distills real judgment back INTO the live brain (or up into higher-order
+  principle), the archive is a landfill, not cold storage.
+- **This principle outranks convenience.** "It's just an index / just a bugfix / just a
+  cleanup" is the exact voice that erodes it. When a proposed DDD change feels like plumbing,
+  re-ask the judgment test above before touching code.
+- **No dynamic, decision-inert numbers enter the brain — they are drift, not knowledge.** A
+  figure that (a) keeps changing over time AND (b) does not change any judgment I make is
+  pure drift-bait: stale → it silently misleads me (and the eval judge), fresh → it costs
+  upkeep for nothing, and it was never load-bearing. This BANS such numbers from EVERY
+  cognitive store — DDD docs, MEMORY, KNOWLEDGE, EVOLUTION — not just from external output.
+  Before persisting ANY number ask: *does this change a decision, AND is it stable?* If not
+  BOTH, do not store it. Examples that are almost always drift: LOC / file / test counts,
+  "N skills", archive/corpus sizes (the 48MB/55K figures live in a run report, NOT here),
+  star snapshots, line numbers in prose, utilization %, index sizes. The fix is to store the
+  **reproducible method** ("run `git ls-files | …`") or a qualitative fact ("runs in
+  production daily"), never the frozen output — a number earns a home in the brain ONLY if it
+  is both decision-relevant AND stable; otherwise it is measured live on demand. (This is
+  Principle 1 applied at the intake gate: admission quality serves judgment quality. It is the
+  product-level statement of AGENT.md R30#4.)
+
+_(Sedimented 2026-07-20, two XG directives on the same day. (1) "DDD 是你的认知大脑 帮你 judge
+的 knowledge 这是 principle 1 啊 所有 changes 还有改动都不能 break 这个 principle." (2) "dynamic
+并且不能帮你做决策的数字 别让它们进你 DDD or Memory or Knowledge …… 很容易产生 drift" — the
+no-drift-number corollary. I must hold both myself — not wait for XG to re-assert them.)_
+
 ### What a DDD is — the paradigm (product-level decision, 2026-07-19)
 A **DDD is a universal brain** for a product, system, or endeavor. It always has the
 **same six-section cognitive structure** — ① Identity ② Knowledge (PRODUCT / TECH /
