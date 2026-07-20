@@ -280,9 +280,12 @@ class ImprovementWritebackHook:
         with its own ``_insert_after_header`` + bespoke dedup. It builds an append
         ``CultivationProposal`` per lesson and applies it via ``apply_to_ddd`` —
         the SAME single chokepoint pipeline REFLECT uses. Why:
-          - ONE dedup (content_signature) sees both writers' formats, so a
-            writeback lesson dedups against a cultivation entry and vice-versa
-            (the old two-writer / two-blind-dedup split silted 43K archive dups).
+          - After this change there is ONE live writer format (cultivation's), so
+            this hook's lessons dedup against REFLECT entries via the shared
+            content_signature. The old split — this hook's OWN front-prefix format
+            + blind dedup — silted 43K archive dups; content_signature still
+            normalizes that legacy front-prefix so incoming lessons also dedup
+            against the pre-existing corpus.
           - ``source_stage="writeback"`` keeps the attribution honest (NOT
             "auto-cultivated"/reflect — that would misattribute hook output).
           - ``apply_to_ddd`` is SYNC (fcntl.flock + read + atomic rename); this

@@ -274,14 +274,17 @@ def _extract_bullet_content(line: str) -> str:
     return text
 
 
-# Leading writeback-hook prefix: "**2026-06-08** (session f1f7201b): " — the
-# improvement_writeback_hook.py format (see _append_lessons there). This prefix
-# sits at the FRONT of the bullet, so _extract_bullet_content's TRAILING-only
-# strip leaves it intact — which is exactly why the two writers' dedups never
-# matched and the archive silted with 43K writeback-format dups (Gate-1 killer
-# finding, run_4c5f81ce). content_signature() strips it so both formats collapse.
+# Leading LEGACY writeback-hook prefix: "**2026-06-08** (session f1f7201b): ".
+# improvement_writeback_hook now routes through apply_to_ddd (cultivation format),
+# so this FRONT-prefix shape is NO LONGER PRODUCED by any live writer — it is
+# retained ONLY to dedup incoming lessons against the ~55K pre-existing archive
+# bullets that were silted before the unification (the two writers' TRAILING-only
+# dedup never matched this front-prefix → 43K dups; Gate-1 killer, run_4c5f81ce).
+# Session-id class is deliberately broad ([0-9a-fA-F-]+): 8-hex covers 100% of the
+# real corpus today, but a future context.session_id[:N] slice (dashed UUID /
+# longer) must not silently survive the strip and break cross-format dedup.
 _WRITEBACK_PREFIX_RE = re.compile(
-    r"^\*\*\d{4}-\d{2}-\d{2}\*\*\s*\(session\s+[0-9a-f]+\)\s*:\s*", re.IGNORECASE
+    r"^\*\*\d{4}-\d{2}-\d{2}\*\*\s*\(session\s+[0-9a-fA-F-]+\)\s*:\s*", re.IGNORECASE
 )
 # Leading "[type] " classification marker (cultivation form: "- [pitfall] **T**").
 _TYPE_PREFIX_RE = re.compile(r"^\[[a-z]+\]\s*", re.IGNORECASE)

@@ -531,6 +531,18 @@ class TestContentSignature:
 
         assert content_signature("- The  Fix   Works") == content_signature("- the fix works")
 
+    def test_writeback_prefix_stripped_for_dashed_uuid_session(self):
+        """Gate-2 hardening: the writeback front-prefix must strip regardless of
+        session-id shape (8-hex today, but a full dashed UUID or longer slice must
+        not silently survive → the two formats would stop deduping). Whole point
+        is robustness to a future context.session_id[:N] change."""
+        from core.ddd_cultivation import content_signature
+
+        text = "prevention over recovery beats runtime error handling"
+        cultivation_fmt = f"- {text} (2026-06-08, run_abc123, auto-cultivated)"
+        dashed_uuid = f"- **2026-06-08** (session 0024aab4-dfd3-459f-8a1b-deadbeef0001): {text}"
+        assert content_signature(dashed_uuid) == content_signature(cultivation_fmt)
+
 
 class TestCrossFormatDedup:
     """AC2: apply_to_ddd dedup catches a duplicate even when the existing entry
