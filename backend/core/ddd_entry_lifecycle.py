@@ -1048,21 +1048,24 @@ def _archive_and_strip(
     """Shared apply-tail for reclaim_noise_entries AND retire_entry (R25 dedup):
     archive the `selected` entries to `archive_name`, physically strip them from
     `content` by (title, section) identity, and — if `source_path` is given —
-    snapshot a DATED .bak then persist the stripped content. Mutates `report`
-    (sets .archived + .new_content). Selection is the CALLER's job; this is the
-    common machinery both selection strategies share.
+    persist the stripped content (NO .bak; recovery = archive + git, see below).
+    Mutates `report` (sets .archived + .new_content). Selection is the CALLER's
+    job; this is the common machinery both selection strategies share.
 
     Strip by (title, section) identity — NOT title alone — so a keep-class entry
     that merely SHARES a title with a selected one is never deleted (adversarial
     C1: title-only strip silently destroyed protected knowledge that wasn't even
     archived).
 
-    Dated .bak rationale (H2 adversarial): a single rolling <name>.bak
-    self-destructs — reclaim runs every TIMER_30MIN + SESSION_CLOSE, so run N's
-    .bak (entries run N-1 stripped) would overwrite run N-1's. The dated name
-    gives one stable snapshot per day; we never rewrite an existing same-day .bak,
-    so the day's FIRST pre-strip state is preserved. With the forward-append
-    archive + git auto-commit, recovery is robust.
+    Recovery of a stripped entry has TWO independent, live paths — NO dated .bak
+    (run_a6482355): (1) `archive_entries` above appends every stripped entry (full
+    raw_text + metadata) to <archive_name>, which recall/FTS reads — the entry is
+    never lost, only moved; (2) the source doc is git-tracked and the workspace
+    auto-commits many times/minute, so `git show HEAD~N:<file>` recovers any
+    pre-strip whole-file state (dirty window negligible). The old dated .bak was a
+    THIRD copy nobody reads that silted into a graveyard (14 stale .bak purged
+    across DDDs 2026-07-20) — a disaster-recovery copy masquerading as safety
+    (Principle 1 / STEERING #2). Removed: archive + git already make recovery robust.
     """
     archived = archive_entries(project_dir, selected, archive_name=archive_name)
     report.archived = archived
@@ -1071,11 +1074,7 @@ def _archive_and_strip(
         include_prose=include_prose,
     )
     if source_path is not None:
-        src = Path(source_path)
-        bak = src.with_name(f"{src.name}.{today.isoformat()}.bak")
-        if not bak.exists():  # preserve the day's FIRST pre-strip snapshot
-            bak.write_text(content, encoding="utf-8")
-        src.write_text(report.new_content, encoding="utf-8")
+        Path(source_path).write_text(report.new_content, encoding="utf-8")
 
 
 class RetireError(ValueError):
@@ -1100,7 +1099,7 @@ def retire_entry(
 ) -> ReclaimReport:
     """Agent-directed retire of ONE named (title, section) entry — the sanctioned
     'out' side of the knowledge layer (mirrors s_self-evolution's RETIRE for the
-    governance layer). Reuses the same archive+strip+dated-bak machinery as
+    governance layer). Reuses the same archive+strip machinery as
     reclaim_noise_entries via _archive_and_strip; the ONLY difference is selection:
     exactly the one entry the caller names, not the autonomous noise set.
 
@@ -1118,7 +1117,7 @@ def retire_entry(
       but never by accident.
 
     dry_run=True (default): preview only — sets report.candidates, writes nothing.
-    dry_run=False: archive + strip (+ dated .bak if source_path given).
+    dry_run=False: archive + strip + persist (recovery = archive + git, no .bak).
 
     For a MOVE across files: the CALLER must add-to-target FIRST (via s_persist,
     dedup-checked) and retire-from-source SECOND — so the entry is durable in its

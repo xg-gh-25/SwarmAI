@@ -1016,10 +1016,14 @@ class TestReclaimNoiseEntries:
         assert "old operational bug" not in out
         assert report.archived == 1
 
-    def test_apply_writes_source_backup(self, tmp_path):
-        # REVIEW finding #2: destructive reclaim must snapshot the source before
-        # overwrite. The archive holds removed entries (forward-append), but a
-        # full pre-write .bak is belt-and-braces recovery for the user-owned doc.
+    def test_apply_writes_no_bak_recovery_is_archive_plus_git(self, tmp_path):
+        # CONTRACT CHANGE (run_a6482355, supersedes test_apply_writes_source_backup):
+        # NO dated .bak is written. The old belt-and-braces .bak was a THIRD recovery
+        # copy nobody reads that silted into a graveyard (14 stale .bak purged across
+        # DDDs 2026-07-20). Recovery is fully covered by two live paths: (1) the
+        # forward-append ARCHIVE holds every stripped entry (asserted here); (2) the
+        # git-tracked source + workspace auto-commit (git show HEAD~N). Principle 1 /
+        # STEERING #2: no disaster-recovery copy masquerading as safety.
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         src = tmp_path / "IMPROVEMENT.md"
         src.write_text(_RECLAIM_FIXTURE)
@@ -1028,36 +1032,36 @@ class TestReclaimNoiseEntries:
             source_path=src, dry_run=False,
         )
         assert report.archived == 2
-        bak = tmp_path / f"IMPROVEMENT.md.{_RECLAIM_TODAY.isoformat()}.bak"
-        assert bak.exists()
-        assert bak.read_text() == _RECLAIM_FIXTURE  # exact pre-write snapshot
+        # NO .bak of any date is produced.
+        assert list(tmp_path.glob("IMPROVEMENT.md*.bak")) == []
+        # Recovery path 1: the stripped entries are preserved in the archive.
+        archive = tmp_path / "IMPROVEMENT-archive.md"
+        assert archive.exists()
+        assert "Reclaim this plain lesson" in archive.read_text()
+        # Source was stripped + persisted (the operation still happened).
+        assert "Reclaim this plain lesson" not in src.read_text()
 
-    def test_second_run_same_day_does_not_clobber_backup(self, tmp_path):
-        # Adversarial H2: a single rolling .bak self-destructs — run 2's backup
-        # (post-strip content) would overwrite run 1's pre-strip snapshot. The
-        # day's FIRST snapshot must survive a same-day re-run.
+    def test_second_run_same_day_writes_no_bak(self, tmp_path):
+        # The old H2 concern (a rolling .bak self-clobbering on a same-day re-run) is
+        # MOOT now that no .bak is written at all. A same-day re-run must produce zero
+        # .bak files and still strip idempotently.
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         src = tmp_path / "IMPROVEMENT.md"
         src.write_text(_RECLAIM_FIXTURE)
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
                               source_path=src, dry_run=False)
-        bak = tmp_path / f"IMPROVEMENT.md.{_RECLAIM_TODAY.isoformat()}.bak"
-        first_snapshot = bak.read_text()
         # Run 2 on the already-stripped content (simulates the next timer tick).
         reclaim_noise_entries(src.read_text(), _RECLAIM_TODAY, tmp_path,
                               source_path=src, dry_run=False)
-        # The day's first pre-strip snapshot is preserved (still has both
-        # reclaimable entries), not overwritten with stripped content.
-        assert bak.read_text() == first_snapshot
-        assert "Reclaim this plain lesson" in bak.read_text()
+        assert list(tmp_path.glob("IMPROVEMENT.md*.bak")) == []
 
     def test_no_backup_when_dry_run_or_no_source_path(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         bak_glob = lambda: list(tmp_path.glob("IMPROVEMENT.md*.bak"))
-        # dry_run → no backup
+        # dry_run → no write of any kind
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True)
         assert bak_glob() == []
-        # no source_path → no backup (caller persists new_content itself)
+        # no source_path → caller persists new_content itself; still no .bak
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False)
         assert bak_glob() == []
 
@@ -1334,7 +1338,10 @@ class TestRetireProseEntry:
         assert "continuation line three" not in new_content, "body left behind"
         assert "Keep me" in new_content, "sibling removed"
 
-    def test_retire_prose_dated_bak_written(self, tmp_path):
+    def test_retire_prose_writes_no_bak_archive_is_recovery(self, tmp_path):
+        # CONTRACT CHANGE (run_a6482355): retire writes NO .bak. The stripped entry
+        # is preserved in the archive (recovery path 1) + git history (path 2); the
+        # dated .bak was a graveyard-silting third copy nobody reads (Principle 1).
         from core.ddd_entry_lifecycle import retire_entry
         today = date(2026, 7, 3)
         content = "## Open Threads\n- 🟡 **Thread A** — live. (2026-06-25, run_x)\n"
@@ -1343,8 +1350,10 @@ class TestRetireProseEntry:
         retire_entry(content, title="Thread A", section="Open Threads",
                      project_dir=tmp_path, source_path=src, dry_run=False, force=True,
                      archive_name="MEMORY-archive.md", today=today)
-        bak = tmp_path / "MEMORY.md.2026-07-03.bak"
-        assert bak.exists(), "dated .bak not written for prose retire"
+        assert list(tmp_path.glob("MEMORY.md*.bak")) == [], "no .bak should be written"
+        # Recovery preserved: the retired entry lives in the archive.
+        archive = tmp_path / "MEMORY-archive.md"
+        assert archive.exists() and "Thread A" in archive.read_text()
 
     def test_retire_prose_fail_loud_on_no_match(self, tmp_path):
         from core.ddd_entry_lifecycle import retire_entry, RetireError

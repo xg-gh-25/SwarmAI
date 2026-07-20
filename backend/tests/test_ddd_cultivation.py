@@ -1243,14 +1243,14 @@ class TestEvidenceDrivenRetire:
         assert "Stale caliber residue" not in after
         # Sibling preserved (identity strip, not title-only)
         assert "Keep this one" in after
-        # Archived to doc-matched archive (BLOCKER-1: not IMPROVEMENT default when TECH)
+        # Archived to doc-matched archive (BLOCKER-1: not IMPROVEMENT default when TECH).
+        # The archive IS the recovery path — the stripped entry is preserved here.
         archive = tmp_path / "IMPROVEMENT-archive.md"
         assert archive.exists()
         assert "Stale caliber residue" in archive.read_text(encoding="utf-8")
-        # Dated .bak snapshot of pre-strip state
-        baks = list(tmp_path.glob("IMPROVEMENT.md.*.bak"))
-        assert baks, "expected a dated .bak snapshot"
-        assert "Stale caliber residue" in baks[0].read_text(encoding="utf-8")
+        # CONTRACT CHANGE (run_a6482355): NO dated .bak — recovery is archive + git,
+        # not a third silting copy (Principle 1). No .bak should exist.
+        assert list(tmp_path.glob("IMPROVEMENT.md.*.bak")) == []
 
     def test_apply_retire_no_target_refuses(self, tmp_path):
         from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
@@ -1384,9 +1384,10 @@ class TestConfidentAutoRetire:
         after = doc.read_text(encoding="utf-8")
         assert "Vector recall hybrid scorer blend leg" not in after  # deleted
         assert "Frontend reconcile store authority render" in after  # sibling kept
-        # Reversible: archived + .bak both present
+        # Reversible via the ARCHIVE (recovery path 1) — NOT a .bak (run_a6482355:
+        # the dated .bak was a graveyard-silting third copy, removed; Principle 1).
         assert (tmp_path / "IMPROVEMENT-archive.md").exists()
-        assert list(tmp_path.glob("IMPROVEMENT.md.*.bak"))
+        assert list(tmp_path.glob("IMPROVEMENT.md.*.bak")) == []
         assert original != after
 
     # ── borderline (auto_apply_ok False) → escalate, doc untouched ─────────────

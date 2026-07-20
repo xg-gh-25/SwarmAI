@@ -119,7 +119,7 @@ class CultivationProposal:
     # ── Evidence-driven DELETE/REWRITE (run_b8f10185; auto-apply run_ecc7a32b) ──
     # change_type discriminates the "out" side of the knowledge layer from the
     # default append. A "retire"/"rewrite" is REVERSIBLE (retire_entry: archive →
-    # dated .bak → strip), so a HIGH-CONFIDENCE one (auto_apply_ok, set by a
+    # strip; recovery = archive + git), so a HIGH-CONFIDENCE one (auto_apply_ok, set by a
     # unambiguous non-keep-class locate) AUTO-APPLIES up to MAX_AUTO_RETIRES_PER_RUN;
     # a borderline / close-runner-up / keep-class one ESCALATES to the human queue.
     # Either way it NEVER goes through the append applier (apply_to_ddd hard-refuses
@@ -828,7 +828,7 @@ def _locate_target_entry(
 
 def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply a retire/rewrite proposal via the reversible retire_entry
-    machinery (archive → dated .bak → identity-strip). The sibling of apply_to_ddd
+    machinery (archive → identity-strip; recovery = archive + git). The sibling of apply_to_ddd
     for the "out" side. Two callers (run_ecc7a32b): (1) _cultivate_proposals for a
     HIGH-CONFIDENCE (auto_apply_ok) retire — autonomous, reversible; (2) the approve
     router for a human-approved escalated retire. retire_entry is fail-loud (no
@@ -843,7 +843,7 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
       - "retire_failed:<reason>" — retire_entry raised RetireError (fail-loud:
                          no match / ambiguous duplicate / keep-class refused)
       - "rewrite_partial:<status>" — retire succeeded but replacement append didn't
-                         (original recoverable from archive + .bak)
+                         (original recoverable from archive + git)
 
     For rewrite the replacement is a NEW append (not a cross-file move): we retire
     the stale entry, then append the replacement via apply_to_ddd. If the append
@@ -910,7 +910,7 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
         append_status = apply_to_ddd(replacement, project_dir)
         if append_status in ("applied", "created_section"):
             return "rewritten"
-        # Retire succeeded but append didn't — original is in archive + .bak.
+        # Retire succeeded but append didn't — original is in archive + git.
         return f"rewrite_partial:{append_status}"
 
     return "retired"
@@ -1097,7 +1097,7 @@ def _cultivate_proposals(
                     # (doc, title) + the evidence that triggered it).
                     logger.warning(
                         "[AUTO-RETIRE] autonomously retired DDD entry (reversible: "
-                        "archived + .bak): %s § %s | evidence=%s | run=%s",
+                        "archived + git): %s § %s | evidence=%s | run=%s",
                         proposal.target_doc, proposal.target_title,
                         proposal.evidence[:120].replace("\n", "\\n"),
                         proposal.source_run_id,
