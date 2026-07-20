@@ -272,12 +272,14 @@ def create_user_correction_detector(
 
         # Two tiers of match (adversarial MED, run_e681a61d):
         #  - explicit_error: "that's wrong / 不对 / 应该是" — a recorded MISTAKE.
-        #    Logs AND seeds a golden case AND writes a MEMORY [pitfall].
+        #    Logs to corrections.jsonl AND (if it passes the value gate) writes a
+        #    MEMORY [pitfall]. Golden-case seeding is NO LONGER done here (moved
+        #    post-session + CLASS-gated, M5 :306); the MEMORY write is now likewise
+        #    value-gated via is_memory_worthy_correction (run_4443a967, :317).
         #  - meta_only: a redirect/reframe ("去查 X / 重新想 / go check") — STEERING,
         #    not a mistake. Logs to corrections.jsonl (for the post-session
-        #    classifier to judge) but does NOT seed a golden pitfall or a MEMORY
-        #    [pitfall] — a redirect is not a "do not repeat" pattern, and seeding
-        #    one pollutes golden_set/MEMORY exactly like the tracker-noise bug.
+        #    classifier to judge) but does NOT write a MEMORY [pitfall] — a redirect
+        #    is not a "do not repeat" pattern, and recording one pollutes MEMORY.
         is_explicit_error = bool(_CORRECTION_PATTERNS_EN.search(prompt))
         is_meta = bool(_CORRECTION_PATTERNS_META.search(prompt))
         if is_explicit_error or is_meta:
@@ -316,21 +318,36 @@ def create_user_correction_detector(
 
                 # Gap #17: Immediate correction → MEMORY.md as [pitfall].
                 # Best-effort — failure must never break the hook chain.
+                #
+                # UNIFIED VALUE GATE (run_4443a967): a correction-detected prompt is a
+                # SIGNAL, not automatically a lesson. Route it through the SAME value
+                # floor the cultivation writeback leg uses (is_quality_lesson +
+                # MIN_LESSON_LENGTH + a pure-correction-signal reject) BEFORE writing —
+                # symmetric with the golden-case seeding leg, which is already
+                # post-session + CLASS-gated. Without this, raw prompt[:150] dumps
+                # (test-session noise, task-notification XML, bare "that's wrong")
+                # poisoned MEMORY ungated. The corrections.jsonl append above is the
+                # durable signal the post-session classifier consumes — so skipping
+                # the MEMORY write here loses NO signal, only noise.
                 try:
                     from pathlib import Path as _Path
+                    from core.ddd_cultivation import is_memory_worthy_correction
                     from scripts.locked_write import locked_read_modify_write
-                    ws = _Path.home() / ".swarm-ai" / "SwarmWS"
-                    memory_path = ws / ".context" / "MEMORY.md"
-                    if memory_path.exists():
-                        summary = prompt[:150].replace("\n", " ").strip()
-                        today = time.strftime("%Y-%m-%d")
-                        entry_text = (
-                            f"\n- [pitfall] **{summary}** — "
-                            f"({today}, {sid[:8]}, correction)\n"
-                        )
-                        locked_read_modify_write(
-                            memory_path, "## Pitfalls", entry_text, mode="append"
-                        )
+                    summary = prompt[:150].replace("\n", " ").strip()
+                    if is_memory_worthy_correction(summary):
+                        ws = _Path.home() / ".swarm-ai" / "SwarmWS"
+                        memory_path = ws / ".context" / "MEMORY.md"
+                        if memory_path.exists():
+                            today = time.strftime("%Y-%m-%d")
+                            entry_text = (
+                                f"\n- [pitfall] **{summary}** — "
+                                f"({today}, {sid[:8]}, correction)\n"
+                            )
+                            # dedup=True: don't re-append a lesson already in MEMORY.
+                            locked_read_modify_write(
+                                memory_path, "## Pitfalls", entry_text,
+                                mode="append", dedup=True,
+                            )
                 except Exception:
                     pass  # Non-blocking — MEMORY write is best-effort
 

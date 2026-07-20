@@ -1002,6 +1002,47 @@ class TestLessonQualityGate:
             "silently disabling the downstream visibility filter."
         ) is True
 
+    def test_cjk_lesson_not_rejected_by_word_floor(self):
+        # Gate-2 (run_4443a967): the >=5-WORD floor is whitespace-tokenized → blind to
+        # CJK (no inter-word spaces). A real, PURE-CJK (zero Latin token) lesson >= 30
+        # chars MUST pass on the CJK char-floor branch. Latin tokens must NOT be needed
+        # to clear the floor (that masking is exactly what hid the bug).
+        from core.ddd_cultivation import is_quality_lesson
+        assert is_quality_lesson(
+            "应该用悲观锁而不是乐观锁，因为这个热点账户并发更新极高，"
+            "乐观锁重试会雪崩，这是线上事故复盘的结论"
+        ) is True
+        # A SHORT CJK fragment (< MIN_LESSON_LENGTH) still rejects — the floor holds.
+        assert is_quality_lesson("错了搞错了") is False
+
+    def test_cjk_floor_does_not_weaken_latin_path(self):
+        # The CJK branch must fire ONLY when _CJK_RE matches. A short pure-ASCII
+        # fragment (no CJK, < 5 words) must STILL reject — no accidental char-floor
+        # for Latin text.
+        from core.ddd_cultivation import is_quality_lesson
+        assert is_quality_lesson("supercalifragilisticexpialidocious") is False
+        assert is_quality_lesson("use rebase") is False
+
+    def test_cjk_re_matches_loader_detector(self):
+        # Sync guard (run_4443a967 Gate-2 meta-review): ddd_cultivation._CJK_RE must
+        # stay byte-identical in COVERAGE to context_directory_loader's full detector
+        # so the two can't silently diverge in what they call "CJK". (memory_index's
+        # _CJK_RE is intentionally Han-only and deliberately NOT covered here.)
+        from core.ddd_cultivation import _CJK_RE as cult_re
+        from core.context_directory_loader import ContextDirectoryLoader
+        loader_re = ContextDirectoryLoader._CJK_RE
+        # Probe representative codepoints across every declared range.
+        probes = [
+            "　", "぀", "゠", "㐀", "一", "鿿",
+            "가", "힯", "豈", "︰", "＀",
+            "\U00020000", "\U0002a700",
+        ]
+        for ch in probes:
+            assert bool(cult_re.search(ch)) == bool(loader_re.search(ch)), \
+                f"CJK detector divergence at U+{ord(ch):04X}"
+        # And a non-CJK char matches neither.
+        assert not cult_re.search("A") and not loader_re.search("A")
+
     def test_authoritative_zone_blocks_autocultivation(self):
         from core.ddd_cultivation import is_protected_zone
         # NEGATIVE: auto-cultivation must be structurally blocked from these

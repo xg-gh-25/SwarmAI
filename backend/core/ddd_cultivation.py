@@ -79,6 +79,20 @@ def _record_auto_retire(project_dir: Path) -> None:
 # Minimum lesson length to be considered for DDD promotion
 MIN_LESSON_LENGTH = 30
 
+# CJK codepoint detector — used by is_quality_lesson to apply a char-length floor
+# (not a whitespace-word floor) to Chinese/Japanese/Korean text, which has no
+# inter-word spaces. Ranges are kept byte-identical to context_directory_loader's
+# full detector (Han + Kana + Hangul + CJK ext); a sync-guard test asserts equality
+# so a future edit to either can't silently diverge (test_cjk_re_matches_loader).
+# NOTE: this is NOT a single "canonical" regex — memory_index._CJK_RE is
+# intentionally Han-ONLY ([一-鿿]) for its recall tokenizer, a deliberately narrower
+# detector, not a copy of this one. Do not "sync" the three blindly.
+_CJK_RE = re.compile(
+    r"[　-〿぀-ゟ゠-ヿ㐀-䶿"
+    r"一-鿿가-힯豈-﫿︰-﹏＀-￯"
+    r"\U00020000-\U0002a6df\U0002a700-\U0002b73f]"
+)
+
 # ── Routing: single source of truth in persist_routing.py ────────────────────
 # Keywords, classification logic, and safe-append rules all live there.
 # This module only imports what it needs for the auto cultivation path.
@@ -289,8 +303,114 @@ def is_quality_lesson(lesson: str) -> bool:
         return False
     # Require at least one "sentence": >= 5 words AND ends like prose OR is long.
     # A bare fragment ("done", "tests pass") has < 5 words and no sentence shape.
+    #
+    # CJK-aware (run_4443a967): the >=5-WORD floor is whitespace-tokenized, which is
+    # blind to CJK — Chinese/Japanese have no inter-word spaces, so a real
+    # post-mortem lesson tokenizes to 1-3 "words" and is wrongly rejected. This
+    # matters MORE here than at first glance: the correction-capture leg routes
+    # prompts that are disproportionately CJK (its trigger regex matches 不对/错了/
+    # 应该用) through this floor. For CJK-bearing text, count CJK codepoints as
+    # content and require MIN_LESSON_LENGTH chars instead of 5 whitespace-words.
     words = stripped.split()
     if len(words) < 5:
+        # A CJK-heavy fragment clears the floor on CHAR length, not word count.
+        if _CJK_RE.search(stripped) and len(stripped) >= MIN_LESSON_LENGTH:
+            return True
+        return False
+    return True
+
+
+# Pure-correction-signal patterns: a raw user prompt whose ENTIRE substance is a
+# correction TRIGGER ("that's wrong, use async instead", "不对，应该用 rebase") carries
+# NO reusable lesson — it is a steering signal, not knowledge. is_quality_lesson()
+# alone does NOT catch these (they are grammatical 5+-word sentences that pass the
+# floor — verified: "That's wrong, use async instead" passed is_quality_lesson).
+# The discriminator: strip the trigger phrases; if the residual teaching body is
+# below MIN_LESSON_LENGTH, the prompt was ONLY a correction → not memory-worthy.
+#
+# DELIBERATELY a residue-length test, NOT a growing spelling denylist (PIT40: a
+# per-spelling guard is whack-a-mole — each new phrasing needs a new pattern). We
+# match the common trigger STEMS and let the residue-length gate do the deciding,
+# so an unseen phrasing with a real lesson body still passes on its residue.
+#
+# CJK stem PARITY (run_4443a967 Gate-2 meta-review): the EN side enumerates ~7 stem
+# families; the CJK side must have comparable breadth or the residue gate is the ONLY
+# CJK discriminator AND it under-strips → a long pure-CJK redirect (no lesson) leaks
+# into MEMORY (CJK is information-dense: a 30+ char redirect keeps 30+ char residue).
+# This is stem PARITY across languages, not per-spelling whack-a-mole. Residual risk
+# is bounded by the asymmetry the caller documents: when the gate is uncertain on CJK
+# it should REJECT (Principle 1 — a false-positive poisons the brain; a false-negative
+# is still captured in corrections.jsonl for post-session classification).
+_CORRECTION_TRIGGER_RE = re.compile(
+    r"(?ix)"
+    r"\b(that'?s|you'?re|it'?s)\s+(wrong|incorrect|not\s+right|not\s+correct)\b"
+    r"|\bactually,?\s+(no|not|don'?t|it'?s\s+not|that'?s\s+not)\b"
+    r"|\bnot\s+like\s+that\b"
+    r"|\b(use|try)\s+\w+\s+instead\b"
+    r"|\bdon'?t\s+use\b"
+    r"|\b(it|that)\s+should\s+be\b"
+    r"|\bthe\s+code\s+is\s+wrong(ly|fully)?\s+\w*\b"
+    # CJK trigger stems — wrongness (不对/错了/搞错/不太对/不对劲/不是这样/不是这个意思),
+    # redirect (重新|重弄|推倒重来|方向.{0,4}错|完全不行|这样写?不行|不应该这么),
+    # imperative-swap (应该用|应该是|改用|别用|不要用|你.{0,6}(重新|再)).
+    r"|不对劲|不太对|不对|错了|搞错|不是这样|不是这个意思|不是.{0,10}是"
+    r"|完全不行|这样写?不行|不应该这么|推倒重来|重新想|重新弄|重新理解|重新写"
+    r"|应该用|应该是|改用|别用|不要用|方向.{0,4}错",
+)
+
+
+def is_memory_worthy_correction(prompt: str) -> bool:
+    """True if a correction-detected user prompt carries a reusable lesson worth
+    writing to MEMORY.md ``## Pitfalls`` — the UNIFIED value gate for the immediate
+    correction-capture leg (runtime_hooks.create_user_correction_detector).
+
+    Symmetric with the golden-case seeding leg (which was already moved post-session
+    + CLASS-gated): a raw prompt is a correction SIGNAL, not automatically a lesson.
+    Reuses the SAME value-floor primitives as the cultivation writeback path — no
+    parallel judgment logic (AC3/AC5):
+
+      1. length floor        — len < MIN_LESSON_LENGTH → reject
+      2. is_quality_lesson() — instance-logs / XML dumps / narration / <5-word → reject
+      3. pure-correction     — strip trigger phrases; residue < MIN_LESSON_LENGTH → reject
+                               (a prompt that is ONLY "that's wrong, use X" teaches nothing)
+
+    NOTE: this gates only what gets SEDIMENTED into the cognitive store. The
+    corrections.jsonl append (the durable signal the post-session classifier
+    consumes) happens REGARDLESS — rejecting here loses no signal, only DELAYS a
+    borderline lesson to post-session classification. That asymmetry is deliberate:
+    per Principle 1 a false-POSITIVE (garbage sedimented into the brain) is strictly
+    worse than a false-NEGATIVE (a real lesson captured in jsonl, promoted later).
+    So the residue floor is intentionally CONSERVATIVE — it errs toward rejecting a
+    borderline single-swap redirect (e.g. "Use gVisor instead of runc for untrusted
+    tenants" → residue 29 < 30 → rejected here, still in jsonl). A residue-FRACTION
+    relaxation was evaluated (run_4443a967 Gate-2) and REJECTED: it could not
+    separate that borderline lesson (0.60 non-trigger fraction) from genuine garbage
+    ("Actually, not like that. Use rebase." → 0.58) — it re-opened a garbage leak to
+    save a non-permanent, jsonl-preserved false-negative. Brain purity wins.
+
+    KNOWN RESIDUAL (run_4443a967 Gate-2 meta-review, MED — accepted, not fixed):
+    a LONG pure-CJK redirect that carries no lesson yet matches the upstream
+    explicit-error gate (e.g. "不对，你这个整个思路都错了，重新捋一遍需求再来…") is
+    NOT reliably separable from a real CJK lesson by any stem/length heuristic — CJK
+    is information-dense, so a verbose redirect keeps a 30+ char residue just like a
+    lesson does. Chasing perfect separation is PIT40 whack-a-mole (unbounded stem
+    list) or PIT05 (a corpus-tuned length threshold). We DELIBERATELY stop at CJK
+    stem PARITY with the EN side and accept that a rare long CJK redirect may
+    sediment. This is acceptable because such an entry is NOT permanent brain-poison:
+    it is (1) MemoryGuard.sanitize()-validated on write, (2) subject to value-aware
+    decay, and (3) still reclassified post-session from jsonl. The HIGH direction —
+    real CJK lessons wrongly DROPPED by the CJK-blind word floor — is the one that
+    mattered and is fixed; this MED residual is the lesser evil (DEC28: the fix that
+    loses real knowledge is worse than the one that admits a little noise a decay
+    engine will clear).
+    """
+    stripped = prompt.strip()
+    if len(stripped) < MIN_LESSON_LENGTH:
+        return False
+    if not is_quality_lesson(stripped):
+        return False
+    residue = _CORRECTION_TRIGGER_RE.sub("", stripped).strip(" ,.;:—-“”\"'。，、！!？?")
+    if len(residue) < MIN_LESSON_LENGTH:
         return False
     return True
 
