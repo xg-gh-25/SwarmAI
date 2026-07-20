@@ -487,7 +487,11 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
                               never user input), so creating it is safe. Surfaced
                               (logged) so latent drift is still visible.
                               (run_45ab67c7 root cause — structural fix.)
-      - "duplicate"         — benign no-op, exact content already present
+      - "duplicate"         — benign no-op, content already present ANYWHERE in the
+                              doc (DOC-WIDE content-signature match, run_e9cb7e2a)
+      - "rejected_low_value"— failed the value FLOOR (empty / instance-log /
+                              narration / <30 chars / <5-word fragment). The gate
+                              working as intended, not an error (run_e9cb7e2a).
       - "not_safe"          — target doc/section not in SAFE_APPEND_SECTIONS
       - "doc_missing"       — target document file does not exist
       - "locked"            — another process holds the write lock (retry later)
@@ -506,6 +510,19 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         return "not_safe"
     if not proposal.is_safe_append():
         return "not_safe"
+
+    # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
+    # every write path crosses — but the writeback hook reaches it DIRECTLY,
+    # bypassing _classify_lesson where is_quality_lesson/MIN_LESSON_LENGTH lived.
+    # So an empty / instance-log / narration / sub-5-word fragment could enter the
+    # brain ungated. Enforce the SAME floor here so all paths share it. This is a
+    # FLOOR, not a taste judge: is_quality_lesson errs toward ACCEPT when ambiguous
+    # (knowledge-loss > noise), and MIN_LESSON_LENGTH is the existing 30-char bar.
+    # (Not the fix for the 170K silt — that's the doc-wide dedup below; this closes
+    # the orthogonal "junk fragment via writeback" hole.)
+    _candidate = proposal.content.strip()
+    if len(_candidate) < MIN_LESSON_LENGTH or not is_quality_lesson(_candidate):
+        return "rejected_low_value"
 
     doc_path = project_dir / proposal.target_doc
     if not doc_path.exists():
@@ -540,33 +557,37 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         match = section_re.search(content)
 
         if match:
-            # Compute the target section's text span [body_start, body_end) so the
-            # duplicate check is SCOPED to this section, not the whole document.
-            # (Adversarial HIGH: a whole-doc substring match dropped legit lessons
-            # when the same text appeared in a DIFFERENT section, and dropped short
-            # lessons that were substrings of a longer unrelated entry.)
+            # Compute the target section's text span [body_start, body_end) — used
+            # only to choose WHERE to insert the new entry (newest-first under this
+            # heading). The duplicate check itself is DOC-WIDE, not scoped here.
             line_end = content.find("\n", match.start())
             if line_end == -1:
                 line_end = len(content)
             body_start = line_end + 1
             while body_start < len(content) and content[body_start] == "\n":
                 body_start += 1
-            # Section body ends at the next '## ' heading (or EOF).
-            next_h = re.compile(r"^## ", re.MULTILINE).search(content, body_start)
-            body_end = next_h.start() if next_h else len(content)
-            section_body = content[body_start:body_end]
 
-            # Duplicate detection scoped to THIS section, matched on a
-            # FORMAT-AGNOSTIC content signature (not raw substring, not
-            # exact-string). content_signature() normalizes BOTH writer formats
-            # (cultivation `- text (date,run)` AND writeback `- **date**
-            # (session): text`) so a lesson written by either writer dedups
-            # against the other. Signing BOTH sides — the existing bullets AND
-            # the incoming content — is what makes it catch the 43K writeback-
-            # format corpus (Gate-1: signing only one side is a no-op).
+            # DOC-WIDE duplicate detection (root-cause fix, run_e9cb7e2a; measured
+            # 2026-07-20: 170K archived bullets deduped to ~700 unique — 99.6% were
+            # the SAME lesson re-written, many under DIFFERENT sections/dates/session
+            # ids). A section-scoped check let the same lesson re-accumulate under a
+            # different heading — the direct source of the silt. So sign EVERY `- `
+            # bullet in the WHOLE document, not just this section.
+            #   • content_signature() is FORMAT-AGNOSTIC — normalizes cultivation
+            #     `- text (date,run)` AND writeback `- **date** (session): text` AND
+            #     `[type]` markers to the same key, so a lesson dedups regardless of
+            #     which writer/format/date/section produced it.
+            #   • Signing BOTH sides (existing bullets AND incoming content) is what
+            #     catches the writeback-format corpus (signing one side is a no-op).
+            #   • Whole-STRING signature (not prefix / not substring) — a genuinely
+            #     distinct lesson does NOT collide (guards the old adversarial HIGH:
+            #     no dropping short lessons that are substrings of a longer one).
+            # This is the ONE chokepoint every write path crosses (writeback /
+            # reflect / retire-rewrite / HTTP), so doc-wide dedup here covers them
+            # all — no per-path patching.
             existing_sigs = {
                 content_signature(ln)
-                for ln in section_body.splitlines()
+                for ln in content.splitlines()
                 if ln.lstrip().startswith("- ")
             }
             existing_sigs.discard("")  # never dedup against empty (blank bullets)
@@ -1093,27 +1114,47 @@ def _cultivate_proposals(
                 escalated += 1
             continue
         if proposal.is_safe_append():
-            # Additional auto-approval gate (maturity, magnitude, circuit breaker)
-            # Gate is advisory: if it blocks, escalate. If it errors, allow (fail-open).
+            # Additional auto-approval gate (maturity, magnitude, circuit breaker).
+            # FAIL-CLOSED (run_e9cb7e2a): a gate that cannot run is NOT a licence to
+            # silent-write. The old `except Exception: pass # allow through` meant a
+            # broken/absent gate flooded the brain with UNGATED appends — the exact
+            # "gate is a router, not a filter" leak. On ANY gate error we now ESCALATE
+            # to the human proposal queue (durable, reviewable), never auto-apply.
+            # (`Exception` alone subsumes `ImportError`; the prior tuple was a lint
+            # smell. Kept broad on purpose — this gate must never crash cultivation,
+            # but "can't evaluate" now means "don't auto-write", not "write anyway".)
             try:
                 from core.ddd_auto_approval import evaluate_auto_approval
                 decision = evaluate_auto_approval(proposal, project_dir)
-                if not decision.approved:
-                    # Only escalate if a HARD gate blocked (not maturity absence)
-                    # Hard gates: safe_target_doc, circuit_breaker_ok
-                    hard_blocked = (
-                        not decision.criteria_met.get("safe_target_doc", True)
-                        or not decision.criteria_met.get("circuit_breaker_ok", True)
-                        or not decision.criteria_met.get("small_magnitude", True)
-                    )
-                    if hard_blocked:
-                        proposal.status = "escalated"
-                        write_proposal(proposal, project_dir)
-                        escalated += 1
-                        continue
-                    # Soft gates (maturity, conflict, precision) — log but allow
-            except (ImportError, Exception):
-                pass  # Auto-approval module unavailable or errored — allow through
+                gate_ok = True
+            except Exception as e:
+                logger.warning(
+                    "auto-approval gate errored (%s: %s) → FAIL-CLOSED, escalating "
+                    "%s § %s instead of silent-writing",
+                    type(e).__name__, e, proposal.target_doc, proposal.target_section,
+                )
+                gate_ok = False
+
+            if not gate_ok:
+                proposal.status = "escalated"
+                write_proposal(proposal, project_dir)
+                escalated += 1
+                continue
+
+            if not decision.approved:
+                # Only escalate if a HARD gate blocked (not maturity absence)
+                # Hard gates: safe_target_doc, circuit_breaker_ok, small_magnitude
+                hard_blocked = (
+                    not decision.criteria_met.get("safe_target_doc", True)
+                    or not decision.criteria_met.get("circuit_breaker_ok", True)
+                    or not decision.criteria_met.get("small_magnitude", True)
+                )
+                if hard_blocked:
+                    proposal.status = "escalated"
+                    write_proposal(proposal, project_dir)
+                    escalated += 1
+                    continue
+                # Soft gates (maturity, conflict, precision) — log but allow
 
             status = apply_to_ddd(proposal, project_dir)
             if status == "applied":
@@ -1143,7 +1184,8 @@ def _cultivate_proposals(
                 log_application(proposal, project_dir, created_section=True)
                 applied += 1
             else:
-                # Benign no-op: "duplicate", "doc_missing", "locked", "not_safe".
+                # Benign no-op: "duplicate", "rejected_low_value", "doc_missing",
+                # "locked", "not_safe" — none landed, count as rejected.
                 rejected += 1
         else:
             proposal.status = "escalated"

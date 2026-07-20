@@ -360,6 +360,15 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     if not proposal.is_safe_append():
         return "not_safe"
 
+    # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
+    # every write path crosses, but the writeback hook reaches it DIRECTLY, bypassing
+    # _classify_lesson where is_quality_lesson/MIN_LESSON_LENGTH lived. Enforce the
+    # SAME floor here so all paths share it. A FLOOR, not a taste judge:
+    # is_quality_lesson errs toward ACCEPT when ambiguous (knowledge-loss > noise).
+    _candidate = proposal.content.strip()
+    if len(_candidate) < MIN_LESSON_LENGTH or not is_quality_lesson(_candidate):
+        return "rejected_low_value"
+
     doc_path = project_dir / proposal.target_doc
     if not doc_path.exists():
         return "doc_missing"
@@ -393,33 +402,28 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         match = section_re.search(content)
 
         if match:
-            # Compute the target section's text span [body_start, body_end) so the
-            # duplicate check is SCOPED to this section, not the whole document.
-            # (Adversarial HIGH: a whole-doc substring match dropped legit lessons
-            # when the same text appeared in a DIFFERENT section, and dropped short
-            # lessons that were substrings of a longer unrelated entry.)
+            # Compute the target section's insert point — used only to place the new
+            # entry newest-first under this heading. Dedup itself is DOC-WIDE.
             line_end = content.find("\n", match.start())
             if line_end == -1:
                 line_end = len(content)
             body_start = line_end + 1
             while body_start < len(content) and content[body_start] == "\n":
                 body_start += 1
-            # Section body ends at the next '## ' heading (or EOF).
-            next_h = re.compile(r"^## ", re.MULTILINE).search(content, body_start)
-            body_end = next_h.start() if next_h else len(content)
-            section_body = content[body_start:body_end]
 
-            # Duplicate detection scoped to THIS section, matched on a
-            # FORMAT-AGNOSTIC content signature (not raw substring, not
-            # exact-string). content_signature() normalizes BOTH writer formats
-            # (cultivation `- text (date,run)` AND writeback `- **date**
-            # (session): text`) so a lesson written by either writer dedups
-            # against the other. Signing BOTH sides — the existing bullets AND
-            # the incoming content — is what makes it catch the 43K writeback-
-            # format corpus (Gate-1: signing only one side is a no-op).
+            # DOC-WIDE duplicate detection (root-cause fix, run_e9cb7e2a; measured
+            # 2026-07-20: 170K archived bullets deduped to ~700 unique — 99.6% were
+            # the SAME lesson re-written, many under DIFFERENT sections/dates/session
+            # ids). A section-scoped check let a lesson re-accumulate under a different
+            # heading — the direct source of the silt. So sign EVERY `- ` bullet in
+            # the WHOLE document. content_signature() is FORMAT-AGNOSTIC (normalizes
+            # cultivation / writeback / [type] shapes to one key); whole-STRING (a
+            # genuinely distinct lesson does NOT collide, guarding the old substring
+            # adversarial HIGH). This is the ONE chokepoint every write path crosses,
+            # so doc-wide dedup here covers them all — no per-path patching.
             existing_sigs = {
                 content_signature(ln)
-                for ln in section_body.splitlines()
+                for ln in content.splitlines()
                 if ln.lstrip().startswith("- ")
             }
             existing_sigs.discard("")  # never dedup against empty (blank bullets)

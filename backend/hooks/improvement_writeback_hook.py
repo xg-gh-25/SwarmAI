@@ -316,7 +316,11 @@ class ImprovementWritebackHook:
                 )
                 # Offload the sync file I/O off the event loop (hook is awaited on it).
                 status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
-                if status not in ("applied", "created_section", "duplicate"):
+                # "duplicate" and "rejected_low_value" are the gate WORKING as intended
+                # (the chokepoint dedup + value floor doing their job) — expected, not a
+                # fault. Only an unexpected status (doc_missing / locked / not_safe)
+                # warrants a warning.
+                if status not in ("applied", "created_section", "duplicate", "rejected_low_value"):
                     logger.warning(
                         "writeback: apply_to_ddd returned %s for a %s lesson "
                         "(session %s)",

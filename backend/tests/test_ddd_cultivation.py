@@ -370,10 +370,12 @@ class TestApplyToDDD:
             doc = project_dir / "IMPROVEMENT.md"
             # Doc exists, but the whitelisted 'What Worked' heading is absent.
             doc.write_text("# Lessons\n\n## What Failed\n\n- old failure\n")
+            # Content must clear the value FLOOR (≥5 words, ≥30 chars) so this test
+            # exercises AUTO-CREATE, not the floor (run_e9cb7e2a).
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",  # whitelisted, but missing here
-                content="A genuinely new lesson",
+                content="A genuinely new lesson worth keeping in the brain",
                 source_run_id="run_drift",
                 confidence=0.7,
             )
@@ -381,48 +383,61 @@ class TestApplyToDDD:
             content = doc.read_text()
             # Heading was created AND the lesson written under it (not dropped).
             assert "## What Worked" in content
-            assert "A genuinely new lesson" in content
+            assert "A genuinely new lesson worth keeping in the brain" in content
             assert "- old failure" in content  # existing content preserved
 
             # Duplicate content in an EXISTING section = benign no-op.
             doc.write_text(
                 "# Lessons\n\n## What Worked\n\n"
-                "- dup lesson (2026-01-01, run_x, auto-cultivated)\n"
+                "- a duplicated lesson that already lives here (2026-01-01, run_x, auto-cultivated)\n"
             )
             p2 = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",
-                content="dup lesson",
+                content="a duplicated lesson that already lives here",
                 source_run_id="run_dup2",
                 confidence=0.7,
             )
             assert apply_to_ddd(p2, project_dir) == "duplicate"
 
-    def test_duplicate_check_is_section_scoped_not_whole_doc(self):
-        """Adversarial HIGH: duplicate detection must be scoped to the TARGET
-        section, not the whole document. The same text in a DIFFERENT section is
-        NOT a duplicate for this section — dropping it would lose a real lesson."""
+    def test_duplicate_check_is_docwide_not_section_scoped(self):
+        """CONTRACT CHANGE (run_e9cb7e2a, supersedes the prior section-scoped rule):
+        duplicate detection is DOC-WIDE. An IDENTICAL lesson already present under a
+        DIFFERENT section IS a duplicate and must be dropped.
+
+        Why the prior rule was reversed — MEASURED production evidence, not a
+        hypothetical: the SwarmAI archive held 109,593 bullets that deduped to 277
+        unique (99.7% silt); the top offenders were the SAME lesson re-written
+        845–1690× across different sections/dates/session-ids (e.g. 'prevention
+        over recovery' written 845 times). The old section-scoped rule was the
+        direct mechanism that let a lesson re-accumulate under a different heading.
+        The legitimate 'same short phrase in What Worked vs What Failed' case is
+        protected by content_signature being WHOLE-STRING: a real success/failure
+        pair phrases differently and does NOT collide (see the substring test
+        below). ARTIFICIALLY-identical text across sections — as here — is exactly
+        the silt we now drop."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             doc = project_dir / "IMPROVEMENT.md"
-            # Same text already exists, but under a DIFFERENT section.
+            # Identical text already exists under a DIFFERENT section (content clears
+            # the value floor so this tests DOC-WIDE dedup, not the floor).
             doc.write_text(
                 "# L\n\n## What Failed\n\n"
-                "- shared insight text (2026-01-01, run_x, auto-cultivated)\n\n"
-                "## What Worked\n\n- unrelated\n"
+                "- a shared insight that recurs across sections (2026-01-01, run_x, auto-cultivated)\n\n"
+                "## What Worked\n\n- unrelated existing entry that stays put\n"
             )
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",  # different section than the match
-                content="shared insight text",
+                content="a shared insight that recurs across sections",
                 source_run_id="run_new",
                 confidence=0.7,
             )
-            # Must NOT be treated as duplicate — it's new to 'What Worked'.
-            assert apply_to_ddd(p, project_dir) == "applied"
-            assert doc.read_text().count("shared insight text") == 2
+            # DOC-WIDE: identical content anywhere in the doc → duplicate, dropped.
+            assert apply_to_ddd(p, project_dir) == "duplicate"
+            assert doc.read_text().count("a shared insight that recurs across sections") == 1
 
     def test_duplicate_check_not_fooled_by_substring(self):
         """Adversarial MED: a short lesson that is a SUBSTRING of an existing
@@ -440,7 +455,9 @@ class TestApplyToDDD:
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",
-                content="invalidate the cache on write",  # substring of existing
+                # substring of the existing longer bullet, and clears the value
+                # floor (≥5 words, ≥30 chars) — must NOT be treated as a duplicate.
+                content="invalidate the cache on every write",
                 source_run_id="run_new",
                 confidence=0.7,
             )
@@ -456,16 +473,50 @@ class TestApplyToDDD:
             doc = project_dir / "IMPROVEMENT.md"
             doc.write_text(
                 "# L\n\n## What Worked\n\n"
-                "- exact same lesson (2026-01-01, run_x, auto-cultivated)\n"
+                "- the exact same lesson written once already (2026-01-01, run_x, auto-cultivated)\n"
             )
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",
-                content="exact same lesson",
+                content="the exact same lesson written once already",
                 source_run_id="run_dup",
                 confidence=0.7,
             )
             assert apply_to_ddd(p, project_dir) == "duplicate"
+
+    def test_low_value_fragment_rejected_at_chokepoint(self):
+        """run_e9cb7e2a: apply_to_ddd is the ONE chokepoint every write path crosses
+        (writeback / reflect / retire-rewrite / HTTP). The writeback path bypasses
+        _classify_lesson (where is_quality_lesson lived), so a bare fragment could
+        enter the brain ungated. The value FLOOR (is_quality_lesson: empty /
+        instance-log / narration / <5-word fragment — errs toward ACCEPT when
+        ambiguous, NOT a taste judge) now lives IN apply_to_ddd. Mutation: remove
+        the floor → this fragment lands and the test goes RED."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# L\n\n## What Worked\n\n- existing lesson here now\n")
+            frag = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="tests pass",  # <5 words, no sentence — a fragment, not a lesson
+                source_run_id="session_deadbeef",
+                confidence=0.5,
+                source_stage="writeback",
+            )
+            assert apply_to_ddd(frag, project_dir) == "rejected_low_value"
+            # A real lesson on the SAME path still lands (floor, not a taste judge).
+            real = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="doc-wide dedup at the chokepoint stops cross-section silt re-accumulating",
+                source_run_id="session_deadbeef",
+                confidence=0.5,
+                source_stage="writeback",
+            )
+            assert apply_to_ddd(real, project_dir) == "applied"
 
     def test_applied_returns_status_string(self):
         """Successful append returns 'applied' (status contract, not bool True)."""
@@ -478,7 +529,7 @@ class TestApplyToDDD:
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
                 target_section="What Worked",
-                content="brand new lesson text",
+                content="a brand new lesson worth keeping in the brain",
                 source_run_id="run_ok",
                 confidence=0.7,
             )
@@ -568,6 +619,34 @@ class TestCrossFormatDedup:
                 target_section="What Failed",
                 content=text,
                 source_run_id="run_dup2",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "duplicate"
+
+    def test_docwide_dedup_catches_cross_section_duplicate(self):
+        """The 170K-archive root cause (measured 2026-07-20): the SAME lesson
+        re-written under a DIFFERENT section slips a section-scoped dedup and
+        re-accumulates. Dedup must be DOC-WIDE (content_signature across every
+        bullet in the doc), not section-scoped. Mutation: revert to section-only
+        → this dup lands and this test goes RED."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        text = "prevention over recovery beats runtime error handling everywhere"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            # Same lesson already lives under 'What Worked' …
+            doc.write_text(
+                "# L\n\n## What Worked\n\n"
+                f"- {text} (2026-06-08, run_x, auto-cultivated)\n\n"
+                "## What Failed\n\n"
+            )
+            # … and a new proposal targets a DIFFERENT section ('What Failed').
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Failed",
+                content=text,
+                source_run_id="run_cross",
                 confidence=0.7,
             )
             assert apply_to_ddd(p, project_dir) == "duplicate"
