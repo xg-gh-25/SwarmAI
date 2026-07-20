@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 620" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="arG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7ee787"/></marker>
+    <marker id="arP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d2a8ff"/></marker>
+  </defs>
+  <rect width="940" height="620" fill="#0d1117" rx="12"/>
+
+  <text x="470" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">AI-Ready-Repo — Three Layers of Understanding</text>
+  <text x="470" y="48" text-anchor="middle" fill="#8b949e" font-size="10">Any codebase → structured artifacts both AI agents AND humans truly understand · increasing abstraction ↓</text>
+
+  <!-- INPUT -->
+  <rect x="40" y="68" width="200" height="46" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="140" y="88" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">Any Codebase</text>
+  <text x="140" y="104" text-anchor="middle" fill="#8b949e" font-size="8">+ optional docs / signals / git history</text>
+  <line x1="240" y1="91" x2="300" y2="91" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#arP)"/>
+  <text x="270" y="84" text-anchor="middle" fill="#8b949e" font-size="8">engine</text>
+
+  <!-- AGENTS.md loader (entry point, spans right) -->
+  <rect x="640" y="68" width="260" height="46" rx="8" fill="#1c1029" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="770" y="88" text-anchor="middle" fill="#f0b429" font-size="11" font-weight="bold">AGENTS.md — ≤150-line entry point</text>
+  <text x="770" y="104" text-anchor="middle" fill="#8b949e" font-size="8">the loader · progressive disclosure · loads deep context by task type</text>
+
+  <!-- Layer 1: code-intel.json -->
+  <rect x="40" y="140" width="860" height="120" rx="10" fill="none" stroke="#58a6ff" stroke-width="1.6"/>
+  <rect x="40" y="140" width="200" height="120" rx="10" fill="#0e1a2b"/>
+  <text x="58" y="166" fill="#58a6ff" font-size="13" font-weight="bold">① code-intel.json</text>
+  <text x="58" y="184" fill="#e6edf3" font-size="10">machine-precise skeleton</text>
+  <text x="58" y="204" fill="#8b949e" font-size="8.5">domains[] / flows[] / steps[]</text>
+  <text x="58" y="219" fill="#8b949e" font-size="8.5">modules · routes · edges</text>
+  <text x="58" y="234" fill="#8b949e" font-size="8.5">id · file:line · mermaid src</text>
+  <text x="58" y="251" fill="#7ee787" font-size="8">AST + regex extracted (deterministic)</text>
+  <text x="270" y="170" fill="#e6edf3" font-size="9.5" font-weight="bold">USE</text>
+  <text x="270" y="188" fill="#8b949e" font-size="9">· deterministic lookup — "where is the handler"</text>
+  <text x="270" y="204" fill="#8b949e" font-size="9">· recall index (BM25 domain leg)</text>
+  <text x="270" y="220" fill="#8b949e" font-size="9">· incremental-merge anchor (fingerprint + keep-last)</text>
+  <text x="270" y="236" fill="#8b949e" font-size="9">· the fact skeleton every LLM assertion anchors to</text>
+  <text x="890" y="252" text-anchor="end" fill="#58a6ff" font-size="8" font-style="italic">facts</text>
+
+  <line x1="470" y1="260" x2="470" y2="278" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arG)"/>
+  <text x="484" y="272" fill="#8b949e" font-size="8">generate + LLM-thicken + human-augment</text>
+
+  <!-- Layer 2: spec-details -->
+  <rect x="40" y="282" width="860" height="132" rx="10" fill="none" stroke="#7ee787" stroke-width="2"/>
+  <rect x="40" y="282" width="200" height="132" rx="10" fill="#0e1f14"/>
+  <text x="58" y="308" fill="#7ee787" font-size="13" font-weight="bold">② spec-details/</text>
+  <text x="58" y="325" fill="#e6edf3" font-size="10">&lt;domain&gt;.spec.md ⭐</text>
+  <text x="58" y="344" fill="#8b949e" font-size="8.5">rich-understanding layer</text>
+  <text x="58" y="359" fill="#8b949e" font-size="8.5">business rules · contracts</text>
+  <text x="58" y="374" fill="#8b949e" font-size="8.5">exceptions · arch diagram</text>
+  <text x="58" y="389" fill="#8b949e" font-size="8.5">user-flow · issues · gaps</text>
+  <text x="58" y="406" fill="#f0b429" font-size="8">every assertion: anchor + verified</text>
+  <text x="270" y="310" fill="#e6edf3" font-size="9.5" font-weight="bold">USE — AI + human co-read the SAME artifact</text>
+  <text x="270" y="330" fill="#8b949e" font-size="9">· AI recall for judgment (only [human] + verified facts injected)</text>
+  <text x="270" y="346" fill="#8b949e" font-size="9">· human decision / sign-off — "can I sign my name to this being correct"</text>
+  <text x="270" y="362" fill="#8b949e" font-size="9">· the layer that lets an engineer SAFELY change legacy code</text>
+  <text x="270" y="385" fill="#7ee787" font-size="8.5" font-weight="bold">Reverse Documentation Engineering: Legacy Code → signable Spec</text>
+  <text x="270" y="401" fill="#8b949e" font-size="8">diagrams = mermaid (text AI parses + human renders), not SVG/PNG (§2.3)</text>
+  <text x="890" y="406" text-anchor="end" fill="#7ee787" font-size="8" font-style="italic">domain understanding</text>
+
+  <line x1="470" y1="414" x2="470" y2="432" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#arP)"/>
+  <text x="484" y="426" fill="#8b949e" font-size="8">domain issue escalates → reference-up (never copy)</text>
+
+  <!-- Layer 3: DDD -->
+  <rect x="40" y="436" width="860" height="120" rx="10" fill="none" stroke="#d2a8ff" stroke-width="1.6"/>
+  <rect x="40" y="436" width="200" height="120" rx="10" fill="#170e29"/>
+  <text x="58" y="462" fill="#d2a8ff" font-size="13" font-weight="bold">③ 4-file DDD</text>
+  <text x="58" y="480" fill="#e6edf3" font-size="10">project-level · concern-axis</text>
+  <text x="58" y="500" fill="#8b949e" font-size="8.5">battle-tested, 8 projects</text>
+  <text x="58" y="515" fill="#8b949e" font-size="8.5">automated cultivation</text>
+  <text x="58" y="532" fill="#8b949e" font-size="8">orthogonal to ② (§8)</text>
+  <text x="270" y="462" fill="#e6edf3" font-size="9.5" font-weight="bold">USE — teaches JUDGMENT (why/how/lesson/state)</text>
+  <text x="270" y="482" fill="#8b949e" font-size="9">PRODUCT.md — why we build it / non-goals</text>
+  <text x="270" y="498" fill="#8b949e" font-size="9">TECH.md — how + constraints ("never raw SQL")</text>
+  <text x="270" y="514" fill="#8b949e" font-size="9">IMPROVEMENT.md — what failed before</text>
+  <text x="270" y="530" fill="#8b949e" font-size="9">PROJECT.md — current state / DoD</text>
+  <text x="890" y="548" text-anchor="end" fill="#d2a8ff" font-size="8" font-style="italic">project concerns</text>
+
+  <text x="470" y="588" text-anchor="middle" fill="#e6edf3" font-size="10" font-style="italic">Three layers by abstraction — each consumable by BOTH AI and humans, differing only in granularity: facts → domain understanding → project concerns</text>
+  <text x="470" y="606" text-anchor="middle" fill="#8b949e" font-size="9">Output targets: Kiro · Claude Code · Codex · Cursor · 12+ agent IDEs (install adapters)</text>
+</svg>

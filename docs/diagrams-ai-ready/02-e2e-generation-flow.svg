@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 640" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <marker id="fr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="frG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7ee787"/></marker>
+    <marker id="frO" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f78166"/></marker>
+  </defs>
+  <rect width="940" height="640" fill="#0d1117" rx="12"/>
+
+  <text x="470" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">E2E Generation Flow — "make [repo] AI-ready"</text>
+  <text x="470" y="48" text-anchor="middle" fill="#8b949e" font-size="10">2 human touchpoints (INPUT + ENRICH) · everything else autonomous · deterministic ingest, LLM understanding, sub-agent verify</text>
+
+  <!-- vertical pipeline, left column -->
+  <!-- INPUT -->
+  <rect x="40" y="66" width="420" height="40" rx="7" fill="#1c1029" stroke="#f0b429" stroke-width="1.6"/>
+  <text x="56" y="84" fill="#f0b429" font-size="11" font-weight="bold">INPUT</text>
+  <text x="56" y="99" fill="#8b949e" font-size="8.5">👤 Touchpoint #1 — repo path (required) + optional signals + output language</text>
+  <line x1="250" y1="106" x2="250" y2="120" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#fr)"/>
+
+  <!-- INGEST -->
+  <rect x="40" y="122" width="420" height="72" rx="7" fill="#0e1a2b" stroke="#58a6ff" stroke-width="1.4"/>
+  <text x="56" y="140" fill="#58a6ff" font-size="11" font-weight="bold">INGEST</text>
+  <text x="360" y="140" text-anchor="end" fill="#7ee787" font-size="8">deterministic · ai_ready_helpers.py</text>
+  <text x="56" y="157" fill="#8b949e" font-size="9">· gather_repo_info() → file tree, tech stack, git stats</text>
+  <text x="56" y="172" fill="#8b949e" font-size="9">· parse_git_gotchas() → evidence-grounded WHEN/RISK/BECAUSE</text>
+  <text x="56" y="187" fill="#8b949e" font-size="9">· extract_import_graph() → dependency edges from real imports</text>
+  <line x1="250" y1="194" x2="250" y2="208" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#fr)"/>
+
+  <!-- UNDERSTAND -->
+  <rect x="40" y="210" width="420" height="92" rx="7" fill="#0e1a2b" stroke="#58a6ff" stroke-width="1.4"/>
+  <text x="56" y="228" fill="#58a6ff" font-size="11" font-weight="bold">UNDERSTAND</text>
+  <text x="404" y="228" text-anchor="end" fill="#d2a8ff" font-size="8">LLM reads actual code — min 8 files</text>
+  <text x="56" y="245" fill="#8b949e" font-size="9">· function-level tables for top hot-zone files</text>
+  <text x="56" y="260" fill="#8b949e" font-size="9">· route extraction (regex-first: FastAPI/Express/Next) → routes[] + id</text>
+  <text x="56" y="275" fill="#8b949e" font-size="9">· domain classification (entry-point grounding §5.2) → domains/flows/steps</text>
+  <text x="56" y="290" fill="#f0b429" font-size="9">· anchor every LLM assertion (§6) — verified / absence_evidence</text>
+  <line x1="250" y1="302" x2="250" y2="316" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#fr)"/>
+
+  <!-- GENERATE -->
+  <rect x="40" y="318" width="420" height="100" rx="7" fill="#0e1f14" stroke="#7ee787" stroke-width="1.6"/>
+  <text x="56" y="336" fill="#7ee787" font-size="11" font-weight="bold">GENERATE</text>
+  <text x="56" y="353" fill="#8b949e" font-size="9">· AGENTS.md (≤150 lines, entry point)</text>
+  <text x="56" y="368" fill="#8b949e" font-size="9">· .ai-ready/ PRODUCT · TECH · IMPROVEMENT · PROJECT.md</text>
+  <text x="56" y="383" fill="#8b949e" font-size="9">· .ai-ready/code-intel.json (v3 — domains/flows/steps, validated)</text>
+  <text x="56" y="398" fill="#8b949e" font-size="9">· .ai-ready/spec-details/&lt;domain&gt;.spec.md (8 sections, mermaid)</text>
+  <text x="56" y="412" fill="#8b949e" font-size="9">· .ai-ready/ai-ready.json + REVIEW-REPORT.md</text>
+  <line x1="250" y1="418" x2="250" y2="432" stroke="#7ee787" stroke-width="1.5" marker-end="url(#frG)"/>
+
+  <!-- VERIFY -->
+  <rect x="40" y="434" width="420" height="58" rx="7" fill="#1c1029" stroke="#d2a8ff" stroke-width="1.6"/>
+  <text x="56" y="452" fill="#d2a8ff" font-size="11" font-weight="bold">VERIFY</text>
+  <text x="404" y="452" text-anchor="end" fill="#8b949e" font-size="8">fresh sub-agent · sees ONLY the output</text>
+  <text x="56" y="469" fill="#8b949e" font-size="9">· 3 real tasks drawn from git log — could a fresh agent succeed?</text>
+  <text x="56" y="484" fill="#8b949e" font-size="9">· + equivalence check where tests/runtime exist (§7) → equivalence_score</text>
+  <line x1="250" y1="492" x2="250" y2="506" stroke="#7ee787" stroke-width="1.5" marker-end="url(#frG)"/>
+
+  <!-- DELIVER -->
+  <rect x="40" y="508" width="420" height="72" rx="7" fill="#0e1f14" stroke="#7ee787" stroke-width="1.6"/>
+  <text x="56" y="526" fill="#7ee787" font-size="11" font-weight="bold">DELIVER</text>
+  <text x="56" y="543" fill="#8b949e" font-size="9">· resolve_output_path() → deterministic location</text>
+  <text x="56" y="558" fill="#8b949e" font-size="9">· install.sh → 12 IDEs via platforms_table (non-destructive)</text>
+  <text x="56" y="573" fill="#8b949e" font-size="9">· generate_learning_tour() → topological onboarding order</text>
+
+  <!-- Human touchpoint #2 note -->
+  <rect x="480" y="210" width="200" height="92" rx="7" fill="#1c1029" stroke="#f0b429" stroke-width="1.2" stroke-dasharray="4,2"/>
+  <text x="580" y="232" text-anchor="middle" fill="#f0b429" font-size="9.5" font-weight="bold">👤 Touchpoint #2 — ENRICH</text>
+  <text x="580" y="250" text-anchor="middle" fill="#8b949e" font-size="8">agent asks targeted questions</text>
+  <text x="580" y="264" text-anchor="middle" fill="#8b949e" font-size="8">only where code can't reveal intent</text>
+  <text x="580" y="282" text-anchor="middle" fill="#8b949e" font-size="8">everything else = autonomous</text>
+  <line x1="480" y1="256" x2="462" y2="256" stroke="#f0b429" stroke-width="1.2" stroke-dasharray="4,2" marker-end="url(#fr)"/>
+
+  <!-- Maintenance loop, right column -->
+  <rect x="480" y="318" width="420" height="262" rx="10" fill="none" stroke="#f78166" stroke-width="1.5" stroke-opacity="0.7"/>
+  <text x="690" y="340" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Post-install maintenance — self-maintaining loop</text>
+
+  <rect x="500" y="356" width="380" height="40" rx="6" fill="#161b22" stroke="#f78166" stroke-width="1"/>
+  <text x="516" y="373" fill="#e6edf3" font-size="9.5" font-weight="bold">check_staleness()</text>
+  <text x="516" y="388" fill="#8b949e" font-size="8.5">per-file fresh/stale · content-hash, not mtime (§9.1 loop 4)</text>
+
+  <rect x="500" y="404" width="380" height="40" rx="6" fill="#161b22" stroke="#f78166" stroke-width="1"/>
+  <text x="516" y="421" fill="#e6edf3" font-size="9.5" font-weight="bold">incremental_update()</text>
+  <text x="516" y="436" fill="#8b949e" font-size="8.5">batch-existing + keep-last merge · changed files only (§10)</text>
+
+  <rect x="500" y="452" width="380" height="40" rx="6" fill="#161b22" stroke="#f78166" stroke-width="1"/>
+  <text x="516" y="469" fill="#e6edf3" font-size="9.5" font-weight="bold">recall + cultivation</text>
+  <text x="516" y="484" fill="#8b949e" font-size="8.5">domain leg + [human]-marker leg + independent refresh (§9)</text>
+
+  <rect x="500" y="500" width="380" height="40" rx="6" fill="#161b22" stroke="#f78166" stroke-width="1"/>
+  <text x="516" y="517" fill="#e6edf3" font-size="9.5" font-weight="bold">decay / archive</text>
+  <text x="516" y="532" fill="#8b949e" font-size="8.5">skeleton-gone → _archive/ · [human] never silently lost (§9.4)</text>
+
+  <path d="M690,540 L690,556 L500,556" fill="none" stroke="#f78166" stroke-width="1.2" stroke-dasharray="3,2"/>
+  <path d="M500,556 Q490,556 490,530 L490,376 Q490,356 500,356" fill="none" stroke="#f78166" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#frO)"/>
+  <text x="694" y="570" fill="#f78166" font-size="8">loops on file/config change</text>
+
+  <!-- deliver → maintenance handoff -->
+  <path d="M460,544 Q472,544 472,300 Q472,240 476,240" fill="none" stroke="#7ee787" stroke-width="1.2" opacity="0.5"/>
+  <line x1="460" y1="437" x2="478" y2="380" stroke="#7ee787" stroke-width="1.2" opacity="0.5" marker-end="url(#frG)"/>
+
+  <text x="470" y="612" text-anchor="middle" fill="#8b949e" font-size="9" font-style="italic">Deterministic ingest (zero LLM) · LLM only for understanding · fresh-agent verify · then the loop keeps artifacts alive</text>
+</svg>
