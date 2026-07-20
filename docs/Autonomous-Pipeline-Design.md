@@ -9,13 +9,19 @@ status: current
 
 # Autonomous Pipeline — Coding as Black Box
 
-> **Last major update — 2026-07-20:** Refreshed against the live orchestrator
-> (`s_autonomous-pipeline/INSTRUCTIONS.md`). Added the terminal **COMPLETE** stage
-> doc (`stages/complete.md`) to the file-structure reference and clarified the
+> **Last refresh — 2026-07-20 (PE-review pass):** Re-verified every concrete claim
+> against live source. Corrected the **runtime-pattern count from 40 (RP1-40) to 51
+> (RP1-RP51)** everywhere it appears — RP41-51 are the newest "gate & test integrity"
+> family (`REVIEW_PATTERNS.md`, verified). Replaced the stale 14-command
+> `artifact_cli.py` table in §5 with the **live 28-subcommand surface** (help strings
+> taken verbatim from source), grouped by run-lifecycle / artifact-store / telemetry /
+> DDD-governance. Refreshed **Figure 1** (`diagrams-pipeline/01-overall-architecture.svg`)
+> to annotate the **3 gates (★)** on EVALUATE / PLAN→BUILD / ADVERSARIAL and add the
+> "9 stages · 3 gates · 2 modes" subtitle — it previously showed only "9 stages +
+> convergence".
+> Prior 2026-07-20 update: added the terminal **COMPLETE** stage doc to the
+> file-structure reference; refreshed **Figure 3** for all three gates; clarified the
 > canonical **9 stages · 3 gates · 2 modes** shape (Gate 0 added in v6, 2026-06-26).
-> Also refreshed **Figure 3** (`diagrams-pipeline/03-nine-stages.svg`) to annotate all
-> three gates (Gate 0 in EVALUATE, Gate 1 on the PLAN→BUILD boundary, Gate 2 =
-> ADVERSARIAL inside DELIVER) — the prior diagram predated Gate 0.
 > Prior notable updates: v3 rewrite to the dual-mode implementation (2026-06);
 > "Three Gates" section added to complete the external framing.
 
@@ -47,7 +53,7 @@ Dual-mode pipeline (bounded tasks + open-ended goals) with shared decision front
 | Self-review blind spot elimination | Fresh-context adversarial sub-agents (zero builder bias) |
 | Failure mode safety | Always "escalate with gap report" — never "ship despite known issues" |
 | Cross-run learning | pipeline_intelligence.json + DDD cultivation + RP/OP pattern growth |
-| Structural error prevention | 40 runtime patterns (RP1-40) + 8 operational invariants (OP1-8) |
+| Structural error prevention | 51 runtime patterns (RP1-51) + 8 operational invariants (OP1-8) |
 | Dual execution modes | Bounded tasks (linear) + open-ended goals (iterative) — same quality gates |
 | Background autonomy | Job System decouples pipeline from chat; runs overnight, notifies on completion |
 
@@ -55,9 +61,7 @@ Dual-mode pipeline (bounded tasks + open-ended goals) with shared decision front
 
 ## 2. Architecture Overview
 
-![Figure 1: Overall Architecture](diagrams-pipeline/01-overall-architecture.svg)
-
-![Figure 9: Dual-Mode Execution Architecture (v3)](diagrams-pipeline/09-dual-mode-architecture.svg)
+![Figure 1: Autonomous Pipeline — 9 Stages · 3 Gates · 2 Modes (official v4 figure)](../assets/aidlc-autonomous-pipeline-v4.svg)
 
 ### The Dual-Mode System
 
@@ -318,7 +322,7 @@ Why gates and not just careful prompting: **carefulness doesn't scale, gates do.
 **Trigger:** >3 files OR >100 lines OR touches auth/data/infra code.
 
 Spawn 3 parallel sub-agents:
-- **Code Quality Agent** — RP1-RP40 checklist, integration trace, depth analysis
+- **Code Quality Agent** — RP1-RP51 checklist, integration trace, depth analysis
 - **Security & Safety Agent** — Confidence-gated scan per file (1-10 + exploit scenario), wire test (WR1-4)
 - **UX & Test Agent** — Only if frontend files changed; discoverability, feedback states, escape handling
 
@@ -455,7 +459,7 @@ Plus **Meta-Review** sub-agent for operational blind spots.
 | Agent | File | Responsibility |
 |-------|------|---------------|
 | **Spec Compliance** | `review-agents/spec-compliance.md` | AC verification: MISSING / EXTRA / MISUNDERSTOOD. Serial, blocking. |
-| **Code Quality** | `review-agents/code-quality.md` | RP1-40 checklist, integration trace, replace/move parity, depth/seam analysis |
+| **Code Quality** | `review-agents/code-quality.md` | RP1-51 checklist, integration trace, replace/move parity, depth/seam analysis |
 | **Security & Safety** | `review-agents/security-safety.md` | Confidence-gated security scan (1-10 per file + exploit scenario), wire test WR1-4 |
 | **UX & Test** | `review-agents/ux-test.md` | Frontend-only. Discoverability, feedback states, escape handling, E2E trace |
 
@@ -477,13 +481,14 @@ Dispatched during DELIVER's adversarial gate. Each is scope-gated, produces JSON
 
 ### Pattern Checklists
 
-**REVIEW_PATTERNS.md (RP1-RP40)** — 40 production-proven bug patterns organized by category:
+**REVIEW_PATTERNS.md (RP1-RP51)** — 51 production-proven bug patterns organized by category:
 - Resource lifecycle (RP1-2, RP6, RP11)
 - React/frontend (RP3-5, RP12, RP20-21, RP23)
 - API boundaries (RP7-9, RP14, RP24)
 - State & async (RP13, RP15-16, RP22, RP27)
 - Data integrity (RP17-18, RP28, RP34)
 - Production context (RP19, RP25-26, RP30, RP35-40)
+- Gate & test integrity (RP41-51) — the newest family, distilled from adversarial-review misses: non-orthogonal liveness/health discriminators (RP41), sample-tuned discriminators (RP42), destructive ops keyed by a non-unique field (RP43), identity gates keyed by a raw user name (RP44), injected-deps tests that leave the real adapter uncovered (RP45), enum gates that fail-open on an un-enumerated tier (RP46), test-theater — a test that cannot fail on the bug it guards (RP47), stale/false comments (RP48), redaction written as a denylist instead of an allowlist (RP49), verification gates that fail OPEN (RP50), producer/validator allowlist drift (RP51)
 
 Every applicable pattern must be explicitly verified or marked N/A. Silence = unchecked = fail.
 
@@ -506,24 +511,56 @@ Every applicable pattern must be explicitly verified or marked N/A. Silence = un
 
 ### artifact_cli.py — State Management
 
-The pipeline's state machine is managed by `artifact_cli.py`:
+The pipeline's state machine is managed by `artifact_cli.py`. The live command
+surface (28 subcommands) groups into run lifecycle, artifact store, telemetry/
+intelligence, DDD governance, and delivery:
+
+**Run lifecycle**
 
 | Command | Purpose |
 |---------|---------|
-| `run-create` | Initialize new pipeline run with metadata |
-| `run-update` | Update run status (code-enforced blocking gates) |
-| `run-get` | Retrieve run state |
-| `run-budget` | Check token budget remaining |
-| `run-checkpoint` | Save checkpoint for resume |
+| `run-create` | Initialize new pipeline run with metadata (auto-abandons stale same-project runs) |
+| `run-update` | Update run/stage status (code-enforced blocking gates) |
+| `run-get` | Retrieve full run state (stages[] array) |
+| `run-commit` | Auto local-commit this run's files after PUSH-READY (never pushes) |
+| `run-checkpoint` | Save checkpoint for resume (budget-gated) |
 | `run-resume` | Restore from checkpoint |
-| `run-status` | Pipeline run status summary |
+| `run-history` | Historical token costs for calibration |
+| `run-budget` | Check token budget remaining + `should_checkpoint` |
+| `run-status` | Cross-project run dashboard (progress "3/8") |
 | `run-report` | Generate REPORT.md from run data |
-| `run-observe` | Record telemetry event |
-| `run-cultivate` | Auto-apply additive DDD lessons |
-| `discover` | Find artifacts for a project |
+
+**Artifact store**
+
+| Command | Purpose |
+|---------|---------|
+| `discover` | Find artifacts for a project (by type) |
 | `publish` | Store artifact with schema validation |
 | `state` | Query artifact state |
 | `advance` | Move artifact to next stage |
+
+**Telemetry & meta-intelligence**
+
+| Command | Purpose |
+|---------|---------|
+| `run-observe` | Record a telemetry event |
+| `run-metrics` | Generate METRICS.json for a pipeline run |
+| `run-analytics` | Cross-run pipeline analytics |
+| `learn` | Record pipeline outcome for meta-intelligence learning |
+| `cleanup-orphans` | Mark stale 'running' runs as abandoned |
+| `projects` | List all projects |
+
+**DDD governance & delivery**
+
+| Command | Purpose |
+|---------|---------|
+| `run-cultivate` | Auto-apply additive DDD lessons (REFLECT) |
+| `ddd-health` | 5-dimensional DDD health scoring per section |
+| `ddd-retire` | Retire ONE named (title, section) knowledge entry: archive + strip |
+| `ddd-noise` | Per-doc DDD noise gate (reclaimable noise_rate + PASS/FAIL) |
+| `bind` | PULL: clone + code-intel every binding in a project's bindings.yaml |
+| `release-gate` | CI-green gate: poll CI for HEAD, write marker on green (authorizes `gh release`) |
+| `schema` | Print a stage's expected artifact schema + template |
 
 ### Scripts
 
@@ -737,7 +774,7 @@ This is Coding as Black Box.
 s_autonomous-pipeline/
 ├── SKILL.md                    # Skill frontmatter + description
 ├── INSTRUCTIONS.md             # Orchestrator (the mechanical run-loop)
-├── REVIEW_PATTERNS.md          # RP1-RP40 bug pattern checklist
+├── REVIEW_PATTERNS.md          # RP1-RP51 bug pattern checklist
 ├── OPERATIONAL_PATTERNS.md     # OP1-OP8 system invariants
 ├── stages/
 │   ├── evaluate.md             # Stage 1: intake + profile selection (Gate 0)
