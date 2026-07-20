@@ -1,6 +1,6 @@
 ---
 name: autonomous-pipeline
-pipeline_version: "6.0"  # 3 gates (Gate 0 EVALUATE family + Gate 1 Skeptic/SSA + Gate 2 Adversarial) · 10 stages · 2 execution modes (full one-shot / goal iterative). See INSTRUCTIONS.md Architecture.
+pipeline_version: "6.0"  # 3 gates (Gate 0 EVALUATE family + Gate 1 Skeptic/SSA + Gate 2 Adversarial) · 9 stages · 2 execution modes (full one-shot / goal iterative). See INSTRUCTIONS.md Architecture.
 description: "Orchestrate the full AIDLC Autonomous Pipeline from a one-sentence requirement to a PR-ready\
   \ delivery with TDD methodology. DDD drives judgment, SDD produces specs, TDD verifies delivery.\
   \ Stages: Evaluate, Think, Plan, Build, Review, Test, Deliver, Reflect. Checkpoints on BLOCK or context limits.\n\

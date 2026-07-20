@@ -73,7 +73,7 @@ about to run and why*, not just that it started:
 ```
 🚀 Pipeline started: <requirement> (run_<id>) · Project: <PROJECT>
 
-   Architecture: 3 gates · 10 stages · 2 execution modes
+   Architecture: 3 gates · 9 stages · 2 execution modes
    • Gate 0 (EVALUATE→THINK) — is the problem/framing understood? (diagnose-before-build family)
    • Gate 1 (after PLAN)      — is the plan sound, root not symptom? (Skeptic + SSA)
    • Gate 2 (in DELIVER)      — is the build actually correct? (Adversarial sub-agent)
@@ -123,21 +123,24 @@ based on the evaluation's scope classification:
 | bugfix | **bugfix** | evaluate, think, plan, build, review, test, deliver, reflect |
 | goal | **goal** | evaluate, think, plan, goal_cycle, deliver, reflect |
 
-> **Why ≤8 stage entries, not 10?** The architecture is **10 stages across 3 gates**,
-> but two of them are *gate moments inside* an existing stage, not separate
-> orchestration steps:
+> **Why ≤8 stage entries, not 9?** The canonical architecture is **9 stages across
+> 3 gates** (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER
+> → REFLECT). Two of those "steps" are not separate orchestration rows:
+> - **ADVERSARIAL** is architecturally stage 7 but executes *inside DELIVER* (spawn
+>   fresh-context sub-agent), a mandatory blocking gate — so it never appears as its
+>   own row in a profile's stage list. See `stages/deliver.md` § "Adversarial Review
+>   Gate (BLOCKING)". This is why `full` lists 8 entries while docs say "9 stages".
 > - **Gate 0** — the diagnose-before-build family (Understanding + Ambiguity scan +
->   greenfield Working-Backwards) fires *inside EVALUATE*, at the EVALUATE→THINK
->   boundary. Code-enforced by `pipeline_validator.py` at publish time. See TECH.md
->   "diagnose-before-build gate family" + `stages/evaluate.md`.
-> - **Gate 2 — ADVERSARIAL** fires *inside DELIVER* (spawn fresh-context sub-agent),
->   a mandatory blocking gate, not a row in the profile stage list. See
->   `stages/deliver.md` § "Adversarial Review Gate (BLOCKING)".
+>   greenfield Working-Backwards) is not a stage at all; it fires *inside EVALUATE*,
+>   at the EVALUATE→THINK boundary. Code-enforced by `pipeline_validator.py` at
+>   publish time. See TECH.md "diagnose-before-build gate family" + `stages/evaluate.md`.
 >
-> So a profile's stage list shows the orchestration steps (≤8); the 3 gates
-> (Gate 0 in EVALUATE, Gate 1 after PLAN, Gate 2 in DELIVER) ride *within* them.
-> `★ Gate 1`/`★ Gate 2` are wired into the ④/⑧ landmarks, GS021, and tests — do
-> not renumber them; `★ Gate 0` is the EVALUATE-stage landmark.
+> `COMPLETE` (Step 6 — read `stages/complete.md`) is the terminal *output-format* step,
+> not a quality stage, so it is not counted in the 9. So a profile's stage list shows
+> the orchestration steps (≤8); the 3 gates (Gate 0 in EVALUATE, Gate 1 after PLAN,
+> Gate 2 in DELIVER) ride *within* them. `★ Gate 1`/`★ Gate 2` are wired into the
+> ④/⑧ landmarks, GS021, and tests — do not renumber them; `★ Gate 0` is the
+> EVALUATE-stage landmark.
 
 ### Profile Selection Principle
 
