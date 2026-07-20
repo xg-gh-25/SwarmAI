@@ -10,8 +10,8 @@ import type { Message, ChatMessage } from '../../types';
 
 // ─── Test Helpers ───
 
-function makeMsg(id: string, role: 'user' | 'assistant' | 'system' = 'user', text = 'hello'): Message {
-  return { id, role, content: [{ type: 'text', text }], timestamp: new Date().toISOString() };
+function makeMsg(id: string, role: 'user' | 'assistant' | 'system' = 'user', text = 'hello', timestamp?: string): Message {
+  return { id, role, content: [{ type: 'text', text }], timestamp: timestamp ?? new Date().toISOString() };
 }
 
 function makeChatMsg(id: string, role: 'user' | 'assistant' | 'system' = 'user', text = 'hello'): ChatMessage {
@@ -1138,24 +1138,34 @@ describe('MessageStore clientId dedup', () => {
   it('reconcile preserves local messages without clientId match', () => {
     const store = new MessageStore();
 
-    // Insert optimistic + a synthetic boundary marker
-    const optimistic = makeMsg('local-1718700000-xyz', 'user', 'Test');
-    const boundary = makeMsg('boundary-resume', 'system', '--- Session Resumed ---');
+    // Insert optimistic + a synthetic boundary marker.
+    // FIXED timestamps encode real resume semantics + kill the flake: the
+    // resume boundary is created AT resume time, i.e. strictly AFTER the prior
+    // user message. Chronological insertion (_findChronologicalPosition, sorts
+    // ASC by timestamp) then deterministically places it last. Using
+    // new Date() for all three made both timestamps land in the same ms on a
+    // fast machine (equal → tiebreak kept order) but split across a ms boundary
+    // on a slow one (boundary earlier → sorted BEFORE the DB msg) → CI flake.
+    const optimistic = makeMsg('local-1718700000-xyz', 'user', 'Test', '2026-01-01T00:00:00.000Z');
+    const boundary = makeMsg('boundary-resume', 'system', '--- Session Resumed ---', '2026-01-01T00:00:01.000Z');
     store.replace([optimistic, boundary]);
 
-    // DB only has the real version of the user message
+    // DB only has the real version of the user message. Its timestamp matches
+    // the optimistic message it replaces (the same user turn), so it stays
+    // chronologically BEFORE the later resume boundary.
     const dbMessages: ChatMessage[] = [{
       id: 'uuid-real-002',
       sessionId: 'sess-1',
       role: 'user',
       content: [{ type: 'text', text: 'Test' }] as any,
-      createdAt: new Date().toISOString(),
+      createdAt: '2026-01-01T00:00:00.000Z',
       metadata: { client_id: 'local-1718700000-xyz' },
     }];
 
     store.reconcile(dbMessages);
 
-    // Should have 2: DB version (replaced optimistic) + boundary (preserved)
+    // Should have 2: DB version (replaced optimistic) + boundary (preserved),
+    // in chronological order (user turn first, resume boundary last).
     expect(store.messages).toHaveLength(2);
     expect(store.messages[0].id).toBe('uuid-real-002');
     expect(store.messages[1].id).toBe('boundary-resume');
