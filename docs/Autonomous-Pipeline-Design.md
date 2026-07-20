@@ -836,8 +836,7 @@ The pipeline runs as a **skill invocation** within a single agent session. No se
 
 | Document | Scope | Audience |
 |----------|-------|----------|
-| **This document** (Autonomous-Pipeline-Design.md) | Architecture + design decisions + how it all fits together | Anyone understanding the system |
-| **AIDLC-Phase3-Design.md** | Original conceptual framing (DDD+SDD+TDD closed loop, psychology) | Conceptual understanding |
+| **This document** (Autonomous-Pipeline-Design.md) | Architecture + design decisions + how it all fits together (supersedes the original AIDLC-Phase3 conceptual framing) | Anyone understanding the system |
 | **INSTRUCTIONS.md** | Mechanical orchestration (exact commands, routing tables, budget formulas) | The agent executing the pipeline |
 | **Stage docs** (stages/*.md) | Per-stage mechanics (blocking gates, anti-patterns, outputs) | The agent at each stage |
 | **Review-agents & specialists** | Sub-agent briefings (what to check, output format, confidence rules) | Spawned sub-agents |
