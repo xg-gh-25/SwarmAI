@@ -485,6 +485,82 @@ class TestApplyToDDD:
             assert apply_to_ddd(p, project_dir) == "applied"
 
 
+class TestContentSignature:
+    """content_signature() — format-agnostic normalizer that lets the two
+    IMPROVEMENT.md writers (cultivation + writeback hook) dedup against each
+    other. THE root fix: writeback's `- **DATE** (session xxx): text` and
+    cultivation's `- text (date, run, label)` must normalize to the SAME
+    signature for the same lesson text. (Gate-1 killer finding: the old
+    _extract_bullet_content strips only the TRAILING paren, so the writeback
+    prefix survives → the two never matched → 43K-corpus dup was a no-op.)"""
+
+    def test_cross_format_same_text_same_signature(self):
+        """The load-bearing invariant: same lesson text in BOTH bullet formats
+        → identical signature. This is what makes cross-writer dedup work."""
+        from core.ddd_cultivation import content_signature
+
+        text = "Both are valid workspace-relative paths that the resolver handles"
+        cultivation_fmt = f"- {text} (2026-06-08, run_abc123, auto-cultivated)"
+        writeback_fmt = f"- **2026-06-08** (session f1f7201b): {text}"
+        assert content_signature(cultivation_fmt) == content_signature(writeback_fmt)
+
+    def test_type_prefix_stripped(self):
+        """A [type]-prefixed cultivation bullet normalizes to the same sig as
+        the bare text."""
+        from core.ddd_cultivation import content_signature
+
+        text = "prevention over recovery beats runtime error handling"
+        typed = f"- [pitfall] **{text}** (2026-01-01, run_x, auto-cultivated)"
+        # bold-title cultivation form and plain form share the core signature
+        assert content_signature(typed) == content_signature(f"- {text}")
+
+    def test_distinct_text_distinct_signature(self):
+        """Guard against over-collision: genuinely different lessons that share
+        a common opening stem must NOT collapse to the same signature (Gate-1
+        #2 — whole-string normalize, NOT first-N-chars)."""
+        from core.ddd_cultivation import content_signature
+
+        a = "- Lesson learned: always verify the remote ref with gh api not local"
+        b = "- Lesson learned: always run the full build before pushing to main"
+        assert content_signature(a) != content_signature(b)
+
+    def test_whitespace_and_case_normalized(self):
+        """Signature is case- and whitespace-insensitive (cosmetic diffs are not
+        distinct lessons)."""
+        from core.ddd_cultivation import content_signature
+
+        assert content_signature("- The  Fix   Works") == content_signature("- the fix works")
+
+
+class TestCrossFormatDedup:
+    """AC2: apply_to_ddd dedup catches a duplicate even when the existing entry
+    is in the WRITEBACK format (the 43K-corpus shape). Mutation target: if the
+    dedup does not signature-normalize the EXISTING bullets, a writeback-format
+    dup slips through."""
+
+    def test_writeback_format_existing_blocks_cultivation_dup(self):
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        text = "governance co-authorship erodes compliance over time"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            # Existing entry is in the WRITEBACK format (the shape that silted
+            # the 43K archive) — a naive exact-string dedup misses it.
+            doc.write_text(
+                "# L\n\n## What Failed\n\n"
+                f"- **2026-06-08** (session abc12345): {text}\n"
+            )
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Failed",
+                content=text,
+                source_run_id="run_dup2",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "duplicate"
+
+
 class TestSafeAppendSectionsExistInDocs:
     """Drift guard (AC3, PIT28 single-source pattern): every section the
     cultivation engine appends to. Since apply_to_ddd now AUTO-CREATES a missing
