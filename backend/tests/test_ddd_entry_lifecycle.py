@@ -227,22 +227,56 @@ class TestAssessDecay:
         new_entry_transitions = [t for t in transitions if "Adversarial" in t.entry.title]
         assert len(new_entry_transitions) == 0  # Grace period
 
+    def test_judgment_types_are_evergreen_by_type(self):
+        """Step 3 (run_123652ae): decision/pitfall/correction are EVERGREEN BY TYPE —
+        immune to age-decay in ANY section/project, mirroring evergreen SECTIONS. A
+        real judgment lesson must not be buried on a timer merely for not being
+        recalled (Principle 1). Operational guideline/process still age-decay.
+        Mutation: remove the EVERGREEN_TYPES guard → the judgment entries transition
+        and this test goes RED."""
+        from core.ddd_entry_lifecycle import EntryMetadata
+        today = date(2026, 5, 19)
+        old_created = date(2025, 1, 1)   # ~500d — well past grace + archived threshold
+        old_ref = date(2025, 1, 1)
+        def _mk(t):
+            return EntryMetadata(
+                title=f"{t} entry idle 500d", entry_type=t, ref_count=0,
+                last_referenced=old_ref, decay_state="active",
+                created_date=old_created, section="What Failed",
+            )
+        # Judgment types: NO transition despite 500d idle.
+        for t in ("decision", "pitfall", "correction"):
+            trans = assess_decay([_mk(t)], today)
+            assert trans == [], f"{t} must be evergreen-by-type (got {trans})"
+        # Operational types: DO age-decay at the same age.
+        for t in ("guideline", "process"):
+            trans = assess_decay([_mk(t)], today)
+            assert len(trans) == 1 and trans[0].new_state in ("dormant", "archived"), \
+                f"{t} must still age-decay (got {trans})"
+
     def test_high_ref_no_longer_gets_extended_grace(self):
         """R2-prime (run_e50621b6): ref_count NO LONGER grants extended decay
         grace. ref is a dead input (no live body producer — Gate-2 verified), so
         honoring it only preserved toxic prose residue. An entry 100 days idle
-        decays at the normal 90d threshold REGARDLESS of ref_count."""
+        decays at the normal threshold REGARDLESS of ref_count.
+
+        Targets entry[3] "Old entry no refs" — a [guideline] (an OPERATIONAL type
+        that still age-decays). NOT entry[1] "5 rounds" which is a [pitfall], now
+        EVERGREEN by type (Step 3, run_123652ae) → immune to age-decay, so it can no
+        longer demonstrate the ref-count point."""
         entries = parse_entries(SAMPLE_CONTENT)
-        entries[1].ref_count = 10  # would have bought 2x grace pre-R2-prime
+        guideline = next(e for e in entries if e.title == "Old entry no refs")
+        assert guideline.entry_type == "guideline"  # non-evergreen type
+        guideline.ref_count = 10  # would have bought 2x grace pre-R2-prime
         # past the 30d grace (created) AND 100d idle (last_referenced)
-        entries[1].created_date = date(2026, 2, 1)
-        entries[1].last_referenced = date(2026, 2, 8)  # 100 days before 2026-05-19
+        guideline.created_date = date(2026, 2, 1)
+        guideline.last_referenced = date(2026, 2, 8)  # 100 days before 2026-05-19
         today = date(2026, 5, 19)
         transitions = assess_decay(entries, today)
-        # 100 days > 90d normal threshold → NOW transitions (ref ignored, no 2x)
-        high_ref_transitions = [t for t in transitions if "5 rounds" in t.entry.title]
-        assert len(high_ref_transitions) == 1
-        assert high_ref_transitions[0].new_state == "dormant"
+        # 100 days > normal threshold → transitions (ref ignored, no 2x)
+        hits = [t for t in transitions if t.entry.title == "Old entry no refs"]
+        assert len(hits) == 1
+        assert hits[0].new_state == "dormant"
 
     def test_dormant_days_override_ages_faster(self):
         """A2 (run_55cb38d6): the optional dormant_days param lets a caller age

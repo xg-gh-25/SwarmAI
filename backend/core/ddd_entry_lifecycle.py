@@ -118,6 +118,27 @@ GRACE_PERIOD_DAYS = 30
 DORMANT_THRESHOLD_DAYS = 60
 ARCHIVED_THRESHOLD_DAYS = 150
 
+# Types that are EVERGREEN BY TYPE for AGE-DECAY (Step 3, run_123652ae): a real
+# judgment lesson must never be buried on a timer merely for not being recalled
+# (Principle 1 — a brain that forgets its best judgment because a counter didn't
+# tick is failing). assess_decay treats these as immune to active→dormant→archived
+# age transitions, exactly like an evergreen SECTION. guideline/process (operational
+# notes) still age-decay normally. Safe because the intake gate (Step 1: dedup +
+# value floor) + the one-time cleanse (Step 2) guarantee LIVE judgment entries are
+# real, not silt. Genuine staleness is handled by evidence-based retire
+# (ddd_cultivation retire path), NEVER by silent age-death.
+#
+# ⚠️ DELIBERATELY DISTINCT from _KEEP_TYPES (below, ~line 946). The two govern
+# DIFFERENT actions and legitimately differ on `pitfall`:
+#   • EVERGREEN_TYPES → "never AGE-DECAY" (retention / recall-priority). Includes
+#     pitfall — the dominant hard-won failure-lesson type (measured: 294 across DDDs).
+#   • _KEEP_TYPES → "never RECLAIM-STRIP" (the harsher physical removal). Excludes
+#     pitfall (historically pitfalls were the reclaimable archived noise) and adds
+#     model/principle.
+# Do NOT unify them — a future reader who collapses these two sets re-breaks either
+# pitfall retention or reclaim safety.
+EVERGREEN_TYPES = frozenset({"decision", "pitfall", "correction"})
+
 # High-ref entries (ref >= HIGH_REF_THRESHOLD) get extended grace (2x)
 HIGH_REF_THRESHOLD = 10
 HIGH_REF_MULTIPLIER = 2
@@ -668,6 +689,15 @@ def assess_decay(
 
         # Evergreen section immunity
         if entry.section in _evergreen:
+            continue
+
+        # Evergreen-by-TYPE immunity (Step 3, run_123652ae): judgment types
+        # (decision/pitfall/correction) never age-decay — real judgment must not be
+        # buried on a timer for lack of recall (Principle 1). Mirrors section
+        # immunity above; distinct from is_keep_class/_KEEP_TYPES (see EVERGREEN_TYPES
+        # definition — that guards reclaim-strip, this guards age-decay, they differ
+        # on pitfall by design). guideline/process fall through to normal age decay.
+        if entry.entry_type in EVERGREEN_TYPES:
             continue
 
         # Grace period for new entries
