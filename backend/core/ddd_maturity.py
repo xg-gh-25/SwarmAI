@@ -25,6 +25,7 @@ Public API:
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +33,8 @@ from pathlib import Path
 from typing import Optional
 
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+
+logger = logging.getLogger(__name__)
 
 
 # Valid maturity levels (ordered)
@@ -72,6 +75,15 @@ class MaturityState:
 
     def __post_init__(self):
         if self.level not in LEVELS:
+            # Fail-loud: an illegal level is doc pollution (a hand-written value
+            # the engine's vocabulary doesn't contain). Warn before coercing so
+            # it's visible, not silently swallowed. The guard ensures the legal
+            # default ("sparse") never warns — no warn-storm.
+            logger.warning(
+                "DDD maturity: illegal level %r (not in %s) — coercing to 'sparse'. "
+                "Likely a hand-edited annotation; fix the source doc.",
+                self.level, LEVELS,
+            )
             self.level = "sparse"
 
     def to_comment(self) -> str:
@@ -162,6 +174,17 @@ def _parse_annotation_match(m: re.Match) -> MaturityState:
     """Parse a regex match into MaturityState."""
     level = m.group(1).lower()
     if level not in LEVELS:
+        # Fail-loud: the annotation matched the regex but carries an illegal
+        # level (e.g. a hand-written 'seeded'). This is the primary evidence-loss
+        # site — we discard the parsed sources/verified/used and return a zeroed
+        # default. Warn naming the illegal level so the pollution is visible
+        # instead of silently zeroing the section's evidence.
+        logger.warning(
+            "DDD maturity: illegal level %r in annotation (not in %s) — "
+            "discarding this section's parsed evidence, returning default. "
+            "Fix the source doc's maturity annotation.",
+            level, LEVELS,
+        )
         return MaturityState()
 
     source_count = int(m.group(2))

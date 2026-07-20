@@ -15,6 +15,64 @@ from core.ddd_maturity import (
 )
 
 
+class TestIllegalLevelFailLoud:
+    """Fail-loud on an illegal maturity level (e.g. hand-written 'seeded').
+
+    Behavior is PRESERVED (a safe default is still returned / coerced to sparse),
+    but the illegal level must now emit a logger.warning naming it — so doc
+    pollution is visible instead of silently discarding the section's evidence.
+    """
+
+    def test_parse_illegal_level_returns_safe_default(self):
+        # AC1: behavior preserved — illegal level parses to a safe default.
+        content = (
+            "## Bad Section\n"
+            "<!-- maturity: seeded | sources: 1 | verified: true | "
+            "used: true | days: 0 | promoted: none -->\n"
+            "Body.\n"
+        )
+        result = parse_maturity(content)
+        state = result["Bad Section"]
+        assert state.level == "sparse"  # coerced to safe default
+        assert state.source_count == 0  # zeroed default (evidence discarded — unchanged)
+
+    def test_parse_illegal_level_emits_warning_naming_it(self, caplog):
+        # AC2: fail-loud — the warning names the illegal level.
+        content = (
+            "## Bad Section\n"
+            "<!-- maturity: seeded | sources: 1 | verified: true | "
+            "used: true | days: 0 | promoted: none -->\n"
+            "Body.\n"
+        )
+        import logging
+        with caplog.at_level(logging.WARNING, logger="core.ddd_maturity"):
+            parse_maturity(content)
+        assert any(
+            "seeded" in r.message and r.levelno == logging.WARNING
+            for r in caplog.records
+        ), f"expected a WARNING naming 'seeded', got: {[r.message for r in caplog.records]}"
+
+    def test_construct_illegal_level_emits_warning(self, caplog):
+        # AC2 (defense-in-depth): direct construction with an illegal level warns.
+        import logging
+        with caplog.at_level(logging.WARNING, logger="core.ddd_maturity"):
+            state = MaturityState(level="bogus")
+        assert state.level == "sparse"  # coerced — behavior preserved
+        assert any("bogus" in r.message for r in caplog.records)
+
+    def test_legal_default_construction_emits_no_warning(self, caplog):
+        # AC3: no warn-storm — the legal 'sparse' default must NOT warn.
+        import logging
+        with caplog.at_level(logging.WARNING, logger="core.ddd_maturity"):
+            MaturityState()  # default level='sparse' (legal)
+            MaturityState(level="growing")
+            # an un-annotated section → parse builds MaturityState() defaults
+            parse_maturity("## Plain\n\nJust body, no annotation.\n")
+        assert not caplog.records, (
+            f"legal levels must not warn, got: {[r.message for r in caplog.records]}"
+        )
+
+
 # --- AC1+AC2+AC3: Parse/Inject roundtrip ---
 
 
