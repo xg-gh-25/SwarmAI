@@ -26,7 +26,7 @@
 | [Goal Loop Design](Goal-Loop-Design.md) | — | Iterative convergence for open-ended objectives. Inline + scheduled modes, DoD-driven cycles, velocity tracking. |
 | [Pollinate v3 Content Engine](Pollinate-Content-Engine.md) | — | Personal content delivery engine. DISCOVER stage + 11 production tracks (A–K) + audience simulation + cross-format consistency. |
 | [Session Observation Layer](Session-Observation-Layer-Design.md) | — | Real-time tool-call recording. ObservationRing + DDD event emission + crash recovery enrichment. |
-| [DDD Cultivation Engine](DDD-Cultivation-Engine-HLD.md) | — | How DDD self-grows from normal work. 8 feed channels, health scoring, cross-project routing. |
+| [DDD HLD](DDD-Cultivation-Engine-HLD.md) | — | The complete DDD architecture: what a DDD is (Product Domain Brain), the six sections, the lightweight ontology, recall + cultivation E2E, key design decisions, KEM. |
 
 ## Markdown Sources
 

@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 540" font-family="sans-serif">
+  <rect width="820" height="540" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="410" y="28" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">KEM — Knowledge Entry Model: One Object, Four Operations</text>
+  <text x="410" y="48" text-anchor="middle" fill="#8b949e" font-size="10">root-cause fix — collapse 5 disjoint representations into 1 addressable entry every operation consumes</text>
+
+  <!-- ===== LEFT: the problem — 5 disjoint representations ===== -->
+  <text x="140" y="80" text-anchor="middle" fill="#f78166" font-size="12" font-weight="bold">TODAY — 1 entry, 5 disjoint stores</text>
+  <text x="140" y="96" text-anchor="middle" fill="#8b949e" font-size="8">write-shape ≠ read-shape → written but not consumed</text>
+
+  <rect x="30" y="108" width="220" height="24" rx="4" fill="#2d1a1a" stroke="#f78166" stroke-width="1"/>
+  <text x="40" y="124" fill="#e6edf3" font-size="9">markdown body <tspan fill="#8b949e">— the prose</tspan></text>
+  <rect x="30" y="138" width="220" height="24" rx="4" fill="#2d1a1a" stroke="#f78166" stroke-width="1"/>
+  <text x="40" y="154" fill="#e6edf3" font-size="9">regex prefix <tspan fill="#8b949e">[PRI]/[GUI] = type</tspan></text>
+  <rect x="30" y="168" width="220" height="24" rx="4" fill="#2d1a1a" stroke="#f78166" stroke-width="1"/>
+  <text x="40" y="184" fill="#e6edf3" font-size="9">HTML comment <tspan fill="#8b949e">ref / last / decay</tspan></text>
+  <rect x="30" y="198" width="220" height="24" rx="4" fill="#2d1a1a" stroke="#f78166" stroke-width="1"/>
+  <text x="40" y="214" fill="#e6edf3" font-size="9">relations YAML <tspan fill="#8b949e">.knowledge-graph</tspan></text>
+  <rect x="30" y="228" width="220" height="24" rx="4" fill="#2d1a1a" stroke="#f78166" stroke-width="1"/>
+  <text x="40" y="244" fill="#e6edf3" font-size="9">archive file <tspan fill="#8b949e">— index-dead 46.9MB</tspan></text>
+
+  <!-- arrow: collapse -->
+  <line x1="256" y1="180" x2="310" y2="180" stroke="#58a6ff" stroke-width="2"/>
+  <polygon points="308,174 320,180 308,186" fill="#58a6ff"/>
+  <text x="288" y="170" text-anchor="middle" fill="#58a6ff" font-size="8">unify</text>
+
+  <!-- ===== CENTER: one KEM object ===== -->
+  <rect x="326" y="100" width="200" height="248" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="426" y="122" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">KEM — one entry</text>
+  <text x="426" y="137" text-anchor="middle" fill="#8b949e" font-size="8">all fields live IN the markdown</text>
+  <text x="340" y="162" fill="#e6edf3" font-size="9">id <tspan fill="#8b949e">— stable, addressable</tspan></text>
+  <text x="340" y="182" fill="#e6edf3" font-size="9">type <tspan fill="#8b949e">— 7-type (exists)</tspan></text>
+  <text x="340" y="202" fill="#e6edf3" font-size="9">body</text>
+  <text x="340" y="222" fill="#7ee787" font-size="9">terms[] <tspan fill="#8b949e">— synonym keys</tspan></text>
+  <text x="340" y="242" fill="#7ee787" font-size="9">severity <tspan fill="#8b949e">— P0/rec/adv</tspan></text>
+  <text x="340" y="262" fill="#7ee787" font-size="9">rationale <tspan fill="#8b949e">— why / fail-code</tspan></text>
+  <text x="340" y="282" fill="#7ee787" font-size="9">supersedes <tspan fill="#8b949e">— replaced id</tspan></text>
+  <text x="340" y="302" fill="#7ee787" font-size="9">lifecycle <tspan fill="#8b949e">— active/superseded</tspan></text>
+  <text x="340" y="322" fill="#7ee787" font-size="9">tier <tspan fill="#8b949e">— hot / cold</tspan></text>
+  <text x="426" y="340" text-anchor="middle" fill="#8b949e" font-size="7" font-style="italic">green = new load-bearing fields</text>
+
+  <!-- ===== RIGHT: 4 operations consume the same object ===== -->
+  <text x="678" y="80" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">4 operations, same fields</text>
+
+  <rect x="560" y="100" width="236" height="52" rx="6" fill="#182a1e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="572" y="120" fill="#7ee787" font-size="10" font-weight="bold">SCHEMA</text>
+  <text x="572" y="136" fill="#8b949e" font-size="8">fields, not prose → severity/rationale</text>
+  <text x="572" y="147" fill="#8b949e" font-size="8">consumable by the gate</text>
+
+  <rect x="560" y="160" width="236" height="52" rx="6" fill="#182a1e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="572" y="180" fill="#7ee787" font-size="10" font-weight="bold">WRITE = upsert</text>
+  <text x="572" y="196" fill="#8b949e" font-size="8">supersede (mark, don't delete) →</text>
+  <text x="572" y="207" fill="#8b949e" font-size="8">no delete-then-append trap</text>
+
+  <rect x="560" y="220" width="236" height="52" rx="6" fill="#182a1e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="572" y="240" fill="#7ee787" font-size="10" font-weight="bold">READ</text>
+  <text x="572" y="256" fill="#8b949e" font-size="8">type-aware + terms[] →</text>
+  <text x="572" y="267" fill="#8b949e" font-size="8">recall consumes classification</text>
+
+  <rect x="560" y="280" width="236" height="52" rx="6" fill="#182a1e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="572" y="300" fill="#7ee787" font-size="10" font-weight="bold">TIER</text>
+  <text x="572" y="316" fill="#8b949e" font-size="8">hot + cold FTS5 index →</text>
+  <text x="572" y="327" fill="#8b949e" font-size="8">archive keeps id, stays retrievable</text>
+
+  <!-- arrows: KEM → each op -->
+  <line x1="528" y1="150" x2="558" y2="126" stroke="#58a6ff" stroke-width="1.5"/>
+  <line x1="528" y1="190" x2="558" y2="186" stroke="#58a6ff" stroke-width="1.5"/>
+  <line x1="528" y1="230" x2="558" y2="246" stroke="#58a6ff" stroke-width="1.5"/>
+  <line x1="528" y1="270" x2="558" y2="306" stroke="#58a6ff" stroke-width="1.5"/>
+
+  <!-- ===== BOTTOM: constraint + rollout ===== -->
+  <rect x="30" y="368" width="766" height="60" rx="8" fill="#161b22" stroke="#8b949e" stroke-width="1"/>
+  <text x="410" y="390" text-anchor="middle" fill="#e6edf3" font-size="11" font-weight="bold">Architecture lock — file-system-first</text>
+  <text x="410" y="408" text-anchor="middle" fill="#8b949e" font-size="9">markdown is the SOLE source of truth; every index (incl. recall FTS5) is a derived, rebuildable cache — never authoritative.</text>
+  <text x="410" y="421" text-anchor="middle" fill="#8b949e" font-size="9">No sqlite, no graph DB. If an index disagrees with markdown, markdown wins.</text>
+
+  <text x="410" y="452" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Strangler rollout — one contract, migrate one operation at a time</text>
+  <rect x="70" y="462" width="130" height="40" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1"/>
+  <text x="135" y="480" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="bold">Run 0 — SCHEMA</text>
+  <text x="135" y="494" text-anchor="middle" fill="#8b949e" font-size="8">one parser/writer</text>
+  <rect x="212" y="462" width="130" height="40" rx="6" fill="#182a1e" stroke="#7ee787" stroke-width="1"/>
+  <text x="277" y="480" text-anchor="middle" fill="#7ee787" font-size="9" font-weight="bold">Run 1 — TIER</text>
+  <text x="277" y="494" text-anchor="middle" fill="#8b949e" font-size="8">archive → cold index</text>
+  <rect x="354" y="462" width="130" height="40" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1"/>
+  <text x="419" y="480" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="bold">Run 2 — READ</text>
+  <text x="419" y="494" text-anchor="middle" fill="#8b949e" font-size="8">type + terms aware</text>
+  <rect x="496" y="462" width="130" height="40" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1"/>
+  <text x="561" y="480" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="bold">Run 3 — WRITE</text>
+  <text x="561" y="494" text-anchor="middle" fill="#8b949e" font-size="8">upsert / supersede</text>
+  <rect x="638" y="462" width="130" height="40" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1"/>
+  <text x="703" y="480" text-anchor="middle" fill="#e6edf3" font-size="9" font-weight="bold">Run 4 — SCHEMA↑</text>
+  <text x="703" y="494" text-anchor="middle" fill="#8b949e" font-size="8">rationale→gate</text>
+
+  <text x="410" y="524" text-anchor="middle" fill="#6e7681" font-size="8" font-style="italic">Gates (③) out of scope — KEM fixes the knowledge internals (schema/write/read/tier), not the enforcement-gate layer</text>
+</svg>

@@ -17,7 +17,7 @@
   <text x="290" y="119" text-anchor="middle" fill="#e6edf3" font-size="9">principle</text>
   <rect x="340" y="102" width="90" height="26" rx="5" fill="#1a1a2e" stroke="#f78166" stroke-width="1"/>
   <text x="385" y="119" text-anchor="middle" fill="#e6edf3" font-size="9">correction</text>
-  <text x="250" y="150" fill="#8b949e" font-size="8">EVALUATE · THINK · all-stages</text>
+  <text x="250" y="150" fill="#6e7681" font-size="8" font-style="italic">EVALUATE · THINK · all-stages <tspan fill="#e3b341">(designed, not wired)</tspan></text>
 
   <!-- Cognitive layer -->
   <rect x="30" y="180" width="410" height="80" rx="8" fill="#2a2618" stroke="#e3b341" stroke-width="2"/>
@@ -28,7 +28,7 @@
   <text x="290" y="209" text-anchor="middle" fill="#e6edf3" font-size="9">decision</text>
   <rect x="340" y="192" width="90" height="26" rx="5" fill="#1a1a2e" stroke="#e3b341" stroke-width="1"/>
   <text x="385" y="209" text-anchor="middle" fill="#e6edf3" font-size="9">model</text>
-  <text x="250" y="240" fill="#8b949e" font-size="8">EVALUATE · PLAN · BUILD · DEBUG</text>
+  <text x="250" y="240" fill="#6e7681" font-size="8" font-style="italic">EVALUATE · PLAN · BUILD · DEBUG <tspan fill="#e3b341">(designed)</tspan></text>
 
   <!-- Operational layer -->
   <rect x="30" y="270" width="410" height="90" rx="8" fill="#182a1e" stroke="#7ee787" stroke-width="2"/>
@@ -55,8 +55,8 @@
   <text x="490" y="160" fill="#d2a8ff" font-size="10">addresses · serves_thesis · applies_to</text>
   <text x="490" y="182" fill="#d2a8ff" font-size="10">conflicts_with · requires · informs</text>
   <text x="490" y="204" fill="#d2a8ff" font-size="10">produced_by</text>
-  <text x="485" y="238" fill="#8b949e" font-size="9">Classes tell the agent HOW to treat an entry;</text>
-  <text x="485" y="252" fill="#8b949e" font-size="9">relations tell it WHAT ELSE to pull.</text>
+  <text x="485" y="238" fill="#8b949e" font-size="9">Classes drive decay <tspan fill="#7ee787">today</tspan>; type-aware retrieval</text>
+  <text x="485" y="252" fill="#8b949e" font-size="9">+ relation-pull are <tspan fill="#e3b341">designed (§11 KEM Run 2)</tspan>.</text>
 
   <!-- classification x relations = ontology brace -->
   <text x="640" y="300" text-anchor="middle" fill="#e6edf3" font-size="11">classification × relations = <tspan fill="#58a6ff" font-weight="bold">lightweight ontology</tspan></text>
@@ -80,4 +80,7 @@
   <text x="650" y="440" text-anchor="middle" fill="#8b949e" font-size="9">nodes: domain concepts</text>
   <text x="650" y="454" text-anchor="middle" fill="#8b949e" font-size="9">edges: concept → doc/section</text>
   <text x="650" y="467" text-anchor="middle" fill="#e3b341" font-size="8">refreshed by Code-Intel channel</text>
+
+  <!-- honest-status legend (reconciles §3 L2 / §9b: some retrieval routing is designed, not yet wired) -->
+  <text x="410" y="490" text-anchor="middle" fill="#e3b341" font-size="8" font-style="italic">(designed) = schema exists + governs decay, but retrieval is not yet type-aware — closed by §11 KEM Run 2</text>
 </svg>
