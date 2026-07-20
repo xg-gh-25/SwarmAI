@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 580" font-family="sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 648" font-family="sans-serif">
   <defs>
     <marker id="arrow3" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
@@ -7,11 +7,11 @@
       <polygon points="0 0, 10 3.5, 0 7" fill="#d2a8ff"/>
     </marker>
   </defs>
-  <rect width="780" height="580" fill="#1a1a2e" rx="8"/>
+  <rect width="780" height="648" fill="#1a1a2e" rx="8"/>
 
   <!-- Title -->
   <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">The 9 Stages: Production Line</text>
-  <text x="390" y="48" text-anchor="middle" fill="#e6edf3" font-size="10" opacity="0.7">DDD-informed, sequential, produces delivery candidate</text>
+  <text x="390" y="48" text-anchor="middle" fill="#e6edf3" font-size="10" opacity="0.7">DDD-informed, sequential &#183; 9 stages &#183; 3 gates &#183; produces delivery candidate</text>
 
   <!-- DDD column on left -->
   <rect x="20" y="65" width="110" height="490" rx="8" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3"/>
@@ -36,7 +36,12 @@
   <text x="560" y="83" fill="#e6edf3" font-size="8" opacity="0.7">Reads: PRODUCT.md</text>
   <text x="560" y="97" fill="#e6edf3" font-size="8" opacity="0.7">Produces: GO decision</text>
 
-  <line x1="280" y1="110" x2="280" y2="120" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow3)"/>
+  <!-- Gate 0: framing (fires on EVALUATE -> THINK) -->
+  <rect x="135" y="105" width="40" height="23" rx="4" fill="#3a2f10" stroke="#e3b341" stroke-width="1.5"/>
+  <text x="155" y="115" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">&#9733;Gate</text>
+  <text x="155" y="124" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">0</text>
+
+  <line x1="280" y1="110" x2="280" y2="120" stroke="#e3b341" stroke-width="2" marker-end="url(#arrow3)"/>
 
   <!-- Stage 2: THINK -->
   <rect x="180" y="125" width="200" height="45" rx="8" fill="#1e2a3a" stroke="#58a6ff" stroke-width="2"/>
@@ -64,7 +69,12 @@
   <text x="560" y="203" fill="#e6edf3" font-size="8" opacity="0.7">Reads: all DDD docs</text>
   <text x="560" y="217" fill="#e6edf3" font-size="8" opacity="0.7">Produces: SDD spec</text>
 
-  <line x1="280" y1="230" x2="280" y2="240" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow3)"/>
+  <!-- Gate 1: plan soundness (fires after PLAN, before BUILD) -->
+  <rect x="135" y="223" width="40" height="23" rx="4" fill="#3a2f10" stroke="#e3b341" stroke-width="1.5"/>
+  <text x="155" y="233" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">&#9733;Gate</text>
+  <text x="155" y="242" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">1</text>
+
+  <line x1="280" y1="230" x2="280" y2="240" stroke="#e3b341" stroke-width="2" marker-end="url(#arrow3)"/>
 
   <!-- Stage 4: BUILD -->
   <rect x="180" y="245" width="200" height="45" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
@@ -106,10 +116,16 @@
 
   <line x1="280" y1="410" x2="280" y2="420" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow3)"/>
 
+  <!-- Gate 2: build correctness (ADVERSARIAL rides inside DELIVER, BLOCKING) -->
+  <rect x="135" y="436" width="40" height="23" rx="4" fill="#3a2f10" stroke="#e3b341" stroke-width="1.5"/>
+  <text x="155" y="446" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">&#9733;Gate</text>
+  <text x="155" y="455" text-anchor="middle" fill="#e3b341" font-size="8" font-weight="bold">2</text>
+
   <!-- Stage 7: ADVERSARIAL -->
   <rect x="180" y="425" width="200" height="45" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2"/>
-  <text x="280" y="443" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">7. ADVERSARIAL REVIEW</text>
-  <text x="280" y="460" text-anchor="middle" fill="#e6edf3" font-size="9">Fresh-context sub-agent attack</text>
+  <text x="280" y="439" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">7. ADVERSARIAL REVIEW</text>
+  <text x="280" y="452" text-anchor="middle" fill="#e6edf3" font-size="9">Fresh-context sub-agent attack</text>
+  <text x="280" y="463" text-anchor="middle" fill="#e3b341" font-size="8">&#9733; Gate 2 &#183; BLOCKING &#183; runs inside DELIVER</text>
 
   <rect x="420" y="432" width="80" height="22" rx="4" fill="#1e2a3a" stroke="#7ee787" stroke-width="1"/>
   <text x="460" y="447" text-anchor="middle" fill="#7ee787" font-size="9">mechanical</text>
@@ -145,4 +161,10 @@
   <!-- Legend -->
   <rect x="420" y="65" width="80" height="22" rx="4" fill="#1e2a3a" stroke="#e6edf3" stroke-width="0.5"/>
   <text x="460" y="80" text-anchor="middle" fill="#e6edf3" font-size="8">Decision Type</text>
+
+  <!-- Gate legend band -->
+  <rect x="20" y="588" width="740" height="48" rx="8" fill="#22201a" stroke="#e3b341" stroke-width="1"/>
+  <text x="34" y="606" fill="#e3b341" font-size="10" font-weight="bold">&#9733; 3 Gates &#183; 3 moments of truth</text>
+  <text x="34" y="622" fill="#e6edf3" font-size="8.5" opacity="0.85">Gate 0 &#8212; framing (inside EVALUATE): is the problem understood? &#183; Gate 1 &#8212; plan (after PLAN, before BUILD): root not symptom?</text>
+  <text x="34" y="633" fill="#e6edf3" font-size="8.5" opacity="0.85">Gate 2 &#8212; build correctness (ADVERSARIAL, inside DELIVER, BLOCKING): is the code actually right? &#183; Gates 0 &amp; 2 ride within a stage; Gate 1 is the PLAN&#8594;BUILD boundary.</text>
 </svg>

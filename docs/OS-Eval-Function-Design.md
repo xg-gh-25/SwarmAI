@@ -1,21 +1,23 @@
 ---
 title: "SwarmAI OS Eval Function — Continuous Self-Awareness Engine"
 created: 2026-06-08
-updated: 2026-06-08
+updated: 2026-07-20
 tags: [eval, self-awareness, golden-set, cognitive-health]
 project: SwarmAI
-status: draft
+status: design-draft (superseded by live system — see note)
 ---
 
 # SwarmAI OS Eval Function — Continuous Self-Awareness Engine
 
 > **Thesis:** An AI OS without eval is an organism without proprioception — it doesn't know its own state until something breaks. Eval is not testing; it is *the capacity to know whether you're still you, and still good.*
 
-> ⚠️ **Current-implementation note (as of 2026-07-04).** This is the original **2026-06-08 design draft** — kept intact as the design narrative. The shipped system has since evolved; where the two disagree, the live source of truth wins:
-> - **Dimensions: 6, not the "Five" this doc describes** — canonical names are `factual_accuracy`, `judgment_quality`, `context_utility`, `compliance`, `capability`, `recovery`. (This draft uses the older names *judgment_consistency*, *behavioral_compliance*, *capability_integrity*, and folds recovery into capability; `recovery` is now a first-class 6th dimension, test-protected.) Source of truth: `Eval/golden_set.yaml` `dimensions:` + `backend/scripts/eval_runner.py` `DIMENSIONS`.
+> ⚠️ **Current-implementation note (refreshed 2026-07-20).** This is the original **2026-06-08 design draft** — kept intact as the design narrative. The shipped system has since evolved; where the two disagree, the live source of truth wins:
+> - **Dimensions: 6, not the "Five" this doc describes.** The scoring engine `backend/scripts/eval_runner.py` uses six short ids — `factual`, `judgment`, `utility`, `compliance`, `capability`, `recovery` — which map to the long-form names carried in `Eval/golden_set.yaml` `dimensions:` (`factual_accuracy`, `judgment_quality`, `context_utility`, `compliance`, `capability`, `recovery`) via `_DIM_TO_SNAPSHOT_KEY` in `eval_runner.py`. (This draft uses the older names *judgment_consistency*, *behavioral_compliance*, *capability_integrity*, and folds recovery into capability; `recovery` is now a first-class 6th dimension, test-protected.) Source of truth: `eval_runner.py` `DIMENSIONS` (ids) + `golden_set.yaml` `dimensions:` (snapshot keys).
 > - **Categories: 15, not 12** — the draft's 12-category taxonomy has since added `safety`, `memory`, `runtime_health`. Source of truth: `Eval/golden_set.yaml` `categories:`.
-> - **Cadence:** the scheduled run is **Monday 12:30 ICT** (`cron 30 4 * * 1`), not the "continuous/quarterly" cadences sketched below.
-> The section headers/counts below were left as-written (historical); trust `golden_set.yaml` for live numbers.
+> - **Golden set: ~192 cases** (33 public in `golden_set.yaml` + 159 privacy-gated in `golden_set.private.yaml`), not the ~112 seed sketched below. Public-vs-private split is a privacy gate: sensitive cases stay private until the promotion gate clears them.
+> - **Cadence:** the scheduled run is the system `eval-scheduled` job — **Monday 18:30 ICT (`cron 30 10 * * 1`), gated to run biweekly** — not the "continuous/quarterly" cadences sketched below. (The older `os-eval-biweekly` user job is disabled/superseded.)
+> - **Trigger wiring:** eval is a **decoupled system-level subsystem** — triggered by CI push-gate (`ci_eval_gate.py`), the scheduled job, or deploy — NOT by the per-edit hooks the "Trigger Matrix" below imagines, and NOT run by the agent inside a coding pipeline.
+> The section headers/counts below were left as-written (historical); trust `golden_set.yaml` + `eval_runner.py` for live numbers.
 
 ## Origin & Inspiration
 
@@ -43,7 +45,7 @@ Rob's model targets enterprise agent products (millions of users, model drift, A
 
 ## Architecture: The Eval Dimensions
 
-> _Draft describes 5; shipped system has **6** (adds `recovery`). See the current-implementation note at the top._
+> _Historical diagram — shows the **5** original dimensions. The shipped system has **6**: add a `Recovery` box (6th) alongside the five below. Live ids: `factual`, `judgment`, `utility`, `compliance`, `capability`, `recovery`. See the current-implementation note at the top._
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -281,7 +283,8 @@ metrics:
 
 ---
 
-## Dimension 5: Capability Integrity — "我的 12 个器官还活着吗？"
+## Dimension 5: Capability Integrity — "我的每个器官还活着吗？"
+> _Live mapping: this draft's "Capability Integrity" is the shipped `capability` dimension; the shipped system also splits out `recovery` as a distinct 6th dimension (see the top note). Dimension numbering below is the original 5-dimension draft._
 
 ### What Drifts
 - Dependency break (MCP server down, API contract changed)
@@ -464,6 +467,11 @@ If agent fails → correction NOT internalized → escalate
 | **Quality** | Done = tried to break it and failed | Behavioral Compliance | P2/R3/corrections |
 | **Loop-Active** | Self-xxx loops are spinning | Capability Integrity | Evolution design |
 | **Cultivation** | DDD grows from daily work | Capability Integrity | DDD cultivation |
+| **Safety** _(shipped, added post-draft)_ | Never exfiltrate / destructive without approval | Compliance | Safety principles |
+| **Memory** _(shipped, added post-draft)_ | Persist + recall the right thing across sessions | Capability | Memory subsystem |
+| **Runtime-Health** _(shipped, added post-draft)_ | Observe live state before asserting; recover from decay | Recovery | COEs / runtime traps |
+
+_The three `_(shipped, added post-draft)_` rows bring the taxonomy to the live **15**; the first 12 are the original draft. Source of truth: `Eval/golden_set.yaml` `categories:`._
 
 ---
 

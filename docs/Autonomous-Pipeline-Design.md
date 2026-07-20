@@ -1,13 +1,23 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
 created: 2026-05-12
-updated: 2026-06-11
+updated: 2026-07-20
 tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review, tdd, ddd]
 project: SwarmAI
 status: current
 ---
 
 # Autonomous Pipeline — Coding as Black Box
+
+> **Last major update — 2026-07-20:** Refreshed against the live orchestrator
+> (`s_autonomous-pipeline/INSTRUCTIONS.md`). Added the terminal **COMPLETE** stage
+> doc (`stages/complete.md`) to the file-structure reference and clarified the
+> canonical **9 stages · 3 gates · 2 modes** shape (Gate 0 added in v6, 2026-06-26).
+> Also refreshed **Figure 3** (`diagrams-pipeline/03-nine-stages.svg`) to annotate all
+> three gates (Gate 0 in EVALUATE, Gate 1 on the PLAN→BUILD boundary, Gate 2 =
+> ADVERSARIAL inside DELIVER) — the prior diagram predated Gate 0.
+> Prior notable updates: v3 rewrite to the dual-mode implementation (2026-06);
+> "Three Gates" section added to complete the external framing.
 
 ---
 
@@ -726,18 +736,19 @@ This is Coding as Black Box.
 ```
 s_autonomous-pipeline/
 ├── SKILL.md                    # Skill frontmatter + description
-├── INSTRUCTIONS.md             # Orchestrator (1,207 lines)
+├── INSTRUCTIONS.md             # Orchestrator (the mechanical run-loop)
 ├── REVIEW_PATTERNS.md          # RP1-RP40 bug pattern checklist
 ├── OPERATIONAL_PATTERNS.md     # OP1-OP8 system invariants
 ├── stages/
-│   ├── evaluate.md             # Stage 1: intake + profile selection
+│   ├── evaluate.md             # Stage 1: intake + profile selection (Gate 0)
 │   ├── think.md                # Stage 2: research + alternatives
-│   ├── plan.md                 # Stage 3: file discovery + change spec
+│   ├── plan.md                 # Stage 3: file discovery + change spec (Gate 1 after)
 │   ├── build.md                # Stage 4: TDD implementation
 │   ├── review.md               # Stage 5: multi-layer review
 │   ├── test.md                 # Stage 6: 3-layer verification
-│   ├── deliver.md              # Stage 7: convergence + adversarial
+│   ├── deliver.md              # Stage 7: convergence + adversarial (Gate 2)
 │   ├── reflect.md              # Stage 8: lessons + cultivation
+│   ├── complete.md             # Terminal: completion summary + exec summary output format
 │   ├── goal_cycle.md           # Goal profile: iterative loop
 │   └── specialists/            # 9 deep-review specialist profiles
 │       ├── api-contract.md
@@ -754,12 +765,15 @@ s_autonomous-pipeline/
 │   ├── code-quality.md
 │   ├── security-safety.md
 │   └── ux-test.md
-└── scripts/                    # Pipeline tooling
-    ├── artifact_cli.py         # State management + artifact storage
+└── scripts/                    # Pipeline-local tooling
     ├── confidence_score.py     # Delivery gate scorer
     ├── goal_metrics.py         # Goal loop velocity tracking
     ├── pipeline_pr.py          # Auto-PR creation
     └── wtf_gate.py             # Changeset risk scoring
+
+backend/scripts/                # Shared pipeline engine (not skill-local)
+├── artifact_cli.py             # State machine + artifact storage + code-enforced gates
+└── pipeline_validator.py       # Stage-boundary schema + gate validation (publish-time)
 ```
 
 ---
