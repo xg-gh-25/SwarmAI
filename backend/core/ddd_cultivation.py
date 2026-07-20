@@ -557,8 +557,8 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         match = section_re.search(content)
 
         if match:
-            # Compute the target section's text span [body_start, body_end) — used
-            # only to choose WHERE to insert the new entry (newest-first under this
+            # Compute body_start (the section's insert point) — used only to choose
+            # WHERE to insert the new entry (newest-first under this
             # heading). The duplicate check itself is DOC-WIDE, not scoped here.
             line_end = content.find("\n", match.start())
             if line_end == -1:
@@ -858,6 +858,16 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
     doc_path = project_dir / proposal.target_doc
     if not doc_path.exists():
         return "doc_missing"
+
+    # PREVENTION over recovery (run_e9cb7e2a, Gate-2 MED): for a REWRITE, validate the
+    # replacement against the SAME value floor apply_to_ddd enforces — BEFORE we retire
+    # the old entry. Otherwise a floor-rejected replacement would leave a half-state
+    # (old entry archived + stripped, no replacement appended). Make rewrite
+    # all-or-nothing: refuse up-front, fail-loud (client-correctable), retire nothing.
+    if proposal.change_type == "rewrite":
+        _repl = proposal.replacement_content.strip()
+        if _repl and (len(_repl) < MIN_LESSON_LENGTH or not is_quality_lesson(_repl)):
+            return "retire_failed:replacement below value floor (too short / not a lesson)"
 
     from core.ddd_entry_lifecycle import retire_entry, RetireError
 

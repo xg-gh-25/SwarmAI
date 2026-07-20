@@ -609,27 +609,42 @@ def _cultivate_proposals(
             escalated += 1
             continue
         if proposal.is_safe_append():
-            # Additional auto-approval gate (maturity, magnitude, circuit breaker)
-            # Gate is advisory: if it blocks, escalate. If it errors, allow (fail-open).
+            # Additional auto-approval gate (maturity, magnitude, circuit breaker).
+            # FAIL-CLOSED (run_e9cb7e2a): a gate that cannot run is NOT a licence to
+            # silent-write. On ANY gate error, ESCALATE to the human proposal queue,
+            # never auto-apply ungated. (Mirrors core; `Exception` subsumes ImportError.)
             try:
                 from ddd_auto_approval import evaluate_auto_approval
                 decision = evaluate_auto_approval(proposal, project_dir)
-                if not decision.approved:
-                    # Only escalate if a HARD gate blocked (not maturity absence)
-                    # Hard gates: safe_target_doc, circuit_breaker_ok
-                    hard_blocked = (
-                        not decision.criteria_met.get("safe_target_doc", True)
-                        or not decision.criteria_met.get("circuit_breaker_ok", True)
-                        or not decision.criteria_met.get("small_magnitude", True)
-                    )
-                    if hard_blocked:
-                        proposal.status = "escalated"
-                        write_proposal(proposal, project_dir)
-                        escalated += 1
-                        continue
-                    # Soft gates (maturity, conflict, precision) — log but allow
-            except (ImportError, Exception):
-                pass  # Auto-approval module unavailable or errored — allow through
+                gate_ok = True
+            except Exception as e:
+                logger.warning(
+                    "auto-approval gate errored (%s: %s) → FAIL-CLOSED, escalating "
+                    "%s § %s instead of silent-writing",
+                    type(e).__name__, e, proposal.target_doc, proposal.target_section,
+                )
+                gate_ok = False
+
+            if not gate_ok:
+                proposal.status = "escalated"
+                write_proposal(proposal, project_dir)
+                escalated += 1
+                continue
+
+            if not decision.approved:
+                # Only escalate if a HARD gate blocked (not maturity absence)
+                # Hard gates: safe_target_doc, circuit_breaker_ok, small_magnitude
+                hard_blocked = (
+                    not decision.criteria_met.get("safe_target_doc", True)
+                    or not decision.criteria_met.get("circuit_breaker_ok", True)
+                    or not decision.criteria_met.get("small_magnitude", True)
+                )
+                if hard_blocked:
+                    proposal.status = "escalated"
+                    write_proposal(proposal, project_dir)
+                    escalated += 1
+                    continue
+                # Soft gates (maturity, conflict, precision) — log but allow
 
             status = apply_to_ddd(proposal, project_dir)
             if status == "applied":
@@ -659,7 +674,8 @@ def _cultivate_proposals(
                 log_application(proposal, project_dir, created_section=True)
                 applied += 1
             else:
-                # Benign no-op: "duplicate", "doc_missing", "locked", "not_safe".
+                # Benign no-op: "duplicate", "rejected_low_value", "doc_missing",
+                # "locked", "not_safe" — none landed, count as rejected.
                 rejected += 1
         else:
             proposal.status = "escalated"

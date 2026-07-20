@@ -1263,6 +1263,37 @@ class TestEvidenceDrivenRetire:
         )
         assert apply_retire_proposal(p, tmp_path) == "no_target"
 
+    def test_rewrite_with_subfloor_replacement_refuses_before_retire(self, tmp_path):
+        """Gate-2 MED (run_e9cb7e2a): the value floor added to apply_to_ddd made a
+        rewrite's replacement-append floor-rejectable — which, done AFTER the retire,
+        would leave a half-state (old entry gone, replacement dropped). Fixed by
+        PREVENTION: validate the replacement against the floor BEFORE retiring, so a
+        sub-floor replacement refuses up-front (fail-loud) and the old entry is
+        UNTOUCHED. Mutation: remove the pre-check → old entry gets stripped and this
+        assertion (entry still present) goes RED."""
+        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
+        doc = tmp_path / "IMPROVEMENT.md"
+        original = (
+            "## What Failed\n\n"
+            "- [pitfall] **A real superseded lesson worth rewriting** — the old body\n"
+        )
+        doc.write_text(original, encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Failed",
+            content="superseded", source_run_id="r", confidence=0.9,
+            change_type="rewrite",
+            target_title="A real superseded lesson worth rewriting",
+            evidence="proven wrong",
+            replacement_content="tests pass",  # <5 words, <30 chars — sub-floor
+        )
+        status = apply_retire_proposal(p, tmp_path)
+        assert status.startswith("retire_failed:"), f"got {status}"
+        # All-or-nothing: the old entry is STILL present (retire never ran).
+        assert "A real superseded lesson worth rewriting" in doc.read_text(encoding="utf-8")
+        # No archive / .bak created (nothing was retired).
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
+        assert not list(tmp_path.glob("IMPROVEMENT.md.*.bak"))
+
     def test_apply_retire_no_match_fails_loud(self, tmp_path):
         """retire_entry is fail-loud: a title with no match → retire_failed, never
         a silent zero-strip (data-loss guard)."""
