@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <marker id="sr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="srG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7ee787"/></marker>
+  </defs>
+  <rect width="940" height="600" fill="#0d1117" rx="12"/>
+
+  <text x="470" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">code-intel.json v3 — the Domain Layer (additive over v2)</text>
+  <text x="470" y="48" text-anchor="middle" fill="#8b949e" font-size="10">3-level ontology thickened to "AI-and-human signable" · every LLM assertion anchored to code + verified</text>
+
+  <!-- v2 base keys (left) -->
+  <rect x="30" y="70" width="200" height="230" rx="10" fill="#0e1a2b" stroke="#58a6ff" stroke-width="1.4"/>
+  <text x="130" y="92" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">v2 base (unchanged)</text>
+  <text x="130" y="106" text-anchor="middle" fill="#8b949e" font-size="8">AST + regex extracted · deterministic</text>
+  <text x="46" y="130" fill="#e6edf3" font-size="9.5">repo</text>
+  <text x="46" y="150" fill="#e6edf3" font-size="9.5">modules[]</text>
+  <text x="46" y="170" fill="#e6edf3" font-size="9.5">routes[] <tspan fill="#f0b429">+ id ⚠</tspan></text>
+  <text x="46" y="190" fill="#e6edf3" font-size="9.5">entry_points[] <tspan fill="#f0b429">+ id ⚠</tspan></text>
+  <text x="46" y="210" fill="#e6edf3" font-size="9.5">hot_zones[]</text>
+  <text x="46" y="230" fill="#e6edf3" font-size="9.5">risk_areas[]</text>
+  <text x="46" y="250" fill="#e6edf3" font-size="9.5">dead_code[]</text>
+  <text x="46" y="270" fill="#e6edf3" font-size="9.5">dependencies</text>
+  <text x="46" y="290" fill="#8b949e" font-size="7.5">⚠ id = the join key §5.2 needs</text>
+
+  <!-- grounding arrow -->
+  <line x1="230" y1="180" x2="268" y2="180" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#sr)"/>
+  <text x="249" y="172" text-anchor="middle" fill="#8b949e" font-size="7.5">anchor</text>
+
+  <!-- v3 domain layer (right, 3 stacked) -->
+  <text x="590" y="88" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">v3 business-semantic layer — entry-point grounded (no orphan flows)</text>
+
+  <!-- DOMAIN -->
+  <rect x="275" y="98" width="630" height="120" rx="9" fill="#0e1f14" stroke="#7ee787" stroke-width="1.6"/>
+  <text x="292" y="120" fill="#7ee787" font-size="12" font-weight="bold">domain</text>
+  <text x="292" y="136" fill="#8b949e" font-size="8">id: domain:order-management</text>
+  <text x="360" y="120" fill="#e6edf3" font-size="9">name · summary · entities[] · complexity</text>
+  <text x="360" y="137" fill="#f0b429" font-size="9">business_rules[] — HIGHEST hallucination risk (spurious ≤0.67)</text>
+  <text x="372" y="152" fill="#8b949e" font-size="8.5">{rule, anchor: "file:L188", verified: true}</text>
+  <text x="372" y="166" fill="#8b949e" font-size="8.5">verified:false ⇒ absence_evidence (grep=0 proof) REQUIRED, else BLOCK</text>
+  <text x="360" y="184" fill="#e6edf3" font-size="9">diagram (mermaid graph) · cross_domain[]</text>
+  <text x="360" y="200" fill="#e6edf3" font-size="9">issues[] <tspan fill="#8b949e" font-size="8">(risk_areas ∩ domain + llm)</tspan>  ·  gaps[] <tspan fill="#8b949e" font-size="8">(dead_code + llm)</tspan></text>
+  <text x="890" y="212" text-anchor="end" fill="#8b949e" font-size="7.5">issues/gaps are evidence-gated, not always-present</text>
+
+  <line x1="590" y1="218" x2="590" y2="234" stroke="#7ee787" stroke-width="1.5" marker-end="url(#srG)"/>
+  <text x="604" y="230" fill="#8b949e" font-size="8">1 domain → N flows</text>
+
+  <!-- FLOW -->
+  <rect x="275" y="236" width="630" height="96" rx="9" fill="#0e1f14" stroke="#7ee787" stroke-width="1.4"/>
+  <text x="292" y="258" fill="#7ee787" font-size="12" font-weight="bold">flow</text>
+  <text x="292" y="274" fill="#8b949e" font-size="8">id: flow:create-order</text>
+  <text x="360" y="258" fill="#e6edf3" font-size="9">domain_id · name · summary · complexity</text>
+  <text x="360" y="275" fill="#e6edf3" font-size="9">entry_type: http|cli|event|cron|manual</text>
+  <text x="360" y="292" fill="#f0b429" font-size="9">entry_ref == routes[].id — a REAL trigger anchor, not an invented string</text>
+  <text x="360" y="309" fill="#e6edf3" font-size="9">diagram (mermaid sequenceDiagram — user flow, derived from steps)</text>
+  <text x="360" y="325" fill="#8b949e" font-size="8">Generation rule: a flow that can't anchor to a real route/CLI/event is DROPPED</text>
+
+  <line x1="590" y1="332" x2="590" y2="348" stroke="#7ee787" stroke-width="1.5" marker-end="url(#srG)"/>
+  <text x="604" y="344" fill="#8b949e" font-size="8">1 flow → N ordered steps</text>
+
+  <!-- STEP -->
+  <rect x="275" y="350" width="630" height="140" rx="9" fill="#0e1f14" stroke="#7ee787" stroke-width="1.4"/>
+  <text x="292" y="372" fill="#7ee787" font-size="12" font-weight="bold">step</text>
+  <text x="292" y="388" fill="#8b949e" font-size="8">id: step:create-order:validate-input</text>
+  <text x="360" y="372" fill="#e6edf3" font-size="9">flow_id · order (int) · name · summary</text>
+  <text x="360" y="389" fill="#f0b429" font-size="9">file_path + line_range — deterministic, points at a REAL file</text>
+  <text x="360" y="406" fill="#e6edf3" font-size="9">io {input, output}  ·  contract {signature, http, status_codes}</text>
+  <text x="360" y="423" fill="#e6edf3" font-size="9">preconditions[] · rules[] · exceptions[] — each {…, anchor, verified}</text>
+  <text x="360" y="440" fill="#e6edf3" font-size="9">explicit: true — says HOW it's computed (forward-engineerable), not just WHAT</text>
+  <text x="360" y="462" fill="#8b949e" font-size="8.5">Understand-Anything's step = 2-3 sentence summary. Ours thickens every level to</text>
+  <text x="360" y="476" fill="#8b949e" font-size="8.5">sign-off granularity — the gap ABOVE function-level: "what does this flow guarantee?"</text>
+
+  <!-- footer -->
+  <rect x="30" y="510" width="875" height="66" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="46" y="531" fill="#f0b429" font-size="10" font-weight="bold">Entry-point grounding (Principle 10)</text>
+  <text x="46" y="548" fill="#8b949e" font-size="9">12 classes of deterministic regex scan REAL external triggers (HTTP/CLI/event/cron/GraphQL/gRPC) → LLM only CLASSIFIES them into flows.</text>
+  <text x="46" y="564" fill="#8b949e" font-size="9">Business names are anchored to real routes — hallucination is structurally prevented, not review-caught. version: 3.0 · additive · v2 readers unaffected.</text>
+</svg>
