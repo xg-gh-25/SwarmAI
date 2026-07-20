@@ -2071,9 +2071,10 @@ class SessionUnit:
                     # ── Per-trigger wrap-up policy (intentional) ──────
                     # turn_approaching → graceful two-phase wrap-up (handled
                     #   above: subprocess still healthy, ~20-turn buffer exists).
-                    # latency_degradation / memory_growth / error_cascade /
-                    #   hang_detected → immediate kill (an extra turn would be
-                    #   slow, risk OOM, likely also fail, or go unanswered).
+                    # memory_growth / error_cascade / hang_detected → immediate
+                    #   kill (an extra turn would be slow, risk OOM, likely also
+                    #   fail, or go unanswered). (latency_degradation removed —
+                    #   run_099724ca: it false-killed healthy slow-but-alive turns.)
                     # For EVERY trigger the checkpoint is still enriched from
                     # history here (2.1, 2.4) before the kill.
                     _enrichment = await self._derive_heal_enrichment()

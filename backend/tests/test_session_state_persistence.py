@@ -334,22 +334,9 @@ class TestDisconnectAllPreservesIdentity:
 class TestScopedHealImmunity:
     """AC5/AC6: turn<3 immunity only for specific triggers."""
 
-    def test_young_session_immune_to_latency(self):
-        """AC5: turn_count=0, latency trigger → should NOT heal."""
-        from core.session_healing import HealthSensor
-
-        sensor = HealthSensor(max_turns=500)
-        # Simulate 0 turns but bad latency
-        sensor._turn_count = 1
-        # Fill latency buffer to trigger
-        sensor._turn_latencies.extend([100] * 10 + [500] * 5)
-        sensor._rss_samples.extend([500] * 5)
-        sensor._last_activity_time = time.time()
-
-        should_heal, trigger = sensor.should_checkpoint(session_state="idle")
-        # Even though latency is bad, young session is immune
-        if trigger == "latency_degradation":
-            assert not should_heal, "Young session (turn<3) must be immune to latency_degradation"
+    # (test_young_session_immune_to_latency removed with the latency_degradation
+    #  signal — run_099724ca. Young-immunity for the surviving signals is covered
+    #  by test_young_session_immune_to_turn_approaching + the RSS immunity test.)
 
     def test_young_session_immune_to_turn_approaching(self):
         """AC5: turn_count=2, turn_approaching → should NOT heal."""

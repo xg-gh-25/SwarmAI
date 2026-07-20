@@ -13,8 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from core.session_healing import (
-    LATENCY_BASELINE_WINDOW,
-    LATENCY_WINDOW,
+    ERROR_CASCADE_THRESHOLD,
     HealthSensor,
     HealingLoop,
 )
@@ -46,23 +45,24 @@ class TestSessionUnitHealingWiring:
 class TestSelfHealTrigger:
     """Test the self-heal trigger logic (simulated, no real subprocess)."""
 
-    def test_latency_spike_triggers_heal_decision(self):
-        """Simulating latency spike should cause should_checkpoint to fire."""
+    def test_trigger_allows_heal_decision(self):
+        """A real trigger (error_cascade) should cause should_checkpoint to fire.
+
+        (Was test_latency_spike_triggers_heal_decision — latency_degradation was
+        removed in run_099724ca; error_cascade is the stable trigger vehicle for
+        exercising the should_checkpoint → can_heal wiring.)
+        """
         unit = SessionUnit(session_id="test-heal", agent_id="agent-1")
         sensor = unit._health_sensor
 
-        # Simulate baseline (10 turns at 100ms)
-        for _ in range(LATENCY_BASELINE_WINDOW):
-            sensor.record_turn(100.0, 1400, False)
-
-        # Simulate degradation (5 turns at 300ms)
-        for _ in range(LATENCY_WINDOW):
-            sensor.record_turn(300.0, 1500, False)
+        # 3 consecutive errors → error_cascade
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            sensor.record_turn(100.0, 1400, True)
 
         # Should trigger
         should, trigger = sensor.should_checkpoint()
         assert should is True
-        assert trigger == "latency_degradation"
+        assert trigger == "error_cascade"
 
         # HealingLoop should allow it
         can, _ = unit._healing_loop.can_heal()
@@ -101,11 +101,9 @@ class TestSelfHealExecution:
         """When heal triggers, _crash_to_cold_async should be called."""
         unit = SessionUnit(session_id="test-heal-exec", agent_id="agent-1")
 
-        # Force heal trigger
-        for _ in range(LATENCY_BASELINE_WINDOW):
-            unit._health_sensor.record_turn(100.0, 1400, False)
-        for _ in range(LATENCY_WINDOW):
-            unit._health_sensor.record_turn(300.0, 1500, False)
+        # Force heal trigger (error_cascade — latency_degradation removed)
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            unit._health_sensor.record_turn(100.0, 1400, True)
 
         # Mock _crash_to_cold_async
         unit._crash_to_cold_async = AsyncMock()
@@ -175,23 +173,27 @@ class TestNegativeHealCycle:
     """Negative test: verify heal cycle fires correctly on degradation."""
 
     def test_full_degradation_to_heal_decision(self):
-        """DoD criterion 7: latency spike → heal fires."""
+        """Heal fires on a real trigger (error_cascade).
+
+        (latency_degradation was removed in run_099724ca; error_cascade is the
+        stable vehicle for the healthy→degrade→heal-allowed transition.)
+        """
         unit = SessionUnit(session_id="neg-test", agent_id="agent-1")
 
         # Phase 1: healthy
-        for _ in range(LATENCY_BASELINE_WINDOW):
+        for _ in range(10):
             unit._health_sensor.record_turn(100.0, 1400, False)
         should, _ = unit._health_sensor.should_checkpoint()
         assert not should, "Should not trigger during healthy phase"
 
-        # Phase 2: degrade
-        for _ in range(LATENCY_WINDOW):
-            unit._health_sensor.record_turn(300.0, 1800, False)
+        # Phase 2: degrade (consecutive errors)
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            unit._health_sensor.record_turn(300.0, 1800, True)
 
         # Phase 3: verify trigger
         should, trigger = unit._health_sensor.should_checkpoint()
-        assert should is True, "Must trigger on latency spike"
-        assert trigger == "latency_degradation"
+        assert should is True, "Must trigger on error cascade"
+        assert trigger == "error_cascade"
 
         # Phase 4: verify heal is allowed
         can, _ = unit._healing_loop.can_heal()
@@ -211,17 +213,17 @@ class TestE2EHealCycle:
         unit._pid = 99999  # fake PID (won't be killed — we mock)
 
         # Phase 1: Record baseline turns
-        for _ in range(LATENCY_BASELINE_WINDOW):
+        for _ in range(10):
             unit._health_sensor.record_turn(100.0, 1400, False)
 
-        # Phase 2: Spike latency (simulating context window filling)
-        for _ in range(LATENCY_WINDOW):
-            unit._health_sensor.record_turn(300.0, 1600, False)
+        # Phase 2: Trigger degradation (error_cascade — latency_degradation removed)
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            unit._health_sensor.record_turn(300.0, 1600, True)
 
         # Phase 3: Verify trigger fires
         should, trigger = unit._health_sensor.should_checkpoint()
         assert should is True
-        assert trigger == "latency_degradation"
+        assert trigger == "error_cascade"
 
         # Phase 4: Execute heal (mocked subprocess kill)
         unit._crash_to_cold_async = AsyncMock()
@@ -246,7 +248,7 @@ class TestE2EHealCycle:
 
         # Phase 5: Verify post-heal state
         assert unit._heal_checkpoint is not None, "Checkpoint must be built"
-        assert unit._heal_checkpoint.trigger == "latency_degradation"
+        assert unit._heal_checkpoint.trigger == "error_cascade"
         assert unit._heal_checkpoint.original_request == "Implement feature X"
         assert unit._health_sensor.turn_count == 0, "Turn count must reset"
         assert unit._healing_loop.heal_attempts == 0, "Attempts must reset on success"

@@ -69,8 +69,7 @@ def test_turn_approaching_when_pending_proceeds_to_kill():
 
 
 def test_immediate_trigger_proceeds_to_kill():
-    for trigger in ("latency_degradation", "memory_growth",
-                    "error_cascade", "hang_detected"):
+    for trigger in ("memory_growth", "error_cascade", "hang_detected"):
         c = _coord()
         d = c.decide(trigger, enabled=True, user_stopped=False,
                      state="streaming", graceful_pending=False)

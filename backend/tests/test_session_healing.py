@@ -18,9 +18,6 @@ from core.session_healing import (
     ERROR_CASCADE_THRESHOLD,
     HANG_TIMEOUT_S,
     HEAL_COOLDOWN_S,
-    LATENCY_BASELINE_WINDOW,
-    LATENCY_MULTIPLIER,
-    LATENCY_WINDOW,
     MAX_HEAL_ATTEMPTS,
     RSS_GROWTH_THRESHOLD_MB,
     RSS_WINDOW,
@@ -38,49 +35,50 @@ from core.session_healing import (
 
 
 class TestHealthSensorLatency:
-    """Test latency degradation detection."""
+    """Latency degradation was REMOVED (run_099724ca).
 
-    def test_no_trigger_when_latency_stable(self):
-        """Stable latency should not trigger heal."""
+    The `latency_degradation` self-heal signal force-killed healthy IDLE
+    sessions between turns based purely on RELATIVE completed-turn latency
+    (recent-5 avg > 2.5x opening-10 avg). Its kill->--resume response made
+    latency WORSE (replays full context, 2x multiplier), and every real cause
+    of rising latency already has a correct owner (context-bloat->soft-compact,
+    memory->RSS-restart, legit-heavier-work->no action). See EVOLUTION/DDD.
+    These tests pin that a latency shape NO LONGER triggers a heal.
+    """
+
+    def test_latency_spike_no_longer_triggers(self):
+        """The 00e5ba40 shape (10 fast turns then 5 turns at 3x) must NOT heal.
+
+        This is the exact false-kill: healthy session, latency rose because the
+        later turns were legitimately heavier work. Before the fix this returned
+        (True, "latency_degradation"); after removal it must NOT.
+        """
         sensor = HealthSensor(max_turns=500)
-        # Record 20 turns with stable 100ms latency
-        for _ in range(20):
+        # Baseline: 10 turns at 100ms
+        for _ in range(10):
             sensor.record_turn(100.0, 1400, False)
+        # Recent: 5 turns at 300ms (3x baseline — would have been >2.5x trigger)
+        for _ in range(5):
+            sensor.record_turn(300.0, 1400, False)
         should, trigger = sensor.should_checkpoint()
+        assert trigger != "latency_degradation"
+        # With stable RSS + no errors + turns far from the limit, nothing fires.
         assert not should
         assert trigger == ""
 
-    def test_trigger_on_latency_spike(self):
-        """Latency spike (>2.5× baseline) should trigger heal."""
-        sensor = HealthSensor(max_turns=500)
-        # Baseline: 10 turns at 100ms
-        for _ in range(LATENCY_BASELINE_WINDOW):
-            sensor.record_turn(100.0, 1400, False)
-        # Recent: 5 turns at 300ms (3× baseline > 2.5× threshold)
-        for _ in range(LATENCY_WINDOW):
-            sensor.record_turn(300.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert should
-        assert trigger == "latency_degradation"
+    def test_extreme_latency_still_no_trigger(self):
+        """Even a 10x latency blowup (still SSE-alive) must not force a kill.
 
-    def test_no_trigger_with_mild_latency_increase(self):
-        """Mild increase (2× baseline, below 2.5× threshold) should not trigger."""
+        A genuinely slow-but-progressing turn is not a hang; hang_detected
+        (300s silence) + turn floors are the real safety nets, not latency.
+        """
         sensor = HealthSensor(max_turns=500)
-        # Baseline: 10 turns at 100ms
-        for _ in range(LATENCY_BASELINE_WINDOW):
-            sensor.record_turn(100.0, 1400, False)
-        # Recent: 5 turns at 200ms (2× baseline, below 2.5× threshold)
-        for _ in range(LATENCY_WINDOW):
-            sensor.record_turn(200.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert not should
-
-    def test_not_enough_data_no_trigger(self):
-        """Too few turns should not trigger (need LATENCY_BASELINE_WINDOW)."""
-        sensor = HealthSensor(max_turns=500)
+        for _ in range(10):
+            sensor.record_turn(50.0, 1400, False)
         for _ in range(5):
-            sensor.record_turn(500.0, 1400, False)
+            sensor.record_turn(500.0, 1400, False)  # 10x
         should, trigger = sensor.should_checkpoint()
+        assert trigger != "latency_degradation"
         assert not should
 
     def test_none_max_turns_uses_default(self):
@@ -98,7 +96,6 @@ class TestHealthSensorRSS:
     def test_trigger_on_rss_growth(self):
         """RSS growth > 400MB over RSS_WINDOW should trigger."""
         sensor = HealthSensor(max_turns=500)
-        # Need LATENCY_BASELINE_WINDOW turns to avoid latency check early-exit
         for i in range(RSS_WINDOW):
             rss = 1400 + (i * 50)  # 1400 → 1850 (450MB growth)
             sensor.record_turn(100.0, rss, False)
@@ -367,8 +364,8 @@ class TestTaskCheckpoint:
             uncommitted_changes="2 files changed, +200/-0",
             pipeline_run_id="run_abc123",
             pipeline_stage="build",
-            key_findings="HealthSensor detects 5 trigger types",
-            trigger="latency_degradation",
+            key_findings="HealthSensor detects 4 trigger types",
+            trigger="memory_growth",
             turn_count=200,
             heal_attempt=1,
         )
@@ -468,7 +465,12 @@ class TestSensorHealIntegration:
     """Test the sensor→heal decision flow (no actual subprocess)."""
 
     def test_full_degradation_flow(self):
-        """Simulate a session degrading: healthy → latency spike → heal decision."""
+        """Simulate a session degrading: healthy → error cascade → heal decision.
+
+        (Was a latency-spike flow; latency_degradation was removed in
+        run_099724ca. error_cascade is the stable trigger vehicle for the
+        healthy→degrade→heal→reset→healthy cycle.)
+        """
         sensor = HealthSensor(max_turns=500)
         loop = HealingLoop()
 
@@ -478,14 +480,14 @@ class TestSensorHealIntegration:
             should, _ = sensor.should_checkpoint()
             assert not should
 
-        # Phase 2: Latency starts climbing (inference slowing)
-        for _ in range(LATENCY_WINDOW):
-            sensor.record_turn(300.0, 1500, False)
+        # Phase 2: Errors start cascading
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            sensor.record_turn(300.0, 1500, True)
 
         # Should now trigger
         should, trigger = sensor.should_checkpoint()
         assert should
-        assert trigger == "latency_degradation"
+        assert trigger == "error_cascade"
 
         # Healing loop says: yes, go ahead
         can, _ = loop.can_heal()
@@ -502,18 +504,17 @@ class TestSensorHealIntegration:
         should, _ = sensor.should_checkpoint()
         assert not should
 
-    def test_negative_latency_spike_detection(self):
-        """DoD criterion 7: latency spike correctly triggers checkpoint."""
+    def test_negative_error_cascade_detection(self):
+        """A real trigger (error_cascade) correctly triggers checkpoint.
+
+        (Was test_negative_latency_spike_detection — latency signal removed.)
+        """
         sensor = HealthSensor(max_turns=500)
-        # Baseline
-        for _ in range(LATENCY_BASELINE_WINDOW):
-            sensor.record_turn(100.0, 1400, False)
-        # Spike
-        for _ in range(LATENCY_WINDOW):
-            sensor.record_turn(300.0, 1900, False)
+        for _ in range(ERROR_CASCADE_THRESHOLD):
+            sensor.record_turn(300.0, 1900, True)
         should, trigger = sensor.should_checkpoint()
         assert should is True
-        assert trigger == "latency_degradation"
+        assert trigger == "error_cascade"
 
 
 # ─── Rich Checkpoint Tests ──────────────────────────────────────────────────
@@ -601,7 +602,7 @@ class TestBuildRichCheckpoint:
                 working_dir="/tmp/test",
                 file_tracker_paths=["c.py"],
                 turn_count=150,
-                trigger="latency_degradation",
+                trigger="memory_growth",
             )
         prompt = cp.to_continuation_prompt()
         lines = [l for l in prompt.split("\n") if l.strip()]
@@ -771,8 +772,8 @@ class TestHealingLoopObservability:
         loop = HealingLoop()
         loop.record_heal_start(trigger="hang_detected")
         loop.record_heal_start(trigger="hang_detected")
-        loop.record_heal_start(trigger="latency_degradation")
-        assert loop.trigger_counts == {"hang_detected": 2, "latency_degradation": 1}
+        loop.record_heal_start(trigger="memory_growth")
+        assert loop.trigger_counts == {"hang_detected": 2, "memory_growth": 1}
 
     def test_recent_triggers_capped_at_20(self):
         """recent_triggers deque never exceeds 20 entries."""

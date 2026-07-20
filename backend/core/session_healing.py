@@ -35,7 +35,6 @@ import subprocess as _subprocess
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from statistics import mean
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -66,11 +65,6 @@ def get_process_rss_mb(pid: int | None = None) -> int:
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-
-# Latency: if recent 5 turns average > LATENCY_MULTIPLIER × baseline, trigger
-LATENCY_MULTIPLIER = 2.5
-LATENCY_WINDOW = 5  # turns for recent average
-LATENCY_BASELINE_WINDOW = 10  # turns for baseline (first N turns)
 
 # RSS: if growth over last N turns exceeds this (MB), trigger
 RSS_GROWTH_THRESHOLD_MB = 400
@@ -134,7 +128,6 @@ class HealthSensor:
     _YOUNG_IMMUNITY_MAX_AGE_S: float = 180.0
 
     def __init__(self, max_turns: int | None = DESKTOP_MAX_TURNS):
-        self._turn_latencies: deque[float] = deque(maxlen=50)
         self._rss_samples: deque[int] = deque(maxlen=RSS_WINDOW)
         self._consecutive_errors: int = 0
         self._turn_count: int = 0
@@ -149,8 +142,13 @@ class HealthSensor:
     def record_turn(
         self, latency_ms: float, rss_mb: int, had_error: bool
     ) -> None:
-        """Record one turn's health signals."""
-        self._turn_latencies.append(latency_ms)
+        """Record one turn's health signals.
+
+        ``latency_ms`` is accepted for caller compatibility
+        (streaming_orchestrator.py passes it) but is no longer stored — the
+        latency_degradation signal that consumed it was removed (run_099724ca).
+        """
+        del latency_ms  # signal removed; param kept for caller compat
         self._rss_samples.append(rss_mb)
         self._turn_count += 1
         self._last_activity_time = time.time()
@@ -200,14 +198,17 @@ class HealthSensor:
             and (time.time() - self._created_at) < self._YOUNG_IMMUNITY_MAX_AGE_S
         )
 
-        # Signal 1: Latency degradation (context window filling up)
-        if not _young and len(self._turn_latencies) >= LATENCY_BASELINE_WINDOW:
-            baseline = list(self._turn_latencies)[:LATENCY_BASELINE_WINDOW]
-            recent = list(self._turn_latencies)[-LATENCY_WINDOW:]
-            baseline_avg = mean(baseline)
-            recent_avg = mean(recent)
-            if baseline_avg > 0 and recent_avg > baseline_avg * LATENCY_MULTIPLIER:
-                return True, "latency_degradation"
+        # Signal 1 (latency_degradation) was REMOVED (run_099724ca): it force-
+        # killed healthy IDLE sessions between turns on RELATIVE completed-turn
+        # latency (recent-5 > 2.5x opening-10), with no absolute floor and no
+        # resource co-signal. The kill->--resume response made latency WORSE
+        # (replays full context, 2x multiplier), and every real cause of rising
+        # latency has a correct owner elsewhere: context-bloat -> soft-compact
+        # (session_unit._check_context_soft_compact, no kill), memory -> RSS
+        # proactive restart (_check_rss_and_proactive_restart) + Signal 2 below,
+        # legitimately-heavier work -> no action needed. A live+SSE-emitting
+        # slow turn is not a hang; hang_detected (Signal 5) + the turn floors
+        # are the real safety nets.
 
         # Signal 2: Memory growth (RSS climbing)
         if not _young and len(self._rss_samples) >= RSS_WINDOW:
@@ -256,7 +257,6 @@ class HealthSensor:
         independent turn counter. Our sensor tracks turns per-subprocess-life,
         not total session lifetime.
         """
-        self._turn_latencies.clear()
         self._rss_samples.clear()
         self._consecutive_errors = 0
         self._turn_count = 0  # Reset: new subprocess = new turn counter
@@ -394,7 +394,7 @@ class HealingLoop:
         """Record that a heal cycle is starting.
 
         Args:
-            trigger: The trigger name (e.g. "hang_detected", "latency_degradation").
+            trigger: The trigger name (e.g. "hang_detected", "memory_growth").
                 Used for observability — tracks per-trigger frequency to detect
                 false positive patterns.
         """

@@ -123,7 +123,7 @@ class TestBugConditionCheckpointEnrichment:
     ):
         """2b (GAP 1): completed/pending steps must be populated from history.
 
-        A `latency_degradation` heal fires with session history available. The fixed
+        A `memory_growth` heal fires with session history available. The fixed
         builder accepts derived `completed_steps` / `pending_steps` and renders the
         `**Completed:**` / `**Next:**` lines. On UNFIXED code these parameters do not
         exist and the fields stay empty, so this FAILS (counterexample:
@@ -134,7 +134,7 @@ class TestBugConditionCheckpointEnrichment:
         checkpoint = await build_rich_checkpoint(
             original_request=ORIGINAL_REQUEST,
             working_dir=None,
-            trigger="latency_degradation",
+            trigger="memory_growth",
             turn_count=60,
             completed_steps=completed_steps,
             pending_steps=pending_steps,
@@ -302,14 +302,14 @@ class TestPreservationSensor:
         sensor = HealthSensor(max_turns=500)
         assert sensor.should_checkpoint() == (False, "")
 
-    def test_3_2_latency_degradation_trigger(self):
-        """Recent latency >2.5x baseline → latency_degradation (signal 1)."""
+    def test_3_2_latency_no_longer_triggers(self):
+        """Latency degradation was REMOVED (run_099724ca): a >2.5x shape must NOT heal."""
         sensor = HealthSensor(max_turns=500)
         for _ in range(10):
             sensor.record_turn(latency_ms=10.0, rss_mb=100, had_error=False)
         for _ in range(5):
             sensor.record_turn(latency_ms=100.0, rss_mb=100, had_error=False)
-        assert sensor.should_checkpoint() == (True, "latency_degradation")
+        assert sensor.should_checkpoint() == (False, "")
 
     def test_3_2_memory_growth_trigger(self):
         """RSS growth over the window >400MB → memory_growth (signal 2)."""
@@ -338,16 +338,15 @@ class TestPreservationSensor:
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 5)
         assert sensor.should_checkpoint() == (True, "hang_detected")
 
-    def test_3_2_five_signal_names_are_the_known_set(self):
-        """The producible trigger names are exactly the five documented signals."""
-        observed: set[str] = set()
+    def test_3_2_signal_names_are_the_known_set(self):
+        """The producible trigger names are exactly the documented signals.
 
-        s1 = HealthSensor(max_turns=500)
-        for _ in range(10):
-            s1.record_turn(latency_ms=10.0, rss_mb=100, had_error=False)
-        for _ in range(5):
-            s1.record_turn(latency_ms=100.0, rss_mb=100, had_error=False)
-        observed.add(s1.should_checkpoint()[1])
+        latency_degradation was removed (run_099724ca), so the known set is now
+        four: memory_growth, error_cascade, turn_approaching, hang_detected.
+        (turn_hard_floor shares the turn-limit family and is not separately
+        producible here.)
+        """
+        observed: set[str] = set()
 
         s2 = HealthSensor(max_turns=500)
         for v in (100, 200, 300, 400, 500, 600, 700, 800, 900, 1000):
@@ -369,7 +368,6 @@ class TestPreservationSensor:
         observed.add(s5.should_checkpoint()[1])
 
         assert observed == {
-            "latency_degradation",
             "memory_growth",
             "error_cascade",
             "turn_approaching",
@@ -584,7 +582,6 @@ from hypothesis import strategies as st  # noqa: E402
 # ─── Shared strategies / helpers ─────────────────────────────────────────────
 
 _TRIGGERS = [
-    "latency_degradation",
     "memory_growth",
     "error_cascade",
     "turn_approaching",
