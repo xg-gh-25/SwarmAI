@@ -12,8 +12,10 @@ Decay rules (see DORMANT_THRESHOLD_DAYS / ARCHIVED_THRESHOLD_DAYS below — the 
 - dormant → archived: 150 days TOTAL since last reference (NOT additional-after-dormant)
 - New entries (< 30 days old): immune to decay (grace period)
 - Evergreen sections: entries within are immune
+- Evergreen TYPES (the 5 judgment types — decision/model/principle/correction/pitfall):
+  immune regardless of age (Step 3, run_123652ae). Only guideline/process age-decay.
   (The ref>=10 "2x grace" and the 90/180 windows were removed 2026-06; ref_count has
-   no live producer, so decay is age + evergreen + grace only — see assess_decay.)
+   no live producer, so decay is age + evergreen-section + evergreen-type + grace — see assess_decay.)
 
 Public API:
     EntryMetadata        — dataclass for per-entry state
@@ -128,16 +130,26 @@ ARCHIVED_THRESHOLD_DAYS = 150
 # real, not silt. Genuine staleness is handled by evidence-based retire
 # (ddd_cultivation retire path), NEVER by silent age-death.
 #
-# ⚠️ DELIBERATELY DISTINCT from _KEEP_TYPES (below, ~line 946). The two govern
-# DIFFERENT actions and legitimately differ on `pitfall`:
-#   • EVERGREEN_TYPES → "never AGE-DECAY" (retention / recall-priority). Includes
-#     pitfall — the dominant hard-won failure-lesson type (measured: 294 across DDDs).
-#   • _KEEP_TYPES → "never RECLAIM-STRIP" (the harsher physical removal). Excludes
-#     pitfall (historically pitfalls were the reclaimable archived noise) and adds
-#     model/principle.
-# Do NOT unify them — a future reader who collapses these two sets re-breaks either
-# pitfall retention or reclaim safety.
-EVERGREEN_TYPES = frozenset({"decision", "pitfall", "correction"})
+# The set is ALL five judgment types (cognitive + meta-cognitive): decision, model
+# (cognitive) + principle, correction (meta-cognitive) + pitfall (hard-won failure
+# lesson). Only OPERATIONAL types (guideline, process) age-decay. Rationale for
+# including principle/model too (Gate-2 axis-2, run_123652ae): the Principle-1
+# argument — "judgment must not be buried on a timer" — is STRONGEST for the
+# meta-cognitive layer, so it would be incoherent to keep `correction` evergreen but
+# let `principle` age out. This makes EVERGREEN_TYPES = _KEEP_TYPES ∪ {pitfall}.
+#
+# ⚠️ STILL DELIBERATELY DISTINCT from _KEEP_TYPES (below, ~line 946) — they govern
+# DIFFERENT actions and differ on `pitfall`:
+#   • EVERGREEN_TYPES → "never AGE-DECAY" (retention / hot-context recall-priority).
+#     INCLUDES pitfall — the dominant hard-won failure-lesson type (294 across DDDs;
+#     the MEMORY [PIT##] entries are real lessons, not churn — the old A2 "PIT is
+#     fast-churn noise" premise was wrong; guideline is the fast-churn type).
+#   • _KEEP_TYPES → "never RECLAIM-STRIP" (the harsher physical removal). EXCLUDES
+#     pitfall (a legacy pre-stamped-dormant pitfall stays reclaim-eligible — that's
+#     how Step-2-era archived noise is removable).
+# Do NOT collapse them into one set — dropping pitfall from EVERGREEN_TYPES re-breaks
+# retention; adding it to _KEEP_TYPES re-breaks reclaim of legacy archived noise.
+EVERGREEN_TYPES = frozenset({"decision", "model", "principle", "correction", "pitfall"})
 
 # High-ref entries (ref >= HIGH_REF_THRESHOLD) get extended grace (2x)
 HIGH_REF_THRESHOLD = 10
@@ -658,6 +670,10 @@ def assess_decay(
 
     Decay rules:
     - Evergreen sections: entries within are immune (never decay)
+    - Evergreen TYPES (EVERGREEN_TYPES = the 5 judgment types decision/model/
+      principle/correction/pitfall): immune regardless of section/age (Step 3,
+      run_123652ae — judgment must not be buried on a timer). Only operational
+      guideline/process age-decay.
     - Grace period: entries < 30 days old are immune
     - active → dormant: `dormant_days` days since last_referenced
       (defaults to the global DORMANT_THRESHOLD_DAYS=60 when None)

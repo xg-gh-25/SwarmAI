@@ -244,8 +244,8 @@ class TestAssessDecay:
                 last_referenced=old_ref, decay_state="active",
                 created_date=old_created, section="What Failed",
             )
-        # Judgment types: NO transition despite 500d idle.
-        for t in ("decision", "pitfall", "correction"):
+        # All 5 judgment types (cognitive + meta-cognitive): NO transition at 500d idle.
+        for t in ("decision", "model", "principle", "correction", "pitfall"):
             trans = assess_decay([_mk(t)], today)
             assert trans == [], f"{t} must be evergreen-by-type (got {trans})"
         # Operational types: DO age-decay at the same age.
