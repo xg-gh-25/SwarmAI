@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 
 from core.session_hooks import HookContext
@@ -29,11 +28,6 @@ logger = logging.getLogger(__name__)
 # Minimum message count to justify extraction -- short sessions
 # rarely produce meaningful lessons.
 MIN_MESSAGES_FOR_EXTRACTION = 8
-
-# Sections in IMPROVEMENT.md that we append to.
-SECTION_WHAT_WORKED = "## What Worked"
-SECTION_WHAT_FAILED = "## What Failed"
-SECTION_KNOWN_ISSUES = "## Known Issues"
 
 
 class ImprovementWritebackHook:
@@ -280,76 +274,48 @@ class ImprovementWritebackHook:
         lessons: dict,
         context: HookContext,
     ) -> None:
-        """Append extracted lessons to IMPROVEMENT.md under the right sections.
+        """Route extracted lessons through the SHARED cultivation admission path.
 
-        Uses flock_exclusive/flock_unlock for cross-process safety (same
-        pattern as locked_write.py).  The asyncio.Lock in execute()
-        handles in-process concurrency; this handles hook-vs-skill races.
+        UNIFIED INTAKE (run_4c5f81ce): this hook no longer writes IMPROVEMENT.md
+        with its own ``_insert_after_header`` + bespoke dedup. It builds an append
+        ``CultivationProposal`` per lesson and applies it via ``apply_to_ddd`` —
+        the SAME single chokepoint pipeline REFLECT uses. Why:
+          - ONE dedup (content_signature) sees both writers' formats, so a
+            writeback lesson dedups against a cultivation entry and vice-versa
+            (the old two-writer / two-blind-dedup split silted 43K archive dups).
+          - ``source_stage="writeback"`` keeps the attribution honest (NOT
+            "auto-cultivated"/reflect — that would misattribute hook output).
+          - ``apply_to_ddd`` is SYNC (fcntl.flock + read + atomic rename); this
+            hook is awaited directly on the event loop (session_hooks.py:577), so
+            each call is offloaded with ``asyncio.to_thread`` to avoid blocking it.
         """
-        from utils.file_lock import flock_exclusive, flock_unlock
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        project_dir = improvement_path.parent
+        # session_id is NOT a pipeline run_id; tag it distinctly so the changelog /
+        # weekly report can tell writeback-sourced entries from REFLECT ones.
+        source_run_id = f"session_{context.session_id[:8]}"
 
-        fd = None
-        try:
-            fd = open(improvement_path, "r+", encoding="utf-8")
-            flock_exclusive(fd)
-
-            content = fd.read()
-            modified = False
-
-            for item in lessons.get("worked", []):
-                entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
-                content, changed = self._insert_after_header(
-                    content, SECTION_WHAT_WORKED, entry
+        section_for = {
+            "worked": "What Worked",
+            "failed": "What Failed",
+        }
+        for key, section in section_for.items():
+            for item in lessons.get(key, []):
+                proposal = CultivationProposal(
+                    target_doc="IMPROVEMENT.md",
+                    target_section=section,
+                    content=item,
+                    source_run_id=source_run_id,
+                    confidence=0.5,
+                    source_stage="writeback",
+                    change_type="append",
                 )
-                modified = modified or changed
-
-            for item in lessons.get("failed", []):
-                entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
-                content, changed = self._insert_after_header(
-                    content, SECTION_WHAT_FAILED, entry
-                )
-                modified = modified or changed
-
-            if modified:
-                fd.seek(0)
-                fd.write(content)
-                fd.truncate()
-        finally:
-            if fd is not None:
-                flock_unlock(fd)
-                fd.close()
-
-    @staticmethod
-    def _insert_after_header(
-        content: str, header: str, entry: str
-    ) -> tuple[str, bool]:
-        """Insert an entry after a markdown section header.
-
-        Deduplicates: if *entry* already exists in *content*, returns
-        unchanged.  Handles edge cases: header at end of file (no
-        trailing newline), header followed by blank line, etc.
-        Returns (new_content, changed).
-        """
-        if header not in content:
-            return content, False
-
-        # Dedup: skip if this exact entry is already present
-        if entry in content:
-            return content, False
-
-        idx = content.index(header) + len(header)
-        next_newline = content.find("\n", idx)
-
-        if next_newline == -1:
-            # Header is the last line — append to end
-            content = content + "\n\n" + entry + "\n"
-        else:
-            content = (
-                content[: next_newline + 1]
-                + "\n" + entry + "\n"
-                + content[next_newline + 1:]
-            )
-
-        return content, True
+                # Offload the sync file I/O off the event loop (hook is awaited on it).
+                status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
+                if status not in ("applied", "created_section", "duplicate"):
+                    logger.warning(
+                        "writeback: apply_to_ddd returned %s for a %s lesson "
+                        "(session %s)",
+                        status, section, context.session_id[:8],
+                    )
