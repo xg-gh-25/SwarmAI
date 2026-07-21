@@ -1,5 +1,5 @@
 # Security Specialist Review
-<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP49 -->
+<!-- version: 2026-07-21 | synced with: REVIEW_PATTERNS.md RP1-RP52 -->
 
 Scope: When changeset touches auth, user input handling, database queries, file paths,
 external API calls, or any endpoint/handler. NEVER_GATE — once dispatched (per
@@ -11,7 +11,10 @@ RP17 (unsanitized strings in HTML/JSON/SQL), RP24 (cross-language serialization)
 RP28 (schema migration without rollback), RP44 (identity-gate keyed by a raw name —
 case/path/symlink aliasing), RP46 (enum-matched gate fails-open on an un-listed
 value), RP49 (redaction written as a denylist — fails-open on fields added later;
-invert to an allowlist-of-keep). These are proven vulnerability patterns.
+invert to an allowlist-of-keep), RP52 (identity/principal read from the REQUEST
+body/header/query — or a JWT decoded without signature verify — instead of the
+server-verified principal; assert `attacker sets user_alias=<victim> in body →
+expect 403`). These are proven vulnerability patterns.
 
 Output: JSON objects, one finding per line.
 
