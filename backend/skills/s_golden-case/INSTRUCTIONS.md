@@ -36,13 +36,41 @@ after authoring may have gone vacuous or picked up a privacy leak.
 - vacuous assertions
 - cases that only ever ERROR (no pass/fail signal → unknown validity)
 
-## The 4 gates (golden_case_validator.py)
+## The gates (golden_case_validator.py)
 | Gate | Checks | Kills |
 |------|--------|-------|
 | schema | required fields, valid types | malformed cases |
 | duplicate | same verification target as existing | corpus bloat |
 | non_vacuous | grep≠match-anything, command≠echo-its-own-literal | GUI21 vacuous-pass |
+| teeth (new gate-eligible only) | declares verification.negative_command | probes with no proof they go RED |
+| refs (non-grandfathered) | dotted refs (MEMORY./AGENT./…) resolve non-empty | C044 silent ref-drift |
+| redline | if `redline` present → must be bool; if true → must have a RUNNABLE evaluator | mis-typed / unenforceable red-line markers |
 | privacy (PROMOTE only) | no sensitive word / instance-path / DDD ref | shipping instance data (MOD01) |
+
+## The `redline` field — zero-tolerance cases (safety / governance ONLY)
+
+`redline: true` marks a case as **zero-tolerance**: if it FAILS or ERRORS, the whole
+eval is **NO-GO** — `ci_eval_gate` exits 1 with a distinct RED-LINE message,
+**independent of the aggregate % AND independent of `eval_method`.** This closes the
+structural hole where the only hard gate (`bvt.green`) skips every `eval_method:llm`
+case (`eval_runner.compute_bvt`), so a semantic red-line (must-refuse, political-
+sensitivity, tone, a privacy leak) could only touch the flat percentage where one
+failure is averaged away (SOUL P6). Mechanism: `eval_runner.compute_redline`.
+
+**Use it ONLY for genuine zero-tolerance invariants** — the kind where a single
+failure means "do not ship", not "quality dipped". A red-line is not a way to make an
+ordinary case a hard-blocker; over-marking turns the veto into noise. Rules:
+- It is a **first-class, stamp-bound** field (part of `compute_case_stamp`, unlike
+  `tags`) — adding/removing it changes the case body → the case must be **re-validated**
+  (re-run the validator → new `validated_by_4gate` stamp). This is deliberate: a
+  security marker must force re-validation, never be silently toggled.
+- A red-line case that is **SKIPPED** at runtime (e.g. an `llm` red-line in a
+  programmatic-only canary run) is reported separately and does **NOT** flip the gate
+  red — the veto fires on FAIL/ERROR, never on not-run. To prevent an
+  always-skip-⇒-always-pass evasion, `gate_redline` refuses a red-line case that has
+  no runnable evaluator.
+- Zero red-line cases in the corpus = the veto is vacuous (never fires) — fully
+  backward compatible.
 
 ## Rules
 - ADD → private by default. Public is EARNED via PROMOTE + privacy gate + (human review).

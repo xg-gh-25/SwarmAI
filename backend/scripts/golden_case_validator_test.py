@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.golden_case_validator import (  # noqa: E402
-    gate_schema, gate_duplicate, gate_non_vacuous, privacy_scan, validate_case,
+    gate_schema, gate_duplicate, gate_non_vacuous, gate_redline, privacy_scan, validate_case,
 )
 
 
@@ -70,6 +70,74 @@ def test_non_vacuous_canary_without_grep_is_not_vacuous():
         "command": "cd backend && .venv/bin/python scripts/recall_chain_probe.py knowledge_live",
         "expected_contains": "KNOWLEDGE_LIVE_OK"}))
     assert ok, errs
+
+
+# ── gate_redline (severity marker validity — run_21490939) ──
+def test_redline_absent_is_ok():
+    ok, errs = gate_redline(_ok_case())
+    assert ok and errs == []
+
+def test_redline_true_with_runnable_evaluator_ok():
+    ok, errs = gate_redline(_ok_case(redline=True, evaluators=["file_contains"]))
+    assert ok, errs
+
+def test_redline_true_llm_evaluator_ok():
+    # An llm-judged red-line (refusal/tone) is the WHOLE point — must be allowed.
+    ok, errs = gate_redline(_ok_case(redline=True, eval_method="llm", evaluators=["goal_success"]))
+    assert ok, errs
+
+def test_redline_non_bool_rejected():
+    ok, errs = gate_redline(_ok_case(redline="true"))  # string, not bool
+    assert not ok and "bool" in " ".join(errs).lower()
+
+def test_redline_true_without_runnable_evaluator_rejected():
+    # Gate-1 F3 evasion: mark redline + give it an unknown evaluator -> always
+    # 'skipped' -> never gates -> always-passes. gate_redline must refuse it.
+    ok, errs = gate_redline(_ok_case(redline=True, evaluators=["nonexistent_evaluator"]))
+    assert not ok and "runnable" in " ".join(errs).lower()
+
+def test_redline_true_empty_evaluators_rejected():
+    ok, errs = gate_redline(_ok_case(redline=True, evaluators=[]))
+    assert not ok
+
+def test_redline_false_not_validated_as_redline():
+    # redline: false with a junk evaluator is fine — it's not a red-line.
+    ok, errs = gate_redline(_ok_case(redline=False, evaluators=["nonexistent_evaluator"]))
+    assert ok, errs
+
+def test_validate_case_wires_gate_redline():
+    """A redline:true case with an unrunnable evaluator must FAIL validate_case."""
+    c = _ok_case(redline=True, evaluators=["nonexistent_evaluator"],
+                 verification={"file": "x.py", "grep": "class Foo"})
+    ok, report = validate_case(c, existing=[], for_public=False)
+    assert not ok
+    assert "redline" in report and report["redline"][0] is False
+
+
+# ── mirror-drift guard (adversarial L1, run_21490939) ──
+# _RUNNABLE_EVALUATORS / _GATE_ELIGIBLE_EVALUATORS are hand-copied in this module
+# and MUST equal eval_runner's canonical sets. Nothing enforces the mirror at
+# runtime (a module-level derive would risk the circular import — eval_runner
+# imports compute_case_stamp from HERE). This test IS the enforcement: if
+# eval_runner adds/removes an evaluator, this goes RED so the validator's copy is
+# updated in lockstep. Without it, gate_redline silently drifts — a redline case
+# using a new evaluator gets false-rejected (or, worse, an unrunnable one accepted).
+def test_runnable_evaluators_mirror_eval_runner_dispatch():
+    from scripts import eval_runner
+    from scripts.golden_case_validator import _RUNNABLE_EVALUATORS
+    canonical = (eval_runner.PROGRAMMATIC_EVALUATORS
+                 | eval_runner.LLM_EVALUATORS
+                 | eval_runner.BEHAVIOR_EVALUATORS)
+    assert _RUNNABLE_EVALUATORS == canonical, (
+        f"drift: validator _RUNNABLE_EVALUATORS != eval_runner dispatch union. "
+        f"missing={canonical - _RUNNABLE_EVALUATORS}, extra={_RUNNABLE_EVALUATORS - canonical}")
+
+
+def test_gate_eligible_evaluators_mirror_eval_runner():
+    from scripts import eval_runner
+    from scripts.golden_case_validator import _GATE_ELIGIBLE_EVALUATORS
+    assert _GATE_ELIGIBLE_EVALUATORS == eval_runner._GATE_ELIGIBLE_EVALUATORS, (
+        "drift: validator _GATE_ELIGIBLE_EVALUATORS != eval_runner's — keep in sync")
 
 
 # ── privacy scan (the ship-boundary gate for PROMOTE) ──

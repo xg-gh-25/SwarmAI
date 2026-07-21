@@ -215,6 +215,57 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
     }
 
 
+def compute_redline(cases: list, results: list[dict]) -> dict:
+    """RED-LINE (zero-tolerance) veto over cases marked ``redline: true``.
+
+    The severity-keyed gate that compute_bvt is NOT. compute_bvt gates on
+    MECHANISM (deterministic evaluator + tier + stamp) and structurally skips
+    every eval_method=='llm' case (compute_bvt:183) — exactly where semantic
+    red-lines live (refusal / political-sensitivity / tone). So a red-line judged
+    by the LLM could only ever reach compute_scores' flat equal-weight percentage,
+    where one failure is averaged away (SOUL P6: the metric must not average away a
+    red-line). compute_redline is the fix: ANY red-line case that FAILS or ERRORS
+    forces ``violated=True``, regardless of eval_method / tier / evaluator.
+
+    Semantics (Gate-1 adjudicated):
+      - Iterates ONLY cases where ``case.get("redline") is True`` (explicit opt-in;
+        redline=false / absent is NOT a red-line). NO mechanism filter — a red-line
+        gates however it is judged.
+      - status failed/error -> a violation (an ERROR is a violation, not a free
+        pass: a red-line that cannot even run is not proven safe).
+      - status skipped -> reported in ``skipped[]`` but NOT a violation. Fail-closed
+        on FAIL/ERROR, never on not-run — an llm red-line legitimately skips in a
+        programmatic_only canary run; flipping the gate red there would false-block
+        every deep-check. (The evasion "mark redline + give it an unrunnable
+        evaluator = always-skip = always-pass" is closed UPSTREAM by
+        golden_case_validator.gate_redline, which refuses a red-line case without a
+        runnable evaluator.)
+      - ``violated = len(violations) > 0``. Empty red-line set -> violated=False,
+        total=0 (vacuous pass) — fully additive, changes nothing when no case is
+        marked (backward-compatible with the existing corpus).
+    """
+    by_id = {r["id"]: r for r in results}
+    total = 0
+    violations: list[dict] = []
+    skipped: list[str] = []
+    for c in cases:
+        if c.get("redline") is not True:
+            continue
+        total += 1
+        st = by_id.get(c["id"], {}).get("status")
+        if st in ("failed", "error"):
+            violations.append({"id": c["id"], "status": st,
+                               "eval_method": c.get("eval_method", "programmatic")})
+        elif st == "skipped":
+            skipped.append(c["id"])
+    return {
+        "violated": len(violations) > 0,
+        "total": total,
+        "violations": violations,
+        "skipped": skipped,
+    }
+
+
 # ─── Load & Validate ─────────────────────────────────────────────────────────
 
 def load_golden_set(path: Path) -> dict:
@@ -1695,6 +1746,9 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         # binary gate the ci_eval_gate.py / build step reads.
         "code_digest": compute_code_digest(root),
         "bvt": compute_bvt(cases, results),
+        # Severity-keyed veto, ADDITIVE to bvt — gates any redline:true case that
+        # FAILS/ERRORS regardless of eval_method (the llm red-lines bvt excludes).
+        "redline": compute_redline(cases, results),
     }
 
     return run_result

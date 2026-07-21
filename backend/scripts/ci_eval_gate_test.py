@@ -24,13 +24,15 @@ def ws(tmp_path, monkeypatch):
 
 
 def _report(hist: Path, name: str, digest: str, bvt: dict, score: float | None = None,
-            mtime: int | None = None):
+            mtime: int | None = None, redline: dict | None = None):
     payload = {
         "run_id": name, "triggered_at": "2026-06-26T00:00:00Z",
         "code_digest": digest, "bvt": bvt,
     }
     if score is not None:
         payload["overall_score"] = score
+    if redline is not None:
+        payload["redline"] = redline
     p = hist / name
     p.write_text(json.dumps(payload))
     if mtime is not None:
@@ -146,6 +148,57 @@ def test_drift_latest_picked_by_mtime_not_filename(ws):
     code, msg = check_gate(root)
     assert code == 1, msg
     assert "drift" in msg.lower() or "regress" in msg.lower(), msg
+
+
+# ── red-line veto gate (run_21490939) ───────────────────────────────────────
+# A violated red-line blocks the push with a DISTINCT message, independent of the
+# bvt.green result (a red-line can be an eval_method='llm' case that bvt never
+# even sees). The redline block is checked AFTER freshness (a stale report can't
+# be trusted to assert anything) and BEFORE the bvt/score checks.
+_GREEN_BVT = {"total": 5, "passed": 5, "failed": 0, "error": 0, "green": True}
+
+
+def test_redline_violation_blocks_even_when_bvt_green(ws):
+    """The crux: bvt is GREEN (its deterministic cases all pass) but a red-line
+    case (invisible to bvt) FAILED → the push must still be blocked, with a
+    message naming the RED-LINE, not a bvt-red."""
+    root, hist = ws
+    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN_BVT, score=99.0,
+            redline={"violated": True, "total": 1,
+                     "violations": [{"id": "GS_RL_REFUSE", "status": "failed",
+                                     "eval_method": "llm"}], "skipped": []})
+    code, msg = check_gate(root)
+    assert code == 1, msg
+    assert "red-line" in msg.lower() or "redline" in msg.lower(), msg
+    assert "GS_RL_REFUSE" in msg, msg
+
+
+def test_redline_clean_still_passes(ws):
+    root, hist = ws
+    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN_BVT, score=99.0,
+            redline={"violated": False, "total": 2, "violations": [], "skipped": []})
+    code, msg = check_gate(root)
+    assert code == 0, msg
+
+
+def test_redline_absent_falls_through_to_bvt(ws):
+    """Backward compat: an old report with NO redline block must NOT crash and
+    must fall through to the existing bvt check (fail-open on the new gate)."""
+    root, hist = ws
+    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN_BVT, score=99.0)
+    code, msg = check_gate(root)
+    assert code == 0, msg  # no redline block → bvt green → pass
+
+
+def test_stale_report_not_masked_by_redline_check(ws):
+    """A stale report is blocked on FRESHNESS before the redline check — a
+    red-line verdict from stale code can't be trusted either way."""
+    root, hist = ws
+    _report(hist, "2026-06-26_now.json", "OLD_DIGEST", _GREEN_BVT, score=99.0,
+            redline={"violated": True, "total": 1,
+                     "violations": [{"id": "X", "status": "failed"}], "skipped": []})
+    code, msg = check_gate(root)
+    assert code == 1 and "stale" in msg.lower(), msg
 
 
 def test_load_history_real_import_resolves():

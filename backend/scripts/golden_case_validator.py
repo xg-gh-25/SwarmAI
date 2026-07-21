@@ -10,6 +10,11 @@ Gates:
   G2 duplicate    — structural similarity vs existing (same verification target)
   G3 non-vacuous  — assertion isn't trivially true (no echo-its-own-literal,
                     no match-anything grep)  [design's G4]
+  gate_teeth      — (new gate-eligible only) declares verification.negative_command
+  gate_refs       — (non-grandfathered) dotted refs resolve non-empty (anti-drift)
+  gate_redline    — if `redline` present it must be bool; if true it must carry a
+                    RUNNABLE evaluator (else it always-skips = always-passes = an
+                    unenforceable red-line). run_21490939.
   privacy_scan    — (PROMOTE only) no sensitive words / instance-paths / DDD refs.
                     Instance cases are FINE in private; this is the ship boundary.
 
@@ -43,6 +48,20 @@ _STAMP_EXCLUDED_FIELDS = frozenset(
 _GATE_ELIGIBLE_EVALUATORS = frozenset(
     {"file_contains", "keyword_match", "trajectory_exact",
      "trajectory_in_order", "trajectory_any_order", "canary_pass"}
+)
+
+# EVERY evaluator eval_runner.evaluate_case knows how to run (deterministic +
+# llm). MUST equal eval_runner's PROGRAMMATIC|LLM|BEHAVIOR canonical union — the
+# mirror is CI-enforced by test_runnable_evaluators_mirror_eval_runner_dispatch
+# (hand-copied, not module-level-derived, to avoid the circular import:
+# eval_runner imports compute_case_stamp from THIS module). A case whose
+# evaluators are ALL outside this set returns 'skipped' at runtime ("No supported
+# evaluator") — benign for a normal case, but for a RED-LINE it is an evasion
+# (always-skip = always-pass, Gate-1 F3), so gate_redline refuses it.
+_RUNNABLE_EVALUATORS = frozenset(
+    {"file_contains", "keyword_match", "trajectory_exact", "trajectory_in_order",
+     "trajectory_any_order", "canary_pass", "runtime_health", "recall_at_k",
+     "trajectory_capture", "goal_success", "quality_score"}
 )
 
 
@@ -143,6 +162,38 @@ def gate_non_vacuous(case: dict) -> tuple[bool, list[str]]:
     # GS_RCHAIN_* probes).
     if "grep" in v and grep in (".", ".*", "", "^"):
         return False, [f"vacuous: grep '{grep}' matches anything"]
+    return True, []
+
+
+def gate_redline(case: dict) -> tuple[bool, list[str]]:
+    """A red-line (zero-tolerance) marker must be VALID and ENFORCEABLE.
+
+    ``redline`` is the severity field eval_runner.compute_redline vetoes on: any
+    red-line case that FAILS/ERRORS forces the whole eval NO-GO regardless of the
+    aggregate % or eval_method. Because it is that powerful, the marker itself is
+    gated:
+      1. If present, ``redline`` MUST be a real ``bool`` — a string "true" / int 1
+         would be truthy-but-wrong and silently mis-gate.
+      2. If ``redline is True``, the case MUST carry at least one RUNNABLE evaluator
+         (eval_runner knows how to execute it). Closes the Gate-1 F3 evasion: a
+         red-line whose evaluators are all unknown returns 'skipped' at runtime,
+         and compute_redline treats skipped as not-a-violation (correct for the
+         canary-skip case) — so an unrunnable red-line would always-skip =
+         always-pass, a red-line that can never fire. Refuse it at the gate.
+
+    redline absent / False → not a red-line, nothing to validate here (a junk
+    evaluator on a non-red-line is caught by other gates, not this one)."""
+    rl = case.get("redline")
+    if rl is None:
+        return True, []
+    if not isinstance(rl, bool):
+        return False, [f"redline: must be a boolean (got {type(rl).__name__} {rl!r})"]
+    if rl is True:
+        evs = case.get("evaluators") or []
+        if not (set(evs) & _RUNNABLE_EVALUATORS):
+            return False, ["redline: a zero-tolerance case must declare at least one "
+                           "RUNNABLE evaluator (else it always 'skips' at runtime and "
+                           f"the veto never fires). Known evaluators: {sorted(_RUNNABLE_EVALUATORS)}"]
     return True, []
 
 
@@ -256,7 +307,11 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
     g2 = gate_duplicate(case, existing); report["duplicate"] = g2
     g3 = gate_non_vacuous(case); report["non_vacuous"] = g3
     g4 = gate_teeth(case, grandfathered=grandfathered); report["teeth"] = g4
-    gates = [g1, g2, g3, g4]
+    # gate_redline runs for ALL cases (incl. grandfathered): the marker is opt-in,
+    # so a legacy case without `redline` passes vacuously — but if any case (new or
+    # old) IS marked redline, the marker must be valid + enforceable.
+    g_rl = gate_redline(case); report["redline"] = g_rl
+    gates = [g1, g2, g3, g4, g_rl]
     if not grandfathered:
         g5 = gate_refs(case); report["refs"] = g5
         gates.append(g5)

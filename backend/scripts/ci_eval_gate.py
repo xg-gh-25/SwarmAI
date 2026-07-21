@@ -124,6 +124,21 @@ def check_gate(root: Path) -> tuple[int, str]:
                    f"!= current={current_digest}. Eval-relevant code or golden_set "
                    f"changed since the last eval — re-run `eval_runner.py run`.")
 
+    # Red-line veto (run_21490939): a zero-tolerance case that FAILED/ERRORED
+    # blocks the push regardless of bvt.green or the aggregate %. This is the
+    # SEVERITY-keyed gate bvt is not — bvt skips every eval_method=='llm' case, so
+    # a semantic red-line (refusal/political/tone) is invisible to it. Checked
+    # AFTER freshness (a stale report can't be trusted to assert a red-line either
+    # way) and BEFORE bvt (a red-line violation is strictly more severe). Absent
+    # block (report predates this gate) → fail-open, fall through to bvt.
+    redline = report.get("redline")
+    if redline and redline.get("violated"):
+        ids = ", ".join(v.get("id", "?") for v in redline.get("violations", []))
+        return 1, (f"GATE BLOCKED (RED-LINE): {len(redline.get('violations', []))} "
+                   f"zero-tolerance case(s) failed [{ids}] — a red-line failure is "
+                   f"NO-GO independent of the {report.get('overall_score', '?')}% score. "
+                   f"Fix before push/build; red-line cases cannot be waived.")
+
     # Green: bvt must be a non-empty, all-pass set.
     if not bvt.get("green"):
         return 1, (f"GATE BLOCKED (red): bvt total={bvt.get('total')} "

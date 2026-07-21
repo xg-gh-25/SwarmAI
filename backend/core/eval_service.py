@@ -1383,6 +1383,15 @@ class EvalService:
                 "cases_failed": 0,
                 "cases_skipped": 0,
                 "duration_seconds": 0,
+                # Gate blocks in canonical shape so ci_eval_gate reads a
+                # well-formed report (run_21490939 Gate-1 F2). A crashed run
+                # cannot ASSERT a clean gate: bvt.green False, and redline
+                # not-violated (a crash never OBSERVED a red-line failure —
+                # freshness/bvt already block the push; don't fabricate a veto
+                # the run never saw).
+                "bvt": {"total": 0, "passed": 0, "failed": 0, "error": 0,
+                        "skipped": 0, "green": False},
+                "redline": {"violated": False, "total": 0, "violations": [], "skipped": []},
             }
             try:
                 self._write_run_result(failure_result)
