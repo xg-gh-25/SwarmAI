@@ -1265,40 +1265,87 @@ _RELEASE_DECOUPLING_FLAG_RE = re.compile(r"(?:^|\s)--(?:target|tag)(?:=|\s)", re
 # (--title=x) are already `-`-prefixed so the scanner skips them; only the space
 # form needs the value swallowed. ONLY value-taking flags belong here — a BOOLEAN
 # flag (--prerelease/--latest/--draft) listed here would wrongly swallow the real
-# tag as its "value" → false-DENY (Gate-2 re-review LOW). Verified value-flags per
+# tag as its "value" → false-DENY (Gate-2 re-review LOW).
+#
+# ⚠️ COMPLETENESS IS SECURITY-CRITICAL: a MISSING value-flag is a false-ALLOW, not
+# a mere miss — the scanner reads the flag's VALUE as the positional tag while gh
+# consumes it as the flag arg and publishes a DIFFERENT positional. If the leaked
+# value is a real CI-green ref, the gate approves an unverified publish (Gate-2
+# run_372d96a5: `--notes-start-tag` was missing → `create --notes-start-tag vGREEN
+# vEVIL` leaked vGREEN while gh ships vEVIL). `test_value_flags_cover_gh_string_flags`
+# asserts this set stays complete vs `gh release {create,edit} -h` so a future gh
+# flag addition fails a test, not silently reopens the hole. Verified per
 # `gh release create/edit -h` (gh 2.88.1):
 _RELEASE_VALUE_FLAGS = {
     "-t", "--title", "-n", "--notes", "-F", "--notes-file", "--target", "--tag",
-    "-R", "--repo", "--discussion-category",
+    "-R", "--repo", "--discussion-category", "--notes-start-tag",
 }
+
+# Upper bound on the arg-substring length fed to shlex.split — shlex is O(n²) on a
+# pathological unterminated quote, and this runs SYNCHRONOUSLY in the PreToolUse
+# hook (Gate-2 run_372d96a5 MED DoS: a ~1M-char crafted command stalled the hook
+# ~60s). 16KB caps the worst-case (unterminated-quote) shlex cost at ~20ms
+# (measured) while clearing any realistic release command — even one with several KB
+# of INLINE --notes (the runbook flip uses --notes-file, so the real command line is
+# tiny; a verbose inline-notes release still fits). Over the cap = not a legit
+# release command → fail-CLOSED (return None) before the expensive parse. (Chosen
+# from a cost/headroom measurement, not tuned to a corpus: 4KB false-DENYs a
+# verbose-inline release, 64KB costs ~360ms — 16KB is the knee.)
+_RELEASE_ARG_MAX_LEN = 16384
 
 
 def _extract_release_tag(command: str) -> str | None:
     """Extract the tag arg from a `gh release create/edit <tag> …` publish command.
-    Returns the first positional token after the `create`/`edit` verb, correctly
-    SKIPPING both `--flag=value` (single token, `-`-prefixed) AND `--flag value`
-    (two tokens — the value must not be read as the positional tag). gh's release
-    tag is positional, e.g. `gh release edit v1.26.0 --draft=false`.
-    Quoted spans are stripped first so a tag-lookalike inside --notes is ignored.
-    Returns None if no positional tag is found (→ caller fails CLOSED)."""
-    stripped = _strip_quoted(command)
-    m = re.search(r"\bgh\s+release\s+(?:create|edit)\b(.*)$", stripped,
+    Returns the first POSITIONAL token after the `create`/`edit` verb, correctly
+    SKIPPING both `--flag=value` (single token) AND `--flag value` (two tokens —
+    the value must not be read as the tag). gh's release tag is positional, e.g.
+    `gh release edit v1.26.0 --draft=false`.
+
+    Tokenizes with **shlex.split** — the SAME quoting/escaping rules the shell (and
+    thus gh) applies — so the tokens the scanner sees are EXACTLY the argv gh
+    receives. This is the ground truth; a hand-rolled `.split()` + quote heuristic
+    is unsound and was a real false-ALLOW: `--notes "a\\"b\\" vEVIL more" v1.26.2`
+    let the heuristic think the notes span closed early and leaked `vEVIL` (a valid
+    git ref) as the tag while gh publishes `v1.26.2` — the extracted tag DIVERGED
+    from the published tag and could deref to the CI-green commit (run_372d96a5
+    Gate-2 adversarial CRITICAL). shlex sees the notes value as ONE arg, so `vEVIL`
+    is never a positional. A quoted positional tag (`edit "v1.26.2" …`) is likewise
+    correctly unquoted by shlex (this is the original bug the run fixed: the old
+    `_strip_quoted`-first DELETED the quoted tag → returned a downstream token).
+
+    Fail-CLOSED: an unbalanced/unparseable command → shlex raises → return None →
+    the caller denies the publish. A tag-lookalike inside `--notes` is skipped
+    because `--notes` is a `_RELEASE_VALUE_FLAGS` space-valued flag (its single
+    shlex arg is consumed). Returns None if no positional tag is found."""
+    m = re.search(r"\bgh\s+release\s+(?:create|edit)\b(.*)$", command,
                   re.IGNORECASE | re.DOTALL)
     if not m:
         return None
-    toks = m.group(1).split()
+    arg_tail = m.group(1)
+    # DoS guard: shlex.split is O(n²) on an unterminated quote and runs synchronously
+    # in the PreToolUse hook. A real publish arg tail is tiny; over the cap → this is
+    # not a legit release command → fail-CLOSED before the expensive parse.
+    if len(arg_tail) > _RELEASE_ARG_MAX_LEN:
+        return None
+    try:
+        # posix=True honors shell quoting + backslash-escapes exactly as gh's argv;
+        # unbalanced quotes raise ValueError → fail-closed (return None).
+        toks = shlex.split(arg_tail, posix=True)
+    except ValueError:
+        return None
     i = 0
     while i < len(toks):
         tok = toks[i]
         if tok.startswith("-"):
-            # A space-valued flag consumes the NEXT token as its value; `=`-attached
-            # flags carry their own value and consume nothing extra.
+            # A space-valued flag consumes its NEXT arg (already one whole token
+            # post-shlex — no multi-word span to track); `=`-attached flags carry
+            # their own value in-token and consume nothing extra.
             if tok in _RELEASE_VALUE_FLAGS and "=" not in tok:
                 i += 2
             else:
                 i += 1
             continue
-        return tok  # first true positional = the tag
+        return tok  # first true positional = the tag (shlex already unquoted it)
     return None
 
 

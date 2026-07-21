@@ -277,9 +277,112 @@ class TestExtractReleaseTag:
         ("gh release edit --prerelease v1.26.0 --draft=false", "v1.26.0"),
         ("gh release create -p v1.26.0 --notes 'x'", "v1.26.0"),
         ("gh release edit --latest v1.26.0 --draft=false", "v1.26.0"),
+        # run_372d96a5: a QUOTED positional tag must be extracted (unwrapped), not
+        # deleted by strip-first. This is the real bug — a legit runbook flip uses
+        # a bare tag, but an operator may quote it, and the guard must not false-DENY.
+        ('gh release edit "v1.26.2" --draft=false --latest', "v1.26.2"),          # double-quoted tag
+        ("gh release edit 'v1.26.2' --draft=false --latest", "v1.26.2"),          # single-quoted tag
+        # ...even with a trailing shell redirect (which strip-first returned AS the tag)
+        ('gh release edit "v1.26.2" --draft=false --latest --notes-file /tmp/x.md 2>&1', "v1.26.2"),
+        # ...and a --notes-file VALUE (a path) must never be returned as the tag
+        ('gh release edit "v1.26.2" --draft=false --notes-file /tmp/relnotes.md', "v1.26.2"),
+        # a quoted tag-lookalike inside --notes must still be ignored (value-flag skip,
+        # NOT strip-first — the fix must preserve this behavior a different way)
+        ('gh release edit "v1.26.2" --draft=false --notes "see v9.9.9 for details"', "v1.26.2"),
+        # HARDEST: a MULTI-WORD quoted --notes value BEFORE the tag — .split() breaks it
+        # into several tokens; the whole quoted span must be consumed or the lookalike
+        # (v9.9.9) leaks out as the positional tag.
+        ('gh release edit --notes "see v9.9.9 for details" "v1.26.2" --draft=false', "v1.26.2"),
+        ('gh release edit --title "Release v9.9.9 notes" v1.26.2 --draft=false', "v1.26.2"),
+        # Gate-2 spec-review concern 1: =-ATTACHED multi-word quoted value must also
+        # consume its full span (--notes="see v9.9.9 details" split → --notes="see,
+        # v9.9.9, details") — else v9.9.9 leaks as the tag.
+        ('gh release edit --notes="see v9.9.9 details" v1.26.2 --draft=false', "v1.26.2"),
+        ('gh release edit --notes="see v9.9.9 details" "v1.26.2" --draft=false', "v1.26.2"),
+        # =-attached SINGLE-word value must still not swallow the following tag
+        ('gh release edit v1.26.2 --notes="quicknote" --draft=false', "v1.26.2"),
+        ('gh release edit --notes="quicknote" v1.26.2 --draft=false', "v1.26.2"),
+        # Gate-2 adversarial CRITICAL (run_372d96a5): escaped INNER quote inside a
+        # --notes value must NOT leak a buried git-ref-lookalike as the tag. The old
+        # .split()+heuristic returned 'vEVIL' (a valid ref → could deref to the
+        # CI-green commit = false-ALLOW) while gh publishes v1.26.2. shlex tokenizes
+        # the notes value as ONE arg, so the real positional v1.26.2 is returned.
+        (r'gh release edit --notes "a\"b\" vEVIL more" v1.26.2 --draft=false', "v1.26.2"),
+        # unbalanced/unparseable quotes → shlex raises → fail-closed (None)
+        ('gh release edit --notes "unterminated v1.26.2 --draft=false', None),
+        # Gate-2 re-review CRITICAL (run_372d96a5): --notes-start-tag is a gh VALUE
+        # flag; if missing from _RELEASE_VALUE_FLAGS the scanner reads its value
+        # (vGREEN) as the tag while gh publishes the real positional (vEVIL) = false-
+        # ALLOW. Must swallow the value and land on vEVIL (which won't match a green
+        # marker → fail-closed).
+        ("gh release create --notes-start-tag vGREEN vEVIL --generate-notes", "vEVIL"),
     ])
     def test_extract(self, cmd, expected):
         assert security_hooks._extract_release_tag(cmd) == expected
+
+    def test_notes_start_tag_does_not_leak_as_tag(self):
+        """Gate-2 CRITICAL: --notes-start-tag's VALUE must never be returned as the
+        positional tag (it would diverge from gh's real positional = false-ALLOW)."""
+        assert security_hooks._extract_release_tag(
+            "gh release create --notes-start-tag vGREEN vEVIL"
+        ) == "vEVIL"
+
+    def test_shlex_dos_guard_fails_closed_on_huge_arg(self):
+        """Gate-2 MED: an over-cap arg tail (shlex is O(n²) on unterminated quotes,
+        runs synchronously in the hook) fails CLOSED before the expensive parse."""
+        import time
+        cmd = 'gh release create "' + "a" * 500_000  # unterminated quote, huge
+        t0 = time.time()
+        result = security_hooks._extract_release_tag(cmd)
+        elapsed = time.time() - t0
+        assert result is None                      # fail-closed
+        assert elapsed < 0.5, f"DoS guard too slow: {elapsed:.2f}s (shlex ran)"
+
+    def test_value_flags_cover_gh_string_flags(self):
+        """A MISSING value-flag is a false-ALLOW (its value leaks as the tag). Assert
+        the set stays complete vs `gh release {create,edit} -h` so a future gh flag
+        addition fails HERE, not silently in production. Skips if gh is unavailable."""
+        import shutil, subprocess, re as _re
+        if not shutil.which("gh"):
+            pytest.skip("gh CLI not available")
+        missing = []
+        for verb in ("create", "edit"):
+            try:
+                h = subprocess.run(["gh", "release", verb, "--help"],
+                                   capture_output=True, text=True, timeout=10)
+            except (subprocess.TimeoutExpired, OSError):
+                pytest.skip("gh help unavailable")
+            # Lines like "  -n, --notes string   ...": a long flag followed by a
+            # value-type word (string/file/...) is a value-taking flag.
+            for m in _re.finditer(r"(--[a-z][a-z0-9-]+)\s+(string|file|int)\b", h.stdout):
+                flag = m.group(1)
+                if flag not in security_hooks._RELEASE_VALUE_FLAGS:
+                    missing.append(f"{verb}:{flag}")
+        assert not missing, (
+            f"gh value-flags missing from _RELEASE_VALUE_FLAGS (false-ALLOW risk): {missing}"
+        )
+
+    def test_no_false_allow_via_escaped_inner_quote(self):
+        """Regression for the Gate-2 CRITICAL: the extracted tag must equal gh's
+        REAL positional (shlex ground truth), never a value buried in --notes."""
+        import shlex
+        cmd = r'gh release edit --notes "a\"b\" vEVIL more" v1.26.2 --draft=false'
+        extracted = security_hooks._extract_release_tag(cmd)
+        # gh's TRUE positional: first non-flag arg after the verb, skipping the
+        # space-valued --notes and its single (shlex-joined) value — exactly gh's rule.
+        argv = shlex.split(cmd)[3:]  # drop 'gh release edit'
+        k, gh_positional = 0, None
+        while k < len(argv):
+            t = argv[k]
+            if t.startswith("-"):
+                k += 2 if (t in security_hooks._RELEASE_VALUE_FLAGS and "=" not in t) else 1
+                continue
+            gh_positional = t
+            break
+        assert extracted == gh_positional == "v1.26.2", (
+            f"extractor {extracted!r} diverged from gh positional {gh_positional!r} "
+            "— a divergence to a real ref is a false-ALLOW"
+        )
 
 
 class TestDecouplingFlagsFailClosed:
