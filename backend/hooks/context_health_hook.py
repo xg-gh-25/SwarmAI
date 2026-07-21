@@ -2604,6 +2604,14 @@ class ContextHealthHook:
         #     base. (run_5a29f00c)
         findings += self._check_ddd_completeness(root)
 
+        # 14. README six-section drift — the platform Projects/README.md must keep
+        #     describing all six canonical DDD sections (SSOT:
+        #     swarm_workspace_manager.DDD_SIX_SECTION_NAMES, the same constant the
+        #     per-project AGENTS.md is generated from). WARN-only, fail-open — a
+        #     human-readable README is not a cognitive organ, so this just prevents
+        #     silent staleness, never blocks.
+        findings += self._check_readme_six_sections(root)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -2679,6 +2687,54 @@ class ContextHealthHook:
         except Exception as e:  # noqa: BLE001 — fail-open by design
             findings.append(
                 f"DDD completeness check failed (non-fatal): "
+                f"{type(e).__name__}: {e}"
+            )
+        return findings
+
+    def _check_readme_six_sections(self, root: Path) -> list[str]:
+        """Flag DRIFT: Projects/README.md no longer describes all six DDD sections.
+
+        The platform-level Projects/README.md documents the canonical six-section
+        DDD structure (Identity / Knowledge / Gates / Capabilities / Delivery
+        Contract / Refresher). The SAME structure is described in every project's
+        AGENTS.md, generated from a template in core.swarm_workspace_manager. If a
+        section is renamed/added there but the hand-maintained README isn't
+        updated, the README silently drifts from canonical truth (R30).
+
+        This is a WARN-only string-presence check: it catches a section NAME being
+        dropped from the README (the common drift), NOT semantic divergence of a
+        section's description — a human-readable doc is not a cognitive organ, so a
+        cheap presence check is the right weight, never a BLOCK.
+
+        SSOT: the six names come from swarm_workspace_manager.DDD_SIX_SECTION_NAMES,
+        so this check never hardcodes its own copy of the vocabulary. (That constant
+        is kept CONSISTENT-BY-CONVENTION with the AGENTS.md template's long-form
+        prose — each short name is a substring of its long form — but is NOT
+        mechanically bound to it; see the constant's own note. This check verifies
+        the README against the constant, not against the template.)
+
+        Fail-open: absent README (nothing to check) or any error → silent / logged
+        finding, never raised — a health sub-item must not break the deep check.
+        """
+        findings: list[str] = []
+        try:
+            readme = root / "Projects" / "README.md"
+            if not readme.is_file():
+                return findings  # nothing to check — not an error
+            from core.swarm_workspace_manager import DDD_SIX_SECTION_NAMES
+            text = readme.read_text(encoding="utf-8")
+            missing = [name for name in DDD_SIX_SECTION_NAMES if name not in text]
+            if missing:
+                findings.append(
+                    f"[gap/low] README-DRIFT: Projects/README.md no longer mentions "
+                    f"DDD section(s): {', '.join(missing)}. The six-section structure "
+                    f"(SSOT: swarm_workspace_manager.DDD_SIX_SECTION_NAMES) is what every "
+                    f"project's AGENTS.md is generated from — the README must describe all "
+                    f"six or it drifts from canonical truth. Update Projects/README.md."
+                )
+        except Exception as e:  # noqa: BLE001 — fail-open by design
+            findings.append(
+                f"README six-section check failed (non-fatal): "
                 f"{type(e).__name__}: {e}"
             )
         return findings

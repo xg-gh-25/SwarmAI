@@ -88,6 +88,26 @@ DEFAULT_PROJECT_NAME = "SwarmAI"
 # Bump when the six-section structure changes in a way propagated DDDs must track.
 DDD_SPEC_VERSION = "1.0"
 
+# The canonical short NAMES of the six DDD sections (DDD-agent-brain spec §3.6),
+# in section order ①→⑥. This is the reusable SSOT of the section VOCABULARY for
+# programmatic consumers (e.g. a doc-drift check that asks "does this doc mention
+# all six sections?") — such a consumer MUST import THIS tuple rather than hardcode
+# its own list, so it can never become a third drifting copy.
+# NOTE — relationship to the AGENTS.md template below: the template renders the
+# LONG forms as literal markdown ("① Identity & Manifest … ⑥ Refresher") and does
+# NOT interpolate this constant, so the two are NOT mechanically bound. Each short
+# name here IS a substring of its long form in the template, so they are kept
+# CONSISTENT by convention, not by code. If you rename a section, update BOTH the
+# template prose AND this tuple (they cannot auto-sync).
+DDD_SIX_SECTION_NAMES: tuple[str, ...] = (
+    "Identity",
+    "Knowledge",
+    "Gates",
+    "Capabilities",
+    "Delivery Contract",
+    "Refresher",
+)
+
 # Default job system config (provisioned on first startup).
 # Feed definitions are user-customizable; system job definitions live in code.
 _DEFAULT_JOB_CONFIG = """\

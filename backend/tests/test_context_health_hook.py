@@ -341,6 +341,47 @@ class TestDddCompleteness:
                    for r in caplog.records), \
             "deep_check did not surface the DDD-INCOMPLETE finding — wiring missing"
 
+    def _write_readme(self, workspace, section_names):
+        """Helper: write Projects/README.md mentioning the given section names."""
+        readme = workspace / "Projects" / "README.md"
+        readme.parent.mkdir(parents=True, exist_ok=True)
+        body = "# Projects\n\nThe six sections:\n" + "\n".join(
+            f"- {n}: desc" for n in section_names
+        )
+        readme.write_text(body)
+        return readme
+
+    def test_readme_six_sections_all_present_silent(self, hook, workspace):
+        """A Projects/README.md that mentions all six canonical section names is silent."""
+        from core.swarm_workspace_manager import DDD_SIX_SECTION_NAMES
+        self._write_readme(workspace, DDD_SIX_SECTION_NAMES)
+        findings = hook._check_readme_six_sections(workspace)
+        assert findings == [], f"Complete README should be silent, got: {findings}"
+
+    def test_readme_six_sections_missing_one_warns(self, hook, workspace):
+        """Dropping one section name from README → a WARN finding naming it."""
+        from core.swarm_workspace_manager import DDD_SIX_SECTION_NAMES
+        # omit "Refresher" (the last, most-likely-to-be-dropped section)
+        self._write_readme(workspace, [n for n in DDD_SIX_SECTION_NAMES if n != "Refresher"])
+        findings = hook._check_readme_six_sections(workspace)
+        assert any("Refresher" in f for f in findings), \
+            f"Expected a finding naming the missing 'Refresher' section, got: {findings}"
+
+    def test_readme_six_sections_absent_file_silent(self, hook, workspace):
+        """No Projects/README.md → fail-open silent (nothing to check, not an error)."""
+        # workspace has Projects/ but no README.md
+        findings = hook._check_readme_six_sections(workspace)
+        assert findings == [], f"Absent README must fail-open silent, got: {findings}"
+
+    def test_readme_six_sections_wired_into_deep_check(self, hook, workspace, caplog):
+        """The README drift check is actually CALLED by _deep_check (mutation-guard)."""
+        from core.swarm_workspace_manager import DDD_SIX_SECTION_NAMES
+        self._write_readme(workspace, [n for n in DDD_SIX_SECTION_NAMES if n != "Gates"])
+        with caplog.at_level(logging.WARNING, logger="hooks.context_health_hook"):
+            hook._deep_check(workspace, str(workspace))
+        assert any("README" in r.message and "Gates" in r.message for r in caplog.records), \
+            "deep_check did not surface the README six-section drift finding — wiring missing"
+
     def test_detects_stale_git_lock(self, hook, workspace, caplog):
         """Deep check removes stale .git/index.lock."""
         lock = workspace / ".git" / "index.lock"
