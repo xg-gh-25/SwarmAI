@@ -703,7 +703,7 @@ async def _start_code_intel_watchers() -> None:
     """
     await asyncio.sleep(10)  # Let startup settle
     try:
-        from core.code_intel import load_project_graph, get_code_intel_db_path
+        from core.code_intel import load_project_graph, get_code_intel_db_path, repo_root_is_owned
         from core.code_intel.watcher import start_watcher
         from jobs.paths import PROJECTS_DIR
 
@@ -725,6 +725,18 @@ async def _start_code_intel_watchers() -> None:
 
             repo_root = graph.get_meta("repo_root")
             if not repo_root or not Path(repo_root).is_dir():
+                continue
+
+            # OWNERSHIP GUARD (run_1950e67e): only watch a repo_root the project
+            # actually OWNS (its own TECH.md declares it). A foreign/mis-seeded
+            # repo_root (e.g. IVTHub's db pointing at the SwarmAI source tree) must
+            # NOT be watched — else every save in that tree re-indexes foreign files
+            # into this project's brain (self-perpetuating content contamination).
+            if not repo_root_is_owned(project_dir, repo_root):
+                logger.warning(
+                    "Code Intelligence: %s repo_root %r is NOT owned by the project "
+                    "(TECH.md declares no/different local repo) — skipping watcher to "
+                    "prevent cross-project contamination", project_name, repo_root)
                 continue
 
             ok = await start_watcher(project_name, Path(repo_root), graph)

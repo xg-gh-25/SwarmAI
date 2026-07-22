@@ -668,6 +668,19 @@ class ContextHealthHook:
             if not repo_root.is_dir():
                 continue
 
+            # OWNERSHIP GUARD (run_1950e67e): the THIRD index-trigger site (with the
+            # startup watcher + reindex job). Never incrementally index a repo_root
+            # the project doesn't OWN (its own TECH.md must declare it) — else a
+            # foreign/mis-seeded repo_root re-indexes another project's files into
+            # this brain (the IVTHub-indexed-SwarmAI contamination). R27 all-consumers.
+            from core.code_intel import repo_root_is_owned
+            if not repo_root_is_owned(project_dir, str(repo_root)):
+                logger.warning(
+                    "code_intel: %s repo_root %s not owned by project — skipping "
+                    "incremental index (cross-project contamination guard)",
+                    project_dir.name, repo_root)
+                continue
+
             for rel_path in freshness.changed_files[:50]:  # cap at 50
                 full_path = repo_root / rel_path
                 if full_path.exists():

@@ -173,6 +173,66 @@ def extract_repo_path(content: str) -> str | None:
     return None
 
 
+def resolve_owned_repo_root(project_dir) -> str | None:
+    """Return the absolute repo path a project OWNS, or None.
+
+    A project's OWN repo is whatever its own TECH.md declares (via
+    ``extract_repo_path`` over ``ddd_path(project_dir, "TECH.md")``), resolved and
+    confirmed to be a real local directory. Returns None when the project declares
+    no local repo — e.g. a data-agent / internal-repo DDD whose bindings are all
+    ``worktree: null`` (code.amazon.com/* Brazil packages, never checked out here).
+
+    This is the OWNERSHIP oracle used to validate a code_intel.db's stored
+    ``repo_root`` before we index or watch it. It exists because nothing previously
+    checked that a db's ``repo_root`` belonged to its project: IVTHub's db carried
+    ``repo_root=<SwarmAI source>`` and the startup watcher happily watched the
+    SwarmAI tree, re-indexing SwarmAI's files into IVTHub's brain on every save
+    (self-perpetuating content contamination — a Principle-1 violation: IVTHub's
+    brain described SwarmAI's code). A ``None`` result means "index NOTHING", never
+    "trust whatever repo_root is already in the db" (run_1950e67e).
+    """
+    try:
+        tech_md = ddd_path(project_dir, "TECH.md")
+        if not tech_md.exists():
+            return None
+        candidate = extract_repo_path(tech_md.read_text(encoding="utf-8"))
+        if not candidate:
+            return None
+        # expanduser so a `~/repos/x` declaration resolves (else it becomes
+        # <cwd>/~/repos/x, is_dir()=False → a legit project silently un-indexed).
+        resolved = Path(candidate.rstrip("/")).expanduser().resolve()
+        return str(resolved) if resolved.is_dir() else None
+    except Exception:  # noqa: BLE001 — ownership check must never raise into a caller
+        return None
+
+
+def repo_root_is_owned(project_dir, stored_repo_root: str | None) -> bool:
+    """True iff ``stored_repo_root`` matches the repo the project OWNS.
+
+    The gate both index trigger sites (startup watcher, reindex job) apply before
+    trusting a db's ``repo_root``. False when the project owns no local repo
+    (``resolve_owned_repo_root`` is None) OR the stored value differs from it —
+    either case means the db's ``repo_root`` is foreign and must NOT be indexed
+    or watched (run_1950e67e).
+    """
+    owned = resolve_owned_repo_root(project_dir)
+    if not owned or not stored_repo_root:
+        return False
+    try:
+        stored = Path(stored_repo_root.rstrip("/")).expanduser().resolve()
+        owned_p = Path(owned).resolve()
+        if stored == owned_p:
+            return True
+        # Case-insensitive FS (macOS APFS/HFS+) or symlink: string-!= but SAME dir.
+        # samefile compares inode identity — the ground truth "is it the same repo".
+        import os
+        if stored.is_dir() and owned_p.is_dir():
+            return os.path.samefile(stored, owned_p)
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _build_project_path_cache():
     """Scan Projects/*/TECH.md for repo_path fields (uses `extract_repo_path`)."""
     from jobs.paths import PROJECTS_DIR

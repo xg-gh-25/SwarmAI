@@ -53,9 +53,19 @@ def reindex_projects(full: bool = False) -> dict:
             results.append({"project": project_name, "status": "fresh"})
             continue
 
-        repo_root = Path(graph.get_meta("repo_root") or "").resolve()
+        stored_root = graph.get_meta("repo_root")
+        repo_root = Path(stored_root or "").resolve()
         if not repo_root.is_dir():
             results.append({"project": project_name, "status": "no_repo"})
+            continue
+        # OWNERSHIP GUARD (run_1950e67e): never re-index a repo_root the project
+        # doesn't OWN (its own TECH.md must declare it). A foreign/mis-seeded
+        # repo_root would keep pulling another project's code into this brain (the
+        # IVTHub-indexed-SwarmAI contamination). Defense at BOTH trigger sites
+        # (this + the startup watcher, main.py) — R27 all-consumers.
+        from core.code_intel import repo_root_is_owned
+        if not repo_root_is_owned(project_dir, stored_root):
+            results.append({"project": project_name, "status": "unowned_repo"})
             continue
         # Ensure repo_root is stored as absolute (fixes '.' from early indexing)
         graph.set_meta("repo_root", str(repo_root))

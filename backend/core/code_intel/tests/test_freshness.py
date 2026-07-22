@@ -285,6 +285,9 @@ class TestFullRebuildDelegation:
         (proj / "f.py").write_text("x = 1\n")
         sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
         sp.run(["git", "commit", "-q", "-m", "i"], cwd=proj, check=True, env=env)
+        # TECH.md must DECLARE the owned repo (proj) so the run_1950e67e ownership
+        # guard (repo_root_is_owned) accepts this project's stored repo_root.
+        (proj / "TECH.md").write_text(f"# TECH\n\n**Local:** `{proj}`\n")
         db = GraphStore(proj / "code_intel.db")
         db.set_meta("repo_root", str(proj))  # never indexed: no last_indexed_commit
         db.close()
@@ -429,6 +432,8 @@ class TestGradedIncrementalE2E:
         # edit STRUCTURALLY.
         (proj / "cosmetic.py").write_text("def alpha():\n    return 1\n")
         (proj / "structural.py").write_text("def beta():\n    return 2\n")
+        # TECH.md declares the owned repo (proj) → run_1950e67e ownership guard passes.
+        (proj / "TECH.md").write_text(f"# TECH\n\n**Local:** `{proj}`\n")
         sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
         sp.run(["git", "commit", "-q", "-m", "init"], cwd=proj, check=True, env=env)
         head = sp.run(["git", "rev-parse", "HEAD"], cwd=proj, capture_output=True,
