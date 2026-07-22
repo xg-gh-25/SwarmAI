@@ -157,7 +157,16 @@ def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph
     graph = _graph if _graph is not None else graph_store.get_full_graph()
     clusters = compute_graph_clusters(graph_store, _graph=graph) \
         if _accepts_graph_kw(compute_graph_clusters) else compute_graph_clusters(graph_store)
-    candidate_ids = set(clusters.get("extraction_candidates", []))
+    # A rule-BEARING domain is any community, NOT only a decomposition
+    # extraction_candidate (run_482289eb decoupling): the candidate floor answers
+    # "is this chunk big enough to REWRITE as a unit?" — a size-relative,
+    # decomposition question. Business rules exist regardless of that size bar (a
+    # 4-symbol domain with dynamic-SQL writes still carries real rules), so
+    # domain_rules iterates every COMMUNITY and lets the per-symbol write filter
+    # below decide which actually produce rules. (Coupling domain_rules to the
+    # scale-relative candidate floor would silently drop small rule-bearing domains.)
+    rule_domain_ids = {c["cluster_id"] for c in clusters.get("clusters", [])
+                       if c["kind"] == "community"}
     by_id = {c["cluster_id"]: c for c in clusters.get("clusters", [])}
 
     edges = graph["edges"]
@@ -202,7 +211,7 @@ def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph
 
     domains = []
     rules = []
-    for cid in sorted(candidate_ids):
+    for cid in sorted(rule_domain_ids):
         cluster = by_id.get(cid)
         if not cluster:
             continue

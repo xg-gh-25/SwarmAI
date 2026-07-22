@@ -7,7 +7,7 @@ cluster != 1.0), kind classification (community/file_bucket/singleton), the
 extraction_candidates actionability filter, weighted-vote (a hub is NOT excluded /
 does NOT desert its community), cross-language separation, and edge cases.
 """
-from core.code_intel.clustering import compute_graph_clusters
+from core.code_intel.clustering import compute_graph_clusters, _candidate_size_floor
 
 
 class _FakeGraph:
@@ -160,3 +160,82 @@ def test_does_not_emit_domains_key():
     r = compute_graph_clusters(_two_communities())
     assert "domains" not in r
     assert "clusters" in r and "extraction_candidates" in r
+
+
+# ── run_482289eb: scale-relative extraction_candidate floor ────────────────────
+
+def _many_small_plus_few_big(n_small, small_size, n_big, big_size):
+    """A large graph: n_small tiny triangle-ish communities + n_big large ones.
+    Each community is a clique in its own file (so cohesion is high, kind=community).
+    Distinct files → they don't merge."""
+    nodes, edges = [], []
+    def clique(prefix, k):
+        ids = [f"{prefix}.py::{prefix}{i}" for i in range(k)]
+        nonlocal nodes, edges
+        nodes += [_node(i) for i in ids]
+        for a in range(k):
+            for b in range(a + 1, k):
+                edges.append(_edge(ids[a], ids[b]))
+    for s in range(n_small):
+        clique(f"s{s}", small_size)
+    for b in range(n_big):
+        clique(f"b{b}", big_size)
+    return _FakeGraph(nodes, edges)
+
+
+def test_large_graph_suppresses_tiny_communities():
+    """AC1/AC4: on a LARGE graph the size floor scales up so tiny (size-3)
+    communities are NOT extraction_candidates — only substantial ones qualify.
+    Mutation check: reverting to a constant size>=3 makes the tiny ones reappear
+    (this test would then FAIL), proving the floor is load-bearing."""
+    # 300 tiny size-3 + 3 big size-40 → N≈1020 → floor≈max(8,round(6*log10(1020)))≈18
+    g = _many_small_plus_few_big(n_small=300, small_size=3, n_big=3, big_size=40)
+    r = compute_graph_clusters(g)
+    cand = {c["cluster_id"] for c in r["clusters"] if c["cluster_id"] in set(r["extraction_candidates"])}
+    cand_sizes = [c["size"] for c in r["clusters"] if c["cluster_id"] in cand]
+    assert cand_sizes, "no candidates at all — floor too aggressive"
+    assert min(cand_sizes) >= 8, f"a tiny community slipped through: sizes {sorted(cand_sizes)[:5]}"
+    # the big size-40 communities MUST still qualify
+    assert any(s >= 40 for s in cand_sizes), "big substantial community was excluded"
+    # and the floor is surfaced for the consumer
+    assert r.get("candidate_size_floor", 0) >= 8
+
+
+def test_small_graph_keeps_lower_floor():
+    """AC2: a SMALL graph gets a proportionally-lower floor (hard min 8), NOT the
+    big-graph floor — a mid-size community in a small repo still qualifies."""
+    # 2 communities of size 9 in a ~18-node graph → floor should be the hard min 8,
+    # so a size-9 community qualifies (it would NOT under the big-graph floor of 26).
+    g = _many_small_plus_few_big(n_small=0, small_size=3, n_big=2, big_size=9)
+    r = compute_graph_clusters(g)
+    assert r["candidate_size_floor"] == 8, f"small-graph floor should be the hard min 8, got {r['candidate_size_floor']}"
+    cand_sizes = [c["size"] for c in r["clusters"] if c["cluster_id"] in set(r["extraction_candidates"])]
+    assert 9 in cand_sizes, f"size-9 community excluded on a small graph: {cand_sizes}"
+
+
+def test_isolated_nodes_do_not_inflate_the_floor():
+    """run_482289eb Gate-2 HIGH: the scale floor must use the EDGE-BEARING node
+    count, not the total. A graph of one 30-node clique + 5000 isolated (edge-less)
+    nodes must compute the floor from 30 (→ floor 9), NOT 5030 (→ floor 22). adj is
+    a defaultdict, so reading len(adj) AFTER the weight/LP lookups would auto-vivify
+    every isolated node and inflate the floor — this pins that it does not."""
+    nodes = [_node(f"c.py::c{i}") for i in range(30)] + \
+            [_node(f"iso.py::x{i}") for i in range(5000)]
+    edges = [_edge(f"c.py::c{a}", f"c.py::c{b}")
+             for a in range(30) for b in range(a + 1, 30)]
+    r = compute_graph_clusters(_FakeGraph(nodes, edges))
+    assert r["candidate_size_floor"] == _candidate_size_floor(30), \
+        f"floor inflated by isolated nodes: got {r['candidate_size_floor']}, want {_candidate_size_floor(30)}"
+    # the 30-node clique clears floor 9 and IS a candidate
+    assert any(c["size"] == 30 for c in r["clusters"]
+               if c["cluster_id"] in set(r["extraction_candidates"]))
+
+
+def test_recon_scale_domain_survives_any_scale():
+    """AC2: a recon-scale domain (35+ nodes, high cohesion) survives the floor at
+    BOTH small and large graph scale — the HLR non-regression invariant."""
+    from core.code_intel.clustering import _candidate_size_floor
+    # recon domain was 35-183 nodes; floor must stay well below 35 at HLR scale (~400)
+    assert _candidate_size_floor(400) <= 35
+    assert _candidate_size_floor(21060) <= 35  # even at SwarmAI scale, 35 clears it
+    assert _candidate_size_floor(10) == 8       # hard min on a pathologically tiny graph

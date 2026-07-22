@@ -41,11 +41,31 @@ from collections import Counter, defaultdict
 # unbounded time inside the fail-open export block.
 _MAX_EDGES = 50_000
 _MAX_ROUNDS = 10
-# extraction-candidate thresholds (a cluster is "decomposition-ready" iff all hold)
-_MIN_CANDIDATE_SIZE = 3
+# extraction-candidate thresholds (a cluster is "decomposition-ready" iff all hold).
+# The SIZE floor is SCALE-RELATIVE, not a fixed constant (run_482289eb): a size-3
+# cluster is a meaningful decomposition unit on a ~400-node file but is noise on a
+# 21K-node monolith (where a flat size>=3 admitted 1122 candidates, median size 5).
+# The absolute value below is the HARD MINIMUM; the effective floor grows with graph
+# size via _candidate_size_floor().
+_MIN_CANDIDATE_SIZE_ABS = 8
 _MIN_CANDIDATE_COHESION = 0.5
 
 _SEP = "::"
+
+
+def _candidate_size_floor(n_in_graph: int) -> int:
+    """Scale-relative minimum size for an extraction candidate.
+
+    ``floor = max(_MIN_CANDIDATE_SIZE_ABS, round(6 * log10(max(N, 10))))`` where N is
+    the number of in-graph (adjacency-bearing) nodes. log10 grows GENTLY so the floor
+    tracks graph scale without collapsing large graphs the way k*sqrt(N) does
+    (k*sqrt over-corrected SwarmAI to 2-5 candidates). Calibrated on two real graphs
+    50× apart (run_482289eb): HLR ~400 nodes → floor 16 (recon domain 35-183 survives);
+    SwarmAI ~21060 nodes → floor 26 (~19 actionable candidates, was 1122). The
+    coefficient 6 is a scale-CURVE calibration (validated N=50→100000 → floor 10→30),
+    not a stored count. The hard min 8 protects a pathologically tiny graph.
+    """
+    return max(_MIN_CANDIDATE_SIZE_ABS, round(6 * math.log10(max(n_in_graph, 10))))
 
 
 def _file_of(node_id: str) -> str:
@@ -104,6 +124,15 @@ def compute_graph_clusters(graph_store, _graph=None) -> dict:
             adj[s].add(t)
             adj[t].add(s)
             in_degree[t] += 1  # directional in-degree → entry-point ranking
+
+    # Capture the TRUE edge-bearing node count NOW — before the weight/LP lookups
+    # below auto-vivify an empty set for every isolated node (adj is a defaultdict,
+    # so `adj[nid]` for an edge-less node inflates len(adj) to the TOTAL node count).
+    # The scale-relative candidate floor must scale with the CLUSTERABLE graph
+    # (edge-bearing nodes), not with edge-less leaf symbols/constants/data-objects
+    # (run_482289eb Gate-2 HIGH: len(adj) read after auto-vivification gave floor 22
+    # instead of 9 on a 30-edge-bearing + 5000-isolated graph).
+    n_in_graph = len(adj)
 
     # Precompute vote weight per node = 1/sqrt(deg): dilutes a hub's influence
     # without removing it (Gate-1 weighted-vote fix).
@@ -189,13 +218,15 @@ def compute_graph_clusters(graph_store, _graph=None) -> dict:
             "files": files,
         })
 
-    # Actionable subset: real communities, big enough, cohesive, with a cuttable
-    # seam (inter_edges finite — always true here; the real gates are kind/size/
-    # cohesion). This is the decomposition-ready output vs raw buckets.
+    # Actionable subset: real communities, big enough (SCALE-RELATIVE floor —
+    # run_482289eb), cohesive. N = in-graph (adjacency-bearing) node count, so the
+    # size floor tracks graph scale instead of admitting the whole power-law tail
+    # of tiny clusters on a large monolith. cohesion floor unchanged.
+    size_floor = _candidate_size_floor(n_in_graph)
     extraction_candidates = [
         c["cluster_id"] for c in clusters
         if c["kind"] == "community"
-        and c["size"] >= _MIN_CANDIDATE_SIZE
+        and c["size"] >= size_floor
         and c["cohesion"] >= _MIN_CANDIDATE_COHESION
     ]
 
@@ -204,4 +235,5 @@ def compute_graph_clusters(graph_store, _graph=None) -> dict:
         "rounds_used": rounds_used,
         "clusters": clusters,
         "extraction_candidates": extraction_candidates,
+        "candidate_size_floor": size_floor,
     }
