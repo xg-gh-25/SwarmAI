@@ -227,7 +227,33 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
 
     projects = _discover_ddd_projects()
     if not projects:
-        return {"status": "skipped", "summary": "No DDD projects found", "output_path": None}
+        # FAIL-LOUD when the brain is blind (run_775f3969). "0 DDD projects" has two
+        # very different meanings and they MUST NOT collapse to a silent 'skipped':
+        #   • Projects/ genuinely empty (fresh install) → legit skip, nothing to audit.
+        #   • Projects/ HAS project dirs but none resolved as a DDD → the discovery
+        #     probe is BLIND (e.g. a layout migration moved canonical docs and the
+        #     probe still reads the old path). This is exactly how the six-section
+        #     migration silently disabled the whole semantic-drift immune system for
+        #     weeks — caught only by manual dive-deep. A brain must announce when it
+        #     can't see its own organs, so this path returns 'failed' → job-failure 🔔
+        #     + surfaces in briefing/health, not a quiet skip.
+        candidate_dirs = [
+            d for d in (PROJECTS_DIR.iterdir() if PROJECTS_DIR.is_dir() else [])
+            if d.is_dir() and not d.name.startswith(".")
+        ]
+        if candidate_dirs:
+            names = ", ".join(sorted(d.name for d in candidate_dirs)[:10])
+            return {
+                "status": "failed",
+                "summary": (
+                    f"DISCOVERY BLIND: {len(candidate_dirs)} project dir(s) on disk "
+                    f"({names}) but ZERO resolved as DDD — the self-audit would no-op. "
+                    "Likely a layout change the discovery probe doesn't follow "
+                    "(canonical-doc path resolution). The brain cannot audit itself."
+                ),
+                "output_path": None,
+            }
+        return {"status": "skipped", "summary": "No DDD projects found (Projects/ empty)", "output_path": None}
 
     claude_path = _resolve_claude_cli()
     if not claude_path:

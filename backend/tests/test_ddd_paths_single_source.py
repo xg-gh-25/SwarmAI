@@ -72,6 +72,23 @@ _DOC_VAR_JOIN_RE = re.compile(
     r'\s*/\s*(?:doc_name|ddd_name|doc\b|\w+\.target_doc\b|f["\']\{doc)'
 )
 
+# The COMPREHENSION shape — `<anyvar> / doc ... for doc in DDD_CANONICAL_DOCS` on one
+# line. This is the 3rd wave (run_775f3969): ddd_self_audit.py used a BARE loop var
+# `d` from `PROJECTS_DIR.iterdir()` — `(d / doc).exists() for doc in DDD_CANONICAL_DOCS`
+# — so the LHS-var list above (project_dir|proj_dir|…) never matched it, and the
+# migration silently BLINDED the entire semantic-drift self-audit (discovery returned
+# [] → the whole immune system no-op'd for weeks). We CANNOT add bare `d` as an LHS
+# alt (`d /` is ubiquitous → false-positive storm); instead key on the unambiguous
+# RHS marker: a `/ doc` join on the SAME line as the `DDD_CANONICAL_DOCS` iterable.
+# That marker is specific enough to never false-positive on an unrelated `x / doc`.
+# Order-independent: the `/ doc` join and the `DDD_CANONICAL_DOCS` iterable may appear
+# in either order on the line — comprehension form puts the join first
+# (`d / doc for doc in DDD_CANONICAL_DOCS`), statement form puts the iterable first
+# (`for doc in DDD_CANONICAL_DOCS: p = d / doc`). Match both.
+_DOC_COMPREHENSION_RE = re.compile(
+    r'(/\s*doc\b.*\bDDD_CANONICAL_DOCS\b)|(\bDDD_CANONICAL_DOCS\b.*/\s*doc\b)'
+)
+
 
 def _is_allowlisted(path: Path, line: str) -> bool:
     if path == _RESOLVER_FILE:
@@ -150,7 +167,12 @@ def test_no_stray_variable_doc_joins():
         except OSError:
             continue
         for i, line in enumerate(text.splitlines(), 1):
-            if _DOC_VAR_JOIN_RE.search(line) and not _is_allowlisted(py, line):
+            if _is_allowlisted(py, line):
+                continue
+            # Two shapes of the same bug: LHS-var join (`project_dir / doc_name`) and
+            # the comprehension join (`<anyvar> / doc ... for doc in DDD_CANONICAL_DOCS`,
+            # the run_775f3969 self-audit-blinding shape with a bare loop var `d`).
+            if _DOC_VAR_JOIN_RE.search(line) or _DOC_COMPREHENSION_RE.search(line):
                 offenders.append(f"{py.relative_to(_BACKEND)}:{i}: {line.strip()}")
     assert not offenders, (
         "Variable-doc path joins found (route through core.ddd_paths.ddd_path("

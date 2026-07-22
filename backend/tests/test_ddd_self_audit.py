@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -118,6 +119,89 @@ class TestEnumeration:
         assert found == {"Migrated", "Legacy"}, (
             f"migrated DDD (docs in 2-understanding/) must be discovered — got {found}"
         )
+
+
+class TestDiscoveryBlindnessIsFailLoud:
+    """run_775f3969: a brain must ANNOUNCE when it's blind. If Projects/ has project
+    dirs but ZERO resolve as DDD (the discovery probe can't see them — e.g. a layout
+    migration it doesn't follow), the audit must return 'failed' (→ job-failure 🔔),
+    NOT a silent 'skipped'. Silent-skip is exactly how the six-section migration
+    disabled the whole semantic-drift immune system undetected for weeks."""
+
+    def test_blind_discovery_fails_loud_not_skipped(self, tmp_path, monkeypatch):
+        import jobs.handlers.ddd_self_audit as mod
+        projects_dir = tmp_path / "Projects"
+        # Project dirs EXIST on disk but carry no discoverable DDD doc (simulates the
+        # probe being blind to the real layout).
+        (projects_dir / "AlphaProj").mkdir(parents=True)
+        (projects_dir / "BetaProj").mkdir(parents=True)
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+        # Force discovery to return [] (the blind state) while dirs exist on disk.
+        monkeypatch.setattr(mod, "_discover_ddd_projects", lambda: [])
+
+        result = mod.run_ddd_self_audit({})
+        assert result["status"] == "failed", (
+            f"blind discovery (dirs exist, 0 DDD resolved) must FAIL loud, got "
+            f"{result['status']!r}: {result.get('summary')}"
+        )
+        assert "BLIND" in result["summary"] or "blind" in result["summary"].lower()
+
+    def test_genuinely_empty_projects_is_legit_skip(self, tmp_path, monkeypatch):
+        """The OTHER side: Projects/ genuinely empty (fresh install) → 'skipped' is
+        correct, NOT a false 'failed' alarm."""
+        import jobs.handlers.ddd_self_audit as mod
+        projects_dir = tmp_path / "Projects"
+        projects_dir.mkdir(parents=True)  # exists but empty — no project dirs
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(mod, "_discover_ddd_projects", lambda: [])
+
+        result = mod.run_ddd_self_audit({})
+        assert result["status"] == "skipped", (
+            f"genuinely-empty Projects/ must skip (not false-alarm failed), got "
+            f"{result['status']!r}"
+        )
+
+    def test_executor_propagates_handler_failed_status(self, monkeypatch):
+        """INTEGRATION SEAM (Gate-2 CRITICAL, run_775f3969): the handler returning
+        'failed' is INERT unless the executor maps it to JobResult 'failed' — otherwise
+        it collapses to 'skipped' → no 🔔, no consecutive_failures increment, and the
+        fail-loud fix does nothing in production. This guards executor.py's status map
+        (a handler-only test cannot — it bypasses execute_job). MUTATION: revert the
+        map to `== "success" else "skipped"` → this goes RED."""
+        import jobs.executor as ex
+        from jobs.models import Job
+        # Handler reports the blind-failure; executor must NOT swallow it.
+        monkeypatch.setattr(
+            ex, "_write_job_result", lambda *a, **k: None
+        )
+        import jobs.handlers.ddd_self_audit as sa_mod
+        monkeypatch.setattr(
+            sa_mod, "run_ddd_self_audit",
+            lambda config=None: {"status": "failed", "summary": "DISCOVERY BLIND: test", "output_path": None},
+        )
+        job = Job(id="ddd-self-audit", name="DDD Self-Audit",
+                  type="ddd_self_audit", schedule="0 9 * * 1")
+        result = ex.execute_job(job, MagicMock(), [], known_job_ids={"ddd-self-audit"})
+        assert result.status == "failed", (
+            f"executor must propagate handler 'failed' → JobResult 'failed' (else no "
+            f"notification/streak), got {result.status!r}"
+        )
+
+    def test_executor_maps_handler_skipped_to_skipped(self, monkeypatch):
+        """The other side: a legit handler 'skipped' (empty Projects/) must stay
+        'skipped', not become a false 'failed' alarm."""
+        import jobs.executor as ex
+        from jobs.models import Job
+        monkeypatch.setattr(ex, "_write_job_result", lambda *a, **k: None)
+        import jobs.handlers.ddd_self_audit as sa_mod
+        monkeypatch.setattr(
+            sa_mod, "run_ddd_self_audit",
+            lambda config=None: {"status": "skipped", "summary": "empty", "output_path": None},
+        )
+        job = Job(id="ddd-self-audit", name="DDD Self-Audit",
+                  type="ddd_self_audit", schedule="0 9 * * 1")
+        result = ex.execute_job(job, MagicMock(), [], known_job_ids={"ddd-self-audit"})
+        assert result.status == "skipped", f"legit skip must stay skipped, got {result.status!r}"
 
 
 class TestNoMutation:

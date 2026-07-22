@@ -268,9 +268,21 @@ def execute_job(
             from .handlers.ddd_self_audit import run_ddd_self_audit
             audit_result = run_ddd_self_audit(config=job.config)
             duration = (datetime.now(timezone.utc) - start).total_seconds()
+            # Map handler status faithfully: a handler "failed" (e.g. discovery-blind —
+            # project dirs exist but 0 resolved as DDD) MUST propagate to JobResult
+            # "failed" so it fires the 🔔 notification + increments consecutive_failures
+            # (send_post_job_notification / _update_job_state). Collapsing non-success→"skipped" (the
+            # old code) silently swallowed the fail-loud signal — the exact
+            # silent-blindness this audit-fix set out to eliminate (run_775f3969).
+            # Preserve the handler's three distinct outcomes (all valid JobResult enum
+            # values): "success" (audit ran), "skipped" (benign — Projects/ genuinely
+            # empty, no 🔔), "failed" (LOUD — discovery-blind → 🔔 + streak). Anything
+            # unexpected → "failed" (fail-safe loud, never a silent swallow).
+            _audit_status = audit_result.get("status")
+            _mapped = _audit_status if _audit_status in ("success", "skipped", "failed") else "failed"
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if audit_result.get("status") == "success" else "skipped",
+                status=_mapped,
                 summary=audit_result.get("summary", "DDD self-audit"),
                 output_path=audit_result.get("output_path"),
                 duration_seconds=duration,
