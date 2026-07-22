@@ -1494,6 +1494,103 @@ def _sql_strip_comments_strings(text: str) -> str:
     return _SQL_STRIP_PATTERN.sub(lambda m: " " * (m.end() - m.start()), text)
 
 
+def _sql_strip_comments_only(text: str) -> str:
+    """Blank out PL/SQL COMMENTS but PRESERVE string literals, offsets preserved.
+
+    Uses the SAME single-pass alternation as _SQL_STRIP_PATTERN so a `--` INSIDE a
+    string literal is consumed as part of the string span (never mistaken for a
+    comment) and a `'` inside a `-- comment` is consumed as part of the comment —
+    the mutual-recursion boundary problem a naive `--[^\n]*` gets wrong (Gate-1 H1,
+    run_4056325a). The callback blanks ONLY the two comment alternatives; a string
+    match is returned UNCHANGED so the dynamic-SQL scanner can read the RHS literal.
+    """
+    def _repl(m):
+        s = m.group(0)
+        if s.startswith("'"):   # a string literal → keep it (we scan it)
+            return s
+        return " " * (m.end() - m.start())  # a comment → blank, preserve offsets
+    return _SQL_STRIP_PATTERN.sub(_repl, text)
+
+
+# A dynamic-SQL string assignment: `<var> := '<VERB> [schema.]<table> ...`. Captures
+# (var, operation, table). VERB set = the write/DDL operations whose FIRST object is
+# the target table. Case-insensitive. Only the write-TARGET is captured (not FROM
+# read-sources) — a deliberate v1 scope named by the `dynamic_sql_write:` edge_type
+# (Gate-1 #3, run_4056325a). The RHS opening quote anchors it to a real assignment.
+_SQL_DYNAMIC_ASSIGN = re.compile(
+    r"""(\w+)\s*:=\s*'\s*
+        (CREATE\s+TABLE|INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE
+         |TRUNCATE\s+TABLE|DROP\s+TABLE|MERGE\s+INTO)
+        \s+(?:"?\w+"?\.)?"?(\w+)"?""",
+    re.IGNORECASE | re.VERBOSE)
+
+# Map the matched multi-word verb → a compact operation token for the edge_type.
+_SQL_OP_TOKEN = {
+    "CREATE": "CREATE", "INSERT": "INSERT", "UPDATE": "UPDATE", "DELETE": "DELETE",
+    "ALTER": "ALTER", "TRUNCATE": "TRUNCATE", "DROP": "DROP", "MERGE": "MERGE",
+}
+
+
+def _sql_dynamic_sql_edges(content, rel_path, headers):
+    """Surface dynamic-SQL write targets that static analysis cannot see.
+
+    PL/SQL builds SQL as string literals (`SQL_TXT := 'CREATE TABLE FOO AS ...'`)
+    then executes them (EXECUTE IMMEDIATE) or passes them to a helper — so the table
+    a procedure actually touches is invisible to the call graph. This scans the
+    assignment RHS literals for a write verb + target table and emits, per hit:
+      • a `data_object` CodeNode for the table (REQUIRED — else graph_store's orphan
+        cleanup deletes the edge because its target isn't a node; Gate-1 C1), with a
+        `table:`-namespaced id so it never collides with a same-named procedure
+        (Gate-1 C2);
+      • a `dynamic_sql_write:<OP>` CodeEdge proc→table, confidence 0.4 (this is an
+        ASSIGNMENT, weaker evidence than an executed call — Gate-1 H2).
+
+    `headers` is the list of _SQL_DEF_HEADER matches (procedure segmentation), reused
+    from the caller so a hit's line is attributed to its enclosing procedure; an
+    assignment before the first header (package init) is attributed to a module
+    sentinel rather than dropped (Gate-1 #4).
+    """
+    nodes: list[CodeNode] = []
+    edges: list[CodeEdge] = []
+    # Comments blanked, STRING LITERALS PRESERVED (we must read the RHS literal).
+    scan = _sql_strip_comments_only(content)
+    header_starts = [(h.start(), _sanitize_name(h.group(1))) for h in headers]
+
+    def _enclosing_proc(pos: int) -> str:
+        name = None
+        for hs, hname in header_starts:
+            if hs <= pos:
+                name = hname
+            else:
+                break
+        return _qualify(name, rel_path) if name else _qualify(_MODULE_SENTINEL, rel_path)
+
+    seen_tables: set[str] = set()
+    for m in _SQL_DYNAMIC_ASSIGN.finditer(scan):
+        op_word = m.group(2).split()[0].upper()
+        op = _SQL_OP_TOKEN.get(op_word, op_word)
+        table = _sanitize_name(m.group(3))
+        if not table:
+            continue
+        line = scan[:m.start()].count("\n") + 1
+        table_id = _qualify("table:" + table, rel_path)  # namespaced → no proc collision
+        if table not in seen_tables:
+            seen_tables.add(table)
+            nodes.append(CodeNode(
+                id=table_id, file_path=rel_path, node_type="data_object",
+                name=table, line_start=line, line_end=line, language="sql",
+                is_export=False, is_entry_point=False,
+            ))
+        edges.append(CodeEdge(
+            source_id=_enclosing_proc(m.start()),
+            target_id=table_id,
+            edge_type="dynamic_sql_write:" + op,
+            confidence=0.4,
+            line_number=line,
+        ))
+    return nodes, edges
+
+
 def _sql_call_edges(content: str, rel_path: str, import_map: dict,
                     defined_names: set) -> list["CodeEdge"]:
     """Extract SQL call edges, denoised via the DEFINED-NAMES WHITELIST.
@@ -1611,6 +1708,12 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
     # def|function|func window scan BYTE-IDENTICALLY (AC7 — no behavior change).
     if lang == "sql":
         edges.extend(_sql_call_edges(content, rel_path, import_map, defined_names))
+        # Run2: dynamic-SQL write targets (invisible to the static call graph).
+        # Reuse the SAME procedure segmentation the def-extraction used.
+        _dyn_headers = list(_SQL_DEF_HEADER.finditer(def_scan))
+        _dyn_nodes, _dyn_edges = _sql_dynamic_sql_edges(content, rel_path, _dyn_headers)
+        nodes.extend(_dyn_nodes)
+        edges.extend(_dyn_edges)
     else:
         func_bodies = list(re.finditer(r'^(?:async\s+)?(?:def|function|func)\s+(\w+)\s*\([^)]*\)\s*[:{]', content, re.MULTILINE))
         for func_match in func_bodies:

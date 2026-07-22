@@ -130,6 +130,70 @@ def test_sql_forward_declaration_is_not_a_definition():
     assert procs == [], f"forward declarations wrongly extracted as defs: {[n.name for n in procs]}"
 
 
+# ── Run2: dynamic-SQL extraction (edges to data-object table nodes) ────────────
+
+def _dyn_edges(result):
+    return [e for e in result.edges if e.edge_type.startswith("dynamic_sql")]
+
+
+def test_dynamic_sql_extracts_write_edges():
+    """Run2 AC1/AC3: `var := '<VERB> <table>'` assignments become dynamic_sql_write
+    edges (op encoded in edge_type). Fixture builds CREATE/UPDATE/INSERT."""
+    r = _parse("sample_dynamic.sql")
+    pairs = {(e.edge_type, e.target_id.split(":")[-1]) for e in _dyn_edges(r)}
+    assert ("dynamic_sql_write:CREATE", "recon_staging") in pairs, pairs
+    assert ("dynamic_sql_write:UPDATE", "recon_result") in pairs, pairs
+    assert ("dynamic_sql_write:INSERT", "audit_log") in pairs, pairs
+
+
+def test_dynamic_sql_emits_data_object_nodes():
+    """Run2 AC2 (CRITICAL C1): a CodeNode(node_type='data_object') is emitted per
+    table — WITHOUT it, orphan cleanup deletes every dynamic_sql edge on rebuild
+    (the plan-was-a-no-op bug Gate-1 caught)."""
+    r = _parse("sample_dynamic.sql")
+    data_objs = {n.name for n in r.nodes if n.node_type == "data_object"}
+    assert {"recon_staging", "recon_result", "audit_log"} <= data_objs, data_objs
+
+
+def test_dynamic_sql_table_node_id_namespaced_no_collision():
+    """Run2 AC2 (CRITICAL C2): table `audit_log` and PROCEDURE `audit_log` in the
+    same file must have DISTINCT node ids (table id namespaced), else the dynamic
+    edge resolves into the procedure = fabricated call."""
+    r = _parse("sample_dynamic.sql")
+    proc = next(n for n in r.nodes if n.node_type in ("function", "procedure") and n.name == "audit_log")
+    tbl = next(n for n in r.nodes if n.node_type == "data_object" and n.name == "audit_log")
+    assert proc.id != tbl.id, f"id collision: proc={proc.id} tbl={tbl.id}"
+
+
+def test_dynamic_sql_comment_assignment_not_an_edge():
+    """Run2 AC6 (H1): `-- sqlText := 'DROP TABLE old_ghost'` in a comment must NOT
+    produce an edge (string-aware de-comment)."""
+    r = _parse("sample_dynamic.sql")
+    targets = {e.target_id.split(":")[-1] for e in _dyn_edges(r)}
+    assert "old_ghost" not in targets, f"comment assignment leaked as edge: {targets}"
+
+
+def test_dynamic_sql_edges_survive_bulk_insert():
+    """Run2 AC4 (CRITICAL C1 regression — the plan-killer): edges must SURVIVE a
+    real GraphStore.bulk_insert, which runs orphan cleanup that deletes edges whose
+    target is not a node. Parsing alone is NOT enough — they must persist through
+    the production rebuild path."""
+    import tempfile
+    from core.code_intel.graph_store import GraphStore
+    r = _parse("sample_dynamic.sql")
+    with tempfile.TemporaryDirectory() as td:
+        gs = GraphStore(Path(td) / "t.db")
+        try:
+            gs.bulk_insert([r])
+            rows = gs._conn.execute(
+                "SELECT edge_type, target_id FROM code_edges "
+                "WHERE edge_type LIKE 'dynamic_sql%'"
+            ).fetchall()
+        finally:
+            gs.close()
+    assert len(rows) >= 3, f"dynamic_sql edges did not survive bulk_insert: {rows}"
+
+
 # ── Dog-food smoke on REAL production PL/SQL (O009: fixture ≠ reality) ──────────
 # These lock the numbers that fixtures structurally cannot surface: the .pkb
 # bare-PROCEDURE form, same-package-qualified self-calls, and the external-package
