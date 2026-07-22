@@ -282,13 +282,13 @@ work for both.
 ```python
 # Unpack DOCX for XML editing
 import subprocess
-OOXML_SCRIPTS = "$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/ooxml/scripts"
+OOXML_SCRIPTS = "${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pptx/ooxml/scripts"
 subprocess.run(["python3", f"{OOXML_SCRIPTS}/unpack.py", "{topic}.docx", "_unpacked/"])
 
 # Add comments/tracked changes via document.py (Python library, NOT CLI)
 # Import and use the DocxXMLEditor class:
 import sys
-sys.path.insert(0, "$HOME/.swarm-ai/SwarmWS/.claude/skills/s_docx/scripts")
+sys.path.insert(0, "${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_docx/scripts")
 from document import DocxXMLEditor
 
 editor = DocxXMLEditor("_unpacked/")

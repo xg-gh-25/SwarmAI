@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Comma-separated subset of declared targets. Omit = full declared set.")
     ap.add_argument("--publish", action="store_true",
                     help="Run the external-publish content gate (refused unless visibility=external).")
+    ap.add_argument("--with-enablement", action="store_true", dest="with_enablement",
+                    help="Ship class-A enablement skills (e.g. s_repo-to-ddd) as a portable "
+                         "copy — for BARE foreign hosts (Kiro/Claude Code/Quick) that lack "
+                         "SwarmAI/AIM built-ins. Default OFF = lean knowledge-only package.")
     args = ap.parse_args(argv)
 
     ddd_dir = Path(args.ddd)
@@ -51,7 +55,8 @@ def main(argv: list[str] | None = None) -> int:
 
     requested = args.targets.split(",") if args.targets else None
     try:
-        results = pk.package_ddd(ddd_dir, args.out, requested_targets=requested, publish=args.publish)
+        results = pk.package_ddd(ddd_dir, args.out, requested_targets=requested,
+                                 publish=args.publish, with_enablement=args.with_enablement)
     except pk.PackagingError as e:
         print(f"REFUSED / ABORTED: {e}", file=sys.stderr)
         return 1

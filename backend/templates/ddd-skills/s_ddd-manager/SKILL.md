@@ -97,8 +97,8 @@ contract** declared in `Projects/<name>/bindings.yaml`. A DDD may bind many repo
 
 | Shape | bindings.yaml | DEVELOP path | SYNC-BACK |
 |---|---|---|---|
-| **External** (GitHub) | `kind: external` | branch + PR + `s_code-review` (no CRUX/Brazil) | opt-in |
-| **Internal** (code.amazon.com/Brazil) | `kind: internal` | `s_internal-brazil` → `s_internal-crux-cr` → `s_internal-crux-review` | opt-in |
+| **External** (GitHub) | `kind: external` | branch + PR + `s_code-review` | opt-in |
+| **Internal** (enterprise host) | `kind: internal` | the host's `s_internal-*` toolchain (provided by that host, not this package) | opt-in |
 | **No-repo** (pure DDD) | none | docs ARE the deliverable — edit directly | n/a |
 
 `bindings.yaml` (⑤, `DDD_SPEC_VERSION 1.0`) — `bindings` is an ARRAY; each entry:
@@ -106,13 +106,14 @@ contract** declared in `Projects/<name>/bindings.yaml`. A DDD may bind many repo
 bindings:
   - repo: my-repo
     kind: external                 # external | internal
-    clone: "https://github.com/org/my-repo.git"   # git URL (or a brazil command for internal)
+    clone: "https://github.com/org/my-repo.git"   # git URL (or an enterprise-host clone command for internal)
     worktree: null                 # null → clone OUTSIDE the DDD tree (never pollute DDD git)
     delivery_contract:             # governance-as-DATA — NEVER hoist into a global rule file
-      remote_kind: github-pr       # github-pr | code-amazon-cr
-      build_system: none           # none | brazil  (orthogonal to remote_kind)
+      remote_kind: github-pr       # github-pr | code-amazon-cr | self-hosted-main
+      build_system: none           # none | local-script | (an enterprise build system)  (orthogonal to remote_kind)
       branch: main
-      review_path: s_code-review   # s_code-review (github) | s_internal-crux-review (internal)
+      review_path: s_code-review   # s_code-review (github) | the host's internal review skill
+      auto_send: manual-push       # manual-push = stop at PUSH-READY (commit=auto, push=user) | on-clean-review; required
       refresh_policy: on-develop   # when the ⑥ refresher regenerates code-intel
 ```
 - **Delivery policy lives in the binding, not a global rule file** — each repo carries its own.
@@ -132,8 +133,8 @@ bindings:
   refresher (`s_repo-to-ddd`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
   binding member — it's a DERIVED projection (§3.6), regenerated locally, gitignored.
 - **DEVELOP:** read the project's class (`classify_project`) + the binding's `remote_kind` +
-  `build_system` and route — never assume CRUX/Brazil. The agent never `git push`es an internal
-  CR remote (CRUX auto-merge owns it).
+  `build_system` and route — never assume a specific enterprise toolchain. The agent never
+  `git push`es an internal CR remote (the host's auto-merge owns it).
 
 ## MANAGE — List / Edit / Rename
 

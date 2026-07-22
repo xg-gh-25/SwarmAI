@@ -200,8 +200,8 @@ For each slide, list issues found. Even minor ones.
 After QA pass, inject speaker notes:
 
 ```bash
-OOXML_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/ooxml/scripts"
-INJECT_SCRIPT="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pollinate/scripts/deck_notes_injector.py"
+OOXML_SCRIPTS="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pptx/ooxml/scripts"
+INJECT_SCRIPT="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pollinate/scripts/deck_notes_injector.py"
 
 # Unpack
 python3 "$OOXML_SCRIPTS/unpack.py" output.pptx _unpacked/
@@ -343,7 +343,7 @@ For light directions (D2 Paper, D10+): invert — `bg-deep` for text, white/crea
 ### html2pptx.js Execution
 
 ```bash
-PPTX_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/scripts"
+PPTX_SCRIPTS="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pptx/scripts"
 
 # Create a build script that:
 # 1. Imports pptxgenjs
@@ -383,7 +383,7 @@ await pptx.writeFile(outputPath);
 ### Unpack
 
 ```bash
-OOXML_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/ooxml/scripts"
+OOXML_SCRIPTS="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pptx/ooxml/scripts"
 
 python3 "$OOXML_SCRIPTS/unpack.py" \
   "content/{name}/tracks/deck/base.pptx" \

@@ -278,7 +278,7 @@ This ensures the PDF shows correct metadata in file browsers, preview apps, and 
 ## Step 4: Preview for Chat
 
 ```bash
-PDF_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pdf/scripts"
+PDF_SCRIPTS="${SWARM_WORKSPACE:-$PWD}/.claude/skills/s_pdf/scripts"
 python3 "$PDF_SCRIPTS/convert_pdf_to_images.py" \
   "content/{name}/tracks/pdf/{topic}.pdf" \
   --output-dir "content/{name}/tracks/pdf/" \

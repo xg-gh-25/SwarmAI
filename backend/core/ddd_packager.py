@@ -469,15 +469,24 @@ _KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
 # ---------------------------------------------------------------------------
 # Target A — AIM capabilities package
 # ---------------------------------------------------------------------------
-def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
+def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = False) -> PackageResult:
     ddd_name = ddd_dir.name
     aim = _read_aim(ddd_dir)
     domain, enablement_excl, unclassified = split_skills(ddd_dir)
+    # with_enablement (opt-in, bare-host variant): ship the class-A enablement engine
+    # (e.g. s_repo-to-ddd) as a portable copy so a host lacking SwarmAI/AIM built-ins
+    # can still USE the capability. Unclassified is NEVER shipped (author-error guard).
+    # Default (False) is byte-identical to the lean knowledge-only package.
+    engine_skills = sorted(enablement_excl) if with_enablement else []
+    skills_to_copy = sorted(set(domain) | set(engine_skills))
     res = PackageResult(target=TARGET_AIM, out_dir=out_dir,
-                        skills_included=domain,
-                        skills_excluded=sorted(enablement_excl + unclassified))
+                        skills_included=skills_to_copy,
+                        skills_excluded=sorted(
+                            ([] if with_enablement else enablement_excl) + unclassified))
     for s in unclassified:
         res.warnings.append(f"skill '{s}' on disk but in NEITHER native_skills nor domain_skills → excluded (unclassified)")
+    if with_enablement and engine_skills:
+        res.warnings.append(f"with-enablement: shipping portable copy of enablement skill(s) {engine_skills} for bare foreign hosts")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -516,7 +525,7 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
             "systemPrompt": "{{aim:include:context/AGENTS.md}}",
         },
         "dependencies": {
-            "skills": {"skillNames": sorted(domain) or ["*"]},
+            "skills": {"skillNames": skills_to_copy or ["*"]},
             "context": {"contextNames": ["*"]},
             "agentSops": {"agentSopNames": ["*"]},
         },
@@ -524,8 +533,8 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
     _write_json(out_dir / "agents" / f"{normalize_name(ddd_name, prefix='')}.agent-spec.json", agent_spec)
 
     # skills/, context/ (knowledge docs + AGENTS.md), agent-sops/ (gates + refresher)
-    res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", domain)
-    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", domain)
+    res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
+    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", skills_to_copy)
     ctx = out_dir / "context"
     ctx.mkdir(parents=True, exist_ok=True)
     for doc in (*_KNOWLEDGE_DOCS, "AGENTS.md"):
@@ -547,15 +556,22 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
 # ---------------------------------------------------------------------------
 # Target B — Open-Plugins plugin
 # ---------------------------------------------------------------------------
-def emit_target_open_plugin(ddd_dir: Path, out_dir: Path) -> PackageResult:
+def emit_target_open_plugin(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = False) -> PackageResult:
     ddd_name = ddd_dir.name
     aim = _read_aim(ddd_dir)
     domain, enablement_excl, unclassified = split_skills(ddd_dir)
+    # with_enablement (opt-in, bare-host variant): ship the class-A enablement engine
+    # as a portable copy. Default (False) = lean knowledge-only, byte-identical to before.
+    engine_skills = sorted(enablement_excl) if with_enablement else []
+    skills_to_copy = sorted(set(domain) | set(engine_skills))
     res = PackageResult(target=TARGET_OPEN_PLUGIN, out_dir=out_dir,
-                        skills_included=domain,
-                        skills_excluded=sorted(enablement_excl + unclassified))
+                        skills_included=skills_to_copy,
+                        skills_excluded=sorted(
+                            ([] if with_enablement else enablement_excl) + unclassified))
     for s in unclassified:
         res.warnings.append(f"skill '{s}' on disk but in NEITHER native_skills nor domain_skills → excluded (unclassified)")
+    if with_enablement and engine_skills:
+        res.warnings.append(f"with-enablement: shipping portable copy of enablement skill(s) {engine_skills} for bare foreign hosts")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     plugin_name = normalize_name(ddd_name)
@@ -573,8 +589,8 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path) -> PackageResult:
     _write_json(out_dir / ".plugin" / "plugin.json", plugin_json)
 
     # skills/
-    res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", domain)
-    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", domain)
+    res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", skills_to_copy)
+    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", skills_to_copy)
 
     # agents/<ddd>.md — system prompt as a sub-agent markdown
     agents_dir = out_dir / "agents"
@@ -666,6 +682,7 @@ def package_ddd(
     *,
     requested_targets: list[str] | None = None,
     publish: bool = False,
+    with_enablement: bool = False,
 ) -> list[PackageResult]:
     """Emit the DDD into ``out_root/<target>/`` for each PERMITTED target.
 
@@ -701,9 +718,9 @@ def package_ddd(
         if out_dir.exists():
             shutil.rmtree(out_dir)  # idempotent, deterministic re-emit
         if target == TARGET_AIM:
-            res = emit_target_aim(ddd_dir, out_dir)
+            res = emit_target_aim(ddd_dir, out_dir, with_enablement=with_enablement)
         elif target == TARGET_OPEN_PLUGIN:
-            res = emit_target_open_plugin(ddd_dir, out_dir)
+            res = emit_target_open_plugin(ddd_dir, out_dir, with_enablement=with_enablement)
             emit_install_script(out_dir, normalize_name(ddd_dir.name), is_aim_target=False)
         else:  # pragma: no cover - permitted is filtered to known targets
             continue

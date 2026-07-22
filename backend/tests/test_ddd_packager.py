@@ -226,6 +226,44 @@ class TestAC4SkillSplit:
 
 
 # ---------------------------------------------------------------------------
+# with_enablement — opt-in bare-host variant ships class-A engine as portable copy
+# (Gap 1, run_385b37f9). Default OFF must remain byte-identical to the lean package.
+# ---------------------------------------------------------------------------
+class TestWithEnablement:
+    def test_default_still_excludes_enablement(self, tmp_path):
+        # REGRESSION: without the flag, class-A enablement is excluded (unchanged).
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert "s_ddd-manager" in res.skills_excluded
+        assert "s_ddd-manager" not in res.skills_included
+        assert not (res.out_dir / "skills" / "s_ddd-manager").exists()
+
+    def test_with_enablement_ships_engine_both_targets(self, tmp_path):
+        # OPT-IN: the class-A enablement skill dir is copied into the package on BOTH
+        # targets, and moves from excluded -> included.
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities", "open-plugin"],
+                                visibility="external")
+        results = pk.package_ddd(ddd, tmp_path / "out", with_enablement=True)
+        assert len(results) == 2
+        for res in results:
+            assert "s_ddd-manager" in res.skills_included, res.target
+            assert "s_ddd-manager" not in res.skills_excluded, res.target
+            assert (res.out_dir / "skills" / "s_ddd-manager").exists(), res.target
+            # class-B domain skills still ship regardless of the flag
+            assert {"s_fx-report", "s_fx-analyze"}.issubset(set(res.skills_included)), res.target
+
+    def test_with_enablement_never_ships_unclassified(self, tmp_path):
+        # The flag opens the ENABLEMENT gate only — an unclassified on-disk skill (in
+        # NEITHER native nor domain) must STILL be excluded (author-error guard holds).
+        # add_unclassified_skill plants s_fx-orphan in NEITHER native nor domain list
+        ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external",
+                                add_unclassified_skill=True)
+        [res] = pk.package_ddd(ddd, tmp_path / "out", with_enablement=True)
+        assert "s_fx-orphan" in res.skills_excluded
+        assert not (res.out_dir / "skills" / "s_fx-orphan").exists()
+
+
+# ---------------------------------------------------------------------------
 # AC6 — content scan aborts on secret + host-path (over the emitted tree)
 # ---------------------------------------------------------------------------
 class TestAC6ContentScan:

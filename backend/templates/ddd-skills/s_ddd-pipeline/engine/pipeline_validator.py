@@ -180,8 +180,8 @@ def _verify_findings_on_disk(
         deliveries run from CI or another machine (Gate-1 Attack-5/6).
 
     ``disk_check.file`` is ABSOLUTE by contract (Gate-1 Attack-3): findings
-    reference SOURCE-repo files, but the validator's workspace root is
-    ``~/.swarm-ai/SwarmWS`` (the C040 source-vs-workspace split). Joining a
+    reference SOURCE-repo files, but the validator's workspace root is a
+    separate host workspace dir (the C040 source-vs-workspace split). Joining a
     relative path against the workspace root would grep the WRONG tree and
     false-block 100% of code-fix deliveries. Absolute paths eliminate the join.
     ``allowed_root``, when set, confines reads to that subtree (defence in depth

@@ -310,7 +310,7 @@ for (let i = 0; i < slideCount; i++) {
   // ── ADVISORY text-overlap probe (READ side of the data-om-validate contract) ──
   // deck-stage.js WRITES data-om-validate="no_overflowing_text,no_overlapping_text,
   // slide_sized_text" on every slide but nothing ever read it. Here we honor the
-  // no_overlapping_text token: detect two LEAF text blocks whose boxes intersect,
+  // no_overlapping_text flag — detect two LEAF text blocks whose boxes intersect,
   // using the real loaded fonts (reveals already forced above). This is ADVISORY
   // only — we warn, never fail (INSTRUCTIONS.md:801: this check class is
   // false-positive-prone and must not hard-block a genuine delivery). A slide may

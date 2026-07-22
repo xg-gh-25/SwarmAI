@@ -28,7 +28,7 @@ the 4 pipeline scripts, and the **cultivation trio** (`ddd_cultivation` + `persi
 |---------|----------------------------------|---------------------------|
 | Engine | `backend/scripts/artifact_cli.py` + `core.*` | **`engine/artifact_cli.py`** (co-located, decoupled) |
 | Run state | `data.db` Radar row + `run.json` | **`run.json`** only — sqlite side-effect dropped |
-| Workspace | `~/.swarm-ai/SwarmWS` (hardcoded) | `$SWARM_WORKSPACE` or cwd — portable |
+| Workspace | a hardcoded SwarmAI workspace root | `$SWARM_WORKSPACE` or cwd — portable |
 | DDD docs read | `Projects/<P>/*.md` | THIS DDD's own 4 docs (co-located) |
 | The moat | Gate-2 adversarial + 养成 ladder | **identical — retained, non-negotiable** |
 
