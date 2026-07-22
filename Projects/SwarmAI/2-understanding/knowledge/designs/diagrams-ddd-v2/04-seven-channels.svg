@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 420" font-family="sans-serif">
+  <rect width="780" height="420" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Eight Feed Channels into the Cultivation Engine</text>
+
+  <!-- Channel boxes (left side, stacked) -->
+  <rect x="30" y="55" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="120" y="76" text-anchor="middle" fill="#7ee787" font-size="10">Ch1: Code Changes</text>
+
+  <rect x="30" y="98" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="120" y="119" text-anchor="middle" fill="#7ee787" font-size="10">Ch2: External Learning</text>
+
+  <rect x="30" y="141" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="120" y="162" text-anchor="middle" fill="#d2a8ff" font-size="10">Ch3: Pipeline Delivery</text>
+
+  <rect x="30" y="184" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="120" y="205" text-anchor="middle" fill="#7ee787" font-size="10">Ch4: Industry Signals</text>
+
+  <rect x="30" y="227" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="120" y="248" text-anchor="middle" fill="#7ee787" font-size="10">Ch5: Conversation</text>
+
+  <rect x="30" y="270" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#f78166" stroke-width="1.5"/>
+  <text x="120" y="291" text-anchor="middle" fill="#f78166" font-size="10">Ch6: Corrections</text>
+
+  <rect x="30" y="313" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="120" y="334" text-anchor="middle" fill="#7ee787" font-size="10">Ch7: Code Intelligence</text>
+
+  <!-- Flow arrows from channels to proposal queue -->
+  <line x1="210" y1="72" x2="310" y2="185" stroke="#7ee787" stroke-width="1"/>
+  <line x1="210" y1="115" x2="310" y2="185" stroke="#7ee787" stroke-width="1"/>
+  <line x1="210" y1="158" x2="310" y2="190" stroke="#d2a8ff" stroke-width="1.5"/>
+  <line x1="210" y1="201" x2="310" y2="195" stroke="#7ee787" stroke-width="1"/>
+  <line x1="210" y1="244" x2="310" y2="200" stroke="#7ee787" stroke-width="1"/>
+  <line x1="210" y1="287" x2="310" y2="205" stroke="#f78166" stroke-width="1"/>
+  <line x1="210" y1="330" x2="310" y2="210" stroke="#7ee787" stroke-width="1"/>
+
+  <!-- Proposal Queue -->
+  <rect x="310" y="140" width="140" height="120" rx="8" fill="none" stroke="#58a6ff" stroke-width="2"/>
+  <text x="380" y="165" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">Proposal</text>
+  <text x="380" y="182" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="bold">Queue</text>
+
+  <!-- Stacked proposals -->
+  <rect x="325" y="195" width="110" height="18" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="380" y="208" text-anchor="middle" fill="#e6edf3" font-size="8">proposal-001.yaml</text>
+  <rect x="325" y="217" width="110" height="18" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="380" y="230" text-anchor="middle" fill="#e6edf3" font-size="8">proposal-002.yaml</text>
+  <rect x="325" y="239" width="110" height="18" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="380" y="252" text-anchor="middle" fill="#e6edf3" font-size="8">proposal-003.yaml</text>
+
+  <!-- Arrow to Approval Gate -->
+  <line x1="450" y1="200" x2="500" y2="200" stroke="#58a6ff" stroke-width="1.5"/>
+  <polygon points="497,196 505,200 497,204" fill="#58a6ff"/>
+
+  <!-- Approval Gate -->
+  <rect x="505" y="160" width="100" height="80" rx="8" fill="none" stroke="#f78166" stroke-width="2.5"/>
+  <text x="555" y="190" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">APPROVAL</text>
+  <text x="555" y="207" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">GATE</text>
+  <text x="555" y="228" text-anchor="middle" fill="#e6edf3" font-size="9">Human or auto</text>
+
+  <!-- Arrow to DDD -->
+  <line x1="605" y1="200" x2="655" y2="200" stroke="#7ee787" stroke-width="1.5"/>
+  <polygon points="652,196 660,200 652,204" fill="#7ee787"/>
+
+  <!-- DDD Documents -->
+  <rect x="660" y="130" width="100" height="140" rx="8" fill="none" stroke="#7ee787" stroke-width="2"/>
+  <text x="710" y="155" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">DDD</text>
+  <rect x="672" y="165" width="76" height="20" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="710" y="179" text-anchor="middle" fill="#e6edf3" font-size="8">PRODUCT.md</text>
+  <rect x="672" y="190" width="76" height="20" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="710" y="204" text-anchor="middle" fill="#e6edf3" font-size="8">TECH.md</text>
+  <rect x="672" y="215" width="76" height="20" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="710" y="229" text-anchor="middle" fill="#e6edf3" font-size="8">IMPROVEMENT.md</text>
+  <rect x="672" y="240" width="76" height="20" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="710" y="254" text-anchor="middle" fill="#e6edf3" font-size="8">PROJECT.md</text>
+
+  <!-- Rejection path -->
+  <path d="M 555 240 L 555 310 L 380 310 L 380 260" fill="none" stroke="#f78166" stroke-width="1" stroke-dasharray="4"/>
+  <text x="470" y="303" text-anchor="middle" fill="#f78166" font-size="9">Rejected: returned to queue or discarded</text>
+
+  <!-- Legend at bottom -->
+  <rect x="30" y="370" width="720" height="38" rx="6" fill="none" stroke="#e6edf3" stroke-width="0.5"/>
+  <circle cx="60" cy="389" r="5" fill="#d2a8ff"/>
+  <text x="75" y="393" fill="#e6edf3" font-size="9">Richest feed (Pipeline)</text>
+  <circle cx="230" cy="389" r="5" fill="#f78166"/>
+  <text x="245" y="393" fill="#e6edf3" font-size="9">Highest priority (Corrections)</text>
+  <circle cx="420" cy="389" r="5" fill="#7ee787"/>
+  <text x="435" y="393" fill="#e6edf3" font-size="9">Continuous flow (5 steady channels)</text>
+  <circle cx="630" cy="389" r="5" fill="#58a6ff"/>
+  <text x="645" y="393" fill="#e6edf3" font-size="9">Safety boundary</text>
+</svg>

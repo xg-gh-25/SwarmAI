@@ -1,0 +1,255 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1258" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151528"/>
+      <stop offset="1" stop-color="#0F1020"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF6B35"/>
+      <stop offset="1" stop-color="#FF9068"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4ECDC4"/>
+      <stop offset="1" stop-color="#2FB6AD"/>
+    </linearGradient>
+    <linearGradient id="stageband" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF6B35"/>
+      <stop offset="0.5" stop-color="#FDCB6E"/>
+      <stop offset="1" stop-color="#4ECDC4"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8894a8"/>
+    </marker>
+    <marker id="arrowW" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#FF6B35"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="1258" fill="url(#bg)"/>
+
+  <!-- ===== HEADER ===== -->
+  <text x="60" y="62" font-size="34" font-weight="800" fill="#FFFFFF">🐝 Pollinate</text>
+  <text x="285" y="62" font-size="20" font-weight="600" fill="#4ECDC4">— Swarm Media Value Delivery Engine</text>
+  <text x="60" y="92" font-size="15" fill="#9AA5B8">One message → all professional formats → all audiences → quality guaranteed.</text>
+  <text x="60" y="114" font-size="14" font-style="italic" fill="#6E7891">Message-first, format follows audience.  Your message · their attention · the right format.</text>
+
+  <!-- ===== STEP 0: DISCOVER ===== -->
+  <rect x="60" y="140" width="1320" height="92" rx="12" fill="#1E2438" stroke="#FF6B35" stroke-width="2"/>
+  <rect x="60" y="140" width="6" height="92" rx="3" fill="url(#orange)"/>
+  <text x="88" y="170" font-size="18" font-weight="700" fill="#FF6B35">STEP 0 · DISCOVER</text>
+  <text x="88" y="196" font-size="13" fill="#C6CEDC">搞清楚再动手 — the ONLY mandatory human gate.  5 Qs: MESSAGE · AUDIENCE · OUTCOME · CONTEXT · SCOPE</text>
+  <text x="88" y="217" font-size="12.5" fill="#9AA5B8">Fast-path: explicit format → confirm &amp; skip · format_recommend.py maps answers → tracks → user confirms scope</text>
+  <rect x="1140" y="152" width="220" height="46" rx="8" fill="#2A3350"/>
+  <text x="1250" y="172" font-size="12" font-weight="700" fill="#4ECDC4" text-anchor="middle">discovery.json</text>
+  <text x="1250" y="189" font-size="11" fill="#9AA5B8" text-anchor="middle">confirmed_tracks[]</text>
+
+  <line x1="720" y1="232" x2="720" y2="250" stroke="#FF6B35" stroke-width="2" marker-end="url(#arrowW)"/>
+
+  <!-- ===== 9-STAGE PIPELINE ===== -->
+  <text x="60" y="262" font-size="17" font-weight="700" fill="#FFFFFF">9-Stage Pipeline</text>
+  <text x="230" y="262" font-size="12.5" fill="#6E7891">EVALUATE → REFLECT · per-stage: gate-check → load context → execute → classify decisions (mechanical/taste/judgment) → verify</text>
+
+  <rect x="60" y="278" width="1320" height="10" rx="5" fill="url(#stageband)" opacity="0.35"/>
+
+  <!-- stage boxes -->
+  <g font-size="12.5" font-weight="700" text-anchor="middle">
+    <!-- Phase A: Decision -->
+    <rect x="60"  y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#FF6B35" stroke-width="1.5"/>
+    <text x="130" y="322" fill="#FF8A5C">1 · EVALUATE</text>
+    <text x="130" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">worth</text>
+    <text x="130" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">producing?</text>
+
+    <rect x="210" y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#FF6B35" stroke-width="1.5"/>
+    <text x="280" y="322" fill="#FF8A5C">2 · THINK</text>
+    <text x="280" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">research +</text>
+    <text x="280" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">differentiate</text>
+
+    <rect x="360" y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#FF6B35" stroke-width="1.5"/>
+    <text x="430" y="322" fill="#FF8A5C">3 · STRATEGIZE</text>
+    <text x="430" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">PR/FAQ +</text>
+    <text x="430" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">channel×format</text>
+
+    <rect x="510" y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#FDCB6E" stroke-width="1.5"/>
+    <text x="580" y="322" fill="#FDCB6E">4 · PLAN</text>
+    <text x="580" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">content pkg +</text>
+    <text x="580" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">per-track specs</text>
+
+    <!-- Phase B: Production -->
+    <rect x="660" y="298" width="140" height="72" rx="9" fill="#2E2A3A" stroke="#FDCB6E" stroke-width="2"/>
+    <text x="730" y="322" fill="#FDCB6E">5 · BUILD</text>
+    <text x="730" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">production</text>
+    <text x="730" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">(per track)</text>
+
+    <rect x="810" y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#FDCB6E" stroke-width="1.5"/>
+    <text x="880" y="322" fill="#FDCB6E">6 · REVIEW</text>
+    <text x="880" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">quality</text>
+    <text x="880" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">audit</text>
+
+    <rect x="960" y="298" width="140" height="72" rx="9" fill="#26243C" stroke="#4ECDC4" stroke-width="1.5"/>
+    <text x="1030" y="322" fill="#4ECDC4">7 · TEST</text>
+    <text x="1030" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">render +</text>
+    <text x="1030" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">spec validate</text>
+
+    <!-- Phase C: Delivery -->
+    <rect x="1110" y="298" width="130" height="72" rx="9" fill="#22303A" stroke="#4ECDC4" stroke-width="2"/>
+    <text x="1175" y="322" fill="#4ECDC4">8 · DELIVER</text>
+    <text x="1175" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">publish pkg</text>
+    <text x="1175" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">+ REPORT.md</text>
+
+    <rect x="1250" y="298" width="130" height="72" rx="9" fill="#26243C" stroke="#4ECDC4" stroke-width="1.5"/>
+    <text x="1315" y="322" fill="#4ECDC4">9 · REFLECT</text>
+    <text x="1315" y="342" font-size="10.5" font-weight="400" fill="#9AA5B8">learn +</text>
+    <text x="1315" y="356" font-size="10.5" font-weight="400" fill="#9AA5B8">improve prefs</text>
+  </g>
+
+  <!-- phase labels -->
+  <text x="280" y="388" font-size="11" font-weight="700" fill="#FF6B35" text-anchor="middle" letter-spacing="1">◄ DECISION ►</text>
+  <text x="805" y="388" font-size="11" font-weight="700" fill="#FDCB6E" text-anchor="middle" letter-spacing="1">◄ PRODUCTION ►</text>
+  <text x="1245" y="388" font-size="11" font-weight="700" fill="#4ECDC4" text-anchor="middle" letter-spacing="1">◄ DELIVERY ►</text>
+
+  <!-- ===== TRACKS (fan-out from BUILD) ===== -->
+  <text x="60" y="432" font-size="17" font-weight="700" fill="#FFFFFF">11 Format Tracks</text>
+  <text x="245" y="432" font-size="12.5" fill="#6E7891">BUILD fans out to only the confirmed tracks — each self-contained (spec · template · render · verify)</text>
+
+  <g font-size="12" text-anchor="middle">
+    <!-- row 1 -->
+    <rect x="60"  y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="135" y="472" font-weight="700" fill="#FF9068">A · Video</text>
+    <text x="135" y="492" font-size="10.5" fill="#9AA5B8">Remotion MP4 + TTS</text>
+
+    <rect x="222" y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="297" y="472" font-weight="700" fill="#FF9068">B · Poster</text>
+    <text x="297" y="492" font-size="10.5" fill="#9AA5B8">HTML→PNG 长图 ×2</text>
+
+    <rect x="384" y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="459" y="472" font-weight="700" fill="#FDCB6E">C · Narrative</text>
+    <text x="459" y="492" font-size="10.5" fill="#9AA5B8">Markdown article</text>
+
+    <rect x="546" y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="621" y="472" font-weight="700" fill="#FDCB6E">E · Deck</text>
+    <text x="621" y="492" font-size="10.5" fill="#9AA5B8">PPTX + notes</text>
+
+    <rect x="708" y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="783" y="472" font-weight="700" fill="#FDCB6E">L · HTML Deck</text>
+    <text x="783" y="492" font-size="10.5" fill="#9AA5B8">34 design systems</text>
+
+    <rect x="870" y="448" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="945" y="472" font-weight="700" fill="#4ECDC4">F · PDF</text>
+    <text x="945" y="492" font-size="10.5" fill="#9AA5B8">one-pager→white paper</text>
+
+    <!-- row 2 -->
+    <rect x="60"  y="518" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="135" y="542" font-weight="700" fill="#4ECDC4">G · Data Report</text>
+    <text x="135" y="562" font-size="10.5" fill="#9AA5B8">XLSX + charts</text>
+
+    <rect x="222" y="518" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="297" y="542" font-weight="700" fill="#4ECDC4">H · Document</text>
+    <text x="297" y="562" font-size="10.5" fill="#9AA5B8">DOCX six-pager</text>
+
+    <rect x="384" y="518" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="459" y="542" font-weight="700" fill="#FF9068">I · Image</text>
+    <text x="459" y="562" font-size="10.5" fill="#9AA5B8">AI hero visuals</text>
+
+    <rect x="546" y="518" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="621" y="542" font-weight="700" fill="#FF9068">J · Interactive</text>
+    <text x="621" y="562" font-size="10.5" fill="#9AA5B8">HTML dashboard</text>
+
+    <rect x="708" y="518" width="150" height="58" rx="8" fill="#20263C" stroke="#354063" stroke-width="1"/>
+    <text x="783" y="542" font-weight="700" fill="#FDCB6E">K · Podcast</text>
+    <text x="783" y="562" font-size="10.5" fill="#9AA5B8">2-host TTS audio</text>
+
+    <!-- channels box -->
+    <rect x="870" y="518" width="150" height="58" rx="8" fill="#1A2230" stroke="#4ECDC4" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="945" y="540" font-weight="700" fill="#4ECDC4">5 Channel Specs</text>
+    <text x="945" y="558" font-size="9.5" fill="#9AA5B8">bilibili · douyin · 视频号</text>
+    <text x="945" y="570" font-size="9.5" fill="#9AA5B8">xiaohongshu · youtube</text>
+  </g>
+
+  <!-- ===== RIGHT COLUMN: QUALITY GATES ===== -->
+  <rect x="1040" y="448" width="340" height="256" rx="12" fill="#181E30" stroke="#2A3350" stroke-width="1.5"/>
+  <text x="1060" y="476" font-size="16" font-weight="700" fill="#FFFFFF">Quality Gate Taxonomy</text>
+  <text x="1060" y="496" font-size="11" fill="#6E7891">Honest tiers — a check that runs ≠ a check that blocks</text>
+
+  <!-- ENFORCED -->
+  <rect x="1060" y="508" width="300" height="70" rx="8" fill="#231A18" stroke="#FF6B35" stroke-width="1.5"/>
+  <text x="1076" y="528" font-size="12.5" font-weight="800" fill="#FF6B35">● ENFORCED — blocks delivery</text>
+  <text x="1076" y="546" font-size="10.5" fill="#C6CEDC">pollinate_validator.py · artifact_cli exit(1), 9 invariants</text>
+  <text x="1076" y="561" font-size="10.5" fill="#C6CEDC">convergence_gate.py · p2_scan.py (poster BUILD loop)</text>
+  <text x="1076" y="574" font-size="9.5" fill="#8894a8">delivery-level chokepoint + track-level agent-run</text>
+
+  <!-- ADVISORY -->
+  <rect x="1060" y="586" width="300" height="52" rx="8" fill="#20261E" stroke="#FDCB6E" stroke-width="1.5"/>
+  <text x="1076" y="606" font-size="12.5" font-weight="800" fill="#FDCB6E">● ADVISORY — trusted-to-run</text>
+  <text x="1076" y="624" font-size="10.5" fill="#C6CEDC">geo_score (AI-slop opener) · cross_format_check</text>
+  <text x="1076" y="637" font-size="9.5" fill="#8894a8">high false-positive-cost taste/judgment checks only</text>
+
+  <!-- PREFLIGHT -->
+  <rect x="1060" y="646" width="300" height="46" rx="8" fill="#1A222A" stroke="#4ECDC4" stroke-width="1.5"/>
+  <text x="1076" y="666" font-size="12.5" font-weight="800" fill="#4ECDC4">● PREFLIGHT — informs, never blocks</text>
+  <text x="1076" y="683" font-size="10.5" fill="#C6CEDC">check_prereqs.py · video env probe (always exit 0)</text>
+
+  <!-- ===== BOTTOM: DECISION DISCIPLINE + FOUNDATIONS ===== -->
+  <rect x="60" y="740" width="640" height="180" rx="12" fill="#181E30" stroke="#2A3350" stroke-width="1.5"/>
+  <text x="80" y="768" font-size="16" font-weight="700" fill="#FFFFFF">Decision Discipline</text>
+  <text x="80" y="792" font-size="12.5" fill="#C6CEDC"><tspan font-weight="700" fill="#4ECDC4">Mechanical</tspan> — deterministic, auto-decided (specs, dims, formats)</text>
+  <text x="80" y="814" font-size="12.5" fill="#C6CEDC"><tspan font-weight="700" fill="#FDCB6E">Taste</tspan> — batched to user at DELIVER (design direction, tone)</text>
+  <text x="80" y="836" font-size="12.5" fill="#C6CEDC"><tspan font-weight="700" fill="#FF6B35">Judgment</tspan> — escalate immediately (scope, message truth)</text>
+  <line x1="80" y1="852" x2="680" y2="852" stroke="#2A3350" stroke-width="1"/>
+  <text x="80" y="874" font-size="11.5" fill="#9AA5B8">Content has no deterministic spec → it converges by iteration.</text>
+  <text x="80" y="892" font-size="11.5" fill="#9AA5B8">DISCOVER + PR/FAQ pull first-shot to "direction correct"; adversarial</text>
+  <text x="80" y="908" font-size="11.5" fill="#9AA5B8">iteration after is the price of a spec-less domain, not a defect.</text>
+
+  <rect x="720" y="740" width="660" height="180" rx="12" fill="#181E30" stroke="#2A3350" stroke-width="1.5"/>
+  <text x="740" y="768" font-size="16" font-weight="700" fill="#FFFFFF">Foundations</text>
+  <g font-size="12" fill="#C6CEDC">
+    <text x="740" y="794"><tspan font-weight="700" fill="#4ECDC4">Brand system</tspan> · identity.yaml (🐝 #FF6B35 / #1B2838 / #4ECDC4),</text>
+    <text x="758" y="811">tone_guide, poster_design_system, content_principles, 34 systems</text>
+    <text x="740" y="835"><tspan font-weight="700" fill="#FDCB6E">Scripts</tspan> · format_recommend · geo_score · check_specs ·</text>
+    <text x="758" y="852">convergence_gate · p2_scan · cross_format_check · publish_to_pages</text>
+    <text x="740" y="876"><tspan font-weight="700" fill="#FF9068">State &amp; output</tspan> · artifact_cli pipeline run · content/{name}/</text>
+    <text x="758" y="893">REPORT.md · decision log · confidence score  (DDD flywheel ↓)</text>
+    <text x="740" y="912" font-size="11" fill="#8894a8">Studio preview (user-approved) before 4K render · platform spec-validated</text>
+  </g>
+
+  <!-- flow arrow from BUILD down to tracks -->
+  <path d="M730 372 L730 400 L135 400 L135 444" fill="none" stroke="#4a5573" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrow)" opacity="0.6"/>
+  <path d="M730 372 L730 400 L945 400 L945 512" fill="none" stroke="#4a5573" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrow)" opacity="0.6"/>
+
+  <!-- ===== DDD / KNOWLEDGE FLYWHEEL BAND ===== -->
+  <rect x="60" y="948" width="1320" height="196" rx="12" fill="#161B2C" stroke="#4ECDC4" stroke-width="1.5"/>
+  <rect x="60" y="948" width="6" height="196" rx="3" fill="url(#teal)"/>
+  <text x="88" y="978" font-size="16" font-weight="700" fill="#FFFFFF">DDD / Knowledge Flywheel — 越用越聪明</text>
+  <text x="430" y="978" font-size="12" fill="#6E7891">Pollinate READS existing assets to differentiate, and WRITES lessons back to the DDD — every run compounds.</text>
+
+  <!-- READ side -->
+  <text x="88" y="1012" font-size="13" font-weight="700" fill="#4ECDC4">◄ READ  (EVALUATE · THINK)</text>
+  <g font-size="11.5" fill="#C6CEDC">
+    <rect x="88"  y="1024" width="200" height="34" rx="7" fill="#1A2230" stroke="#2F4A50" stroke-width="1"/>
+    <text x="102" y="1045">Knowledge/ · Notes·Designs·Reports</text>
+    <rect x="300" y="1024" width="180" height="34" rx="7" fill="#1A2230" stroke="#2F4A50" stroke-width="1"/>
+    <text x="314" y="1045">.context/MEMORY.md</text>
+    <rect x="492" y="1024" width="240" height="34" rx="7" fill="#1A2230" stroke="#2F4A50" stroke-width="1"/>
+    <text x="506" y="1045">Project DDD · PRODUCT/TECH/PROJECT.md</text>
+  </g>
+  <text x="88" y="1082" font-size="11" fill="#8894a8">→ asset inventory (readiness score) · differentiation vs prior work · brand + tone from identity.yaml</text>
+
+  <!-- WRITE side -->
+  <text x="88" y="1114" font-size="13" font-weight="700" fill="#FF9068">WRITE ►  (BUILD · REFLECT)</text>
+  <g font-size="11.5" fill="#C6CEDC">
+    <rect x="330" y="1096" width="250" height="34" rx="7" fill="#231A18" stroke="#5A3A2E" stroke-width="1"/>
+    <text x="344" y="1117">Knowledge/Pollinate/{date}-{name}/</text>
+    <rect x="592" y="1096" width="240" height="34" rx="7" fill="#231A18" stroke="#5A3A2E" stroke-width="1"/>
+    <text x="606" y="1117">IMPROVEMENT.md (DDD lessons)</text>
+    <rect x="844" y="1096" width="170" height="34" rx="7" fill="#231A18" stroke="#5A3A2E" stroke-width="1"/>
+    <text x="858" y="1117">user_prefs.json</text>
+  </g>
+
+  <!-- flywheel loop arc on the right -->
+  <path d="M1095 1058 A 42 30 0 1 1 1094 1058" fill="none" stroke="#4ECDC4" stroke-width="2.5" marker-end="url(#arrow)" opacity="0.9"/>
+  <text x="1160" y="1042" font-size="12" font-weight="700" fill="#4ECDC4">compound loop</text>
+  <text x="1160" y="1062" font-size="10.5" fill="#8894a8">each run's output +</text>
+  <text x="1160" y="1077" font-size="10.5" fill="#8894a8">lessons feed the next</text>
+
+  <!-- footer -->
+  <text x="720" y="1188" font-size="12" fill="#4a5573" text-anchor="middle">SwarmAI · s_pollinate — 9 stages · 11 tracks · 3-tier gates · 5 channels · brand-governed · DDD flywheel</text>
+</svg>

@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" width="800" height="560">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="560" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Memory Management: Four-Level Architecture</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">System prompt injection (L1-L2) + On-demand recall (L3-L4)</text>
+  <rect x="20" y="80" width="18" height="190" rx="4" fill="#e74c3c"/>
+  <text x="29" y="180" fill="#ecf0f1" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle" transform="rotate(-90, 29, 180)">ALWAYS INJECTED</text>
+  <rect x="50" y="80" width="340" height="85" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="50" y="80" width="340" height="4" rx="2" fill="#e74c3c"/>
+  <text x="220" y="104" fill="#e74c3c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L1 Semantic Memory  &#x2014;  MEMORY.md</text>
+  <text x="220" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Facts, decisions, preferences</text>
+  <text x="220" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Injected into every session prompt</text>
+  <text x="220" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Updated by save-memory skill</text>
+  <rect x="50" y="185" width="340" height="85" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="50" y="185" width="340" height="4" rx="2" fill="#f39c12"/>
+  <text x="220" y="209" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L2 Procedural Memory  &#x2014;  EVOLUTION.md</text>
+  <text x="220" y="227" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Learned patterns, skill rules</text>
+  <text x="220" y="243" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Injected into every session prompt</text>
+  <text x="220" y="259" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Updated by evolution pipeline</text>
+  <rect x="20" y="295" width="18" height="190" rx="4" fill="#3498db"/>
+  <text x="29" y="395" fill="#ecf0f1" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle" transform="rotate(-90, 29, 395)">ON-DEMAND</text>
+  <rect x="50" y="295" width="340" height="85" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="50" y="295" width="340" height="4" rx="2" fill="#3498db"/>
+  <text x="220" y="319" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L3 Episodic Memory  &#x2014;  DailyActivity/</text>
+  <text x="220" y="337" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Session logs, notes, designs</text>
+  <text x="220" y="353" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">RecallEngine fetches on-demand</text>
+  <text x="220" y="369" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Hybrid search: vector + FTS5</text>
+  <rect x="50" y="400" width="340" height="85" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="50" y="400" width="340" height="4" rx="2" fill="#9b59b6"/>
+  <text x="220" y="424" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L4 Verbatim Memory  &#x2014;  JSONL</text>
+  <text x="220" y="442" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Full session transcripts</text>
+  <text x="220" y="458" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">TranscriptIndexer on-demand</text>
+  <text x="220" y="474" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Highest fidelity, largest cost</text>
+  <rect x="430" y="80" width="340" height="120" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="430" y="80" width="340" height="4" rx="2" fill="#2ecc71"/>
+  <text x="600" y="104" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">System Prompt Assembly</text>
+  <text x="600" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">7 layers assembled at start:</text>
+  <text x="600" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">1. CLAUDE.md  2. MEMORY.md</text>
+  <text x="600" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">3. EVOLUTION.md  4. PROJECT.md</text>
+  <text x="600" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">5. Active skill SKILL.md</text>
+  <text x="600" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">6. Recalled context  7. User msg</text>
+  <rect x="430" y="230" width="340" height="140" rx="8" fill="#16213e" stroke="#1abc9c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="430" y="230" width="340" height="4" rx="2" fill="#1abc9c"/>
+  <text x="600" y="254" fill="#1abc9c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">RecallEngine</text>
+  <text x="600" y="272" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Hybrid: 0.6 vector + 0.4 FTS5</text>
+  <text x="600" y="288" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Triggered by focus keywords</text>
+  <text x="600" y="304" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">or agent Read tool request</text>
+  <text x="600" y="320" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="600" y="336" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Pre-session: medium precision</text>
+  <text x="600" y="352" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Post-msg: high precision</text>
+  <text x="600" y="368" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Mid-session: highest precision</text>
+  <rect x="430" y="400" width="340" height="85" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="430" y="400" width="340" height="4" rx="2" fill="#f39c12"/>
+  <text x="600" y="424" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Token Budget Enforcement</text>
+  <text x="600" y="442" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">MemoryGuard caps per section</text>
+  <text x="600" y="458" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SectionCaps: hard limits per level</text>
+  <text x="600" y="474" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Graceful degrade, never truncate</text>
+  <line x1="390" y1="122" x2="428" y2="122" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="390" y1="227" x2="428" y2="300" stroke="#3498db" stroke-width="2" marker-end="url(#arrT)"/>
+  <line x1="390" y1="340" x2="428" y2="320" stroke="#3498db" stroke-width="2" marker-end="url(#arrT)"/>
+  <line x1="390" y1="442" x2="428" y2="420" stroke="#9b59b6" stroke-width="2" marker-end="url(#arrO)"/>
+  <text x="400" y="530" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L1+L2 = always present in context  |  L3+L4 = retrieved when relevant  |  Budget enforced at all levels</text>
+</svg>

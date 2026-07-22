@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="800" height="520">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="520" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">RecallEngine: Three-Stage Precision Recall</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Progressive precision: pre-session &#x2192; post-first-message &#x2192; mid-session</text>
+  <rect x="30" y="80" width="230" height="160" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="30" y="80" width="230" height="4" rx="2" fill="#3498db"/>
+  <text x="145" y="104" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Stage 1: Pre-Session</text>
+  <text x="145" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Trigger: session start</text>
+  <text x="145" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Input: focus keywords</text>
+  <text x="145" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">from user profile</text>
+  <text x="145" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="145" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Precision: MEDIUM</text>
+  <text x="145" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Broad context priming</text>
+  <text x="145" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Low latency required</text>
+  <rect x="285" y="80" width="230" height="160" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="285" y="80" width="230" height="4" rx="2" fill="#2ecc71"/>
+  <text x="400" y="104" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Stage 2: Post-First-Msg</text>
+  <text x="400" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Trigger: first user msg</text>
+  <text x="400" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Input: actual query text</text>
+  <text x="400" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">with full intent</text>
+  <text x="400" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="400" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Precision: HIGH</text>
+  <text x="400" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Targeted recall</text>
+  <text x="400" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">~200ms budget</text>
+  <rect x="540" y="80" width="230" height="160" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="80" width="230" height="4" rx="2" fill="#f39c12"/>
+  <text x="655" y="104" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Stage 3: Mid-Session</text>
+  <text x="655" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Trigger: agent Read tool</text>
+  <text x="655" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Input: specific file or</text>
+  <text x="655" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">knowledge request</text>
+  <text x="655" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="655" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Precision: HIGHEST</text>
+  <text x="655" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Exact retrieval</text>
+  <text x="655" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Agent-driven</text>
+  <line x1="260" y1="160" x2="283" y2="160" stroke="#3498db" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="515" y1="160" x2="538" y2="160" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrO)"/>
+  <rect x="30" y="270" width="740" height="110" rx="8" fill="#16213e" stroke="#1abc9c" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="400" y="294" fill="#1abc9c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Hybrid Search Engine</text>
+  <rect x="60" y="308" width="200" height="26" rx="13" fill="#3498db" opacity="0.22"/>
+  <text x="160" y="325" fill="#3498db" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Vector Search (weight 0.6)</text>
+  <text x="160" y="350" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Semantic similarity via embeddings</text>
+  <text x="280" y="322" fill="#1abc9c" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">+</text>
+  <rect x="310" y="308" width="200" height="26" rx="13" fill="#f39c12" opacity="0.22"/>
+  <text x="410" y="325" fill="#f39c12" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">FTS5 Full-Text (weight 0.4)</text>
+  <text x="410" y="350" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Keyword matching via SQLite FTS5</text>
+  <text x="530" y="322" fill="#1abc9c" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">=</text>
+  <rect x="560" y="308" width="180" height="26" rx="13" fill="#2ecc71" opacity="0.22"/>
+  <text x="650" y="325" fill="#2ecc71" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Merged + Ranked Results</text>
+  <text x="650" y="350" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Deduplicated, scored, budget-fit</text>
+  <rect x="30" y="405" width="740" height="90" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="400" y="428" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Merge &#x2192; Rank &#x2192; Inject Pipeline</text>
+  <rect x="60" y="444" width="110" height="26" rx="13" fill="#3498db" opacity="0.22"/>
+  <text x="115" y="461" fill="#3498db" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Query Encode</text>
+  <line x1="170" y1="457" x2="188" y2="457" stroke="#3498db" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="190" y="444" width="110" height="26" rx="13" fill="#1abc9c" opacity="0.22"/>
+  <text x="245" y="461" fill="#1abc9c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Parallel Search</text>
+  <line x1="300" y1="457" x2="318" y2="457" stroke="#1abc9c" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="320" y="444" width="110" height="26" rx="13" fill="#2ecc71" opacity="0.22"/>
+  <text x="375" y="461" fill="#2ecc71" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Score Merge</text>
+  <line x1="430" y1="457" x2="448" y2="457" stroke="#2ecc71" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="450" y="444" width="110" height="26" rx="13" fill="#f39c12" opacity="0.22"/>
+  <text x="505" y="461" fill="#f39c12" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Dedup + Rank</text>
+  <line x1="560" y1="457" x2="578" y2="457" stroke="#f39c12" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="580" y="444" width="110" height="26" rx="13" fill="#e74c3c" opacity="0.22"/>
+  <text x="635" y="461" fill="#e74c3c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Budget Trim</text>
+  <line x1="690" y1="457" x2="688" y2="457" stroke="#e74c3c" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="690" y="444" width="80" height="26" rx="13" fill="#9b59b6" opacity="0.22"/>
+  <text x="730" y="461" fill="#9b59b6" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Inject</text>
+</svg>

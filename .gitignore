@@ -2,10 +2,23 @@
 __pycache__/
 *.py[cod]
 
-# Projects — only SwarmAI is public; all others are private/internal
+# Projects — only SwarmAI is public (ships as the sample DDD); all others private.
 Projects/*
 !Projects/SwarmAI/
+# SwarmAI ships as the reference six-section DDD, but its RUNTIME artifacts never
+# leave the laptop — only the structure + authored content is the sample.
+# NOTE: gitignore has NO inline comments — patterns must stand alone on their line.
+# pipeline run records (per-run working memory)
+Projects/SwarmAI/.artifacts/
+# SQLite code-intel graph + WAL sidecars (binary runtime)
 Projects/*/code_intel.db
+Projects/*/code_intel.db-shm
+Projects/*/code_intel.db-wal
+# advisory doc-write locks (runtime)
+Projects/SwarmAI/.*.md.lock
+# runtime usage counters (drift, not sample content)
+Projects/SwarmAI/.ddd-usage.json
+Projects/SwarmAI/.ddd-usage.json.lock
 # Eval private golden set — instance-specific cases (ref local MEMORY/STEERING).
 # Public golden_set.yaml ships; this gitignored sibling never leaves the laptop.
 # Eval/ is a top-level system subsystem (sibling of Projects/), decoupled from DDD.

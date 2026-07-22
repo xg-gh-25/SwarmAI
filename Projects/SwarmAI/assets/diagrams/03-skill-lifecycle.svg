@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="800" height="520">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="520" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Skill Lifecycle: Tiering, Manifest, and SDK Injection</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Lazy/Always tiering with manifest-driven registration</text>
+  <rect x="30" y="80" width="220" height="170" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="30" y="80" width="220" height="4" rx="2" fill="#e74c3c"/>
+  <text x="140" y="104" fill="#e74c3c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Always-Load (15 skills)</text>
+  <text x="140" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Core skills loaded at</text>
+  <text x="140" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">every session start</text>
+  <text x="140" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="140" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Examples:</text>
+  <text x="140" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">save-memory, outlook,</text>
+  <text x="140" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">self-evolution, qa,</text>
+  <text x="140" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">code-review, deliver</text>
+  <rect x="280" y="80" width="220" height="170" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="280" y="80" width="220" height="4" rx="2" fill="#3498db"/>
+  <text x="390" y="104" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Lazy-Load (46 skills)</text>
+  <text x="390" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Loaded on-demand when</text>
+  <text x="390" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">user intent matches</text>
+  <text x="390" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="390" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Examples:</text>
+  <text x="390" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">xlsx, pptx, podcast,</text>
+  <text x="390" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">browser-agent, github,</text>
+  <text x="390" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">deep-research</text>
+  <rect x="530" y="80" width="240" height="170" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="530" y="80" width="240" height="4" rx="2" fill="#2ecc71"/>
+  <text x="650" y="104" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">manifest.yaml</text>
+  <text x="650" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">name, version, tier</text>
+  <text x="650" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">triggers: [keywords]</text>
+  <text x="650" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">tools: [required MCPs]</text>
+  <text x="650" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">inject: SKILL.md path</text>
+  <text x="650" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="650" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Single source of truth</text>
+  <text x="650" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">for skill registry</text>
+  <line x1="530" y1="165" x2="502" y2="165" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrB)" stroke-dasharray="6 4"/>
+  <line x1="530" y1="145" x2="252" y2="145" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrR)" stroke-dasharray="6 4"/>
+  <rect x="30" y="280" width="740" height="100" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="400" y="304" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Skill Content Split</text>
+  <rect x="60" y="318" width="320" height="26" rx="13" fill="#1abc9c" opacity="0.22"/>
+  <text x="220" y="335" fill="#1abc9c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SKILL.md  &#x2014;  Context for the agent (injected into prompt)</text>
+  <rect x="420" y="318" width="320" height="26" rx="13" fill="#9b59b6" opacity="0.22"/>
+  <text x="580" y="335" fill="#9b59b6" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">INSTRUCTIONS.md  &#x2014;  How to build/maintain the skill</text>
+  <text x="400" y="366" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SKILL.md goes into system prompt  |  INSTRUCTIONS.md stays on disk for humans</text>
+  <rect x="30" y="405" width="740" height="90" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="400" y="428" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SDK Injection Flow</text>
+  <rect x="60" y="444" width="120" height="26" rx="13" fill="#3498db" opacity="0.22"/>
+  <text x="120" y="461" fill="#3498db" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">User Message</text>
+  <line x1="180" y1="457" x2="193" y2="457" stroke="#3498db" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="195" y="444" width="120" height="26" rx="13" fill="#f39c12" opacity="0.22"/>
+  <text x="255" y="461" fill="#f39c12" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Intent Match</text>
+  <line x1="315" y1="457" x2="328" y2="457" stroke="#f39c12" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="330" y="444" width="120" height="26" rx="13" fill="#2ecc71" opacity="0.22"/>
+  <text x="390" y="461" fill="#2ecc71" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Load SKILL.md</text>
+  <line x1="450" y1="457" x2="463" y2="457" stroke="#2ecc71" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="465" y="444" width="120" height="26" rx="13" fill="#1abc9c" opacity="0.22"/>
+  <text x="525" y="461" fill="#1abc9c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Inject to Prompt</text>
+  <line x1="585" y1="457" x2="598" y2="457" stroke="#1abc9c" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="600" y="444" width="120" height="26" rx="13" fill="#e74c3c" opacity="0.22"/>
+  <text x="660" y="461" fill="#e74c3c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Agent Executes</text>
+</svg>

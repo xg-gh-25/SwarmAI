@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 440" font-family="sans-serif">
+  <defs>
+    <marker id="arr4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#d2a8ff"/>
+    </marker>
+    <marker id="arr4b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#58a6ff"/>
+    </marker>
+    <marker id="arr4g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#7ee787"/>
+    </marker>
+    <marker id="arr4o" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#f78166"/>
+    </marker>
+  </defs>
+  <rect width="780" height="440" fill="#1a1a2e" rx="12"/>
+
+  <!-- Title -->
+  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">Super Builder: Autonomous Pipeline (9 Stages)</text>
+  <text x="390" y="48" text-anchor="middle" fill="#8b8ba0" font-size="10">Vision: Coding as Black Box / Goal: Push-Ready Delivery</text>
+
+  <!-- DDD Read (top) -->
+  <rect x="250" y="60" width="280" height="35" rx="8" fill="#0d2240" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="390" y="82" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="bold">DDD READS: Domain knowledge informs every stage</text>
+  <line x1="390" y1="95" x2="390" y2="115" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr4b)"/>
+
+  <!-- 9 Stages -->
+  <rect x="40" y="120" width="70" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="75" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">EVALUATE</text>
+  <text x="75" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">GO/DEFER</text>
+
+  <line x1="110" y1="142" x2="120" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="122" y="120" width="60" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="152" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">THINK</text>
+  <text x="152" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Research</text>
+
+  <line x1="182" y1="142" x2="192" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="194" y="120" width="60" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="224" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">PLAN</text>
+  <text x="224" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">TDD Spec</text>
+
+  <line x1="254" y1="142" x2="264" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="266" y="120" width="60" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="296" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">BUILD</text>
+  <text x="296" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Red-Green</text>
+
+  <line x1="326" y1="142" x2="336" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="338" y="120" width="60" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="368" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">REVIEW</text>
+  <text x="368" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Self-QA</text>
+
+  <line x1="398" y1="142" x2="408" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="410" y="120" width="60" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="440" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">TEST</text>
+  <text x="440" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Full suite</text>
+
+  <line x1="470" y1="142" x2="480" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="482" y="120" width="72" height="45" rx="6" fill="#3d1b2e" stroke="#f78166" stroke-width="1.5"/>
+  <text x="518" y="140" text-anchor="middle" fill="#f78166" font-size="8" font-weight="bold">ADVERSARIAL</text>
+  <text x="518" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Fresh agent</text>
+
+  <line x1="554" y1="142" x2="564" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="566" y="120" width="65" height="45" rx="6" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="598" y="140" text-anchor="middle" fill="#d2a8ff" font-size="8" font-weight="bold">DELIVER</text>
+  <text x="598" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Package</text>
+
+  <line x1="631" y1="142" x2="643" y2="142" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arr4)"/>
+
+  <rect x="645" y="120" width="70" height="45" rx="6" fill="#1a2e1a" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="680" y="140" text-anchor="middle" fill="#7ee787" font-size="8" font-weight="bold">REFLECT</text>
+  <text x="680" y="155" text-anchor="middle" fill="#8b8ba0" font-size="7">Learn</text>
+
+  <!-- Quality Convergence Loop -->
+  <rect x="120" y="195" width="480" height="100" rx="8" fill="none" stroke="#f78166" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="360" y="215" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Quality Convergence Loop (between BUILD and DELIVER)</text>
+
+  <!-- 6-layer gate -->
+  <rect x="140" y="225" width="440" height="55" rx="6" fill="#12122a" stroke="#58a6ff" stroke-width="1"/>
+  <text x="360" y="242" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="bold">6-Layer Push-Ready Gate</text>
+  <text x="140" y="262" fill="#e6edf3" font-size="8" dx="10">1. Unit Tests</text>
+  <text x="240" y="262" fill="#e6edf3" font-size="8">2. Lint</text>
+  <text x="320" y="262" fill="#e6edf3" font-size="8">3. Type-check</text>
+  <text x="420" y="262" fill="#e6edf3" font-size="8">4. Adversarial Review</text>
+  <text x="140" y="275" fill="#e6edf3" font-size="8" dx="10">5. Integration Test</text>
+  <text x="300" y="275" fill="#e6edf3" font-size="8">6. Build Verification</text>
+
+  <!-- Loop arrow -->
+  <path d="M580,250 Q620,250 620,175 Q620,142 580,142" fill="none" stroke="#f78166" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="640" y="200" fill="#f78166" font-size="8">Iterate until</text>
+  <text x="640" y="212" fill="#f78166" font-size="8">all 6 pass</text>
+
+  <!-- Decision classification -->
+  <rect x="40" y="320" width="700" height="50" rx="8" fill="#12122a" stroke="#333355" stroke-width="1"/>
+  <text x="390" y="340" text-anchor="middle" fill="#e6edf3" font-size="10" font-weight="bold">Decision Classification at Every Stage</text>
+  <rect x="60" y="348" width="140" height="18" rx="4" fill="#1a2e1a" stroke="#7ee787" stroke-width="1"/>
+  <text x="130" y="361" text-anchor="middle" fill="#7ee787" font-size="8">Mechanical: auto-approve</text>
+  <rect x="220" y="348" width="160" height="18" rx="4" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="300" y="361" text-anchor="middle" fill="#d2a8ff" font-size="8">Taste: batch at delivery gate</text>
+  <rect x="400" y="348" width="160" height="18" rx="4" fill="#3b1520" stroke="#f78166" stroke-width="1"/>
+  <text x="480" y="361" text-anchor="middle" fill="#f78166" font-size="8">Judgment: block for human</text>
+  <rect x="580" y="348" width="140" height="18" rx="4" fill="#2b1810" stroke="#f78166" stroke-width="1"/>
+  <text x="650" y="361" text-anchor="middle" fill="#f78166" font-size="8">L2-BLOCK: escalate</text>
+
+  <!-- DDD Write (bottom) -->
+  <line x1="680" y1="165" x2="680" y2="390" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arr4g)"/>
+  <rect x="550" y="390" width="200" height="35" rx="8" fill="#0d2b1a" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="650" y="412" text-anchor="middle" fill="#7ee787" font-size="10" font-weight="bold">REFLECT -> Channel 3 -> DDD grows</text>
+</svg>

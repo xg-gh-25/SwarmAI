@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="800" height="520">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="520" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SwarmAI: Compound Learning Loop</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Every session makes the next session smarter  &#x2014;  the flywheel effect</text>
+  <line x1="457" y1="164" x2="518" y2="190" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrO)"/>
+  <line x1="565" y1="252" x2="565" y2="296" stroke="#f39c12" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="507" y1="358" x2="446" y2="387" stroke="#3498db" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="342" y1="382" x2="281" y2="352" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrP)"/>
+  <line x1="235" y1="288" x2="235" y2="243" stroke="#9b59b6" stroke-width="2" marker-end="url(#arrT)"/>
+  <line x1="292" y1="185" x2="353" y2="159" stroke="#1abc9c" stroke-width="2" marker-end="url(#arrR)"/>
+  <rect x="335" y="115" width="130" height="50" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="2" filter="url(#sh)"/>
+  <rect x="335" y="115" width="130" height="4" rx="2" fill="#e74c3c"/>
+  <text x="400" y="145" fill="#e74c3c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">User Session</text>
+  <rect x="500" y="185" width="130" height="50" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="2" filter="url(#sh)"/>
+  <rect x="500" y="185" width="130" height="4" rx="2" fill="#f39c12"/>
+  <text x="565" y="215" fill="#f39c12" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Hook Capture</text>
+  <rect x="500" y="305" width="130" height="50" rx="8" fill="#16213e" stroke="#3498db" stroke-width="2" filter="url(#sh)"/>
+  <rect x="500" y="305" width="130" height="4" rx="2" fill="#3498db"/>
+  <text x="565" y="335" fill="#3498db" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Memory Distill</text>
+  <rect x="326" y="385" width="148" height="50" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="2" filter="url(#sh)"/>
+  <rect x="326" y="385" width="148" height="4" rx="2" fill="#2ecc71"/>
+  <text x="400" y="415" fill="#2ecc71" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Evolution Pipeline</text>
+  <rect x="170" y="305" width="130" height="50" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="2" filter="url(#sh)"/>
+  <rect x="170" y="305" width="130" height="4" rx="2" fill="#9b59b6"/>
+  <text x="235" y="335" fill="#9b59b6" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Better Skills</text>
+  <rect x="170" y="185" width="130" height="50" rx="8" fill="#16213e" stroke="#1abc9c" stroke-width="2" filter="url(#sh)"/>
+  <rect x="170" y="185" width="130" height="4" rx="2" fill="#1abc9c"/>
+  <text x="235" y="215" fill="#1abc9c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Better Memory</text>
+  <circle cx="400" cy="280" r="38" fill="#16213e" stroke="#f39c12" stroke-width="2"/>
+  <text x="400" y="276" fill="#f39c12" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Flywheel</text>
+  <text x="400" y="292" fill="#f39c12" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Effect</text>
+  <rect x="30" y="440" width="230" height="55" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="30" y="440" width="230" height="4" rx="2" fill="#e74c3c"/>
+  <text x="145" y="464" fill="#e74c3c" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Input</text>
+  <text x="145" y="482" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Each user session = training data</text>
+  <rect x="285" y="440" width="230" height="55" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="285" y="440" width="230" height="4" rx="2" fill="#2ecc71"/>
+  <text x="400" y="464" fill="#2ecc71" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Processing</text>
+  <text x="400" y="482" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Hooks + Pipeline = automated learning</text>
+  <rect x="540" y="440" width="230" height="55" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="440" width="230" height="4" rx="2" fill="#9b59b6"/>
+  <text x="655" y="464" fill="#9b59b6" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Output</text>
+  <text x="655" y="482" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Better skills + memory = compound growth</text>
+  <line x1="260" y1="467" x2="283" y2="467" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="515" y1="467" x2="538" y2="467" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrP)"/>
+</svg>

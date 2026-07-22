@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0c0e14"/>
+      <stop offset="100%" style="stop-color:#10131a"/>
+    </linearGradient>
+    <marker id="arrowMuted" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#7B89A8"/>
+    </marker>
+    <marker id="arrowWheat" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#C9A96E"/>
+    </marker>
+    <marker id="arrowSlate" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#6B8CAE"/>
+    </marker>
+    <marker id="arrowCoral" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#C75B4A"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#6FA88B"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="960" y="42" font-family="Inter, -apple-system, Arial" font-size="28" font-weight="700" fill="#E8E4E0" text-anchor="middle">SwarmAI Eval — Decoupled System-Level Subsystem</text>
+  <text x="960" y="68" font-family="Inter, -apple-system, Arial" font-size="12" fill="#8B8D94" text-anchor="middle" letter-spacing="0.5">A system concern, not a DDD concern  ·  One-way WRITE bridge in  ·  Git-bound regression gate  ·  "alive ≠ correct" enforced as a contract</text>
+
+  <!-- ===================== COLUMN HEADERS ===================== -->
+  <text x="200"  y="108" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#6B6E76" text-anchor="middle" letter-spacing="2">① WRITE  (BRIDGE IN)</text>
+  <text x="620"  y="108" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#C9A96E" text-anchor="middle" letter-spacing="2">② GOLDEN SET</text>
+  <text x="1075" y="108" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#6B8CAE" text-anchor="middle" letter-spacing="2">③ EXECUTE</text>
+  <text x="1620" y="108" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#8BAFD4" text-anchor="middle" letter-spacing="2">④ CONSUME</text>
+
+  <!-- ====================================================================== -->
+  <!-- ① WRITE / BRIDGE                                                        -->
+  <!-- ====================================================================== -->
+
+  <!-- Sources -->
+  <rect x="40" y="140" width="160" height="62" rx="8" fill="#13151C" stroke="#4A4D56" stroke-width="1.2"/>
+  <text x="120" y="167" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="600" fill="#B8B4AF" text-anchor="middle">User corrections</text>
+  <text x="120" y="186" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">corrections.jsonl</text>
+
+  <rect x="40" y="216" width="160" height="62" rx="8" fill="#13151C" stroke="#4A4D56" stroke-width="1.2"/>
+  <text x="120" y="243" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="600" fill="#B8B4AF" text-anchor="middle">Session behaviors</text>
+  <text x="120" y="262" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">real trajectories</text>
+
+  <rect x="40" y="292" width="160" height="62" rx="8" fill="#13151C" stroke="#4A4D56" stroke-width="1.2"/>
+  <text x="120" y="319" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="600" fill="#B8B4AF" text-anchor="middle">Manual authoring</text>
+  <text x="120" y="338" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">hand-written case</text>
+
+  <!-- arrows sources -> validator -->
+  <line x1="200" y1="171" x2="248" y2="232" stroke="#7B89A8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+  <line x1="200" y1="247" x2="248" y2="247" stroke="#7B89A8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+  <line x1="200" y1="323" x2="248" y2="262" stroke="#7B89A8" stroke-width="1.4" marker-end="url(#arrowMuted)"/>
+
+  <!-- s_golden-case 4-gate validator -->
+  <rect x="250" y="150" width="170" height="200" rx="10" fill="#171A24" stroke="#C9A96E" stroke-width="1.6"/>
+  <text x="335" y="178" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#C9A96E" text-anchor="middle">s_golden-case</text>
+  <text x="335" y="196" font-family="Inter, -apple-system, Arial" font-size="9" fill="#8B8D94" text-anchor="middle">the ONLY sanctioned write</text>
+  <line x1="268" y1="206" x2="402" y2="206" stroke="#2A2D35" stroke-width="1"/>
+  <text x="335" y="226" font-family="Inter, -apple-system, Arial" font-size="10.5" fill="#B8B4AF" text-anchor="middle">1 · schema gate</text>
+  <text x="335" y="248" font-family="Inter, -apple-system, Arial" font-size="10.5" fill="#B8B4AF" text-anchor="middle">2 · duplicate gate</text>
+  <text x="335" y="270" font-family="Inter, -apple-system, Arial" font-size="10.5" fill="#B8B4AF" text-anchor="middle">3 · non-vacuous gate</text>
+  <text x="335" y="292" font-family="Inter, -apple-system, Arial" font-size="10.5" fill="#E8694E" text-anchor="middle">4 · privacy gate ★</text>
+  <text x="335" y="322" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">ADD → private by default</text>
+  <text x="335" y="337" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">PROMOTE → privacy-checked</text>
+
+  <!-- one-way write note -->
+  <text x="335" y="372" font-family="Inter, -apple-system, Arial" font-size="10" font-weight="700" fill="#C9A96E" text-anchor="middle">one-way WRITE ▶</text>
+
+  <!-- ====================================================================== -->
+  <!-- ② GOLDEN SET                                                            -->
+  <!-- ====================================================================== -->
+  <rect x="450" y="125" width="340" height="412" rx="12" fill="#13151C" stroke="#C9A96E" stroke-width="1.4"/>
+
+  <text x="620" y="158" font-family="Inter, -apple-system, Arial" font-size="18" font-weight="800" fill="#C9A96E" text-anchor="middle">Eval/  (golden set)</text>
+  <text x="620" y="178" font-family="Inter, -apple-system, Arial" font-size="10" fill="#8B8D94" text-anchor="middle">top-level in SwarmWS — sibling of Projects/</text>
+
+  <!-- public / private split (classification, no counts) -->
+  <rect x="474" y="212" width="138" height="120" rx="8" fill="#11131A" stroke="#6FA88B" stroke-width="1.2"/>
+  <text x="543" y="244" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#6FA88B" text-anchor="middle">Public</text>
+  <text x="543" y="266" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">tracked in git</text>
+  <text x="543" y="284" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">golden_set.yaml</text>
+  <text x="543" y="312" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">shareable cases —</text>
+  <text x="543" y="324" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">no private data</text>
+
+  <rect x="628" y="212" width="138" height="120" rx="8" fill="#11131A" stroke="#C75B4A" stroke-width="1.2"/>
+  <text x="697" y="244" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#E8694E" text-anchor="middle">Private</text>
+  <text x="697" y="266" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">gitignored</text>
+  <text x="697" y="284" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">golden_set.private.yaml</text>
+  <text x="697" y="312" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">sensitive cases —</text>
+  <text x="697" y="324" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">never leave the box</text>
+
+  <line x1="474" y1="350" x2="766" y2="350" stroke="#2A2D35" stroke-width="1"/>
+
+  <!-- tagged on 4 orthogonal axes (open sets, not exhaustive lists) -->
+  <text x="620" y="372" font-family="Inter, -apple-system, Arial" font-size="11" font-weight="700" fill="#B8B4AF" text-anchor="middle">every case tagged on 4 axes</text>
+
+  <!-- axis 1: Category -->
+  <text x="474" y="394" font-family="Inter, -apple-system, Arial" font-size="9.5" font-weight="700" fill="#C9A96E" text-anchor="start">Category</text>
+  <text x="766" y="394" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="end">compliance · decision · recall · refusal …</text>
+
+  <!-- axis 2: Dimension -->
+  <text x="474" y="416" font-family="Inter, -apple-system, Arial" font-size="9.5" font-weight="700" fill="#8BAFD4" text-anchor="start">Dimension</text>
+  <text x="766" y="416" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="end">capability · judgment · factual-acc …</text>
+
+  <!-- axis 3: Tier -->
+  <text x="474" y="438" font-family="Inter, -apple-system, Arial" font-size="9.5" font-weight="700" fill="#6FA88B" text-anchor="start">Tier</text>
+  <text x="766" y="438" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="end">draft → active → stable  (maturity)</text>
+
+  <!-- axis 4: Eval Method -->
+  <text x="474" y="460" font-family="Inter, -apple-system, Arial" font-size="9.5" font-weight="700" fill="#C87941" text-anchor="start">Method</text>
+  <text x="766" y="460" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="end">programmatic · llm · behavior</text>
+
+  <text x="620" y="482" font-family="Inter, -apple-system, Arial" font-size="8" fill="#6B6E76" text-anchor="middle" font-style="italic">open sets — slice &amp; filter, never a fixed enum</text>
+
+  <!-- decoupled callout -->
+  <rect x="474" y="492" width="292" height="40" rx="8" fill="#1A1610" stroke="#C75B4A" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="620" y="510" font-family="Inter, -apple-system, Arial" font-size="11" font-weight="700" fill="#E8694E" text-anchor="middle">⛒ Runtime reads NO DDD</text>
+  <text x="620" y="525" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#B8B4AF" text-anchor="middle">cases are self-contained — eval scores the deployed system, not docs</text>
+
+  <!-- arrow golden set -> runner -->
+  <line x1="790" y1="300" x2="850" y2="300" stroke="#6B8CAE" stroke-width="2" marker-end="url(#arrowSlate)"/>
+
+  <!-- ====================================================================== -->
+  <!-- ③ EXECUTE — runner + evaluators + BVT                                   -->
+  <!-- ====================================================================== -->
+  <rect x="860" y="125" width="430" height="385" rx="12" fill="#171A24" stroke="#6B8CAE" stroke-width="1.6"/>
+  <text x="1075" y="158" font-family="Inter, -apple-system, Arial" font-size="16" font-weight="800" fill="#8BAFD4" text-anchor="middle">eval_runner</text>
+  <text x="1075" y="176" font-family="Inter, -apple-system, Arial" font-size="9" fill="#8B8D94" text-anchor="middle">spawns real agent · scores each case · 0→100</text>
+
+  <!-- evaluators group: programmatic -->
+  <rect x="882" y="192" width="194" height="170" rx="8" fill="#11131A" stroke="#6FA88B" stroke-width="1.2"/>
+  <text x="979" y="214" font-family="Inter, -apple-system, Arial" font-size="12" font-weight="700" fill="#6FA88B" text-anchor="middle">Programmatic</text>
+  <text x="979" y="229" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">deterministic · cheap · no LLM</text>
+  <text x="979" y="252" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">trajectory_in_order</text>
+  <text x="979" y="272" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">file_contains</text>
+  <text x="979" y="292" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">keyword_match</text>
+  <text x="979" y="312" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">regex / canary_pass</text>
+  <text x="979" y="346" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">objective pass/fail</text>
+
+  <!-- evaluators group: LLM judge -->
+  <rect x="1088" y="192" width="186" height="170" rx="8" fill="#11131A" stroke="#C9A96E" stroke-width="1.2"/>
+  <text x="1181" y="214" font-family="Inter, -apple-system, Arial" font-size="12" font-weight="700" fill="#C9A96E" text-anchor="middle">LLM Judge</text>
+  <text x="1181" y="229" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">graded by a model · subjective</text>
+  <text x="1181" y="252" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">goal_success</text>
+  <text x="1181" y="272" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">quality_score</text>
+  <text x="1181" y="296" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">rubric-based grading</text>
+  <text x="1181" y="334" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#C75B4A" text-anchor="middle">⚠ judge-infra failure</text>
+  <text x="1181" y="348" font-family="Inter, -apple-system, Arial" font-size="8.5" fill="#6B6E76" text-anchor="middle">→ ERRORED, excluded from score</text>
+
+  <!-- BVT spine probe -->
+  <rect x="882" y="378" width="392" height="110" rx="8" fill="#1A1610" stroke="#D4AA6B" stroke-width="1.4"/>
+  <text x="1078" y="402" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="800" fill="#D4AA6B" text-anchor="middle">BVT — Spine Probe</text>
+  <text x="1078" y="420" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#B8B4AF" text-anchor="middle">deterministic zero-LLM canaries on the load-bearing read path</text>
+  <text x="1078" y="444" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">teeth-tested: each probe goes RED on the reverted behavior (no vacuous pass)</text>
+  <text x="1078" y="470" font-family="Inter, -apple-system, Arial" font-size="10" font-weight="700" fill="#E8694E" text-anchor="middle">"alive ≠ correct" — asserts SUBSTANCE, not existence</text>
+
+  <!-- arrow runner -> report -->
+  <line x1="1290" y1="300" x2="1350" y2="300" stroke="#8BAFD4" stroke-width="2" marker-end="url(#arrowSlate)"/>
+
+  <!-- ====================================================================== -->
+  <!-- ④ CONSUME — report (git-bound)                                          -->
+  <!-- ====================================================================== -->
+  <rect x="1360" y="125" width="520" height="200" rx="12" fill="#13151C" stroke="#8BAFD4" stroke-width="1.4"/>
+  <text x="1620" y="158" font-family="Inter, -apple-system, Arial" font-size="16" font-weight="800" fill="#8BAFD4" text-anchor="middle">Run Report</text>
+  <text x="1620" y="176" font-family="Inter, -apple-system, Arial" font-size="9" fill="#8B8D94" text-anchor="middle">scored result snapshot, persisted to EvalHistory/</text>
+
+  <rect x="1384" y="192" width="232" height="58" rx="8" fill="#11131A" stroke="#C9A96E" stroke-width="1.3"/>
+  <text x="1500" y="216" font-family="Inter, -apple-system, Arial" font-size="12" font-weight="700" fill="#C9A96E" text-anchor="middle">code_digest</text>
+  <text x="1500" y="236" font-family="Inter, -apple-system, Arial" font-size="9" fill="#B8B4AF" text-anchor="middle">git-bound — ties score to a commit</text>
+
+  <rect x="1624" y="192" width="232" height="58" rx="8" fill="#11131A" stroke="#6FA88B" stroke-width="1.3"/>
+  <text x="1740" y="216" font-family="Inter, -apple-system, Arial" font-size="12" font-weight="700" fill="#6FA88B" text-anchor="middle">overall score + BVT</text>
+  <text x="1740" y="236" font-family="Inter, -apple-system, Arial" font-size="9" fill="#B8B4AF" text-anchor="middle">per-dimension + spine green/red</text>
+
+  <text x="1620" y="288" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#6B6E76" text-anchor="middle">stale on a code change is EXPECTED — clears post-deploy when eval runs as a system concern</text>
+  <text x="1620" y="306" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#C75B4A" text-anchor="middle">never run inside a coding pipeline (tests the OLD binary)</text>
+
+  <!-- ====================================================================== -->
+  <!-- TRIGGERS — feed the runner from above                                   -->
+  <!-- ====================================================================== -->
+  <text x="70" y="556" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#6B6E76" text-anchor="start" letter-spacing="2">TRIGGERS</text>
+  <text x="70" y="576" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#6B6E76" text-anchor="start">the ONLY ways eval runs</text>
+  <text x="70" y="590" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#6B6E76" text-anchor="start">never the agent · never mid-pipeline</text>
+
+  <rect x="600" y="572" width="290" height="108" rx="10" fill="#171A24" stroke="#C75B4A" stroke-width="1.4"/>
+  <text x="745" y="600" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#E8694E" text-anchor="middle">CI gate  (post-push)</text>
+  <text x="745" y="622" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">ci_eval_gate — git-bound via code_digest</text>
+  <text x="745" y="642" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">HARD stop · blocks merge on regression</text>
+  <text x="745" y="664" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">formal confirmation of an already-qualified change</text>
+
+  <rect x="910" y="572" width="290" height="108" rx="10" fill="#171A24" stroke="#C9A96E" stroke-width="1.4"/>
+  <text x="1055" y="600" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#C9A96E" text-anchor="middle">Deploy  (release)</text>
+  <text x="1055" y="622" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">prod.sh release — hard-stop gate</text>
+  <text x="1055" y="642" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">no ship if BVT red / score below baseline</text>
+  <text x="1055" y="664" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">scores the binary about to ship</text>
+
+  <rect x="1220" y="572" width="290" height="108" rx="10" fill="#171A24" stroke="#6B8CAE" stroke-width="1.4"/>
+  <text x="1365" y="600" font-family="Inter, -apple-system, Arial" font-size="14" font-weight="800" fill="#8BAFD4" text-anchor="middle">Scheduled  (lunchtime)</text>
+  <text x="1365" y="622" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">12:30 ICT weekdays · machine on, creds fresh</text>
+  <text x="1365" y="642" font-family="Inter, -apple-system, Arial" font-size="10" fill="#B8B4AF" text-anchor="middle">never gates — continuous drift watch</text>
+  <text x="1365" y="664" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">BVT-red / score-drop → Slack alert</text>
+
+  <!-- arrows triggers -> runner (up into EXECUTE box) -->
+  <line x1="745"  y1="572" x2="980"  y2="514" stroke="#C75B4A" stroke-width="1.4" marker-end="url(#arrowCoral)"/>
+  <line x1="1055" y1="572" x2="1075" y2="514" stroke="#C9A96E" stroke-width="1.4" marker-end="url(#arrowWheat)"/>
+  <line x1="1365" y1="572" x2="1170" y2="514" stroke="#6B8CAE" stroke-width="1.4" marker-end="url(#arrowSlate)"/>
+
+  <!-- ====================================================================== -->
+  <!-- DASHBOARD — 7 tabs (bottom band)                                        -->
+  <!-- ====================================================================== -->
+  <rect x="40" y="720" width="1840" height="190" rx="12" fill="#13151C" stroke="#7B89A8" stroke-width="1.4"/>
+  <text x="960" y="752" font-family="Inter, -apple-system, Arial" font-size="15" font-weight="800" fill="#A8B0C0" text-anchor="middle">Eval Dashboard  —  7 tabs</text>
+  <text x="960" y="770" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#6B6E76" text-anchor="middle">the proprioception surface — how the system sees its own quality over time</text>
+
+  <!-- 7 tab cards -->
+  <rect x="70"   y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="190" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Overview</text>
+  <text x="190" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">latest run · score · BVT</text>
+  <text x="190" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">pass / fail / errored</text>
+
+  <rect x="324"  y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#C9A96E" stroke-width="1"/>
+  <text x="444" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#C9A96E" text-anchor="middle">Golden Set</text>
+  <text x="444" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">browse all cases</text>
+  <text x="444" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">public / private badge</text>
+
+  <rect x="578"  y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="698" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Context</text>
+  <text x="698" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">read-path utility</text>
+  <text x="698" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">recall / assembly health</text>
+
+  <rect x="832"  y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="952" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Governance</text>
+  <text x="952" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">correction → case</text>
+  <text x="952" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">coverage of failures</text>
+
+  <rect x="1086" y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="1206" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Trends</text>
+  <text x="1206" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">score over time</text>
+  <text x="1206" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">drift vs baseline</text>
+
+  <rect x="1340" y="790" width="240" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="1460" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Reports</text>
+  <text x="1460" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">per-run detail</text>
+  <text x="1460" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">case-level breakdown</text>
+
+  <rect x="1594" y="790" width="256" height="92" rx="8" fill="#11131A" stroke="#4A4D56" stroke-width="1"/>
+  <text x="1722" y="822" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#E8E4E0" text-anchor="middle">Guide</text>
+  <text x="1722" y="846" font-family="Inter, -apple-system, Arial" font-size="9.5" fill="#8B8D94" text-anchor="middle">how eval works</text>
+  <text x="1722" y="862" font-family="Inter, -apple-system, Arial" font-size="9" fill="#6B6E76" text-anchor="middle">methodology docs</text>
+
+  <!-- arrow report -> dashboard -->
+  <line x1="1620" y1="325" x2="1620" y2="715" stroke="#7B89A8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrowMuted)"/>
+
+  <!-- ====================================================================== -->
+  <!-- FOOTER tagline                                                          -->
+  <!-- ====================================================================== -->
+  <text x="960" y="958" font-family="Inter, -apple-system, Arial" font-size="13" font-weight="700" fill="#C9A96E" text-anchor="middle">When assert() fails: eval is how a self-evolving agent OS proves the deployed system is still right — not just alive.</text>
+  <text x="960" y="982" font-family="Inter, -apple-system, Arial" font-size="10" fill="#6B6E76" text-anchor="middle">DEC05 · DEC09 · PIT179  —  decoupled from DDD · git-bound gate · fail-closed privacy · BVT teeth on the read path</text>
+
+</svg>

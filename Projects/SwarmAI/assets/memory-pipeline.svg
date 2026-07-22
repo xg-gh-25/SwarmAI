@@ -1,0 +1,236 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" width="960" height="580">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444" opacity="0.7"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" opacity="0.7"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b5cf6" opacity="0.7"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="580" rx="16" fill="url(#bg)"/>
+
+  <!-- Grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="0" y1="500" x2="960" y2="500" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="580" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="580" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="580" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="38" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">MEMORY PIPELINE</text>
+  <text x="480" y="56" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">Three-Layer Distillation + Hybrid Recall System</text>
+
+  <!-- ============ SYSTEM 1: DISTILLATION PIPELINE ============ -->
+  <text x="42" y="82" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" letter-spacing="1.5">SYSTEM 1: DISTILLATION PIPELINE</text>
+
+  <!-- Box 1: Chat Session -->
+  <rect x="30" y="94" width="200" height="120" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="30" y="94" width="200" height="120" rx="10" fill="url(#blue)" opacity="0.06"/>
+  <text x="130" y="118" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">Chat Session</text>
+  <text x="130" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Decisions made</text>
+  <text x="130" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Code committed</text>
+  <text x="130" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Lessons learned</text>
+  <text x="130" y="178" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Files changed</text>
+  <text x="130" y="198" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">DailyActivityExtractionHook</text>
+
+  <!-- Arrow: Session -> DailyActivity -->
+  <path d="M 230,154 L 278,154" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
+  <text x="254" y="146" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">auto</text>
+
+  <!-- Box 2: DailyActivity -->
+  <rect x="285" y="94" width="210" height="120" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="285" y="94" width="210" height="120" rx="10" fill="url(#gold)" opacity="0.06"/>
+  <text x="390" y="118" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">DailyActivity/</text>
+  <text x="390" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Per-session logs</text>
+  <text x="390" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Deliverables, git, decisions</text>
+  <text x="390" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Lessons, next steps</text>
+  <text x="390" y="182" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">30-day retention</text>
+  <text x="390" y="198" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Distill when >=3 unprocessed</text>
+
+  <!-- Arrow: DailyActivity -> Distill -> MEMORY -->
+  <path d="M 495,154 L 528,154" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
+  <text x="512" y="146" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.6">distill</text>
+
+  <!-- Box 3: MEMORY.md -->
+  <rect x="535" y="94" width="200" height="120" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="535" y="94" width="200" height="120" rx="10" fill="url(#purple)" opacity="0.06"/>
+  <text x="635" y="118" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">MEMORY.md</text>
+  <text x="635" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Open Threads (P0/P1/P2)</text>
+  <text x="635" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Key Decisions + Lessons</text>
+  <text x="635" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">COE Registry (worst bugs)</text>
+  <text x="635" y="178" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Recent Context (30 days)</text>
+  <text x="635" y="198" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Curated durable knowledge</text>
+
+  <!-- Feedback loop: MEMORY -> Session -->
+  <path d="M 535,190 C 380,230 180,230 80,214" stroke="#8b5cf6" stroke-width="1.2" opacity="0.2" stroke-dasharray="5 3"/>
+  <text x="310" y="232" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.5">feeds next session</text>
+
+  <!-- ============ MIDDLE ROW: Verification + Maintenance ============ -->
+
+  <!-- Box: Git Cross-Reference -->
+  <rect x="760" y="94" width="170" height="68" rx="10" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
+  <rect x="760" y="94" width="170" height="68" rx="10" fill="url(#red)" opacity="0.06"/>
+  <text x="845" y="116" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Git Cross-Reference</text>
+  <text x="845" y="132" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Verify claims against git log</text>
+  <text x="845" y="146" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">[UNVERIFIED] tag if no match</text>
+
+  <!-- Arrow: Distill -> Git verify -->
+  <path d="M 735,130 L 758,130" stroke="#ef4444" stroke-width="1" opacity="0.4" stroke-dasharray="4 3" marker-end="url(#arrowRed)"/>
+
+  <!-- Box: Weekly LLM Maintenance -->
+  <rect x="760" y="174" width="170" height="56" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="760" y="174" width="170" height="56" rx="10" fill="url(#green)" opacity="0.06"/>
+  <text x="845" y="196" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Weekly Maintenance</text>
+  <text x="845" y="214" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Prune, resolve, detect gaps</text>
+
+  <!-- Arrow: MEMORY -> Maintenance -->
+  <path d="M 735,194 L 758,200" stroke="#10b981" stroke-width="1" opacity="0.3" stroke-dasharray="4 3"/>
+
+  <!-- ============ DIVIDER ============ -->
+  <line x1="30" y1="248" x2="930" y2="248" stroke="#334155" stroke-width="0.5" opacity="0.4"/>
+
+  <!-- ============ SYSTEM 2: RECALL SYSTEM ============ -->
+  <text x="42" y="272" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" letter-spacing="1.5">SYSTEM 2: RECALL SYSTEM</text>
+  <text x="930" y="272" text-anchor="end" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Reads from MEMORY.md</text>
+
+  <!-- Box: L0 Memory Index -->
+  <rect x="30" y="284" width="280" height="110" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="30" y="284" width="280" height="110" rx="10" fill="url(#gold)" opacity="0.04"/>
+  <text x="170" y="308" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">L0: Memory Index</text>
+  <text x="170" y="326" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Compact index (~500 tokens)</text>
+  <text x="170" y="340" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Always injected into system prompt</text>
+  <text x="170" y="358" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Value-based tiers: Permanent / Active</text>
+  <text x="170" y="376" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Every session, zero latency</text>
+
+  <!-- Arrow L0 -> L1 -->
+  <path d="M 310,340 L 340,340" stroke="#3b82f6" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowBlue)"/>
+  <text x="325" y="332" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="7">deeper</text>
+
+  <!-- Box: L1 Section Selection -->
+  <rect x="347" y="284" width="280" height="110" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="347" y="284" width="280" height="110" rx="10" fill="url(#blue)" opacity="0.04"/>
+  <text x="487" y="308" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">L1: Section Selection</text>
+  <text x="487" y="326" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Topic-triggered keyword matching</text>
+  <text x="487" y="340" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Loads 0-3 relevant MEMORY.md sections</text>
+  <text x="487" y="358" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Activates when context >30K tokens</text>
+  <text x="487" y="376" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Selective, on-demand sections</text>
+
+  <!-- Arrow L1 -> L2 -->
+  <path d="M 627,340 L 657,340" stroke="#8b5cf6" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowPurple)"/>
+  <text x="642" y="332" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="7">deeper</text>
+
+  <!-- Box: L2 On-Demand / Read tool -->
+  <rect x="664" y="284" width="266" height="110" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="664" y="284" width="266" height="110" rx="10" fill="url(#purple)" opacity="0.04"/>
+  <text x="797" y="308" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">L2: On-Demand</text>
+  <text x="797" y="326" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Agent uses Read tool explicitly</text>
+  <text x="797" y="340" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Loads specific MEMORY.md sections</text>
+  <text x="797" y="358" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Full context when needed</text>
+  <text x="797" y="376" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Agent-driven, surgical retrieval</text>
+
+  <!-- Upward arrows from Recall to MEMORY.md -->
+  <path d="M 487,284 L 600,214" stroke="#3b82f6" stroke-width="1" opacity="0.2" stroke-dasharray="4 3" marker-end="url(#arrowBlue)"/>
+  <path d="M 797,284 L 670,214" stroke="#8b5cf6" stroke-width="1" opacity="0.2" stroke-dasharray="4 3" marker-end="url(#arrowPurple)"/>
+
+  <!-- ============ DIVIDER ============ -->
+  <line x1="30" y1="414" x2="930" y2="414" stroke="#334155" stroke-width="0.5" opacity="0.4"/>
+
+  <!-- ============ SYSTEM 3: HYBRID SEARCH ============ -->
+  <text x="42" y="438" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" letter-spacing="1.5">SYSTEM 3: HYBRID SEARCH</text>
+  <text x="930" y="438" text-anchor="end" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Knowledge Library scope (not MEMORY.md)</text>
+
+  <!-- Box: FTS5 Keyword -->
+  <rect x="30" y="450" width="270" height="80" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <rect x="30" y="450" width="270" height="80" rx="10" fill="url(#cyan)" opacity="0.04"/>
+  <text x="165" y="474" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">FTS5 Keyword Search</text>
+  <text x="165" y="492" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">SQLite FTS5 full-text index</text>
+  <text x="165" y="506" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">BM25 ranking, exact term match</text>
+  <text x="165" y="520" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.7">Weight: 0.4</text>
+
+  <!-- Box: Vector Search -->
+  <rect x="345" y="450" width="270" height="80" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <rect x="345" y="450" width="270" height="80" rx="10" fill="url(#cyan)" opacity="0.04"/>
+  <text x="480" y="474" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">Vector Search</text>
+  <text x="480" y="492" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">sqlite-vec cosine similarity</text>
+  <text x="480" y="506" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Bedrock Titan v2 embeddings (1024 dim)</text>
+  <text x="480" y="520" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.7">Weight: 0.6</text>
+
+  <!-- Merge arrows -->
+  <path d="M 300,490 L 340,490" stroke="#06b6d4" stroke-width="1.2" opacity="0.4" marker-end="url(#arrowCyan)"/>
+  <path d="M 615,490 L 658,490" stroke="#06b6d4" stroke-width="1.2" opacity="0.4" marker-end="url(#arrowCyan)"/>
+
+  <!-- Box: Weighted Merge -->
+  <rect x="665" y="450" width="265" height="80" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="665" y="450" width="265" height="80" rx="10" fill="url(#green)" opacity="0.04"/>
+  <text x="797" y="474" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">Weighted Merge</text>
+  <text x="797" y="492" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">0.6 vector + 0.4 keyword</text>
+  <text x="797" y="506" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">RRF rank fusion, top-K results</text>
+  <text x="797" y="520" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Returns ranked Knowledge Library docs</text>
+
+  <!-- ============ LIFECYCLE BAR ============ -->
+  <g transform="translate(40, 544)">
+    <line x1="0" y1="10" x2="880" y2="10" stroke="#334155" stroke-width="1.5"/>
+    <line x1="0" y1="10" x2="880" y2="10" stroke="#f59e0b" stroke-width="2" opacity="0.15"/>
+
+    <circle cx="50" cy="10" r="4.5" fill="#3b82f6"/>
+    <text x="50" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Capture</text>
+
+    <circle cx="195" cy="10" r="4.5" fill="#f59e0b"/>
+    <text x="195" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Log</text>
+
+    <circle cx="340" cy="10" r="4.5" fill="#ef4444"/>
+    <text x="340" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Verify</text>
+
+    <circle cx="485" cy="10" r="4.5" fill="#8b5cf6"/>
+    <text x="485" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Promote</text>
+
+    <circle cx="630" cy="10" r="4.5" fill="#06b6d4"/>
+    <text x="630" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Recall</text>
+
+    <circle cx="810" cy="10" r="4.5" fill="#10b981"/>
+    <text x="810" y="28" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Prune</text>
+  </g>
+</svg>

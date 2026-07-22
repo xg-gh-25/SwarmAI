@@ -1,0 +1,89 @@
+# D4: Neon (霓虹)
+# Mood: 赛博朋克 — "凌晨三点写完的技术宣言"
+# Use for: AI/前沿技术、挑衅观点、技术愿景、高信息密度
+# Key trait: Cut corners, neon glow, HUD decorations, 80/15/5 color ratio
+
+id: d4
+name: Neon
+name_cn: 霓虹
+mood: "凌晨三点写完的技术宣言"
+
+# ─── Semantic Tokens ───────────────────────────────────────
+tokens:
+  bg-deep: "#0D1117"                     # GitHub dark background
+  bg-elevated: "#161B22"                  # Elevated surface
+  bg-surface: "rgba(56,189,248,0.03)"    # Cyan tint
+  border: "rgba(56,189,248,0.12)"        # Glowing cyan border
+  accent: "#38BDF8"                      # Cyan primary
+  accent-dim: "rgba(56,189,248,0.10)"    # Cyan at low opacity
+  accent-glow: "rgba(56,189,248,0.3)"    # Neon glow color (apply as: box-shadow: 0 0 20px var(--accent-glow))
+  text-primary: "#E2E8F0"               # Slightly blue-white
+  text-secondary: "rgba(226,232,240,0.7)" # Muted blue-white
+  text-muted: "rgba(226,232,240,0.4)"    # Faint
+  accent-secondary: "#F472B6"            # Magenta for contrast
+  color-ratio: "80/15/5"                 # bg-deep / accent / accent-secondary
+
+# ─── Typography ────────────────────────────────────────────
+typography:
+  headline-font: "PingFang SC"
+  headline-weight: 700                   # Bold, assertive
+  body-font: "PingFang SC"
+  body-weight: 400
+  code-font: "JetBrains Mono"           # More cyber feel
+  en-display: "Inter"
+  en-display-weight: 700
+
+# ─── Visual Elements ───────────────────────────────────────
+visual_elements:
+  - "4px cut corners (clip-path: polygon — top-right and bottom-left)"
+  - "Neon border glow (box-shadow: accent-glow on cards)"
+  - "HUD-style decorative codes (monospace, text-muted, 12px)"
+  - "Scan line overlay (horizontal lines, 2% opacity)"
+  - "Grid dot background (8px spacing, 3% opacity)"
+  - "80/15/5 color ratio rule enforced across all elements"
+
+# ─── Divider Alternation ──────────────────────────────────
+dividers:
+  - type: glowing_line
+    spec: "1px full-width, accent with box-shadow glow (0 0 8px)"
+  - type: hud_code
+    spec: "Monospace string like '// SECTION_03' in text-muted, centered"
+
+# ─── Card Variety ──────────────────────────────────────────
+card_styles:
+  1: "Glowing border card — accent border with neon glow"
+  2: "Cut corner card — clip-path polygon, dark interior"
+  3: "HUD overlay — scan lines + monospace metadata"
+  4: "Magenta accent — secondary color for emphasis"
+  5: "Terminal block — code-font text on bg-elevated"
+  6: "Split glow — left=cyan, right=magenta gradient border"
+
+# ─── Content Affinity ─────────────────────────────────────
+content_triggers:
+  strong:
+    - "is_ai_frontier"
+    - "is_provocative_opinion"
+    - "is_tech_manifesto"
+  moderate:
+    - "has_high_info_density"
+    - "is_future_prediction"
+    - "is_competitive_analysis"
+  weak:
+    - "is_soft_narrative"
+    - "is_personal_story"
+
+# ─── CSS Quick Reference ──────────────────────────────────
+css_snippet: |
+  :root {
+    --bg-deep: #0D1117;
+    --bg-elevated: #161B22;
+    --bg-surface: rgba(56,189,248,0.03);
+    --border: rgba(56,189,248,0.12);
+    --accent: #38BDF8;
+    --accent-dim: rgba(56,189,248,0.10);
+    --accent-glow: rgba(56,189,248,0.3);
+    --accent-secondary: #F472B6;
+    --text-primary: #E2E8F0;
+    --text-secondary: rgba(226,232,240,0.7);
+    --text-muted: rgba(226,232,240,0.4);
+  }

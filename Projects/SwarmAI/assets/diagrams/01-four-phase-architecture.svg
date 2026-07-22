@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" width="800" height="560">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="560" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Next-Gen Agent Intelligence: Four-Phase Architecture</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Safety &#x2192; Understanding &#x2192; Evolution &#x2192; E2E Hardening</text>
+  <rect x="30" y="80" width="170" height="190" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="30" y="80" width="170" height="4" rx="2" fill="#e74c3c"/>
+  <text x="115" y="104" fill="#e74c3c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Phase 1: Safety</text>
+  <text x="115" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">MemoryGuard</text>
+  <text x="115" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SkillMetrics</text>
+  <text x="115" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SectionCaps</text>
+  <text x="115" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">EntryRefs</text>
+  <text x="115" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="115" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Token budgets,</text>
+  <text x="115" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">corruption detection</text>
+  <rect x="220" y="80" width="170" height="190" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="220" y="80" width="170" height="4" rx="2" fill="#3498db"/>
+  <text x="305" y="104" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Phase 2: Understanding</text>
+  <text x="305" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">UserObserver</text>
+  <text x="305" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SessionRecall</text>
+  <text x="305" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SkillRegistry</text>
+  <text x="305" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SkillGuard</text>
+  <text x="305" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="305" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Profile-aware recall,</text>
+  <text x="305" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">registry as truth</text>
+  <rect x="410" y="80" width="170" height="190" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="410" y="80" width="170" height="4" rx="2" fill="#2ecc71"/>
+  <text x="495" y="104" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Phase 3: Evolution</text>
+  <text x="495" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SessionMiner</text>
+  <text x="495" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">SkillFitness</text>
+  <text x="495" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">EvolutionOptimizer</text>
+  <text x="495" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">RetentionPolicies</text>
+  <text x="495" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="495" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Data-driven self-</text>
+  <text x="495" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">improvement</text>
+  <rect x="600" y="80" width="170" height="190" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="600" y="80" width="170" height="4" rx="2" fill="#9b59b6"/>
+  <text x="685" y="104" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Phase 4: E2E Hardening</text>
+  <text x="685" y="122" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Integration Tests</text>
+  <text x="685" y="138" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Chaos Testing</text>
+  <text x="685" y="154" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Regression Suite</text>
+  <text x="685" y="170" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Perf Benchmarks</text>
+  <text x="685" y="186" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle"></text>
+  <text x="685" y="202" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Production-grade</text>
+  <text x="685" y="218" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">reliability</text>
+  <line x1="200" y1="175" x2="218" y2="175" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="390" y1="175" x2="408" y2="175" stroke="#3498db" stroke-width="2" marker-end="url(#arrG)"/>
+  <line x1="580" y1="175" x2="598" y2="175" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrP)"/>
+  <rect x="30" y="300" width="740" height="60" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="400" y="322" fill="#f39c12" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Each phase builds on the previous  &#x2014;  Phase N+1 unlocks only after N is stable</text>
+  <text x="400" y="342" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Safety &#x2192; Understanding &#x2192; Evolution &#x2192; Hardening</text>
+  <rect x="30" y="390" width="230" height="140" rx="8" fill="#16213e" stroke="#1abc9c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="30" y="390" width="230" height="4" rx="2" fill="#1abc9c"/>
+  <text x="145" y="414" fill="#1abc9c" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Design Principles</text>
+  <text x="145" y="432" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Budget-first memory</text>
+  <text x="145" y="448" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Lazy-load everything</text>
+  <text x="145" y="464" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Guard before inject</text>
+  <text x="145" y="480" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Measure before evolve</text>
+  <rect x="285" y="390" width="230" height="140" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="285" y="390" width="230" height="4" rx="2" fill="#f39c12"/>
+  <text x="400" y="414" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Safety Invariants</text>
+  <text x="400" y="432" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Token caps enforced</text>
+  <text x="400" y="448" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">No silent corruption</text>
+  <text x="400" y="464" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Graceful degrade on OOM</text>
+  <text x="400" y="480" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Audit trail always on</text>
+  <rect x="540" y="390" width="230" height="140" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="390" width="230" height="4" rx="2" fill="#3498db"/>
+  <text x="655" y="414" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Evolution Constraints</text>
+  <text x="655" y="432" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Confidence-gated deploy</text>
+  <text x="655" y="448" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Human review for HIGH</text>
+  <text x="655" y="464" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Rollback on regression</text>
+  <text x="655" y="480" fill="#95a5a6" font-size="11" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Weekly health audit</text>
+</svg>

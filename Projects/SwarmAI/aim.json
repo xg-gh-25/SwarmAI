@@ -1,0 +1,14 @@
+{
+  "name": "SwarmAI",
+  "ddd_spec_version": "1.0",
+  "description": "DDD package for SwarmAI (six-section canonical structure).",
+  "plugins": {
+    "native_skills": [
+      "s_ddd-manager",
+      "s_ddd-persist",
+      "s_ddd-pipeline",
+      "s_ddd-pollinate",
+      "s_ai-ready-repo"
+    ]
+  }
+}

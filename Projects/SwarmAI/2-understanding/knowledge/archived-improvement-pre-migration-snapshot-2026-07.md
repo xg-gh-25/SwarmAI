@@ -1,3 +1,11 @@
+# [ARCHIVED] Pre-migration IMPROVEMENT.md snapshot (source tree, ~2026-07-19)
+
+> Historical snapshot of the source-repo root IMPROVEMENT.md as it stood before
+> the six-section migration. Preserved for lineage; the LIVE IMPROVEMENT.md is
+> 2-understanding/IMPROVEMENT.md. Per-run reflect headings in the old format.
+
+---
+
 
 ### 2026-07-19: fixed context_files recall 0.00→0.25 — section NAME was never a matchable signal (run_94e602ad, bugfix)
 <!-- ref:0 | last:none | decay:active | source:manual -->

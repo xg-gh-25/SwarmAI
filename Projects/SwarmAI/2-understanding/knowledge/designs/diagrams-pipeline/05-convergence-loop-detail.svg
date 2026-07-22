@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 480" font-family="sans-serif">
+  <defs>
+    <marker id="arrow5" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow5g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7ee787"/>
+    </marker>
+    <marker id="arrow5o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f78166"/>
+    </marker>
+  </defs>
+  <rect width="780" height="480" fill="#1a1a2e" rx="8"/>
+
+  <!-- Title -->
+  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Quality Convergence Loop: Internal Mechanics</text>
+  <text x="390" y="50" text-anchor="middle" fill="#e6edf3" font-size="10" opacity="0.7">Iterate until push-ready or max iterations exhausted</text>
+
+  <!-- Entry point -->
+  <rect x="30" y="100" width="130" height="50" rx="8" fill="#1e2a3a" stroke="#58a6ff" stroke-width="2"/>
+  <text x="95" y="120" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="bold">Delivery</text>
+  <text x="95" y="137" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="bold">Candidate</text>
+
+  <line x1="160" y1="125" x2="195" y2="125" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow5)"/>
+
+  <!-- Step 1: Evaluate against gate -->
+  <rect x="200" y="90" width="160" height="70" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="280" y="112" text-anchor="middle" fill="#7ee787" font-size="10" font-weight="bold">EVALUATE</text>
+  <text x="280" y="128" text-anchor="middle" fill="#e6edf3" font-size="9">Run 6-layer gate</text>
+  <text x="280" y="143" text-anchor="middle" fill="#e6edf3" font-size="9">Agent self-assess</text>
+  <text x="280" y="158" text-anchor="middle" fill="#e6edf3" font-size="9">Check goal alignment</text>
+
+  <line x1="360" y1="125" x2="395" y2="125" stroke="#7ee787" stroke-width="2" marker-end="url(#arrow5g)"/>
+
+  <!-- Decision: All pass? -->
+  <polygon points="460,90 530,125 460,160 390,125" fill="none" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="460" y="122" text-anchor="middle" fill="#d2a8ff" font-size="10">ALL</text>
+  <text x="460" y="136" text-anchor="middle" fill="#d2a8ff" font-size="10">PASS?</text>
+
+  <!-- YES path -->
+  <line x1="530" y1="125" x2="580" y2="125" stroke="#7ee787" stroke-width="2.5" marker-end="url(#arrow5g)"/>
+  <text x="555" y="118" fill="#7ee787" font-size="10" font-weight="bold">YES</text>
+
+  <!-- Push Ready -->
+  <rect x="585" y="95" width="165" height="60" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2.5"/>
+  <text x="668" y="118" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">PUSH-READY</text>
+  <text x="668" y="138" text-anchor="middle" fill="#e6edf3" font-size="9">Create PR</text>
+  <text x="668" y="150" text-anchor="middle" fill="#e6edf3" font-size="9">(auto-merge if CI green)</text>
+
+  <!-- NO path -->
+  <line x1="460" y1="160" x2="460" y2="200" stroke="#f78166" stroke-width="2.5" marker-end="url(#arrow5o)"/>
+  <text x="475" y="183" fill="#f78166" font-size="10" font-weight="bold">NO</text>
+
+  <!-- Step 2: Identify Gap -->
+  <rect x="380" y="205" width="160" height="55" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2"/>
+  <text x="460" y="225" text-anchor="middle" fill="#f78166" font-size="10" font-weight="bold">IDENTIFY GAP</text>
+  <text x="460" y="242" text-anchor="middle" fill="#e6edf3" font-size="9">Which layers failed?</text>
+  <text x="460" y="255" text-anchor="middle" fill="#e6edf3" font-size="9">What specific issues?</text>
+
+  <line x1="460" y1="260" x2="460" y2="290" stroke="#f78166" stroke-width="2" marker-end="url(#arrow5o)"/>
+
+  <!-- Step 3: Targeted Fix -->
+  <rect x="380" y="295" width="160" height="55" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2"/>
+  <text x="460" y="315" text-anchor="middle" fill="#f78166" font-size="10" font-weight="bold">TARGETED FIX</text>
+  <text x="460" y="332" text-anchor="middle" fill="#e6edf3" font-size="9">Fix ONLY identified gap</text>
+  <text x="460" y="345" text-anchor="middle" fill="#e6edf3" font-size="9">(minimal, scoped change)</text>
+
+  <line x1="460" y1="350" x2="460" y2="380" stroke="#f78166" stroke-width="2" marker-end="url(#arrow5o)"/>
+
+  <!-- Step 4: Re-verify -->
+  <rect x="380" y="385" width="160" height="40" rx="8" fill="#1e2a3a" stroke="#58a6ff" stroke-width="2"/>
+  <text x="460" y="410" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="bold">RE-VERIFY</text>
+
+  <!-- Loop back -->
+  <path d="M380,405 Q200,405 200,260 Q200,125 195,125" fill="none" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow5)"/>
+  <text x="175" y="270" fill="#58a6ff" font-size="9" transform="rotate(-90,175,270)">loop back</text>
+
+  <!-- Iteration counter -->
+  <rect x="30" y="220" width="130" height="70" rx="8" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="95" y="240" text-anchor="middle" fill="#d2a8ff" font-size="9" font-weight="bold">Iteration Counter</text>
+  <text x="95" y="258" text-anchor="middle" fill="#e6edf3" font-size="9">Current: N</text>
+  <text x="95" y="275" text-anchor="middle" fill="#e6edf3" font-size="9">Max: configurable</text>
+
+  <!-- Max iterations exceeded -->
+  <line x1="95" y1="290" x2="95" y2="350" stroke="#f78166" stroke-width="1.5" marker-end="url(#arrow5o)"/>
+  <text x="95" y="310" text-anchor="middle" fill="#f78166" font-size="8">N > max</text>
+
+  <rect x="30" y="355" width="130" height="55" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2"/>
+  <text x="95" y="375" text-anchor="middle" fill="#f78166" font-size="10" font-weight="bold">ESCALATE</text>
+  <text x="95" y="393" text-anchor="middle" fill="#e6edf3" font-size="9">Human review with</text>
+  <text x="95" y="405" text-anchor="middle" fill="#e6edf3" font-size="9">gap report</text>
+
+  <!-- Convergence property annotation -->
+  <rect x="570" y="210" width="185" height="110" rx="8" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="663" y="230" text-anchor="middle" fill="#d2a8ff" font-size="9" font-weight="bold">Convergence Properties</text>
+  <text x="663" y="252" text-anchor="middle" fill="#e6edf3" font-size="9">Each iteration narrows gap</text>
+  <text x="663" y="268" text-anchor="middle" fill="#e6edf3" font-size="9">Fixes are targeted, not global</text>
+  <text x="663" y="284" text-anchor="middle" fill="#e6edf3" font-size="9">No regression from fixes</text>
+  <text x="663" y="300" text-anchor="middle" fill="#e6edf3" font-size="9">(re-verify catches them)</text>
+
+  <!-- Bottom note -->
+  <text x="390" y="460" text-anchor="middle" fill="#e6edf3" font-size="10" font-style="italic">Typical convergence: 1-3 iterations. Most tasks pass on first check.</text>
+</svg>

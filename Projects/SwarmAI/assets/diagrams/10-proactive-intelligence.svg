@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 780" width="800" height="780">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="780" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Proactive Intelligence: L0-L4 Awareness Levels</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Multi-level context analysis feeding the session briefing</text>
+  <rect x="40" y="78" width="720" height="90" rx="8" fill="#16213e" stroke="#7f8c8d" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="78" width="6" height="90" rx="3" fill="#7f8c8d"/>
+  <rect x="64" y="90" width="56" height="28" rx="14" fill="#7f8c8d" opacity="0.25"/>
+  <text x="92" y="108" fill="#7f8c8d" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L0</text>
+  <text x="138" y="108" fill="#7f8c8d" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Parsing</text>
+  <text x="82" y="136" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Raw signal extraction from session state</text>
+  <rect x="300" y="92" width="100" height="22" rx="11" fill="#7f8c8d" opacity="0.22"/>
+  <text x="350" y="107" fill="#7f8c8d" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Open threads</text>
+  <rect x="440" y="92" width="114" height="22" rx="11" fill="#7f8c8d" opacity="0.22"/>
+  <text x="497" y="107" fill="#7f8c8d" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Continue hints</text>
+  <rect x="580" y="92" width="121" height="22" rx="11" fill="#7f8c8d" opacity="0.22"/>
+  <text x="640" y="107" fill="#7f8c8d" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Pattern signals</text>
+  <line x1="400" y1="168" x2="400" y2="180" stroke="#7f8c8d" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="40" y="180" width="720" height="90" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="180" width="6" height="90" rx="3" fill="#3498db"/>
+  <rect x="64" y="192" width="56" height="28" rx="14" fill="#3498db" opacity="0.25"/>
+  <text x="92" y="210" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L1</text>
+  <text x="138" y="210" fill="#3498db" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Temporal</text>
+  <text x="82" y="238" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Time-aware context: when was last session? what changed?</text>
+  <rect x="300" y="194" width="100" height="22" rx="11" fill="#3498db" opacity="0.22"/>
+  <text x="350" y="209" fill="#3498db" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Session gaps</text>
+  <rect x="440" y="194" width="142" height="22" rx="11" fill="#3498db" opacity="0.22"/>
+  <text x="511" y="209" fill="#3498db" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Stale P0 detection</text>
+  <rect x="580" y="194" width="156" height="22" rx="11" fill="#3498db" opacity="0.22"/>
+  <text x="658" y="209" fill="#3498db" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">First-session-of-day</text>
+  <line x1="400" y1="270" x2="400" y2="282" stroke="#3498db" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="40" y="282" width="720" height="90" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="282" width="6" height="90" rx="3" fill="#2ecc71"/>
+  <rect x="64" y="294" width="56" height="28" rx="14" fill="#2ecc71" opacity="0.25"/>
+  <text x="92" y="312" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L2</text>
+  <text x="138" y="312" fill="#2ecc71" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Scoring</text>
+  <text x="82" y="340" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Rank all signals by importance and recency</text>
+  <rect x="300" y="296" width="142" height="22" rx="11" fill="#2ecc71" opacity="0.22"/>
+  <text x="371" y="311" fill="#2ecc71" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">ScoredItem ranking</text>
+  <rect x="440" y="296" width="149" height="22" rx="11" fill="#2ecc71" opacity="0.22"/>
+  <text x="514" y="311" fill="#2ecc71" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Priority x Momentum</text>
+  <rect x="580" y="296" width="128" height="22" rx="11" fill="#2ecc71" opacity="0.22"/>
+  <text x="644" y="311" fill="#2ecc71" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Weighted urgency</text>
+  <line x1="400" y1="372" x2="400" y2="384" stroke="#2ecc71" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="40" y="384" width="720" height="90" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="384" width="6" height="90" rx="3" fill="#f39c12"/>
+  <rect x="64" y="396" width="56" height="28" rx="14" fill="#f39c12" opacity="0.25"/>
+  <text x="92" y="414" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L3</text>
+  <text x="138" y="414" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Learning</text>
+  <text x="82" y="442" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Adaptive weights from user behavior patterns</text>
+  <rect x="300" y="398" width="149" height="22" rx="11" fill="#f39c12" opacity="0.22"/>
+  <text x="374" y="413" fill="#f39c12" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Skip penalty (-0.2)</text>
+  <rect x="440" y="398" width="163" height="22" rx="11" fill="#f39c12" opacity="0.22"/>
+  <text x="521" y="413" fill="#f39c12" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Affinity bonus (+0.1)</text>
+  <rect x="580" y="398" width="149" height="22" rx="11" fill="#f39c12" opacity="0.22"/>
+  <text x="654" y="413" fill="#f39c12" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Effectiveness trend</text>
+  <line x1="400" y1="474" x2="400" y2="486" stroke="#f39c12" stroke-width="1.5" marker-end="url(#arr)"/>
+  <rect x="40" y="486" width="720" height="90" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="486" width="6" height="90" rx="3" fill="#9b59b6"/>
+  <rect x="64" y="498" width="56" height="28" rx="14" fill="#9b59b6" opacity="0.25"/>
+  <text x="92" y="516" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L4</text>
+  <text x="138" y="516" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Signals</text>
+  <text x="82" y="544" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">External async signals from background jobs</text>
+  <rect x="300" y="500" width="142" height="22" rx="11" fill="#9b59b6" opacity="0.22"/>
+  <text x="371" y="515" fill="#9b59b6" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">signal_digest.json</text>
+  <rect x="440" y="500" width="93" height="22" rx="11" fill="#9b59b6" opacity="0.22"/>
+  <text x="486" y="515" fill="#9b59b6" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Job results</text>
+  <rect x="580" y="500" width="107" height="22" rx="11" fill="#9b59b6" opacity="0.22"/>
+  <text x="633" y="515" fill="#9b59b6" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Health alerts</text>
+  <rect x="720" y="500" width="100" height="22" rx="11" fill="#9b59b6" opacity="0.22"/>
+  <text x="770" y="515" fill="#9b59b6" font-size="9" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Skill health</text>
+  <path d="M 200 168 C 200 578, 200 578, 400 606" fill="none" stroke="#7f8c8d" stroke-width="2" marker-end="url(#arr)" stroke-dasharray="6 4"/>
+  <path d="M 300 270 C 300 578, 300 578, 400 606" fill="none" stroke="#3498db" stroke-width="2" marker-end="url(#arr)" stroke-dasharray="6 4"/>
+  <path d="M 400 372 C 400 578, 400 578, 400 606" fill="none" stroke="#2ecc71" stroke-width="2" marker-end="url(#arr)" stroke-dasharray="6 4"/>
+  <path d="M 500 474 C 500 578, 500 578, 400 606" fill="none" stroke="#f39c12" stroke-width="2" marker-end="url(#arr)" stroke-dasharray="6 4"/>
+  <path d="M 600 576 C 600 578, 600 578, 400 606" fill="none" stroke="#9b59b6" stroke-width="2" marker-end="url(#arr)" stroke-dasharray="6 4"/>
+  <rect x="120" y="596" width="560" height="65" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="2" filter="url(#sh)"/>
+  <rect x="120" y="596" width="560" height="5" rx="2" fill="#f39c12"/>
+  <text x="400" y="626" fill="#f39c12" font-size="16" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Session Briefing</text>
+  <text x="400" y="646" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Top-N ranked items  |  Temporal context  |  Pending signals  |  Health status</text>
+  <line x1="400" y1="661" x2="400" y2="678" stroke="#f39c12" stroke-width="2" marker-end="url(#arrO)"/>
+  <rect x="220" y="676" width="360" height="45" rx="22" fill="#1abc9c" opacity="0.2"/>
+  <rect x="220" y="676" width="360" height="45" rx="22" fill="none" stroke="#1abc9c" stroke-width="1.5"/>
+  <text x="400" y="704" fill="#1abc9c" font-size="13" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">&#x2192;  Injected into System Prompt</text>
+  <text x="400" y="764" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L0-L2 = deterministic  |  L3 = adaptive (learns from skips/engagement)  |  L4 = async external signals</text>
+</svg>

@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 820" width="800" height="820">
+  <defs>
+    <filter id="sh" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#7f8c8d"/>
+    </marker>
+    <marker id="arrW" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#ecf0f1"/>
+    </marker>
+    <marker id="arrO" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#f39c12"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#e74c3c"/>
+    </marker>
+    <marker id="arrG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#2ecc71"/>
+    </marker>
+    <marker id="arrB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3498db"/>
+    </marker>
+    <marker id="arrP" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#9b59b6"/>
+    </marker>
+    <marker id="arrT" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#1abc9c"/>
+    </marker>
+    
+  </defs>
+  <rect width="800" height="820" fill="#1a1a2e" rx="8"/>
+  <text x="400" y="36" fill="#f39c12" font-size="18" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Context Engineering: The 11-File System Prompt Chain</text>
+  <text x="400" y="54" fill="#95a5a6" font-size="12" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P0-P10 priority files assembled into a single system prompt</text>
+  <text x="145" y="82" fill="#e74c3c" font-size="13" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">System-Owned</text>
+  <text x="395" y="82" fill="#3498db" font-size="13" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">User-Owned</text>
+  <text x="645" y="82" fill="#2ecc71" font-size="13" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Agent / Auto</text>
+  <rect x="40" y="96" width="210" height="58" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="96" width="210" height="4" rx="2" fill="#e74c3c"/>
+  <text x="145" y="120" fill="#e74c3c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P0  SWARMAI.md</text>
+  <text x="145" y="138" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Core identity + rules</text>
+  <rect x="40" y="168" width="210" height="58" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="168" width="210" height="4" rx="2" fill="#e74c3c"/>
+  <text x="145" y="192" fill="#e74c3c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P1  IDENTITY.md</text>
+  <text x="145" y="210" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Persona + personality</text>
+  <rect x="40" y="240" width="210" height="58" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="240" width="210" height="4" rx="2" fill="#e74c3c"/>
+  <text x="145" y="264" fill="#e74c3c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P2  SOUL.md</text>
+  <text x="145" y="282" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Values + ethics</text>
+  <rect x="40" y="312" width="210" height="58" rx="8" fill="#16213e" stroke="#e74c3c" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="40" y="312" width="210" height="4" rx="2" fill="#e74c3c"/>
+  <text x="145" y="336" fill="#e74c3c" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P3  AGENT.md</text>
+  <text x="145" y="354" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Agent config + tools</text>
+  <rect x="290" y="96" width="210" height="58" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="290" y="96" width="210" height="4" rx="2" fill="#3498db"/>
+  <text x="395" y="120" fill="#3498db" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P4  USER.md</text>
+  <text x="395" y="138" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">User profile + preferences</text>
+  <rect x="290" y="168" width="210" height="58" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="290" y="168" width="210" height="4" rx="2" fill="#3498db"/>
+  <text x="395" y="192" fill="#3498db" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P5  STEERING.md</text>
+  <text x="395" y="210" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Session steering hints</text>
+  <rect x="290" y="240" width="210" height="58" rx="8" fill="#16213e" stroke="#3498db" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="290" y="240" width="210" height="4" rx="2" fill="#3498db"/>
+  <text x="395" y="264" fill="#3498db" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P6  TOOLS.md</text>
+  <text x="395" y="282" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Tool config + permissions</text>
+  <rect x="540" y="96" width="210" height="58" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="96" width="210" height="4" rx="2" fill="#2ecc71"/>
+  <text x="645" y="120" fill="#2ecc71" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P7  MEMORY.md</text>
+  <text x="645" y="138" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Distilled session facts</text>
+  <rect x="540" y="168" width="210" height="58" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="168" width="210" height="4" rx="2" fill="#2ecc71"/>
+  <text x="645" y="192" fill="#2ecc71" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P8  EVOLUTION.md</text>
+  <text x="645" y="210" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Learned patterns + rules</text>
+  <rect x="540" y="240" width="210" height="58" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="240" width="210" height="4" rx="2" fill="#2ecc71"/>
+  <text x="645" y="264" fill="#2ecc71" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P9  KNOWLEDGE.md</text>
+  <text x="645" y="282" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Domain knowledge index</text>
+  <rect x="540" y="312" width="210" height="58" rx="8" fill="#16213e" stroke="#2ecc71" stroke-width="1.5" filter="url(#sh)"/>
+  <rect x="540" y="312" width="210" height="4" rx="2" fill="#2ecc71"/>
+  <text x="645" y="336" fill="#2ecc71" font-size="12" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P10 PROJECTS.md</text>
+  <text x="645" y="354" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Active project context</text>
+  <rect x="40" y="410" width="500" height="120" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="290" y="432" fill="#f39c12" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Token Budget Tiers</text>
+  <rect x="60" y="452" width="120" height="20" rx="4" fill="#7f8c8d" opacity="0.3"/>
+  <rect x="60" y="452" width="120" height="20" rx="4" fill="none" stroke="#7f8c8d" stroke-width="1"/>
+  <text x="120" y="466" fill="#7f8c8d" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">30K tokens</text>
+  <text x="192" y="466" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Default context</text>
+  <rect x="60" y="480" width="220" height="20" rx="4" fill="#3498db" opacity="0.3"/>
+  <rect x="60" y="480" width="220" height="20" rx="4" fill="none" stroke="#3498db" stroke-width="1"/>
+  <text x="170" y="494" fill="#3498db" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">50K tokens</text>
+  <text x="292" y="494" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">Large context</text>
+  <rect x="60" y="508" width="320" height="20" rx="4" fill="#2ecc71" opacity="0.3"/>
+  <rect x="60" y="508" width="320" height="20" rx="4" fill="none" stroke="#2ecc71" stroke-width="1"/>
+  <text x="220" y="522" fill="#2ecc71" font-size="11" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">100K tokens</text>
+  <text x="392" y="522" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="start">1M-model context</text>
+  <rect x="560" y="410" width="200" height="120" rx="8" fill="#16213e" stroke="#9b59b6" stroke-width="1.5" filter="url(#sh)"/>
+  <text x="660" y="432" fill="#9b59b6" font-size="14" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Prompt Cache</text>
+  <rect x="575" y="446" width="170" height="24" rx="12" fill="#1abc9c" opacity="0.22"/>
+  <text x="660" y="462" fill="#1abc9c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L0  Anthropic API Cache</text>
+  <text x="660" y="486" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Prefix match &#x2192; cache hit</text>
+  <rect x="575" y="496" width="170" height="24" rx="12" fill="#f39c12" opacity="0.22"/>
+  <text x="660" y="512" fill="#f39c12" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">L1  Local File Cache</text>
+  <line x1="145" y1="370" x2="145" y2="580" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrR)"/>
+  <line x1="395" y1="298" x2="395" y2="580" stroke="#3498db" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="645" y1="370" x2="645" y2="580" stroke="#2ecc71" stroke-width="2" marker-end="url(#arrG)"/>
+  <rect x="40" y="580" width="720" height="80" rx="8" fill="#16213e" stroke="#f39c12" stroke-width="2" filter="url(#sh)"/>
+  <rect x="40" y="580" width="720" height="5" rx="2" fill="#f39c12"/>
+  <text x="400" y="612" fill="#f39c12" font-size="16" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">System Prompt Assembly</text>
+  <text x="400" y="632" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">Priority-ordered concatenation  |  Budget enforcement  |  Cache-aligned prefix</text>
+  <line x1="400" y1="660" x2="400" y2="680" stroke="#f39c12" stroke-width="2" marker-end="url(#arrO)"/>
+  <rect x="320" y="682" width="160" height="30" rx="15" fill="#1abc9c" opacity="0.22"/>
+  <text x="400" y="701" fill="#1abc9c" font-size="10" font-weight="bold" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">&#x2192;  Claude LLM</text>
+  <text x="400" y="804" fill="#95a5a6" font-size="10" font-family="Helvetica Neue, Arial, sans-serif" text-anchor="middle">P0-P3 = immutable system core  |  P4-P6 = user customizable  |  P7-P10 = auto-maintained by hooks + pipeline</text>
+</svg>
