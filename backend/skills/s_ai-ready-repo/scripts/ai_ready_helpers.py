@@ -3255,20 +3255,25 @@ def prioritized_file_list(repo_path: Path, max_files: int = 300) -> list[str]:
 # ─── Output Verification (VERIFY Phase) ───
 
 def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
-    """Select 3 verification tasks from git history.
+    """Select up to 3 verification tasks from git history.
 
     Each task has:
-      - type: "fix" | "feat" | "refactor"
+      - type: "fix" | "feat" | "refactor" | "general"
       - description: commit subject (what to ask the agent)
-      - correct_file: primary file changed in that commit (ground truth)
-      - correct_functions: functions modified (from diff, if detectable)
-      - commit: hash for evidence
+      - correct_file: the first source file in the commit NOT already claimed by
+        another task (ground truth). NOTE: git `--name-only` lists files
+        alphabetically, so this is the first-alphabetical UNCLAIMED source file,
+        not necessarily the commit's "primary" file.
+      - commit: hash (7-char) for evidence
 
-    Selection:
+    Selection (each picks a DISTINCT file — dedup by correct_file, run_006dce1c):
       1. Most recent fix:/hotfix:/revert: commit
       2. Most recent feat: commit
-      3. Most recent large-diff commit (or refactor:)
-      Fallback: 3 most recent commits of any type
+      3. Largest-diff commit (proxy for refactor)
+      Fallback: fill remaining slots from any commit with an unclaimed source file
+
+    May return FEWER than 3 tasks when the repo cannot supply 3 distinct source
+    files (small/single-file repos); the caller's pass bar scales to the count.
     """
     repo_path = _validate_repo_path(Path(repo_path))
 
@@ -3307,63 +3312,61 @@ def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
 
     # Select by type
     tasks: list[dict[str, Any]] = []
+    seen_files: set[str] = set()  # dedup: the 3 tasks must point at DISTINCT files
     fix_pattern = re.compile(r"^(fix|hotfix|revert|bugfix)[\s:(]", re.IGNORECASE)
     feat_pattern = re.compile(r"^feat[\s:(]", re.IGNORECASE)
 
+    def _first_unclaimed_source(c: dict) -> str | None:
+        """First source file in the commit NOT already claimed by another task.
+        Dedup is by FILE, not just by commit hash: two DIFFERENT commits can both
+        list foo.py first, which would make the verification ask about the same
+        file twice and inflate the 2/3 pass bar (Gate-1, run_006dce1c). Returns the
+        first unclaimed source file, or None if the commit adds no new source file."""
+        for f in c["files"]:
+            if f.startswith("tests/") or not f.endswith((".py", ".ts", ".js", ".rs", ".go")):
+                continue
+            if f not in seen_files:
+                return f
+        return None
+
+    def _try_add(c: dict, task_type: str) -> bool:
+        """Append a task for commit c if it yields an unclaimed source file + the
+        commit isn't already used. Records the file in seen_files. Returns success."""
+        if c["hash"][:7] in [t.get("commit") for t in tasks]:
+            return False
+        src = _first_unclaimed_source(c)
+        if not src:
+            return False
+        tasks.append({
+            "type": task_type,
+            "description": c["subject"],
+            "correct_file": src,
+            "commit": c["hash"][:7],
+        })
+        seen_files.add(src)
+        return True
+
     # Task 1: fix commit
     for c in commits:
-        if fix_pattern.match(c["subject"]) and c["files"]:
-            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
-            if source_files:
-                tasks.append({
-                    "type": "fix",
-                    "description": c["subject"],
-                    "correct_file": source_files[0],
-                    "commit": c["hash"][:7],
-                })
-                break
+        if fix_pattern.match(c["subject"]) and _try_add(c, "fix"):
+            break
 
     # Task 2: feat commit
     for c in commits:
-        if feat_pattern.match(c["subject"]) and c["files"]:
-            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
-            if source_files:
-                tasks.append({
-                    "type": "feat",
-                    "description": c["subject"],
-                    "correct_file": source_files[0],
-                    "commit": c["hash"][:7],
-                })
-                break
+        if feat_pattern.match(c["subject"]) and _try_add(c, "feat"):
+            break
 
     # Task 3: largest diff (most files changed)
     for c in sorted(commits[:30], key=lambda x: len(x["files"]), reverse=True):
-        if c["hash"][:7] not in [t.get("commit") for t in tasks] and c["files"]:
-            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
-            if source_files:
-                tasks.append({
-                    "type": "refactor",
-                    "description": c["subject"],
-                    "correct_file": source_files[0],
-                    "commit": c["hash"][:7],
-                })
-                break
+        if _try_add(c, "refactor"):
+            break
 
-    # Fallback: use first 3 commits with source files
+    # Fallback: fill from remaining commits with an unclaimed source file
     if len(tasks) < 3:
         for c in commits:
             if len(tasks) >= 3:
                 break
-            if c["hash"][:7] in [t.get("commit") for t in tasks]:
-                continue
-            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
-            if source_files:
-                tasks.append({
-                    "type": "general",
-                    "description": c["subject"],
-                    "correct_file": source_files[0],
-                    "commit": c["hash"][:7],
-                })
+            _try_add(c, "general")
 
     return tasks[:3]
 
@@ -3464,22 +3467,57 @@ def evaluate_verification_response(
                 feedback.append(f"Task {i} ({task['type']}): Sub-agent said INSUFFICIENT but didn't specify what's missing")
             continue
 
-        # Check if correct file is mentioned
+        # Check if correct file is mentioned — TOKEN-EXACT match (run_006dce1c).
+        # The old `file_stem in answer` substring test false-passed: a WRONG file
+        # sharing the stem (src/utils_v2.py vs src/utils.py), or the stem appearing
+        # in APPROACH prose, both matched. Fix: tokenize the answer and accept a
+        # token ONLY if it equals the full rel-path OR equals the bare basename.
+        #
+        # Gate-2 correction (run_006dce1c): the earlier draft ALSO accepted
+        # `Path(tok).name == filename` (basename-OF-a-path-token) so 'src/foo.py'
+        # would match correct 'backend/core/foo.py'. That is a NEW false-pass class:
+        # 'api/models.py' would match correct 'db/models.py' (same basename, genuinely
+        # DIFFERENT file, both common in one repo). And a probe that asks "which file
+        # would you modify" SHOULD score a wrong DIRECTORY as a miss — naming
+        # 'src/foo.py' when the answer is 'backend/core/foo.py' is not a pass. So the
+        # basename arm is now EXACT-BARE-BASENAME only: a token that IS just 'foo.py'
+        # (the agent referred to the file by name) passes; a token carrying a
+        # different directory must match the full path or it fails.
         correct_file = task["correct_file"]
-        # Match on filename (without full path) or full path
-        filename = Path(correct_file).name
-        file_stem = Path(correct_file).stem
+        filename = Path(correct_file).name  # basename, WITH extension
 
-        if correct_file in answer or filename in answer or file_stem in answer:
+        # Split on whitespace, the format's '|' delimiter, AND ':' so a label-glued
+        # token like 'FILE:foo.py' (no space after the colon) yields ['FILE','foo.py']
+        # — else a root-level correct file would false-FAIL (Gate-2 MED). ':' never
+        # appears inside a repo-relative POSIX path, so splitting on it is safe.
+        raw_tokens = re.split(r"[\s|:]+", answer)
+        matched = False
+        for tok in raw_tokens:
+            tok = tok.strip("`'\"(),.;[]<>")
+            if not tok:
+                continue
+            if tok == correct_file or tok == filename:
+                matched = True
+                break
+
+        if matched:
             correct_count += 1
             results.append({"task": task["description"][:50], "correct": True, "detail": f"Found: {filename}"})
         else:
             results.append({"task": task["description"][:50], "correct": False, "detail": f"Expected: {correct_file}, got: {answer[:80]}"})
             feedback.append(f"Task {i} ({task['type']}): Agent pointed to wrong file. Expected {correct_file}. TECH.md may need better module mapping for this area.")
 
+    # Pass bar is PROPORTIONAL to task count, not a hardcoded >=2 (Gate-2 HIGH,
+    # run_006dce1c): dedup-by-file can legitimately yield <3 tasks (a small repo
+    # where every commit touches the same file), and a hardcoded `>=2` made a
+    # PERFECT agent fail 1/1. Bar = ceil(2/3 of tasks), min 1 — a repo that only
+    # affords 1 verification task passes on that 1, matching the intended "~2/3
+    # correct" threshold at every task count. Zero tasks → not passed (nothing proven).
+    n = len(tasks)
+    pass_threshold = max(1, (2 * n + 2) // 3) if n else 1  # ceil(2n/3), floor 1
     return {
-        "passed": correct_count >= 2,
-        "score": f"{correct_count}/{len(tasks)}",
+        "passed": n > 0 and correct_count >= pass_threshold,
+        "score": f"{correct_count}/{n}",
         "results": results,
         "feedback": feedback,
     }

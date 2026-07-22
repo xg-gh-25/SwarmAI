@@ -1324,6 +1324,129 @@ class TestVerificationTasks:
         assert "dedup" in result["feedback"][0].lower()
         assert "extension" in result["feedback"][1].lower()
 
+    # ─── Gap 3: matcher false-pass (Gate-1 corrected — run_006dce1c) ───
+
+    def test_wrong_file_sharing_stem_does_not_false_pass(self):
+        """Gate-2/skeptic bug: `file_stem in answer` substring test scored a WRONG
+        file CORRECT whenever it shared the stem. correct_file=src/utils.py, agent
+        names src/utils_v2.py (wrong) — stem 'utils' is a substring of both → old
+        code false-passed. Exact-token match must score this INCORRECT."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix util bug", "correct_file": "src/utils.py", "commit": "abc"}]
+        # Agent names a DIFFERENT file whose stem collides; also the stem appears in prose.
+        response = "TASK 1: FILE: src/utils_v2.py | FUNCTION: helper | APPROACH: refactor the utils layer"
+        result = evaluate_verification_response(response, tasks)
+        assert result["results"][0]["correct"] is False, \
+            "wrong file sharing stem must NOT pass (the :3473 substring false-pass)"
+
+    def test_stem_in_prose_without_the_file_does_not_pass(self):
+        """The stem appearing only in APPROACH prose (no file named) must fail."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix handler", "correct_file": "src/handler.py", "commit": "abc"}]
+        response = "TASK 1: FILE: src/router.py | FUNCTION: route | APPROACH: call the handler function"
+        result = evaluate_verification_response(response, tasks)
+        assert result["results"][0]["correct"] is False
+
+    def test_correct_full_path_still_passes(self):
+        """Regression guard: an exact full-path answer must STILL pass after the fix."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "backend/core/foo.py", "commit": "abc"}]
+        response = "TASK 1: FILE: backend/core/foo.py | FUNCTION: bar | APPROACH: guard"
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is True
+
+    def test_wrong_directory_same_basename_does_not_pass(self):
+        """Gate-2 correction (SUPERSEDES the earlier Gate-1 basename-prefix leniency):
+        naming the right basename under a DIFFERENT directory (src/foo.py when correct
+        is backend/core/foo.py) must FAIL. The earlier draft accepted basename-of-any-
+        path-token, which false-passes a genuinely different file (api/models.py vs
+        db/models.py, both real in one repo). A file-location probe SHOULD score a
+        wrong directory as a miss. Match is full-path-exact OR bare-basename only."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "backend/core/foo.py", "commit": "abc"}]
+        response = "TASK 1: FILE: src/foo.py | FUNCTION: bar | APPROACH: guard"
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is False
+
+    def test_same_basename_different_dir_is_a_miss(self):
+        """Gate-2 MED: api/models.py vs db/models.py — genuinely different files that
+        share a basename must NOT match via basename-of-path-token."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix model", "correct_file": "db/models.py", "commit": "abc"}]
+        response = "TASK 1: FILE: api/models.py | FUNCTION: M | APPROACH: field"
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is False
+
+    def test_bare_basename_answer_passes(self):
+        """A token that IS just the bare basename (agent referred to the file by name,
+        no directory) still passes — the legitimate basename case we DO accept."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "backend/core/foo.py", "commit": "abc"}]
+        response = "TASK 1: FILE: foo.py | FUNCTION: bar | APPROACH: guard"
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is True
+
+    def test_label_glued_path_no_space_root_file_passes(self):
+        """Gate-2 MED: 'FILE:foo.py' (no space after colon) with a ROOT-level correct
+        file must PASS — split on ':' so the label doesn't glue to the path."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "foo.py", "commit": "abc"}]
+        response = "TASK 1: FILE:foo.py | FUNCTION:bar | APPROACH:guard"
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is True
+
+    def test_pass_bar_proportional_perfect_single_task_passes(self):
+        """Gate-2 HIGH: dedup can yield <3 tasks; a hardcoded >=2 bar made a PERFECT
+        agent fail 1/1. Pass bar must scale — 1 task all-correct => passed=True."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "foo.py", "commit": "abc"}]
+        response = "TASK 1: FILE: foo.py | FUNCTION: bar | APPROACH: guard"
+        r = evaluate_verification_response(response, tasks)
+        assert r["score"] == "1/1"
+        assert r["passed"] is True, "1/1 must pass — proportional bar, not hardcoded >=2"
+
+    def test_pass_bar_two_tasks_needs_both(self):
+        """ceil(2/3 of 2) = 2 → both required at n=2."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "a", "correct_file": "a.py", "commit": "x"},
+                 {"type": "feat", "description": "b", "correct_file": "b.py", "commit": "y"}]
+        # only 1 correct
+        r = evaluate_verification_response("TASK 1: FILE: a.py\nTASK 2: FILE: wrong.py", tasks)
+        assert r["score"] == "1/2" and r["passed"] is False
+
+    def test_zero_tasks_not_passed(self):
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        r = evaluate_verification_response("", [])
+        assert r["passed"] is False and r["score"] == "0/0"
+
+    def test_backtick_wrapped_path_passes(self):
+        """Gate-1 correction: LLM commonly backtick-wraps paths. Must strip
+        surrounding punctuation/backticks per token before comparing."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+        tasks = [{"type": "fix", "description": "fix x", "correct_file": "src/handler.py", "commit": "abc"}]
+        response = "TASK 1: FILE: `src/handler.py` | FUNCTION: `handle` | APPROACH: null-check."
+        assert evaluate_verification_response(response, tasks)["results"][0]["correct"] is True
+
+    def test_select_tasks_dedup_by_correct_file(self, tmp_path):
+        """Gate-1: two DIFFERENT commits can share correct_file[0]; the 3 tasks must
+        not all point at the same file. Build a repo where fix + feat + refactor all
+        touch foo.py first — result must have DISTINCT correct_files."""
+        import subprocess as sp
+        from scripts.ai_ready_helpers import select_verification_tasks
+        r = tmp_path / "repo"
+        r.mkdir()
+        sp.run(["git", "init", "-q"], cwd=r, check=True)
+        sp.run(["git", "config", "user.email", "t@t"], cwd=r, check=True)
+        sp.run(["git", "config", "user.name", "t"], cwd=r, check=True)
+        (r / "foo.py").write_text("x=1\n")
+        (r / "bar.py").write_text("y=1\n")
+        def commit(msg, files):
+            for f in files:
+                (r / f).write_text((r / f).read_text() + f"# {msg}\n")
+            sp.run(["git", "add", "-A"], cwd=r, check=True)
+            sp.run(["git", "commit", "-q", "-m", msg], cwd=r, check=True)
+        commit("feat: add foo path", ["foo.py", "bar.py"])
+        commit("fix: foo null guard", ["foo.py"])          # foo.py first again
+        commit("refactor: foo + bar cleanup", ["foo.py", "bar.py"])
+        tasks = select_verification_tasks(r)
+        files = [t["correct_file"] for t in tasks]
+        assert len(files) == len(set(files)), f"tasks must have distinct correct_files, got {files}"
+
 
 # ─── Output Path Resolution ───
 
@@ -3230,3 +3353,64 @@ class TestBusinessRulesDimension:
         r = compute_business_rules_dimension(doc, specs=specs)
         assert r["traceability_pass"] == 0.0, r
         assert r["score"] == 0, r
+
+
+# ─── Gap 3: producer order-invariance tripwires (run_006dce1c) ───
+#
+# NOT `f(x)==f(x)`. Each test feeds SHUFFLED/REVERSED input to a producer and
+# asserts the collection field comes out SORTED — so if a future edit drops the
+# `sorted()` at the source, the test goes RED (Gate-1 correction: an already-ordered
+# fixture would make this a worthless tautology; deliberately-disordered input is
+# what gives it regression teeth).
+
+class TestProducerOrderInvariance:
+    """Sorted-output tripwires: shuffled input -> sorted output, or RED on dropped sorted()."""
+
+    def test_blind_spot_scan_output_sorted_by_file_path(self):
+        from scripts.ai_ready_helpers import blind_spot_scan
+        # risk_areas deliberately in REVERSE file_path order; scan must sort blind_spots.
+        doc = {
+            "domains": [], "flows": [], "steps": [], "hot_zones": [],
+            "risk_areas": [
+                {"name": "z", "file_path": "z/zzz.py", "risk_score": 9, "reason": "r"},
+                {"name": "a", "file_path": "a/aaa.py", "risk_score": 8, "reason": "r"},
+                {"name": "m", "file_path": "m/mmm.py", "risk_score": 7, "reason": "r"},
+            ],
+        }
+        out = blind_spot_scan(doc)
+        paths = [b["file_path"] for b in out["blind_spots"]]
+        assert paths == sorted(paths), f"blind_spots must be sorted by file_path, got {paths}"
+        assert paths[0] == "a/aaa.py" and paths[-1] == "z/zzz.py"  # RED if sorted() dropped
+
+    def test_compute_anchor_accounting_missing_ids_sorted(self):
+        from scripts.ai_ready_helpers import compute_anchor_accounting
+        # Anchors present but none classified/unclassified -> all become "missing";
+        # feed entry ids in NON-sorted order, assert missing_ids comes out sorted.
+        doc = {
+            "flows": [], "domains": [], "unclassified": [],
+            "entry_points": [
+                {"id": "e-zebra", "method": "GET", "path": "/z", "file_path": "z.py", "line_number": 1},
+                {"id": "e-alpha", "method": "GET", "path": "/a", "file_path": "a.py", "line_number": 1},
+                {"id": "e-mike", "method": "GET", "path": "/m", "file_path": "m.py", "line_number": 1},
+            ],
+        }
+        out = compute_anchor_accounting(doc)
+        mids = out["missing_ids"]
+        if len(mids) >= 2:  # only meaningful when there are ids to order
+            assert mids == sorted(mids), f"missing_ids must be sorted, got {mids}"
+
+    def test_build_file_tree_returns_sorted(self, tmp_path):
+        """_build_file_tree caps at sorted(files)[:500]. Gate-2 caught the naive
+        version as VACUOUS: with a .git dir, `git ls-files` is consulted FIRST and
+        already returns alphabetical output, so the fallback's sorted() is never
+        exercised — dropping it wouldn't RED the test. Force the rglob FALLBACK
+        (NO .git dir → git ls-files returns empty → walk branch, where sorted() is
+        load-bearing over unordered filesystem walk order)."""
+        from scripts.ai_ready_helpers import _build_file_tree
+        r = tmp_path / "repo_nogit"; r.mkdir()  # deliberately NOT a git repo
+        for name in ["zzz.py", "aaa.py", "mmm.py", "bbb.py"]:
+            (r / name).write_text("x\n")
+        tree = _build_file_tree(r)
+        rel = [t for t in tree if t.endswith(".py")]
+        assert rel, "expected the .py files via the rglob fallback (no git)"
+        assert rel == sorted(rel), f"_build_file_tree must return sorted paths, got {rel}"
