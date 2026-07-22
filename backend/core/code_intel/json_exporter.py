@@ -288,6 +288,20 @@ def export_code_intel_json(
                     c["members_trimmed"] = True
                 content = json.dumps(doc, indent=2, ensure_ascii=False)
 
+        # If STILL over, slim domain_rules.rules to their IDENTITY fields (rule_id,
+        # domain_id, source_symbol, operation, target_data_object, disposition) and
+        # drop the verbose anchor object. rules can be thousands of entries on a
+        # large monolith and otherwise has no trim (Gate-2 MED, run_28a8f99d). The
+        # domains[] summary + rule identity survive; anchors are recoverable by
+        # re-running compute_domain_rules (graph-derived). Flag rules_trimmed.
+        if len(content.encode("utf-8")) > _MAX_SIZE_BYTES:
+            dr = doc.get("domain_rules")
+            if isinstance(dr, dict) and dr.get("rules"):
+                for r in dr["rules"]:
+                    r.pop("anchor", None)
+                dr["rules_trimmed"] = True
+                content = json.dumps(doc, indent=2, ensure_ascii=False)
+
     # ── F19: ATOMIC write (tmp + os.replace). An interrupted/failed write must never
     # leave a half-written file or corrupt the prior one. os.replace is atomic within
     # a filesystem; the .tmp sibling is cleaned up on failure. ──

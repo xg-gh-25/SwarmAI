@@ -51,11 +51,15 @@ _DYNAMIC_TARGET = "<dynamic:unresolved>"
 # table (group 2) + disposition (group 3). Case-insensitive; tolerant of the
 # optional package qualifier and whitespace. NOT anchored to a specific package
 # name so it generalizes beyond RECONCILIATION_INTERFACES.
+# Literal sub-pattern that tolerates PL/SQL doubled-quote escapes (`''` inside a
+# string), so an apostrophe in an arg doesn't truncate the capture or break the
+# whole match (Gate-2 MED, run_28a8f99d). Unescape ''→' after capture.
+_SQL_STR = r"(?:[^']|'')*"
 _RECON_CALL = re.compile(
     r"""prov_recon_services(?:_cps)?\s*\(\s*
-        '[^']*'\s*,\s*      # arg1: schema
-        '([^']*)'\s*,\s*    # arg2: target table   -> group(1)
-        '([^']*)'           # arg3: disposition    -> group(2)
+        '""" + _SQL_STR + r"""'\s*,\s*    # arg1: schema
+        '(""" + _SQL_STR + r""")'\s*,\s*  # arg2: target table   -> group(1)
+        '(""" + _SQL_STR + r""")'         # arg3: disposition    -> group(2)
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -81,10 +85,21 @@ def _scan_dispositions(source: str) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     for m in _RECON_CALL.finditer(source):
-        tbl, disp = m.group(1).strip(), m.group(2).strip()
+        # Unescape PL/SQL doubled quotes ('' -> ') in the captured literals.
+        tbl = m.group(1).replace("''", "'").strip()
+        disp = m.group(2).replace("''", "'").strip()
         key = tbl.casefold()
-        if key and key not in out:
+        if not key:
+            continue
+        if key not in out:
             out[key] = disp
+        elif out[key] != disp:
+            # Same table, DIFFERENT disposition in a later call — surface the
+            # conflict rather than silently keep the first (Gate-2 MED).
+            if not out[key].startswith("CONFLICT:"):
+                out[key] = f"CONFLICT:{out[key]}|{disp}"
+            elif disp not in out[key]:
+                out[key] += f"|{disp}"
     return out
 
 

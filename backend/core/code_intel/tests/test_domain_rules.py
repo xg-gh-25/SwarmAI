@@ -166,3 +166,20 @@ def test_empty_graph_no_crash():
     r = compute_domain_rules(_FakeGraph([], []), source_reader=lambda f: "")
     assert r["rules"] == []
     assert r["domains"] == []
+
+
+def test_disposition_doubled_quote_and_conflict():
+    """Gate-2 MED: PL/SQL doubled quotes ('') inside a recon-call literal must not
+    truncate the capture; and a table with a CONFLICTING second disposition must be
+    surfaced, not silently first-wins-dropped."""
+    from core.code_intel.domain_rules import _scan_dispositions
+    # doubled-quote inside disposition: KEEP''EM → KEEP'EM (not truncated to KEEP)
+    src = "prov_recon_services('S','TBL','KEEP''EM','x','1');"
+    assert _scan_dispositions(src)["tbl"] == "KEEP'EM"
+    # apostrophe in table arg does not break the match
+    src2 = "prov_recon_services('S','O''BRIEN_TAB','DELETE','x','1');"
+    assert _scan_dispositions(src2)["o'brien_tab"] == "DELETE"
+    # same table, conflicting dispositions → surfaced as CONFLICT, not silent drop
+    src3 = ("prov_recon_services('S','REP_X','CREATE_ACTIVATE','x','1');\n"
+            "prov_recon_services('S','REP_X','DELETE','x','1');")
+    assert _scan_dispositions(src3)["rep_x"].startswith("CONFLICT:")

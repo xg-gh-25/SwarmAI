@@ -1553,6 +1553,18 @@ _SQL_DYNAMIC_UNRESOLVED = "<dynamic:unresolved>"
 # table name is concatenated OUTSIDE the quote. This is a NON-MATCH for
 # _SQL_DYNAMIC_ASSIGN (which needs a literal table token inside the quote), so it
 # is additive: it fires ONLY where the literal-token pattern cannot (Gate-1 C2).
+# SQL-shape guard for the concat branch (Gate-2 HIGH, run_28a8f99d): the concat
+# regex alone false-positives on error/log MESSAGES that concatenate a verb phrase,
+# e.g. `msg := 'CREATE TABLE ' || v_reason || ' was blocked'`. Real dynamic DDL, in
+# the string CONTINUATION after the concatenated name, contains SQL structure (AS /
+# NOLOGGING / SELECT / SET / VALUES / WHERE / INTO / a paren); prose continues with
+# an English word. We scan the RHS from the match to the statement terminator for a
+# SQL-continuation token — the mirror of the literal path's shape guard.
+_SQL_CONCAT_SHAPE = re.compile(
+    r"""\b(AS|NOLOGGING|SELECT|SET|VALUES|WHERE|INTO|USING|PARTITION
+         |TABLESPACE|ENABLE|DISABLE|ADD|MODIFY|RENAME)\b|\(""",
+    re.IGNORECASE | re.VERBOSE)
+
 _SQL_DYNAMIC_ASSIGN_CONCAT = re.compile(
     r"""(\w+)\s*:=\s*'\s*
         (CREATE\s+TABLE|INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE
@@ -1629,6 +1641,16 @@ def _sql_dynamic_sql_edges(content, rel_path, headers):
     unresolved_id = _qualify("table:" + _SQL_DYNAMIC_UNRESOLVED, rel_path)
     seen_unresolved_procs: set[str] = set()
     for m in _SQL_DYNAMIC_ASSIGN_CONCAT.finditer(scan):
+        # SQL-shape guard (Gate-2 HIGH): only accept if the RHS continuation (up to
+        # the statement terminator) contains SQL structure — rejects prose messages
+        # like `msg := 'CREATE TABLE ' || v || ' was blocked'`. Bound the lookahead
+        # to the assignment's `;` (or 400 chars) so a later real DDL can't rescue a
+        # prose hit.
+        tail = scan[m.end():]
+        semi = tail.find(";")
+        window = tail[: semi if 0 <= semi <= 400 else 400]
+        if not _SQL_CONCAT_SHAPE.search(window):
+            continue  # prose/message concatenation, not a dynamic write
         proc = _enclosing_proc(m.start())
         if proc in seen_unresolved_procs:
             continue

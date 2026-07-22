@@ -209,6 +209,17 @@ def test_dynamic_sql_concatenated_target_unresolved():
     assert "NOLOGGING" not in tables and "PROV_" not in tables, f"phantom table fabricated: {tables}"
 
 
+def test_dynamic_sql_concat_prose_message_not_a_write():
+    """run_28a8f99d Gate-2 HIGH: the concat branch must NOT fire on a prose message
+    that concatenates a verb phrase (`msg := 'CREATE TABLE ' || v || ' was blocked'`)
+    — the SQL-shape guard rejects a RHS with no SQL structure. `log_error` writes
+    nothing; it must contribute ZERO dynamic_sql edges."""
+    r = _parse("sample_dynamic.sql")
+    log_edges = [e for e in _dyn_edges(r)
+                 if e.source_id.split("::")[-1] == "log_error"]
+    assert log_edges == [], f"prose message fabricated a dynamic write: {log_edges}"
+
+
 def test_dynamic_sql_data_object_not_flagged_dead_code():
     """Run2 (Gate-2): a data_object node has 0 outgoing edges — it must NOT be
     mis-flagged as dead code. Dead-code detection filters is_export=1; data_object

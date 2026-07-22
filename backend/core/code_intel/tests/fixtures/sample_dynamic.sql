@@ -37,3 +37,13 @@ BEGIN
     execute immediate(sqlText);
 END build_dynamic;
 /
+
+CREATE OR REPLACE PROCEDURE log_error IS
+    msg varchar2(200);
+BEGIN
+    -- prose message that concatenates a verb phrase — NOT a dynamic write.
+    -- The concat branch must reject this (no SQL structure after the ||concat).
+    msg := 'CREATE TABLE ' || v_reason || ' was blocked by policy';
+    raise_application_error(-20002, msg);
+END log_error;
+/
