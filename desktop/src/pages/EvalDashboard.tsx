@@ -1010,6 +1010,13 @@ interface ContextHealthData {
   staleness: { project: string; doc: string; days_stale: number; recent_commits: number; raw?: string }[];
   pending_proposals: { id: string; target_doc: string; target_section: string; content: string; created_at: string; confidence: number }[];
   weeks_available: number;
+  // Optional: a swallowed backend error may omit this key — always guard with ?. (Gate-1).
+  semantic_drift?: {
+    report_date: string | null;
+    drift_count: number;
+    findings: { project: string | null; docs: string[]; title: string; detail: string }[];
+    at_risk_cases: { case_id: string; project: string; doc: string }[];
+  };
 }
 
 function useContextHealth() {
@@ -1026,7 +1033,10 @@ function ContextHealthTab() {
   if (isError) return <ErrorState message="Failed to load context health data." />;
   if (!data) return <Loading />;
 
-  const hasActivity = data.refresh_log.length > 0 || data.staleness.length > 0 || data.pending_proposals.length > 0;
+  const drift = data.semantic_drift;
+  const driftFindings = drift?.findings ?? [];
+  const hasActivity = data.refresh_log.length > 0 || data.staleness.length > 0
+    || data.pending_proposals.length > 0 || driftFindings.length > 0;
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
@@ -1045,6 +1055,53 @@ function ContextHealthTab() {
           <p className="text-sm">No context drift detected. Everything is fresh.</p>
           <p className="text-xs mt-1 opacity-70">Auto-refresh runs on every code commit + every 30 minutes.</p>
         </div>
+      )}
+
+      {/* Semantic Drift (ddd-self-audit findings + at-risk golden cases) — a TRUTH
+          signal (a DDD prose claim contradicts itself / the code), distinct from the
+          mtime-based Staleness below. Each finding lists the docs it hits; at-risk
+          cases are golden cases whose affected_by depends on a drifted doc. */}
+      {driftFindings.length > 0 && (
+        <section>
+          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base text-red-500">rule</span>
+            Semantic Drift ({driftFindings.length})
+            {drift?.report_date && (
+              <span className="text-[10px] text-[var(--color-text-muted)] font-normal">
+                from self-audit {drift.report_date}
+              </span>
+            )}
+          </h3>
+          <div className="border border-red-500/20 rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-red-500/5">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Project</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Doc(s)</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">What's Stale</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {driftFindings.map((f, i) => (
+                  <tr key={i} className="hover:bg-[var(--color-hover)]">
+                    <td className="px-3 py-2 text-[var(--color-text)]">{f.project ?? '—'}</td>
+                    <td className="px-3 py-2 text-[var(--color-text-muted)] font-mono">{f.docs.join(', ') || '—'}</td>
+                    <td className="px-3 py-2 text-[var(--color-text-muted)]">{f.title}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(drift?.at_risk_cases?.length ?? 0) > 0 && (
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
+              ⚠️ {drift!.at_risk_cases.length} eval case(s) at risk (affected_by a drifted doc):{' '}
+              <span className="font-mono">{drift!.at_risk_cases.map(c => c.case_id).join(', ')}</span>
+            </p>
+          )}
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-1 italic">
+            Semantic contradictions found by the weekly DDD self-audit. Fix via chat: "s_persist … correct the claim".
+          </p>
+        </section>
       )}
 
       {/* Staleness Signals */}

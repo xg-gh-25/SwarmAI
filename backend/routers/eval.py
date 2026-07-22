@@ -245,9 +245,14 @@ async def get_context_health():
     from pathlib import Path
     from core.initialization_manager import initialization_manager
 
+    # Default drift signal — ALWAYS present in the response so the frontend never
+    # accesses an undefined key (Gate-1: a swallowed backend error must not crash the tab).
+    _empty_drift = {"report_date": None, "findings": [], "drift_count": 0, "at_risk_cases": []}
+
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"refresh_log": [], "staleness": [], "pending_proposals": [], "weeks_available": 0}
+        return {"refresh_log": [], "staleness": [], "pending_proposals": [],
+                "weeks_available": 0, "semantic_drift": _empty_drift}
 
     root = Path(ws_path)
     result = {
@@ -255,6 +260,7 @@ async def get_context_health():
         "staleness": [],
         "pending_proposals": [],
         "weeks_available": 0,
+        "semantic_drift": _empty_drift,
     }
 
     # 1. Read auto-refresh log (last 8 weeks)
@@ -306,6 +312,27 @@ async def get_context_health():
         ]
     except Exception as exc:
         logger.debug("context-health: proposals read failed: %s", exc)
+
+    # 3b. DDD SEMANTIC drift (ddd-self-audit findings) + at-risk golden cases.
+    # Distinct from #2 staleness (that is ddd_refresh's SYNTACTIC mtime signal); this is
+    # the LLM self-audit's semantic-contradiction findings, and it maps each finding to
+    # the golden cases whose affected_by depends on the drifted doc — drift influences
+    # eval through the EXISTING affected_by chain, no new score. Computed LIVE (R30#4).
+    try:
+        from core.ddd_drift_signal import get_semantic_drift, map_at_risk_cases
+        from core.eval_service import get_eval_service
+
+        drift = get_semantic_drift(root)
+        try:
+            cases = get_eval_service().get_golden_set()["cases"]
+            drift["at_risk_cases"] = map_at_risk_cases(drift["findings"], cases)
+        except Exception as exc:
+            logger.debug("context-health: at-risk mapping failed: %s", exc)
+            drift["at_risk_cases"] = []
+        result["semantic_drift"] = drift
+    except Exception as exc:
+        logger.debug("context-health: semantic drift read failed: %s", exc)
+        # result["semantic_drift"] keeps the _empty_drift default set above.
 
     # 4. Learning Dashboard — knowledge growth metrics (source:auto|manual)
     try:

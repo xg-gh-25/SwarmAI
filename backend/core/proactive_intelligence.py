@@ -1499,6 +1499,37 @@ def _get_health_highlights(working_directory: str) -> list[str]:
     return lines
 
 
+def _get_ddd_drift_line(working_directory: str) -> list[str]:
+    """One LIVE briefing line for DDD semantic drift (latest ddd-self-audit report).
+
+    Deliberately SEPARATE from _get_health_highlights: that function reads
+    health_findings.json and returns [] when it is absent (its contract). Drift is an
+    INDEPENDENT source (self-audit reports) and must surface on its own, so it is a
+    standalone helper called directly by build_session_briefing — not folded into the
+    health-findings path (Gate-2: folding it there forced a fallthrough that leaked
+    unrelated global-state lines when health_findings.json was missing).
+
+    Read-only, computed live every call, NOTHING persisted (R30#4); a plain string
+    line, never a Radar-todo write. Full detail + at-risk cases live on the Eval ›
+    Context Health tab.
+    """
+    try:
+        from core.ddd_drift_signal import get_semantic_drift
+
+        drift = get_semantic_drift(Path(working_directory))
+        n = drift.get("drift_count", 0)
+        if n <= 0:
+            return []
+        projects = {f.get("project") for f in drift["findings"] if f.get("project")}
+        m = len(projects) or len(drift["findings"])
+        return [
+            f"  - [ddd-drift] DDD semantic drift: {n} finding(s) across "
+            f"{m} project(s) (see Eval › Context Health)"
+        ]
+    except Exception:
+        return []  # Non-blocking — drift signal must never break briefing
+
+
 def _create_health_todo(
     message: str, severity: str = "warning", escalate: bool = False
 ) -> None:
@@ -1880,7 +1911,10 @@ def build_session_briefing(
             sections.append("**Pending Radar todos:**\n" + "\n".join(todo_lines))
 
         # L4: System health alerts from health_findings.json
-        health_lines = _get_health_highlights(str(workspace))
+        # + DDD semantic-drift line from an INDEPENDENT source (self-audit report),
+        # surfaced as its own helper so it fires even when health_findings.json is
+        # absent (Gate-2: it must not depend on the health-findings path's contract).
+        health_lines = _get_health_highlights(str(workspace)) + _get_ddd_drift_line(str(workspace))
         if health_lines:
             sections.append("**System health:**\n" + "\n".join(health_lines))
 
