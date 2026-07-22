@@ -50,21 +50,36 @@ _SECTION_JOIN_RE = re.compile(
     r'|\bd|"SwarmAI"|/ *"[A-Z][A-Za-z_]+")'
     r'\s*/\s*["\'](?:gates|skills)["\']'
 )
-# A VARIABLE-doc JOIN: `<project_dir_expr> / doc_name` where the loop var holds a
-# canonical doc NAME (from `for doc_name in DDD_CANONICAL_DOCS:` etc). This is the
-# pattern that let 15 readers slip past the literal-only guard (run_3a636c88,
-# Gate-2): the doc name isn't a literal string on the line, it's a variable. Any
-# such join MUST go through ddd_path (a migrated DDD keeps docs in 2-understanding/,
-# so a root join returns a non-existent path → the project silently vanishes /
-# cultivation writes to root = split-brain).
+# A VARIABLE-doc JOIN: `<project_dir_expr> / <doc-holder>` where the RHS holds a
+# canonical doc NAME — either a loop/local var (`doc_name`, `doc`, `ddd_name`) OR
+# an ATTRIBUTE access (`proposal.target_doc`, `p.target_doc`). The doc name isn't a
+# literal on the line, so `_DOC_JOIN_RE` (matches "TECH.md") never sees it. Two
+# waves recurred:
+#   - run_3a636c88: 15 loop-var readers (`project_dir / doc_name`)
+#   - run_6f636dd5: 3 ddd_cultivation.py attribute-shape readers
+#     (`project_dir / proposal.target_doc`) → a migrated DDD's canonical docs live
+#     under 2-understanding/, so the root join hit a non-existent path →
+#     doc.exists()==False → cultivation returned "doc_missing" → SILENTLY stopped
+#     sedimenting knowledge for every migrated DDD. The literal-only + loop-var
+#     guards both missed the `\w+.target_doc` shape.
+# Any such join MUST go through ddd_path (else the project vanishes from indexes /
+# cultivation writes to root = split-brain). RHS alternatives:
+#   - `doc_name|ddd_name|doc\b`  → local/loop var
+#   - `\w+\.target_doc\b`        → attribute access (the run_6f636dd5 shape)
+#   - `f["']\{doc`               → f-string-built doc path
 _DOC_VAR_JOIN_RE = re.compile(
     r'(?:project_dir|proj_dir|ddd_dir|pdir)'
-    r'\s*/\s*(?:doc_name|ddd_name|doc\b|f["\']\{doc)'
+    r'\s*/\s*(?:doc_name|ddd_name|doc\b|\w+\.target_doc\b|f["\']\{doc)'
 )
 
 
 def _is_allowlisted(path: Path, line: str) -> bool:
     if path == _RESOLVER_FILE:
+        return True
+    # A comment-only line is prose describing the pattern (e.g. the fix note that
+    # cites `project_dir / doc`), never an executable path join — skip it. A real
+    # bare-join in code is a statement, not a `#`-led line.
+    if line.lstrip().startswith("#"):
         return True
     if "ddd-six-section-fallback" in line or "ddd-canonical-fallback" in line:
         return True

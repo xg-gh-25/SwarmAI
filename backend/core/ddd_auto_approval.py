@@ -102,7 +102,12 @@ def _check_maturity(proposal: "CultivationProposal", project_dir: Path) -> bool:
     Reads the maturity annotation comment from the DDD doc.
     Format: <!-- maturity: growing | sources: N | ... -->
     """
-    doc_path = project_dir / proposal.target_doc
+    # Six-section resolver (READ, strangler-aware): a migrated DDD keeps canonical
+    # docs under 2-understanding/. A bare `project_dir / doc` would hit the empty
+    # root → doc.exists()==False → maturity always fails → auto-approval silently
+    # denied for every migrated DDD (lessons wrongly escalated to the human queue).
+    from core.ddd_paths import ddd_path
+    doc_path = ddd_path(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return False
 

@@ -518,6 +518,41 @@ class TestApplyToDDD:
             )
             assert apply_to_ddd(real, project_dir) == "applied"
 
+    def test_applied_to_migrated_six_section_layout(self):
+        """run_6f636dd5 (P0): a MIGRATED DDD keeps canonical docs under
+        2-understanding/ with NO root copy. apply_to_ddd must resolve the doc via
+        ddd_path (READ, strangler-aware) and STILL append — not hit an empty root,
+        return 'doc_missing', and silently stop sedimenting. MUTATION: revert the
+        fix (doc_path = project_dir / proposal.target_doc) → the doc is not at root
+        → returns 'doc_missing' → this test goes RED. Non-vacuous."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            # Six-section MIGRATED layout: docs live ONLY under 2-understanding/,
+            # nothing at root (exactly the post-migration state of all 7 DDDs).
+            und = project_dir / "2-understanding"
+            und.mkdir(parents=True)
+            doc = und / "IMPROVEMENT.md"
+            doc.write_text("# Lessons\n\n## What Worked\n\n- existing entry\n")
+            # Guard the premise: no root copy exists (the split-brain trap).
+            assert not (project_dir / "IMPROVEMENT.md").exists()
+
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="cultivation resolves migrated docs via ddd_path, not a bare root join",
+                source_run_id="run_6f636dd5",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "applied"
+
+            # Written to the 2-understanding/ doc, and NO stray root copy created.
+            content = doc.read_text()
+            assert "cultivation resolves migrated docs via ddd_path" in content
+            assert "existing entry" in content  # didn't clobber
+            assert not (project_dir / "IMPROVEMENT.md").exists()
+
     def test_applied_returns_status_string(self):
         """Successful append returns 'applied' (status contract, not bool True)."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
@@ -669,6 +704,7 @@ class TestSafeAppendSectionsExistInDocs:
         # developer-machine path (that would make the check pass VACUOUSLY in CI
         # where the path is absent). Adversarial MED.
         from core.initialization_manager import initialization_manager
+        from core.ddd_paths import ddd_path
         workspace = Path(initialization_manager.get_cached_workspace_path())
         project_dir = workspace / "Projects" / "SwarmAI"
         if not project_dir.exists():
@@ -677,7 +713,11 @@ class TestSafeAppendSectionsExistInDocs:
         missing = []
         checked = 0  # non-vacuous guard: at least one section must be verified
         for doc_name, sections in SAFE_APPEND_SECTIONS.items():
-            doc_path = project_dir / doc_name
+            # Resolve via the six-section resolver: SwarmAI (and every DDD) is
+            # migrated, so canonical docs live under 2-understanding/. A bare
+            # `project_dir / doc_name` read would find nothing → checked stays 0 →
+            # this very hygiene check goes vacuous (the run_6f636dd5 class).
+            doc_path = ddd_path(project_dir, doc_name)
             if not doc_path.exists():
                 continue
             content = doc_path.read_text(encoding="utf-8")

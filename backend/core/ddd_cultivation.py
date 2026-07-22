@@ -5,7 +5,8 @@ Connects Pipeline REFLECT output to DDD documents with graduated autonomy:
 - ADDITIVE changes (new lessons, patterns): auto-applied, logged to changelog
 - RETIRE (evidence-driven delete/rewrite, run_ecc7a32b): a HIGH-CONFIDENCE
   supersession (unambiguous non-keep-class locate) AUTO-APPLIES reversibly
-  (retire_entry: archive+bak+strip), capped at MAX_AUTO_RETIRES_PER_RUN; a
+  (retire_entry: archive+strip; recovery = archive + git, no .bak), capped at
+  MAX_AUTO_RETIRES_PER_RUN; a
   borderline / close-runner-up / keep-class one is escalated via the proposal queue
 - RISKY appends (protected zones, conversation-derived): escalated via proposal queue
 
@@ -35,12 +36,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from core.ddd_paths import ddd_path
+
 # Maximum proposals generated per pipeline run (prevents noise)
 MAX_PROPOSALS_PER_RUN = 5
 
 # Maximum AUTONOMOUS retires (delete/rewrite) applied per cultivate call
 # (run_ecc7a32b). Bounds the blast radius of confident auto-retire within one
-# _cultivate_proposals invocation. Retire is reversible (archive+bak), so a wrong
+# _cultivate_proposals invocation. Retire is reversible (archive + git), so a wrong
 # auto-delete is recoverable — but a low cap keeps volume sane + auditable.
 MAX_AUTO_RETIRES_PER_RUN = 2
 
@@ -644,7 +647,13 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     if len(_candidate) < MIN_LESSON_LENGTH or not is_quality_lesson(_candidate):
         return "rejected_low_value"
 
-    doc_path = project_dir / proposal.target_doc
+    # Six-section resolver (READ, strangler-aware): a migrated DDD keeps canonical
+    # docs under 2-understanding/; a bare `project_dir / doc` would hit the empty
+    # root → doc_missing → cultivation silently stops sedimenting. ddd_path returns
+    # the new location when it exists, else the old root (un-migrated DDDs). We both
+    # READ and WRITE-BACK this same resolved path below, so reads/writes never
+    # diverge (no split-brain) — ddd_path (not ddd_write_path) is correct here.
+    doc_path = ddd_path(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return "doc_missing"
 
@@ -831,7 +840,8 @@ def _locate_target_entry(
     Uses parse_entries(include_prose=True) so both **bold** entries and curated
     prose bullets are candidates. Fail-safe: no doc/entries/overlap → None → append.
     """
-    doc_path = project_dir / target_doc
+    # Six-section resolver (READ, strangler-aware) — see apply_to_ddd note.
+    doc_path = ddd_path(project_dir, target_doc)
     if not doc_path.exists():
         return None
     try:
@@ -975,7 +985,15 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
     if not proposal.target_title:
         return "no_target"  # locator found nothing — refuse to guess
 
-    doc_path = project_dir / proposal.target_doc
+    # Six-section resolver (READ, strangler-aware) — see apply_to_ddd note. The
+    # resolved path is also passed as retire_entry(source_path=...) below, so the
+    # STRIP (the write-back that removes the entry) lands on the SAME doc we read.
+    # NOTE: the retire ARCHIVE (<stem>-archive.md) is written by ddd_entry_lifecycle
+    # at the project ROOT, NOT co-located with a migrated 2-understanding/ doc — this
+    # is intentional (an archive is cold storage outside the ①→⑥ tree, and FTS5
+    # rglob-indexes it wherever it lives, so recall is unaffected). Do not "fix" the
+    # strip/archive to the same dir on that assumption.
+    doc_path = ddd_path(project_dir, proposal.target_doc)
     if not doc_path.exists():
         return "doc_missing"
 

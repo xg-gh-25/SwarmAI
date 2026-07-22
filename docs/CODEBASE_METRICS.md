@@ -16,10 +16,10 @@ updated: 2026-07-22
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 3052+ | `git log --oneline | wc -l` |
+| Total commits | 3060+ | `git log --oneline | wc -l` |
 | Duration | ~150 days | First commit to latest (1 human contributor) |
-| Backend core modules | 145 Python files, 81782 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 211914 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
+| Backend core modules | 146 Python files, 82342 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
+| Total backend LOC | 212489 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
 | Test files | 401 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 82 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 14 | `ls backend/hooks/*.py | wc -l` |
@@ -29,5 +29,5 @@ updated: 2026-07-22
 | Context system | 1220 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 13 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | 20,936 symbols, 31,426 edges | `code_intel.db` (code_nodes / code_edges tables) |
+| Code graph | 21,007 symbols, 30,177 edges | `code_intel.db` (code_nodes / code_edges tables) |
 <!-- METRICS_END -->
