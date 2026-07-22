@@ -656,6 +656,87 @@ class TestEnsureDefaultWorkspace:
         finally:
             swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
+    @pytest.mark.asyncio
+    async def test_ensure_default_project_writes_canonical_docs_under_2understanding(
+        self, temp_dir
+    ):
+        """CREATE (fresh) must place the 4 canonical docs UNDER 2-understanding/,
+        NOT at the project root — routed via ddd_write_path (six-section SSOT)."""
+        from pathlib import Path
+        manager = SwarmWorkspaceManager()
+        root = Path(temp_dir) / "SwarmWS"
+        (root / "Projects").mkdir(parents=True, exist_ok=True)
+
+        await manager._ensure_default_project(root)
+
+        proj = root / "Projects" / "SwarmAI"
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            assert (proj / "2-understanding" / doc).exists(), \
+                f"{doc} should be created under 2-understanding/"
+            assert not (proj / doc).exists(), \
+                f"{doc} must NOT be created at project root (six-section violation)"
+
+    @pytest.mark.asyncio
+    async def test_ensure_default_project_does_not_restub_migrated_docs(self, temp_dir):
+        """REGRESSION (run_1db3791d P0): for a MIGRATED DDD (canonical docs already
+        under 2-understanding/, root empty), verify_integrity's _ensure_default_project
+        must NOT re-create template STUBS at root. Pre-fix it used a bare
+        `project_dir / filename` root write whose `if not exists()` guard missed the
+        migrated docs and re-stubbed every startup. MUTATION: revert to the bare join
+        → this test goes RED (root stub re-appears + real doc untouched)."""
+        from pathlib import Path
+        manager = SwarmWorkspaceManager()
+        root = Path(temp_dir) / "SwarmWS"
+        proj = root / "Projects" / "SwarmAI"
+        und = proj / "2-understanding"
+        und.mkdir(parents=True, exist_ok=True)
+        # Simulate the migrated state: real docs under 2-understanding/, root EMPTY.
+        real_marker = "# REAL migrated content — do not clobber\n"
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (und / doc).write_text(real_marker, encoding="utf-8")
+        assert not any((proj / d).exists()
+                       for d in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"))
+
+        await manager._ensure_default_project(root)
+
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            assert not (proj / doc).exists(), \
+                f"{doc} was re-stubbed at root — the provision split-brain bug recurred"
+            # the real migrated doc is preserved (exists() guard saw it, skipped write)
+            assert (und / doc).read_text(encoding="utf-8") == real_marker, \
+                f"2-understanding/{doc} was clobbered"
+
+    @pytest.mark.asyncio
+    async def test_ensure_default_project_does_not_stub_unmigrated_root_docs(self, temp_dir):
+        """REGRESSION (run_1db3791d, Gate-2 CRITICAL): for an UN-MIGRATED DDD (real
+        docs at ROOT, no 2-understanding/), _ensure_default_project must NOT write a
+        stub into 2-understanding/ and orphan the real root doc. A ddd_write_path GUARD
+        (always-new) would return the absent 2-understanding/ path → exists()=False →
+        stub there while the real doc sits at root, and the strangler READ then resolves
+        to the empty stub = DATA LOSS. The guard must use ddd_path (strangler read: sees
+        the root doc, skips). MUTATION: change the guard to ddd_write_path → this goes
+        RED (a stub appears in 2-understanding/)."""
+        from pathlib import Path
+        manager = SwarmWorkspaceManager()
+        root = Path(temp_dir) / "SwarmWS"
+        proj = root / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        # Un-migrated: real human-authored docs at ROOT, no 2-understanding/ dir.
+        real_marker = "# REAL root content (un-migrated) — do not orphan\n"
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (proj / doc).write_text(real_marker, encoding="utf-8")
+        assert not (proj / "2-understanding").exists()
+
+        await manager._ensure_default_project(root)
+
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            # No stub written into 2-understanding/ (guard saw the root doc via strangler)
+            assert not (proj / "2-understanding" / doc).exists(), \
+                f"2-understanding/{doc} stub written — orphans the real root doc (data loss)"
+            # the real root doc is untouched
+            assert (proj / doc).read_text(encoding="utf-8") == real_marker, \
+                f"root {doc} was clobbered"
+
 
 class TestExpandPathWithAppDataDir:
     """Tests for expand_path() with {app_data_dir} placeholder."""

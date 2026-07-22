@@ -977,11 +977,24 @@ class SwarmWorkspaceManager:
         def _provision():
             project_dir.mkdir(parents=True, exist_ok=True)
 
-            # Write DDD docs (only if missing — user edits are preserved)
+            # Write DDD docs (only if missing — user edits are preserved). This runs
+            # every startup via verify_integrity, so the exists() guard must be
+            # strangler-aware in BOTH directions (matches provision_project_ddd's
+            # contract): READ via ddd_path (existing-or-new), WRITE via ddd_write_path
+            # (always-new). Using ddd_write_path for the GUARD too breaks both states:
+            #   • MIGRATED (docs in 2-understanding/, root empty): the original bug —
+            #     a bare `project_dir / filename` root guard missed the migrated doc
+            #     and re-stubbed at root every restart.
+            #   • UN-MIGRATED (real docs at root, no 2-understanding/): a ddd_write_path
+            #     guard returns the always-new 2-understanding/ path (exists()=False) →
+            #     writes a STUB there while the real doc orphans at root, and the
+            #     strangler READ then resolves to the empty stub = data loss.
+            # ddd_path for the guard sees the real doc in EITHER location and skips;
+            # ddd_write_path is used only when actually creating a fresh doc.
             for filename, content in SWARMAI_PROJECT_DDD.items():
-                filepath = project_dir / filename
-                if not filepath.exists():
-                    filepath.write_text(content, encoding="utf-8")
+                if ddd_path(project_dir, filename).exists():
+                    continue
+                ddd_write_path(project_dir, filename).write_text(content, encoding="utf-8")
 
             # Ensure .artifacts/ with manifest.json
             artifacts_dir = project_dir / ".artifacts"

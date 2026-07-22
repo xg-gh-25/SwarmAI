@@ -1074,7 +1074,8 @@ def reclaim_noise_entries(
     if dry_run or not selected:
         return report
 
-    # Apply via the shared archive+strip+dated-bak tail (also used by retire_entry).
+    # Apply via the shared archive+strip tail (also used by retire_entry;
+    # recovery = archive + git, NO .bak — see _archive_and_strip docstring below).
     _archive_and_strip(content, selected, today, project_dir, report,
                        archive_name=archive_name, source_path=source_path)
     return report
