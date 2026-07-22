@@ -1521,7 +1521,15 @@ _SQL_DYNAMIC_ASSIGN = re.compile(
     r"""(\w+)\s*:=\s*'\s*
         (CREATE\s+TABLE|INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE
          |TRUNCATE\s+TABLE|DROP\s+TABLE|MERGE\s+INTO)
-        \s+(?:"?\w+"?\.)?"?(\w+)"?""",
+        \s+(?:"?\w+"?\.)?"?(\w+)"?
+        # SQL-shape guard (Gate-2 HIGH, run_4056325a): the table token MUST be
+        # followed by real SQL structure — NOT another prose word. Without this,
+        # an error MESSAGE like `msg := 'CREATE TABLE was blocked'` fabricates a
+        # phantom table `was`. Real dynamic SQL continues with `(`, `;`, end-of-
+        # string, or a SQL keyword; prose continues with an English word.
+        \s*(?:\(|;|'|$|\bAS\b|\bSET\b|\bSELECT\b|\bVALUES\b|\bWHERE\b|\bUSING\b
+             |\bADD\b|\bMODIFY\b|\bDROP\b|\bRENAME\b|\bPARTITION\b|\bNOLOGGING\b
+             |\bTABLESPACE\b|\bENABLE\b|\bDISABLE\b|\bTRUNCATE\b)""",
     re.IGNORECASE | re.VERBOSE)
 
 # Map the matched multi-word verb → a compact operation token for the edge_type.

@@ -173,6 +173,33 @@ def test_dynamic_sql_comment_assignment_not_an_edge():
     assert "old_ghost" not in targets, f"comment assignment leaked as edge: {targets}"
 
 
+def test_dynamic_sql_prose_message_not_a_table():
+    """Run2 (Gate-2 HIGH regression): an error MESSAGE that mentions a write verb
+    (`msg := 'CREATE TABLE was blocked'`) must NOT fabricate a phantom table. The
+    SQL-shape guard requires real SQL structure after the table token, not prose."""
+    r = _parse("sample_dynamic.sql")
+    tables = {n.name for n in r.nodes if n.node_type == "data_object"}
+    assert "was" not in tables and "the" not in tables, f"prose fabricated tables: {tables}"
+
+
+def test_dynamic_sql_edge_confidence_is_low():
+    """Run2 (Gate-2): a dynamic-SQL edge is an ASSIGNMENT (weaker evidence than an
+    executed call) — confidence must stay low (0.4) to signal that honestly."""
+    r = _parse("sample_dynamic.sql")
+    for e in _dyn_edges(r):
+        assert e.confidence == 0.4, f"dynamic_sql edge confidence should be 0.4, got {e.confidence}"
+
+
+def test_dynamic_sql_data_object_not_flagged_dead_code():
+    """Run2 (Gate-2): a data_object node has 0 outgoing edges — it must NOT be
+    mis-flagged as dead code. Dead-code detection filters is_export=1; data_object
+    nodes are is_export=False, so they are excluded by construction. Guard it."""
+    r = _parse("sample_dynamic.sql")
+    for n in r.nodes:
+        if n.node_type == "data_object":
+            assert n.is_export is False, f"data_object {n.name} must be is_export=False"
+
+
 def test_dynamic_sql_edges_survive_bulk_insert():
     """Run2 AC4 (CRITICAL C1 regression — the plan-killer): edges must SURVIVE a
     real GraphStore.bulk_insert, which runs orphan cleanup that deletes edges whose

@@ -16,3 +16,12 @@ BEGIN
     NULL;
 END audit_log;
 /
+
+CREATE OR REPLACE PROCEDURE guard_msg IS
+    msg varchar2(200);
+BEGIN
+    msg := 'CREATE TABLE was blocked by policy';
+    msg := 'UPDATE the record failed';
+    raise_application_error(-20001, msg);
+END guard_msg;
+/
