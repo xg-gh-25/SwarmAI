@@ -41,7 +41,7 @@ def _ddd_doc(project_dir: Path, doc: str) -> Path:
         return ddd_path(project_dir, doc)
     except ImportError:
         new = project_dir / "2-understanding" / doc
-        return new if new.exists() else project_dir / doc
+        return new if new.exists() else project_dir / doc  # ddd-six-section-fallback
 
 
 def count_corrections() -> int:

@@ -28,6 +28,7 @@ import tempfile as _tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from core.ddd_paths import ddd_path
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from typing import Optional
 
@@ -245,7 +246,7 @@ def _get_section_age_days(
         return (now - latest_ts).days
 
     # Fallback: file mtime (all sections get same age — coarse but safe)
-    doc_path = project_dir / doc_name
+    doc_path = ddd_path(project_dir, doc_name)
     if doc_path.exists():
         mtime = datetime.fromtimestamp(doc_path.stat().st_mtime, tz=timezone.utc)
         return (datetime.now(timezone.utc) - mtime).days
@@ -285,7 +286,7 @@ def compute_section_health(project_dir: Path) -> dict:
     }
 
     for doc_name in DDD_CANONICAL_DOCS:
-        doc_path = project_dir / doc_name
+        doc_path = ddd_path(project_dir, doc_name)
         if not doc_path.exists():
             continue
 

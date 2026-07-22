@@ -137,6 +137,40 @@ class TestShareableScan:
         assert all(p.endswith(("PRODUCT.md", "TECH.md")) for p in paths)
 
     @pytest.mark.asyncio
+    async def test_migrated_project_shares_docs_from_2understanding(self, tmp_path):
+        """A MIGRATED shareable DDD keeps its 4 docs under 2-understanding/. The
+        scanner must still surface them (via ddd_path) — the containment guard was
+        'direct child of project_dir', which rejected every migrated doc until it
+        was relaxed to 'inside the project tree' (run_3a636c88, Gate-2 catch)."""
+        proj = tmp_path / "Projects" / "Migrated"
+        und = proj / "2-understanding"
+        und.mkdir(parents=True)
+        (proj / ".project.json").write_text(json.dumps(
+            {"name": "Migrated", "shareable": True}), encoding="utf-8")
+        for d in ("PRODUCT.md", "TECH.md"):
+            (und / d).write_text(f"# {d}", encoding="utf-8")
+        paths = await self._run_scan(tmp_path)
+        assert len(paths) == 2, f"migrated shareable docs must be shared, got {paths}"
+        assert all("2-understanding" in p for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_symlink_escape_still_rejected_after_migration(self, tmp_path):
+        """Security intact: a 2-understanding/TECH.md -> ../../MEMORY.md symlink must
+        STILL be rejected (the guard relaxation must not open a symlink escape)."""
+        proj = tmp_path / "Projects" / "Evil"
+        und = proj / "2-understanding"
+        und.mkdir(parents=True)
+        (proj / ".project.json").write_text(json.dumps(
+            {"name": "Evil", "shareable": True}), encoding="utf-8")
+        secret = tmp_path / "MEMORY.md"
+        secret.write_text("# owner private", encoding="utf-8")
+        (und / "PRODUCT.md").write_text("# real", encoding="utf-8")
+        (und / "TECH.md").symlink_to(secret)  # escape attempt
+        paths = await self._run_scan(tmp_path)
+        assert all("MEMORY.md" not in p for p in paths), "symlink escape must be rejected"
+        assert not any(str(secret) in p for p in paths)
+
+    @pytest.mark.asyncio
     async def test_private_project_contributes_nothing(self, tmp_path):
         # shareable=False → fail-closed exclusion
         self._make_project(

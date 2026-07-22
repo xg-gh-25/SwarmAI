@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.ddd_paths import ddd_path
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 
 logger = logging.getLogger(__name__)
@@ -338,7 +339,7 @@ def promote_section(
     if new_level not in LEVELS:
         return False
 
-    doc_path = project_dir / doc_name
+    doc_path = ddd_path(project_dir, doc_name)
     if not doc_path.is_file():
         return False
 
@@ -374,7 +375,7 @@ def evaluate_all_promotions(project_dir: Path) -> list[dict]:
     promotions: list[dict] = []
 
     for doc_name in DDD_CANONICAL_DOCS:
-        doc_path = project_dir / doc_name
+        doc_path = ddd_path(project_dir, doc_name)
         if not doc_path.is_file():
             continue
 
@@ -467,7 +468,7 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
     now = datetime.now(timezone.utc)
 
     for doc_name in DDD_CANONICAL_DOCS:
-        doc_path = project_dir / doc_name
+        doc_path = ddd_path(project_dir, doc_name)
         if not doc_path.is_file():
             continue
 

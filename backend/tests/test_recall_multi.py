@@ -683,6 +683,29 @@ class TestRun3RecallLegsE2E:
         hits, layer = _recall_ddd("anything", "Proj", 5)
         assert isinstance(hits, list)  # no crash when neither leg has data
 
+    def test_moat_recalled_from_assets_data_contract(self, tmp_path, monkeypatch):
+        """A governed-asset data-contract file (assets/data-source/data-contract/*.md)
+        MUST be recallable — the moat's domain judgment reaches recall (run_3a636c88,
+        PRI01). Before the assets-leg it was an orphan (recall never scanned assets/)."""
+        from core.recall_multi import _recall_ddd
+        proj = self._make_project(tmp_path, monkeypatch, with_domains=False, with_human=False)
+        dc = proj / "assets" / "data-source" / "data-contract"
+        dc.mkdir(parents=True)
+        (dc / "entities.md").write_text(
+            "# Entities\n- zMOATSENTINEL77 = the domain disambiguation token\n",
+            encoding="utf-8")
+        hits, layer = _recall_ddd("zMOATSENTINEL77 domain disambiguation", "Proj", 5)
+        docs = [h.get("doc", "") for h in hits]
+        assert any("data-contract/entities.md" in d for d in docs), \
+            f"moat data-contract sentinel MUST be recalled from assets/, got {docs}"
+
+    def test_moat_leg_safe_when_no_assets_dir(self, tmp_path, monkeypatch):
+        """No assets/ dir → the leg is a no-op, never crashes."""
+        from core.recall_multi import _recall_ddd
+        self._make_project(tmp_path, monkeypatch, with_domains=False, with_human=False)
+        hits, layer = _recall_ddd("anything at all", "Proj", 5)
+        assert isinstance(hits, list)
+
     def test_domain_hit_survives_full_doc_pool_at_default_max(self, tmp_path, monkeypatch):
         """Regression (run_89e28075): the domain leg is the specialized business-
         semantic layer — a query about a business flow MUST surface its domain even

@@ -533,6 +533,37 @@ def _recall_ddd(query: str, project: Optional[str],
             for rel, score in memory_index._normalize_bm25_scores(raw).items():
                 scored.append((rel, "(whole file)", score * _K_WEIGHT))
 
+    # ② GOVERNED-ASSET moat leg (six-section redesign, run_3a636c88): a data-agent
+    # DDD's moat — its L3 data-semantic contract — lives at assets/<kind>/ (e.g.
+    # CMHK's assets/data-source/data-contract/*.md). This is the DDD's DOMAIN
+    # JUDGMENT (entity disambiguation "CMHK != China Mobile HK", the 6-gate output
+    # self-check the AGENT runs) — exactly what a session touching the domain should
+    # RECALL even without the skill loaded (PRI01: the moat's judgment reaches my
+    # judgment). Read via ddd_asset_path (strangler: assets/ new, 4-capabilities/
+    # or skills/ old pkg). BOUNDED STRICTER than the knowledge leg (contract tables
+    # are denser/less narrative) + WEIGHTED LOWER (supporting reference, must not
+    # crowd the 4 judgment docs — Gate-0 anti-pollution). rel-path carries the
+    # assets/ prefix so it can never alias a Knowledge/ file (no double-count).
+    from core.ddd_paths import ddd_asset_path
+    dc_dir = ddd_asset_path(base, "data-source", old_rel="4-capabilities/s_cmhk-data-proxy") / "data-contract"
+    if dc_dir.is_dir():
+        from core import memory_index
+        _DC_MAX_FILES = 20          # a data-contract is fewer/smaller files than Knowledge/
+        _DC_MAX_BYTES = 32 * 1024   # stricter skip — contract tables are data, not narrative
+        dcdocs: dict[str, str] = {}
+        for dp in sorted(dc_dir.rglob("*.md"))[:_DC_MAX_FILES]:
+            try:
+                if dp.stat().st_size > _DC_MAX_BYTES:
+                    continue
+                dcdocs[str(dp.relative_to(base))] = dp.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        if dcdocs:
+            raw_dc = memory_index._bm25_scores(query, dcdocs)
+            _DC_WEIGHT = 0.5        # below _K_WEIGHT (0.7): machine-contract < cultivated judgment
+            for rel, score in memory_index._normalize_bm25_scores(raw_dc).items():
+                scored.append((rel, "(moat contract)", score * _DC_WEIGHT))
+
     # ③ code-intel domains[] leg (Run 3, §8.1): the code-intel.json business
     # semantic layer (domains/flows/steps) is a JSON EXPORT — the codeintel graph
     # leg reads code_intel.db (SQLite symbols), NEVER this file, so domains[] was

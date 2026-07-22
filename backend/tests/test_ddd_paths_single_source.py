@@ -50,6 +50,17 @@ _SECTION_JOIN_RE = re.compile(
     r'|\bd|"SwarmAI"|/ *"[A-Z][A-Za-z_]+")'
     r'\s*/\s*["\'](?:gates|skills)["\']'
 )
+# A VARIABLE-doc JOIN: `<project_dir_expr> / doc_name` where the loop var holds a
+# canonical doc NAME (from `for doc_name in DDD_CANONICAL_DOCS:` etc). This is the
+# pattern that let 15 readers slip past the literal-only guard (run_3a636c88,
+# Gate-2): the doc name isn't a literal string on the line, it's a variable. Any
+# such join MUST go through ddd_path (a migrated DDD keeps docs in 2-understanding/,
+# so a root join returns a non-existent path → the project silently vanishes /
+# cultivation writes to root = split-brain).
+_DOC_VAR_JOIN_RE = re.compile(
+    r'(?:project_dir|proj_dir|ddd_dir|pdir)'
+    r'\s*/\s*(?:doc_name|ddd_name|doc\b|f["\']\{doc)'
+)
 
 
 def _is_allowlisted(path: Path, line: str) -> bool:
@@ -103,5 +114,31 @@ def test_no_stray_section_dir_joins():
     assert not offenders, (
         "Hardcoded per-DDD section-dir joins found (route through "
         "core.ddd_paths.ddd_path(project_dir, 'gates'|'capabilities') instead):\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_no_stray_variable_doc_joins():
+    """No `project_dir / doc_name` VARIABLE-doc join outside the resolver.
+
+    This is the pattern that let 15 canonical-doc readers slip past the
+    literal-only guards (run_3a636c88): the doc name is a loop variable, not a
+    literal, so `_DOC_JOIN_RE` (which matches "TECH.md") never saw them. A migrated
+    DDD keeps its docs under 2-understanding/, so a root `project_dir / doc_name`
+    read returns a non-existent path → the project vanishes from indexes /
+    cultivation writes to root = split-brain. Route through ddd_path(project_dir,
+    doc_name)."""
+    offenders: list[str] = []
+    for py in _iter_backend_py():
+        try:
+            text = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if _DOC_VAR_JOIN_RE.search(line) and not _is_allowlisted(py, line):
+                offenders.append(f"{py.relative_to(_BACKEND)}:{i}: {line.strip()}")
+    assert not offenders, (
+        "Variable-doc path joins found (route through core.ddd_paths.ddd_path("
+        "project_dir, doc_name) — a migrated DDD's docs are under 2-understanding/):\n"
         + "\n".join(offenders)
     )

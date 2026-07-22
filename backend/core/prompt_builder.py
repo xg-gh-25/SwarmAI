@@ -38,6 +38,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
+from core.ddd_paths import ddd_path
+
 if TYPE_CHECKING:
     from .app_config_manager import AppConfigManager
 
@@ -1673,7 +1675,7 @@ class PromptBuilder:
                     # doc must resolve to a real file DIRECTLY inside it.
                     proj_real = os.path.realpath(project_dir)
                     for doc in self._SHAREABLE_DDD_DOCS:
-                        doc_path = project_dir / doc
+                        doc_path = ddd_path(project_dir, doc)
                         # SYMLINK ESCAPE GUARD (adversarial M1, run_c220f153):
                         # is_file() FOLLOWS symlinks, and the handler realpath-
                         # resolves the grant — so a symlink `TECH.md ->
@@ -1686,9 +1688,18 @@ class PromptBuilder:
                         if not doc_path.is_file():
                             continue
                         doc_real = os.path.realpath(doc_path)
-                        if os.path.dirname(doc_real) != proj_real:
-                            # resolved outside the project dir (symlink/.. escape)
-                            continue
+                        # Containment: the resolved doc must live INSIDE the project
+                        # tree (fail-closed on symlink/.. escape). Six-section change
+                        # (run_3a636c88): a migrated doc resolves to
+                        # <proj>/2-understanding/<doc>, so the anchor is "still under
+                        # proj_real", NOT "direct child of proj_real" (the old check
+                        # rejected every migrated shareable doc). os.path.commonpath
+                        # confirms containment without allowing a ../ escape.
+                        try:
+                            if os.path.commonpath([doc_real, proj_real]) != proj_real:
+                                continue  # resolved outside the project dir
+                        except ValueError:
+                            continue  # different drives / relative — fail-closed
                         paths.append(str(doc_path))
             except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error
                 logger.warning(

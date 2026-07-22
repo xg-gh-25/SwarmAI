@@ -25,6 +25,7 @@ import re
 import subprocess
 from datetime import date, datetime, timedelta
 
+from core.ddd_paths import ddd_path
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from pathlib import Path
 from typing import Any, Optional
@@ -499,7 +500,7 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
                 if doc_name in raw_docs:
                     docs_normalized[doc_name] = {**raw_docs[doc_name], "exists": True}
                 else:
-                    doc_path = project_dir / doc_name
+                    doc_path = ddd_path(project_dir, doc_name)
                     docs_normalized[doc_name] = {"exists": doc_path.exists()}
             projects.append({
                 "name": project_dir.name,
@@ -516,7 +517,7 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
                 continue
             docs: dict[str, dict] = {}
             for doc_name in DDD_CANONICAL_DOCS:
-                doc_path = project_dir / doc_name
+                doc_path = ddd_path(project_dir, doc_name)
                 if doc_path.exists():
                     mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)
                     age_days = (now - mtime).days

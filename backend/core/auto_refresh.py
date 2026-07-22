@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 
+from core.ddd_paths import ddd_path
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -631,7 +632,7 @@ class MechanicalRefresher:
                 if not project_dir.is_dir():
                     continue
                 for doc_name in DDD_CANONICAL_DOCS:
-                    doc = project_dir / doc_name
+                    doc = ddd_path(project_dir, doc_name)
                     if doc.exists():
                         files.append(doc)
 

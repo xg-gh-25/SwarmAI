@@ -56,6 +56,7 @@ from typing import Any
 # Add parent directory for core imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.ddd_paths import ddd_path
 from core.pipeline_profiles import get_profile_stages
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 
@@ -1562,7 +1563,7 @@ def check_ddd_consistency(project: str, context_text: str | None = None) -> dict
     # Load DDD docs
     ddd_docs: dict[str, str] = {}
     for doc_name in DDD_CANONICAL_DOCS:
-        doc_path = project_dir / doc_name
+        doc_path = ddd_path(project_dir, doc_name)
         if doc_path.exists():
             try:
                 content = doc_path.read_text()
@@ -2256,7 +2257,7 @@ def check_artifact_freshness(
         ws = _get_workspace()
         project_dir = ws / "Projects" / project
         for doc_name, expected_hash in ddd_checksums.items():
-            doc_path = project_dir / doc_name
+            doc_path = ddd_path(project_dir, doc_name)
             if doc_path.exists():
                 try:
                     content = doc_path.read_text()

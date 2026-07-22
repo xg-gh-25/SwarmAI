@@ -380,13 +380,13 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
     ctx = out_dir / "context"
     ctx.mkdir(parents=True, exist_ok=True)
     for doc in (*_KNOWLEDGE_DOCS, "AGENTS.md"):
-        src = ddd_dir / doc
+        src = ddd_path(ddd_dir, doc)  # migrated docs live under 2-understanding/
         if src.is_file():
             shutil.copy2(src, ctx / doc)
     sops = out_dir / "agent-sops"
     sops.mkdir(parents=True, exist_ok=True)
     for doc in ("REFRESHER.md",):
-        src = ddd_dir / doc
+        src = ddd_path(ddd_dir, doc)  # REFRESHER stays at root; resolver handles it
         if src.is_file():
             (sops / f"{Path(doc).stem.lower()}.sop.md").write_text(
                 src.read_text(encoding="utf-8"), encoding="utf-8")
@@ -440,7 +440,7 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path) -> PackageResult:
     rules_dir = out_dir / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
     for doc in _KNOWLEDGE_DOCS:
-        src = ddd_dir / doc
+        src = ddd_path(ddd_dir, doc)  # migrated docs live under 2-understanding/
         if src.is_file():
             (rules_dir / f"{doc[:-3].lower()}.md").write_text(
                 src.read_text(encoding="utf-8"), encoding="utf-8")

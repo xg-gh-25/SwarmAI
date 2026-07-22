@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from core.ddd_paths import ddd_path
 from core.eval_service import get_eval_service
 
 logger = logging.getLogger(__name__)
@@ -342,7 +343,7 @@ def _build_learning_dashboard(root) -> dict:
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
             for doc_name in ("IMPROVEMENT.md", "TECH.md"):
-                doc_path = project_dir / doc_name
+                doc_path = ddd_path(project_dir, doc_name)
                 if not doc_path.exists():
                     continue
                 try:

@@ -379,7 +379,7 @@ class DddCultivationOrchestrator:
             # doc is stale, and only ONCE for the whole project.
             stale_docs: list[tuple[str, datetime]] = []
             for ddd_name in ("TECH.md", "PRODUCT.md"):
-                ddd_file = project_dir / ddd_name
+                ddd_file = ddd_path(project_dir, ddd_name)  # six-section strangler
                 if not ddd_file.exists():
                     continue
                 mtime = datetime.fromtimestamp(ddd_file.stat().st_mtime)
@@ -541,10 +541,17 @@ class DddCultivationOrchestrator:
 
                         from utils.file_lock import flock_exclusive, flock_unlock
                         for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
-                            ddd_path = project_dir / ddd_name
-                            if not ddd_path.exists():
+                            # Resolve via the six-section resolver (strangler): a
+                            # migrated DDD keeps its docs under 2-understanding/, so a
+                            # a bare root read (project_dir joined with the doc name) would miss it and
+                            # mechanical writeback would silently stop applying
+                            # (run_3a636c88). NOTE: local var is `doc_path` — must NOT
+                            # shadow the imported `ddd_path` FUNCTION (it was `ddd_path`
+                            # before, a latent TypeError trap + the root-path bug).
+                            doc_path = ddd_path(project_dir, ddd_name)
+                            if not doc_path.exists():
                                 continue
-                            lock_path = ddd_path.with_suffix(ddd_path.suffix + ".lock")
+                            lock_path = doc_path.with_suffix(doc_path.suffix + ".lock")
                             lock_file = None
                             try:
                                 lock_file = open(lock_path, "w")
@@ -554,12 +561,12 @@ class DddCultivationOrchestrator:
                                     lock_file.close()
                                 continue
                             try:
-                                ddd_content = ddd_path.read_text(encoding="utf-8")
+                                ddd_content = doc_path.read_text(encoding="utf-8")
                                 if current_block in ddd_content:
                                     new_content = ddd_content.replace(
                                         current_block, proposed_block, 1
                                     )
-                                    ddd_path.write_text(new_content, encoding="utf-8")
+                                    doc_path.write_text(new_content, encoding="utf-8")
                                     applied_changes.append({
                                         "project": project_dir.name,
                                         "doc": ddd_name,
@@ -785,7 +792,7 @@ class DddCultivationOrchestrator:
                 doc = match.group(2).strip()
                 section = match.group(3).strip()
                 project_dir = root / "Projects" / project
-                doc_path = project_dir / f"{doc}.md"
+                doc_path = ddd_path(project_dir, f"{doc}.md")  # six-section strangler
 
                 if not project_dir.exists() or not doc_path.exists():
                     stale_count += 1
@@ -1158,7 +1165,7 @@ class DddCultivationOrchestrator:
                     if proposals_generated >= max_proposals_per_cycle:
                         break
 
-                    doc_path = project_dir / doc_name
+                    doc_path = ddd_path(project_dir, doc_name)  # six-section strangler
                     if not doc_path.exists():
                         continue
 

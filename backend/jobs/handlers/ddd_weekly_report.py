@@ -30,6 +30,19 @@ try:
     from core.project_registry import DDD_CANONICAL_DOCS as DDD_DOCS
 except ImportError:  # pragma: no cover - subprocess without core on path
     DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
+
+# Guarded import — mirrors DDD_DOCS above. The fallback reproduces the resolver's
+# new-then-old READ semantics (2-understanding/<doc> if present, else root).
+try:
+    from core.ddd_paths import ddd_path
+except ImportError:  # pragma: no cover - subprocess without core on path
+    def ddd_path(project_dir, key):  # ddd-canonical-fallback
+        root = Path(project_dir)
+        new_path = root / "2-understanding" / key
+        old_path = root / key
+        if not new_path.exists() and old_path.exists():
+            return old_path
+        return new_path
 REPORT_WINDOW_DAYS = 7
 
 
@@ -171,7 +184,7 @@ def _compute_doc_health(project_dir: Path) -> dict:
     """Compute basic health stats for DDD docs in a project."""
     stats = {}
     for doc_name in DDD_DOCS:
-        doc_path = project_dir / doc_name
+        doc_path = ddd_path(project_dir, doc_name)
         if doc_path.exists():
             content = doc_path.read_text(encoding="utf-8")
             lines = len(content.split("\n"))
