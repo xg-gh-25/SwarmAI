@@ -2,7 +2,7 @@
 """⑥ Code-Intel Refresher CLI (DDD-native, portable).
 
 Regenerates `code-intel.json` from a bound repo's REAL import graph — the runnable
-mechanism the s_ai-ready-repo SKILL describes. Pure stdlib + git; no SwarmAI backend.
+mechanism the s_repo-to-ddd SKILL describes. Pure stdlib + git; no SwarmAI backend.
 
 Narrow ⑥ refresh mode (spec §3.6): produces ONLY the derived projection
 (`code-intel.json`), NEVER touches the 4 DDD docs (OWNed cognition). The projection is

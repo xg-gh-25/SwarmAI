@@ -8,7 +8,7 @@
       "s_ddd-persist",
       "s_ddd-pipeline",
       "s_ddd-pollinate",
-      "s_ai-ready-repo"
+      "s_repo-to-ddd"
     ]
   }
 }

@@ -336,7 +336,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
     # A DDD is self-propagating + self-養成 because it carries the ability to
     # create more DDDs (s_ddd-manager), sediment its own docs (s_ddd-persist), run
     # its own dev-loop (s_ddd-pipeline), express its value (s_ddd-pollinate), and
-    # refresh its ⑥ code-intel projection (s_ai-ready-repo). On AIM export this
+    # refresh its ⑥ code-intel projection (s_repo-to-ddd). On AIM export this
     # becomes the plugin namespace; the skill FILES ship alongside it.
     "aim.json": """{
   "name": "{project_name}",
@@ -348,7 +348,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
       "s_ddd-persist",
       "s_ddd-pipeline",
       "s_ddd-pollinate",
-      "s_ai-ready-repo"
+      "s_repo-to-ddd"
     ]
   },
   "distribution": {
@@ -400,7 +400,7 @@ everything else lives under its numbered section dir.
 - **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
 - **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
 - **s_ddd-pollinate** — express this product's value to audiences.
-- **s_ai-ready-repo** — the ⑥ refresher: regenerate `code-intel.json` from code.
+- **s_repo-to-ddd** — the ⑥ refresher: regenerate `code-intel.json` from code.
 
 Together they make a DDD **get smarter with use, on any runtime, without SwarmAI**.
 
@@ -439,7 +439,7 @@ to. It is a **self-contained mechanism that REGENERATES the projection from the
 asset's source** — its shape follows the asset `kind`: a `code-repo` →
 `code-intel.json` from code; a `data-source` → a schema/semantic projection; a
 `document-corpus` → an index. It ships the refresher (capability), never the
-projection (derived data). The default code refresher is `s_ai-ready-repo` (narrow
+projection (derived data). The default code refresher is `s_repo-to-ddd` (narrow
 refresh mode; see `aim.json` native_skills).
 
 **Activation:** ⑥ activates when an asset is BOUND (see ⑤ `bindings.yaml`). For a
@@ -477,14 +477,14 @@ SECTION_DIRS: tuple[str, ...] = (
 # Claude Code. SOURCE OF TRUTH: backend/templates/ddd-skills/s_ddd-*/ (we, the
 # official maintainer, keep them there and version them). This is DISTINCT from
 # the SwarmAI-native skills in backend/skills/ (s_project-manager, s_persist,
-# s_autonomous-pipeline, s_pollinate, s_ai-ready-repo, s_internal-*) which are
+# s_autonomous-pipeline, s_pollinate, s_repo-to-ddd, s_internal-*) which are
 # how SwarmAI itself operates and are NEVER modified for DDD work.
 DDD_NATIVE_SKILLS: tuple[str, ...] = (
     "s_ddd-manager",     # ← learned from s_project-manager (self-propagation seed)
     "s_ddd-persist",     # ← learned from s_persist (sediment DDD docs)
     "s_ddd-pipeline",    # ← learned from s_autonomous-pipeline (judge→execute→reflect)
     "s_ddd-pollinate",   # ← learned from s_pollinate (express value)
-    "s_ai-ready-repo",   # ← the ⑥ code-intel refresher (portable as-is)
+    "s_repo-to-ddd",   # ← the ⑥ code-intel refresher (portable as-is)
 )
 
 # ── EXTERNAL vs INTERNAL provisioning sources — the git-tracking boundary ──────

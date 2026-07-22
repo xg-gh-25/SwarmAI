@@ -95,7 +95,7 @@ Making {repo_name} genuinely understood by AI agents.
 
 ## Prerequisites
 
-Helper script: `backend/skills/s_ai-ready-repo/scripts/ai_ready_helpers.py`
+Helper script: `backend/skills/s_repo-to-ddd/scripts/ai_ready_helpers.py`
 - `gather_repo_info(path)` — git stats, file tree, tech stack detection
 - `extract_import_graph(path)` — REAL dependency graph from import statements (not guessed)
 - `validate_code_intel_json(doc)` — v2 schema enforcement
@@ -228,7 +228,7 @@ Run the helper script to gather deterministic repo info:
 
 ```python
 import sys
-sys.path.insert(0, "backend/skills/s_ai-ready-repo/scripts")
+sys.path.insert(0, "backend/skills/s_repo-to-ddd/scripts")
 from ai_ready_helpers import gather_repo_info, parse_git_gotchas
 
 info = gather_repo_info(Path(repo_path))
@@ -239,7 +239,7 @@ Or via Bash:
 ```bash
 python -c "
 import sys, json
-sys.path.insert(0, 'backend/skills/s_ai-ready-repo/scripts')
+sys.path.insert(0, 'backend/skills/s_repo-to-ddd/scripts')
 from pathlib import Path
 from ai_ready_helpers import gather_repo_info, parse_git_gotchas
 info = gather_repo_info(Path('REPO_PATH'))

@@ -485,7 +485,7 @@ class TestMintIdMirrorsDeriveRouteId:
     def test_mint_id_byte_identical_to_derive_route_id(self, tmp_path):
         import sys, os
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
-                                        "skills", "s_ai-ready-repo", "scripts"))
+                                        "skills", "s_repo-to-ddd", "scripts"))
         from ai_ready_helpers import derive_route_id
         # reach _mint_id via a real export path is awkward; re-derive its logic by
         # calling through _reattach_route_ids on an unmatched route and comparing.

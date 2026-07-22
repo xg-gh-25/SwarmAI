@@ -26,7 +26,7 @@ backend**.
 └── REFRESHER.md                                              # ⑥ Code-intel refresher
 ```
 The 5 ④ skills: `s_ddd-manager` `s_ddd-persist` `s_ddd-pipeline` `s_ddd-pollinate`
-`s_ai-ready-repo` — copied in at CREATE. Do NOT scaffold `agents/`/`agent-sops/` (AIM-export
+`s_repo-to-ddd` — copied in at CREATE. Do NOT scaffold `agents/`/`agent-sops/` (AIM-export
 form, generated at export, not native).
 
 ## Lifecycle: CREATE → BIND → PULL → DEVELOP → SYNC-BACK
@@ -129,7 +129,7 @@ bindings:
   #    DDD there already carries its skills from a prior SwarmAI provision or the export.
   ```
 - **PULL + index:** clone the repo into a worktree OUTSIDE the DDD tree, then run the ⑥
-  refresher (`s_ai-ready-repo`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
+  refresher (`s_repo-to-ddd`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
   binding member — it's a DERIVED projection (§3.6), regenerated locally, gitignored.
 - **DEVELOP:** read the project's class (`classify_project`) + the binding's `remote_kind` +
   `build_system` and route — never assume CRUX/Brazil. The agent never `git push`es an internal

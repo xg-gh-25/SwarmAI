@@ -64,7 +64,7 @@ def build_fixture_ddd(
         "ddd_spec_version": "1.0",
         "description": "A synthetic fixture DDD for packager tests.",
         "plugins": {
-            "native_skills": ["s_ddd-manager", "s_ai-ready-repo"],
+            "native_skills": ["s_ddd-manager", "s_repo-to-ddd"],
             "domain_skills": ["s_fx-report", "s_fx-analyze"],
             "mcp": [{"name": "FxMCP", "endpoint_env": "MCP_ENDPOINT"}],
         },
@@ -221,7 +221,7 @@ class TestAC4SkillSplit:
     def test_delegates_to_registry(self):
         # Gate-1 C3: uses the registry's enablement definition, not a fork.
         assert pk._is_enablement("s_ddd-manager") is True
-        assert pk._is_enablement("s_ai-ready-repo") is True
+        assert pk._is_enablement("s_repo-to-ddd") is True
         assert pk._is_enablement("s_fx-report") is False
 
 
@@ -379,3 +379,213 @@ def test_empty_targets_emits_nothing(tmp_path):
     ddd = build_fixture_ddd(tmp_path, targets=[], visibility="internal")
     results = pk.package_ddd(ddd, tmp_path / "out")
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# _shared/ materialization (A′: single-source _shared locally, self-contained on distribute)
+# ---------------------------------------------------------------------------
+def _add_shared(ddd: Path, files: dict[str, str]) -> None:
+    """Plant a _shared/ code layer under the DDD's capabilities dir (fixture uses skills/)."""
+    from core.ddd_paths import ddd_path as _dp
+    shared = _dp(ddd, "capabilities") / "_shared"
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / "__init__.py").write_text("", encoding="utf-8")
+    for name, body in files.items():
+        (shared / name).write_text(body, encoding="utf-8")
+
+
+class TestSharedMaterialization:
+    def test_shared_module_lands_in_each_emitted_skill(self, tmp_path):
+        """AC1/AC2: _shared/*.py copied into every emitted skill scripts/ (both targets)."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities", "open-plugin"], visibility="internal")
+        _add_shared(ddd, {"client.py": "def hello():\n    return 'shared'\n"})
+        results = pk.package_ddd(ddd, tmp_path / "out")
+        assert results
+        for res in results:  # both targets
+            for skill in res.skills_included:
+                dst = res.out_dir / "skills" / skill / "scripts" / "client.py"
+                assert dst.is_file(), f"{res.target}: client.py not materialized into {skill}"
+                assert "def hello" in dst.read_text(encoding="utf-8")
+
+    def test_init_py_not_materialized(self, tmp_path):
+        """__init__.py is a package marker, not shared code — must NOT be copied."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"client.py": "x = 1\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        skill = res.skills_included[0]
+        assert not (res.out_dir / "skills" / skill / "scripts" / "__init__.py").exists()
+
+    def test_distributed_skill_imports_shared_via_injection(self, tmp_path):
+        """AC3: a skill using parents[2]/_shared injection imports cleanly from the emitted package."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"client.py": "def hello():\n    return 'shared-ok'\n"})
+        # give s_fx-report a real entry that uses the parents[2]/_shared injection pattern
+        from core.ddd_paths import ddd_path as _dp
+        entry_dir = _dp(ddd, "capabilities") / "s_fx-report" / "scripts"
+        entry_dir.mkdir(parents=True, exist_ok=True)
+        (entry_dir / "gen.py").write_text(
+            "import sys\n"
+            "from pathlib import Path\n"
+            "_S = str(Path(__file__).resolve().parents[2] / '_shared')\n"
+            "if _S not in sys.path: sys.path.insert(0, _S)\n"
+            "from client import hello\n"
+            "print(hello())\n",
+            encoding="utf-8",
+        )
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        emitted_entry = res.out_dir / "skills" / "s_fx-report" / "scripts" / "gen.py"
+        assert emitted_entry.is_file()
+        # run the DISTRIBUTED skill entry — parents[2]/_shared points outside the pkg,
+        # but the materialized sibling client.py in scripts/ makes the import resolve.
+        proc = subprocess.run(
+            ["python3", str(emitted_entry)], capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 0, f"distributed import failed: {proc.stderr}"
+        assert "shared-ok" in proc.stdout
+
+    def test_skill_owned_file_not_overwritten_warns(self, tmp_path):
+        """AC4: a skill's own scripts/<name> is NOT clobbered by _shared; a WARN is emitted."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"client.py": "def hello():\n    return 'from_shared'\n"})
+        # s_fx-report owns its OWN client.py (must win)
+        from core.ddd_paths import ddd_path as _dp
+        owned = _dp(ddd, "capabilities") / "s_fx-report" / "scripts"
+        owned.mkdir(parents=True, exist_ok=True)
+        (owned / "client.py").write_text("def hello():\n    return 'SKILL_OWNED'\n", encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        dst = res.out_dir / "skills" / "s_fx-report" / "scripts" / "client.py"
+        assert "SKILL_OWNED" in dst.read_text(encoding="utf-8"), "skill-owned file was clobbered"
+        assert any("skill-owned" in w and "client.py" in w for w in res.warnings), \
+            f"expected a skill-owned collision WARN, got {res.warnings}"
+
+    def test_shared_subpackage_warns_and_is_not_materialized(self, tmp_path):
+        """Gate-2 MED: a sub-package in _shared can't be flat-materialized — WARN loud, skip it,
+        never silently ship a package that fails on sub-import at the foreign host."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"client.py": "from sub.mod import g\n"})
+        from core.ddd_paths import ddd_path as _dp
+        sub = _dp(ddd, "capabilities") / "_shared" / "sub"
+        sub.mkdir(parents=True, exist_ok=True)
+        (sub / "__init__.py").write_text("", encoding="utf-8")
+        (sub / "mod.py").write_text("def g():\n    return 1\n", encoding="utf-8")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        # the sub-package is NOT materialized into any skill
+        for skill in res.skills_included:
+            assert not (res.out_dir / "skills" / skill / "scripts" / "sub").exists()
+        # and a loud warning names it
+        assert any("_shared/sub/" in w and "sub-package" in w for w in res.warnings), \
+            f"expected a loud sub-package warning, got {res.warnings}"
+
+    def test_no_shared_dir_is_noop_byte_identical(self, tmp_path):
+        """AC5: a DDD with no _shared/ emits a tree byte-identical to pre-feature (no-op)."""
+        # emit WITHOUT _shared
+        ddd = build_fixture_ddd(tmp_path, name="NoShared_A", targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out_a")
+        files_no_shared = sorted(res.files)
+        # no client.py should appear anywhere in the emitted skills
+        for skill in res.skills_included:
+            assert not (res.out_dir / "skills" / skill / "scripts" / "client.py").exists()
+        # and warnings must be empty (no collision path taken)
+        assert res.warnings == [] or all("_shared" not in w for w in res.warnings)
+        assert files_no_shared  # sanity: it did emit something
+
+
+def _add_domain_tools_sdk(ddd: Path, rel_dir: str, files: dict[str, str]) -> None:
+    """Plant a data-source-asset SDK dir + declare it via aim.json plugins.domain_tools."""
+    sdk = ddd / rel_dir
+    sdk.mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (sdk / name).write_text(body, encoding="utf-8")
+    aim = json.loads((ddd / "aim.json").read_text(encoding="utf-8"))
+    aim.setdefault("plugins", {})["domain_tools"] = [f"{rel_dir}/{n}" for n in files]
+    (ddd / "aim.json").write_text(json.dumps(aim, indent=2), encoding="utf-8")
+
+
+class TestDomainToolsMaterialization:
+    def test_collect_sources_unions_shared_and_domain_tools(self, tmp_path):
+        """AC1: _collect_shared_sources returns _shared + domain_tools parent-dirs, ordered+deduped."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"a.py": "x=1\n"})
+        _add_domain_tools_sdk(ddd, "assets/data-source/scripts", {"catalog.py": "C=1\n"})
+        srcs = pk._collect_shared_sources(ddd)
+        names = [s.name for s in srcs]
+        assert "_shared" in names and "scripts" in names
+        assert names.index("_shared") < names.index("scripts")  # _shared precedence first
+        assert len(srcs) == len({s.resolve() for s in srcs})  # deduped
+
+    def test_domain_tools_sdk_materialized_into_skills(self, tmp_path):
+        """AC2: the data-source-asset SDK (declared via domain_tools) lands in emitted skills."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_domain_tools_sdk(ddd, "assets/data-source/scripts",
+                              {"catalog.py": "def rule():\n    return 'moat'\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        for skill in res.skills_included:
+            dst = res.out_dir / "skills" / skill / "scripts" / "catalog.py"
+            assert dst.is_file(), f"domain_tools SDK not materialized into {skill}"
+            assert "def rule" in dst.read_text(encoding="utf-8")
+
+    def test_same_name_in_both_sources_not_double_copied(self, tmp_path):
+        """AC3: a filename in BOTH _shared and a domain_tools dir → one copy, _shared wins."""
+        ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        _add_shared(ddd, {"client.py": "V='from_shared'\n"})
+        _add_domain_tools_sdk(ddd, "assets/data-source/scripts", {"client.py": "V='from_asset'\n"})
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        skill = res.skills_included[0]
+        dst = res.out_dir / "skills" / skill / "scripts" / "client.py"
+        assert "from_shared" in dst.read_text(encoding="utf-8"), "_shared should win precedence"
+        # no double-copy warning (dedup is silent, first-writer-wins)
+        assert not any("client.py is skill-owned" in w for w in res.warnings)
+
+    def test_no_shared_no_domain_tools_is_noop(self, tmp_path):
+        """AC4: neither source present → no-op, no materialized files, no warnings."""
+        ddd = build_fixture_ddd(tmp_path, name="Bare_Brain", targets=["aim-capabilities"], visibility="internal")
+        assert pk._collect_shared_sources(ddd) == []
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        for skill in res.skills_included:
+            assert not (res.out_dir / "skills" / skill / "scripts" / "catalog.py").exists()
+
+    def _set_domain_tools(self, ddd: Path, entries: list[str]) -> None:
+        aim = json.loads((ddd / "aim.json").read_text(encoding="utf-8"))
+        aim.setdefault("plugins", {})["domain_tools"] = entries
+        (ddd / "aim.json").write_text(json.dumps(aim, indent=2), encoding="utf-8")
+
+    def test_traversal_domain_tools_escapes_are_sandboxed(self, tmp_path):
+        """Gate-2 CRITICAL: ../ traversal / absolute / bare-filename domain_tools entries must
+        NOT become materialization sources (silent host-file leak into the package)."""
+        # plant a would-be-leaked host dir OUTSIDE the ddd
+        host_secret = tmp_path / "hostsecrets"
+        host_secret.mkdir()
+        (host_secret / "leak.py").write_text("PROPRIETARY = 'do-not-ship'\n", encoding="utf-8")
+        ddd = build_fixture_ddd(tmp_path, name="Sbx_Brain", targets=["aim-capabilities"], visibility="internal")
+        for bad in (["../hostsecrets/x.py"], [str(host_secret / "x.py")], ["catalog.py"]):
+            self._set_domain_tools(ddd, bad)
+            srcs = pk._collect_shared_sources(ddd)
+            for s in srcs:
+                rd = s.resolve()
+                # every returned source must be strictly inside the ddd and not the root
+                assert str(rd).startswith(str(ddd.resolve())), f"{bad}: source {rd} escaped the DDD"
+                assert rd != ddd.resolve(), f"{bad}: DDD root became a source (too broad)"
+        # end-to-end: the external proprietary file never lands in any emitted skill
+        self._set_domain_tools(ddd, ["../hostsecrets/leak.py"])
+        [res] = pk.package_ddd(ddd, tmp_path / "out_sbx")
+        for skill in res.skills_included:
+            assert not (res.out_dir / "skills" / skill / "scripts" / "leak.py").exists()
+
+    def test_domain_tools_into_skill_dir_is_skipped(self, tmp_path):
+        """Gate-2 MED: a domain_tools entry under a skill's own dir is skill-owned, NOT a shared
+        source — must not cross-materialize that skill's private files into sibling skills."""
+        ddd = build_fixture_ddd(tmp_path, name="SkillTool_Brain", targets=["aim-capabilities"], visibility="internal")
+        from core.ddd_paths import ddd_path as _dp
+        priv = _dp(ddd, "capabilities") / "s_fx-report" / "scripts"
+        priv.mkdir(parents=True, exist_ok=True)
+        (priv / "priv_tool.py").write_text("SECRET_SAUCE = 1\n", encoding="utf-8")
+        # declare it (relative to ddd) as a domain tool
+        rel = (priv / "priv_tool.py").resolve().relative_to(ddd.resolve())
+        self._set_domain_tools(ddd, [str(rel)])
+        assert pk._collect_shared_sources(ddd) == [], "skill-owned dir must not be a shared source"
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        # priv_tool.py must NOT appear in a DIFFERENT skill
+        for skill in res.skills_included:
+            if skill == "s_fx-report":
+                continue
+            assert not (res.out_dir / "skills" / skill / "scripts" / "priv_tool.py").exists()

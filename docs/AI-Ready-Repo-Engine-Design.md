@@ -1213,7 +1213,7 @@ The unifying defense is Principle 20: **deterministic supplies the anchor, LLM s
 
 ### 23.3 Multi-package / Multi-repo — verified current state (code is truth)
 
-Grep-verified in `backend/core/code_intel/` + `ddd_bindings.py` + `s_ai-ready-repo/` (2026-07-17):
+Grep-verified in `backend/core/code_intel/` + `ddd_bindings.py` + `s_repo-to-ddd/` (2026-07-17):
 
 | Dimension | Support | Evidence |
 |---|---|---|

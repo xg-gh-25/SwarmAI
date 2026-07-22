@@ -2,7 +2,7 @@
 
 Validates the capability-package discovery mechanism:
 - build_manifest resolves each mounted DDD's DOMAIN skills (aim.json domain_skills)
-- enablement skills (native_skills / s_ddd-*/ s_ai-ready-repo) are EXCLUDED
+- enablement skills (native_skills / s_ddd-*/ s_repo-to-ddd) are EXCLUDED
 - fail-soft: missing OR malformed manifest/aim.json → [] (never raises — the
   read path is inside SkillManager.scan_all, the choke point for ALL discovery)
 - atomic write (no torn read)
@@ -62,7 +62,7 @@ class TestBuildManifest:
         ws = tmp_path / "SwarmWS"
         builtin = tmp_path / "b"; builtin.mkdir(parents=True)
         # enablement listed (wrongly) in domain_skills must be dropped
-        _mk_ddd(ws, "CMHK", ["s_cmhk-weekly-report", "s_ddd-persist", "s_ai-ready-repo"])
+        _mk_ddd(ws, "CMHK", ["s_cmhk-weekly-report", "s_ddd-persist", "s_repo-to-ddd"])
         records = reg.build_manifest(ws, builtin)
         names = {r["skill"] for r in records}
         assert names == {"s_cmhk-weekly-report"}  # enablement excluded
@@ -70,7 +70,7 @@ class TestBuildManifest:
     def test_native_skills_never_registered(self, tmp_path):
         ws = tmp_path / "SwarmWS"
         builtin = tmp_path / "b"; builtin.mkdir(parents=True)
-        _mk_ddd(ws, "CMHK", ["s_cmhk-x"], native_skills=["s_ddd-manager", "s_ai-ready-repo"])
+        _mk_ddd(ws, "CMHK", ["s_cmhk-x"], native_skills=["s_ddd-manager", "s_repo-to-ddd"])
         records = reg.build_manifest(ws, builtin)
         assert {r["skill"] for r in records} == {"s_cmhk-x"}
 

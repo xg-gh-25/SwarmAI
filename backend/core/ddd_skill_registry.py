@@ -14,7 +14,7 @@ Two layers (this module is the engine; the ops face lives in ``s_ddd-manager``):
   ``aim.json`` ``plugins.domain_skills`` resolved to real skill dirs, with provenance.
 
 Design invariants (from Gate-1 review of run_597f4ed1):
-- **DOMAIN only.** ``native_skills`` (enablement: ``s_ddd-*``, ``s_ai-ready-repo``,
+- **DOMAIN only.** ``native_skills`` (enablement: ``s_ddd-*``, ``s_repo-to-ddd``,
   SwarmAI-provided) are EXCLUDED — they are not DDD-owned; the official built-in
   version serves them (tier ``built-in > ddd``).
 - **Fail-soft, always.** A missing OR malformed manifest/aim.json is treated as
@@ -51,7 +51,7 @@ MANIFEST_RELPATH = Path(".context") / "ddd_skill_registry.json"
 #  not included — but this set documents the intent + guards a future aim.json that
 #  mistakenly lists an enablement skill under domain_skills.)
 _ENABLEMENT_PREFIXES = ("s_ddd-",)
-_ENABLEMENT_EXACT = {"s_ai-ready-repo"}
+_ENABLEMENT_EXACT = {"s_repo-to-ddd"}
 
 
 def _is_enablement(skill_name: str) -> bool:

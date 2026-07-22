@@ -79,10 +79,10 @@ DDD at provision time (the same mechanism that copies the 4 DDD docs).
 | `s_ddd-persist` | `s_persist` | sediment/refresh THIS DDD's docs (additive, honors human edits) |
 | `s_ddd-pipeline` | `s_autonomous-pipeline` | DDD-native judge→execute→reflect loop (retains Gate-2 adversarial + 养成 moat) |
 | `s_ddd-pollinate` | `s_pollinate` | express this product's value to audiences |
-| `s_ai-ready-repo` | `s_ai-ready-repo` (portable as-is) | the ⑥ refresher — regenerate `code-intel.json` from code |
+| `s_repo-to-ddd` | `s_repo-to-ddd` (portable as-is) | the ⑥ refresher — regenerate `code-intel.json` from code |
 
 > **Two distinct namespaces — do not conflate.** SwarmAI-native skills (`s_project-manager`,
-> `s_persist`, `s_autonomous-pipeline`, `s_pollinate`, `s_ai-ready-repo`, `s_internal-*`)
+> `s_persist`, `s_autonomous-pipeline`, `s_pollinate`, `s_repo-to-ddd`, `s_internal-*`)
 > live in `backend/skills/` and are how SwarmAI operates — they are NEVER modified for the
 > DDD work. The DDD-native `s_ddd-*` set is a SEPARATE, official, maintained template that
 > ships INSIDE each DDD. An **internal DDD** (bound to a Brazil/CRUX repo, e.g. AIDLC) also
@@ -133,7 +133,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 5 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
 | **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. | All 4 docs substantive — **no placeholders** (P6 ② check FAILs on a stub). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
-| **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_ai-ready-repo` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
+| **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_repo-to-ddd` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `python backend/skills/s_project-manager/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 

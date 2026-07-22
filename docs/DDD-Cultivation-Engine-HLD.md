@@ -242,7 +242,7 @@ dev-consumer gets the refresher and builds the projection locally). **Ship the r
 the projection.** The projection is a **derived-zone** artifact (gitignored, regenerated at
 each end, NEVER PR-flows-back) — what flows back into the DDD is JUDGMENT (a pitfall, a gate),
 never a machine-generated projection. **GOVERN.**
-*The refresher capability is `s_ai-ready-repo`; full code-graph design:*
+*The refresher capability is `s_repo-to-ddd`; full code-graph design:*
 **[AI-Ready-Repo Engine Design](AI-Ready-Repo-Engine-Design.md)**. *The narrow "regenerate
 code-intel.json only" ⑥-mode is a designed addition (Paradigm §3.7), not yet a shipped flag.*
 

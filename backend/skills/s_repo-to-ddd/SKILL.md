@@ -1,5 +1,5 @@
 ---
-name: ai-ready-repo
+name: repo-to-ddd
 description: >
   Generate AI-Ready artifacts for any codebase — transforms repos into DDD-structured
   context (AGENTS.md + PRODUCT/TECH/IMPROVEMENT/PROJECT.md + code-intel.json) that
@@ -9,7 +9,7 @@ description: >
 tier: lazy
 platform: all
 ---
-# ai-ready-repo
+# Repo to DDD
 
 > This skill loads full instructions on activation. Read INSTRUCTIONS.md before proceeding.
 

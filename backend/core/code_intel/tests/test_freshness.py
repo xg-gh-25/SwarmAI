@@ -630,7 +630,7 @@ class TestSpecHashStampingLoop:
         import sys
         from pathlib import Path as _P
         sys.path.insert(0, str(_P(__file__).resolve().parents[3]
-                                / "skills" / "s_ai-ready-repo" / "scripts"))
+                                / "skills" / "s_repo-to-ddd" / "scripts"))
         from ai_ready_helpers import _spec_content_hash
         d = self._domain()
         doc = {"domains": [dict(d)], "flows": [], "steps": []}
@@ -642,7 +642,7 @@ class TestSpecHashStampingLoop:
         import json, sys
         from pathlib import Path as _P
         sys.path.insert(0, str(_P(__file__).resolve().parents[3]
-                                / "skills" / "s_ai-ready-repo" / "scripts"))
+                                / "skills" / "s_repo-to-ddd" / "scripts"))
         from ai_ready_helpers import project_domain_skeleton
         from core.code_intel.json_exporter import _stamp_spec_hashes
         from core.code_intel.freshness import detect_spec_details_staleness
@@ -660,7 +660,7 @@ class TestSpecHashStampingLoop:
         import json, sys
         from pathlib import Path as _P
         sys.path.insert(0, str(_P(__file__).resolve().parents[3]
-                                / "skills" / "s_ai-ready-repo" / "scripts"))
+                                / "skills" / "s_repo-to-ddd" / "scripts"))
         from ai_ready_helpers import project_domain_skeleton
         from core.code_intel.json_exporter import _stamp_spec_hashes
         from core.code_intel.freshness import detect_spec_details_staleness

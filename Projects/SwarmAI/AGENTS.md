@@ -27,7 +27,7 @@ never contains that source and never runs its deploy pipeline (指+治, 不含+�
 - **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
 - **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
 - **s_ddd-pollinate** — express this product's value to audiences.
-- **s_ai-ready-repo** — the ⑥ refresher: regenerate `code-intel.json` from code.
+- **s_repo-to-ddd** — the ⑥ refresher: regenerate `code-intel.json` from code.
 
 Together they make a DDD **get smarter with use, on any runtime, without SwarmAI**.
 

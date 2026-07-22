@@ -27,7 +27,7 @@ _MAX_SIZE_BYTES = 500 * 1024
 
 # The v3 business-semantic layer keys the exporter must PRESERVE across a reindex.
 # The graph store only knows v2 structure (modules/routes/nodes); the v3 layer is
-# authored by the s_ai-ready-repo skill (LLM classification + finalize_v3) and lives
+# authored by the s_repo-to-ddd skill (LLM classification + finalize_v3) and lives
 # ONLY in the on-disk code-intel.json. A naive v2 overwrite wipes it → a backfilled
 # accounted_ratio=1.0 silently reverts to 4.8% on the next commit (Gate-1 Check-2:
 # the FALSE-100% banking red line). So we read the prior doc and re-attach these.
@@ -144,7 +144,7 @@ def export_code_intel_json(
             from importlib import import_module
             import sys as _sys
             _skill_scripts = str(Path(__file__).resolve().parents[2]
-                                 / "skills" / "s_ai-ready-repo" / "scripts")
+                                 / "skills" / "s_repo-to-ddd" / "scripts")
             if _skill_scripts not in _sys.path:
                 _sys.path.insert(0, _skill_scripts)
             _arh_pkg = import_module("ai_ready_helpers")
@@ -199,7 +199,7 @@ def export_code_intel_json(
             from importlib import import_module
             import sys as _sys
             _skill_scripts = str(Path(__file__).resolve().parents[2]
-                                 / "skills" / "s_ai-ready-repo" / "scripts")
+                                 / "skills" / "s_repo-to-ddd" / "scripts")
             if _skill_scripts not in _sys.path:
                 _sys.path.insert(0, _skill_scripts)
             _arh = import_module("ai_ready_helpers")
@@ -343,7 +343,7 @@ def _reattach_route_ids(built_routes: list[dict], prior_routes: list[dict] | Non
     Minting an id for unmatched routes keeps them IN the denominator; if they carry
     no flow/unclassified entry they surface as a real coverage hole via
     check_anchor_accounting — visible, never silently accepted."""
-    # derive_route_id lives in the s_ai-ready-repo skill (not importable from core —
+    # derive_route_id lives in the s_repo-to-ddd skill (not importable from core —
     # C046 core-must-not-import-skill). Mint a fresh id inline that is BYTE-IDENTICAL
     # to ai_ready_helpers.derive_route_id so a later skill run (backfill_route_ids)
     # produces the SAME id for the same route → a moved route re-matches by id and its
@@ -383,7 +383,7 @@ def _stamp_spec_hashes(doc: dict) -> None:
     try:
         import sys as _sys
         _skill_scripts = str(Path(__file__).resolve().parents[2]
-                             / "skills" / "s_ai-ready-repo" / "scripts")
+                             / "skills" / "s_repo-to-ddd" / "scripts")
         if _skill_scripts not in _sys.path:
             _sys.path.insert(0, _skill_scripts)
         from importlib import import_module

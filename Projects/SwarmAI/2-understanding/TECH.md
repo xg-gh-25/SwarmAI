@@ -1274,6 +1274,26 @@ Projects/ (filesystem = single source of truth)
 - **Not enforcement** — direct filesystem ops work too; hook catches up on next session.
 - **Rename command added 2026-05-18** — handles DDD title updates, manifest, path constants.
 
+**System-level capability relationship — `s_project-manager` ↔ `s_repo-to-ddd` (do not conflate):**
+These two skills both surface the four DDD docs (PRODUCT/TECH/IMPROVEMENT/PROJECT) but sit at
+**different layers, in an orchestrator→engine relationship** — not competitors:
+
+| | `s_project-manager` | `s_repo-to-ddd` (was `s_ai-ready-repo`) |
+|---|---|---|
+| Verb | **MANAGE** a DDD (create / list / edit / rename / delete) | **GENERATE FROM CODE** (read a repo, reverse-engineer content) |
+| Reads source code? | ❌ scaffolds the six-section skeleton + placeholder templates; content filled by human/agent | ✅ parses the repo, auto-generates filled content + `code-intel.json` |
+| Output target | `Projects/<NAME>/` (SwarmAI's own workspace) | the *target repo's* `.ai-ready/` + `AGENTS.md` (someone else's codebase) |
+| DDD sections owned | the whole six-section lifecycle | only ⑥ the code-intel refresher cell |
+
+**The call edge:** `s_project-manager`'s **P4-REFRESHER phase invokes `s_repo-to-ddd`** to generate/regenerate
+`code-intel.json` for a `kind: code-repo` asset (no-op for data-agent / pure-knowledge / 0-asset brains).
+So `s_project-manager` is the lifecycle orchestrator; `s_repo-to-ddd` is the code→DDD engine it calls for
+the ⑥ refresher step. `s_repo-to-ddd` is an **enablement skill** (SwarmAI-provided, in `_ENABLEMENT_EXACT`) —
+its portable copy distributes *with* a DDD package for foreign hosts, but on SwarmAI the official built-in
+version wins (never mounted from a DDD). Renamed from `s_ai-ready-repo` → `s_repo-to-ddd` (2026-07-22) to
+free the "AI-Ready-Repo" name for the public brand / DDD project and stop the three-way id collision;
+the invocation trigger `name:` moved `ai-ready-repo` → `repo-to-ddd` in the same migration.
+
 ### Code Intelligence (v2 shipped 2026-05-31; v3 domain layer + multi-package landed)
 
 Project-scoped dependency analysis engine. Powers PreToolUse context injection, blast radius assessment, dead code detection, codebase map briefing, and the AI-Ready-Repo external delivery (`code-intel.json`).
@@ -1296,7 +1316,7 @@ Project-scoped dependency analysis engine. Powers PreToolUse context injection, 
 | Router | `routers/code_intel.py` | REST API: summary, graph, reindex |
 | Frontend | `desktop/src/components/code-intel/CodeGraph.tsx` | react-force-graph-2d visualization |
 
-**v3 domain layer (shipped):** LLM-classified `domains[]`/`flows[]`/`steps[]` over the deterministic anchor menu (business-flow spec understanding) + spec-details generation; anti-hallucination contract (LLM references real entry-point ids only). See `s_ai-ready-repo` INSTRUCTIONS §4.6.5.
+**v3 domain layer (shipped):** LLM-classified `domains[]`/`flows[]`/`steps[]` over the deterministic anchor menu (business-flow spec understanding) + spec-details generation; anti-hallucination contract (LLM references real entry-point ids only). See `s_repo-to-ddd` INSTRUCTIONS §4.6.5.
 
 **Multi-package / monorepo (shipped run_a9fe5ad3):** `detect_package_roots` auto-detects boundaries from workspace manifests (npm/pnpm/lerna/Cargo/go/pyproject); `run_multi_package(repo_root)` produces per-package material + cross-package synthesis; `packages[]` partition emitted into `code-intel.json` by BOTH producers (core reindex `export_code_intel_json` + skill INSTRUCTIONS §4.6); INSTRUCTIONS §4.9 fan-out. Single repo → `[{name, root:"."}]`.
 

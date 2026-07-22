@@ -156,7 +156,7 @@ that both cultivates and mounts it; a DDD's skills belong to the DDD, not to Swa
   没有"自动跑"的调度。 A job that depends on a DDD's domain skill belongs to that DDD
   and distributes with it.
 - **Two skill classes (govern differently — do NOT mount both blindly):**
-  - **Enablement** (SwarmAI-provided, e.g. `s_ddd-*`, `s_ai-ready-repo`) — platform
+  - **Enablement** (SwarmAI-provided, e.g. `s_ddd-*`, `s_repo-to-ddd`) — platform
     capabilities *lent* to the DDD. On SwarmAI the **official built-in version wins**
     (NOT mounted from the DDD); the DDD's portable copy is only for foreign hosts.
   - **Domain** (DDD-owned, e.g. `s_cmhk-*`) — the DDD's real capabilities; these are

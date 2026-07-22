@@ -727,7 +727,7 @@ class ContextHealthHook:
         2. A Radar TODO via escalation.create_radar_todo (run_fe26ed6c) — a REAL
            consumable surface the operator acts on, NOT a sink-less event. This
            is the loop-closing consumer the earlier LOG-only design (run_2bad039d)
-           deferred for lack of one: regeneration is skill-owned (s_ai-ready-repo,
+           deferred for lack of one: regeneration is skill-owned (s_repo-to-ddd,
            LLM-in-agent, C046), and the todo is exactly the operator trigger for it.
            We deliberately do NOT emit a `spec_details_stale` EVENT — that would be
            the sink-less write-only signal Gate-2 (run_2bad039d) correctly rejected;
@@ -754,7 +754,7 @@ class ContextHealthHook:
                 continue
             logger.info(
                 "spec-details STALE in %s: %d spec(s) drifted from domain content "
-                "(%s) — regenerate via s_ai-ready-repo (skill-owned, manual)",
+                "(%s) — regenerate via s_repo-to-ddd (skill-owned, manual)",
                 project_dir.name, len(stale), ", ".join(stale[:5]),
             )
             self._create_spec_stale_todo(project_dir.name, stale)
@@ -786,7 +786,7 @@ class ContextHealthHook:
                 situation=(f"{len(stale)} spec-details file(s) in {project} no longer "
                            f"match their domain content-hash ({specs}). The code-intel "
                            f"domain layer changed since these specs were projected."),
-                recommendation="Regenerate via s_ai-ready-repo (preserves [human] §5 blocks)",
+                recommendation="Regenerate via s_repo-to-ddd (preserves [human] §5 blocks)",
                 project=project,
                 pipeline_stage="",
             )

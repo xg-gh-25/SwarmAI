@@ -52,7 +52,7 @@ try:  # pragma: no cover - import wiring
     from core.ddd_skill_registry import _is_enablement, _read_domain_skills
 except Exception:  # pragma: no cover - fallback keeps the module importable off-host
     _ENABLEMENT_PREFIXES = ("s_ddd-",)
-    _ENABLEMENT_EXACT = {"s_ai-ready-repo"}
+    _ENABLEMENT_EXACT = {"s_repo-to-ddd"}
 
     def _is_enablement(skill_name: str) -> bool:
         return skill_name in _ENABLEMENT_EXACT or any(
@@ -305,6 +305,154 @@ def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list
     return sorted(copied)
 
 
+def _shared_source_label(ddd_dir: Path, source: Path) -> str:
+    """A readable relative label for a shared-source dir, for warning messages."""
+    try:
+        return str(source.resolve().relative_to(ddd_dir.resolve()))
+    except ValueError:
+        return source.name
+
+
+def _collect_shared_sources(ddd_dir: Path) -> list[Path]:
+    """Discover the DDD's shared-code source dirs to materialize into distributed skills.
+
+    Two GENERIC (never project-hardcoded) sources, in precedence order:
+    1. ``<capabilities>/_shared/`` — the conventional flat shared layer.
+    2. The parent dir of each ``aim.json`` ``plugins.domain_tools`` entry — a data-agent
+       DDD keeps its SDK as the ``data-source`` GOVERNED ASSET (and ③ moat) under
+       ``assets/…``, NOT in ``_shared``; domain_tools declares those tool files, so their
+       parent dir is the SDK source (CMHK → ``assets/data-source/scripts``).
+
+    Returns existing dirs only, deduped, in the order above (``_shared`` first, then
+    domain_tools parent-dirs sorted) — this order defines materialization precedence
+    (first-writer-wins per dest filename). No sources → ``[]`` (caller no-ops).
+
+    🔒 SANDBOXED (Gate-2 CRITICAL, run_b3c3d1e4): ``domain_tools`` entries come from an
+    author-editable ``aim.json`` field, so a ``../``-traversal, an absolute path, or a
+    bare filename (``parent == "."`` → the whole DDD root) could otherwise turn an
+    ARBITRARY host dir into a materialization source and silently leak host files into the
+    distributed package (the content-safety scan only catches pattern-matched secrets, not
+    arbitrary proprietary code). So a domain_tools source is admitted ONLY if it resolves
+    strictly INSIDE the DDD dir AND is not the DDD root itself AND is not under a skill's
+    own capabilities dir (skill-owned code is not shared — else it cross-materializes into
+    sibling skills). Rejected entries are dropped with a WARN via the logger.
+    """
+    sources: list[Path] = []
+    seen: set[Path] = set()
+    ddd_root = ddd_dir.resolve()
+    caps_root = ddd_path(ddd_dir, "capabilities").resolve()
+
+    def _add(d: Path, *, trusted: bool) -> None:
+        rd = d.resolve()
+        if not d.is_dir() or rd in seen:
+            return
+        if not trusted:
+            # sandbox: must be strictly inside the DDD, not the root, not skill-owned
+            try:
+                rel = rd.relative_to(ddd_root)
+            except ValueError:
+                logger.warning("domain_tools source %s escapes the DDD dir — skipped", d)
+                return
+            if rel == Path("."):
+                logger.warning("domain_tools source resolves to the DDD root — skipped (too broad)")
+                return
+            # under 4-capabilities/<skill>/… → skill-owned code, not a shared source
+            # (would cross-materialize a skill's private files into sibling skills).
+            try:
+                caps_rel = rd.relative_to(caps_root)
+            except ValueError:
+                caps_rel = None  # not under capabilities — fine (e.g. assets/data-source/scripts)
+            if caps_rel is not None and caps_rel != Path("."):
+                logger.warning(
+                    "domain_tools source %s is under a skill dir (skill-owned, not shared) — skipped", d
+                )
+                return
+        seen.add(rd)
+        sources.append(d)
+
+    _add(ddd_path(ddd_dir, "capabilities") / "_shared", trusted=True)
+    aim = _read_aim(ddd_dir)
+    plugins = aim.get("plugins") if isinstance(aim, dict) else None
+    tools = plugins.get("domain_tools") if isinstance(plugins, dict) else None
+    if isinstance(tools, list):
+        for parent in sorted({str(Path(t).parent) for t in tools if isinstance(t, str)}):
+            _add(ddd_dir / parent, trusted=False)
+    return sources
+
+
+def _materialize_shared(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list[str]:
+    """Materialize the DDD's shared code layer(s) INTO each emitted skill's scripts/.
+
+    A DDD may keep single-source shared code that its skills import at runtime via a
+    ``parents[2]/_shared`` (or asset-relative) sys.path injection. That injection resolves
+    LOCALLY, but a distributed package copies ONLY the skill dir (``_copy_skill_dirs``) —
+    so the shared code lands OUTSIDE the package and the import fails at the foreign host.
+    This copies each shared ``*.py`` module into every emitted skill's ``scripts/`` so the
+    distributed skill is self-contained: the SAME ``import client`` line resolves from the
+    shared dir locally and from the materialized sibling copy in the package.
+
+    Sources are discovered by :func:`_collect_shared_sources` (``<capabilities>/_shared/``
+    + ``aim.json`` domain_tools parent-dirs — so a data-source-asset SDK need not be moved
+    into ``_shared`` to be distributable). Rules, applied per source:
+    - **FLAT top-level .py modules ONLY** (skips ``__pycache__`` and ``__init__.py``).
+    - Dest = each emitted skill's ``scripts/`` dir (created if absent).
+    - Collision with a skill-OWNED same-name file → SKIP + WARN (never overwrite skill code).
+    - Cross-source dedup: a dest filename written by an earlier source is not overwritten
+      by a later one (first-writer-wins; ``_shared`` precedes domain_tools dirs).
+    - No sources → no-op (returns empty), emitted tree byte-identical to before.
+
+    ⚠️ FLAT-ONLY is ENFORCED, not assumed. The runtime contract is a sys.path injection
+    that imports each module flat (``import client``). A **sub-package** (a sub-dir) in a
+    source would build a package that PASSES the build but fails at the foreign host with
+    ``ModuleNotFoundError`` on the sub-import (Gate-2 MED, run_493d964a) — so a sub-dir
+    emits a LOUD warning and is NOT materialized.
+
+    Returns the ``warnings`` list (empty when clean). Materialized files are picked up by
+    each emit target's final ``rglob`` over out_dir, so this does not return a file list.
+    """
+    sources = _collect_shared_sources(ddd_dir)
+    if not sources:
+        return []
+    warnings: list[str] = []
+
+    # Collect flat modules per source (sub-dirs → LOUD WARN, not materialized).
+    src_files: list[Path] = []
+    seen_names: set[str] = set()  # cross-source dedup: first source wins a given filename
+    for source in sources:
+        rel = _shared_source_label(ddd_dir, source)
+        for sub in sorted(d.name for d in source.iterdir() if d.is_dir() and d.name != "__pycache__"):
+            warnings.append(
+                f"{rel}/{sub}/ is a sub-package — flat materialization supports top-level "
+                f"modules only; it was NOT materialized (a distributed skill importing it "
+                f"would fail at the host). Flatten it or vend it inside the skill."
+            )
+        for p in sorted(source.glob("*.py")):
+            if not p.is_file() or p.name == "__init__.py":
+                continue
+            if p.name in seen_names:
+                continue  # first-writer-wins across sources (deterministic precedence)
+            seen_names.add(p.name)
+            src_files.append(p)
+    if not src_files:
+        return warnings
+
+    for name in sorted(skills):
+        if not (out_skills / name).is_dir():
+            continue  # skill wasn't emitted (excluded) — nothing to make self-contained
+        skill_scripts = out_skills / name / "scripts"
+        skill_scripts.mkdir(parents=True, exist_ok=True)
+        for src in src_files:
+            dst = skill_scripts / src.name
+            if dst.exists():
+                warnings.append(
+                    f"skill '{name}' scripts/{src.name} is skill-owned — NOT overwritten "
+                    f"with shared {src.name} (materialization skipped for this file)"
+                )
+                continue
+            shutil.copy2(src, dst)
+    return warnings
+
+
 def _read_aim(ddd_dir: Path) -> dict[str, Any]:
     try:
         d = json.loads((ddd_dir / "aim.json").read_text(encoding="utf-8"))
@@ -377,6 +525,7 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path) -> PackageResult:
 
     # skills/, context/ (knowledge docs + AGENTS.md), agent-sops/ (gates + refresher)
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", domain)
+    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", domain)
     ctx = out_dir / "context"
     ctx.mkdir(parents=True, exist_ok=True)
     for doc in (*_KNOWLEDGE_DOCS, "AGENTS.md"):
@@ -425,6 +574,7 @@ def emit_target_open_plugin(ddd_dir: Path, out_dir: Path) -> PackageResult:
 
     # skills/
     res.files += _copy_skill_dirs(ddd_dir, out_dir / "skills", domain)
+    res.warnings += _materialize_shared(ddd_dir, out_dir / "skills", domain)
 
     # agents/<ddd>.md — system prompt as a sub-agent markdown
     agents_dir = out_dir / "agents"

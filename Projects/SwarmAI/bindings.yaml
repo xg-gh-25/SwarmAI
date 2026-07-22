@@ -44,6 +44,6 @@ bindings:
       review_path: s_autonomous-pipeline   # SwarmAI's review = the pipeline's Gate-2 adversarial (main-only, no external CR/PR)
       auto_send: manual-push       # STEERING #5: commit=auto, push=user decision
 
-# Enablement skills (aim.json native_skills: s_ddd-*, s_ai-ready-repo) are NOT governed
+# Enablement skills (aim.json native_skills: s_ddd-*, s_repo-to-ddd) are NOT governed
 # assets — they are SwarmAI-platform capabilities. On SwarmAI the official built-in
 # version wins (tier: built-in > ddd). SwarmAI has no DDD-owned domain skill-set.
