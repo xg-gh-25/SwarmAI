@@ -110,3 +110,42 @@ class TestWriterConvergence:
         assert orch == hh
         assert orch.endswith("(updated today)")  # suffix present in BOTH now
         assert "`[internal]`" in orch
+
+
+class TestMigratedLayoutIndex:
+    """A DDD migrated to the six-section numbered tree (docs under 2-understanding/,
+    skills under 4-capabilities/) MUST still produce an index line. Regression for
+    run_af3dfd9f: describe_project_ddd_line read docs at ROOT via `d / f`, so a
+    migrated DDD found 0 docs → returned None → VANISHED from the KNOWLEDGE.md
+    index. Caught by live post-deploy smoke (not unit tests — this path had none).
+    Fix: resolve docs via ddd_path (strangler new-then-old)."""
+
+    def test_migrated_ddd_still_produces_index_line(self, tmp_path):
+        from core.ddd_bindings import describe_project_ddd_line
+        d = tmp_path / "Projects" / "MigratedBrain"
+        # NEW layout: docs under 2-understanding/, skills under 4-capabilities/.
+        und = d / "2-understanding"
+        und.mkdir(parents=True)
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (und / doc).write_text(f"# {doc}\ncontent\n")
+        (d / "4-capabilities" / "s_cmhk-weekly-report").mkdir(parents=True)
+        (und / "knowledge").mkdir()
+
+        line = describe_project_ddd_line(d, freshness=None)
+
+        assert line is not None, (
+            "a migrated DDD (docs in 2-understanding/) must NOT vanish from the index"
+        )
+        assert "**MigratedBrain**" in line
+        assert "1 skills" in line, "skills under 4-capabilities/ must be counted"
+        assert "PRODUCT.md" in line and "TECH.md" in line
+
+    def test_unmigrated_ddd_still_works(self, tmp_path):
+        """Strangler back-compat: an un-migrated DDD (docs at root) still resolves."""
+        from core.ddd_bindings import describe_project_ddd_line
+        d = tmp_path / "Projects" / "LegacyBrain"
+        d.mkdir(parents=True)
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            (d / doc).write_text(f"# {doc}\ncontent\n")
+        line = describe_project_ddd_line(d, freshness=None)
+        assert line is not None and "**LegacyBrain**" in line

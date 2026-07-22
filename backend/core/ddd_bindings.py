@@ -510,9 +510,13 @@ from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
 
 def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:
-    """Freshness label from the most-recent DDD doc mtime (today / Nd ago / Nd stale)."""
+    """Freshness label from the most-recent DDD doc mtime (today / Nd ago / Nd stale).
+
+    ``docs`` are canonical doc NAMES; each is resolved via ddd_path so a migrated
+    DDD (docs under 2-understanding/) is read at its real location, not root."""
     import time
-    mtimes = [(project_dir / f).stat().st_mtime for f in docs if (project_dir / f).is_file()]
+    resolved = [ddd_path(project_dir, f) for f in docs]
+    mtimes = [p.stat().st_mtime for p in resolved if p.is_file()]
     days_ago = int((time.time() - max(mtimes)) / 86400) if mtimes else 999
     if days_ago == 0:
         return "today"
@@ -542,7 +546,11 @@ def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = N
     Fail-safe: classify_project errors → no tag, never raises.
     """
     d = Path(project_dir)
-    docs = [f for f in _DDD_DOC_NAMES if (d / f).is_file()]
+    # Resolve each canonical doc via ddd_path (strangler): a migrated DDD keeps
+    # its 4 docs under 2-understanding/, so a bare `d / f` root check would find
+    # none → the project vanishes from the KNOWLEDGE.md index (caught by live
+    # post-deploy smoke, run_af3dfd9f). ddd_path finds new-or-old location.
+    docs = [f for f in _DDD_DOC_NAMES if ddd_path(d, f).is_file()]
     if not docs:
         return None
 
