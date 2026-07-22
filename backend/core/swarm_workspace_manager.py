@@ -411,9 +411,16 @@ never contained), the deploy pipeline (referenced in ⑤, never executed here).
 AIM-export-only members (`agents/*.agent-spec.json`, `agent-sops/`, `context/`)
 are generated at export — they are NOT part of the SwarmWS-native skeleton.
 
-## Non-section directories (sanctioned, at project root)
-`assets/` (diagrams/decks/generators — referenced by path, do NOT relocate),
-`templates/` (doc templates), `.artifacts/` (pipeline run outputs).
+## Governed assets + non-section directories (at project root, un-numbered)
+`assets/<kind>/` — the DDD's **governed assets**, each keyed by an open `kind`
+(`data-source/`, `code-repo/`, `document-corpus/`, …). A data-agent brain's moat
+(the unified SDK: client + catalog + validate_sql + data-contract) is the
+`data-source` asset and lives at `assets/data-source/` — a first-class citizen,
+NOT masquerading as a skill under ④. `assets/` is un-numbered (it sorts after ⑥
+like `.artifacts/`; numbering is read by path, not by sort). Loose misc files
+(diagrams/decks/generators) may also live under `assets/` but governed assets are
+always under a `<kind>/` subdir. `templates/` (doc templates), `.artifacts/`
+(pipeline run outputs) are the other sanctioned non-section dirs.
 """,
     ".crux_template.md": """## Summary
 _One-line summary of the change to {project_name}._
