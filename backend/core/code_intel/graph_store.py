@@ -994,6 +994,35 @@ class GraphStore:
             for r in rows
         ]
 
+    def get_full_graph(self) -> dict:
+        """Return the ENTIRE graph — all nodes + all edges, NO limit.
+
+        Unlike ``get_graph_data`` (top-N by degree, for display) this returns every
+        row, so structural passes (clustering, whole-graph analysis) see the full
+        graph. Confines the ``code_nodes``/``code_edges`` schema coupling to this one
+        accessor instead of spreading raw ``_conn`` reads across modules
+        (run_93e78bcd). Edges are returned VERBATIM including low-confidence ones
+        (e.g. ``dynamic_sql_write:*`` at 0.4) — a consumer that wants a confidence
+        floor filters itself; clustering deliberately keeps them (structural signal).
+        """
+        nodes = [
+            {"id": r[0], "file_path": r[1], "node_type": r[2], "name": r[3],
+             "language": r[4], "is_export": r[5], "is_entry_point": r[6]}
+            for r in self._conn.execute(
+                "SELECT id, file_path, node_type, name, language, is_export, "
+                "is_entry_point FROM code_nodes"
+            ).fetchall()
+        ]
+        edges = [
+            {"source_id": r[0], "target_id": r[1], "edge_type": r[2],
+             "confidence": r[3], "line_number": r[4]}
+            for r in self._conn.execute(
+                "SELECT source_id, target_id, edge_type, confidence, line_number "
+                "FROM code_edges"
+            ).fetchall()
+        ]
+        return {"nodes": nodes, "edges": edges}
+
     def count_files(self) -> int:
         """Number of distinct files currently in the graph.
 

@@ -231,6 +231,17 @@ def export_code_intel_json(
     except Exception as e:  # noqa: BLE001 — one analysis error must not lose the doc
         logger.warning("graph_analysis failed (non-fatal, doc still exported): %s", e)
 
+    # ── graph_clusters: language-agnostic structural domain decomposition ──
+    # Additive key, parallel to graph_analysis. Clusters the shared graph into
+    # bounded structural domains (community detection) so a monolith can be
+    # decomposed domain-by-domain (run_93e78bcd). NOT the LLM domains[] concept.
+    # Fail-open — clustering is a convenience layer, never a reason to sink export.
+    try:
+        from .clustering import compute_graph_clusters
+        doc["graph_clusters"] = compute_graph_clusters(graph_store)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("graph_clusters failed (non-fatal, doc still exported): %s", e)
+
     doc["status"] = status
 
     # Serialize and check size cap
