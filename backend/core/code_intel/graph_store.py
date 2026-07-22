@@ -1007,7 +1007,7 @@ class GraphStore:
         """
         nodes = [
             {"id": r[0], "file_path": r[1], "node_type": r[2], "name": r[3],
-             "language": r[4], "is_export": r[5], "is_entry_point": r[6]}
+             "language": r[4], "is_export": bool(r[5]), "is_entry_point": bool(r[6])}
             for r in self._conn.execute(
                 "SELECT id, file_path, node_type, name, language, is_export, "
                 "is_entry_point FROM code_nodes"
@@ -1032,6 +1032,11 @@ class GraphStore:
         return self._conn.execute(
             "SELECT COUNT(DISTINCT file_path) FROM code_nodes"
         ).fetchone()[0]
+
+    def count_edges(self) -> int:
+        """Total edge count — a cheap pre-check so a consumer can bail BEFORE
+        materializing the whole graph (get_full_graph) on a pathological repo."""
+        return self._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0]
 
     def count_callers_by_file(self, file_path: str) -> dict[str, int]:
         """Count how many callers target each node in *file_path*.

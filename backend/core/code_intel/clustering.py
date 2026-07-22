@@ -11,7 +11,12 @@ flows[].domain_id — business-semantic domains). These are STRUCTURAL communiti
 read from graph topology. The output key is ``graph_clusters`` (distinct).
 
 Algorithm (run_93e78bcd, Gate-1 hardened):
-  • WEIGHTED, deterministic, async label-propagation — no networkx, no random.
+  • WEIGHTED, async label-propagation — no networkx, no random. DETERMINISTIC
+    PER-INPUT (same graph → byte-identical partition, verified across hash seeds)
+    but NOT stable across node-id changes: async LP order = sorted(node_ids), so a
+    file rename shifts positions and can re-partition. cluster_ids are therefore
+    EPHEMERAL — do not diff them across reindexes as if a changed id means a
+    changed domain (Gate-2 #2, run_93e78bcd).
     A neighbor's vote is weighted 1/sqrt(deg(neighbor)) so a hub (god-node) is
     NOT excluded and does NOT desert its community; its vote is merely diluted.
     (Gate-1 CRITICAL: excluding god-node edges made the domain-anchor a singleton
@@ -54,6 +59,17 @@ def compute_graph_clusters(graph_store) -> dict:
     skipped?: reason}``. Each cluster: ``{cluster_id, kind, size, member_ids,
     entry_points, intra_edges, inter_edges, cohesion, languages, files}``.
     """
+    # Edge-count pre-check BEFORE materializing the whole graph — on a pathological
+    # repo get_full_graph() would OOM before an after-the-fact guard could fire.
+    try:
+        edge_count = graph_store.count_edges()
+        if edge_count > _MAX_EDGES:
+            return {"converged": False, "rounds_used": 0, "clusters": [],
+                    "extraction_candidates": [],
+                    "skipped": f"edge count {edge_count} exceeds {_MAX_EDGES}"}
+    except Exception:  # noqa: BLE001 — no count API → fall through to post-materialize guard
+        pass
+
     graph = graph_store.get_full_graph()
     nodes = graph["nodes"]
     edges = graph["edges"]

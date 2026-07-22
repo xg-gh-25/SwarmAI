@@ -262,6 +262,20 @@ def export_code_intel_json(
             )[:20]
             content = json.dumps(doc, indent=2, ensure_ascii=False)
 
+        # If STILL over, drop the per-cluster member_ids from graph_clusters (the
+        # bulk of its size — full node id lists for every cluster). Keep the
+        # summary fields (cluster_id/kind/size/cohesion/entry_points) + the
+        # extraction_candidates, which is what a consumer actually acts on. Without
+        # this graph_clusters is uncapped and can be several× _MAX_SIZE_BYTES alone
+        # on a large repo (Gate-2 #7, run_93e78bcd).
+        if len(content.encode("utf-8")) > _MAX_SIZE_BYTES:
+            gc = doc.get("graph_clusters")
+            if isinstance(gc, dict):
+                for c in gc.get("clusters", []):
+                    c.pop("member_ids", None)
+                    c["members_trimmed"] = True
+                content = json.dumps(doc, indent=2, ensure_ascii=False)
+
     # ── F19: ATOMIC write (tmp + os.replace). An interrupted/failed write must never
     # leave a half-written file or corrupt the prior one. os.replace is atomic within
     # a filesystem; the .tmp sibling is cleaned up on failure. ──

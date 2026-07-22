@@ -107,24 +107,31 @@ def test_cross_language_not_force_merged():
     """AC6: py and sql nodes with NO edge between them stay in separate clusters;
     languages[] is labelled correctly. dynamic_sql_write edges (confidence 0.4) ARE
     included so the sql proc→table clusters (not dropped by a 0.5 floor)."""
+    # The sql proc and its table live in DIFFERENT files, so if the 0.4 edge were
+    # dropped they'd fold into SEPARATE FILE buckets — the test can only pass by
+    # the edge genuinely clustering them into ONE community (not a same-file fold).
     nodes = [
         _node("app.py::p0"), _node("app.py::p1"),
-        _node("recon.sql::run_recon", lang="sql", ntype="function"),
-        _node("recon.sql::table:staging", lang="sql", ntype="data_object", name="staging"),
+        _node("proc.sql::run_recon", lang="sql", ntype="function"),
+        _node("schema.sql::table:staging", lang="sql", ntype="data_object", name="staging"),
     ]
     edges = [
         _edge("app.py::p0", "app.py::p1"),                       # py community
-        _edge("recon.sql::run_recon", "recon.sql::table:staging",
-              etype="dynamic_sql_write:CREATE", conf=0.4),        # sql, low-conf
+        _edge("proc.sql::run_recon", "schema.sql::table:staging",
+              etype="dynamic_sql_write:CREATE", conf=0.4),        # sql, low-conf, cross-file
     ]
     r = compute_graph_clusters(_FakeGraph(nodes, edges))
-    # find the sql cluster — it must contain BOTH sql nodes (0.4 edge was included)
     sql_cluster = next((c for c in r["clusters"]
-                        if "recon.sql::run_recon" in c["member_ids"]), None)
+                        if "proc.sql::run_recon" in c["member_ids"]), None)
     assert sql_cluster is not None
-    assert "recon.sql::table:staging" in sql_cluster["member_ids"], \
+    # kind==community (NOT file_bucket) is the ONLY signal that the 0.4 edge was
+    # included — a dropped edge would leave two separate file buckets.
+    assert sql_cluster["kind"] == "community", \
+        f"0.4 dynamic_sql edge dropped — sql nodes did not form a community: {sql_cluster}"
+    assert "schema.sql::table:staging" in sql_cluster["member_ids"], \
         "0.4 dynamic_sql edge was dropped — sql proc did not cluster with its table"
     assert sql_cluster["languages"] == ["sql"]
+    assert sql_cluster["intra_edges"] >= 1
     # py nodes are in a DIFFERENT cluster (no cross-language edge)
     py_cluster = next(c for c in r["clusters"] if "app.py::p0" in c["member_ids"])
     assert "recon.sql::run_recon" not in py_cluster["member_ids"]
