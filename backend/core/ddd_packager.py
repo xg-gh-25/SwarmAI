@@ -43,6 +43,7 @@ from core.ddd_distribution_policy import (
     DistributionPolicy,
 )
 from core.project_registry import DDD_CANONICAL_DOCS
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ def split_skills(ddd_dir: Path) -> tuple[list[str], list[str], list[str]]:
         pass
 
     on_disk: set[str] = set()
-    skills_root = ddd_dir / "skills"
+    skills_root = ddd_path(ddd_dir, "capabilities")
     if skills_root.is_dir():
         for child in sorted(skills_root.iterdir()):
             if child.is_dir() and (child / "SKILL.md").is_file():
@@ -291,8 +292,9 @@ def _write_json(path: Path, data: Any) -> None:
 def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list[str]:
     """Copy each included skill dir into the package. Returns sorted relative files."""
     copied: list[str] = []
+    caps_root = ddd_path(ddd_dir, "capabilities")
     for name in sorted(skills):
-        src = ddd_dir / "skills" / name
+        src = caps_root / name
         if not src.is_dir():
             continue
         dst = out_skills / name

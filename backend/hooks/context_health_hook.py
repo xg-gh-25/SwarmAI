@@ -24,6 +24,7 @@ from typing import Optional
 
 from core.initialization_manager import initialization_manager
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
@@ -1511,7 +1512,7 @@ class ContextHealthHook:
                 logger.debug("context_health: maturity update hit deadline, stopping")
                 break
             # Skip projects without DDD docs
-            if not (project_path / "TECH.md").exists() and not (project_path / "PRODUCT.md").exists():
+            if not ddd_path(project_path, "TECH.md").exists() and not ddd_path(project_path, "PRODUCT.md").exists():
                 continue
 
             try:

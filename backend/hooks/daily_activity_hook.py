@@ -21,6 +21,7 @@ from core.session_hooks import HookContext
 from core.summarization import SummarizationPipeline
 from core.daily_activity_writer import write_daily_activity
 from core.compliance import ComplianceTracker
+from core.ddd_paths import ddd_path
 from database import db
 from jobs.paths import STATE_DIR, SWARMWS
 
@@ -348,7 +349,7 @@ class DailyActivityExtractionHook:
             projects_dir = ws / "Projects"
             if projects_dir.is_dir():
                 for project_dir in sorted(projects_dir.iterdir()):
-                    tech_md = project_dir / "TECH.md"
+                    tech_md = ddd_path(project_dir, "TECH.md")
                     if not tech_md.is_file():
                         continue
                     try:

@@ -506,6 +506,7 @@ def _utc_now_iso() -> str:
 # Canonical DDD doc names, in display order.
 # Run 0 (run_393e3dc1): single source of truth — see project_registry.DDD_CANONICAL_DOCS.
 from core.project_registry import DDD_CANONICAL_DOCS as _DDD_DOC_NAMES
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
 
 def _compute_ddd_freshness(project_dir: Path, docs: list[str]) -> str:
@@ -558,14 +559,17 @@ def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = N
         cls = None
 
     extras = []
-    skills_dir = d / "skills"
+    # Route through the six-section resolver (strangler): finds 4-capabilities/
+    # (new) or skills/ (un-migrated), etc. A hardcoded old-path check here would
+    # report "0 skills" for a migrated DDD (Gate-2 CRITICAL, run_cfb0f28f).
+    skills_dir = ddd_path(d, "capabilities")
     if skills_dir.is_dir():
         n_skills = sum(1 for s in skills_dir.iterdir() if s.is_dir() and s.name.startswith("s_"))
         if n_skills:
             extras.append(f"{n_skills} skills")
-    if (d / "gates").is_dir():
+    if ddd_path(d, "gates").is_dir():
         extras.append("gates")
-    if (d / "Knowledge").is_dir():
+    if ddd_path(d, "knowledge").is_dir():
         extras.append("Knowledge/")
     # code-intel v3 (run_b5993cdb A): surface the derived spec-details/ projection
     # so the DDD index makes the system AWARE it exists (OT07 prevention — a

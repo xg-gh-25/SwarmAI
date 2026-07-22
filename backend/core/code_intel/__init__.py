@@ -15,6 +15,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.ddd_paths import ddd_path
+
 if TYPE_CHECKING:
     from .graph_store import GraphStore
 
@@ -181,7 +183,7 @@ def _build_project_path_cache():
     for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
             continue
-        tech_md = project_dir / "TECH.md"
+        tech_md = ddd_path(project_dir, "TECH.md")
         if not tech_md.exists():
             continue
         try:

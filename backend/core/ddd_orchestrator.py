@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.cultivation_dispatcher import ChannelTask, EventType
+from core.ddd_paths import ddd_path
 
 logger = logging.getLogger(__name__)
 
@@ -879,7 +880,7 @@ class DddCultivationOrchestrator:
                 continue
             if not project_dir.resolve().is_relative_to(resolved_projects):
                 continue
-            imp_path = project_dir / "IMPROVEMENT.md"
+            imp_path = ddd_path(project_dir, "IMPROVEMENT.md")
             if not imp_path.is_file():
                 continue
 
@@ -887,7 +888,11 @@ class DddCultivationOrchestrator:
             try:
                 # Advisory file lock to prevent concurrent writes (F5 fix)
                 # C1 fix: use try/finally around entire open+lock sequence
-                lock_path = project_dir / ".IMPROVEMENT.md.lock"
+                # Lock MUST be co-located with the file it guards — imp_path now
+                # resolves under 2-understanding/ (six-section tree), so the lock
+                # lives beside it, not at a hardcoded root path (else the lock and
+                # the file it protects diverge → the guard is void).
+                lock_path = imp_path.with_name(".IMPROVEMENT.md.lock")
                 lock_fd = open(lock_path, "w")
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

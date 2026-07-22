@@ -31,6 +31,7 @@ import subprocess
 from core.entity_extractor import extract_clean_description, extract_entities_from_ddd, format_entity_index, prune_entity_index
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+from core.ddd_paths import ddd_path, ddd_write_path  # six-section layout resolver (SSOT)
 
 logger = logging.getLogger(__name__)
 
@@ -375,16 +376,26 @@ asset-derived, so they are no-ops until an asset is bound. (Paradigm: SwarmAI
 SWARMAI.md § "SwarmAI & DDD" + spec §3.6.)
 
 ## The six sections
+The file tree is NUMBERED so a listing reads ①→⑥ top-to-bottom (self-explaining).
+`AGENTS.md` stays at the project ROOT (the external "this is a DDD" door-plate);
+everything else lives under its numbered section dir.
+
 | # | Section | OWN/GOVERN | Members | What belongs / accretion rule |
 |---|---------|-----------|---------|-------------------------------|
-| ① | Identity & Manifest | OWN | this file, `aim.json`, `.crux_template.md` | the DDD's identity + export manifest |
-| ② | Knowledge | OWN | `PRODUCT/TECH/IMPROVEMENT/PROJECT.md` + `Knowledge/` | 冷启动 + judgment BORN here as prose |
-| ③ | Gates (the moat) | OWN | `gates/<gate>.py\\|sh` + tests + `gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the 养成 ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
-| ④ | Capabilities | OWN | `skills/` (portable `s_<name>/SKILL.md`) | validated portable skills the DDD distributes. Accretes as capabilities are bound. |
-| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` | per-asset delivery 全貌 for whatever assets are bound (e.g. build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND; absent for a 0-asset brain. |
-| ⑥ | Refresher | GOVERN | `REFRESHER.md` | a self-contained mechanism that REGENERATES the asset's projection from its source (code→code-intel.json, data→schema, …). Ships the refresher, not the projection. Shape follows the bound asset kind; no-op when there is no asset. |
+| ① | Identity & Manifest | OWN | this file (root), `aim.json`, `.crux_template.md` | the DDD's identity + export manifest |
+| ② | Understanding | OWN | `2-understanding/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md` + `2-understanding/knowledge/` | 冷启动 + judgment BORN here as prose (distilled docs); `knowledge/` = recall corpus |
+| ③ | Gates (the moat) | OWN | `3-gates/<gate>.py\\|sh` + tests + `3-gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the 养成 ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
+| ④ | Capabilities | OWN | `4-capabilities/` (portable `s_<name>/SKILL.md`) | validated portable skills the DDD distributes. Accretes as capabilities are bound. |
+| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` (root) | per-asset delivery 全貌 for whatever assets are bound (e.g. build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND; absent for a 0-asset brain. |
+| ⑥ | Refresher | GOVERN | `REFRESHER.md` (root) | a self-contained mechanism that REGENERATES the asset's projection from its source (code→code-intel.json, data→schema, …). Ships the refresher, not the projection. Shape follows the bound asset kind; no-op when there is no asset. |
 
-## Default native skills (the self-養成 / self-propagation set — ④, copied into `skills/`)
+> Numbered-tree note (redesign 2026-07-21): ②③④ are numbered dirs (`2-understanding/`,
+> `3-gates/`, `4-capabilities/`). ⑤ `bindings.yaml` + ⑥ `REFRESHER.md` are single
+> well-known files kept at root for now (bindings.yaml has 67 consumers — relocating it
+> is a separate contract migration, deliberately not bundled here). ① `AGENTS.md` stays
+> at root permanently (the external door-plate).
+
+## Default native skills (the self-養成 / self-propagation set — ④, copied into `4-capabilities/`)
 - **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
 - **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
 - **s_ddd-pipeline** — DDD-native judge→execute→reflect dev loop (file-state, retains the Gate-2 adversarial moat).
@@ -437,14 +448,18 @@ the projection LOCALLY (never PR-flowed-back — the derived-projection rule, sp
 # marker because a flat file-map cannot materialize an empty dir (Gate-1 B3).
 # NO agents/ or agent-sops/ — those are AIM-export-form, not SwarmWS-native (D1).
 SECTION_DIRS: tuple[str, ...] = (
-    "gates",                      # ③ executable judgment (accretes)
-    "gates/context/includes",     # ③ denylist DATA home (accretes)
-    "skills",                     # ④ portable capabilities (accretes)
-    "Knowledge",                  # ② deep reference material (accretes; spec §3.6
-                                  #    "② KNOWLEDGE = 4 docs + Knowledge/"). s_ddd-persist
+    "3-gates",                    # ③ executable judgment (accretes)
+    "3-gates/context/includes",   # ③ denylist DATA home (accretes)
+    "4-capabilities",             # ④ portable capabilities (accretes)
+    "2-understanding/knowledge",  # ② deep reference material (accretes; spec §3.6
+                                  #    "② KNOWLEDGE = 4 docs + knowledge/"). s_ddd-persist
                                   #    routes reference/spec here; _recall_ddd scans it.
                                   #    (locked_write self-creates it too, but the skeleton
                                   #    must reflect the canonical structure — Q1 Gate-0.)
+                                  # NUMBERED six-section tree (redesign 2026-07-21): the
+                                  # file listing now reads ①→⑥ top-to-bottom. Physical
+                                  # layout is centralized in core.ddd_paths (SSOT resolver);
+                                  # these names must stay in lockstep with that module.
 )
 
 # ④ DEFAULT DDD-NATIVE SKILLS — the official, maintained set that is COPIED INTO
@@ -1048,14 +1063,19 @@ class SwarmWorkspaceManager:
 
         def _create_ddd():
             created = []
+            # ② the 4 canonical docs live UNDER 2-understanding/ (numbered tree,
+            # redesign 2026-07-21). ddd_write_path resolves the NEW location and
+            # creates the parent dir; strangler READs still find an un-migrated
+            # doc at root via ddd_path.
             for filename, template in DDD_TEMPLATES.items():
-                filepath = project_dir / filename
+                filepath = ddd_path(project_dir, filename)  # strangler: existing-or-new
                 if not filepath.exists():
+                    filepath = ddd_write_path(project_dir, filename)  # write → new
                     filepath.write_text(
                         template.replace("{project_name}", project_name),
                         encoding="utf-8",
                     )
-                    created.append(filename)
+                    created.append(str(filepath.relative_to(project_dir)))
 
             # Six-section skeleton (①⑥): scaffold ① identity manifests
             # (aim.json/AGENTS.md/.crux_template.md) + ⑥ REFRESHER.md, only-if-
@@ -1085,12 +1105,12 @@ class SwarmWorkspaceManager:
                     keep.write_text("", encoding="utf-8")
                     created.append(f"{reldir}/.gitkeep")
 
-            # ④ COPY the 5 default DDD-native skills into skills/ (only-if-absent).
-            # This is the fix for "aim.json declared names but no skill existed":
-            # the skills must be PHYSICALLY in the DDD so that after `aim` export
-            # they run directly in Kiro / Claude Code. Source of truth is the
+            # ④ COPY the 5 default DDD-native skills into 4-capabilities/ (only-if-
+            # absent). This is the fix for "aim.json declared names but no skill
+            # existed": the skills must be PHYSICALLY in the DDD so that after `aim`
+            # export they run directly in Kiro / Claude Code. Source of truth is the
             # official maintained template set (backend/templates/ddd-skills/).
-            skills_root = project_dir / "skills"
+            skills_root = ddd_write_path(project_dir, "capabilities")
             for skill_name, files in DDD_NATIVE_SKILL_TEMPLATES.items():
                 for relpath, content in files.items():
                     target = skills_root / skill_name / relpath
@@ -1113,17 +1133,18 @@ class SwarmWorkspaceManager:
                         # ignore build/cache junk so a DDD never ships bytecode
                         shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
                             "__pycache__", "*.pyc", ".DS_Store"))
-                        created.append(f"skills/{skill_name}/ (internal)")
+                        created.append(f"4-capabilities/{skill_name}/ (internal)")
                 # ③ gate: no_git_push (+ test) — copy from the bundled internal
                 # gate reference if present; the gate is pure-stdlib + portable.
+                gates_root = ddd_write_path(project_dir, "gates")
                 gate_src_dir = Path(__file__).parent.parent / "templates" / "ddd-gates"
                 for gate_file in ("no_git_push.py", "test_no_git_push.py"):
                     gsrc = gate_src_dir / gate_file
-                    gdst = project_dir / "gates" / gate_file
+                    gdst = gates_root / gate_file
                     if gsrc.exists() and not gdst.exists():
                         gdst.parent.mkdir(parents=True, exist_ok=True)
                         gdst.write_text(gsrc.read_text(encoding="utf-8"), encoding="utf-8")
-                        created.append(f"gates/{gate_file} (internal)")
+                        created.append(f"3-gates/{gate_file} (internal)")
 
             # Ensure .artifacts/ with manifest.json
             artifacts_dir = project_dir / ".artifacts"
@@ -1296,16 +1317,71 @@ class SwarmWorkspaceManager:
                     )
             return pruned
 
+        def _migrate_layout_to_numbered() -> list[str]:
+            """Physically RELOCATE an OLD-layout DDD into the numbered six-section
+            tree (redesign 2026-07-21). Strangler + C040-safe + non-destructive:
+
+              • 4 canonical docs (root)      → 2-understanding/<doc>
+              • Knowledge/  (per-DDD corpus)  → 2-understanding/knowledge/
+              • gates/                        → 3-gates/
+              • skills/                       → 4-capabilities/
+
+            Each move is guarded: performed ONLY if the OLD path exists AND the NEW
+            path does NOT (C040 — never overwrite a populated target; a half-migrated
+            or already-migrated tree is a safe no-op). ``shutil.move`` preserves
+            content byte-for-byte. AGENTS.md / aim.json / REFRESHER.md / bindings.yaml
+            stay at root (provisioning owns them; ⑤⑥ relocation is a separate run).
+            The workspace-level Knowledge/ store is never touched (this is per-DDD)."""
+            import shutil
+            moved: list[str] = []
+
+            def _relocate(old: Path, new: Path, label: str) -> None:
+                # C040 guard: only move when source exists and target is absent.
+                if not old.exists():
+                    return
+                if new.exists():
+                    logger.warning(
+                        "migrate-layout: %s/%s NOT moved — target already exists "
+                        "(already migrated or a conflict); left for review",
+                        project_name, label,
+                    )
+                    return
+                new.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old), str(new))
+                moved.append(label)
+
+            # ② 4 canonical docs → 2-understanding/
+            # This is THE sanctioned physical-mover: it is the one place allowed to
+            # name both OLD and NEW literal layouts (ddd-six-section-fallback).
+            und = project_dir / "2-understanding"
+            for doc in DDD_CANONICAL_DOCS:
+                _relocate(project_dir / doc, und / doc, f"2-understanding/{doc}")  # ddd-six-section-fallback
+            # ② per-DDD Knowledge/ → 2-understanding/knowledge/
+            _relocate(project_dir / "Knowledge", und / "knowledge", "2-understanding/knowledge")
+            # ③ gates/ → 3-gates/
+            _relocate(project_dir / "gates", project_dir / "3-gates", "3-gates")  # ddd-six-section-fallback
+            # ④ skills/ → 4-capabilities/
+            _relocate(project_dir / "skills", project_dir / "4-capabilities", "4-capabilities")  # ddd-six-section-fallback
+            return moved
+
         metadata_created = await anyio.to_thread.run_sync(_ensure_metadata)
+        # ORDER matters: PRUNE legacy stubs first (they live at OLD paths like
+        # gates/README.md, skills/README.md), THEN relocate the surviving human
+        # content into the numbered tree. Relocating first would carry the legacy
+        # stubs into 3-gates/4-capabilities where prune (which scans OLD paths) can
+        # no longer see them.
         pruned = await anyio.to_thread.run_sync(_prune_legacy_scaffold)
+        relocated = await anyio.to_thread.run_sync(_migrate_layout_to_numbered)
         scaffolded = await self.provision_project_ddd(project_name, workspace_path, internal=internal)
         await self.refresh_projects_index(workspace_path)
         logger.info(
-            "Migrated project '%s' to six-section structure (metadata_created=%s, pruned=%d, scaffolded=%d items)",
-            project_name, metadata_created, len(pruned), len(scaffolded),
+            "Migrated project '%s' to six-section structure (metadata_created=%s, "
+            "relocated=%d, pruned=%d, scaffolded=%d items)",
+            project_name, metadata_created, len(relocated), len(pruned), len(scaffolded),
         )
         return {
             "metadata_created": metadata_created,
+            "relocated": relocated,
             "pruned": pruned,
             "scaffolded": scaffolded,
             "id": f"{project_name.lower()}-ddd",
@@ -1364,7 +1440,7 @@ class SwarmWorkspaceManager:
         """
         workspace_path = self._resolve_workspace_path(workspace_path)
         project_dir = Path(workspace_path) / "Projects" / project_name
-        tech_path = project_dir / "TECH.md"
+        tech_path = ddd_path(project_dir, "TECH.md")
 
         if not project_dir.is_dir():
             raise ValueError(f"Project '{project_name}' not found")
@@ -1575,7 +1651,7 @@ class SwarmWorkspaceManager:
                 ddd_status = ", ".join(ddd_docs) if ddd_docs else "none"
 
                 # Read one-line vision from PRODUCT.md (cleaned)
-                vision = extract_clean_description(candidate / "PRODUCT.md")
+                vision = extract_clean_description(ddd_path(candidate, "PRODUCT.md"))
 
                 entries.append({
                     "name": name,

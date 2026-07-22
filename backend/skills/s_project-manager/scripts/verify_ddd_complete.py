@@ -67,6 +67,30 @@ try:  # single source of truth (guarded — gate may run standalone off-host)
 except ImportError:
     CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
 
+
+def _section_dir(project_dir: "Path", section_key: str) -> "Path":
+    """Resolve a six-section dir (③ gates / ④ capabilities / ② knowledge),
+    strangler-aware: new numbered layout (3-gates/, 4-capabilities/,
+    2-understanding/knowledge/) if present, else the old bare dir. Guarded so the
+    gate stays PORTABLE (a distributed DDD off-host has no SwarmAI core)."""
+    try:  # ddd-six-section-fallback
+        from core.ddd_paths import ddd_path
+        return ddd_path(project_dir, section_key)
+    except ImportError:
+        from pathlib import Path as _P
+        _new = {
+            "gates": "3-gates",
+            "capabilities": "4-capabilities",
+            "skills": "4-capabilities",
+            "knowledge": "2-understanding/knowledge",
+        }.get(section_key, section_key)
+        _old = {
+            "gates": "gates", "capabilities": "skills",
+            "skills": "skills", "knowledge": "Knowledge",
+        }.get(section_key, section_key)
+        cand_new = _P(project_dir) / _new
+        return cand_new if cand_new.exists() else _P(project_dir) / _old
+
 # Placeholder markers left by the s_project-manager CREATE scaffold. A doc whose
 # body is (almost) only these = not yet written = FAIL.
 _PLACEHOLDER_MARKERS = (
@@ -203,17 +227,19 @@ def _check_knowledge(d: Path) -> tuple[str, str, str]:
 
 
 def _check_gates(d: Path) -> tuple[str, str, str]:
-    """③ GATES: gates/ dir exists (content accretes as judgment matures — empty is OK)."""
-    if (d / "gates").is_dir():
-        return ("③ Gates", STATUS_PASS, "gates/ present (content accretes)")
-    return ("③ Gates", STATUS_FAIL, "gates/ dir missing")
+    """③ GATES: gates dir exists (content accretes as judgment matures — empty is OK).
+    Strangler-aware: 3-gates/ (numbered) or gates/ (un-migrated)."""
+    if _section_dir(d, "gates").is_dir():
+        return ("③ Gates", STATUS_PASS, "gates present (content accretes)")
+    return ("③ Gates", STATUS_FAIL, "gates dir missing")
 
 
 def _check_capabilities(d: Path, aim: dict[str, Any] | None) -> tuple[str, str, str]:
-    """④ CAPABILITIES: skills/ exists AND every aim.json domain_skill has a dir with SKILL.md."""
-    skdir = d / "skills"
+    """④ CAPABILITIES: capabilities dir exists AND every aim.json domain_skill has a
+    dir with SKILL.md. Strangler-aware: 4-capabilities/ (numbered) or skills/ (old)."""
+    skdir = _section_dir(d, "capabilities")
     if not skdir.is_dir():
-        return ("④ Capabilities", STATUS_FAIL, "skills/ dir missing")
+        return ("④ Capabilities", STATUS_FAIL, "capabilities dir missing")
     # Defensive extraction — aim.json is hand-editable, so `plugins` may be a
     # non-dict and `domain_skills` a non-list (Gate-2 D1: a list/str `plugins`
     # crashed .get() → uncaught, broke fail-open; D2: a str `domain_skills`

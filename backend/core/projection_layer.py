@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.manifest_loader import ManifestLoader
 from core.skill_manager import SkillManager
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,7 @@ class ProjectionLayer:
             try:
                 _matches: list[Path] = []
                 for _proj in sorted(p for p in projects_dir.iterdir() if p.is_dir()):
-                    cand = _proj / "skills" / "_shared"
+                    cand = ddd_path(_proj, "capabilities") / "_shared"
                     # Content-validate (must carry project_paths.py) + reject symlink
                     # escapes — a bare is_dir() first-match would let an unrelated or
                     # future package silently shadow the real _shared (Gate-2 HIGH).

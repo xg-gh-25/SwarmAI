@@ -20,6 +20,7 @@ from core.code_intel import (
     invalidate_cache,
     extract_repo_path,
 )
+from core.ddd_paths import ddd_path
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ def _run_reindex(project: str) -> None:
 
         # Read repo path from TECH.md
         projects_dir = db_path.parent
-        tech_md = projects_dir / "TECH.md"
+        tech_md = ddd_path(projects_dir, "TECH.md")
         if not tech_md.exists():
             logger.warning(f"Cannot reindex {project}: no TECH.md with repo path")
             return

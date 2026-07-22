@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 
 from core.session_hooks import HookContext
+from core.ddd_paths import ddd_path
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,8 @@ class ImprovementWritebackHook:
             return
 
         # 2. Check IMPROVEMENT.md exists (don't create it -- respect L0/L1)
-        improvement_path = (
-            self._workspace / "Projects" / project_name / "IMPROVEMENT.md"
+        improvement_path = ddd_path(
+            self._workspace / "Projects" / project_name, "IMPROVEMENT.md"
         )
         if not improvement_path.exists():
             return

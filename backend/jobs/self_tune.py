@@ -69,7 +69,12 @@ def extract_projects() -> list[dict]:
         for proj_dir in PROJECTS_DIR.iterdir():
             if not proj_dir.is_dir() or proj_dir.name.startswith('.'):
                 continue
-            tech_md = proj_dir / "TECH.md"
+            # ddd-six-section-fallback: TECH.md moved under 2-understanding/;
+            # self_tune has zero-backend-dep by design, so resolve inline
+            # (new-then-old) instead of importing core.ddd_paths.
+            tech_md = proj_dir / "2-understanding" / "TECH.md"  # ddd-six-section-fallback
+            if not tech_md.exists():
+                tech_md = proj_dir / "TECH.md"  # ddd-six-section-fallback
             if tech_md.exists():
                 tech_content = tech_md.read_text(encoding="utf-8")[:3000]
                 # Find existing project or create new

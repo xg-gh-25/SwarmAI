@@ -31,6 +31,19 @@ EVOLUTION_TEMPLATE = ROOT / "backend" / "context" / "EVOLUTION.md"
 DDD_DIR = _SWARMWS / "Projects" / "SwarmAI"
 
 
+def _ddd_doc(project_dir: Path, doc: str) -> Path:
+    """Resolve a canonical DDD doc, new-then-old (six-section strangler).
+
+    Guarded: uses core.ddd_paths when importable; falls back to an inline
+    new-then-old check so this script stays runnable standalone (CI/fresh)."""
+    try:  # ddd-six-section-fallback
+        from core.ddd_paths import ddd_path
+        return ddd_path(project_dir, doc)
+    except ImportError:
+        new = project_dir / "2-understanding" / doc
+        return new if new.exists() else project_dir / doc
+
+
 def count_corrections() -> int:
     """Count C### entries in EVOLUTION.md (runtime first, template fallback)."""
     for path in [EVOLUTION_RUNTIME, EVOLUTION_TEMPLATE]:
@@ -52,7 +65,7 @@ def count_ddd_sections() -> int:
     except ImportError:
         _docs = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")  # ddd-canonical-fallback
     for doc in _docs:
-        path = DDD_DIR / doc
+        path = _ddd_doc(DDD_DIR, doc)
         if path.exists():
             total += len(re.findall(r"^##\s", path.read_text(), re.MULTILINE))
     return total
@@ -96,7 +109,7 @@ def get_latest_version() -> str:
 
 def get_p0_current_release() -> str:
     """Estimate P0 count for current release (from IMPROVEMENT.md What Failed)."""
-    imp = DDD_DIR / "IMPROVEMENT.md" if DDD_DIR.exists() else None
+    imp = _ddd_doc(DDD_DIR, "IMPROVEMENT.md") if DDD_DIR.exists() else None
     if not imp or not imp.exists():
         return "?"
     # Count entries mentioning P0/Sev-1/critical in the "What Failed" section

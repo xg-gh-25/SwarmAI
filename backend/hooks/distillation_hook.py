@@ -32,6 +32,7 @@ from pathlib import Path
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
+from core.ddd_paths import ddd_path
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
 from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
@@ -1021,7 +1022,7 @@ class DistillationTriggerHook:
             projects_dir = ws / "Projects"
             if projects_dir.is_dir():
                 for project_dir in sorted(projects_dir.iterdir()):
-                    tech_md = project_dir / "TECH.md"
+                    tech_md = ddd_path(project_dir, "TECH.md")
                     if not tech_md.is_file():
                         continue
                     try:

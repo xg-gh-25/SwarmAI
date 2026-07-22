@@ -343,13 +343,14 @@ class TestSixSectionScaffold:
             f"aim.json must declare the 5 native skills (D3), got: {declared}"
         )
 
-        # ★ THE CORE FIX: the 5 native skills must PHYSICALLY EXIST in skills/ —
-        # not merely be declared in aim.json. "declared a name" != "skill exists".
-        # This is what makes the DDD self-養成 after `aim` export to Kiro/Claude Code.
+        # ★ THE CORE FIX: the 5 native skills must PHYSICALLY EXIST in ④
+        # 4-capabilities/ — not merely be declared in aim.json. "declared a name"
+        # != "skill exists". This is what makes the DDD self-養成 after `aim`
+        # export to Kiro/Claude Code. (Numbered tree, redesign 2026-07-21: was skills/.)
         for skill in DDD_NATIVE_SKILLS:
-            skill_md = pdir / "skills" / skill / "SKILL.md"
+            skill_md = pdir / "4-capabilities" / skill / "SKILL.md"
             assert skill_md.exists(), (
-                f"DDD-native skill '{skill}' must be COPIED into skills/ at create "
+                f"DDD-native skill '{skill}' must be COPIED into 4-capabilities/ at create "
                 f"(declared in aim.json but missing on disk = the bug this fixes)"
             )
             body = skill_md.read_text(encoding="utf-8")
@@ -358,7 +359,7 @@ class TestSixSectionScaffold:
 
         # A NON-internal project must NOT get the internal toolchain skills.
         for skill in INTERNAL_DDD_SKILLS:
-            assert not (pdir / "skills" / skill).exists(), (
+            assert not (pdir / "4-capabilities" / skill).exists(), (
                 f"non-internal DDD must NOT carry internal skill '{skill}'"
             )
 
@@ -374,16 +375,61 @@ class TestSixSectionScaffold:
         await manager.migrate_project_to_six_section(
             "IntProj", workspace_path=str(ws), internal=True)
 
-        # 5 native + 3 internal skills all physically present
+        # 5 native + 3 internal skills all physically present (④ 4-capabilities/)
         for skill in DDD_NATIVE_SKILLS + INTERNAL_DDD_SKILLS:
-            assert (pdir / "skills" / skill / "SKILL.md").exists(), (
+            assert (pdir / "4-capabilities" / skill / "SKILL.md").exists(), (
                 f"internal DDD must carry skill '{skill}'"
             )
-        # the no_git_push gate + its test copied in (③ moat seed)
-        assert (pdir / "gates" / "no_git_push.py").exists(), \
+        # the no_git_push gate + its test copied in (③ 3-gates/ moat seed)
+        assert (pdir / "3-gates" / "no_git_push.py").exists(), \
             "internal DDD must get the no_git_push gate"
-        assert (pdir / "gates" / "test_no_git_push.py").exists(), \
+        assert (pdir / "3-gates" / "test_no_git_push.py").exists(), \
             "the gate must ship with its knockout test"
+
+    @pytest.mark.asyncio
+    async def test_migrate_moves_old_layout_into_numbered_tree(self, tmp_path: Path):
+        """migrate_project_to_six_section physically RELOCATES an existing OLD-layout
+        DDD into the numbered tree: 4 docs → 2-understanding/, Knowledge/ →
+        2-understanding/knowledge/, gates/ → 3-gates/, skills/ → 4-capabilities/.
+        Human content is preserved byte-for-byte; AGENTS.md stays at root."""
+        ws = tmp_path / "ws"
+        pdir = ws / "Projects" / "LegacyDDD"
+        pdir.mkdir(parents=True)
+        # An OLD-layout DDD: docs at root, bare section dirs with real content.
+        (pdir / "TECH.md").write_text("# legacy tech\nHUMAN_MARKER_T", encoding="utf-8")
+        (pdir / "PRODUCT.md").write_text("# legacy product\nHUMAN_MARKER_P", encoding="utf-8")
+        (pdir / "IMPROVEMENT.md").write_text("# imp", encoding="utf-8")
+        (pdir / "PROJECT.md").write_text("# proj", encoding="utf-8")
+        (pdir / "Knowledge").mkdir()
+        (pdir / "Knowledge" / "note.md").write_text("HUMAN_MARKER_K", encoding="utf-8")
+        (pdir / "gates").mkdir()
+        (pdir / "gates" / "my_gate.py").write_text("HUMAN_MARKER_G", encoding="utf-8")
+        (pdir / "skills").mkdir()
+        (pdir / "skills" / "s_custom").mkdir()
+        (pdir / "skills" / "s_custom" / "SKILL.md").write_text("HUMAN_MARKER_S", encoding="utf-8")
+
+        manager = SwarmWorkspaceManager()
+        await manager.migrate_project_to_six_section("LegacyDDD", workspace_path=str(ws))
+
+        # Docs relocated into 2-understanding/, content preserved, root copies gone.
+        assert (pdir / "2-understanding" / "TECH.md").read_text(encoding="utf-8").endswith("HUMAN_MARKER_T")
+        assert not (pdir / "TECH.md").exists(), "root TECH.md must be moved, not left behind"
+        assert (pdir / "2-understanding" / "PRODUCT.md").read_text(encoding="utf-8").endswith("HUMAN_MARKER_P")
+
+        # Knowledge corpus relocated under ②, content preserved.
+        assert (pdir / "2-understanding" / "knowledge" / "note.md").read_text(encoding="utf-8") == "HUMAN_MARKER_K"
+        assert not (pdir / "Knowledge").exists(), "old per-DDD Knowledge/ must be moved"
+
+        # gates/ → 3-gates/, skills/ → 4-capabilities/, human content preserved.
+        assert (pdir / "3-gates" / "my_gate.py").read_text(encoding="utf-8") == "HUMAN_MARKER_G"
+        assert not (pdir / "gates").exists(), "old gates/ must be moved"
+        assert (pdir / "4-capabilities" / "s_custom" / "SKILL.md").read_text(encoding="utf-8") == "HUMAN_MARKER_S"
+        assert not (pdir / "skills").exists(), "old skills/ must be moved"
+
+        # ① AGENTS.md provisioned at root; re-run is idempotent (no crash, no dup).
+        assert (pdir / "AGENTS.md").is_file()
+        await manager.migrate_project_to_six_section("LegacyDDD", workspace_path=str(ws))
+        assert (pdir / "2-understanding" / "TECH.md").read_text(encoding="utf-8").endswith("HUMAN_MARKER_T")
 
     @pytest.mark.asyncio
     async def test_provision_is_idempotent(self, tmp_path: Path):
@@ -423,10 +469,17 @@ class TestSixSectionScaffold:
         manager = SwarmWorkspaceManager()
         await manager.migrate_project_to_six_section("MigTest", workspace_path=str(ws))
 
-        assert (pdir / "gates" / "README.md").exists(), \
-            "human-authored gates/README.md must NOT be deleted (data-loss guard)"
+        # Human gates/README survives — pruned FIRST (content diverges from stub →
+        # kept), THEN relocated into the numbered ③ dir. Data preserved, new path.
+        assert (pdir / "3-gates" / "README.md").exists(), \
+            "human-authored gates/README.md must survive + relocate to 3-gates/ (data-loss guard)"
+        assert "IMPORTANT human docs" in (pdir / "3-gates" / "README.md").read_text(encoding="utf-8"), \
+            "human content must be byte-preserved through prune+relocate"
+        # Legacy skills/README stub is pruned BEFORE relocate → never lands in 4-capabilities/.
         assert not (pdir / "skills" / "README.md").exists(), \
             "legacy skills/README stub must be pruned"
+        assert not (pdir / "4-capabilities" / "README.md").exists(), \
+            "legacy stub must not be carried into 4-capabilities/ by relocate"
         assert not (pdir / "agents").exists(), \
             "agents/ with only .gitkeep must be pruned (no D1-violating half-state)"
         assert (pdir / "agent-sops" / "deploy.sop.md").exists(), \
@@ -446,6 +499,48 @@ class TestSixSectionScaffold:
         assert ("no-op" in body or "no repo" in body or "not-yet-built" in body), (
             "REFRESHER must state it's a no-op without a bound repo"
         )
+
+    @pytest.mark.asyncio
+    async def test_create_scaffolds_numbered_self_explaining_tree(self, tmp_path: Path):
+        """CREATE materializes the NUMBERED six-section tree so the file listing
+        reads ①→⑥ (redesign 2026-07-21). The 4 canonical docs live under
+        2-understanding/; sections are 3-gates/ 4-capabilities/ (not bare
+        gates/ skills/); knowledge corpus is 2-understanding/knowledge/."""
+        ws = tmp_path / "ws"
+        (ws / "Projects").mkdir(parents=True)
+        manager = SwarmWorkspaceManager()
+        await manager.create_project(project_name="NumTree", workspace_path=str(ws))
+        pdir = ws / "Projects" / "NumTree"
+
+        # ② the 4 canonical docs live UNDER 2-understanding/, not at root.
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            assert (pdir / "2-understanding" / doc).is_file(), (
+                f"{doc} must be provisioned under 2-understanding/ (② numbered)"
+            )
+            assert not (pdir / doc).exists(), (
+                f"{doc} must NOT remain at project root (moved into 2-understanding/)"
+            )
+
+        # ② knowledge corpus dir is nested under Understanding.
+        assert (pdir / "2-understanding" / "knowledge").is_dir(), (
+            "recall corpus must be 2-understanding/knowledge/"
+        )
+
+        # ③④ numbered section dirs exist; the OLD bare names must NOT.
+        assert (pdir / "3-gates").is_dir(), "③ must be 3-gates/"
+        assert (pdir / "4-capabilities").is_dir(), "④ must be 4-capabilities/"
+        assert not (pdir / "gates").exists(), "old bare gates/ must not be scaffolded"
+        assert not (pdir / "skills").exists(), "old bare skills/ must not be scaffolded"
+        assert not (pdir / "Knowledge").exists(), "old bare per-DDD Knowledge/ must not be scaffolded"
+
+        # ① AGENTS.md STAYS at root (the external door-plate, H4).
+        assert (pdir / "AGENTS.md").is_file(), "① AGENTS.md stays at project root"
+
+        # ④ native skills physically land under 4-capabilities/ (not skills/).
+        for skill in DDD_NATIVE_SKILLS:
+            assert (pdir / "4-capabilities" / skill / "SKILL.md").is_file(), (
+                f"native skill {skill} must be copied into 4-capabilities/"
+            )
 
 
 class TestDddNativeSkills:

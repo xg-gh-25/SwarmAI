@@ -1545,8 +1545,14 @@ class EvalService:
                     # (the real work — register_gate + remove_proposal — must complete).
                     try:
                         from core.evolution.gate_scaffold import scaffold_gate_stub
+                        from core.ddd_paths import ddd_write_path
 
-                        gates_dir = self._workspace_root / "Projects" / "SwarmAI" / "gates"
+                        # Write to the ③ gates section via the resolver → 3-gates/
+                        # (new layout). A hardcoded gates/ would scaffold into a
+                        # stale dir the gate-checker never reads (Gate-2 CRITICAL,
+                        # run_cfb0f28f: gate silently never executes = governance void).
+                        gates_dir = ddd_write_path(
+                            self._workspace_root / "Projects" / "SwarmAI", "gates")
                         scaffolded = scaffold_gate_stub(gates_dir, cls, f"GATE_{cls}")
                         if scaffolded is not None:
                             action_taken = "registered_gate+scaffolded"

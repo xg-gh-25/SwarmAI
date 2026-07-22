@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.session_utils import fuzzy_title_matches_deliverable
+from core.ddd_paths import ddd_path
 
 # L2 scoring engine
 from core.proactive_scoring import (
@@ -1887,7 +1888,7 @@ def build_session_briefing(
         # the current session (recent DailyActivity) touches a hot zone that has
         # recurred >= threshold times in IMPROVEMENT.md. Counts derived from doc.
         try:
-            improvement_path = workspace / "Projects" / "SwarmAI" / "IMPROVEMENT.md"
+            improvement_path = ddd_path(workspace / "Projects" / "SwarmAI", "IMPROVEMENT.md")
             if improvement_path.exists():
                 # session_context = the MOST-RECENT activity block only (what
                 # THIS session is doing) — NOT 2 days of history (adversarial:

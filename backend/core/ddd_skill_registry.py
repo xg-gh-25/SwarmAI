@@ -39,6 +39,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
+
 logger = logging.getLogger(__name__)
 
 MANIFEST_RELPATH = Path(".context") / "ddd_skill_registry.json"
@@ -66,7 +68,7 @@ def _resolve_skill_dir(skill_name: str, project_dir: Path, builtin_dir: Path) ->
     then the built-in dir (where domain skills still physically live pre-Run-3).
     Returns None if found in neither (a declared-but-absent skill → skipped, logged).
     """
-    in_package = project_dir / "skills" / skill_name
+    in_package = ddd_path(project_dir, "capabilities") / skill_name
     if in_package.is_dir() and (in_package / "SKILL.md").is_file():
         return in_package
     in_builtin = builtin_dir / skill_name

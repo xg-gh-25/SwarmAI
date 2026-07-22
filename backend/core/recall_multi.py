@@ -478,6 +478,7 @@ def _recall_ddd(query: str, project: Optional[str],
         return hits, "none"
 
     from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
+    from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
     scored: list[tuple[str, str, float]] = []  # (doc, section, score)
     # entry_hits carry CONTENT (the entry text) so a fresh cultivated lesson buried
     # in a huge section is recallable by its own words, not diluted at section-BM25
@@ -485,7 +486,7 @@ def _recall_ddd(query: str, project: Optional[str],
     # out by whole-doc section scores at the default max_sections.
     _docs_text: dict[str, str] = {}
     for doc in DDD_CANONICAL_DOCS:
-        p = base / doc
+        p = ddd_path(base, doc)
         if not p.exists():
             continue
         try:
@@ -509,7 +510,7 @@ def _recall_ddd(query: str, project: Optional[str],
     # ({rel_path: text}), NOT _ddd_section_scores (which no-ops on section-less docs).
     # BOUNDED (hot path — _recall_ddd runs on every recall_all fan-out): cap file count
     # + skip large files, so a big Knowledge/ tree can't blow up recall I/O.
-    kdir = base / "Knowledge"
+    kdir = ddd_path(base, "knowledge")
     if kdir.is_dir():
         from core import memory_index
         _K_MAX_FILES = 60          # AIDLC has ~45; cap keeps the hot path bounded

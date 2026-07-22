@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..paths import SWARMWS, PROJECTS_DIR
+from core.ddd_paths import ddd_path
 
 logger = logging.getLogger("swarm.jobs.ddd_refresh")
 
@@ -46,7 +47,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
         if not project_dir.is_dir() or project_dir.name.startswith("."):
             continue
 
-        tech_path = project_dir / "TECH.md"
+        tech_path = ddd_path(project_dir, "TECH.md")
         if not tech_path.exists():
             continue
 
@@ -102,7 +103,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
 
 def _check_staleness(project_dir: Path) -> dict:
     """Check if project DDD docs need refresh."""
-    tech_path = project_dir / "TECH.md"
+    tech_path = ddd_path(project_dir, "TECH.md")
     now = datetime.now()
     age_days = (now - datetime.fromtimestamp(tech_path.stat().st_mtime)).days
 
@@ -149,11 +150,11 @@ def _gather_project_context(project_dir: Path, stale_info: dict) -> dict:
     }
 
     # Current TECH.md (capped)
-    tech_path = project_dir / "TECH.md"
+    tech_path = ddd_path(project_dir, "TECH.md")
     context["current_tech_md"] = tech_path.read_text(encoding="utf-8")[:10000]
 
     # Current IMPROVEMENT.md if exists
-    improvement_path = project_dir / "IMPROVEMENT.md"
+    improvement_path = ddd_path(project_dir, "IMPROVEMENT.md")
     if improvement_path.exists():
         context["current_improvement_md"] = improvement_path.read_text(encoding="utf-8")[:5000]
 

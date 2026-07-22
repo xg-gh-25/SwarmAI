@@ -19,6 +19,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from core.ddd_paths import ddd_path
+
 logger = logging.getLogger(__name__)
 
 # Minimum functions in a module to consider it "significant" enough for TECH.md
@@ -74,7 +76,7 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
 
     root = Path(workspace_path)
     project_dir = root / "Projects" / project
-    tech_md_path = project_dir / "TECH.md"
+    tech_md_path = ddd_path(project_dir, "TECH.md")
 
     if not tech_md_path.exists():
         return 0
@@ -212,7 +214,7 @@ def get_code_coverage_for_health(
         return None
 
     root = Path(workspace_path)
-    tech_md_path = root / "Projects" / project / "TECH.md"
+    tech_md_path = ddd_path(root / "Projects" / project, "TECH.md")
     if not tech_md_path.exists():
         return None
 
