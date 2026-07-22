@@ -110,6 +110,17 @@ def test_sql_comment_and_string_calls_do_not_form_edges():
     )
 
 
+def test_sql_quoted_identifier_procedure_name():
+    """Regression (found on tranSMART-ETL, a 2nd public repo): Oracle procedures are
+    often declared with a DOUBLE-QUOTED name (`PROCEDURE "I2B2_LOAD_DATA"`), often
+    preceded by `set define off;` and a multi-line param list before AS. The name
+    must extract WITHOUT the quotes. HLR (bare names) was blind to this."""
+    result = _parse("sample_quoted.sql")
+    names = {n.name for n in result.nodes if n.node_type in ("function", "procedure")}
+    assert "I2B2_LOAD_DATA" in names, f"quoted-identifier proc not extracted: {names}"
+    assert '"I2B2_LOAD_DATA"' not in names  # quotes must be stripped
+
+
 def test_sql_forward_declaration_is_not_a_definition():
     """Gate-2 HIGH regression: a package SPEC (.pks) forward declaration
     (`PROCEDURE foo(...);` — no IS/AS body) is a DECLARATION, not a definition, and

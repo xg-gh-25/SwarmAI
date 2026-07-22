@@ -1402,7 +1402,9 @@ _REGEX_DEF_PATTERNS_BY_LANG: dict[str, list[re.Pattern]] = {
     "sql": [
         re.compile(
             r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
-            r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)'
+            r'(?:PROCEDURE|FUNCTION)\s+'
+            r'(?:"?\w+"?\.)?'   # optional (possibly "quoted") schema qualifier
+            r'"?(\w+)"?'        # name, optionally "double-quoted" (Oracle allows both)
             r'(?:\s*\([^;]*?\))?'
             r'(?:\s+RETURN\s+[^\s;]+)?'
             r'\s*(?:IS|AS)\b',  # \s* not \s+: Oracle allows glued `)IS`
@@ -1457,7 +1459,7 @@ _SQL_BUILTINS = frozenset({
 # A PL/SQL call site: an identifier (optionally schema/package-qualified) followed
 # by an opening paren. Captures the OPTIONAL qualifier and the bare name separately
 # so a package call `PKG.proc(` yields name='proc' with qualifier='PKG'.
-_SQL_CALL_PATTERN = re.compile(r'(?:(\w+)\.)?(\w+)\s*\(', re.IGNORECASE)
+_SQL_CALL_PATTERN = re.compile(r'(?:"?\w+"?\.)?"?(\w+)"?\s*\(', re.IGNORECASE)
 
 # PL/SQL comment + string-literal spans. Stripped (replaced by equal-length spaces
 # to preserve byte offsets → correct line numbers) BEFORE scanning for call sites,
@@ -1478,7 +1480,9 @@ _SQL_STRIP_PATTERN = re.compile(
 # MUST mirror the def-extraction pattern (they segment/count the same procedures).
 _SQL_DEF_HEADER = re.compile(
     r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
-    r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)'
+    r'(?:PROCEDURE|FUNCTION)\s+'
+    r'(?:"?\w+"?\.)?'             # optional (possibly "quoted") schema qualifier
+    r'"?(\w+)"?'                  # name, optionally "double-quoted"
     r'(?:\s*\([^;]*?\))?'          # optional param list (no ';' inside)
     r'(?:\s+RETURN\s+[^\s;]+)?'    # FUNCTION return type
     r'\s*(?:IS|AS)\b',             # \s* not \s+: Oracle allows glued `)IS`; body-introducer → DEFINITION not decl
@@ -1526,7 +1530,7 @@ def _sql_call_edges(content: str, rel_path: str, import_map: dict,
         body = scan[body_start:body_end]
         seen: set[str] = set()
         for cm in _SQL_CALL_PATTERN.finditer(body):
-            call_name = _sanitize_name(cm.group(2))
+            call_name = _sanitize_name(cm.group(1))
             if not call_name or call_name.upper() in _SQL_BUILTINS:
                 continue
             key = call_name.casefold()
