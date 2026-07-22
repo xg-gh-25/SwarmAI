@@ -3120,3 +3120,113 @@ class TestRenderBlindSpotsMd:
         assert "pkg" in md
         # an explicit clean statement, not just whitespace
         assert "no" in md.lower() and "blind" in md.lower()
+
+
+# ─── Gap 2: Business-Rules Extraction scoring dimension (run_128fc19f) ───
+
+class TestBusinessRulesDimension:
+    """The 10th scoring dimension, mechanically computed from doc['domain_rules'].
+
+    Coverage = domains-that-produced-rules / total domains. Traceability (optional,
+    only when specs are passed) = fraction of domains whose spec passes
+    verify_traceability. Score = round(coverage * traceability_factor * 10).
+    A doc with NO domain_rules layer scores N/A and is EXCLUDED from overall — a
+    repo without business rules must not be penalized (the honesty requirement).
+    """
+
+    def _doc(self, domains, rules):
+        return {"domain_rules": {"domains": domains, "rules": rules}}
+
+    def test_full_coverage_no_specs_scores_on_coverage_alone(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        doc = self._doc(
+            [{"domain_id": "d1", "rule_count": 2}, {"domain_id": "d2", "rule_count": 1}],
+            [{"rule_id": "BR-d1-1", "domain_id": "d1"}, {"rule_id": "BR-d1-2", "domain_id": "d1"},
+             {"rule_id": "BR-d2-1", "domain_id": "d2"}],
+        )
+        r = compute_business_rules_dimension(doc)
+        assert r["score"] == 10, r          # 2/2 domains have rules, no traceability penalty
+        assert r["coverage"] == 1.0
+        assert r["traceability_pass"] is None  # not measured without specs
+        assert r["applicable"] is True
+
+    def test_partial_coverage_scales_score(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        # 1 of 2 domains produced rules → coverage 0.5 → score 5
+        doc = self._doc(
+            [{"domain_id": "d1", "rule_count": 1}, {"domain_id": "d2", "rule_count": 0}],
+            [{"rule_id": "BR-d1-1", "domain_id": "d1"}],
+        )
+        r = compute_business_rules_dimension(doc)
+        assert r["coverage"] == 0.5
+        assert r["score"] == 5, r
+
+    def test_no_domain_rules_layer_is_NA_excluded_from_overall(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        # A non-legacy / non-SQL repo has no domain_rules key at all.
+        r = compute_business_rules_dimension({"modules": [], "version": "2.0"})
+        assert r["applicable"] is False
+        assert r["score"] is None, "N/A must be None, never 0 (0 would penalize the average)"
+        assert "N/A" in r["detail"] or "no domain_rules" in r["detail"].lower()
+
+    def test_empty_domains_is_NA_not_zero(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        # domain_rules present but zero domains detected → nothing to score → N/A,
+        # NOT a 0 that would drag the overall down.
+        r = compute_business_rules_dimension(self._doc([], []))
+        assert r["applicable"] is False
+        assert r["score"] is None
+
+    def test_traceability_partial_failure_scales_down(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        # 2 domains both have rules (coverage 1.0). specs provided: d1 references its
+        # rule in the behavioral section (passes), d2 only lists it in the §9 matrix
+        # (fails verify_traceability) → traceability 0.5 → score = round(1.0*0.5*10)=5.
+        doc = self._doc(
+            [{"domain_id": "d1", "rule_count": 1}, {"domain_id": "d2", "rule_count": 1}],
+            [{"rule_id": "BR-d1-1", "domain_id": "d1"}, {"rule_id": "BR-d2-1", "domain_id": "d2"}],
+        )
+        specs = {
+            # behavioral body references BR-d1-1 before the §9 matrix → covered
+            "d1": "# Spec d1\n\n## 1. Behavior\nBR-d1-1 applies here.\n\n## 9. Traceability Matrix\n| BR-d1-1 |\n",
+            # BR-d2-1 appears ONLY in the §9 matrix → uncovered → domain fails
+            "d2": "# Spec d2\n\n## 1. Behavior\nnothing cited.\n\n## 9. Traceability Matrix\n| BR-d2-1 |\n",
+        }
+        r = compute_business_rules_dimension(doc, specs=specs)
+        assert r["traceability_pass"] == 0.5, r
+        assert r["score"] == 5, r
+
+    def test_full_traceability_keeps_full_score(self):
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        doc = self._doc(
+            [{"domain_id": "d1", "rule_count": 1}],
+            [{"rule_id": "BR-d1-1", "domain_id": "d1"}],
+        )
+        specs = {"d1": "# d1\n\n## 1. Behavior\nBR-d1-1 here.\n\n## 9. Traceability Matrix\n| BR-d1-1 |\n"}
+        r = compute_business_rules_dimension(doc, specs=specs)
+        assert r["traceability_pass"] == 1.0
+        assert r["score"] == 10
+
+    def test_rule_count_without_backing_rule_ids_fails_closed(self):
+        """Gate-2 finding: a domain claiming rule_count>0 but with no matching
+        rule_id in rules[] (empty rules[], or a None/mismatched domain_id) must NOT
+        pass traceability vacuously. coverage counts it (rule_count>0); traceability
+        must FAIL it closed — else the score inflates for a domain that cites nothing."""
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        # rule_count claims a rule, but rules[] is empty → unprovable → fail-closed
+        doc = {"domain_rules": {"domains": [{"domain_id": "d1", "rule_count": 1}], "rules": []}}
+        specs = {"d1": "# s\n## 1. Behavior\nnothing cited\n## 9. Traceability Matrix\n| x |\n"}
+        r = compute_business_rules_dimension(doc, specs=specs)
+        assert r["traceability_pass"] == 0.0, r   # was vacuously 1.0 before the fix
+        assert r["score"] == 0, r                 # coverage 1.0 * traceability 0.0 * 10
+
+    def test_rule_with_none_domain_id_does_not_vacuously_pass(self):
+        """A rule whose domain_id is None is dropped from grouping; the rule-bearing
+        domain then has no resolvable ids → must fail closed, not pass on empty ids."""
+        from scripts.ai_ready_helpers import compute_business_rules_dimension
+        doc = {"domain_rules": {"domains": [{"domain_id": "d1", "rule_count": 1}],
+                                "rules": [{"rule_id": "BR-d1-1", "domain_id": None}]}}
+        specs = {"d1": "# s\n## 1. Behavior\nnothing\n## 9. Traceability Matrix\n| BR-d1-1 |\n"}
+        r = compute_business_rules_dimension(doc, specs=specs)
+        assert r["traceability_pass"] == 0.0, r
+        assert r["score"] == 0, r

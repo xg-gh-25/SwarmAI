@@ -902,7 +902,7 @@ Next steps:
 > The `{blind}` count comes from §4.8.5's `scan["blind"]`. For a monorepo, name each
 > package's own BLIND-SPOTS.md + its count (per-package, not merged).
 
-## Scoring (9 Dimensions)
+## Scoring (10 Dimensions)
 
 | Dimension | How to Score |
 |-----------|-------------|
@@ -915,8 +915,13 @@ Next steps:
 | Route Coverage | Routes detected / total endpoint references |
 | Test Safety | Test files found + CI config present |
 | Ops Context | Deploy info + monitoring + runbook references |
+| Business-Rules Extraction | domain_rules coverage × traceability pass-rate — **N/A (excluded from overall)** if no domain_rules layer (non-legacy/non-SQL repo). Compute MECHANICALLY via `compute_business_rules_dimension(doc, specs=...)` in `ai_ready_helpers.py`; never eyeball it. |
 
-Score each 0-10. Overall = average. Minimum for "AI-Ready": 6.0.
+Score each 0-10. **Overall = average of the APPLICABLE dimensions only** — a dimension
+returning N/A (score=None, e.g. Business-Rules Extraction on a repo with no
+domain_rules layer) is EXCLUDED from the average, never counted as 0 (a repo is not
+penalized for lacking a capability it was never meant to have). Minimum for
+"AI-Ready": 6.0.
 
 ## Quality Gate (BLOCKING — before writing ANY output)
 

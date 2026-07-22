@@ -3890,3 +3890,135 @@ def render_blind_spots_md(scan: dict, package_name: str) -> str:
         "step or business-rule documenting it. Route to the SME queue to document — or "
         "confirm it is intentionally out of scope._")
     return "\n".join(lines) + "\n"
+
+
+# ── Gap 2: Business-Rules Extraction scoring dimension (run_128fc19f) ──────────
+#
+# The 10th scoring dimension. It certifies the newest engine capability
+# (domain_rules / business-rules-extraction) MECHANICALLY — not by an LLM eyeball,
+# which is the exact "capability grew but certification lagged" gap this closes.
+#
+# Score = coverage × traceability_factor × 10, where
+#   coverage           = domains-that-produced-rules / total domains detected
+#   traceability_factor = fraction of domains whose spec passes traceability
+#                         (behavioral §1-8 references the rule, not only the §9
+#                          matrix); 1.0 when no specs are passed (coverage-only).
+#
+# HONESTY RULE: a repo with NO domain_rules layer (non-legacy / non-SQL — nothing
+# to extract) is scored N/A (applicable=False, score=None) and MUST be excluded
+# from the overall average by the caller. Scoring it 0 would penalize a repo for
+# not having business rules it was never supposed to have.
+
+# Matrix heading that opens the §9 traceability appendix — everything AT/AFTER it
+# is EXCLUDED from behavioral-coverage (a rule that appears ONLY in the matrix that
+# tracks it is NOT covered). Faithful to core.code_intel.domain_rules._MATRIX_HEADING;
+# re-inlined here because ai_ready_helpers.py is the PORTABLE toolkit script and must
+# stay import-free of core.* (runs on foreign hosts). Keep the two in sync.
+_BR_MATRIX_HEADING = re.compile(
+    r"^\s{0,3}#{1,6}\s*(?:9\b|traceability\s+matrix)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _br_spec_covers_all(spec_markdown: str, rule_ids: list[str]) -> bool:
+    """True iff EVERY rule_id is referenced in the behavioral chapters (before the
+    §9 matrix). Fail-closed: no matrix heading → cannot prove separation → False.
+    Mirrors core.code_intel.domain_rules.verify_traceability (inlined for portability)."""
+    if not rule_ids:
+        # A domain with no rule_ids has nothing to trace — vacuously covered.
+        return True
+    m = _BR_MATRIX_HEADING.search(spec_markdown or "")
+    if not m:
+        return False  # no matrix section → fail-closed (same as verify_traceability)
+    behavioral = spec_markdown[:m.start()]
+    for rid in rule_ids:
+        # Word-boundary so BR-1 is not "covered" by BR-12 (hyphen is a boundary here).
+        if not re.search(r"(?<![\w-])" + re.escape(rid) + r"(?![\w-])", behavioral):
+            return False
+    return True
+
+
+def compute_business_rules_dimension(doc: dict, specs: dict | None = None) -> dict:
+    """Score the Business-Rules Extraction dimension from ``doc['domain_rules']``.
+
+    Args:
+        doc: a code-intel document. Reads ``doc['domain_rules']`` =
+             ``{"domains":[{domain_id, rule_count, ...}], "rules":[{rule_id, domain_id}]}``
+             (the shape emitted by core.code_intel.domain_rules.compute_domain_rules).
+        specs: OPTIONAL ``{domain_id: spec_markdown}``. When provided, traceability
+             is measured per domain (does the spec cite each rule in its behavioral
+             body, not only the §9 matrix). When absent, the score is coverage-only
+             (traceability_pass=None) — the doc itself carries no spec text.
+
+    Returns a dict:
+        {"applicable": bool, "score": int|None, "coverage": float|None,
+         "traceability_pass": float|None, "detail": str}
+
+    ``applicable=False`` (score=None) when there is no domain_rules layer or zero
+    domains — the caller MUST exclude such an N/A from the overall average.
+    """
+    dr = doc.get("domain_rules") if isinstance(doc, dict) else None
+    domains = (dr or {}).get("domains") or []
+    rules = (dr or {}).get("rules") or []
+
+    if not dr or not domains:
+        return {
+            "applicable": False, "score": None, "coverage": None,
+            "traceability_pass": None,
+            "detail": "N/A — no domain_rules layer (non-legacy/non-SQL repo has no "
+                      "business rules to extract; excluded from overall, not penalized)",
+        }
+
+    # Coverage: how many detected domains actually produced ≥1 business rule.
+    domains_with_rules = sum(1 for d in domains if (d.get("rule_count") or 0) > 0)
+    coverage = domains_with_rules / len(domains)
+
+    # Traceability (optional): fraction of RULE-BEARING domains whose spec cites
+    # every one of its rule_ids in the behavioral chapters. Only rule-bearing
+    # domains are eligible — a domain with 0 rules has nothing to trace and must
+    # not dilute the ratio in either direction.
+    traceability_pass = None
+    if specs:
+        # Group rule_ids by domain once (rules[] is the authoritative id list).
+        ids_by_domain: dict = {}
+        for r in rules:
+            rid, did = r.get("rule_id"), r.get("domain_id")
+            if rid and did is not None:
+                ids_by_domain.setdefault(did, []).append(rid)
+        eligible = [d for d in domains if (d.get("rule_count") or 0) > 0]
+        if eligible:
+            passed = 0
+            for d in eligible:
+                did = d.get("domain_id")
+                spec_md = specs.get(did)
+                ids = ids_by_domain.get(did, [])
+                # A rule-bearing domain (rule_count>0) whose rule_ids cannot be
+                # resolved from rules[] — empty rules[], a None/mismatched
+                # domain_id — is NOT provably traceable and must FAIL closed. We
+                # must not hand an empty id list to _br_spec_covers_all (it treats
+                # "no ids" as vacuously covered, which would inflate the score for
+                # a domain that claims a rule but cites none). coverage counts this
+                # domain (rule_count>0); traceability must not silently pass it.
+                if not ids:
+                    continue  # fail-closed: rule_count claims rules, rules[] doesn't back it
+                # A rule-bearing domain with no spec supplied cannot be proven
+                # traceable → counts as a fail (fail-closed, not skipped).
+                if spec_md and _br_spec_covers_all(spec_md, ids):
+                    passed += 1
+            traceability_pass = passed / len(eligible)
+
+    factor = 1.0 if traceability_pass is None else traceability_pass
+    score = round(coverage * factor * 10)
+
+    detail = (f"{domains_with_rules}/{len(domains)} domains produced business rules "
+              f"(coverage {coverage:.0%})")
+    if traceability_pass is not None:
+        detail += f"; traceability {traceability_pass:.0%} of rule-bearing domains cite rules in behavioral chapters"
+    else:
+        detail += "; traceability not measured (no specs supplied — coverage-only score)"
+
+    return {
+        "applicable": True, "score": score, "coverage": round(coverage, 4),
+        "traceability_pass": (round(traceability_pass, 4) if traceability_pass is not None else None),
+        "detail": detail,
+    }
