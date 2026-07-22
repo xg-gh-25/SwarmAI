@@ -231,14 +231,26 @@ def export_code_intel_json(
     except Exception as e:  # noqa: BLE001 — one analysis error must not lose the doc
         logger.warning("graph_analysis failed (non-fatal, doc still exported): %s", e)
 
-    # ── graph_clusters: language-agnostic structural domain decomposition ──
-    # Additive key, parallel to graph_analysis. Clusters the shared graph into
-    # bounded structural domains (community detection) so a monolith can be
-    # decomposed domain-by-domain (run_93e78bcd). NOT the LLM domains[] concept.
-    # Fail-open — clustering is a convenience layer, never a reason to sink export.
+    # ── graph_clusters + domain_rules: structural domain decomposition + rules ──
+    # Additive keys, parallel to graph_analysis. graph_clusters detects bounded
+    # structural domains (run_93e78bcd); domain_rules turns each into anchored,
+    # machine-readable business rules (run_28a8f99d) — the on-box analogue of AWS
+    # Transform business-rules-extraction. Both are GRAPH-DERIVED and recomputed on
+    # every export (NOT in _V3_PRESERVED_KEYS) so they can never go stale — a
+    # coverage/rule number stored in a regenerated artifact is a lie (run_afa86bd9).
+    # One get_full_graph() is materialized here and SHARED by both (Gate-1 M1: no
+    # double load). Fail-open — a convenience layer, never a reason to sink export.
     try:
         from .clustering import compute_graph_clusters
-        doc["graph_clusters"] = compute_graph_clusters(graph_store)
+        _shared_graph = graph_store.get_full_graph()
+        doc["graph_clusters"] = compute_graph_clusters(graph_store, _graph=_shared_graph)
+        try:
+            from .domain_rules import compute_domain_rules
+            _dr_root = graph_store.get_meta("repo_root") if hasattr(graph_store, "get_meta") else None
+            doc["domain_rules"] = compute_domain_rules(
+                graph_store, repo_root=_dr_root, _graph=_shared_graph)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("domain_rules failed (non-fatal, doc still exported): %s", e)
     except Exception as e:  # noqa: BLE001
         logger.warning("graph_clusters failed (non-fatal, doc still exported): %s", e)
 

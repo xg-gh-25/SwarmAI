@@ -52,25 +52,32 @@ def _file_of(node_id: str) -> str:
     return node_id.split(_SEP)[0]
 
 
-def compute_graph_clusters(graph_store) -> dict:
+def compute_graph_clusters(graph_store, _graph=None) -> dict:
     """Cluster the full graph into structural communities.
 
     Returns ``{converged, rounds_used, clusters: [...], extraction_candidates: [...],
     skipped?: reason}``. Each cluster: ``{cluster_id, kind, size, member_ids,
     entry_points, intra_edges, inter_edges, cohesion, languages, files}``.
+
+    ``_graph``: optional pre-materialized ``get_full_graph()`` result. The exporter
+    passes ONE materialization shared with ``compute_domain_rules`` so a single
+    export does not load the whole graph twice (run_28a8f99d Gate-1 M1). When
+    supplied, the edge-count pre-check is skipped (the caller already materialized).
     """
     # Edge-count pre-check BEFORE materializing the whole graph — on a pathological
     # repo get_full_graph() would OOM before an after-the-fact guard could fire.
-    try:
-        edge_count = graph_store.count_edges()
-        if edge_count > _MAX_EDGES:
-            return {"converged": False, "rounds_used": 0, "clusters": [],
-                    "extraction_candidates": [],
-                    "skipped": f"edge count {edge_count} exceeds {_MAX_EDGES}"}
-    except Exception:  # noqa: BLE001 — no count API → fall through to post-materialize guard
-        pass
+    # Skipped when _graph is supplied (already materialized by the caller).
+    if _graph is None:
+        try:
+            edge_count = graph_store.count_edges()
+            if edge_count > _MAX_EDGES:
+                return {"converged": False, "rounds_used": 0, "clusters": [],
+                        "extraction_candidates": [],
+                        "skipped": f"edge count {edge_count} exceeds {_MAX_EDGES}"}
+        except Exception:  # noqa: BLE001 — no count API → fall through to post-materialize guard
+            pass
 
-    graph = graph_store.get_full_graph()
+    graph = _graph if _graph is not None else graph_store.get_full_graph()
     nodes = graph["nodes"]
     edges = graph["edges"]
 

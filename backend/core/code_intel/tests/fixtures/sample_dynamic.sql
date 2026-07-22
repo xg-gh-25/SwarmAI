@@ -25,3 +25,15 @@ BEGIN
     raise_application_error(-20001, msg);
 END guard_msg;
 /
+
+CREATE OR REPLACE PROCEDURE build_dynamic IS
+    sqlText varchar2(1000);
+    tbl varchar2(40);
+BEGIN
+    -- runtime-computed table name: literal closes after the verb, then ||concat.
+    -- No literal token to extract → must emit <dynamic:unresolved>, not a phantom.
+    tbl := 'PROV_' || some_input;
+    sqlText := 'CREATE TABLE ' || tbl || ' NOLOGGING AS SELECT * FROM src_b';
+    execute immediate(sqlText);
+END build_dynamic;
+/

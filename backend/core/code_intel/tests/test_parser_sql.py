@@ -184,10 +184,29 @@ def test_dynamic_sql_prose_message_not_a_table():
 
 def test_dynamic_sql_edge_confidence_is_low():
     """Run2 (Gate-2): a dynamic-SQL edge is an ASSIGNMENT (weaker evidence than an
-    executed call) — confidence must stay low (0.4) to signal that honestly."""
+    executed call) — confidence must stay low (0.4) to signal that honestly.
+    Scoped to RESOLVED (literal-target) edges; runtime-concatenated targets carry
+    an even lower 0.3 (see test_dynamic_sql_concatenated_target_unresolved)."""
     r = _parse("sample_dynamic.sql")
-    for e in _dyn_edges(r):
-        assert e.confidence == 0.4, f"dynamic_sql edge confidence should be 0.4, got {e.confidence}"
+    resolved = [e for e in _dyn_edges(r) if "<dynamic:unresolved>" not in e.target_id]
+    assert resolved, "no resolved dynamic edges — fixture regressed"
+    for e in resolved:
+        assert e.confidence == 0.4, f"resolved dynamic_sql edge confidence should be 0.4, got {e.confidence}"
+
+
+def test_dynamic_sql_concatenated_target_unresolved():
+    """run_28a8f99d G3: a write whose table name is a runtime-concatenated variable
+    (`'CREATE TABLE ' || tbl || ...`) has NO literal token — it must emit a
+    <dynamic:unresolved> target from the enclosing proc (honesty > coverage),
+    NOT be silently dropped and NOT fabricate a phantom table."""
+    r = _parse("sample_dynamic.sql")
+    unresolved = [e for e in _dyn_edges(r) if "<dynamic:unresolved>" in e.target_id]
+    assert unresolved, "concatenated-target write was silently dropped (0 unresolved edges)"
+    assert any(e.source_id.split("::")[-1] == "build_dynamic" for e in unresolved), \
+        f"unresolved edge not attributed to build_dynamic: {[e.source_id for e in unresolved]}"
+    assert all(e.confidence == 0.3 for e in unresolved)
+    tables = {n.name for n in r.nodes if n.node_type == "data_object"}
+    assert "NOLOGGING" not in tables and "PROV_" not in tables, f"phantom table fabricated: {tables}"
 
 
 def test_dynamic_sql_data_object_not_flagged_dead_code():
@@ -246,6 +265,46 @@ def test_dogfood_hlr_package_body():
     assert "export_csv" not in names  # RECONCILIATION_INTERFACES.export_csv is a call, not a def
     # no schema-qualified names leaked
     assert not [n for n in procs if "." in n.name]
+
+
+@pytest.mark.skipif(not _HLR.exists(), reason="HLR sample not present")
+def test_dogfood_hlr_domain_rules_dispositions():
+    """run_28a8f99d AC6 — the whole point, on REAL data: the recon domain must
+    yield SV_NOT_HLR→CREATE_ACTIVATE and HLR_NOT_SV→DELETE rules, anchored to the
+    CURRENT engine P4_CP_INTERFACES (NOT the deprecated _OLD), with the disposition
+    joined by TABLE-NAME EQUALITY (not proximity). Fixtures cannot surface this —
+    it needs the real 300+-call / 600+-write interleave."""
+    import tempfile
+    from core.code_intel.graph_store import GraphStore
+    from core.code_intel.domain_rules import compute_domain_rules
+    root = _HLR.parent
+    files = [root / "spec.sql", root / "body.sql",
+             root / "RECONCILIATION_INTERFACES.pks.sql"]
+    with tempfile.TemporaryDirectory() as td:
+        gs = GraphStore(Path(td) / "t.db")
+        try:
+            gs.bulk_insert([parse_file(f, root) for f in files if f.exists()])
+            r = compute_domain_rules(
+                gs, source_reader=lambda f: (root / f).read_text(errors="replace"))
+        finally:
+            gs.close()
+    by = {}
+    for x in r["rules"]:
+        by.setdefault((x["target_data_object"], x["engine_status"]), x)
+    # activate + delete dispositions present on CURRENT-engine SMS recon rules
+    act = [x for x in r["rules"]
+           if x["disposition"] == "CREATE_ACTIVATE" and x["engine_status"] == "current"]
+    dele = [x for x in r["rules"]
+            if x["disposition"] == "DELETE" and x["engine_status"] == "current"]
+    assert act, "no CREATE_ACTIVATE rule joined on current engine"
+    assert dele, "no DELETE rule joined on current engine"
+    # the deprecated engine IS detected and flagged (but not suppressed)
+    dep = [x for x in r["rules"] if x["engine_status"] == "suspected_deprecated"]
+    assert dep, "P4_CP_INTERFACES_OLD not detected as suspected_deprecated"
+    assert any(x["source_symbol"] == "P4_CP_INTERFACES_OLD" for x in dep)
+    # G3: procs whose write target is runtime-computed surface as unresolved, not 0
+    unres = [x for x in r["rules"] if x["target_data_object"] == "<dynamic:unresolved>"]
+    assert unres, "runtime-computed targets (PROV_RECON_*_PARAM) not surfaced"
 
 
 @pytest.mark.skipif(not _NORTHCART.exists(), reason="NorthCart sample not present")

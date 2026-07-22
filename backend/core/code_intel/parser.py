@@ -1538,6 +1538,29 @@ _SQL_OP_TOKEN = {
     "ALTER": "ALTER", "TRUNCATE": "TRUNCATE", "DROP": "DROP", "MERGE": "MERGE",
 }
 
+# Sentinel target for a dynamic write whose table name is a RUNTIME-CONCATENATED
+# variable rather than a literal (run_28a8f99d G3). Real HLR:
+#   SQL_TXT := 'CREATE TABLE '||Schema_owner||'.'||Table_To_Create_Name||' AS ...'
+# The table name is computed at runtime (Table_To_Create_Name := 'PROV'||SUBSTR(...))
+# so there is NO literal token to extract — resolving it needs runtime eval, which
+# is out of scope. We emit the write with this sentinel target rather than DROP it
+# silently (honesty > coverage), so domain_rules can surface "this proc writes a
+# table it computes at runtime" instead of a false 0-writes.
+_SQL_DYNAMIC_UNRESOLVED = "<dynamic:unresolved>"
+
+# The concatenated-target case: a write verb whose STRING LITERAL ENDS right after
+# the verb (optionally a trailing space), immediately followed by `||` — i.e. the
+# table name is concatenated OUTSIDE the quote. This is a NON-MATCH for
+# _SQL_DYNAMIC_ASSIGN (which needs a literal table token inside the quote), so it
+# is additive: it fires ONLY where the literal-token pattern cannot (Gate-1 C2).
+_SQL_DYNAMIC_ASSIGN_CONCAT = re.compile(
+    r"""(\w+)\s*:=\s*'\s*
+        (CREATE\s+TABLE|INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE
+         |TRUNCATE\s+TABLE|DROP\s+TABLE|MERGE\s+INTO)
+        \s*'\s*\|\|          # literal CLOSES after the verb, then concatenation
+    """,
+    re.IGNORECASE | re.VERBOSE)
+
 
 def _sql_dynamic_sql_edges(content, rel_path, headers):
     """Surface dynamic-SQL write targets that static analysis cannot see.
@@ -1595,6 +1618,35 @@ def _sql_dynamic_sql_edges(content, rel_path, headers):
             edge_type="dynamic_sql_write:" + op,
             confidence=0.4,
             line_number=line,
+        ))
+
+    # Concatenated / runtime-computed target: literal closes right after the verb,
+    # then `||`. Emit ONE unresolved-target edge per enclosing proc that has such a
+    # write (so a proc whose ONLY writes are runtime-computed is not falsely 0-write)
+    # — deduped per (proc), targeting the shared _SQL_DYNAMIC_UNRESOLVED sentinel
+    # node. confidence 0.3 (weaker than a resolved literal target). Gate-1 C2:
+    # additive, fires only where the literal-token pattern cannot.
+    unresolved_id = _qualify("table:" + _SQL_DYNAMIC_UNRESOLVED, rel_path)
+    seen_unresolved_procs: set[str] = set()
+    for m in _SQL_DYNAMIC_ASSIGN_CONCAT.finditer(scan):
+        proc = _enclosing_proc(m.start())
+        if proc in seen_unresolved_procs:
+            continue
+        seen_unresolved_procs.add(proc)
+        line = scan[:m.start()].count("\n") + 1
+        op_word = m.group(2).split()[0].upper()
+        op = _SQL_OP_TOKEN.get(op_word, op_word)
+        if _SQL_DYNAMIC_UNRESOLVED not in seen_tables:
+            seen_tables.add(_SQL_DYNAMIC_UNRESOLVED)
+            nodes.append(CodeNode(
+                id=unresolved_id, file_path=rel_path, node_type="data_object",
+                name=_SQL_DYNAMIC_UNRESOLVED, line_start=line, line_end=line,
+                language="sql", is_export=False, is_entry_point=False,
+            ))
+        edges.append(CodeEdge(
+            source_id=proc, target_id=unresolved_id,
+            edge_type="dynamic_sql_write:" + op,
+            confidence=0.3, line_number=line,
         ))
     return nodes, edges
 
