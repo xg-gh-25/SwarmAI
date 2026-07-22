@@ -6,6 +6,8 @@
 
 ## Architecture
 <!-- maturity: growing | sources: 3 | verified: true | used: true | days: 21 | trust: full | promoted: 2026-07-01 -->
+- [decision] **Two INDEPENDENT git repos both push to `xg-gh-25/SwarmAI` — know which tree you're in before ANY git op** (2026-07-22) — There is NO shared history between them (`git merge-base` fails); they are separate clones that both configured the same push remote. **(1) SOURCE repo** `/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/` — the code publisher: `backend/` + `desktop/` live here, this is where you edit code, run pipelines, and where the public product commits originate (origin/main is a fast-forward ancestor). **(2) WORKSPACE repo** `~/.swarm-ai/SwarmWS/` — the daemon's live cwd: recall/cultivation/provision read+write HERE, has 0 `backend/` files, and its history is auto-hook `content/chore/framework` commits (never a code publisher). The sample DDD ships from the SOURCE tree's `Projects/SwarmAI/`; the six-section migration originally happened ONLY in the WORKSPACE tree, so the two `Projects/SwarmAI/` copies diverged until synced (commit 751d21db). **Operational rule (the reason this entry exists):** before any `git rm`/`git mv`/`git status`-judgment on a `Projects/SwarmAI/` path, FIRST confirm which tree you're in (`git rev-parse --show-toplevel`) and resolve files by ABSOLUTE path — a bare `git rm` nearly ran in the wrong (SOURCE) tree this session while the real change was in the WORKSPACE tree (C040 tree-confusion class). Filename/path similarity across the two trees ≠ same file (different inodes).
+  <!-- ref:0 | last:none | decay:active | source:manual -->
 - [decision] **DDD classification (none / external / internal) is DERIVED-ON-READ from `bindings.yaml` — never stored as a separate field** (2026-07-12, run_2acb67e1) — Classification is NOT a project attribute; it's a **function of the binding set**: no `bindings.yaml` → `none` (no-repo, pure-DDD); any binding `kind:internal` → `internal` (Brazil/CRUX); else `external` (GitHub-PR). `classify_project(project_dir)` in `ddd_bindings.py` is the SSOT reader (fail-safe: catches FileNotFoundError + YAML parse errors → `none`, since it's on the `_recall_ddd` hot path). `sync_internal_provisioning()` in `swarm_workspace_manager.py` is the BIND-time trigger — it reads `classify_project` and, if internal, fires `provision_project_ddd(internal=True)` (idempotent, `not dst.exists()`-guarded) so internal skills+gate land WHEN repo kind becomes known, not guessed at CREATE. The create-time `internal` flag now defaults False with no true-passing caller. **Why derive-on-read, not a stored `repo_kind`:** a stored classification is a SECOND source of truth that drifts vs `bindings.yaml`; Gate-0 killed the initial plan to add a `.project.json` `repo_kind` field precisely because it would have re-created the very drift bug the change fixes. BIND is skill-prose orchestrated (`s_ddd-manager` SKILL.md calls the sync), not a code hook — by design.
   <!-- ref:0 | last:none | decay:active | source:manual -->
 - [decision] **Dead-waiter WAITING_INPUT recovery keys on `has_live_waiter` (real liveness), NOT `_pending_tool_use_id` presence** (2026-07-02, run_65f317db) — `has_outstanding_tool_use` (=`_pending_tool_use_id is not None`) is ALSO the drain-worker guard (session_router.py:1463) and must NOT be weakened. So the deadlock-recovery predicate uses a SEPARATE `_has_live_outstanding_waiter()` that consults the actual waiter managers (`permission_manager.has_live_waiter` / `ask_question_manager.has_live_waiter`, respawn-immune: registered on wait-entry, popped in finally), disambiguated by `_pending_question` shape. Two distinct notions on purpose: **flag-presence** (is a tool_use open? → drain guard) vs **liveness** (is a hook actually blocked to receive the decision? → recovery guard). Rejected weakening the shared property (would break the drain consumer). This is the reap predicate behind `reap_dead_waiting_input`, called from send() + lifecycle tick + approve endpoints.
@@ -1034,7 +1036,8 @@ SwarmAI IMPROVEMENT.md ADR "Socratic method in the autonomous pipeline".
 
 **Auto-Resume (new):** Detects paused/orphaned pipelines on session start. Max 3 attempts with exponential cooldown (0s → 30s → 60s). File-level fcntl lock prevents concurrent session race. Reduces 34% abandoned rate (all from session crash/hang) toward <10%. SubagentStop hook writes marker files for Gate 2 structural audit.
 
-**Stats (2026-06-17 snapshot):** 64 workspace runs (44 completed, 69% rate), 11,154 lines total (orchestrator 1.3K + stages 4.4K + validator 2.3K + CLI 3.1K), 154 tests, 6 profiles, 9 code-enforced completion gates. Completion rate by profile: trivial 91%, bugfix 65%, full 56%, goal 33%. Abandoned runs = 100% session crash/hang (not pipeline failure). _(Gate topology since updated 2026-06-26 — now 3 gate moments: the EVALUATE Gate-0 family (3 sibling checks above) + Gate 1 Skeptic/SSA + Gate 2 Adversarial; sub-agents = Skeptic + Adversarial + the Gate-0 M3 fresh-context skeptic.)_
+**Stable facts:** 6 profiles · 3 gate moments (EVALUATE Gate-0 family + Gate 1 Skeptic/SSA + Gate 2 Adversarial) · sub-agents = Skeptic + Adversarial + Gate-0 M3 fresh-context skeptic. Completion-rate ORDERING is stable-by-design (trivial > bugfix > full > goal — lighter profiles finish more often); abandoned runs are ~100% session crash/hang, not pipeline-logic failure. _(Gate topology last changed 2026-06-26.)_
+**Live figures (run counts, completion %, LOC, test count) are volatile → measured on demand, NEVER stored here (R30#4; a frozen "64 runs" snapshot here drifted to 562 completed and contradicted a second "245 runs" block):** run counts + per-profile completion = `python backend/scripts/artifact_cli.py run-status`; validator check count = `python backend/scripts/pipeline_validator.py --help`; LOC = `git ls-files 'backend/skills/s_autonomous-pipeline/**' 'backend/scripts/artifact_cli.py' 'backend/scripts/pipeline_validator.py' | xargs wc -l | tail -1`.
 
 **Pipeline validator** (`pipeline_validator.py`, ~2000 lines, 155 tests) — 16 structural + semantic checks:
 
@@ -1061,7 +1064,7 @@ SwarmAI IMPROVEMENT.md ADR "Socratic method in the autonomous pipeline".
 
 **Key files:** `skills/s_autonomous-pipeline/SKILL.md` + `INSTRUCTIONS.md`, `scripts/artifact_cli.py`, `scripts/pipeline_validator.py`, `core/pipeline_profiles.py`, `routers/pipelines.py` (dashboard API).
 
-**Stats (2026-05-29):** 245 runs executed, ~5.9K lines instructions, ~4.6K lines code (~10.5K total), 155 tests, 7 specialist agents + 3 review agents, 6 profiles.
+**Stable facts:** 6 profiles · 7 specialist agents + 3 review agents. (Run counts / LOC / test counts are volatile — measure live, see the "Live figures" note above; do not re-freeze a snapshot here.)
 
 ### Proactive Intelligence
 
@@ -1496,9 +1499,9 @@ signal-fetch (hourly) → raw_signals buffer → signal-digest (after:fetch)
 | **always** | ~15 | Full SKILL.md description (~100 tok each) | Every session |
 | **lazy** | ~46 | Minimal stub (~25 tok each) + "Read INSTRUCTIONS.md" | On invocation via Read tool |
 
-**Manifest system** for complex skills: `manifest.yaml` declares scripts, entry points, resources, and dependencies. 16 skills have manifests. `manifest_loader.py` (Pydantic models, cached YAML parser) + `skill_registry.py` (SkillGuard scanning, `_read_tier()` utility).
+**Manifest system** for complex skills: `manifest.yaml` declares scripts, entry points, resources, and dependencies. Complex skills carry a manifest (count is volatile — `find backend/skills -name manifest.yaml | wc -l`). `manifest_loader.py` (Pydantic models, cached YAML parser) + `skill_registry.py` (SkillGuard scanning, `_read_tier()` utility).
 
-**Platform filtering** (shipped 2026-04-29): Each skill declares `platform: all | macos | desktop` in SKILL.md frontmatter (and optionally manifest.yaml). `ProjectionLayer.project_skills()` reads `SWARMAI_MODE` env var — when `hive`, skills tagged `macos` or `desktop` are excluded from projection. Currently 7 skills are platform-tagged (4 macOS: apple-reminders, peekaboo, sonos, system-health; 3 desktop: whisper-transcribe, podcast-gen, video-gen). Default is `all`. Skill-builder enforces the field on new skill creation.
+**Platform filtering** (shipped 2026-04-29): Each skill declares `platform: all | macos | desktop` in SKILL.md frontmatter (and optionally manifest.yaml). `ProjectionLayer.project_skills()` reads `SWARMAI_MODE` env var — when `hive`, skills tagged `macos` or `desktop` are excluded from projection. Some skills are platform-tagged (e.g. macOS: apple-reminders, peekaboo, sonos, system-health; desktop: whisper-transcribe, podcast-gen, video-gen — live count via `grep -rl 'platform: macos\|platform: desktop' backend/skills/*/SKILL.md | wc -l`). Default is `all`. Skill-builder enforces the field on new skill creation.
 
 **Token savings:** ~3,650 tokens/session (49% reduction in skill listing).
 
@@ -1675,7 +1678,7 @@ Cloud deployment of SwarmAI on EC2. Same Python backend + React frontend, no Tau
 **Auth:** Caddy basicauth with bcrypt (14 rounds). Password: 4-word passphrases from 256-word list (~32 bits entropy). Credentials stored in Desktop's SQLite for management.
 
 **Hive-mode differences:**
-- Platform filtering: `ProjectionLayer` excludes `macos` + `desktop` platform skills (7 skills filtered)
+- Platform filtering: `ProjectionLayer` excludes `macos` + `desktop` platform skills on `hive` (count is volatile — measure live)
 - Gateway: no Slack adapter (no Socket Mode in cloud)
 - Write guard: `_require_desktop()` returns HTTP 403 on all management endpoints — Hive cannot self-modify
 - Port: same fixed `127.0.0.1:18321` as desktop daemon
