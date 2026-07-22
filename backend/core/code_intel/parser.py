@@ -49,7 +49,22 @@ LANGUAGE_MAP = {
     ".cc": "cpp",
     ".cxx": "cpp",
     ".hpp": "cpp",
+    # SQL / PL-SQL (Oracle) — regex-only front-end (Run1 MVP, run_533804f3).
+    # .pks = package spec, .pkb = package body. See _REGEX_ONLY_LANGS below for
+    # why SQL bypasses the tree-sitter path.
+    ".sql": "sql",
+    ".pks": "sql",
+    ".pkb": "sql",
 }
+
+# Languages that MUST use the regex extractor even when a tree-sitter grammar is
+# "live". SQL is here because PL-SQL procedure BODIES (BEGIN..EXCEPTION..END)
+# parse as tree-sitter ERROR subtrees, and parse_file_with_status DROPS all edges
+# for any error-tree file (the dangling-target guard, ~L1554). The regex path
+# returns its own nodes+edges with status="ok", so the SQL call graph survives.
+# Verified live (run_533804f3 Gate-1): tree-sitter 'sql' grammar yields
+# create_procedure boundaries but invocation=0 inside bodies + edges dropped.
+_REGEX_ONLY_LANGS = frozenset({"sql"})
 
 DEFINITION_TYPES = {
     "python": ["function_definition", "class_definition"],
@@ -1371,6 +1386,21 @@ _REGEX_DEF_PATTERNS_BY_LANG: dict[str, list[re.Pattern]] = {
         re.compile(r'^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(', re.MULTILINE),
         re.compile(r'^type\s+(\w+)\s+(?:struct|interface)', re.MULTILINE),
     ],
+    # SQL / PL-SQL (Oracle). Matches BOTH forms:
+    #   • standalone:      CREATE [OR REPLACE] PROCEDURE|FUNCTION <name>   (.sql)
+    #   • in-package body:            PROCEDURE|FUNCTION <name>            (.pkb)
+    # The CREATE prefix is OPTIONAL because inside a CREATE PACKAGE BODY the member
+    # procedures have NO CREATE — they are bare `PROCEDURE name(...) IS` (verified on
+    # real HLR body.sql: 0 CREATE-form, 33 bare-form). Optionally schema-qualified
+    # (schema.name → captures the LAST segment). Case-insensitive (Oracle identifiers
+    # are). Line-anchored so a mid-line PROCEDURE keyword in a string/comment, or an
+    # `END PROCEDURE`, does not match.
+    "sql": [
+        re.compile(
+            r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
+            r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)',
+            re.MULTILINE | re.IGNORECASE),
+    ],
 }
 
 # Fallback for unknown languages — conservative, avoids Java-style broad match
@@ -1398,6 +1428,88 @@ _BUILTIN_NAMES = frozenset({
     "clearInterval", "parseInt", "parseFloat", "isNaN", "Array", "Object",
     "String", "Number", "Boolean", "Promise", "Symbol", "Error",
 })
+
+
+# SQL built-in functions / keywords that a naive `NAME(` scan would mistake for a
+# procedure call. Denoise list for the SQL call-edge extractor. Upper-cased; the
+# scan compares case-insensitively (Oracle identifiers are case-insensitive).
+_SQL_BUILTINS = frozenset({
+    "NVL", "NVL2", "DECODE", "COALESCE", "NULLIF", "COUNT", "SUM", "AVG", "MIN",
+    "MAX", "ROUND", "TRUNC", "TO_CHAR", "TO_NUMBER", "TO_DATE", "SUBSTR",
+    "INSTR", "LENGTH", "TRIM", "LTRIM", "RTRIM", "UPPER", "LOWER", "REPLACE",
+    "LPAD", "RPAD", "CONCAT", "SYSDATE", "SYSTIMESTAMP", "CAST", "ABS", "MOD",
+    "GREATEST", "LEAST", "ROW_NUMBER", "RANK", "LISTAGG", "EXTRACT", "SIGN",
+    "CEIL", "FLOOR", "POWER", "SQRT", "ADD_MONTHS", "MONTHS_BETWEEN", "LAST_DAY",
+    "USER", "RAISE_APPLICATION_ERROR",
+    # PL/SQL statement keywords a `WORD(` regex catches before the paren
+    "IF", "ELSIF", "LOOP", "WHILE", "FOR", "CASE", "WHEN", "VALUES", "INTO",
+    "FORALL", "OPEN", "FETCH", "CLOSE", "EXCEPTION", "RETURN", "COMMIT",
+    "ROLLBACK", "TABLE", "IN", "OUT", "AND", "OR", "NOT", "EXISTS",
+})
+
+# A PL/SQL call site: an identifier (optionally schema/package-qualified) followed
+# by an opening paren. Captures the OPTIONAL qualifier and the bare name separately
+# so a package call `PKG.proc(` yields name='proc' with qualifier='PKG'.
+_SQL_CALL_PATTERN = re.compile(r'(?:(\w+)\.)?(\w+)\s*\(', re.IGNORECASE)
+
+# A PL/SQL procedure/function definition header — used to segment the file into
+# per-procedure bodies (a body runs from its header to the next header / EOF).
+# MUST mirror the def-extraction pattern above (CREATE optional, for .pkb package
+# members) or segmentation and node-extraction would disagree on procedure count.
+_SQL_DEF_HEADER = re.compile(
+    r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
+    r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)',
+    re.MULTILINE | re.IGNORECASE)
+
+
+def _sql_call_edges(content: str, rel_path: str, import_map: dict,
+                    defined_names: set) -> list["CodeEdge"]:
+    """Extract SQL call edges, denoised via the DEFINED-NAMES WHITELIST.
+
+    PL/SQL bodies are not cleanly AST-parseable, so we segment the file by
+    procedure headers and scan each body's text for `NAME(` call sites. To keep
+    the graph honest (Gate-1 / THINK decision: miss > false-connect), an edge is
+    emitted ONLY when the callee is a procedure DEFINED IN THIS FILE
+    (`defined_names`). External/package calls (e.g. `UTILS_INTERFACES.export_csv`)
+    and SQL builtins (`NVL`, `DECODE`) are intentionally NOT connected as local
+    edges — they are out-of-file and would be false-positive local links.
+
+    Bodies span header→next-header (NOT a fixed line window): real HLR procedures
+    run 700+ lines, so a 50-line window would truncate the call scan.
+    """
+    edges: list[CodeEdge] = []
+    headers = list(_SQL_DEF_HEADER.finditer(content))
+    for i, hmatch in enumerate(headers):
+        proc_name = _sanitize_name(hmatch.group(1))
+        proc_qn = _qualify(proc_name, rel_path)
+        body_start = hmatch.end()
+        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(content)
+        body = content[body_start:body_end]
+        seen: set[str] = set()
+        for cm in _SQL_CALL_PATTERN.finditer(body):
+            qualifier, call_name = cm.group(1), _sanitize_name(cm.group(2))
+            if not call_name or call_name.upper() in _SQL_BUILTINS:
+                continue
+            # Whitelist denoise (THINK decision: miss > false-connect): connect ONLY
+            # to procedures DEFINED IN THIS FILE. The bare name being in
+            # `defined_names` IS the whitelist — this correctly handles a call
+            # qualified with the package's OWN name (real HLR calls its own members
+            # as `RECONCILIATION_INTERFACES.prov_recon_services(...)`, a same-package
+            # self-reference that IS local). A call whose bare name is NOT defined
+            # in-file (e.g. `UTILS_INTERFACES.export_csv`) stays external — skipped.
+            if call_name not in defined_names:
+                continue
+            if call_name == proc_name or call_name in seen:
+                continue  # self-recursion / dedup per (caller, callee)
+            seen.add(call_name)
+            line = content[:body_start + cm.start()].count("\n") + 1
+            edges.append(CodeEdge(
+                source_id=proc_qn,
+                target_id=_qualify(call_name, rel_path),
+                edge_type="calls", confidence=0.6,
+                line_number=line,
+            ))
+    return edges
 
 
 def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
@@ -1444,29 +1556,34 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
     # Extract calls (with lower confidence)
     import_map, _ = _build_file_scope_regex(content, lang)
 
-    # Find function bodies and extract calls within them
-    func_bodies = list(re.finditer(r'^(?:async\s+)?(?:def|function|func)\s+(\w+)\s*\([^)]*\)\s*[:{]', content, re.MULTILINE))
-    for func_match in func_bodies:
-        func_name = func_match.group(1)
-        func_qn = _qualify(func_name, rel_path)
-        # Scan next ~50 lines for calls (P1-5: use actual line count, not char offset)
-        start_pos = func_match.end()
-        lines_after = content[start_pos:].split('\n', 51)  # 50 lines + remainder
-        body = '\n'.join(lines_after[:50])
-        for call_match in _REGEX_CALL_PATTERN.finditer(body):
-            call_name = call_match.group(1)
-            if (call_name in _BUILTIN_NAMES
-                    or call_name in ("if", "for", "while", "return", "raise",
-                                     "yield", "with", "assert", "except", "import", "from",
-                                     "class", "def", "func", "function", "var", "let", "const")):
-                continue
-            target = _resolve_call_target(call_name, rel_path, import_map, defined_names)
-            line = content[:start_pos + call_match.start()].count("\n") + 1
-            edges.append(CodeEdge(
-                source_id=func_qn, target_id=target,
-                edge_type="calls", confidence=0.6,
-                line_number=line,
-            ))
+    # Find function bodies and extract calls within them. SQL uses a distinct
+    # body model (see _sql_call_edges); every other language keeps the original
+    # def|function|func window scan BYTE-IDENTICALLY (AC7 — no behavior change).
+    if lang == "sql":
+        edges.extend(_sql_call_edges(content, rel_path, import_map, defined_names))
+    else:
+        func_bodies = list(re.finditer(r'^(?:async\s+)?(?:def|function|func)\s+(\w+)\s*\([^)]*\)\s*[:{]', content, re.MULTILINE))
+        for func_match in func_bodies:
+            func_name = func_match.group(1)
+            func_qn = _qualify(func_name, rel_path)
+            # Scan next ~50 lines for calls (P1-5: use actual line count, not char offset)
+            start_pos = func_match.end()
+            lines_after = content[start_pos:].split('\n', 51)  # 50 lines + remainder
+            body = '\n'.join(lines_after[:50])
+            for call_match in _REGEX_CALL_PATTERN.finditer(body):
+                call_name = call_match.group(1)
+                if (call_name in _BUILTIN_NAMES
+                        or call_name in ("if", "for", "while", "return", "raise",
+                                         "yield", "with", "assert", "except", "import", "from",
+                                         "class", "def", "func", "function", "var", "let", "const")):
+                    continue
+                target = _resolve_call_target(call_name, rel_path, import_map, defined_names)
+                line = content[:start_pos + call_match.start()].count("\n") + 1
+                edges.append(CodeEdge(
+                    source_id=func_qn, target_id=target,
+                    edge_type="calls", confidence=0.6,
+                    line_number=line,
+                ))
 
     return ParseResult(nodes=nodes, edges=edges, language=lang, file_path=rel_path)
 
@@ -1529,7 +1646,11 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
     # false-confidence the banking guarantee forbids. So: only enter the tree-sitter
     # branch when a liveness probe confirms the AST path works; the repo-level
     # fidelity signal is emitted once by parse_repo_with_coverage (not per file).
-    parser = _get_cached_parser(lang) if _tree_sitter_live(lang) else None
+    # _REGEX_ONLY_LANGS (e.g. sql) skip the tree-sitter branch even when a grammar
+    # is live — their edges would be dropped by the error-tree guard below.
+    parser = (_get_cached_parser(lang)
+              if (lang not in _REGEX_ONLY_LANGS and _tree_sitter_live(lang))
+              else None)
     if parser:
         try:
             tree = parser.parse(raw_bytes)
