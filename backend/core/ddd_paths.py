@@ -59,6 +59,15 @@ REFRESHER_DIR = "6-refresher"   # reserved (not yet materialized)
 # The recall corpus lives UNDER ② (was the per-DDD Projects/<x>/Knowledge/).
 KNOWLEDGE_CORPUS_DIR = f"{UNDERSTANDING_DIR}/knowledge"
 
+# Governed assets (0..N, kind-open) live under an UN-NUMBERED assets/<kind>/ dir
+# — deliberately outside the ①→⑥ numbering (it sorts after ⑥ like .artifacts/;
+# "numbering is cosmetic, read by path never by sort" — design 2026-07-21 §6).
+# A data-agent DDD's moat (the unified SDK: client+catalog+validate_sql+
+# data-contract) is the `data-source` asset. This is DISTINCT from the misc
+# `assets/` loose-files meaning (diagrams/decks) — governed assets are keyed by
+# <kind> subdir; loose misc files (if any) are not.
+ASSETS_DIR = "assets"
+
 # ① Identity file — stays at project ROOT (the external "this is a DDD" marker;
 # Claude Code / Kiro / Quick read it at a fixed root path, design H4).
 IDENTITY_FILE = "AGENTS.md"
@@ -168,3 +177,42 @@ def ddd_write_path(project_dir, key: str) -> Path:
 def section_dir(project_dir, section_key: str) -> Path:
     """Resolve a section directory KEY to its path (READ, strangler-aware)."""
     return ddd_path(project_dir, section_key)
+
+
+def ddd_asset_path(project_dir, kind: str, *, old_rel: str | None = None) -> Path:
+    """Resolve a governed asset dir → assets/<kind>/ (READ, strangler-aware).
+
+    A data-agent DDD's moat is the `data-source` asset (the unified SDK). Before
+    migration it lived as a non-skill package under 4-capabilities/ (or the older
+    skills/), e.g. ``4-capabilities/s_cmhk-data-proxy``. Pass that as ``old_rel``
+    so reads fall back to the pre-move location until the package is relocated.
+
+    Args:
+        project_dir: the DDD project root.
+        kind: the asset kind subdir under assets/ (e.g. "data-source").
+        old_rel: project-relative path where the asset lived pre-migration. If
+            None, no fallback (new-only).
+
+    Returns:
+        assets/<kind>/ if it exists (or no old_rel given), else the old path if it
+        exists, else the new assets/<kind>/ path (write-forward default).
+    """
+    root = Path(project_dir)
+    new_path = root / ASSETS_DIR / kind
+    if old_rel is None:
+        return new_path
+    old_path = root / old_rel
+    if not new_path.exists() and old_path.exists():
+        return old_path
+    return new_path
+
+
+def ddd_asset_write_path(project_dir, kind: str) -> Path:
+    """Resolve a governed asset dir → assets/<kind>/ (WRITE — always new).
+
+    Creates the parent (assets/) so the caller can materialize the kind dir.
+    """
+    root = Path(project_dir)
+    path = root / ASSETS_DIR / kind
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path

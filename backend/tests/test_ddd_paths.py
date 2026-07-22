@@ -122,3 +122,35 @@ def test_unmigrated_knowledge_dir_falls_back(tmp_path):
     (proj / "Knowledge" / "note.md").write_text("x")
 
     assert ddd_paths.ddd_path(proj, "knowledge") == proj / "Knowledge"
+
+
+# ─── Governed asset: assets/<kind>/ (the moat's first-class home) ────────────
+
+def test_asset_path_resolves_to_assets_kind_dir(tmp_path):
+    """A governed asset resolves to assets/<kind>/ (design 2026-07-21)."""
+    proj = tmp_path / "DataBrain"
+    (proj / "assets" / "data-source").mkdir(parents=True)
+    assert ddd_paths.ddd_asset_path(proj, "data-source") == proj / "assets" / "data-source"
+
+
+def test_asset_path_strangler_falls_back_to_old_skills_pkg(tmp_path):
+    """Before migration, the data-source SDK lived under 4-capabilities/ (or
+    the older skills/) as the non-skill s_cmhk-data-proxy package. Until the
+    move happens, ddd_asset_path falls back to that old location so reads work."""
+    proj = tmp_path / "UnmigratedData"
+    old = proj / "4-capabilities" / "s_cmhk-data-proxy"
+    old.mkdir(parents=True)
+    (old / "README.md").write_text("sdk")
+    # new assets/data-source absent → fall back to the old package path
+    assert ddd_paths.ddd_asset_path(
+        proj, "data-source", old_rel="4-capabilities/s_cmhk-data-proxy"
+    ) == old
+
+
+def test_asset_path_prefers_new_when_present(tmp_path):
+    proj = tmp_path / "MigratedData"
+    (proj / "assets" / "data-source").mkdir(parents=True)
+    (proj / "4-capabilities" / "s_cmhk-data-proxy").mkdir(parents=True)
+    assert ddd_paths.ddd_asset_path(
+        proj, "data-source", old_rel="4-capabilities/s_cmhk-data-proxy"
+    ) == proj / "assets" / "data-source"
