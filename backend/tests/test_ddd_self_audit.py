@@ -95,6 +95,30 @@ class TestEnumeration:
         found = {name for name, _ in _discover_ddd_projects()}
         assert found == {"Alpha", "Beta"}
 
+    def test_discovers_migrated_six_section_projects(self, tmp_path, monkeypatch):
+        """REGRESSION (run_64f745d8 P0): a MIGRATED DDD keeps canonical docs under
+        2-understanding/ with an EMPTY root. Discovery must resolve via ddd_path or it
+        returns [] → the entire self-audit no-ops ('No DDD projects found'). The
+        six-section migration silently blinded the audit this way. MUTATION: revert
+        the probe to bare `(d / doc).exists()` → this test goes RED (migrated project
+        not discovered)."""
+        import jobs.handlers.ddd_self_audit as mod
+        projects_dir = tmp_path / "Projects"
+        # Migrated layout: docs ONLY under 2-understanding/, root empty.
+        mig = projects_dir / "Migrated" / "2-understanding"
+        mig.mkdir(parents=True)
+        (mig / "TECH.md").write_text("# migrated tech")
+        assert not (projects_dir / "Migrated" / "TECH.md").exists()  # premise: root empty
+        # Un-migrated sibling still discovered via strangler fallback.
+        (projects_dir / "Legacy").mkdir(parents=True)
+        (projects_dir / "Legacy" / "PRODUCT.md").write_text("# legacy")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+
+        found = {name for name, _ in _discover_ddd_projects()}
+        assert found == {"Migrated", "Legacy"}, (
+            f"migrated DDD (docs in 2-understanding/) must be discovered — got {found}"
+        )
+
 
 class TestNoMutation:
     def test_report_persist_path_never_touches_ddd_docs(self, tmp_path):

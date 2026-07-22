@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.project_registry import DDD_CANONICAL_DOCS
+from core.ddd_paths import ddd_path  # six-section layout resolver (strangler-aware)
 from ..paths import SWARMWS
 
 logger = logging.getLogger("swarm.jobs.ddd_self_audit")
@@ -104,7 +105,11 @@ def _discover_ddd_projects() -> list[tuple[str, Path]]:
     for d in sorted(PROJECTS_DIR.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
             continue
-        if any((d / doc).exists() for doc in DDD_CANONICAL_DOCS):
+        # ddd_path (strangler-aware): a migrated DDD keeps canonical docs under
+        # 2-understanding/, so a bare `d / doc` root-probe finds NOTHING and this
+        # discovery returns [] → the whole self-audit no-ops ("No DDD projects
+        # found"). Route through the resolver so migrated + un-migrated both resolve.
+        if any(ddd_path(d, doc).exists() for doc in DDD_CANONICAL_DOCS):
             projects.append((d.name, d))
     return projects
 
@@ -130,8 +135,23 @@ def _source_repo_for(project_name: str) -> Path | None:
 def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool) -> str:
     """Domain-aware review prompt. Instructs the agent to emit a RADAR_TODOS block so
     findings become in-band todos; agent has Read/Grep ONLY, so it cannot fix — only report."""
-    docs = ", ".join(d for d in DDD_CANONICAL_DOCS if (project_dir / d).exists())
+    # ddd_path (strangler-aware): name the docs at their real location so the prompt
+    # doesn't tell the agent to "Read the DDD docs" while listing none (migrated docs
+    # live under 2-understanding/, not the project root).
+    present_docs = [d for d in DDD_CANONICAL_DOCS if ddd_path(project_dir, d).exists()]
+    docs = ", ".join(present_docs)
     rel = f"Projects/{project_name}"
+    # Point the agent at the docs' ACTUAL parent dir (2-understanding/ for a migrated
+    # DDD, project root for legacy) — deriving it from the resolver, not assuming root,
+    # so the location hint stays correct across the strangler migration.
+    if present_docs:
+        docs_dir = ddd_path(project_dir, present_docs[0]).parent
+        try:
+            docs_rel = f"Projects/{project_name}/{docs_dir.relative_to(project_dir)}".rstrip("/.")
+        except ValueError:
+            docs_rel = rel
+    else:
+        docs_rel = rel
 
     if code_backed:
         drift_def = (
@@ -169,7 +189,7 @@ def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool)
 
 {caveats}
 
-Docs present: {docs}. Read them under {rel}/.
+Docs present: {docs}. Read them under {docs_rel}/.
 
 You have Read/Grep/Glob ONLY — you CANNOT and MUST NOT edit any file. Your job is to
 REPORT drift, not fix it (the human fixes via s_persist).
