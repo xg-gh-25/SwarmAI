@@ -1395,11 +1395,18 @@ _REGEX_DEF_PATTERNS_BY_LANG: dict[str, list[re.Pattern]] = {
     # (schema.name → captures the LAST segment). Case-insensitive (Oracle identifiers
     # are). Line-anchored so a mid-line PROCEDURE keyword in a string/comment, or an
     # `END PROCEDURE`, does not match.
+    # NOTE: the SQL def pattern is applied by _regex_fallback over COMMENT/STRING-
+    # STRIPPED content (see the lang=="sql" pre-strip there) and requires an IS/AS
+    # body-introducer, so a forward declaration (`PROCEDURE foo(...);`, no body — a
+    # .pks spec) is NOT counted as a definition. Kept in sync with _SQL_DEF_HEADER.
     "sql": [
         re.compile(
             r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
-            r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)',
-            re.MULTILINE | re.IGNORECASE),
+            r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)'
+            r'(?:\s*\([^;]*?\))?'
+            r'(?:\s+RETURN\s+[^\s;]+)?'
+            r'\s*(?:IS|AS)\b',  # \s* not \s+: Oracle allows glued `)IS`
+            re.MULTILINE | re.IGNORECASE | re.DOTALL),
     ],
 }
 
@@ -1452,14 +1459,35 @@ _SQL_BUILTINS = frozenset({
 # so a package call `PKG.proc(` yields name='proc' with qualifier='PKG'.
 _SQL_CALL_PATTERN = re.compile(r'(?:(\w+)\.)?(\w+)\s*\(', re.IGNORECASE)
 
-# A PL/SQL procedure/function definition header — used to segment the file into
-# per-procedure bodies (a body runs from its header to the next header / EOF).
-# MUST mirror the def-extraction pattern above (CREATE optional, for .pkb package
-# members) or segmentation and node-extraction would disagree on procedure count.
+# PL/SQL comment + string-literal spans. Stripped (replaced by equal-length spaces
+# to preserve byte offsets → correct line numbers) BEFORE scanning for call sites,
+# so a call token inside `-- comment`, `/* block */`, or a `'...'` string literal
+# (e.g. dynamic SQL) does NOT fabricate a false edge (Gate-2 HIGH, run_533804f3).
+_SQL_STRIP_PATTERN = re.compile(
+    r"--[^\n]*"          # line comment to EOL
+    r"|/\*.*?\*/"        # block comment (non-greedy, spans newlines)
+    r"|'(?:''|[^'])*'",  # single-quoted string ('' is an escaped quote)
+    re.DOTALL)
+
+# A PL/SQL procedure/function DEFINITION header. Distinguishes a definition from a
+# forward DECLARATION (`.pks` spec: `PROCEDURE foo(...);` — ends in `;`, no body) by
+# requiring an `IS`/`AS` body-introducer after the (optional, possibly multi-line)
+# parameter list and before any `;` (Gate-2 HIGH, run_533804f3). CREATE is optional
+# for `.pkb` package members (bare `PROCEDURE name ... IS`). The `(?:\([^;]*?\))?`
+# tolerates a param list that must not contain a `;` (PL/SQL params never do).
+# MUST mirror the def-extraction pattern (they segment/count the same procedures).
 _SQL_DEF_HEADER = re.compile(
     r'^\s*(?:CREATE\s+(?:OR\s+REPLACE\s+)?)?'
-    r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)',
-    re.MULTILINE | re.IGNORECASE)
+    r'(?:PROCEDURE|FUNCTION)\s+(?:\w+\.)?(\w+)'
+    r'(?:\s*\([^;]*?\))?'          # optional param list (no ';' inside)
+    r'(?:\s+RETURN\s+[^\s;]+)?'    # FUNCTION return type
+    r'\s*(?:IS|AS)\b',             # \s* not \s+: Oracle allows glued `)IS`; body-introducer → DEFINITION not decl
+    re.MULTILINE | re.IGNORECASE | re.DOTALL)
+
+
+def _sql_strip_comments_strings(text: str) -> str:
+    """Blank out PL/SQL comments + string literals, preserving length/offsets."""
+    return _SQL_STRIP_PATTERN.sub(lambda m: " " * (m.end() - m.start()), text)
 
 
 def _sql_call_edges(content: str, rel_path: str, import_map: dict,
@@ -1477,35 +1505,47 @@ def _sql_call_edges(content: str, rel_path: str, import_map: dict,
     Bodies span header→next-header (NOT a fixed line window): real HLR procedures
     run 700+ lines, so a 50-line window would truncate the call scan.
     """
+    # Oracle identifiers are CASE-INSENSITIVE: a def `Log_Run` and a call `log_run`
+    # are the same procedure. Fold the whitelist to a {casefold: canonical_name} map
+    # so the string compare below matches regardless of source casing (Gate-2
+    # CRITICAL, run_533804f3 — a case-sensitive `set` compare dropped every edge on
+    # mixed-case PL/SQL). The canonical (defined) name is used for the edge target id.
+    canon = {n.casefold(): n for n in defined_names}
+
+    # Strip comments + string literals ONCE so a call token inside a comment or a
+    # dynamic-SQL string cannot fabricate an edge (Gate-2 HIGH). Offsets preserved.
+    scan = _sql_strip_comments_strings(content)
+
     edges: list[CodeEdge] = []
-    headers = list(_SQL_DEF_HEADER.finditer(content))
+    headers = list(_SQL_DEF_HEADER.finditer(scan))
     for i, hmatch in enumerate(headers):
         proc_name = _sanitize_name(hmatch.group(1))
         proc_qn = _qualify(proc_name, rel_path)
         body_start = hmatch.end()
-        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(content)
-        body = content[body_start:body_end]
+        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(scan)
+        body = scan[body_start:body_end]
         seen: set[str] = set()
         for cm in _SQL_CALL_PATTERN.finditer(body):
-            qualifier, call_name = cm.group(1), _sanitize_name(cm.group(2))
+            call_name = _sanitize_name(cm.group(2))
             if not call_name or call_name.upper() in _SQL_BUILTINS:
                 continue
+            key = call_name.casefold()
             # Whitelist denoise (THINK decision: miss > false-connect): connect ONLY
-            # to procedures DEFINED IN THIS FILE. The bare name being in
-            # `defined_names` IS the whitelist — this correctly handles a call
-            # qualified with the package's OWN name (real HLR calls its own members
-            # as `RECONCILIATION_INTERFACES.prov_recon_services(...)`, a same-package
-            # self-reference that IS local). A call whose bare name is NOT defined
-            # in-file (e.g. `UTILS_INTERFACES.export_csv`) stays external — skipped.
-            if call_name not in defined_names:
+            # to procedures DEFINED IN THIS FILE. Membership IS the whitelist — this
+            # correctly handles a call qualified with the package's OWN name (real HLR
+            # calls its own members as `RECONCILIATION_INTERFACES.prov_recon_services(
+            # ...)`, a same-package self-reference that IS local). A call whose bare
+            # name is NOT defined in-file (e.g. `UTILS_INTERFACES.export_csv`) stays
+            # external — skipped.
+            if key not in canon:
                 continue
-            if call_name == proc_name or call_name in seen:
+            if key == proc_name.casefold() or key in seen:
                 continue  # self-recursion / dedup per (caller, callee)
-            seen.add(call_name)
-            line = content[:body_start + cm.start()].count("\n") + 1
+            seen.add(key)
+            line = scan[:body_start + cm.start()].count("\n") + 1
             edges.append(CodeEdge(
                 source_id=proc_qn,
-                target_id=_qualify(call_name, rel_path),
+                target_id=_qualify(canon[key], rel_path),
                 edge_type="calls", confidence=0.6,
                 line_number=line,
             ))
@@ -1531,9 +1571,15 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
     # Use language-specific patterns to avoid cross-contamination
     patterns = _REGEX_DEF_PATTERNS_BY_LANG.get(lang, _REGEX_DEF_PATTERNS_GENERIC)
 
+    # For SQL, run def-extraction over comment/string-STRIPPED text so a
+    # `-- PROCEDURE foo IS` in a comment (or inside a dynamic-SQL string) does not
+    # create a phantom procedure node (Gate-2, run_533804f3). Other languages keep
+    # scanning raw content (byte-identical prior behavior).
+    def_scan = _sql_strip_comments_strings(content) if lang == "sql" else content
+
     # Extract definitions
     for pattern in patterns:
-        for m in pattern.finditer(content):
+        for m in pattern.finditer(def_scan):
             name = _sanitize_name(m.group(1))
             if not name or name in defined_names or name in _BUILTIN_NAMES:
                 continue

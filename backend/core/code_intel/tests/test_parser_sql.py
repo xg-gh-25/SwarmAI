@@ -89,6 +89,36 @@ def test_sql_same_package_qualified_call_is_local():
     assert "export_csv" not in targets
 
 
+def test_sql_case_insensitive_call_edge():
+    """Gate-2 CRITICAL regression: Oracle identifiers are case-insensitive. A def
+    `Log_Run` called as `log_run` MUST still form an edge (a case-sensitive
+    whitelist compare dropped every such edge). Target resolves to canonical def."""
+    result = _parse("sample_case_comment.sql")
+    edges = [(e.source_id.split("::")[-1], e.target_id.split("::")[-1])
+             for e in result.edges if e.edge_type == "calls"]
+    assert ("proc_main", "Log_Run") in edges, f"case-insensitive edge missing: {edges}"
+
+
+def test_sql_comment_and_string_calls_do_not_form_edges():
+    """Gate-2 HIGH regression: a call token inside a comment (`-- Log_Run(...)`) or a
+    dynamic-SQL string literal (`'... Log_Run(:1) ...'`) MUST NOT create an edge.
+    Only the ONE real call site counts → exactly 1 edge, not 3."""
+    result = _parse("sample_case_comment.sql")
+    edges = [e for e in result.edges if e.edge_type == "calls"]
+    assert len(edges) == 1, (
+        f"comment/string calls leaked as edges; expected 1 real call, got {len(edges)}"
+    )
+
+
+def test_sql_forward_declaration_is_not_a_definition():
+    """Gate-2 HIGH regression: a package SPEC (.pks) forward declaration
+    (`PROCEDURE foo(...);` — no IS/AS body) is a DECLARATION, not a definition, and
+    must NOT be extracted as a procedure node."""
+    result = _parse("sample_spec.pks")
+    procs = [n for n in result.nodes if n.node_type in ("function", "procedure")]
+    assert procs == [], f"forward declarations wrongly extracted as defs: {[n.name for n in procs]}"
+
+
 # ── Dog-food smoke on REAL production PL/SQL (O009: fixture ≠ reality) ──────────
 # These lock the numbers that fixtures structurally cannot surface: the .pkb
 # bare-PROCEDURE form, same-package-qualified self-calls, and the external-package
