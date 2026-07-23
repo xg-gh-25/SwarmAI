@@ -5,10 +5,27 @@
  * Persists zoom level to localStorage so it survives app restarts.
  *
  * Zoom range: 50% – 200%, step: 10%.
+ *
+ * Terminal-decoupling contract (do NOT remove without updating TerminalPanel):
+ * `applyZoom` publishes TWO things — the raw `zoom` that scales the whole app,
+ * AND `--app-zoom-inv` = 1/level, the precomputed RECIPROCAL. The terminal
+ * surface reads `--app-zoom-inv` as its counter-zoom (`zoom: var(--app-zoom-inv)`)
+ * so the terminal subtree's NET scale stays 1.0 at any app zoom. This is what
+ * keeps xterm's mouse-selection accurate: xterm maps a click to a column via
+ * (clientX − getBoundingClientRect().left) / cellWidth; under CSS zoom the rect
+ * is scaled while cellWidth is not, so a zoomed terminal mis-maps clicks onto
+ * blank cells (drift growing rightward). Net-scale 1.0 removes the mismatch.
+ * A precomputed reciprocal (not `calc(1/var(--app-zoom))`) sidesteps the
+ * `zoom: calc()` support question and is applied as a bare `var()`.
+ *
+ * The var is published SYNCHRONOUSLY at module load (below) as well as in the
+ * hook effect, so the terminal never renders one frame at the wrong scale
+ * before React's first effect runs (startup-flash guard).
  */
 import { useEffect, useCallback, useState } from 'react';
 
 const STORAGE_KEY = 'swarmai-zoom-level';
+const APP_ZOOM_INV_VAR = '--app-zoom-inv';
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 2.0;
 const STEP = 0.1;
@@ -27,7 +44,24 @@ function loadZoom(): number {
 
 function applyZoom(level: number) {
   document.documentElement.style.zoom = String(level);
+  // Publish the reciprocal for the terminal counter-zoom (see module docstring).
+  // level is always > 0 (clamped to [MIN_ZOOM, MAX_ZOOM]), so 1/level is safe.
+  document.documentElement.style.setProperty(APP_ZOOM_INV_VAR, String(1 / level));
 }
+
+// Startup-flash guard: apply BOTH the raw zoom AND its reciprocal at module
+// load, BEFORE React's first render/effect (useEffect fires AFTER first paint).
+// Both halves must be published together: if only --app-zoom-inv is set early,
+// the terminal counter-zooms by 1/level while <html> is still at the default
+// 1.0 → first frame paints at net-scale 1/level (wrong), then snaps to 1.0 when
+// the effect runs. Publishing the raw zoom here too keeps them in phase so the
+// terminal's net scale is 1.0 from the very first frame. Idempotent with the
+// hook effect (same values). Uses applyZoom so the two can never drift apart.
+try {
+  if (typeof document !== 'undefined') {
+    applyZoom(loadZoom());
+  }
+} catch { /* SSR / no-DOM — hook effect will publish it on mount */ }
 
 function persistZoom(level: number) {
   try {

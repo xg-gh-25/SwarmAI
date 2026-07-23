@@ -224,7 +224,28 @@ export default function TerminalPanel() {
               <div
                 key={tab.id}
                 className="absolute inset-0"
-                style={{ display: isActive ? 'block' : 'none' }}
+                style={{
+                  display: isActive ? 'block' : 'none',
+                  // Counter-zoom: cancel the app-wide CSS zoom (useZoom applies
+                  // `zoom` on <html>) so the terminal subtree's NET scale is
+                  // always 1.0 — a constant default font, independent of the
+                  // main window's zoom. This is load-bearing for xterm mouse
+                  // selection: xterm maps a click to a column as
+                  // (clientX − getBoundingClientRect().left) / cellWidth; under
+                  // app zoom the rect is scaled while cellWidth is not, so a
+                  // zoomed terminal mis-maps clicks onto blank cells (drift
+                  // growing rightward). Reading the precomputed reciprocal
+                  // `--app-zoom-inv` (published by useZoom.applyZoom) as a bare
+                  // var — NOT calc(1/var(--app-zoom)) — sidesteps the
+                  // `zoom: calc()` support question. Scoped to THIS per-tab
+                  // wrapper (not the panel) so the panel's clientY drag-resize
+                  // handle stays in the un-counter-zoomed coordinate space.
+                  // FitAddon re-fits automatically: a counter-zoom change alters
+                  // this wrapper's CSS-px content box, which fires the xterm
+                  // host's ResizeObserver (verified: contentRect 780→960 on a
+                  // 1.3→1.6 change) → f.fit() → pty.resize with the correct grid.
+                  zoom: 'var(--app-zoom-inv, 1)',
+                }}
               >
                 <TerminalTab tab={tab} active={isActive} />
               </div>
