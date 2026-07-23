@@ -289,24 +289,77 @@ def _write_json(path: Path, data: Any) -> None:
     )
 
 
+# AIM agentskills.io requires a skill `name` (and its dir name) to match
+# ^[a-z0-9-]+$ — lowercase letters, digits, hyphens ONLY. SwarmAI's internal
+# convention prefixes every skill dir with `s_` (e.g. `s_repo-to-ddd`), whose
+# underscore is DOUBLY non-compliant: aim-build rejects both "name has invalid
+# format" (the `_`) and "name must match dir". So the distributed dir name AND its
+# SKILL.md `name` must be normalized to a compliant form on emit. (run_05e60d5b —
+# reverses run_62055da6's approach A, which matched name to the raw `s_` dir and
+# still failed the character-set rule.)
+_COMPLIANT_NAME = re.compile(r"^[a-z0-9-]+$")
+
+
+def _compliant_skill_name(raw: str) -> str:
+    """Normalize a SwarmAI skill name to an AIM-compliant one: lowercase, strip a
+    leading ``s_`` prefix, turn any remaining ``_`` into ``-``, drop any other illegal
+    char, collapse repeat hyphens, strip leading/trailing hyphens. The result is
+    GUARANTEED non-empty and to match ``^[a-z0-9-]+$``.
+    (``s_repo-to-ddd`` → ``repo-to-ddd``; ``s_ddd-manager`` → ``ddd-manager``.)
+
+    Fail-LOUD on a degenerate input that normalizes to empty (a dir named ``s_`` /
+    ``s___`` / all-dots / pure-non-ascii): an un-nameable skill dir is an author
+    error — emitting it under an empty name would collapse the skill INTO the skills
+    root (``out_skills / "" == out_skills``) and corrupt siblings (Gate-2 HIGH,
+    run_05e60d5b). Raising here surfaces the bad source dir instead of silently
+    shipping a broken package."""
+    s = raw.lower()
+    if s.startswith("s_"):
+        s = s[2:]
+    s = re.sub(r"[^a-z0-9-]", "-", s)      # _ and any other illegal char → hyphen
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    if not s or not _COMPLIANT_NAME.match(s):
+        raise PackagingError(
+            f"skill dir name {raw!r} normalizes to an empty/invalid AIM name — "
+            f"rename it to something matching ^[a-z0-9-]+$ (after the s_ prefix)"
+        )
+    return s
+
+
+def _compliant_skill_map(skills: list[str]) -> dict[str, str]:
+    """Map each raw skill name → its AIM-compliant name. Fail-LOUD on a collision
+    (two raw names normalizing to the same compliant name) — silently merging two
+    skills into one dir would drop a capability from the package."""
+    out: dict[str, str] = {}
+    seen: dict[str, str] = {}
+    for raw in sorted(skills):
+        comp = _compliant_skill_name(raw)
+        if comp in seen and seen[comp] != raw:
+            raise PackagingError(
+                f"skill name collision after AIM normalization: '{raw}' and "
+                f"'{seen[comp]}' both map to '{comp}' — rename one at the source"
+            )
+        seen[comp] = raw
+        out[raw] = comp
+    return out
+
+
 def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list[str]:
-    """Copy each included skill dir into the package. Returns sorted relative files."""
+    """Copy each included skill dir into the package under its AIM-COMPLIANT name,
+    and set the emitted SKILL.md `name` to that same compliant value (name==dirname
+    AND character-set-legal). Emit-layer only — the source dir/SKILL.md are untouched.
+    Returns sorted relative files."""
     copied: list[str] = []
     caps_root = ddd_path(ddd_dir, "capabilities")
-    for name in sorted(skills):
-        src = caps_root / name
+    name_map = _compliant_skill_map(skills)  # raises on collision (fail-loud)
+    for raw in sorted(skills):
+        src = caps_root / raw
         if not src.is_dir():
             continue
-        dst = out_skills / name
+        compliant = name_map[raw]
+        dst = out_skills / compliant
         shutil.copytree(src, dst, dirs_exist_ok=True)
-        # AIM agentskills.io requires the SKILL.md frontmatter `name` to EQUAL the
-        # skill's dir name. SwarmAI's internal convention keeps the two deliberately
-        # distinct (dir `s_repo-to-ddd`, frontmatter `name: repo-to-ddd`), which
-        # SwarmAI's own loader accepts but aim-build REJECTS ("name must match the
-        # directory name"). The distributed dir name IS `name` (dst.name), so rewrite
-        # the emitted copy's `name` line to match it — emit-layer only, source
-        # SKILL.md untouched. (run_62055da6)
-        _rewrite_skill_name(dst / "SKILL.md", dst.name)
+        _rewrite_skill_name(dst / "SKILL.md", compliant)
         for f in sorted(dst.rglob("*")):
             if f.is_file():
                 copied.append(str(f.relative_to(out_skills.parent)))
@@ -321,8 +374,9 @@ _SKILL_NAME_LINE = re.compile(r"^name[ \t]*:[ \t]*.*$", re.MULTILINE)
 
 
 def _rewrite_skill_name(skill_md: Path, dir_name: str) -> None:
-    """Rewrite the emitted SKILL.md `name:` value to equal ``dir_name`` (AIM
-    name==dirname). No-op (idempotent) if already matching. Fail-soft: a missing
+    """Rewrite the emitted SKILL.md `name:` value to equal ``dir_name`` — which the
+    caller has already normalized to an AIM-compliant form (name==dirname AND
+    ^[a-z0-9-]+$). No-op (idempotent) if already matching. Fail-soft: a missing
     SKILL.md, or one without a `name:` line, is left untouched (a skill dir need
     not carry a SKILL.md — e.g. a script-only sub-package)."""
     if not skill_md.is_file():
@@ -333,8 +387,8 @@ def _rewrite_skill_name(skill_md: Path, dir_name: str) -> None:
         return
     # Function replacement (not a template string): a template would interpret
     # backslash / `\g<n>` sequences in dir_name as regex backreferences and corrupt
-    # output. A callable's return is used literally. (dir names are s_[a-z0-9-]
-    # today, but dst.name is a filesystem value — never trust it into a replacement.)
+    # output. A callable's return is used literally. (dir_name is a
+    # `_compliant_skill_name` result, but keep the replacement literal defensively.)
     new_text, n = _SKILL_NAME_LINE.subn(lambda _m: f"name: {dir_name}", text, count=1)
     if n and new_text != text:
         skill_md.write_text(new_text, encoding="utf-8")
@@ -471,7 +525,11 @@ def _materialize_shared(ddd_dir: Path, out_skills: Path, skills: list[str]) -> l
     if not src_files:
         return warnings
 
-    for name in sorted(skills):
+    # Skills are emitted under their AIM-COMPLIANT dir name (_copy_skill_dirs), so
+    # materialize into that same compliant dir — matching on the raw name would miss
+    # every emitted dir and silently ship a non-self-contained package.
+    for raw in sorted(skills):
+        name = _compliant_skill_name(raw)
         if not (out_skills / name).is_dir():
             continue  # skill wasn't emitted (excluded) — nothing to make self-contained
         skill_scripts = out_skills / name / "scripts"
@@ -560,7 +618,10 @@ def emit_target_aim(ddd_dir: Path, out_dir: Path, *, with_enablement: bool = Fal
             "systemPrompt": "{{aim:include:context/AGENTS.md}}",
         },
         "dependencies": {
-            "skills": {"skillNames": skills_to_copy or ["*"]},
+            # skillNames must reference the emitted (AIM-compliant) dir names, not the
+            # raw s_-prefixed source names — else the agent-spec points at dirs that
+            # don't exist in the package. Same normalization _copy_skill_dirs applies.
+            "skills": {"skillNames": [_compliant_skill_name(s) for s in skills_to_copy] or ["*"]},
             "context": {"contextNames": ["*"]},
             "agentSops": {"agentSopNames": ["*"]},
         },

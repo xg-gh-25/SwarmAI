@@ -21,6 +21,7 @@ skills/ + Config + AGENTS.md/REFRESHER.md).
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -190,7 +191,7 @@ class TestAC2TargetAim:
         assert spec["schemaVersion"] == "1"
         assert spec["config"]["systemPrompt"].startswith("{{aim:include:")
         assert (out / "context" / "TECH.md").is_file()
-        assert (out / "skills" / "s_fx-report" / "SKILL.md").is_file()
+        assert (out / "skills" / "fx-report" / "SKILL.md").is_file()  # emitted under compliant name
 
     def test_preserves_existing_build_system(self, tmp_path):
         ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal",
@@ -211,7 +212,7 @@ class TestAC3TargetOpenPlugin:
         out = res.out_dir
         pj = json.loads((out / ".plugin" / "plugin.json").read_text())
         assert pj["name"] == "swarmai-fixture-brain"  # normalized + prefixed
-        assert (out / "skills" / "s_fx-report" / "SKILL.md").is_file()
+        assert (out / "skills" / "fx-report" / "SKILL.md").is_file()  # emitted under compliant name
         assert list((out / "agents").glob("*.md"))
         assert (out / "rules" / "tech.md").is_file()
         assert (out / "hooks").is_dir()
@@ -232,47 +233,86 @@ def _skill_frontmatter_name(skill_md: Path) -> str:
     raise AssertionError(f"no name line in {skill_md}")
 
 
-def _ddd_with_mismatched_skill_name(root: Path, *, targets: list[str], visibility: str) -> Path:
-    """A fixture DDD whose one domain skill has the REAL SwarmAI mismatch: dir
-    `s_fx-report` but frontmatter `name: fx-report` (no s_ prefix). Reproduces the
-    aim-build BLOCK the fix must cure."""
+def _ddd_with_prefixed_skill(root: Path, *, targets: list[str], visibility: str) -> Path:
+    """A fixture DDD whose domain skill uses the REAL SwarmAI convention: dir
+    `s_fx-report` (an `s_` prefix whose underscore is AIM-NON-COMPLIANT). The
+    emit must normalize dir + name to the compliant `fx-report`."""
     ddd = build_fixture_ddd(root, targets=targets, visibility=visibility)
-    # overwrite the domain skill with the deliberate dir/name mismatch
-    _make_skill(ddd / "skills", "s_fx-report", frontmatter_name="fx-report")
+    _make_skill(ddd / "skills", "s_fx-report")
     return ddd
 
 
-class TestSkillNameMatchesDirName:
-    def test_aim_emit_rewrites_name_to_dirname(self, tmp_path):
-        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
-        # precondition: the SOURCE really has the mismatch (else the test is vacuous)
-        assert _skill_frontmatter_name(ddd / "skills" / "s_fx-report" / "SKILL.md") == "fx-report"
-        [res] = pk.package_ddd(ddd, tmp_path / "out")
-        emitted = res.out_dir / "skills" / "s_fx-report" / "SKILL.md"
-        assert emitted.is_file()
-        # the fix: emitted name == dir name (AIM name==dirname)
-        assert _skill_frontmatter_name(emitted) == "s_fx-report"
+class TestSkillNameAimCompliant:
+    """AIM agentskills.io requires a skill name (and its dir) to match ^[a-z0-9-]+$
+    AND name==dirname. SwarmAI's `s_`-prefixed dirs violate both, so the emit
+    normalizes dir + name to a compliant form (`s_fx-report` → `fx-report`)."""
 
-    def test_open_plugin_emit_rewrites_name_to_dirname(self, tmp_path):
-        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["open-plugin"], visibility="external")
+    def test_aim_emit_normalizes_dir_and_name(self, tmp_path):
+        ddd = _ddd_with_prefixed_skill(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # precondition: the SOURCE really uses the non-compliant s_ prefix (non-vacuous)
+        assert (ddd / "skills" / "s_fx-report").is_dir()
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        emitted = res.out_dir / "skills" / "s_fx-report" / "SKILL.md"
-        assert _skill_frontmatter_name(emitted) == "s_fx-report"
+        # emitted under the COMPLIANT name; the raw s_ dir must NOT appear
+        assert (res.out_dir / "skills" / "fx-report" / "SKILL.md").is_file()
+        assert not (res.out_dir / "skills" / "s_fx-report").exists()
+        assert _skill_frontmatter_name(res.out_dir / "skills" / "fx-report" / "SKILL.md") == "fx-report"
 
-    def test_every_emitted_skill_name_equals_its_dir(self, tmp_path):
-        # all included domain skills, not just the planted one, must satisfy name==dirname
-        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
+    def test_open_plugin_emit_normalizes_dir_and_name(self, tmp_path):
+        ddd = _ddd_with_prefixed_skill(tmp_path, targets=["open-plugin"], visibility="external")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        assert (res.out_dir / "skills" / "fx-report" / "SKILL.md").is_file()
+        assert not (res.out_dir / "skills" / "s_fx-report").exists()
+
+    def test_every_emitted_skill_is_compliant_and_name_equals_dir(self, tmp_path):
+        ddd = _ddd_with_prefixed_skill(tmp_path, targets=["aim-capabilities"], visibility="internal")
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         skill_dirs = [d for d in (res.out_dir / "skills").iterdir() if (d / "SKILL.md").is_file()]
         assert skill_dirs, "expected at least one emitted skill"
         for d in skill_dirs:
+            assert re.fullmatch(r"[a-z0-9-]+", d.name), f"dir {d.name} not AIM-compliant"
             assert _skill_frontmatter_name(d / "SKILL.md") == d.name
 
-    def test_source_skill_md_is_untouched(self, tmp_path):
-        # emit-layer only: the source SKILL.md keeps its (mismatched) name
-        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
+    def test_agent_spec_skillnames_are_compliant(self, tmp_path):
+        # skillNames must reference the emitted compliant dirs, not the raw s_ names
+        ddd = _ddd_with_prefixed_skill(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        spec = json.loads(next((res.out_dir / "agents").glob("*.agent-spec.json")).read_text())
+        names = spec["dependencies"]["skills"]["skillNames"]
+        emitted_dirs = {d.name for d in (res.out_dir / "skills").iterdir() if d.is_dir()}
+        for n in names:
+            assert re.fullmatch(r"[a-z0-9-]+", n), f"skillName {n} not compliant"
+            assert n in emitted_dirs, f"skillName {n} has no emitted dir (dangling ref)"
+
+    def test_collision_after_normalization_is_fail_loud(self, tmp_path):
+        # two raw names normalizing to the same compliant name → PackagingError, never
+        # a silent merge (which would drop a skill from the package)
+        with pytest.raises(pk.PackagingError, match="collision"):
+            pk._compliant_skill_map(["s_fx-report", "fx-report"])
+
+    def test_compliant_name_strips_prefix_and_underscore(self):
+        assert pk._compliant_skill_name("s_repo-to-ddd") == "repo-to-ddd"
+        assert pk._compliant_skill_name("s_ddd-manager") == "ddd-manager"
+        assert pk._compliant_skill_name("example-skill") == "example-skill"  # already compliant
+        assert re.fullmatch(r"[a-z0-9-]+", pk._compliant_skill_name("s_A_B__c"))
+
+    def test_compliant_name_degenerate_input_fails_loud(self):
+        # Gate-2 HIGH (run_05e60d5b): a dir normalizing to EMPTY must raise, never
+        # return "" — else dst = out_skills / "" == out_skills, collapsing the skill
+        # into the skills root and corrupting siblings. Every degenerate input raises.
+        for bad in ("s_", "s___", "...", "---", "s_中文", ""):
+            with pytest.raises(pk.PackagingError, match="empty/invalid"):
+                pk._compliant_skill_name(bad)
+
+    def test_compliant_name_never_empty_for_valid_inputs(self):
+        for ok in ("s_a", "s_x1", "s_2fa-tool", "PLAIN"):
+            out = pk._compliant_skill_name(ok)
+            assert out and re.fullmatch(r"[a-z0-9-]+", out)
+
+    def test_source_skill_dir_is_untouched(self, tmp_path):
+        # emit-layer only: the source keeps its s_ dir name
+        ddd = _ddd_with_prefixed_skill(tmp_path, targets=["aim-capabilities"], visibility="internal")
         pk.package_ddd(ddd, tmp_path / "out")
-        assert _skill_frontmatter_name(ddd / "skills" / "s_fx-report" / "SKILL.md") == "fx-report"
+        assert (ddd / "skills" / "s_fx-report").is_dir()
 
     def test_rewrite_name_literal_not_regex_backref(self, tmp_path):
         # Gate-2 (review-found): the rewrite replacement must treat the dir name as a
@@ -353,7 +393,7 @@ class TestWithEnablement:
         for res in results:
             assert "s_ddd-manager" in res.skills_included, res.target
             assert "s_ddd-manager" not in res.skills_excluded, res.target
-            assert (res.out_dir / "skills" / "s_ddd-manager").exists(), res.target
+            assert (res.out_dir / "skills" / "ddd-manager").exists(), res.target  # emitted compliant
             # class-B domain skills still ship regardless of the flag
             assert {"s_fx-report", "s_fx-analyze"}.issubset(set(res.skills_included)), res.target
 
@@ -367,7 +407,7 @@ class TestWithEnablement:
                                 add_unclassified_skill=True)
         [res] = pk.package_ddd(ddd, tmp_path / "out", with_enablement=True)
         assert "s_fx-orphan" in res.skills_included
-        assert (res.out_dir / "skills" / "s_fx-orphan").exists()
+        assert (res.out_dir / "skills" / "fx-orphan").exists()  # emitted under compliant name
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +490,7 @@ class TestGate2SkillDualList:
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         assert "s_fx-report" not in res.skills_included
         assert "s_fx-report" in res.skills_excluded
-        assert not (res.out_dir / "skills" / "s_fx-report").exists()
+        assert not (res.out_dir / "skills" / "fx-report").exists()  # excluded → no emitted (compliant) dir
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +541,7 @@ class TestAC10Unclassified:
                                 add_unclassified_skill=True)
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         assert "s_fx-orphan" in res.skills_included
-        assert (res.out_dir / "skills" / "s_fx-orphan").exists()
+        assert (res.out_dir / "skills" / "fx-orphan").exists()  # emitted under compliant name
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +593,8 @@ class TestSharedMaterialization:
         assert results
         for res in results:  # both targets
             for skill in res.skills_included:
-                dst = res.out_dir / "skills" / skill / "scripts" / "client.py"
+                # skills_included holds RAW names; the emitted dir uses the compliant name
+                dst = res.out_dir / "skills" / pk._compliant_skill_name(skill) / "scripts" / "client.py"
                 assert dst.is_file(), f"{res.target}: client.py not materialized into {skill}"
                 assert "def hello" in dst.read_text(encoding="utf-8")
 
@@ -562,7 +603,7 @@ class TestSharedMaterialization:
         ddd = build_fixture_ddd(tmp_path, targets=["aim-capabilities"], visibility="internal")
         _add_shared(ddd, {"client.py": "x = 1\n"})
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        skill = res.skills_included[0]
+        skill = pk._compliant_skill_name(res.skills_included[0])
         assert not (res.out_dir / "skills" / skill / "scripts" / "__init__.py").exists()
 
     def test_distributed_skill_imports_shared_via_injection(self, tmp_path):
@@ -583,7 +624,7 @@ class TestSharedMaterialization:
             encoding="utf-8",
         )
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        emitted_entry = res.out_dir / "skills" / "s_fx-report" / "scripts" / "gen.py"
+        emitted_entry = res.out_dir / "skills" / "fx-report" / "scripts" / "gen.py"
         assert emitted_entry.is_file()
         # run the DISTRIBUTED skill entry — parents[2]/_shared points outside the pkg,
         # but the materialized sibling client.py in scripts/ makes the import resolve.
@@ -603,7 +644,7 @@ class TestSharedMaterialization:
         owned.mkdir(parents=True, exist_ok=True)
         (owned / "client.py").write_text("def hello():\n    return 'SKILL_OWNED'\n", encoding="utf-8")
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        dst = res.out_dir / "skills" / "s_fx-report" / "scripts" / "client.py"
+        dst = res.out_dir / "skills" / "fx-report" / "scripts" / "client.py"
         assert "SKILL_OWNED" in dst.read_text(encoding="utf-8"), "skill-owned file was clobbered"
         assert any("skill-owned" in w and "client.py" in w for w in res.warnings), \
             f"expected a skill-owned collision WARN, got {res.warnings}"
@@ -670,7 +711,7 @@ class TestDomainToolsMaterialization:
                               {"catalog.py": "def rule():\n    return 'moat'\n"})
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         for skill in res.skills_included:
-            dst = res.out_dir / "skills" / skill / "scripts" / "catalog.py"
+            dst = res.out_dir / "skills" / pk._compliant_skill_name(skill) / "scripts" / "catalog.py"
             assert dst.is_file(), f"domain_tools SDK not materialized into {skill}"
             assert "def rule" in dst.read_text(encoding="utf-8")
 
@@ -680,7 +721,7 @@ class TestDomainToolsMaterialization:
         _add_shared(ddd, {"client.py": "V='from_shared'\n"})
         _add_domain_tools_sdk(ddd, "assets/data-source/scripts", {"client.py": "V='from_asset'\n"})
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        skill = res.skills_included[0]
+        skill = pk._compliant_skill_name(res.skills_included[0])
         dst = res.out_dir / "skills" / skill / "scripts" / "client.py"
         assert "from_shared" in dst.read_text(encoding="utf-8"), "_shared should win precedence"
         # no double-copy warning (dedup is silent, first-writer-wins)
@@ -692,7 +733,7 @@ class TestDomainToolsMaterialization:
         assert pk._collect_shared_sources(ddd) == []
         [res] = pk.package_ddd(ddd, tmp_path / "out")
         for skill in res.skills_included:
-            assert not (res.out_dir / "skills" / skill / "scripts" / "catalog.py").exists()
+            assert not (res.out_dir / "skills" / pk._compliant_skill_name(skill) / "scripts" / "catalog.py").exists()
 
     def _set_domain_tools(self, ddd: Path, entries: list[str]) -> None:
         aim = json.loads((ddd / "aim.json").read_text(encoding="utf-8"))
