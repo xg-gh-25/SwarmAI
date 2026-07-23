@@ -74,28 +74,91 @@ class TestBuildManifest:
         records = reg.build_manifest(ws, builtin)
         assert {r["skill"] for r in records} == {"s_cmhk-x"}
 
-    def test_resolves_builtin_when_not_in_package(self, tmp_path):
-        """Strangler: domain skill still in built-in (pre-Run-3) is resolved there."""
+    def test_folder_is_authoritative_undeclared_skill_discovered(self, tmp_path):
+        """FOLDER-AS-SOURCE: a domain skill DIR present in 4-capabilities/ is
+        discovered even if it is NOT listed in aim.json domain_skills. The folder
+        is the source of truth — the declared list is no longer the gate (it is
+        only a fail-loud cross-check, see test_declared_but_absent_warns)."""
         ws = tmp_path / "SwarmWS"
-        (ws / "Projects" / "CMHK").mkdir(parents=True)
-        (ws / "Projects" / "CMHK" / "aim.json").write_text(
-            json.dumps({"plugins": {"domain_skills": ["s_cmhk-y"]}})
-        )
-        builtin = tmp_path / "b"
-        _mkskill(builtin, "s_cmhk-y")  # lives in built-in, NOT the package
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        # aim.json declares only ONE, but TWO domain skill dirs exist on disk.
+        pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-weekly-report"])
+        _mkskill(pdir / "skills", "s_cmhk-undeclared")  # on disk, NOT declared
         records = reg.build_manifest(ws, builtin)
-        assert len(records) == 1
-        assert Path(records[0]["path"]) == builtin / "s_cmhk-y"
+        names = {r["skill"] for r in records}
+        # Folder-authoritative: BOTH are discovered (old declared-list would miss the 2nd).
+        assert names == {"s_cmhk-weekly-report", "s_cmhk-undeclared"}
+        assert all(r["class"] == "domain" for r in records)
 
-    def test_declared_but_absent_skill_skipped(self, tmp_path):
+    def test_declared_but_absent_warns_not_silent(self, tmp_path, caplog):
+        """AC3 (mid-migration safety): a skill DECLARED in aim.json but ABSENT from
+        the folder must be logged fail-LOUD (warning), not silently dropped. It is
+        NOT added to the manifest (the folder is authoritative), but its absence is
+        surfaced so a half-migrated DDD is visible, not invisible."""
+        import logging
         ws = tmp_path / "SwarmWS"
-        (ws / "Projects" / "CMHK").mkdir(parents=True)
-        (ws / "Projects" / "CMHK" / "aim.json").write_text(
-            json.dumps({"plugins": {"domain_skills": ["s_cmhk-ghost"]}})
-        )
-        builtin = tmp_path / "b"; builtin.mkdir()
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        # Declares a ghost skill that has NO dir on disk.
+        pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-weekly-report"])
+        aim = json.loads((pdir / "aim.json").read_text())
+        aim["plugins"]["domain_skills"].append("s_cmhk-ghost")
+        (pdir / "aim.json").write_text(json.dumps(aim))
+        with caplog.at_level(logging.WARNING):
+            records = reg.build_manifest(ws, builtin)
+        names = {r["skill"] for r in records}
+        assert names == {"s_cmhk-weekly-report"}     # ghost NOT added (folder authoritative)
+        assert "s_cmhk-ghost" in caplog.text          # but its absence is LOUD
+        assert "declared" in caplog.text.lower()
+
+    def test_dir_without_skill_md_excluded(self, tmp_path):
+        """A dir in 4-capabilities/ WITHOUT a SKILL.md (e.g. _shared) is not a skill
+        and must be excluded by the folder scan."""
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-a"])
+        (pdir / "skills" / "_shared").mkdir(parents=True)  # no SKILL.md
+        (pdir / "skills" / "_shared" / "helper.py").write_text("x = 1")
         records = reg.build_manifest(ws, builtin)
-        assert records == []  # declared but no dir anywhere → skipped, no crash
+        assert {r["skill"] for r in records} == {"s_cmhk-a"}  # _shared excluded
+
+    def test_symlink_skill_dir_is_rejected(self, tmp_path):
+        """Gate-2 security (path-escape): a symlink in 4-capabilities/ pointing at a
+        skill-shaped dir OUTSIDE the DDD must NOT be registered — else the packager
+        (which shares this primitive) could copy host files outside the package."""
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-a"])
+        # Plant a skill-shaped dir OUTSIDE the DDD, then symlink into it from caps.
+        outside = tmp_path / "outside" / "s_evil"
+        outside.mkdir(parents=True)
+        (outside / "SKILL.md").write_text("---\nname: s_evil\n---\nescape")
+        (pdir / "skills" / "s_evil").symlink_to(outside, target_is_directory=True)
+        records = reg.build_manifest(ws, builtin)
+        names = {r["skill"] for r in records}
+        # The symlinked escape skill is rejected; the real one survives.
+        assert names == {"s_cmhk-a"}
+        assert "s_evil" not in names
+
+    def test_per_ddd_scan_error_does_not_wipe_other_ddds(self, tmp_path, monkeypatch):
+        """AC4 (per-DDD fail-soft): if ONE DDD's 4-capabilities/ dir raises OSError
+        on scan, that DDD is skipped (logged), but OTHER DDDs' skills still resolve
+        — a per-project read blip must not wipe the whole manifest."""
+        ws = tmp_path / "SwarmWS"
+        builtin = tmp_path / "b"; builtin.mkdir(parents=True)
+        _mk_ddd(ws, "CMHK", ["s_cmhk-a"])
+        _mk_ddd(ws, "IVTHub", ["s_ivt-b"])
+        real_iterdir = Path.iterdir
+
+        def _selective_boom(self):
+            # Only CMHK's capabilities dir explodes; Projects/ + IVTHub are fine.
+            if self.name in ("skills", "4-capabilities") and "CMHK" in str(self):
+                raise OSError("transient: CMHK caps dir unreadable")
+            return real_iterdir(self)
+
+        monkeypatch.setattr(Path, "iterdir", _selective_boom)
+        records = reg.build_manifest(ws, builtin)
+        # IVTHub survives; CMHK is skipped (not a crash, not a full wipe).
+        assert {r["skill"] for r in records} == {"s_ivt-b"}
 
     def test_no_projects_dir_is_empty_not_crash(self, tmp_path):
         ws = tmp_path / "SwarmWS"; ws.mkdir()
@@ -205,18 +268,25 @@ class TestEmptyOverwriteGuard:
 
     def test_legit_removal_of_all_skills_updates_manifest(self, tmp_path):
         # THE SEMANTIC GAP (Gate-2 finding, run_669e29f6): a DDD that HAD domain
-        # skills legitimately drops them all (aim.json edited). Projects/ is fully
-        # readable — this is a REAL 0, not a transient error — so the manifest MUST
-        # update to remove the stale skill. The guard must NOT fire here (it gates
-        # on scan_failure, not on records==0). A guard gated on `records==0` alone
-        # would keep the stale skill FOREVER (self-perpetuating staleness).
+        # skills legitimately drops them all. Projects/ is fully readable — this is
+        # a REAL 0, not a transient error — so the manifest MUST update to remove the
+        # stale skill. The guard must NOT fire here (it gates on scan_failure, not on
+        # records==0). A guard gated on `records==0` alone would keep the stale skill
+        # FOREVER (self-perpetuating staleness).
+        #
+        # FOLDER-AS-SOURCE: "removing a skill" now means DELETING THE DIR (the folder
+        # is authoritative), NOT editing aim.json. (Under the old declared-list
+        # semantics this test emptied domain_skills; that no longer removes anything
+        # because the dir is the source of truth.)
+        import shutil
         ws = tmp_path / "SwarmWS"
         builtin = tmp_path / "b"; builtin.mkdir(parents=True)
         pdir = _mk_ddd(ws, "CMHK", ["s_cmhk-a"])
         reg.build_manifest(ws, builtin)
         assert {r["skill"] for r in reg.read_manifest(ws)} == {"s_cmhk-a"}  # non-empty
 
-        # Operator removes the skill from aim.json; Projects/ still fully readable.
+        # Operator removes the skill by DELETING its dir; Projects/ still fully readable.
+        shutil.rmtree(pdir / "skills" / "s_cmhk-a")
         (pdir / "aim.json").write_text(json.dumps(
             {"name": "CMHK", "plugins": {"native_skills": [], "domain_skills": []}}
         ))

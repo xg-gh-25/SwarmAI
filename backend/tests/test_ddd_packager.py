@@ -252,15 +252,17 @@ class TestWithEnablement:
             # class-B domain skills still ship regardless of the flag
             assert {"s_fx-report", "s_fx-analyze"}.issubset(set(res.skills_included)), res.target
 
-    def test_with_enablement_never_ships_unclassified(self, tmp_path):
-        # The flag opens the ENABLEMENT gate only — an unclassified on-disk skill (in
-        # NEITHER native nor domain) must STILL be excluded (author-error guard holds).
-        # add_unclassified_skill plants s_fx-orphan in NEITHER native nor domain list
+    def test_with_enablement_ships_ondisk_domain_skill(self, tmp_path):
+        # FOLDER-AS-SOURCE: an on-disk skill dir with a SKILL.md that is NOT enablement
+        # and NOT declared-native IS a domain skill (the folder is authoritative — there
+        # is no "unclassified" category to exclude anymore). s_fx-orphan, planted on disk
+        # in neither list, now ships as domain. The smuggle guard (declared-native) is
+        # the only exclusion, tested in TestGate2SkillDualList.
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external",
                                 add_unclassified_skill=True)
         [res] = pk.package_ddd(ddd, tmp_path / "out", with_enablement=True)
-        assert "s_fx-orphan" in res.skills_excluded
-        assert not (res.out_dir / "skills" / "s_fx-orphan").exists()
+        assert "s_fx-orphan" in res.skills_included
+        assert (res.out_dir / "skills" / "s_fx-orphan").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -383,13 +385,18 @@ class TestAC9Determinism:
 # AC10 — neither-list skill excluded AND surfaced (loud)
 # ---------------------------------------------------------------------------
 class TestAC10Unclassified:
-    def test_unclassified_excluded_and_warned(self, tmp_path):
+    def test_ondisk_skill_is_domain_folder_as_source(self, tmp_path):
+        # FOLDER-AS-SOURCE (supersedes the old "unclassified excluded+warned" model):
+        # a skill dir on disk with a SKILL.md, not enablement, not declared-native, IS
+        # a domain skill — the folder is the source of truth, so there is no
+        # undeclared-but-on-disk "unclassified" class to exclude. s_fx-orphan ships.
+        # (The inverse — DECLARED-but-absent-from-folder — is now surfaced loudly by
+        # ddd_skill_registry's cross-check, tested in test_ddd_skill_registry.py.)
         ddd = build_fixture_ddd(tmp_path, targets=["open-plugin"], visibility="external",
                                 add_unclassified_skill=True)
         [res] = pk.package_ddd(ddd, tmp_path / "out")
-        assert "s_fx-orphan" in res.skills_excluded
-        assert not (res.out_dir / "skills" / "s_fx-orphan").exists()
-        assert any("s_fx-orphan" in w and "unclassified" in w for w in res.warnings)
+        assert "s_fx-orphan" in res.skills_included
+        assert (res.out_dir / "skills" / "s_fx-orphan").exists()
 
 
 # ---------------------------------------------------------------------------

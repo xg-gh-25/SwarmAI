@@ -48,8 +48,11 @@ from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 logger = logging.getLogger(__name__)
 
 # Delegate the class-A/B split to the single source of truth (Gate-1 C3).
+# NOTE: split_skills now discovers via ddd_skill_registry.scan_domain_skill_dirs
+# (folder-as-source) — it no longer needs _read_domain_skills. _is_enablement is
+# still used (enablement_excluded). The fallback keeps the module importable off-host.
 try:  # pragma: no cover - import wiring
-    from core.ddd_skill_registry import _is_enablement, _read_domain_skills
+    from core.ddd_skill_registry import _is_enablement
 except Exception:  # pragma: no cover - fallback keeps the module importable off-host
     _ENABLEMENT_PREFIXES = ("s_ddd-",)
     _ENABLEMENT_EXACT = {"s_repo-to-ddd"}
@@ -166,46 +169,43 @@ def normalize_name(ddd_name: str, prefix: str = "swarmai-") -> str:
 def split_skills(ddd_dir: Path) -> tuple[list[str], list[str], list[str]]:
     """Return (domain_included, enablement_excluded, unclassified_excluded).
 
-    - domain_included: class-B (from aim.json plugins.domain_skills, via the registry).
-    - enablement_excluded: class-A native_skills (declared enablement) — excluded.
-    - unclassified_excluded: a skill dir on disk in NEITHER list → excluded + surfaced
-      LOUDLY (Gate-1 H5), never default-included.
+    FOLDER-AS-SOURCE (unified with ddd_skill_registry — design
+    ``2026-07-23-steal-from-agentrock-distribution-evaluate.md``): domain membership
+    is decided by SCANNING ``4-capabilities/`` (via
+    ``ddd_skill_registry.scan_domain_skill_dirs``), NOT by the aim.json declared
+    list. This makes build_manifest (runtime discovery) and split_skills (packaging)
+    share ONE notion of "which skills does this DDD own" — no split-brain where a
+    skill is available at runtime but missing from a distributed package (Gate-1 T3).
+
+    - domain_included: on-disk skill dirs that are NOT enablement (the folder scan).
+    - enablement_excluded: on-disk dirs that ARE enablement (native_skills OR
+      ``s_ddd-*``/``s_repo-to-ddd``) — never shipped as domain.
+    - unclassified_excluded: EMPTY under folder-as-source (a dir with SKILL.md that
+      is not enablement IS a domain skill by definition). Retained in the return
+      tuple for caller compatibility (emit_target_* unpack 3 values); the loud
+      undeclared-skill warning it used to carry is now the registry's declared-but-
+      absent cross-check (the inverse direction: declared∖on-disk, not on-disk∖declared).
     All lists sorted (determinism).
     """
-    aim_path = ddd_dir / "aim.json"
-    domain = set(_read_domain_skills(aim_path))
+    from core.ddd_skill_registry import _read_native_skills, scan_domain_skill_dirs
 
-    declared_native: set[str] = set()
-    try:
-        data = json.loads(aim_path.read_text(encoding="utf-8"))
-        plugins = data.get("plugins") if isinstance(data, dict) else None
-        if isinstance(plugins, dict) and isinstance(plugins.get("native_skills"), list):
-            declared_native = {s for s in plugins["native_skills"] if isinstance(s, str)}
-    except (OSError, json.JSONDecodeError, ValueError):
-        pass
+    # domain = folder scan minus enablement minus declared-native (smuggle guard is
+    # inside scan_domain_skill_dirs — Gate-2 C2 preserved).
+    domain_included = sorted(d.name for d in scan_domain_skill_dirs(ddd_dir))
 
-    on_disk: set[str] = set()
+    # Enablement dirs on disk (declared native OR name-convention) — excluded from
+    # domain, optionally shipped as the portable engine via with_enablement.
+    declared_native = _read_native_skills(ddd_dir / "aim.json")
+    enablement_excluded: list[str] = []
     skills_root = ddd_path(ddd_dir, "capabilities")
     if skills_root.is_dir():
         for child in sorted(skills_root.iterdir()):
             if child.is_dir() and (child / "SKILL.md").is_file():
-                on_disk.add(child.name)
+                if child.name in declared_native or _is_enablement(child.name):
+                    enablement_excluded.append(child.name)
 
-    # Excluded set is AUTHORITATIVE over included (Gate-2 C2): a skill listed in BOTH
-    # native_skills and domain_skills (author error or deliberate smuggle) MUST be
-    # excluded — never copied into an external package. Subtract native + enablement.
-    domain_included = sorted(
-        s for s in domain
-        if s in on_disk and s not in declared_native and not _is_enablement(s)
-    )
-    enablement_excluded = sorted(
-        s for s in on_disk if s in declared_native or _is_enablement(s)
-    )
-    unclassified = sorted(
-        s for s in on_disk
-        if s not in domain and s not in declared_native and not _is_enablement(s)
-    )
-    return domain_included, enablement_excluded, unclassified
+    unclassified: list[str] = []  # folder-as-source: no undeclared-but-on-disk class
+    return domain_included, sorted(enablement_excluded), unclassified
 
 
 # ---------------------------------------------------------------------------

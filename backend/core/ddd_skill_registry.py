@@ -10,8 +10,10 @@ them — WITHOUT re-scanning the filesystem on every session.
 Two layers (this module is the engine; the ops face lives in ``s_ddd-manager``):
 - **Engine (this file)**: product-level — every SwarmAI user has it in the codebase.
 - **Manifest (data)**: per-workspace — ``<workspace>/.context/ddd_skill_registry.json``.
-  A new user's is EMPTY unless a default DDD ships. Content = each DDD's
-  ``aim.json`` ``plugins.domain_skills`` resolved to real skill dirs, with provenance.
+  A new user's is EMPTY unless a default DDD ships. Content = each DDD's DOMAIN
+  skill dirs discovered by SCANNING its ``4-capabilities/`` folder (folder-as-source
+  — NOT the ``aim.json`` declared list), with provenance. The declared list is read
+  only as a fail-loud cross-check for declared-but-absent (mid-migration) skills.
 
 Design invariants (from Gate-1 review of run_597f4ed1):
 - **DOMAIN only.** ``native_skills`` (enablement: ``s_ddd-*``, ``s_repo-to-ddd``,
@@ -61,20 +63,71 @@ def _is_enablement(skill_name: str) -> bool:
     return any(skill_name.startswith(p) for p in _ENABLEMENT_PREFIXES)
 
 
-def _resolve_skill_dir(skill_name: str, project_dir: Path, builtin_dir: Path) -> Path | None:
-    """Resolve a domain skill's ACTUAL directory.
+def scan_domain_skill_dirs(project_dir: Path) -> list[Path]:
+    """Folder-as-source: return a DDD's DOMAIN skill directories by SCANNING its
+    ``4-capabilities/`` folder — NOT by reading the ``aim.json`` declared list.
 
-    Order (strangler-aware): the DDD package's own ``skills/`` first (Run-3 target),
-    then the built-in dir (where domain skills still physically live pre-Run-3).
-    Returns None if found in neither (a declared-but-absent skill → skipped, logged).
+    The folder is the single source of truth (design:
+    ``2026-07-23-steal-from-agentrock-distribution-evaluate.md`` — the S2 steal;
+    unifies discovery so ``build_manifest`` and ``ddd_packager.split_skills`` share
+    ONE notion of domain-membership, eliminating the hand-maintained declared list
+    that had to stay in sync with the folder).
+
+    A directory qualifies as a domain skill iff:
+    - it is a direct child of ``ddd_path(project_dir, "capabilities")``, AND
+    - it is NOT a symlink and it resolves to a path WITHIN the capabilities folder
+      (path-escape guard — a symlink could point at host files outside the DDD and,
+      because this primitive now feeds the PACKAGER too, leak them into a distributed
+      package; mirrors the existing symlink/out-of-root guards in
+      ``skill_manager._scan`` and ``ddd_packager._collect_shared_sources``), AND
+    - it contains a top-level ``SKILL.md``, AND
+    - it is NOT an enablement skill (``_is_enablement`` — ``s_ddd-*`` / ``s_repo-to-ddd``), AND
+    - it is NOT declared under ``aim.json plugins.native_skills`` (the smuggle guard,
+      Gate-2 C2: a skill an author declares native must NEVER be classified as domain,
+      even if its name doesn't match the enablement convention — else it would ship as
+      domain in a package. Excluded-set is authoritative over the folder).
+
+    Returns a sorted list of skill dir Paths. Fail-soft: an unreadable capabilities
+    dir raises OSError to the caller (which handles it per-DDD so one bad project
+    cannot wipe the whole manifest — build_manifest wraps this call). A capabilities
+    dir that simply does not exist yields ``[]`` (a 0-skill DDD is valid).
     """
-    in_package = ddd_path(project_dir, "capabilities") / skill_name
-    if in_package.is_dir() and (in_package / "SKILL.md").is_file():
-        return in_package
-    in_builtin = builtin_dir / skill_name
-    if in_builtin.is_dir() and (in_builtin / "SKILL.md").is_file():
-        return in_builtin
-    return None
+    skills_root = ddd_path(project_dir, "capabilities")
+    if not skills_root.is_dir():
+        return []
+    caps_root = skills_root.resolve()
+    declared_native = _read_native_skills(project_dir / "aim.json")
+    # NOTE: iterdir() may raise OSError (permission/stale mount) — deliberately NOT
+    # caught here; build_manifest catches it PER-DDD so a transient per-project blip
+    # skips that DDD without wiping the others (AC4 / Gate-1 T5).
+    out: list[Path] = []
+    for child in sorted(skills_root.iterdir()):
+        # Path-escape guard (Gate-2 security): reject symlinks + anything that
+        # resolves outside the capabilities folder. Pre-existing in the old scan's
+        # absence, hardened here because this primitive now also gates packaging.
+        if child.is_symlink():
+            logger.warning(
+                "ddd_registry: %s/%s is a symlink — skipped (path-escape guard)",
+                project_dir.name, child.name,
+            )
+            continue
+        try:
+            if not child.resolve().is_relative_to(caps_root):
+                logger.warning(
+                    "ddd_registry: %s/%s resolves outside the capabilities folder "
+                    "— skipped (path-escape guard)", project_dir.name, child.name,
+                )
+                continue
+        except OSError:
+            continue  # unresolvable (broken link / cycle) → not a valid skill dir
+        if (
+            child.is_dir()
+            and (child / "SKILL.md").is_file()
+            and not _is_enablement(child.name)
+            and child.name not in declared_native
+        ):
+            out.append(child)
+    return out
 
 
 def _read_domain_skills(aim_path: Path) -> list[str]:
@@ -99,11 +152,39 @@ def _read_domain_skills(aim_path: Path) -> list[str]:
     ]
 
 
-def build_manifest(workspace_root: Path, builtin_dir: Path) -> list[dict[str, Any]]:
-    """Scan ``<workspace_root>/Projects/*/aim.json`` and return the domain-skill records.
+def _read_native_skills(aim_path: Path) -> set[str]:
+    """Read plugins.native_skills (declared enablement) from an aim.json.
 
-    Each record: ``{skill, class:"domain", owner_ddd, path, fingerprint}``.
-    Writes the manifest atomically to ``<workspace_root>/.context/ddd_skill_registry.json``.
+    Fail-soft → empty set on any error. Used by scan_domain_skill_dirs as the
+    smuggle guard (Gate-2 C2): a skill an author declares native must never be
+    classified as domain, even if its name doesn't match the enablement convention.
+    """
+    try:
+        data = json.loads(aim_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        return set()
+    native = plugins.get("native_skills")
+    if not isinstance(native, list):
+        return set()
+    return {s for s in native if isinstance(s, str) and s}
+
+
+def build_manifest(workspace_root: Path, builtin_dir: Path) -> list[dict[str, Any]]:
+    """Scan ``<workspace_root>/Projects/*/4-capabilities/`` and return domain-skill records.
+
+    FOLDER-AS-SOURCE: each DDD's domain skills are discovered by scanning its
+    capabilities folder (``scan_domain_skill_dirs``), NOT by reading the aim.json
+    declared list. The declared list is consulted only as a fail-loud cross-check
+    (declared-but-absent → warning). Each record: ``{skill, class:"domain",
+    owner_ddd, path}``. Writes atomically to ``.context/ddd_skill_registry.json``.
+
+    ``builtin_dir`` is retained for signature compatibility (29 callers) but is no
+    longer a discovery source — domain skills live in their DDD package, not built-in.
 
     Fail-soft: any per-project error is logged and skipped; the function returns
     whatever it could resolve (possibly empty) and NEVER raises.
@@ -120,24 +201,46 @@ def build_manifest(workspace_root: Path, builtin_dir: Path) -> list[dict[str, An
         scan_failed = True
 
     for project_dir in project_dirs:
-        aim = project_dir / "aim.json"
-        if not aim.is_file():
-            continue
         owner = project_dir.name
-        for skill_name in _read_domain_skills(aim):
-            skill_dir = _resolve_skill_dir(skill_name, project_dir, builtin_dir)
-            if skill_dir is None:
-                logger.info(
-                    "ddd_registry: %s declares domain skill %s but no dir found "
-                    "(package or built-in) — skipped", owner, skill_name,
-                )
-                continue
+        # FOLDER-AS-SOURCE: the 4-capabilities/ folder is authoritative, NOT the
+        # aim.json declared list. Scan the folder; the declared list is read only
+        # as a fail-loud cross-check below (AC3 — mid-migration safety).
+        try:
+            skill_dirs = scan_domain_skill_dirs(project_dir)
+        except OSError as exc:
+            # Per-DDD guard (AC4 / Gate-1 T5): a transient read failure on ONE
+            # project's capabilities dir must NOT wipe the other DDDs' skills. Skip
+            # this project (logged); it will resolve on the next successful rebuild.
+            logger.warning(
+                "ddd_registry: could not scan %s capabilities dir (%s) — skipping "
+                "this DDD (other DDDs unaffected)", owner, exc,
+            )
+            continue
+
+        for skill_dir in skill_dirs:
             records.append({
-                "skill": skill_name,
+                "skill": skill_dir.name,
                 "class": "domain",
                 "owner_ddd": owner,
                 "path": str(skill_dir),
             })
+
+        # Fail-loud cross-check (AC3): a name DECLARED in aim.json domain_skills but
+        # ABSENT from the folder is a half-migrated / stale declaration. It is NOT
+        # added (the folder is authoritative), but its absence is surfaced LOUDLY so
+        # a mid-migration DDD is visible, not silently dropped (the safety the old
+        # backend/skills fallback used to provide — Gate-1 skeptic finding).
+        aim = project_dir / "aim.json"
+        if aim.is_file():
+            found = {d.name for d in skill_dirs}
+            for declared in _read_domain_skills(aim):
+                if declared not in found:
+                    logger.warning(
+                        "ddd_registry: %s declares domain skill %s in aim.json but "
+                        "it is ABSENT from the capabilities folder — not registered "
+                        "(declared-but-absent; migrate the dir or drop the declaration)",
+                        owner, declared,
+                    )
 
     records.sort(key=lambda r: (r["skill"], r["owner_ddd"]))
 
