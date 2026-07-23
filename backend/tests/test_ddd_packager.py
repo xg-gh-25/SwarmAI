@@ -33,10 +33,21 @@ from core import ddd_packager as pk
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
-def _make_skill(skills_dir: Path, name: str, *, body: str = "", script: str | None = None) -> None:
+def _make_skill(
+    skills_dir: Path,
+    name: str,
+    *,
+    body: str = "",
+    script: str | None = None,
+    frontmatter_name: str | None = None,
+) -> None:
     d = skills_dir / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {name} skill\n---\n\n# {name}\n{body}\n", encoding="utf-8")
+    # frontmatter_name lets a test reproduce the real SwarmAI convention where the
+    # dir name (s_repo-to-ddd) intentionally differs from the frontmatter name
+    # (repo-to-ddd). Default = dir name, so existing callers are unaffected.
+    fm_name = frontmatter_name if frontmatter_name is not None else name
+    (d / "SKILL.md").write_text(f"---\nname: {fm_name}\ndescription: {name} skill\n---\n\n# {name}\n{body}\n", encoding="utf-8")
     if script is not None:
         sd = d / "scripts"
         sd.mkdir(exist_ok=True)
@@ -205,6 +216,100 @@ class TestAC3TargetOpenPlugin:
         assert (out / "rules" / "tech.md").is_file()
         assert (out / "hooks").is_dir()
         assert (out / ".mcp.json").is_file()  # from aim.json plugins.mcp
+
+
+# ---------------------------------------------------------------------------
+# name==dirname — AIM agentskills.io requires the emitted SKILL.md frontmatter
+# `name` to equal its dir name; SwarmAI's convention keeps them distinct on the
+# source, so the packager must rewrite `name` on emit. (run_62055da6)
+# ---------------------------------------------------------------------------
+def _skill_frontmatter_name(skill_md: Path) -> str:
+    """Read the `name:` value from a SKILL.md frontmatter (tolerates `name :`)."""
+    for line in skill_md.read_text(encoding="utf-8").splitlines():
+        stripped = line.rstrip()
+        if stripped.replace(" ", "").replace("\t", "").startswith("name:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"no name line in {skill_md}")
+
+
+def _ddd_with_mismatched_skill_name(root: Path, *, targets: list[str], visibility: str) -> Path:
+    """A fixture DDD whose one domain skill has the REAL SwarmAI mismatch: dir
+    `s_fx-report` but frontmatter `name: fx-report` (no s_ prefix). Reproduces the
+    aim-build BLOCK the fix must cure."""
+    ddd = build_fixture_ddd(root, targets=targets, visibility=visibility)
+    # overwrite the domain skill with the deliberate dir/name mismatch
+    _make_skill(ddd / "skills", "s_fx-report", frontmatter_name="fx-report")
+    return ddd
+
+
+class TestSkillNameMatchesDirName:
+    def test_aim_emit_rewrites_name_to_dirname(self, tmp_path):
+        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        # precondition: the SOURCE really has the mismatch (else the test is vacuous)
+        assert _skill_frontmatter_name(ddd / "skills" / "s_fx-report" / "SKILL.md") == "fx-report"
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        emitted = res.out_dir / "skills" / "s_fx-report" / "SKILL.md"
+        assert emitted.is_file()
+        # the fix: emitted name == dir name (AIM name==dirname)
+        assert _skill_frontmatter_name(emitted) == "s_fx-report"
+
+    def test_open_plugin_emit_rewrites_name_to_dirname(self, tmp_path):
+        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["open-plugin"], visibility="external")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        emitted = res.out_dir / "skills" / "s_fx-report" / "SKILL.md"
+        assert _skill_frontmatter_name(emitted) == "s_fx-report"
+
+    def test_every_emitted_skill_name_equals_its_dir(self, tmp_path):
+        # all included domain skills, not just the planted one, must satisfy name==dirname
+        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        [res] = pk.package_ddd(ddd, tmp_path / "out")
+        skill_dirs = [d for d in (res.out_dir / "skills").iterdir() if (d / "SKILL.md").is_file()]
+        assert skill_dirs, "expected at least one emitted skill"
+        for d in skill_dirs:
+            assert _skill_frontmatter_name(d / "SKILL.md") == d.name
+
+    def test_source_skill_md_is_untouched(self, tmp_path):
+        # emit-layer only: the source SKILL.md keeps its (mismatched) name
+        ddd = _ddd_with_mismatched_skill_name(tmp_path, targets=["aim-capabilities"], visibility="internal")
+        pk.package_ddd(ddd, tmp_path / "out")
+        assert _skill_frontmatter_name(ddd / "skills" / "s_fx-report" / "SKILL.md") == "fx-report"
+
+    def test_rewrite_name_literal_not_regex_backref(self, tmp_path):
+        # Gate-2 (review-found): the rewrite replacement must treat the dir name as a
+        # LITERAL, not a regex template. A dir name with a `\g<0>`/`\1` sequence would
+        # corrupt output if fed into re.sub as a template string. Verify the helper
+        # writes the dir name verbatim. (Directly exercises _rewrite_skill_name — the
+        # value comes from dst.name, a filesystem string we must not trust.)
+        d = tmp_path / r"s_weird\g<0>name"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: old\n---\n# body\n", encoding="utf-8")
+        pk._rewrite_skill_name(d / "SKILL.md", d.name)
+        assert _skill_frontmatter_name(d / "SKILL.md") == r"s_weird\g<0>name"
+
+    def test_rewrite_name_missing_skill_md_is_noop(self, tmp_path):
+        # fail-soft: a skill dir without SKILL.md must not crash
+        d = tmp_path / "s_scriptonly"
+        d.mkdir()
+        pk._rewrite_skill_name(d / "SKILL.md", d.name)  # no raise
+        assert not (d / "SKILL.md").exists()
+
+    def test_rewrite_name_tolerates_space_before_colon(self, tmp_path):
+        # Gate-2 LOW: `name :` (space before colon) is valid YAML; aim-build still
+        # validates it, so the rewrite must normalize it too (not silently skip).
+        d = tmp_path / "s_spaced"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname : old\ndescription: x\n---\n# b\n", encoding="utf-8")
+        pk._rewrite_skill_name(d / "SKILL.md", d.name)
+        assert _skill_frontmatter_name(d / "SKILL.md") == "s_spaced"
+
+    def test_rewrite_name_idempotent(self, tmp_path):
+        # already-matching name → no spurious rewrite (stable re-emit)
+        d = tmp_path / "s_ok"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: s_ok\ndescription: x\n---\n# b\n", encoding="utf-8")
+        before = (d / "SKILL.md").read_text()
+        pk._rewrite_skill_name(d / "SKILL.md", "s_ok")
+        assert (d / "SKILL.md").read_text() == before
 
 
 # ---------------------------------------------------------------------------

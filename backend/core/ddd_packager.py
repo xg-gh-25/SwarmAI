@@ -299,10 +299,45 @@ def _copy_skill_dirs(ddd_dir: Path, out_skills: Path, skills: list[str]) -> list
             continue
         dst = out_skills / name
         shutil.copytree(src, dst, dirs_exist_ok=True)
+        # AIM agentskills.io requires the SKILL.md frontmatter `name` to EQUAL the
+        # skill's dir name. SwarmAI's internal convention keeps the two deliberately
+        # distinct (dir `s_repo-to-ddd`, frontmatter `name: repo-to-ddd`), which
+        # SwarmAI's own loader accepts but aim-build REJECTS ("name must match the
+        # directory name"). The distributed dir name IS `name` (dst.name), so rewrite
+        # the emitted copy's `name` line to match it — emit-layer only, source
+        # SKILL.md untouched. (run_62055da6)
+        _rewrite_skill_name(dst / "SKILL.md", dst.name)
         for f in sorted(dst.rglob("*")):
             if f.is_file():
                 copied.append(str(f.relative_to(out_skills.parent)))
     return sorted(copied)
+
+
+# Matches a top-level YAML frontmatter `name:` line (`re.MULTILINE` anchors to line
+# start, so a tab/space-INDENTED `name:` nested under another key is correctly NOT
+# matched). Tolerates whitespace BEFORE the colon (`name :`) — a valid YAML form
+# that aim-build still validates against, so we must normalize it too.
+_SKILL_NAME_LINE = re.compile(r"^name[ \t]*:[ \t]*.*$", re.MULTILINE)
+
+
+def _rewrite_skill_name(skill_md: Path, dir_name: str) -> None:
+    """Rewrite the emitted SKILL.md `name:` value to equal ``dir_name`` (AIM
+    name==dirname). No-op (idempotent) if already matching. Fail-soft: a missing
+    SKILL.md, or one without a `name:` line, is left untouched (a skill dir need
+    not carry a SKILL.md — e.g. a script-only sub-package)."""
+    if not skill_md.is_file():
+        return
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    # Function replacement (not a template string): a template would interpret
+    # backslash / `\g<n>` sequences in dir_name as regex backreferences and corrupt
+    # output. A callable's return is used literally. (dir names are s_[a-z0-9-]
+    # today, but dst.name is a filesystem value — never trust it into a replacement.)
+    new_text, n = _SKILL_NAME_LINE.subn(lambda _m: f"name: {dir_name}", text, count=1)
+    if n and new_text != text:
+        skill_md.write_text(new_text, encoding="utf-8")
 
 
 def _shared_source_label(ddd_dir: Path, source: Path) -> str:
