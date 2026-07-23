@@ -208,6 +208,38 @@ This means DDD scales. It doesn't hit context window limits because it loads int
 
 ---
 
+### 4f. Distribution — A Grown DDD Is a Portable Capability Package
+
+A mature DDD is not confined to SwarmAI. Because a DDD is a self-contained directory
+(knowledge + its domain skills + tools + jobs), a grown one can be **packaged and
+installed into another AI agent** — Kiro, Claude Code, Cursor — so that agent gets
+the same domain-correct judgment. This is the last step of the DDD lifecycle:
+**cultivate → version → DISTRIBUTE**.
+
+Distribution is **opt-in and owner-declared**. Each DDD's `aim.json` carries a
+`distribution` block declaring its `targets` and `visibility` — that declaration is
+the *ceiling*, and the packager only ever emits at-or-below it (never widens reach by
+inference). A DDD that declares nothing distributes nothing, and that is a complete,
+valid state — not a degraded one.
+
+Two rendering targets, one install primitive:
+
+| Target | Shape | Path |
+|--------|-------|------|
+| **Capabilities Package** | `Config` + `AIMBuild` build-tool + agent-spec + skills | internal package store |
+| **Open-Plugin** | `.plugin/plugin.json` + skills + agents + rules | public plugin registry / local install |
+
+Two governance rules make it safe: **(1)** only *domain* skills ship by default;
+*enablement* skills (platform capabilities lent to the DDD) ship only in an explicit
+`--with-enablement` variant, as a stdlib-only portable copy for bare hosts. **(2)** a
+fail-closed content-scan gate strips secrets, internal hostnames, host-paths, and
+internal-MCP references before any external publish — and an internal→external
+visibility change is always human-gated.
+
+**Full design:** [`2026-07-20-ddd-dual-target-distribution-design.md`](./2026-07-20-ddd-dual-target-distribution-design.md).
+
+---
+
 ## 5. Engine 1: Super Builder — Autonomous Pipeline
 
 **Vision:** Coding as Black Box. Give it a requirement, get push-ready code.
