@@ -4,7 +4,7 @@
 
 ## How This System Learns
 
-- **42 captured failures → structural prevention:** [`/docs/corrections/`](./docs/corrections/) — Each failure becomes a case study with root cause and architectural fix. 7 full stories published; recurring classes are converted into structural gates, not repeated lessons.
+- **Captured failures → structural prevention:** [`/docs/corrections/`](./docs/corrections/) — Each failure becomes a case study with root cause and architectural fix; a curated subset is published here as full stories. Recurring classes are converted into structural gates, not repeated lessons.
 - **Each release tests a hypothesis:** [`/docs/experiments/`](./docs/experiments/) — Not just changelogs. Hypothesis → method → result → negative findings → implication.
 
 ---
