@@ -133,8 +133,8 @@ def _upstream_source_head(project_dir: Path) -> "tuple[str, str] | None":
         head = result.stdout.strip()
         if not head:
             return None
-        return (label, head[:7])
-    except (OSError, ValueError, UnicodeDecodeError, subprocess.SubprocessError):
+        return (label, head[:7].lower())
+    except (OSError, ValueError, UnicodeDecodeError, subprocess.SubprocessError, yaml.YAMLError):
         return None
 
 # Sections that are never auto-applied (require human judgment)
@@ -496,7 +496,10 @@ class DddCultivationOrchestrator:
             try:
                 _src_head = _upstream_source_head(project_dir)
                 _anchor = _read_source_anchor(project_dir)
-                if _src_head and _anchor and _src_head[1] != _anchor[:7]:
+                # Compare case-insensitively: git SHAs are lowercase, but a
+                # hand/tool-stored anchor may be uppercase → normalize both to
+                # avoid a false-drift that never clears (Gate-2 F1).
+                if _src_head and _anchor and _src_head[1] != _anchor[:7].lower():
                     findings.append(
                         f"DDD-SOURCE-DRIFT: {project_dir.name} upstream "
                         f"{_src_head[0]} moved ({_anchor[:7]}->{_src_head[1]}), "

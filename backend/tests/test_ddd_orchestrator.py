@@ -531,3 +531,15 @@ class TestSourceAnchorDrift:
         write_source_anchor(proj, "deadbeef")  # anchor but NO bindings.yaml
         findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
         assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
+
+    # ── Gate-2 F1: uppercase-stored anchor must NOT false-drift (case-insensitive) ──
+    def test_uppercase_anchor_no_false_drift(self, tmp_path):
+        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
+        src = tmp_path / "src"
+        head1 = self._make_source_repo(src)  # full 40-char lowercase sha
+        proj = self._make_project(tmp_path, "P", src)
+        # store the SAME commit but UPPERCASED (simulates a tool/UI copy-paste)
+        write_source_anchor(proj, head1.upper())
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings), \
+            "uppercase anchor of the SAME commit must not fire a false drift"
