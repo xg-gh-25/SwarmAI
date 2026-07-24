@@ -21,6 +21,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import time
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
@@ -70,6 +71,14 @@ class WorkspaceAutoCommitHook:
     # Must be short — a hanging git command should fail fast,
     # not block the background hook for 30s.
     GIT_TIMEOUT = 10
+
+    # A .git/index.lock older than this is DEFINITELY stale: every live hook
+    # commit self-bounds at GIT_TIMEOUT=10s and holds the lock for milliseconds,
+    # so a lock this old cannot belong to a live commit — it is a zombie left by
+    # a crashed/wedged git. Matches context_health_hook.py's staleness threshold
+    # (keep them in sync). Age is the PRIMARY staleness judge; pgrep is only a
+    # secondary guard for YOUNG locks (see _cleanup_stale_git_lock).
+    STALE_LOCK_AGE_SECONDS = 300
 
     def __init__(self, git_lock: asyncio.Lock | None = None) -> None:
         self._git_lock = git_lock
@@ -124,26 +133,54 @@ class WorkspaceAutoCommitHook:
             logger.debug("auto_commit: could not compute sibling-touched set: %s", e)
             return set()
 
-    @staticmethod
-    def _cleanup_stale_git_lock(ws_path: str) -> None:
-        """Remove stale .git/index.lock if no git process is using it.
+    @classmethod
+    def _cleanup_stale_git_lock(cls, ws_path: str) -> None:
+        """Remove a stale .git/index.lock. Lock AGE is the primary judge.
 
-        Prevents cascading failures when the backend was killed mid-commit.
-        Uses ``pgrep`` to verify no live git process targets this repo.
+        Prevents cascading failures when the backend was killed mid-commit AND
+        the WEDGED-GIT failure mode: a git process stuck for hours (crashed
+        parent, hung FS) matches ``pgrep -f "git.*ws"`` just like a live one, so
+        a pure process-presence check would skip cleanup forever — the lock
+        accumulates and concurrent auto-commit hooks saturate the thread pool
+        (observed 2026-07-24: 3 zombie git procs held the lock, froze all tabs).
+
+        Decision:
+        - age > STALE_LOCK_AGE_SECONDS → delete UNCONDITIONALLY. A live hook
+          commit self-bounds at GIT_TIMEOUT=10s, so a 300s lock is provably a
+          zombie; a matching git process is itself wedged and must not block us.
+        - young lock (<= threshold) → keep the ``pgrep`` guard: delete only if
+          NO git process matches (an orphan), else skip (a live commit may hold
+          it legitimately).
         """
         lock_file = os.path.join(ws_path, ".git", "index.lock")
         if not os.path.exists(lock_file):
             return
         try:
+            # TOCTOU-safe: the lock may vanish between checks (another process
+            # cleaned it). getmtime/remove raising FileNotFoundError is benign.
+            age = time.time() - os.path.getmtime(lock_file)
+
+            if age > cls.STALE_LOCK_AGE_SECONDS:
+                os.remove(lock_file)
+                logger.warning(
+                    "Removed stale .git/index.lock (age=%.0fs > %ds — a wedged "
+                    "git cannot block cleanup)", age, cls.STALE_LOCK_AGE_SECONDS,
+                )
+                return
+
+            # Young lock — a live commit may hold it; only remove a true orphan.
             result = subprocess.run(
                 ["pgrep", "-f", f"git.*{ws_path}"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode != 0:  # No matching git process
                 os.remove(lock_file)
-                logger.warning("Removed stale .git/index.lock before auto-commit")
+                logger.warning("Removed orphan .git/index.lock (young, no git process)")
             else:
-                logger.info("Git index.lock exists and git is running — skipping cleanup")
+                logger.info("Git index.lock is young and git is running — skipping cleanup")
+        except FileNotFoundError:
+            # Lock removed by another process between check and use — fine.
+            pass
         except Exception as e:
             logger.warning("Failed to check/clean stale git lock: %s", e)
 
