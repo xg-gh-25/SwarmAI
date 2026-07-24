@@ -51,7 +51,16 @@ class TestWritebackRoutesThroughAdmission:
             asyncio.run(hook._append_lessons(doc, lessons, _ctx()))
 
             text = doc.read_text()
-            assert "retry loop reused a poisoned subprocess" in text
+            # The shared cultivation admission path gives the bullet a bold title
+            # via _normalize_cultivated_bullet (INSERT-ONLY: adds a `[type] ` prefix
+            # and one `**…**` pair around a leading span so the lifecycle parser can
+            # read it). So the lesson does NOT appear as one contiguous run — it is
+            # split by the inserted markers, e.g.
+            #   - [guideline] **retry loop reused a poisoned** subprocess (…, writeback)
+            # Assert the TRUE-LOSSLESS invariant instead: stripping the `**` markers
+            # restores the original lesson verbatim (this is a STRONGER probe than the
+            # old contiguous-substring check — it encodes the no-data-loss contract).
+            assert "retry loop reused a poisoned subprocess" in text.replace("**", "")
             # honest provenance: attribution carries the writeback source label,
             # NOT reflect/auto-cultivated
             assert "writeback" in text
