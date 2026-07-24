@@ -38,6 +38,105 @@ ChannelFn = Callable[[Path, str], list[str]]
 # Timeout for git subprocess calls (seconds)
 _GIT_TIMEOUT = 10
 
+# Per-DDD refresh-anchor store (gitignored via `Projects/*` — never committed except
+# the SwarmAI project). Records the upstream source commit the DDD was last VERIFIED
+# against, so source-drift is detectable without a headless clone / autonomous job.
+_REFRESH_STATE_FILENAME = ".refresh_state.json"
+_SOURCE_ANCHOR_KEY = "source_anchor_commit"
+
+
+def _read_source_anchor(project_dir: Path) -> "str | None":
+    """Read the last-verified upstream source commit for a DDD project.
+
+    Fail-safe: returns None on missing file / unreadable / malformed JSON / missing
+    key — the source-drift check treats None as "no anchor → skip", never an error.
+    """
+    try:
+        raw = (Path(project_dir) / _REFRESH_STATE_FILENAME).read_text(encoding="utf-8")
+        val = json.loads(raw).get(_SOURCE_ANCHOR_KEY)
+        return val if isinstance(val, str) and val else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def write_source_anchor(project_dir: Path, commit: str) -> None:
+    """Persist the upstream source commit the DDD is now verified against.
+
+    Merge-writes into ``.refresh_state.json`` (preserves any other keys). Public —
+    called by the human/REFRESHER re-verify step (and tests) to CLEAR a drift signal.
+    Best-effort: swallows OSError (an unwritable anchor must never crash cultivation).
+    """
+    p = Path(project_dir) / _REFRESH_STATE_FILENAME
+    try:
+        data = {}
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    data = {}
+            except (OSError, ValueError):
+                data = {}
+        data[_SOURCE_ANCHOR_KEY] = commit
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _upstream_source_head(project_dir: Path) -> "tuple[str, str] | None":
+    """Resolve a DDD's bound upstream source repo and read its current git HEAD.
+
+    Reads ``bindings.yaml`` RAW (``yaml.safe_load``) rather than via
+    ``ddd_bindings.load_bindings`` — the strict ``BindingsDoc`` schema parses only the
+    ``bindings:`` array and drops ``governed_assets`` (pydantic ``extra='ignore'``),
+    and it has ~99 callers we must not perturb for one optional read-only field
+    (R27). We look for the first ``governed_assets[*]`` entry of ``kind: data-source``
+    (or ``code-repo``) that declares a ``source_workspace`` local path, then run
+    ``git rev-parse HEAD`` there.
+
+    Returns ``(source_label, head7)`` or ``None`` on ANY failure — no bindings file,
+    no declared source_workspace, path absent, not a git repo, git error/timeout,
+    non-UTF8 output. READ-ONLY (never writes the upstream repo); the only external
+    call is a timeout-bounded ``git rev-parse``.
+    """
+    try:
+        import yaml
+
+        bindings = Path(project_dir) / "bindings.yaml"
+        if not bindings.exists():
+            return None
+        doc = yaml.safe_load(bindings.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict):
+            return None
+        assets = doc.get("governed_assets")
+        if not isinstance(assets, list):
+            return None
+        source_ws = None
+        label = "source"
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            if asset.get("kind") in ("data-source", "code-repo") and asset.get("source_workspace"):
+                source_ws = str(asset["source_workspace"])
+                label = str(asset.get("name") or asset.get("kind") or "source")
+                break
+        if not source_ws:
+            return None
+        ws = Path(source_ws)
+        if not (ws / ".git").exists():
+            return None
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(ws), capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+        )
+        if result.returncode != 0:
+            return None
+        head = result.stdout.strip()
+        if not head:
+            return None
+        return (label, head[:7])
+    except (OSError, ValueError, UnicodeDecodeError, subprocess.SubprocessError):
+        return None
+
 # Sections that are never auto-applied (require human judgment)
 _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 
@@ -386,6 +485,25 @@ class DddCultivationOrchestrator:
                 if mtime > cutoff:
                     continue
                 stale_docs.append((ddd_name, mtime))
+
+            # Source-anchor drift (mtime-INDEPENDENT — runs BEFORE the stale_docs
+            # continue-guard, else it would only fire for docs that are ALSO
+            # mtime-stale, i.e. never for a freshly-refreshed DDD like the one this
+            # was built for). Fires when a bound upstream source repo's HEAD has
+            # moved past the last-verified anchor. Fully fail-safe: any error →
+            # zero findings, no raise (never block cultivation on an unreachable
+            # or anchorless source — the common case on CI / another machine).
+            try:
+                _src_head = _upstream_source_head(project_dir)
+                _anchor = _read_source_anchor(project_dir)
+                if _src_head and _anchor and _src_head[1] != _anchor[:7]:
+                    findings.append(
+                        f"DDD-SOURCE-DRIFT: {project_dir.name} upstream "
+                        f"{_src_head[0]} moved ({_anchor[:7]}->{_src_head[1]}), "
+                        f"re-verify TECH.md"
+                    )
+            except Exception:
+                pass  # fail-safe: source-drift check must never break cultivation
 
             if not stale_docs:
                 continue  # no stale docs → no git work for this project

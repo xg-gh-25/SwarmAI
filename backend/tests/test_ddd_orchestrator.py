@@ -410,3 +410,124 @@ class TestSourceWatchPaths:
         assert any("PRODUCT.md" in f for f in findings)
         # Strategy 1 git ran exactly ONCE (deduped), not once per stale doc.
         assert len(grep_calls) == 1
+
+
+class TestSourceAnchorDrift:
+    """Source-anchor staleness: detect when a DDD's bound UPSTREAM source repo
+    (declared in bindings.yaml governed_assets[data-source].source_workspace) has
+    moved its git HEAD past the last-verified anchor in .refresh_state.json.
+
+    Fail-safe by construction: any missing/unreadable/non-git/errored input →
+    ZERO findings, NO exception. Additive to the existing mtime+git-activity path.
+    """
+
+    @staticmethod
+    def _git(cwd, *args):
+        subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+
+    def _make_source_repo(self, path: Path) -> str:
+        """Create a real git repo with one commit; return full HEAD sha."""
+        path.mkdir(parents=True, exist_ok=True)
+        self._git(path, "init", "-q")
+        self._git(path, "config", "user.email", "t@t.co")
+        self._git(path, "config", "user.name", "t")
+        (path / "model.smithy").write_text("v1", encoding="utf-8")
+        self._git(path, "add", "-A")
+        self._git(path, "commit", "-qm", "v1")
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path,
+                           capture_output=True, text=True, check=True)
+        return r.stdout.strip()
+
+    def _make_project(self, root: Path, name: str, source_ws: Path) -> Path:
+        """A DDD project dir with a bindings.yaml declaring a data-source source_workspace."""
+        proj = root / "Projects" / name
+        proj.mkdir(parents=True, exist_ok=True)
+        # fresh TECH.md (NOT mtime-stale) — proves the new check is mtime-INDEPENDENT
+        (proj / "TECH.md").write_text("# Tech\ncurrent", encoding="utf-8")
+        bindings = (
+            "governed_assets:\n"
+            "  - kind: data-source\n"
+            "    name: upstream-svc\n"
+            f"    source_workspace: {source_ws}\n"
+            "bindings: []\n"
+        )
+        (proj / "bindings.yaml").write_text(bindings, encoding="utf-8")
+        return proj
+
+    # ── Helper unit: anchor round-trip (AC3) ──
+    def test_anchor_round_trip(self, tmp_path):
+        from core.ddd_orchestrator import _read_source_anchor, write_source_anchor
+        proj = tmp_path / "Projects" / "P"
+        proj.mkdir(parents=True)
+        assert _read_source_anchor(proj) is None  # nothing stored yet
+        write_source_anchor(proj, "abc1234def5678")
+        assert _read_source_anchor(proj) == "abc1234def5678"
+        # merge-write preserves other keys
+        (proj / ".refresh_state.json").write_text(
+            json.dumps({"source_anchor_commit": "abc1234def5678", "other": 1}),
+            encoding="utf-8")
+        write_source_anchor(proj, "9999999")
+        data = json.loads((proj / ".refresh_state.json").read_text())
+        assert data["source_anchor_commit"] == "9999999"
+        assert data["other"] == 1
+
+    # ── Core: drift FIRES when HEAD advanced past anchor (AC1) ──
+    def test_drift_fires_when_head_moved(self, tmp_path):
+        from core.ddd_orchestrator import (
+            DddCultivationOrchestrator, write_source_anchor,
+        )
+        src = tmp_path / "src"
+        head1 = self._make_source_repo(src)
+        proj = self._make_project(tmp_path, "IVTHubT", src)
+        write_source_anchor(proj, head1)  # anchor == current HEAD → no drift yet
+
+        orch = DddCultivationOrchestrator()
+        findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings), \
+            "anchor==HEAD must NOT drift"
+
+        # advance HEAD
+        (src / "model.smithy").write_text("v2", encoding="utf-8")
+        self._git(src, "add", "-A")
+        self._git(src, "commit", "-qm", "v2")
+
+        findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
+        drift = [f for f in findings if "DDD-SOURCE-DRIFT" in f]
+        assert len(drift) == 1, f"expected 1 drift finding, got {findings}"
+        assert "IVTHubT" in drift[0]
+        assert head1[:7] in drift[0]
+        assert "re-verify" in drift[0]
+
+    # ── Fail-safe x3: no anchor / bad path / not-a-git-repo → [] no raise (AC2) ──
+    def test_failsafe_no_anchor(self, tmp_path):
+        from core.ddd_orchestrator import DddCultivationOrchestrator
+        src = tmp_path / "src"
+        self._make_source_repo(src)
+        self._make_project(tmp_path, "P", src)  # no anchor written
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
+
+    def test_failsafe_nonexistent_source_path(self, tmp_path):
+        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
+        proj = self._make_project(tmp_path, "P", tmp_path / "does_not_exist")
+        write_source_anchor(proj, "deadbeef")
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
+
+    def test_failsafe_not_a_git_repo(self, tmp_path):
+        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
+        src = tmp_path / "src"
+        src.mkdir()  # dir exists but is NOT a git repo
+        proj = self._make_project(tmp_path, "P", src)
+        write_source_anchor(proj, "deadbeef")
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
+
+    def test_failsafe_no_bindings_at_all(self, tmp_path):
+        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
+        proj = tmp_path / "Projects" / "P"
+        proj.mkdir(parents=True)
+        (proj / "TECH.md").write_text("# Tech", encoding="utf-8")
+        write_source_anchor(proj, "deadbeef")  # anchor but NO bindings.yaml
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
