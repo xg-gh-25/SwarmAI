@@ -1,0 +1,2805 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Native Transformation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400;0,6..96,700;0,6..96,800;0,6..96,900;1,6..96,400&family=Manrope:wght@400;500;700;800&family=LXGW+WenKai+TC&family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Emerald-Editorial as rendered in the thumbnail: OAT-PAPER field, NAVY ink,
+     emerald used ONLY as small accent (eyebrow / numeral / rule / key tag). */
+  --paper:#F1E9D6;              /* the actual page background */
+  --ink:#0F1A5C;               /* primary text + dark panels */
+  --emerald:#1FB573;           /* accent only — slightly deepened for contrast on paper */
+  --rule:rgba(15,26,92,.22);
+  --stage-bg:#2a2622; --slide-bg:var(--paper);
+  --serif:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;
+  --sans:'Manrope','Noto Sans SC',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+
+/* ---- viewport-base.css (inlined) ---- */
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--stage-bg);}
+.slide{background:var(--slide-bg);}
+img,video,canvas,svg{max-width:100%;max-height:100%;}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.2s!important;}}
+
+/* ---- Emerald Editorial base (paper field) ---- */
+deck-stage > section{
+  width:1920px;height:1080px;position:relative;overflow:hidden;
+  background:var(--paper);color:var(--ink);
+  font-family:var(--sans);
+}
+.serif{font-family:var(--serif);font-weight:900;letter-spacing:-.02em;line-height:.95;}
+.eyebrow{font-family:var(--sans);font-weight:800;font-size:28px;letter-spacing:.18em;text-transform:uppercase;color:var(--emerald);}
+.label{font-family:var(--sans);font-weight:700;font-size:26px;letter-spacing:.08em;text-transform:uppercase;}
+.body{font-family:var(--sans);font-weight:500;font-size:28px;line-height:1.55;}
+.body-sm{font-family:var(--sans);font-weight:500;font-size:24px;line-height:1.5;}
+.tag{display:inline-block;font-family:var(--sans);font-weight:800;font-size:22px;letter-spacing:.12em;text-transform:uppercase;background:var(--ink);color:var(--paper);padding:9px 20px;}
+
+/* masthead / footline */
+.masthead,.footline{position:absolute;left:80px;right:80px;display:flex;justify-content:space-between;align-items:center;}
+.masthead{top:56px;} .footline{bottom:56px;}
+.masthead .label,.footline .label{color:var(--ink);}
+
+/* double-rule ornament */
+.ornament{display:flex;align-items:center;justify-content:center;gap:28px;}
+.ornament .rules{flex:1;max-width:360px;display:flex;flex-direction:column;gap:3px;}
+.ornament .rules i{height:4px;background:var(--ink);display:block;}
+.ornament .word{font-family:var(--serif);font-weight:800;font-size:68px;color:var(--ink);white-space:nowrap;}
+
+/* reveal */
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .6s cubic-bezier(.16,1,.3,1),transform .6s cubic-bezier(.16,1,.3,1);}
+section[data-deck-active] .reveal{opacity:1;transform:none;}
+section[data-deck-active] .reveal:nth-child(1){transition-delay:.05s;}
+section[data-deck-active] .reveal:nth-child(2){transition-delay:.13s;}
+section[data-deck-active] .reveal:nth-child(3){transition-delay:.21s;}
+section[data-deck-active] .reveal:nth-child(4){transition-delay:.29s;}
+section[data-deck-active] .reveal:nth-child(5){transition-delay:.37s;}
+
+/* ===== S0 Cover ===== */
+.cover{padding:56px 110px;display:flex;flex-direction:column;justify-content:center;}
+.cover .kicker{font-family:var(--sans);font-weight:800;font-size:28px;letter-spacing:.16em;text-transform:uppercase;color:var(--emerald);margin-bottom:14px;display:flex;align-items:center;gap:16px;}
+.cover .kicker::before{content:"";width:52px;height:5px;background:var(--emerald);display:inline-block;}
+.cover h1{font-family:var(--serif);font-weight:900;color:var(--ink);letter-spacing:-.025em;}
+.cover h1 .l1{display:block;font-size:150px;line-height:.9;}
+.cover h1 .l2{display:block;font-size:206px;line-height:.86;}
+.cover h1 .dot{color:var(--emerald);}
+.cover .sub{font-family:var(--sans);font-weight:600;font-size:40px;line-height:1.2;color:var(--ink);margin-top:26px;}
+.cover .sub b{font-family:var(--serif);font-weight:900;}
+.cover .rule{height:4px;background:var(--ink);margin:40px 0 26px;width:100%;}
+.cover .tagbar{display:flex;justify-content:space-between;align-items:baseline;}
+.cover .tagline{font-family:var(--serif);font-weight:900;font-size:46px;color:var(--ink);}
+.cover .method{font-family:var(--sans);font-weight:700;font-size:26px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);}
+.cover .signature{position:absolute;right:110px;bottom:120px;text-align:right;font-family:var(--sans);font-weight:700;font-size:22px;letter-spacing:.04em;color:var(--ink);opacity:.55;line-height:1.5;}
+.cover .signature .role{display:block;font-weight:500;font-size:18px;letter-spacing:.1em;text-transform:uppercase;opacity:.85;}
+
+/* ===== S1 Bottleneck shift ===== */
+.pad{padding:110px 110px 70px;}
+.slide-h{font-family:var(--serif);font-weight:900;font-size:92px;line-height:.98;letter-spacing:-.02em;color:var(--ink);}
+.shift-wrap{margin-top:20px;display:grid;grid-template-columns:1fr;gap:0;}
+.pipe{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;margin-top:52px;border-top:4px solid var(--ink);border-bottom:4px solid var(--ink);}
+.pipe .cell{padding:34px 40px;border-right:4px solid var(--ink);position:relative;}
+.pipe .cell:last-child{border-right:0;}
+.pipe .cell .stage-lbl{font-family:var(--sans);font-weight:800;font-size:24px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink);opacity:.55;}
+.pipe .cell .stage-name{font-family:var(--serif);font-weight:900;font-size:54px;line-height:1;margin-top:14px;color:var(--ink);}
+/* "solved" cell distinguished by emerald accent + strikethrough, NOT a dark fill */
+.pipe .cell.solved{background:rgba(31,181,115,.10);}
+.pipe .cell.solved::before{content:"";position:absolute;left:0;top:0;right:0;height:8px;background:var(--emerald);}
+.pipe .cell.solved .stage-lbl{color:var(--emerald);opacity:1;}
+.pipe .cell.solved .stage-name{color:var(--ink);text-decoration:line-through;text-decoration-color:var(--emerald);text-decoration-thickness:5px;}
+.pipe .cell .note{font-family:var(--sans);font-weight:500;font-size:22px;line-height:1.4;margin-top:16px;color:var(--ink);}
+.pipe .cell.solved .note{color:var(--ink);opacity:.72;}
+.arrows{display:grid;grid-template-columns:1fr 1fr 1fr;margin-top:26px;}
+.arrows .a{text-align:center;}
+.arrows .a .dir{font-family:var(--serif);font-weight:900;font-size:40px;color:var(--ink);}
+.arrows .a .what{font-family:var(--sans);font-weight:700;font-size:23px;letter-spacing:.04em;text-transform:uppercase;margin-top:8px;color:var(--ink);}
+.arrows .a.mid .dir{opacity:.3;}
+.arrows .a.mid .what{opacity:.45;}
+.kicker-line{margin-top:52px;display:flex;align-items:center;gap:26px;}
+.kicker-line .big{font-family:var(--serif);font-weight:900;font-size:56px;color:var(--ink);white-space:nowrap;}
+.kicker-line .txt{font-family:var(--sans);font-weight:500;font-size:26px;line-height:1.45;color:var(--ink);}
+.kicker-line .txt b{font-weight:800;}
+
+/* ===== S15 Agentic OS 3-layer (dense — dedicated compact layout) ===== */
+.os.pad{padding:64px 90px 82px;}
+.os .shead{margin-bottom:16px;}
+.os h2{font-family:var(--serif);font-weight:900;font-size:62px;line-height:.98;letter-spacing:-.02em;color:var(--ink);}
+.os .sbody{justify-content:flex-start;}
+.stack{margin-top:0;display:flex;flex-direction:column;gap:11px;}
+.layer{border:4px solid var(--ink);padding:15px 24px;position:relative;}
+.layer .lhdr{display:flex;align-items:baseline;gap:16px;margin-bottom:10px;}
+.layer .lname{font-family:var(--serif);font-weight:900;font-size:32px;color:var(--ink);}
+.layer .lrole{font-family:var(--sans);font-weight:800;font-size:18px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);opacity:.55;}
+/* "brain" layer is the hero — distinguished by emerald wash + left bar + emerald name, NOT a dark fill */
+.layer.brain{background:rgba(31,181,115,.12);border-color:var(--ink);border-left:14px solid var(--emerald);}
+.layer.brain .lname{color:var(--ink);} .layer.brain .lrole{color:var(--emerald);opacity:1;}
+.tiles{display:grid;gap:9px;}
+.tiles.c5{grid-template-columns:repeat(5,1fr);} .tiles.c4{grid-template-columns:repeat(4,1fr);}
+.tile{border:3px solid var(--ink);padding:10px 14px;background:var(--paper);}
+.tile .tt{font-family:var(--serif);font-weight:800;font-size:22px;line-height:1.02;color:var(--ink);}
+.tile .td{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.26;margin-top:4px;color:var(--ink);opacity:.72;}
+.tile.ghost{border-style:dashed;opacity:.66;background:transparent;}
+.layer.brain .feeds{margin-top:10px;border-top:3px solid rgba(31,181,115,.55);padding-top:9px;font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:.01em;color:var(--ink);opacity:.85;}
+.layer.brain .feeds b{color:var(--emerald);font-weight:800;}
+.os .osfoot{margin-top:14px;border-top:4px solid var(--ink);padding-top:13px;display:flex;justify-content:space-between;align-items:baseline;gap:30px;}
+.os .osfoot .q{font-family:var(--serif);font-weight:900;font-size:31px;line-height:1.06;color:var(--ink);max-width:1180px;}
+.os .osfoot .qb{font-family:var(--sans);font-weight:800;font-size:19px;letter-spacing:.05em;text-transform:uppercase;color:var(--emerald);text-align:right;white-space:nowrap;line-height:1.25;}
+
+
+/* ============================================================
+   SHARED CONTENT-SLIDE CHROME  (paper field · navy ink · emerald accent · bordered, no dark fills)
+   Applied to every non-cover slide for consistent 上下左右 spacing.
+   ============================================================ */
+.pad{padding:96px 110px 92px;display:flex;flex-direction:column;}
+.shead{margin-bottom:30px;}
+.shead .eyebrow{margin-bottom:12px;}
+.shead h2{font-family:var(--serif);font-weight:900;font-size:80px;line-height:.98;letter-spacing:-.02em;color:var(--ink);}
+.shead h2 .em{color:var(--emerald);}
+.shead .dek{font-family:var(--sans);font-weight:500;font-size:26px;line-height:1.45;color:var(--ink);opacity:.78;margin-top:16px;max-width:1400px;}
+.sbody{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;}
+.foot{position:absolute;left:110px;right:110px;bottom:44px;display:flex;justify-content:space-between;align-items:baseline;font-family:var(--sans);font-weight:700;font-size:22px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink);opacity:.5;}
+.sig-sm{position:absolute;right:110px;bottom:76px;font-family:var(--sans);font-weight:700;font-size:19px;letter-spacing:.04em;color:var(--ink);opacity:.42;text-align:right;}
+
+/* reusable card grids */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:22px;}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+.card{border:4px solid var(--ink);padding:30px 32px;background:var(--paper);display:flex;flex-direction:column;}
+.card .ct{font-family:var(--serif);font-weight:900;font-size:38px;line-height:1;color:var(--ink);}
+.card .cd{font-family:var(--sans);font-weight:500;font-size:23px;line-height:1.5;color:var(--ink);opacity:.8;margin-top:14px;}
+.card .cnum{font-family:var(--serif);font-weight:900;font-size:66px;line-height:.9;color:var(--emerald);margin-bottom:8px;}
+.card.hero{border-left:16px solid var(--emerald);background:rgba(31,181,115,.10);}
+.card .ctag{display:inline-block;align-self:flex-start;font-family:var(--sans);font-weight:800;font-size:18px;letter-spacing:.1em;text-transform:uppercase;color:var(--emerald);margin-bottom:12px;}
+
+/* ===== S2 · S×T matrix ===== */
+.matrix{display:grid;grid-template-columns:150px repeat(4,1fr);grid-auto-rows:1fr;gap:0;border:4px solid var(--ink);flex:1;max-height:640px;}
+.matrix .mc{border-right:3px solid var(--rule);border-bottom:3px solid var(--rule);padding:16px 18px;display:flex;flex-direction:column;justify-content:center;}
+.matrix .mc.axis{background:rgba(15,26,92,.05);font-family:var(--sans);font-weight:800;font-size:19px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);}
+.matrix .mc.corner{background:transparent;}
+.matrix .mc .cell-t{font-family:var(--serif);font-weight:800;font-size:24px;line-height:1.05;color:var(--ink);}
+.matrix .mc .cell-n{font-family:var(--sans);font-weight:500;font-size:16px;line-height:1.3;color:var(--ink);opacity:.7;margin-top:5px;}
+.matrix .mc.danger{background:rgba(200,60,60,.14);}
+.matrix .mc.danger .cell-t{color:#a3282a;}
+.matrix .mc.stuck{background:rgba(214,158,40,.16);}
+.matrix .mc.target{background:rgba(31,181,115,.18);}
+.matrix .mc.target .cell-t{color:#12854f;}
+.mkey{display:flex;gap:34px;margin-top:20px;font-family:var(--sans);font-weight:700;font-size:20px;color:var(--ink);}
+.mkey span{display:flex;align-items:center;gap:10px;}
+.mkey i{width:22px;height:22px;display:inline-block;border:2px solid var(--ink);}
+.mkey i.d{background:rgba(200,60,60,.35);} .mkey i.s{background:rgba(214,158,40,.4);} .mkey i.t{background:rgba(31,181,115,.4);}
+
+/* ===== S3 · five pillars (dependency chain) ===== */
+.pillars{display:flex;flex-direction:column;gap:0;border-top:4px solid var(--ink);}
+.prow{display:grid;grid-template-columns:120px 1fr 300px;align-items:center;gap:34px;padding:26px 8px;border-bottom:4px solid var(--ink);}
+.prow .pn{font-family:var(--serif);font-weight:900;font-size:70px;line-height:1;color:var(--emerald);}
+.prow .pt{font-family:var(--serif);font-weight:900;font-size:46px;line-height:1;color:var(--ink);}
+.prow .pd{font-family:var(--sans);font-weight:500;font-size:22px;line-height:1.4;color:var(--ink);opacity:.78;text-align:right;}
+.chain-note{margin-top:22px;font-family:var(--sans);font-weight:600;font-size:24px;color:var(--ink);}
+.chain-note b{color:var(--emerald);font-weight:800;}
+
+/* ===== S4 · metrics (5 stat cards) ===== */
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;flex:1;align-content:center;}
+.metric{border:4px solid var(--ink);padding:26px 24px;display:flex;flex-direction:column;justify-content:space-between;}
+.metric .mi{font-family:var(--serif);font-weight:900;font-size:60px;line-height:.9;color:var(--emerald);}
+.metric .mt{font-family:var(--serif);font-weight:900;font-size:30px;line-height:1.02;color:var(--ink);margin-top:16px;}
+.metric .md{font-family:var(--sans);font-weight:500;font-size:19px;line-height:1.4;color:var(--ink);opacity:.75;margin-top:10px;}
+.mfoot{margin-top:22px;font-family:var(--sans);font-weight:600;font-size:23px;color:var(--ink);}
+.mfoot b{color:var(--emerald);font-weight:800;}
+
+/* ===== S5 · three phases preview ===== */
+.phases{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;flex:1;align-content:center;}
+.phase{border:4px solid var(--ink);padding:30px 30px;display:flex;flex-direction:column;}
+.phase.here{border-left:16px solid var(--emerald);background:rgba(31,181,115,.10);}
+.phase .pph{font-family:var(--sans);font-weight:800;font-size:20px;letter-spacing:.12em;text-transform:uppercase;color:var(--emerald);}
+.phase .pnm{font-family:var(--serif);font-weight:900;font-size:40px;line-height:1.02;color:var(--ink);margin-top:10px;}
+.phase .prole{font-family:var(--sans);font-weight:700;font-size:22px;color:var(--ink);margin-top:14px;}
+.phase .pdesc{font-family:var(--sans);font-weight:500;font-size:20px;line-height:1.45;color:var(--ink);opacity:.78;margin-top:12px;flex:1;}
+.phase .pcap{font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);margin-top:16px;border-top:3px solid var(--rule);padding-top:12px;}
+.ladder{margin-top:22px;display:flex;align-items:center;gap:16px;font-family:var(--sans);font-weight:700;font-size:24px;color:var(--ink);flex-wrap:wrap;}
+.ladder .step{border:3px solid var(--ink);padding:8px 18px;}
+.ladder .arrow{color:var(--emerald);font-weight:900;}
+
+/* ===== S6 · Phase2 spec-driven model ===== */
+.anchor{display:flex;flex-direction:column;align-items:center;gap:0;flex:1;justify-content:center;}
+.flowrow{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:30px;width:100%;}
+.flowbox{border:4px solid var(--ink);padding:24px 28px;text-align:center;}
+.flowbox .fbt{font-family:var(--serif);font-weight:900;font-size:32px;color:var(--ink);}
+.flowbox .fbd{font-family:var(--sans);font-weight:500;font-size:19px;color:var(--ink);opacity:.75;margin-top:8px;}
+.speccore{border:4px solid var(--emerald);background:rgba(31,181,115,.12);padding:30px 44px;text-align:center;}
+.speccore .sct{font-family:var(--serif);font-weight:900;font-size:56px;color:var(--ink);}
+.speccore .scd{font-family:var(--sans);font-weight:700;font-size:22px;color:var(--emerald);margin-top:8px;letter-spacing:.04em;}
+.flowarrow{font-family:var(--serif);font-weight:900;font-size:44px;color:var(--emerald);text-align:center;}
+.shiftrow{display:flex;justify-content:space-between;width:100%;margin-top:30px;font-family:var(--sans);font-weight:600;font-size:22px;color:var(--ink);}
+.shiftrow b{color:var(--emerald);font-weight:800;}
+
+/* ===== S7 · ceiling (the hinge) ===== */
+.ceil{flex:1;display:flex;flex-direction:column;justify-content:center;gap:30px;}
+.ceilbig{font-family:var(--serif);font-weight:900;font-size:64px;line-height:1.05;color:var(--ink);max-width:1500px;}
+.ceilbig .em{color:var(--emerald);}
+.ceil2{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+.ceilcard{border:4px solid var(--ink);border-top:12px solid var(--emerald);padding:30px 34px;}
+.ceilcard .cct{font-family:var(--serif);font-weight:900;font-size:38px;color:var(--ink);}
+.ceilcard .ccd{font-family:var(--sans);font-weight:500;font-size:24px;line-height:1.5;color:var(--ink);opacity:.82;margin-top:12px;}
+.ceilbridge{font-family:var(--sans);font-weight:700;font-size:26px;color:var(--emerald);text-align:center;margin-top:6px;}
+
+/* ===== S8 · DDD brain (role redefinition table) ===== */
+.brainlead{font-family:var(--serif);font-weight:900;font-size:52px;line-height:1.06;color:var(--ink);margin-bottom:28px;max-width:1600px;}
+.brainlead .em{color:var(--emerald);}
+.roletbl{border:3px solid var(--ink);}
+.rrow{display:grid;grid-template-columns:1fr 1.15fr 0.85fr;border-bottom:2px solid var(--rule);}
+.rrow:last-child{border-bottom:0;}
+.rrow.head .rc{background:rgba(15,26,92,.05);font-family:var(--sans);font-weight:800;font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);opacity:.85;}
+.rc{padding:13px 16px;border-right:2px solid var(--rule);}
+.rc:last-child{border-right:0;}
+.rc .role{font-family:var(--serif);font-weight:900;font-size:24px;color:var(--ink);}
+.rc .dim{font-family:var(--serif);font-weight:800;font-size:18px;color:var(--emerald);}
+.rc .txt{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.3;color:var(--ink);opacity:.82;}
+.shared-out{margin-top:22px;text-align:center;font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);}
+.shared-out .em{color:var(--emerald);}
+
+/* ===== S9-S11 · DDD samples & cultivation ===== */
+.sample-tag{display:inline-block;font-family:var(--sans);font-weight:800;font-size:22px;letter-spacing:.1em;text-transform:uppercase;color:var(--emerald);border:3px solid var(--emerald);padding:8px 20px;margin-bottom:18px;align-self:flex-start;}
+.tiers{display:flex;flex-direction:column;gap:16px;flex:1;justify-content:center;}
+.tier{display:grid;grid-template-columns:280px 1fr;align-items:center;gap:30px;border:4px solid var(--ink);padding:24px 30px;}
+.tier.top{border-left:16px solid var(--emerald);background:rgba(31,181,115,.10);}
+.tier .tacc{font-family:var(--serif);font-weight:900;font-size:52px;line-height:1;color:var(--ink);}
+.tier.top .tacc{color:var(--emerald);}
+.tier .tinfo .tnm{font-family:var(--serif);font-weight:800;font-size:30px;color:var(--ink);}
+.tier .tinfo .tds{font-family:var(--sans);font-weight:500;font-size:21px;line-height:1.4;color:var(--ink);opacity:.78;margin-top:6px;}
+
+/* ===== S13 · phase3 mechanisms (4 cols) ===== */
+.mechs{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;flex:1;align-content:center;}
+.mech{border:4px solid var(--ink);padding:26px 24px;display:flex;flex-direction:column;}
+.mech .mno{font-family:var(--serif);font-weight:900;font-size:48px;line-height:.9;color:var(--emerald);}
+.mech .mnm{font-family:var(--serif);font-weight:900;font-size:30px;line-height:1.02;color:var(--ink);margin-top:12px;}
+.mech .mds{font-family:var(--sans);font-weight:500;font-size:19px;line-height:1.42;color:var(--ink);opacity:.78;margin-top:10px;flex:1;}
+.loopline{margin-top:20px;border-top:3px solid var(--emerald);padding-top:14px;font-family:var(--sans);font-weight:600;font-size:22px;color:var(--ink);text-align:center;}
+.loopline b{color:var(--emerald);font-weight:800;}
+
+/* ===== S15 · eval / proprioception ===== */
+.pillars4{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;flex:1;align-content:center;}
+
+/* ===== S16 · dual flywheel ===== */
+.wheels{display:grid;grid-template-columns:1fr 80px 1fr;align-items:center;gap:20px;flex:1;}
+.wheel{border:4px solid var(--ink);padding:34px 38px;}
+.wheel.tech{border-top:12px solid var(--emerald);}
+.wheel.org{border-top:12px solid var(--emerald);}
+.wheel .wt{font-family:var(--serif);font-weight:900;font-size:42px;color:var(--ink);}
+.wheel .wsteps{font-family:var(--sans);font-weight:600;font-size:22px;line-height:1.7;color:var(--ink);opacity:.82;margin-top:16px;}
+.wheel .wsteps b{color:var(--emerald);font-weight:800;}
+.wheelx{font-family:var(--serif);font-weight:900;font-size:60px;color:var(--emerald);text-align:center;}
+.wfoot{margin-top:24px;text-align:center;font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);}
+.wfoot .em{color:var(--emerald);}
+
+/* ===== S17 · where we are (builder/hub/runner) ===== */
+.bhr{display:grid;grid-template-columns:1fr 60px 1fr 60px 1fr;align-items:stretch;gap:14px;flex:1;}
+.bhr .col{border:4px solid var(--ink);padding:26px 26px;display:flex;flex-direction:column;}
+.bhr .col.hub{border-left:16px solid var(--emerald);background:rgba(31,181,115,.10);}
+.bhr .col .colh{font-family:var(--serif);font-weight:900;font-size:38px;color:var(--ink);}
+.bhr .col .cls{font-family:var(--sans);font-weight:700;font-size:19px;letter-spacing:.06em;text-transform:uppercase;color:var(--emerald);margin-top:4px;}
+.bhr .col .cli{font-family:var(--sans);font-weight:500;font-size:20px;line-height:1.5;color:var(--ink);opacity:.82;margin-top:16px;}
+.bhr .col .cli b{font-weight:800;opacity:1;}
+.bhr .conn{display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:900;font-size:44px;color:var(--emerald);}
+
+/* ===== S18 · CTA ===== */
+.cta-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;flex:1;align-content:center;}
+.cstep{border:4px solid var(--ink);padding:28px 26px;display:flex;flex-direction:column;}
+.cstep .csn{font-family:var(--serif);font-weight:900;font-size:56px;line-height:.9;color:var(--emerald);}
+.cstep .cst{font-family:var(--serif);font-weight:900;font-size:30px;line-height:1.05;color:var(--ink);margin-top:14px;}
+.cstep .csd{font-family:var(--sans);font-weight:500;font-size:19px;line-height:1.42;color:var(--ink);opacity:.78;margin-top:10px;}
+.cta-close{margin-top:26px;text-align:center;}
+.cta-close .ccl{font-family:var(--serif);font-weight:900;font-size:52px;color:var(--ink);}
+.cta-close .ccs{font-family:var(--sans);font-weight:700;font-size:26px;letter-spacing:.06em;text-transform:uppercase;color:var(--emerald);margin-top:12px;}
+
+
+
+/* ============================================================
+   REDESIGN v2 — richer architecture layouts (paper · navy · emerald · bordered)
+   ============================================================ */
+
+/* ---- S3 S×T matrix with axes + diagonal ---- */
+.sxt{position:relative;flex:1;display:grid;grid-template-columns:64px 1fr;grid-template-rows:1fr 46px;gap:0;min-height:0;}
+.sxt .yaxis{writing-mode:vertical-rl;transform:rotate(180deg);display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-weight:800;font-size:20px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);opacity:.6;}
+.sxt .xaxis{grid-column:2;text-align:center;font-family:var(--sans);font-weight:800;font-size:20px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);opacity:.6;padding-top:12px;}
+.sxt .grid{position:relative;display:grid;grid-template-columns:90px repeat(4,1fr);grid-template-rows:repeat(4,1fr);border:4px solid var(--ink);}
+.sxt .rlab,.sxt .clab{display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-weight:800;font-size:17px;color:var(--ink);background:rgba(15,26,92,.05);text-align:center;padding:4px;}
+.sxt .rlab{border-right:3px solid var(--ink);border-bottom:2px solid var(--rule);flex-direction:column;line-height:1.2;}
+.sxt .cell{border-right:2px solid var(--rule);border-bottom:2px solid var(--rule);padding:12px 14px;display:flex;flex-direction:column;justify-content:center;position:relative;z-index:2;}
+.sxt .cell .ct{font-family:var(--serif);font-weight:800;font-size:21px;line-height:1.05;color:var(--ink);}
+.sxt .cell .cn{font-family:var(--sans);font-weight:500;font-size:14px;line-height:1.25;color:var(--ink);opacity:.65;margin-top:4px;}
+.sxt .cell.danger{background:rgba(200,60,60,.15);} .sxt .cell.danger .ct{color:#a3282a;}
+.sxt .cell.stuck{background:rgba(214,158,40,.16);}
+.sxt .cell.target{background:rgba(31,181,115,.20);} .sxt .cell.target .ct{color:#12854f;}
+.sxt .diag{position:absolute;inset:0;z-index:3;pointer-events:none;}
+.sxt-key{grid-column:2;display:flex;gap:30px;padding-top:10px;font-family:var(--sans);font-weight:700;font-size:18px;color:var(--ink);}
+.sxt-key span{display:flex;align-items:center;gap:9px;} .sxt-key i{width:20px;height:20px;border:2px solid var(--ink);}
+.sxt-key i.d{background:rgba(200,60,60,.4);} .sxt-key i.t{background:rgba(31,181,115,.45);}
+
+/* ---- S5 metrics rows (input/flow/output grouped) ---- */
+.mrows{display:flex;flex-direction:column;gap:0;border:4px solid var(--ink);flex:1;}
+.mrow{display:grid;grid-template-columns:96px 1fr 1fr 200px;align-items:center;gap:26px;padding:0 30px;border-bottom:3px solid var(--rule);}
+.mrow:last-child{border-bottom:0;}
+.mrow .mno{font-family:var(--serif);font-weight:900;font-size:52px;color:var(--emerald);}
+.mrow .mname{font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);}
+.mrow .men{font-family:var(--sans);font-weight:700;font-size:17px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink);opacity:.55;margin-top:3px;}
+.mrow .mq{font-family:var(--sans);font-weight:500;font-size:20px;line-height:1.35;color:var(--ink);opacity:.8;}
+.mrow .mtgt{justify-self:end;border:3px solid var(--emerald);background:rgba(31,181,115,.1);padding:8px 18px;font-family:var(--serif);font-weight:900;font-size:26px;color:#12854f;white-space:nowrap;}
+.callout{border:3px solid #a3282a;background:rgba(200,60,60,.08);padding:16px 26px;font-family:var(--sans);font-weight:600;font-size:22px;line-height:1.4;color:var(--ink);margin-bottom:22px;}
+.callout b{color:#a3282a;font-weight:800;}
+
+/* ---- S6 three phases (richer) + bigger ladder ---- */
+.ph3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+.ph3 .pcard{border:4px solid var(--ink);padding:26px 28px;display:flex;flex-direction:column;}
+.ph3 .pcard.here{border-left:16px solid var(--emerald);background:rgba(31,181,115,.10);}
+.ph3 .ptop{display:flex;justify-content:space-between;align-items:baseline;}
+.ph3 .pph{font-family:var(--sans);font-weight:800;font-size:19px;letter-spacing:.1em;text-transform:uppercase;color:var(--emerald);}
+.ph3 .px{font-family:var(--serif);font-weight:900;font-size:44px;color:var(--ink);line-height:.9;}
+.ph3 .pnm{font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);margin-top:8px;}
+.ph3 .prole{font-family:var(--sans);font-weight:700;font-size:20px;color:var(--ink);opacity:.85;margin-top:6px;}
+.ph3 .pmeth{margin-top:14px;border-top:3px solid var(--rule);padding-top:12px;font-family:var(--sans);font-weight:500;font-size:19px;line-height:1.45;color:var(--ink);opacity:.82;flex:1;}
+.ph3 .pmeth .mtag{display:inline-block;font-family:var(--sans);font-weight:800;font-size:17px;letter-spacing:.04em;color:var(--emerald);border:2px solid var(--emerald);padding:3px 10px;margin-bottom:8px;}
+.rolebar{margin-top:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px;font-family:var(--sans);font-weight:700;font-size:20px;color:var(--ink);text-align:center;}
+.rolebar span b{color:var(--emerald);}
+.ladder2{margin-top:20px;border:4px solid var(--ink);padding:22px 30px;display:flex;align-items:center;justify-content:center;gap:18px;flex-wrap:wrap;}
+.ladder2 .lstep{font-family:var(--serif);font-weight:900;font-size:34px;color:var(--ink);}
+.ladder2 .larr{font-family:var(--serif);font-weight:900;font-size:34px;color:var(--emerald);}
+.ladder2 .lcap{font-family:var(--sans);font-weight:700;font-size:20px;color:var(--ink);opacity:.6;margin-left:12px;}
+
+/* ---- S7 Phase2 spec-driven full chain ---- */
+.p2chain{display:flex;gap:0;border:4px solid var(--ink);margin-bottom:20px;}
+.p2chain .st{flex:1;padding:14px 10px;text-align:center;border-right:3px solid var(--rule);font-family:var(--sans);font-weight:800;font-size:20px;color:var(--ink);}
+.p2chain .st:last-child{border-right:0;}
+.p2chain .st b{display:block;font-family:var(--serif);font-size:24px;color:var(--emerald);margin-bottom:2px;}
+.p2spec{border:4px solid var(--emerald);background:rgba(31,181,115,.12);padding:14px;text-align:center;margin-bottom:20px;}
+.p2spec .st1{font-family:var(--serif);font-weight:900;font-size:38px;color:var(--ink);}
+.p2spec .st2{font-family:var(--sans);font-weight:700;font-size:19px;color:var(--emerald);margin-top:4px;}
+.roles6{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+.role6{border:3px solid var(--ink);padding:14px 14px;}
+.role6.eng{border-left:12px solid var(--emerald);}
+.role6 .rn{font-family:var(--serif);font-weight:900;font-size:26px;color:var(--ink);}
+.role6 .rr{font-family:var(--sans);font-weight:700;font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:var(--emerald);margin-top:4px;}
+.role6 .rl{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.4;color:var(--ink);opacity:.75;margin-top:8px;}
+.enable{margin-top:18px;display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+.enable .en{border:3px solid var(--ink);border-top:8px solid var(--emerald);padding:14px 18px;}
+.enable .ent{font-family:var(--serif);font-weight:800;font-size:22px;color:var(--ink);}
+.enable .end{font-family:var(--sans);font-weight:500;font-size:16px;line-height:1.35;color:var(--ink);opacity:.75;margin-top:6px;}
+
+/* ---- S8 ceiling: anchor → 2扬2抑 → 3症状 → punchline ---- */
+.s8{display:flex;flex-direction:column;gap:44px;flex:1;justify-content:center;}
+/* anchor sentence */
+.s8anchor{font-family:var(--serif);font-weight:700;font-size:32px;line-height:1.45;color:var(--ink);text-align:center;padding:0 40px;}
+.s8anchor .no{color:#a3282a;font-weight:900;}
+/* 2扬2抑 comparison — light washed columns */
+.s8cmp{display:grid;grid-template-columns:1fr 1fr;column-gap:20px;}
+.s8col{padding:26px 38px;border-radius:4px;}
+.s8col.pos{background:rgba(31,181,115,.07);border-top:4px solid var(--emerald);}
+.s8col.neg{background:rgba(163,40,42,.06);border-top:4px solid #a3282a;}
+.s8ch{font-family:var(--sans);font-weight:800;font-size:19px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:20px;}
+.s8col.pos .s8ch{color:#12854f;}
+.s8col.neg .s8ch{color:#a3282a;}
+.s8it{margin-bottom:20px;padding-left:30px;position:relative;}
+.s8it:last-child{margin-bottom:0;}
+.s8it .t{font-family:var(--serif);font-weight:900;font-size:24px;color:var(--ink);}
+.s8it .d{font-family:var(--sans);font-weight:500;font-size:18px;line-height:1.5;color:var(--ink);opacity:.78;margin-top:5px;}
+.s8col.pos .s8it::before{content:"✓";position:absolute;left:0;top:2px;color:var(--emerald);font-weight:900;font-size:21px;}
+.s8col.neg .s8it::before{content:"✗";position:absolute;left:0;top:2px;color:#a3282a;font-weight:900;font-size:21px;}
+/* connective */
+.s8arrow{font-family:var(--sans);font-weight:700;font-size:17px;letter-spacing:.1em;color:var(--ink);opacity:.5;text-align:center;text-transform:uppercase;margin:-14px 0;}
+/* 3 症状 — top-accent columns, no full borders */
+.s8sym{display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px;}
+.s8sc{border-top:5px solid #a3282a;background:rgba(163,40,42,.05);padding:18px 24px;border-radius:4px;}
+.s8sc .st{font-family:var(--serif);font-weight:900;font-size:25px;color:var(--ink);}
+.s8sc .sd{font-family:var(--sans);font-weight:500;font-size:18px;line-height:1.5;color:var(--ink);opacity:.8;margin-top:8px;}
+/* punchline */
+.s8punch{border-left:8px solid var(--emerald);background:rgba(31,181,115,.08);padding:22px 32px;}
+.s8punch .pl{font-family:var(--serif);font-weight:900;font-size:22px;line-height:1.35;color:var(--ink);white-space:nowrap;}
+.s8punch .pl .em{color:var(--emerald);}
+
+/* ---- S9 DDD as Brain — Plan B: 4 OWN cognitive parts + 4 markdowns hero + money shot ---- */
+.brainwrap{display:grid;grid-template-columns:0.68fr 1.32fr;gap:34px;align-items:start;}
+/* left column wrap: role table + 养成 note filling the height */
+.rolewrap{display:flex;flex-direction:column;gap:16px;}
+.rolenote{font-family:var(--sans);font-weight:600;font-size:16px;line-height:1.5;color:var(--ink);opacity:.72;padding-left:16px;border-left:4px solid var(--emerald);}
+.rolenote b{color:#12854f;font-weight:800;}
+/* brain anatomy card (right) */
+.brainarch{border-top:5px solid var(--emerald);background:rgba(31,181,115,.06);padding:24px 30px 22px;border-radius:4px;display:flex;flex-direction:column;}
+.brainarch .bah{font-family:var(--sans);font-weight:800;font-size:18px;letter-spacing:.08em;text-transform:uppercase;color:#12854f;margin-bottom:18px;}
+.brainarch .bah b{color:var(--ink);opacity:.55;font-weight:700;}
+.bparts{display:flex;flex-direction:column;gap:14px;}
+.bp{padding-left:22px;position:relative;}
+.bp::before{content:"";position:absolute;left:0;top:6px;width:9px;height:9px;background:var(--emerald);border-radius:2px;}
+.bp .bpn{font-family:var(--serif);font-weight:900;font-size:21px;color:var(--ink);}
+.bp .bpd{font-family:var(--sans);font-weight:500;font-size:16px;color:var(--ink);opacity:.72;margin-left:10px;}
+/* the 4 markdowns — prominent hero row under ② Knowledge */
+.mds{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-top:12px;}
+.md{border:2px solid var(--emerald);background:var(--paper);padding:10px 6px 9px;text-align:center;border-radius:3px;}
+.md .mdn{font-family:var(--serif);font-weight:900;font-size:17px;color:#12854f;display:block;line-height:1;}
+.md .mdd{font-family:var(--sans);font-weight:600;font-size:11px;color:var(--ink);opacity:.62;margin-top:5px;display:block;line-height:1.25;}
+/* GOVERN one-liner */
+.governln{margin-top:16px;padding-top:14px;border-top:1.5px solid rgba(15,26,92,.14);font-family:var(--sans);font-weight:600;font-size:15px;color:var(--ink);opacity:.72;}
+.governln b{color:var(--ink);opacity:1;font-weight:800;}
+/* money shot — full-width band below both columns */
+.moneyshot{margin-top:26px;border-left:8px solid var(--emerald);background:rgba(15,26,92,.04);padding:20px 30px;display:flex;align-items:center;gap:22px;}
+.moneyshot .ms-tag{flex:none;font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--emerald);writing-mode:horizontal-tb;}
+.moneyshot .ms-txt{font-family:var(--serif);font-weight:700;font-size:23px;line-height:1.4;color:var(--ink);}
+.moneyshot .ms-txt b{color:#12854f;font-weight:900;}
+
+/* ---- shared "深入阅读" links row (in-flow, bottom of sbody) ---- */
+.readmore{margin-top:12px;padding-top:11px;border-top:1.5px solid rgba(15,26,92,.14);
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-family:var(--sans);}
+.readmore .rml{flex:none;font-weight:800;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);opacity:.5;}
+.readmore a{font-weight:700;font-size:13px;color:#12854f;text-decoration:none;
+  border:1.5px solid rgba(31,181,115,.4);border-radius:3px;padding:4px 11px;background:rgba(31,181,115,.06);}
+.readmore a::before{content:"↗ ";opacity:.7;}
+
+/* ---- S10/S11 layered architecture stack ---- */
+.arch{display:flex;flex-direction:column;gap:11px;flex:1;justify-content:center;}
+.alayer{border:4px solid var(--ink);padding:15px 24px;position:relative;}
+.alayer.hero{border-left:14px solid var(--emerald);background:rgba(31,181,115,.10);}
+.alayer .ah{display:flex;align-items:baseline;gap:14px;margin-bottom:10px;}
+.alayer .an{font-family:var(--serif);font-weight:900;font-size:30px;color:var(--ink);}
+.alayer .ar{font-family:var(--sans);font-weight:700;font-size:16px;letter-spacing:.06em;text-transform:uppercase;color:var(--emerald);}
+.acells{display:grid;gap:10px;}
+.acells.c4{grid-template-columns:repeat(4,1fr);} .acells.c3{grid-template-columns:repeat(3,1fr);} .acells.c2{grid-template-columns:repeat(2,1fr);}
+.acell{border:3px solid var(--ink);background:var(--paper);padding:10px 14px;}
+.acell .att{font-family:var(--serif);font-weight:800;font-size:20px;color:var(--ink);line-height:1.05;}
+.acell .atd{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.3;color:var(--ink);opacity:.72;margin-top:4px;}
+/* S11 enhancements: tighter stack, layer role-tag, callouts, infra strip */
+.arch.s11{gap:5px;}
+.arch.s11 .alayer{padding:7px 22px;}
+.arch.s11 .alayer .ah{margin-bottom:5px;}
+.arch.s11 .acell{padding:7px 14px;}
+.arch.s11 .acell .att{font-size:18px;}
+.arch.s11 .acell .atd{font-size:14px;margin-top:2px;}
+.alayer .arole{margin-left:auto;font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:.04em;color:var(--ink);opacity:.5;}
+.alayer.hero .arole{color:#12854f;opacity:1;}
+.alayer.consumers{border-style:dashed;border-width:3px;opacity:.75;padding:9px 22px;}
+.alayer.consumers .an{font-size:22px;}
+.alayer.infra{border-width:3px;opacity:.7;padding:9px 22px;}
+.alayer.infra .an{font-size:22px;}
+.arole-inline{display:flex;gap:8px;flex-wrap:wrap;}
+.chip-mini{border:2px solid var(--ink);opacity:.7;padding:5px 12px;font-family:var(--sans);font-weight:700;font-size:15px;color:var(--ink);}
+/* hero Knowledge layer — bigger + accuracy callout inside */
+.alayer.hero.big{border-width:5px;background:rgba(31,181,115,.13);}
+.acell.acc{position:relative;}
+.acell .accbadge{position:absolute;top:9px;right:12px;font-family:var(--sans);font-weight:800;font-size:15px;color:#12854f;}
+.acell.acc.warn .accbadge{color:#a3282a;}
+.callout-strip{margin-top:7px;background:rgba(163,40,42,.06);border-left:6px solid #a3282a;padding:7px 18px;font-family:var(--sans);font-weight:700;font-size:15px;color:var(--ink);}
+.callout-strip b{color:#a3282a;font-weight:800;}
+
+/* ---- S12 DDD governance — Ontology + Darwinian (rebuilt) ---- */
+/* anchor: encyclopedia vs darwinian */
+.s12anchor{display:grid;grid-template-columns:1fr auto 1fr;align-items:stretch;gap:16px;margin-bottom:18px;}
+.s12av{padding:12px 22px;border-radius:4px;}
+.s12av .h{font-family:var(--sans);font-weight:800;font-size:16px;letter-spacing:.04em;margin-bottom:3px;}
+.s12av .d{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.35;color:var(--ink);opacity:.75;}
+.s12av.bad{background:rgba(163,40,42,.06);border-left:5px solid #a3282a;}
+.s12av.bad .h{color:#a3282a;}
+.s12av.good{background:rgba(31,181,115,.09);border-left:5px solid var(--emerald);}
+.s12av.good .h{color:#12854f;}
+.s12av-vs{align-self:center;font-family:var(--serif);font-weight:900;font-size:24px;color:var(--ink);opacity:.4;}
+/* main split: layers (left) + ontology (right) */
+.s12main{display:grid;grid-template-columns:1.55fr 1fr;gap:26px;margin-bottom:16px;}
+.klayers{display:flex;flex-direction:column;gap:9px;}
+.klayer{border:3px solid var(--ink);padding:11px 20px;display:flex;align-items:center;gap:20px;}
+.klayer.meta{border-left:12px solid var(--emerald);background:rgba(31,181,115,.11);}
+.klayer .klhwrap{flex:none;width:150px;}
+.klayer .klh{font-family:var(--serif);font-weight:900;font-size:22px;color:var(--ink);line-height:1;}
+.klayer .kls{font-family:var(--sans);font-weight:700;font-size:13px;color:var(--emerald);margin-top:3px;}
+.ktypes{display:flex;flex-wrap:wrap;gap:7px;flex:1;}
+.ktype{border:2px solid var(--ink);padding:5px 12px;font-family:var(--sans);font-weight:700;font-size:15px;color:var(--ink);}
+.ktype b{font-weight:800;}
+.klayer .kdecay{flex:none;font-family:var(--sans);font-weight:800;font-size:13px;color:var(--ink);opacity:.55;width:74px;text-align:right;}
+.klayer.meta .kdecay{color:#12854f;opacity:1;}
+/* ontology box */
+.ontobox{border-top:5px solid var(--emerald);background:rgba(31,181,115,.06);border-radius:4px;padding:16px 22px;display:flex;flex-direction:column;}
+.ontobox .oh{font-family:var(--sans);font-weight:800;font-size:16px;letter-spacing:.04em;color:#12854f;margin-bottom:12px;}
+.ontorow{display:flex;flex-direction:column;gap:10px;flex:1;}
+.onto{padding-left:16px;position:relative;}
+.onto::before{content:"";position:absolute;left:0;top:5px;width:8px;height:8px;background:var(--emerald);border-radius:2px;}
+.onto .ot{font-family:var(--serif);font-weight:900;font-size:19px;color:var(--ink);}
+.onto .od{font-family:var(--sans);font-weight:500;font-size:15px;color:var(--ink);opacity:.74;margin-top:2px;}
+.ontonote{margin-top:12px;padding-top:10px;border-top:1.5px solid rgba(15,26,92,.14);font-family:var(--sans);font-weight:500;font-size:13px;line-height:1.4;color:var(--ink);opacity:.66;}
+.ontonote b{color:var(--ink);opacity:1;font-weight:800;}
+/* lifecycle timeline + example */
+.lifeline{display:grid;grid-template-columns:1.15fr 1fr;gap:24px;align-items:center;}
+.decay{display:flex;align-items:center;gap:0;}
+.decay .dc{flex:1;border:3px solid var(--ink);padding:11px 14px;text-align:center;}
+.decay .dc .dcs{font-family:var(--serif);font-weight:900;font-size:21px;color:var(--ink);}
+.decay .dc .dcd{font-family:var(--sans);font-weight:500;font-size:13px;color:var(--ink);opacity:.7;margin-top:2px;}
+.decay .dc.live{border-color:var(--emerald);} .decay .dc.live .dcs{color:#12854f;}
+.decay .dc.dead{opacity:.5;}
+.decay .darrow{flex:none;padding:0 10px;font-family:var(--sans);font-weight:800;font-size:13px;color:var(--ink);opacity:.55;text-align:center;white-space:nowrap;}
+.kex{border-left:6px solid var(--ink);padding:6px 16px;}
+.kex .kexrow{font-family:var(--sans);font-size:15px;line-height:1.5;color:var(--ink);}
+.kex .kexrow .tag{font-family:var(--sans);font-weight:800;font-size:12px;padding:2px 8px;border-radius:3px;margin-right:8px;}
+.kex .kexrow.stay .tag{background:rgba(31,181,115,.16);color:#12854f;}
+.kex .kexrow.gone .tag{background:rgba(163,40,42,.12);color:#a3282a;}
+.kex .kexrow.gone{opacity:.72;}
+.kexsum{margin-top:8px;font-family:var(--serif);font-weight:700;font-size:16px;line-height:1.4;color:var(--ink);}
+.kexsum b{color:#12854f;font-weight:900;}
+/* S12 Karpathy compare — one-liner + click-to-expand overlay (pure <details>) */
+.kcmp{margin-top:14px;}
+.kcmp summary{list-style:none;cursor:pointer;display:flex;align-items:baseline;gap:12px;
+  font-family:var(--sans);font-weight:600;font-size:15px;line-height:1.45;color:var(--ink);opacity:.72;
+  border-top:1.5px solid rgba(15,26,92,.14);padding-top:12px;}
+.kcmp summary::-webkit-details-marker{display:none;}
+.kcmp summary .kbtn{flex:none;font-family:var(--sans);font-weight:800;font-size:12px;letter-spacing:.04em;
+  text-transform:uppercase;color:#12854f;border:2px solid var(--emerald);border-radius:3px;padding:3px 10px;}
+.kcmp summary .kbtn::after{content:" ▸";}
+.kcmp[open] summary .kbtn::after{content:" ▾";}
+.kcmp summary b{color:var(--ink);opacity:1;font-weight:800;}
+/* expansion overlay — floats over the slide, doesn't push content */
+.kpanel{position:absolute;left:110px;right:110px;bottom:44px;z-index:20;
+  background:var(--paper);border:3px solid var(--ink);border-left:12px solid var(--emerald);
+  box-shadow:0 -18px 60px rgba(15,26,92,.22);padding:26px 34px;}
+.kpclose{position:absolute;top:16px;right:20px;z-index:22;cursor:pointer;
+  font-family:var(--sans);font-weight:800;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ink);background:var(--paper);border:2px solid var(--ink);border-radius:3px;padding:5px 12px;}
+.kpclose:hover{background:var(--ink);color:var(--paper);}
+.kpanel .kph{font-family:var(--serif);font-weight:900;font-size:24px;color:var(--ink);margin-bottom:4px;padding-right:90px;}
+.kpanel .kpsub{font-family:var(--sans);font-weight:600;font-size:15px;color:var(--ink);opacity:.7;margin-bottom:16px;}
+.kptbl{display:grid;grid-template-columns:auto 1fr 1fr;gap:0;border-top:2px solid rgba(15,26,92,.16);}
+.kptbl>div{padding:11px 16px;border-bottom:2px solid rgba(15,26,92,.1);font-family:var(--sans);font-size:15px;line-height:1.4;color:var(--ink);}
+.kptbl .kc0{font-weight:800;opacity:.7;font-size:13px;letter-spacing:.03em;text-transform:uppercase;}
+.kptbl .kc1{opacity:.78;border-left:2px solid rgba(15,26,92,.1);}
+.kptbl .kc2{border-left:2px solid rgba(31,181,115,.3);background:rgba(31,181,115,.05);font-weight:600;}
+.kptbl .khead{font-family:var(--serif);font-weight:900;font-size:18px;opacity:1;border-bottom:2px solid rgba(15,26,92,.16);}
+.kptbl .khead.k2{color:#12854f;}
+.kpfoot{margin-top:16px;font-family:var(--serif);font-weight:700;font-size:18px;line-height:1.45;color:var(--ink);}
+.kpfoot b{color:#12854f;font-weight:900;}
+.kplinks{margin-top:14px;padding-top:12px;border-top:1.5px solid rgba(15,26,92,.14);
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-family:var(--sans);}
+.kplinks .kll{font-weight:800;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);opacity:.55;}
+.kplinks a{font-weight:700;font-size:13.5px;color:#12854f;text-decoration:none;
+  border:1.5px solid rgba(31,181,115,.4);border-radius:3px;padding:4px 11px;background:rgba(31,181,115,.06);}
+.kplinks a::before{content:"↗ ";opacity:.7;}
+
+/* ---- S13 pipeline 9-stage architecture ---- */
+.pipe9{display:flex;gap:0;border:4px solid var(--ink);margin-bottom:18px;}
+.pipe9 .pstage{flex:1;padding:16px 6px;text-align:center;border-right:3px solid var(--rule);font-family:var(--sans);font-weight:800;font-size:16px;letter-spacing:.02em;text-transform:uppercase;color:var(--ink);position:relative;}
+.pipe9 .pstage:last-child{border-right:0;}
+.pipe9 .pstage.g{background:rgba(31,181,115,.14);}
+.pipe9 .pstage .gate{position:absolute;top:-13px;left:50%;transform:translateX(-50%);background:var(--emerald);color:var(--paper);font-size:12px;font-weight:800;padding:2px 8px;white-space:nowrap;letter-spacing:.04em;}
+.gaterow{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;flex:1;align-content:center;}
+.gatecard{border:4px solid var(--ink);border-top:12px solid var(--emerald);padding:22px 26px;}
+.gatecard .gno{font-family:var(--sans);font-weight:800;font-size:18px;letter-spacing:.08em;text-transform:uppercase;color:var(--emerald);}
+.gatecard .gnm{font-family:var(--serif);font-weight:900;font-size:32px;color:var(--ink);margin-top:6px;}
+.gatecard .gd{font-family:var(--sans);font-weight:500;font-size:19px;line-height:1.45;color:var(--ink);opacity:.8;margin-top:10px;}
+.dualmode{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.dm{border:3px solid var(--ink);padding:14px 20px;}
+.dm.goal{border-left:12px solid var(--emerald);}
+.dm .dmt{font-family:var(--serif);font-weight:800;font-size:22px;color:var(--ink);}
+.dm .dmd{font-family:var(--sans);font-weight:500;font-size:16px;color:var(--ink);opacity:.75;margin-top:5px;}
+
+/* ---- S16 eval architecture flow ---- */
+.evalsec .shead{margin-bottom:0;}
+.evanchor{font-family:var(--serif);font-weight:800;font-size:22px;line-height:1.4;color:var(--ink);margin-top:14px;
+  border-left:5px solid var(--emerald);padding:6px 0 6px 16px;}
+.evanchor .em{color:var(--emerald);font-weight:900;}
+.evalsec .sbody{justify-content:space-between;}
+.evalflow{display:grid;grid-template-columns:1fr 60px 1.1fr 60px 1fr;align-items:stretch;gap:12px;flex:0 0 auto;}
+.ecol{border:4px solid var(--ink);padding:16px 22px;display:flex;flex-direction:column;justify-content:flex-start;}
+.ecol.gold{border-left:14px solid var(--emerald);background:rgba(31,181,115,.10);}
+.ecol .ech{font-family:var(--serif);font-weight:900;font-size:26px;color:var(--ink);}
+.ecol .ecs{font-family:var(--sans);font-weight:700;font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--emerald);margin-top:2px;margin-bottom:9px;}
+.ecol .eitem{font-family:var(--sans);font-weight:600;font-size:17px;line-height:1.45;color:var(--ink);opacity:.85;}
+.ecol .eitem.bvt{border:2px solid var(--emerald);padding:8px 12px;margin-top:auto;color:var(--ink);}
+.econn{display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:900;font-size:36px;color:var(--emerald);}
+.evalfoot{margin-top:12px;font-family:var(--sans);font-weight:700;font-size:16px;color:var(--ink);opacity:.72;text-align:center;}
+.evalfoot .em{color:var(--emerald);font-weight:800;opacity:1;}
+/* AgentCore 殊途同归 band */
+.acband{margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.acband .acb{border:2px solid rgba(15,26,92,.4);padding:11px 18px;font-family:var(--sans);font-size:15px;line-height:1.45;color:var(--ink);}
+.acband .acb b{font-family:var(--serif);font-weight:900;font-size:17px;color:#12854f;display:block;margin-bottom:2px;}
+.acband .acb.ours{border:2.5px solid var(--emerald);background:rgba(31,181,115,.08);}
+/* golden-case schema showcase (expand) */
+.gcx{margin-top:18px;}
+.gcx summary{list-style:none;cursor:pointer;display:flex;align-items:baseline;gap:12px;
+  font-family:var(--sans);font-weight:600;font-size:15px;color:var(--ink);opacity:.78;
+  border-top:1.5px solid rgba(15,26,92,.14);padding-top:11px;}
+.gcx summary::-webkit-details-marker{display:none;}
+.gcx summary .gxb{flex:none;font-family:var(--sans);font-weight:800;font-size:12px;letter-spacing:.04em;
+  text-transform:uppercase;color:#12854f;border:2px solid var(--emerald);border-radius:3px;padding:3px 10px;}
+.gcx summary .gxb::after{content:" ▸";}
+.gcx[open] summary .gxb::after{content:" ▾";}
+.gcpanel{position:absolute;left:110px;right:110px;bottom:44px;z-index:20;
+  background:var(--paper);border:3px solid var(--ink);border-left:12px solid var(--emerald);
+  box-shadow:0 -18px 60px rgba(15,26,92,.22);padding:22px 28px;}
+.gcpanel .gph{font-family:var(--serif);font-weight:900;font-size:22px;color:var(--ink);margin-bottom:2px;padding-right:100px;}
+.gcpanel .gpsub{font-family:var(--sans);font-weight:600;font-size:14px;color:var(--ink);opacity:.7;margin-bottom:14px;}
+.gccards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.gccard{border:2px solid var(--ink);padding:14px 16px;}
+.gccard .gcm{font-family:var(--sans);font-weight:800;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#12854f;margin-bottom:6px;}
+.gccard .gct{font-family:var(--serif);font-weight:900;font-size:16px;color:var(--ink);line-height:1.25;margin-bottom:8px;}
+.gccard pre{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;color:var(--ink);
+  background:rgba(15,26,92,.05);border-left:3px solid rgba(31,181,115,.5);padding:9px 11px;white-space:pre-wrap;word-break:break-word;margin:0;}
+.gpmap{margin-top:14px;padding-top:11px;border-top:1.5px solid rgba(15,26,92,.14);
+  font-family:var(--sans);font-size:13.5px;line-height:1.5;color:var(--ink);opacity:.85;}
+.gpmap b{color:#12854f;font-weight:800;} .gpmap code{font-size:12px;}
+.gcpclose{position:absolute;top:14px;right:20px;z-index:22;cursor:pointer;
+  font-family:var(--sans);font-weight:800;font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ink);background:var(--paper);border:2px solid var(--ink);border-radius:3px;padding:5px 12px;}
+.gcpclose:hover{background:var(--ink);color:var(--paper);}
+
+/* ---- S17 dual flywheel (full loops) ---- */
+.fwstage{flex:0 0 auto;display:flex;align-items:center;justify-content:center;}
+.fwstage svg{width:100%;height:auto;display:block;}
+.fwkicker{flex:0 0 auto;margin-top:8px;text-align:center;}
+.fwkicker .fwq{font-family:var(--serif);font-weight:700;font-size:27px;line-height:1.4;color:var(--ink);}
+.fwkicker .fwq b{font-weight:900;}
+.fwkicker .fwq .tool{color:var(--ink);opacity:.55;font-weight:900;}
+.fwkicker .fwq .cmp{color:#12854f;font-weight:900;}
+.fwkicker .fwq2{font-family:var(--sans);font-weight:600;font-size:17px;color:var(--ink);opacity:.78;margin-top:10px;}
+.fwkicker .fwq2 b{font-weight:800;opacity:1;} .fwkicker .fwq2 .cmp{color:#12854f;font-weight:900;}
+.fwkicker .fwtag{font-family:var(--serif);font-weight:900;font-size:30px;color:#12854f;margin-top:14px;
+  display:inline-block;border-top:3px solid var(--emerald);padding-top:12px;}
+
+/* ---- S18 builder/hub/runner (rich) ---- */
+.bhr3{display:grid;grid-template-columns:1fr 56px 1.15fr 56px 1fr;align-items:stretch;gap:12px;flex:1;}
+.bcol{border:4px solid var(--ink);padding:24px 26px;display:flex;flex-direction:column;}
+.bcol.hub{border:4px solid var(--emerald);background:rgba(31,181,115,.10);}
+.bcol .bch{font-family:var(--serif);font-weight:900;font-size:36px;color:var(--ink);}
+.bcol .bcs{font-family:var(--sans);font-weight:700;font-size:16px;letter-spacing:.06em;text-transform:uppercase;color:var(--emerald);margin-top:2px;margin-bottom:16px;}
+.bline{border:3px solid var(--ink);background:var(--paper);padding:11px 14px;margin-bottom:9px;}
+.bline .blt{font-family:var(--serif);font-weight:800;font-size:19px;color:var(--ink);}
+.bline .bld{font-family:var(--sans);font-weight:500;font-size:15px;line-height:1.32;color:var(--ink);opacity:.75;margin-top:3px;}
+.bcol .bnote{font-family:var(--sans);font-weight:600;font-size:16px;line-height:1.45;color:var(--ink);opacity:.82;margin-top:auto;padding-top:12px;}
+.bcol .bnote b{color:var(--emerald);font-weight:800;}
+.bconn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;}
+.bconn .ba{font-family:var(--serif);font-weight:900;font-size:38px;color:var(--emerald);}
+/* S18 dedicated: shrink body so columns end above the moat line; moat clears foot */
+.wwa.pad{padding:64px 90px 104px;}
+.wwa .shead{margin-bottom:18px;}
+.wwa .sbody{flex:0 0 auto;}
+.wwa .bhr3{flex:0 0 auto;}
+.wwa .bcol{padding:20px 22px;}
+.wwa .bcol .bch{font-size:32px;}
+.wwa .bline{padding:9px 13px;margin-bottom:7px;}
+.wwa .bcol .bnote{padding-top:10px;font-size:15px;}
+/* S18 v2 — Builder → 两条线 (线1: Hub↓Runner · 线2: 横跨) */
+.b2{display:flex;flex-direction:column;gap:13px;}
+.bbuilder{border:4px solid var(--ink);border-top:12px solid var(--emerald);padding:15px 24px;}
+.bbuilder .bbh{display:flex;align-items:baseline;gap:16px;}
+.bbuilder .bbt{font-family:var(--serif);font-weight:900;font-size:29px;color:var(--ink);}
+.bbuilder .bbs{font-family:var(--sans);font-weight:700;font-size:15px;letter-spacing:.05em;text-transform:uppercase;color:var(--emerald);}
+.bbuilder .bfocus{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:11px;}
+.bbuilder .bfc{border:2px solid var(--ink);padding:9px 13px;}
+.bbuilder .bfc .bft{font-family:var(--serif);font-weight:800;font-size:17px;color:var(--ink);}
+.bbuilder .bfc .bfd{font-family:var(--sans);font-weight:500;font-size:12.5px;line-height:1.3;color:var(--ink);opacity:.72;margin-top:2px;}
+.bfound{border:3px dashed rgba(15,26,92,.5);background:rgba(15,26,92,.04);padding:8px 20px;margin-top:10px;
+  display:flex;align-items:center;gap:14px;font-family:var(--sans);}
+.bfound .bfl{flex:none;font-family:var(--serif);font-weight:900;font-size:17px;color:var(--ink);}
+.bfound .bfr{font-weight:600;font-size:14.5px;color:var(--ink);opacity:.8;}
+.bsplit{font-family:var(--sans);font-weight:700;font-size:14px;letter-spacing:.04em;color:var(--ink);opacity:.62;text-align:center;}
+.b2grid{display:grid;grid-template-columns:1.15fr 52px 1fr;gap:12px;align-items:stretch;}
+.b2line1{display:flex;flex-direction:column;gap:12px;}
+.b2box{border:4px solid var(--ink);padding:14px 22px;flex:1;display:flex;flex-direction:column;}
+.b2box.hub{border:4px solid var(--emerald);background:rgba(31,181,115,.10);}
+.b2box .b2t{font-family:var(--serif);font-weight:900;font-size:23px;color:var(--ink);}
+.b2box .b2lbl{font-family:var(--sans);font-weight:800;font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--emerald);margin-bottom:5px;}
+.b2box .b2d{font-family:var(--sans);font-weight:600;font-size:15.5px;line-height:1.45;color:var(--ink);opacity:.85;margin-top:5px;}
+.b2box .b2n{font-family:var(--sans);font-weight:600;font-size:13.5px;line-height:1.4;color:var(--ink);opacity:.78;margin-top:auto;padding-top:9px;}
+.b2box .b2n b{color:#12854f;font-weight:800;}
+.b2conn{display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.b2conn .b2a{font-family:var(--serif);font-weight:900;font-size:32px;color:var(--emerald);}
+.b2conn .b2al{font-family:var(--sans);font-weight:700;font-size:12px;color:var(--ink);opacity:.6;writing-mode:vertical-rl;margin-top:8px;}
+.b2vflow{text-align:center;font-family:var(--serif);font-weight:900;font-size:20px;color:var(--emerald);}
+.b2line2{border:4px solid var(--ink);border-left:12px solid rgba(15,26,92,.55);padding:16px 24px;display:flex;flex-direction:column;justify-content:center;}
+.b2line2 .b2t{font-family:var(--serif);font-weight:900;font-size:23px;color:var(--ink);}
+.b2line2 .b2lbl{font-family:var(--sans);font-weight:800;font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink);opacity:.6;margin-bottom:5px;}
+.b2line2 .b2items{font-family:var(--sans);font-weight:600;font-size:15.5px;line-height:1.7;color:var(--ink);opacity:.85;margin-top:8px;}
+.b2line2 .b2big{font-family:var(--serif);font-weight:900;font-size:21px;color:#12854f;margin-top:14px;}
+.moat{position:absolute;left:90px;right:90px;bottom:96px;text-align:center;font-family:var(--serif);font-weight:900;font-size:25px;color:var(--ink);}
+.moat .em{color:var(--emerald);}
+
+.sxt-fig{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;}
+.sxt-fig svg{width:100%;height:100%;object-fit:contain;display:block;}
+.ph3-fig{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;}
+.ph3-fig svg{width:100%;height:100%;object-fit:contain;display:block;}
+.p2-fig{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;margin-bottom:40px;}
+.p2-fig svg{width:100%;height:100%;object-fit:contain;display:block;}
+</style>
+</head>
+<body>
+<deck-stage width="1920" height="1080">
+
+<!-- ═══ S01 COVER ═══ -->
+<section data-label="Cover" class="cover">
+  <div class="masthead"><span class="label">Human Directs · AI Delivers</span><span class="label">2026</span></div>
+  <div class="kicker reveal">A Paradigm Shift · Not a Tool Adoption</div>
+  <h1 class="reveal"><span class="l1">AI-Native</span><span class="l2">Transformation<span class="dot">.</span></span></h1>
+  <div class="sub reveal">从 <b>2x</b> 天花板到 <b>10x</b> 复利 —— 一次范式转移</div>
+  <div class="rule reveal"></div>
+  <div class="tagbar reveal">
+    <span class="tagline">Human Directs, AI Delivers.</span>
+    <span class="method">AI-DLC —— 我们的方法论</span>
+  </div>
+  <div class="signature">XG<span class="role">Chief Architect + Builder</span></div>
+  <div class="footline"><span class="label">AI-Native Transformation</span><span class="label">01 / 19</span></div>
+</section>
+
+<!-- ═══ S02 瓶颈转移 (题眼) ═══ -->
+<section data-label="Bottleneck Shift" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Root Cause · 题眼</div>
+    <h2 class="reveal">瓶颈没有消失 <span class="em">——</span> 它转移了</h2>
+  </div>
+  <div class="sbody">
+    <div class="pipe reveal">
+      <div class="cell"><div class="stage-lbl">Shift Left ←</div><div class="stage-name">定义 + 协调</div><div class="note">需求、Spec、跨角色对齐 —— 新瓶颈</div></div>
+      <div class="cell solved"><div class="stage-lbl">Solved by Agent</div><div class="stage-name">Coding</div><div class="note">曾经的瓶颈 · 只占开发链路约三成</div></div>
+      <div class="cell"><div class="stage-lbl">Shift Right →</div><div class="stage-name">质量 + 安全</div><div class="note">验证、回归、Security —— 新瓶颈</div></div>
+    </div>
+    <div class="kicker-line reveal"><span class="big">= 2x 天花板</span><span class="txt">只优化了中间的 coding，两头瓶颈原封不动（Amdahl）。<b>AI-DLC = 专门解决转移后新瓶颈的方法论。</b></span></div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>02 / 19</span></div>
+</section>
+
+<!-- ═══ S03 S×T 诊断矩阵 (轴 + 对角线) ═══ -->
+<section data-label="S×T Matrix" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Diagnosis · 你在哪</div>
+    <h2 class="reveal">S × T 诊断矩阵 —— 转型失败是<span class="em">错配</span></h2>
+    <div class="dek reveal">S（纵轴）= 个人 AI 能力　×　T（横轴）= 组织就绪度　·　对角线 = 健康推进路径</div>
+  </div>
+  <div class="sbody">
+    <div class="sxt-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 95 1920 720" width="1920" height="720">
+        <!--
+          S×T Tension Matrix — Emerald Editorial re-skin.
+          Same layout / content / cells / diagonal / insights as aidlc-sxt-matrix-v2-light.svg;
+          only style swapped to the deck palette: oat-paper field, navy ink, emerald accent,
+          Bodoni serif headings + Manrope sans labels, semantic washes (danger/stuck/target).
+        -->
+        <defs>
+          <style>
+            .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+            .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+          </style>
+        </defs>
+      
+        <!-- Background: flat oat-paper -->
+        <rect width="1920" height="1080" fill="#F1E9D6"/>
+      
+        <!-- ========== AXIS TITLES (emerald accent, directional + EN gloss) ========== -->
+        <text x="38" y="417" class="sans" font-size="20" font-weight="800" fill="#1FB573" text-anchor="middle" letter-spacing="1.5" transform="rotate(-90, 38, 417)">S 轴 ↑ 个人 AI 能力 · Individual AI Capability</text>
+        <text x="855" y="800" class="sans" font-size="20" font-weight="800" fill="#1FB573" text-anchor="middle" letter-spacing="1.5">T 轴 → 组织 AI 就绪度 · Org AI Readiness</text>
+      
+        <!-- Y-axis levels -->
+        <text x="112" y="176" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="end">S4</text>
+        <text x="112" y="195" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="end">AI 架构师</text>
+        <text x="112" y="331" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="end">S3</text>
+        <text x="112" y="350" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="end">能指挥 Agent</text>
+        <text x="112" y="488" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="end">S2</text>
+        <text x="112" y="507" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="end">日常使用 AI</text>
+        <text x="112" y="644" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="end">S1</text>
+        <text x="112" y="663" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="end">基础使用</text>
+      
+        <!-- X-axis levels -->
+        <text x="311" y="748" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">T1</text>
+        <text x="311" y="766" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">无规范</text>
+        <text x="673" y="748" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">T2</text>
+        <text x="673" y="766" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">工具已部署</text>
+        <text x="1036" y="748" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">T3</text>
+        <text x="1036" y="766" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">Spec-Driven</text>
+        <text x="1398" y="748" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">T4</text>
+        <text x="1398" y="766" class="sans" font-size="11" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">AI-Native</text>
+      
+        <!-- ========== GRID (4x4) ========== -->
+        <!-- Outer border: 4px navy -->
+        <rect x="130" y="105" width="1450" height="625" fill="none" stroke="#0F1A5C" stroke-width="4"/>
+        <!-- Horizontal dividers (navy @ .22) -->
+        <line x1="130" y1="261" x2="1580" y2="261" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+        <line x1="130" y1="418" x2="1580" y2="418" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+        <line x1="130" y1="574" x2="1580" y2="574" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+        <!-- Vertical dividers -->
+        <line x1="492" y1="105" x2="492" y2="730" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+        <line x1="855" y1="105" x2="855" y2="730" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+        <line x1="1217" y1="105" x2="1217" y2="730" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="2"/>
+      
+        <!-- ========== KEY CELLS ========== -->
+      
+        <!-- S3+T2: ATTRITION RISK (danger) -->
+        <rect x="495" y="264" width="357" height="151" fill="#C83C3C" fill-opacity="0.15" stroke="#a3282a" stroke-width="2.5"/>
+        <text x="673" y="309" class="sans" font-size="20" font-weight="800" fill="#a3282a" text-anchor="middle">⚠ ATTRITION RISK</text>
+        <text x="673" y="339" class="sans" font-size="15" font-weight="700" fill="#a3282a" text-anchor="middle">个人 S3 + 组织 T2</text>
+        <text x="673" y="367" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">最强的人被流程卡住</text>
+        <text x="673" y="393" class="sans" font-size="14" font-weight="700" fill="#a3282a" text-anchor="middle">→ 最先离开的人</text>
+      
+        <!-- S2+T2: 效率孤岛 (stuck) -->
+        <rect x="495" y="420" width="357" height="151" fill="#D69E28" fill-opacity="0.16" stroke="#9a6b00" stroke-width="1.5"/>
+        <text x="673" y="464" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" text-anchor="middle">效率孤岛</text>
+        <text x="673" y="494" class="sans" font-size="14" font-weight="700" fill="#9a6b00" text-anchor="middle">2x 天花板 — 大多数团队在这</text>
+        <text x="673" y="519" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">个人有提升，组织看不到收益</text>
+        <text x="673" y="544" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">Phase 1 终点</text>
+      
+        <!-- S3+T3: 转型加速 (target) -->
+        <rect x="858" y="264" width="357" height="151" fill="#1FB573" fill-opacity="0.20" stroke="#12854f" stroke-width="1.5"/>
+        <text x="1036" y="309" class="serif" font-size="22" font-weight="800" fill="#12854f" text-anchor="middle">转型加速</text>
+        <text x="1036" y="339" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" text-anchor="middle">"会指挥 AI = 会交付"</text>
+        <text x="1036" y="367" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">S2→S3 自然发生</text>
+        <text x="1036" y="393" class="sans" font-size="13" font-weight="700" fill="#12854f" text-anchor="middle">Phase 2 目标区</text>
+      
+        <!-- S4+T4: 能力平权 (target, 终局) -->
+        <rect x="1220" y="108" width="357" height="151" fill="#1FB573" fill-opacity="0.20" stroke="#12854f" stroke-width="2"/>
+        <text x="1398" y="154" class="serif" font-size="22" font-weight="800" fill="#12854f" text-anchor="middle">🎯 能力平权</text>
+        <text x="1398" y="184" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" text-anchor="middle">所有人获得 S3+ 输出</text>
+        <text x="1398" y="212" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">AI 是默认执行引擎</text>
+        <text x="1398" y="238" class="sans" font-size="13" font-weight="700" fill="#12854f" text-anchor="middle">Phase 3 终局</text>
+      
+        <!-- S1+T1: 探索期 (neutral) -->
+        <rect x="133" y="577" width="357" height="151" fill="#0F1A5C" fill-opacity="0.05" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1"/>
+        <text x="311" y="624" class="serif" font-size="19" font-weight="800" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">探索期</text>
+        <text x="311" y="654" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">刚开始用 AI</text>
+        <text x="311" y="679" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">没有规范也没有体感</text>
+        <text x="311" y="704" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">大部分客户起点</text>
+      
+        <!-- S4+T2: 个体超能 × 组织拖累 (danger-adjacent) -->
+        <rect x="495" y="108" width="357" height="151" fill="#C83C3C" fill-opacity="0.10" stroke="#a3282a" stroke-opacity="0.6" stroke-width="1.5"/>
+        <text x="673" y="154" class="serif" font-size="18" font-weight="800" fill="#a3282a" text-anchor="middle">个体超能 × 组织拖累</text>
+        <text x="673" y="184" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">能设计 Agent 系统但组织不支持</text>
+        <text x="673" y="209" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">单兵作战 or 出走创业</text>
+      
+        <!-- S2+T3: 被赋能 (target-light) -->
+        <rect x="858" y="420" width="357" height="151" fill="#1FB573" fill-opacity="0.12" stroke="#12854f" stroke-opacity="0.7" stroke-width="1"/>
+        <text x="1036" y="464" class="serif" font-size="18" font-weight="800" fill="#12854f" text-anchor="middle">被赋能</text>
+        <text x="1036" y="494" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">组织就绪 → 个人自然提升</text>
+        <text x="1036" y="519" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">Spec 纪律 + AI-Ready 代码</text>
+        <text x="1036" y="544" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">让普通人也能高效交付</text>
+      
+        <!-- ========== EMPTY CELLS: one-line fills ========== -->
+        <!-- S1+T2 -->
+        <text x="673" y="630" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">被动使用</text>
+        <text x="673" y="652" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">工具有了但没人真用</text>
+        <!-- S1+T3 -->
+        <text x="1036" y="630" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">组织超前</text>
+        <text x="1036" y="652" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">流程就绪但人跟不上</text>
+        <!-- S1+T4 -->
+        <text x="1398" y="630" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">空转</text>
+        <text x="1398" y="652" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">平台建好了没人会用</text>
+        <!-- S2+T1 -->
+        <text x="311" y="470" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">野蛮生长</text>
+        <text x="311" y="492" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">个人在用但各搞各的</text>
+        <!-- S2+T4 -->
+        <text x="1398" y="470" class="sans" font-size="14" font-weight="700" fill="#12854f" text-anchor="middle">平台赋能</text>
+        <text x="1398" y="492" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">普通人也能高产出</text>
+        <!-- S3+T1 -->
+        <text x="311" y="315" class="sans" font-size="14" fill="#a3282a" text-anchor="middle">怀才不遇</text>
+        <text x="311" y="337" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">高手没有施展空间</text>
+        <!-- S3+T4 -->
+        <text x="1398" y="315" class="sans" font-size="14" font-weight="700" fill="#12854f" text-anchor="middle">全面加速</text>
+        <text x="1398" y="337" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">个人强+组织强=飞轮</text>
+        <!-- S4+T1 -->
+        <text x="311" y="160" class="sans" font-size="14" fill="#a3282a" text-anchor="middle">独狼</text>
+        <text x="311" y="182" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">自己搞系统但没人跟</text>
+        <!-- S4+T3 -->
+        <text x="1036" y="160" class="sans" font-size="14" font-weight="700" fill="#12854f" text-anchor="middle">领航者</text>
+        <text x="1036" y="182" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">带着组织一起飞</text>
+      
+        <!-- ========== DIAGONAL ARROW: Evolution path ========== -->
+        <path d="M 311,650 Q 673,500 1036,340 Q 1200,260 1398,180" stroke="#1FB573" stroke-width="3" stroke-dasharray="9,5" fill="none" opacity="0.85"/>
+        <polygon points="1392,170 1406,178 1391,187" fill="#1FB573" opacity="0.85"/>
+      
+        <!-- ========== RIGHT SIDE: KEY INSIGHTS ========== -->
+        <rect x="1600" y="110" width="280" height="620" rx="4" fill="#0F1A5C" fill-opacity="0.04" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1"/>
+        <text x="1740" y="147" class="serif" font-size="20" font-weight="800" fill="#0F1A5C" text-anchor="middle">Core Insights</text>
+        <line x1="1620" y1="162" x2="1860" y2="162" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1"/>
+      
+        <!-- Insight 1 -->
+        <rect x="1620" y="180" width="5" height="42" fill="#a3282a"/>
+        <text x="1638" y="196" class="sans" font-size="14" font-weight="800" fill="#a3282a">最危险组合</text>
+        <text x="1638" y="217" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">S3+T2：最强的人最先离开</text>
+        <line x1="1620" y1="240" x2="1860" y2="240" stroke="#0F1A5C" stroke-opacity="0.12" stroke-width="1"/>
+      
+        <!-- Insight 2 -->
+        <rect x="1620" y="258" width="5" height="42" fill="#9a6b00"/>
+        <text x="1638" y="274" class="sans" font-size="14" font-weight="800" fill="#9a6b00">2x 天花板</text>
+        <text x="1638" y="295" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">T2 = 效率孤岛，Phase 1 结构性终点</text>
+        <line x1="1620" y1="318" x2="1860" y2="318" stroke="#0F1A5C" stroke-opacity="0.12" stroke-width="1"/>
+      
+        <!-- Insight 3 -->
+        <rect x="1620" y="336" width="5" height="62" fill="#12854f"/>
+        <text x="1638" y="352" class="sans" font-size="14" font-weight="800" fill="#12854f">T3 解锁 S 跃迁</text>
+        <text x="1638" y="373" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">"会指挥 AI = 会交付"</text>
+        <text x="1638" y="393" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">Org ready → IC 自然升级</text>
+        <line x1="1620" y1="414" x2="1860" y2="414" stroke="#0F1A5C" stroke-opacity="0.12" stroke-width="1"/>
+      
+        <!-- Insight 4 -->
+        <rect x="1620" y="432" width="5" height="62" fill="#12854f"/>
+        <text x="1638" y="448" class="sans" font-size="14" font-weight="800" fill="#12854f">T4 = 能力平权</text>
+        <text x="1638" y="469" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">所有人获得 S3 输出</text>
+        <text x="1638" y="489" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">不是淘汰人 — 是赋能</text>
+        <line x1="1620" y1="510" x2="1860" y2="510" stroke="#0F1A5C" stroke-opacity="0.12" stroke-width="1"/>
+      
+        <!-- Insight 5 -->
+        <rect x="1620" y="528" width="5" height="176" fill="#1FB573"/>
+        <text x="1638" y="544" class="sans" font-size="14" font-weight="800" fill="#0F1A5C">处方</text>
+        <text x="1638" y="567" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">S&gt;T → 推 T</text>
+        <text x="1638" y="587" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6">（给先锋者组织支撑）</text>
+        <text x="1638" y="615" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75">T&gt;S → 拉 S</text>
+        <text x="1638" y="635" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.6">（培训 + 让平台赋能个体）</text>
+        <text x="1638" y="672" class="sans" font-size="14" font-weight="800" fill="#12854f">目标：S=T 对角线前进</text>
+      </svg>
+    </div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>03 / 19</span></div>
+</section>
+
+<!-- ═══ S04 五大支柱 ═══ -->
+<section data-label="Five Pillars" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Map · 转型地图</div>
+    <h2 class="reveal">五大支柱 —— 是<span class="em">依赖链</span>，不是菜单</h2>
+  </div>
+  <div class="sbody">
+    <div class="pillars reveal">
+      <div class="prow"><div class="pn">1</div><div class="pt">文化 Culture</div><div class="pd">相信 AI 是默认执行方式，不是辅助</div></div>
+      <div class="prow"><div class="pn">2</div><div class="pt">度量 Metrics</div><div class="pd">量管线，不量工具采纳率</div></div>
+      <div class="prow"><div class="pn">3</div><div class="pt">就绪度 Readiness</div><div class="pd">知道自己 ready 没有</div></div>
+      <div class="prow"><div class="pn">4</div><div class="pt">Spec-Driven</div><div class="pd">Spec 作合约，AI 按合约交付</div></div>
+      <div class="prow"><div class="pn">5</div><div class="pt">Autonomous</div><div class="pd">AI 自主判断、执行、验证</div></div>
+    </div>
+    <div class="chain-note reveal">大多数团队直接跳到 4-5（上工具、跑 pipeline），跳过 1-3（文化、度量、就绪度）—— <b>然后发现推不动。不是工具的问题，是地基没打。</b></div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>04 / 19</span></div>
+</section>
+
+<!-- ═══ S05 五个管线指标 (真实指标名 + PR≠Value callout) ═══ -->
+<section data-label="Pipeline Metrics" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Map · 如何衡量成功</div>
+    <h2 class="reveal">5 个管线指标 —— 量<span class="em">管线本身</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="callout reveal">❌ 大部分团队今天在量：<b>PR 数量、AI 生码率、工具采纳率</b> —— 这些告诉你"AI 用了多少"，但 <b>PR ≠ Value</b>。100 个 PR 里可能 80 个在修前 20 个造成的 bug。</div>
+    <div class="mrows reveal">
+      <div class="mrow"><div class="mno">1</div><div><div class="mname">需求吞吐量</div><div class="men">Intake Volume</div></div><div class="mq">管线有多满？— 单位时间进入管线的需求数</div><div class="mtgt">Monitor</div></div>
+      <div class="mrow"><div class="mno">2</div><div><div class="mname">端到端交付周期</div><div class="men">Intake-to-Prod Cycle Time</div></div><div class="mq">管线有多快？— 需求到生产上线的 P90</div><div class="mtgt">Track P90</div></div>
+      <div class="mrow"><div class="mno">3</div><div><div class="mname">AI 自主率</div><div class="men">Autonomous Rate %</div></div><div class="mq">管线有多自主？— AI 端到端完成的占比</div><div class="mtgt">60%+</div></div>
+      <div class="mrow"><div class="mno">4</div><div><div class="mname">交付频率</div><div class="men">Deploys / Builder / Week</div></div><div class="mq">管线产出多少？— 每人每周部署次数</div><div class="mtgt">6x 提升</div></div>
+      <div class="mrow"><div class="mno">5</div><div><div class="mname">交付质量分</div><div class="men">Ticket Score</div></div><div class="mq">产出质量如何？— 系统健康 + 缺陷率</div><div class="mtgt">&gt; 85</div></div>
+    </div>
+  </div>
+  <div class="sig-sm">速度和质量不是 trade-off —— 量对了指标，它们同向增长。</div>
+  <div class="foot"><span>AI-Native Transformation</span><span>05 / 19</span></div>
+</section>
+
+<!-- ═══ S06 三阶段演进 (真实定位) + 大四级递进 ═══ -->
+<section data-label="Three Phases" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Map · 演进路径</div>
+    <h2 class="reveal">三阶段演进 —— 每阶段改变的是<span class="em">人的角色</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="ph3-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 680" width="1920" height="680">
+        <!--
+          Three-Phase Evolution — Emerald Editorial re-skin (FIGURE ONLY).
+          Source layout: aidlc-three-phases-v2.svg. Re-skinned to deck palette
+          (oat-paper #F1E9D6 / navy #0F1A5C / emerald #1FB573), bordered cells, no dark blocks.
+          Title / subtitle / bottom-quote / page-indicator intentionally REMOVED — the deck
+          slide header + the 四级递进 ladder below handle those. Content matches approved slide-6.
+        -->
+        <defs>
+          <style>
+            .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+            .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+          </style>
+        </defs>
+      
+        <!-- background paper -->
+        <rect x="0" y="0" width="1920" height="680" fill="#F1E9D6"/>
+      
+        <!-- ════════ PHASE 1 · narrow, greyed (已达成) ════════ -->
+        <rect x="40" y="12" width="360" height="430" fill="#0F1A5C" fill-opacity="0.04" stroke="#0F1A5C" stroke-opacity="0.28" stroke-width="1.5" stroke-dasharray="7 5"/>
+        <!-- badges -->
+        <rect x="64" y="34" width="118" height="34" fill="#0F1A5C" fill-opacity="0.08"/>
+        <text x="123" y="57" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle" letter-spacing="1">PHASE 1</text>
+        <rect x="196" y="34" width="126" height="34" fill="none" stroke="#12854f" stroke-opacity="0.55" stroke-width="1.5"/>
+        <text x="259" y="57" class="sans" font-size="14" font-weight="700" fill="#12854f" text-anchor="middle">✓ 已达成</text>
+        <!-- title / role -->
+        <text x="220" y="118" class="serif" font-size="40" font-weight="900" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">AI 辅助</text>
+        <text x="220" y="150" class="sans" font-size="17" font-weight="700" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">人驱动 · AI 辅助</text>
+        <!-- formula -->
+        <text x="220" y="212" class="serif" font-size="34" font-weight="900" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">AI = 工具</text>
+        <!-- metric -->
+        <text x="220" y="270" class="serif" font-size="46" font-weight="900" fill="#0F1A5C" fill-opacity="0.5" text-anchor="middle">2x</text>
+        <text x="220" y="296" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.5" text-anchor="middle">吞吐量提升</text>
+        <line x1="72" y1="320" x2="368" y2="320" stroke="#0F1A5C" stroke-opacity="0.16" stroke-width="1"/>
+        <!-- methodology tag -->
+        <rect x="72" y="336" width="204" height="30" fill="none" stroke="#0F1A5C" stroke-opacity="0.3" stroke-width="1.5"/>
+        <text x="174" y="357" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">无机制 · 无方法论</text>
+        <!-- traits -->
+        <text x="72" y="392" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.6">· 个人自由发挥，Copilot 补代码</text>
+        <text x="72" y="418" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.6">· 天花板 = 只覆盖 30% lifecycle</text>
+      
+        <!-- arrow 1→2 -->
+        <text x="425" y="230" class="serif" font-size="40" font-weight="900" fill="#0F1A5C" fill-opacity="0.35" text-anchor="middle">→</text>
+      
+        <!-- ════════ PHASE 2 · wide, emerald (我们在这) ════════ -->
+        <rect x="462" y="12" width="676" height="430" fill="#1FB573" fill-opacity="0.10" stroke="#12854f" stroke-width="2.5"/>
+        <rect x="462" y="12" width="16" height="430" fill="#1FB573"/>
+        <!-- badges -->
+        <rect x="500" y="34" width="118" height="34" fill="#1FB573" fill-opacity="0.18"/>
+        <text x="559" y="57" class="sans" font-size="15" font-weight="800" fill="#12854f" text-anchor="middle" letter-spacing="1">PHASE 2</text>
+        <rect x="632" y="34" width="150" height="34" fill="#1FB573"/>
+        <text x="707" y="57" class="sans" font-size="14" font-weight="800" fill="#ffffff" text-anchor="middle">● 我们在这</text>
+        <!-- title / role -->
+        <text x="808" y="118" class="serif" font-size="46" font-weight="900" fill="#0F1A5C" text-anchor="middle">AI 驱动</text>
+        <text x="808" y="152" class="sans" font-size="19" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">人决策 · AI 执行</text>
+        <!-- formula -->
+        <text x="808" y="216" class="serif" font-size="42" font-weight="900" fill="#12854f" text-anchor="middle">AI = 执行者</text>
+        <!-- metric -->
+        <text x="808" y="278" class="serif" font-size="50" font-weight="900" fill="#12854f" text-anchor="middle">3x</text>
+        <text x="808" y="304" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.65" text-anchor="middle">吞吐量提升</text>
+        <line x1="500" y1="328" x2="1116" y2="328" stroke="#0F1A5C" stroke-opacity="0.18" stroke-width="1"/>
+        <!-- methodology tag -->
+        <rect x="500" y="344" width="252" height="32" fill="#1FB573"/>
+        <text x="626" y="366" class="sans" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">SDD · Spec-Driven Development</text>
+        <!-- traits -->
+        <text x="500" y="402" class="sans" font-size="16" fill="#0F1A5C" fill-opacity="0.8">· Spec 是合同 —— 100% Spec + 100% AI Coding</text>
+        <text x="500" y="428" class="sans" font-size="16" fill="#0F1A5C" fill-opacity="0.8">· 覆盖全生命周期，不只是 Coding</text>
+      
+        <!-- arrow 2↔3 : parallel / coexist -->
+        <text x="1163" y="230" class="serif" font-size="40" font-weight="900" fill="#12854f" text-anchor="middle">⇄</text>
+        <text x="1163" y="266" class="sans" font-size="13" font-weight="800" fill="#12854f" text-anchor="middle">并行</text>
+      
+        <!-- ════════ PHASE 3 · wide, emerald-accent (前沿探索中，与 Phase 2 并行) ════════ -->
+        <rect x="1200" y="12" width="680" height="430" fill="#1FB573" fill-opacity="0.05" stroke="#12854f" stroke-width="2.5"/>
+        <!-- badge -->
+        <rect x="1224" y="34" width="118" height="34" fill="#1FB573" fill-opacity="0.14"/>
+        <text x="1283" y="57" class="sans" font-size="15" font-weight="800" fill="#12854f" text-anchor="middle" letter-spacing="1">PHASE 3</text>
+        <rect x="1356" y="34" width="168" height="34" fill="none" stroke="#12854f" stroke-width="1.8"/>
+        <text x="1440" y="57" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">● 前沿探索中</text>
+        <!-- title / role -->
+        <text x="1540" y="118" class="serif" font-size="46" font-weight="900" fill="#0F1A5C" text-anchor="middle">AI 自治</text>
+        <text x="1540" y="152" class="sans" font-size="19" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">人监督 · AI 管理</text>
+        <!-- formula -->
+        <text x="1540" y="216" class="serif" font-size="42" font-weight="900" fill="#0F1A5C" text-anchor="middle">AI = 自主管理者</text>
+        <!-- metric -->
+        <text x="1540" y="278" class="serif" font-size="50" font-weight="900" fill="#12854f" text-anchor="middle">6–10x</text>
+        <text x="1540" y="304" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.65" text-anchor="middle">吞吐量提升</text>
+        <line x1="1240" y1="328" x2="1840" y2="328" stroke="#0F1A5C" stroke-opacity="0.18" stroke-width="1"/>
+        <!-- methodology tag -->
+        <rect x="1240" y="344" width="240" height="32" fill="none" stroke="#12854f" stroke-width="2"/>
+        <text x="1360" y="366" class="sans" font-size="15" font-weight="800" fill="#12854f" text-anchor="middle">DDD + SDD + TDD</text>
+        <!-- traits -->
+        <text x="1240" y="402" class="sans" font-size="16" fill="#0F1A5C" fill-opacity="0.8">· 自主 Pipeline (EVALUATE → REFLECT) + DDD 驱动判断</text>
+        <text x="1240" y="428" class="sans" font-size="16" fill="#0F1A5C" fill-opacity="0.8">· 自我改进循环 · Coding as Black Box</text>
+      
+        <!-- ════════ ROLE EVOLUTION BAR ════════ -->
+        <rect x="40" y="482" width="1840" height="176" fill="#0F1A5C" fill-opacity="0.03" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1"/>
+        <text x="960" y="520" class="sans" font-size="17" font-weight="800" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle" letter-spacing="1">每个阶段改变的是「谁做什么」　·　Phase 2 与 Phase 3 <tspan fill="#12854f">并行推进</tspan></text>
+      
+        <!-- progression line: grey → emerald -->
+        <defs>
+          <linearGradient id="roleline" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#0F1A5C" stop-opacity="0.3"/>
+            <stop offset="55%" stop-color="#1FB573"/>
+            <stop offset="100%" stop-color="#12854f"/>
+          </linearGradient>
+        </defs>
+        <line x1="120" y1="556" x2="1800" y2="556" stroke="url(#roleline)" stroke-width="4"/>
+        <circle cx="220" cy="556" r="9" fill="#F1E9D6" stroke="#0F1A5C" stroke-opacity="0.4" stroke-width="3"/>
+        <circle cx="808" cy="556" r="11" fill="#1FB573" stroke="#F1E9D6" stroke-width="3"/>
+        <circle cx="1540" cy="556" r="11" fill="#12854f" stroke="#F1E9D6" stroke-width="3"/>
+      
+        <!-- role labels under each phase center -->
+        <text x="220" y="598" class="sans" font-size="17" font-weight="700" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">人 = 操作者</text>
+        <text x="220" y="626" class="sans" font-size="16" fill="#0F1A5C" fill-opacity="0.45" text-anchor="middle">AI = 工具</text>
+        <text x="808" y="598" class="sans" font-size="18" font-weight="800" fill="#12854f" text-anchor="middle">人 = 决策者</text>
+        <text x="808" y="626" class="sans" font-size="16" font-weight="600" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">AI = 执行者</text>
+        <text x="1540" y="598" class="sans" font-size="18" font-weight="800" fill="#12854f" text-anchor="middle">人 = 监督者</text>
+        <text x="1540" y="626" class="sans" font-size="16" font-weight="600" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">AI = 自主管理者</text>
+      </svg>
+    </div>
+    <div class="ladder2 reveal"><span class="lstep">Spec-Driven</span><span class="larr">→</span><span class="lstep">DDD</span><span class="larr">→</span><span class="lstep">Autonomous</span><span class="larr">→</span><span class="lstep">Agentic OS</span><span class="lcap">四级递进 · 跳层 = 地基不稳</span></div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>06 / 19</span></div>
+</section>
+
+<!-- ═══ S07 Phase2 Spec-Driven 全链条 (参考原PPT) ═══ -->
+<section data-label="Phase 2 Model" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">Phase 2 · 打 Shift-Left</div>
+    <h2 class="reveal">全链条 Spec-Driven —— Spec 是<span class="em">唯一锚点</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="p2-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 700" width="1920" height="700">
+  <!--
+    Phase 2 · Spec-Driven operating model — Emerald Editorial re-skin (FIGURE ONLY, v2 refined).
+    Design principle: ONE hero (SPEC), everything else lighter — line-stepper flow (no boxes),
+    borderless up/down labels flowing into SPEC, role band = wash + hairline dividers with
+    Engineer the single emphasized card, enablers = top-accent-rule columns (no boxes).
+    Palette: oat-paper #F1E9D6 / navy #0F1A5C / emerald #1FB573. No dark blocks.
+    Title / subtitle / quote / page-indicator REMOVED — deck header + .sig-sm handle those.
+  -->
+  <defs>
+    <style>
+      .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+      .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+    </style>
+    <linearGradient id="stepline" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0F1A5C" stop-opacity="0.28"/>
+      <stop offset="50%" stop-color="#1FB573"/>
+      <stop offset="100%" stop-color="#12854f"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1920" height="700" fill="#F1E9D6"/>
+
+  <!-- ════════ FLOW · one continuous directional line; 3 upstream + 3 downstream straddle center ════════ -->
+  <!-- nodes: 1=230 2=485 3=740 [SEAM=960] 4=1180 5=1435 6=1690  → seam centered, symmetric -->
+  <line x1="230" y1="54" x2="1690" y2="54" stroke="url(#stepline)" stroke-width="3"/>
+  <!-- flow-direction chevrons (L→R) on each segment -->
+  <polygon points="350,48 364,54 350,60" fill="#0F1A5C" fill-opacity="0.45"/>
+  <polygon points="605,48 619,54 605,60" fill="#0F1A5C" fill-opacity="0.45"/>
+  <polygon points="1300,48 1314,54 1300,60" fill="#12854f" fill-opacity="0.6"/>
+  <polygon points="1555,48 1569,54 1555,60" fill="#12854f" fill-opacity="0.6"/>
+  <!-- node 1 -->
+  <circle cx="230" cy="54" r="16" fill="#F1E9D6" stroke="#0F1A5C" stroke-opacity="0.45" stroke-width="2.5"/>
+  <text x="230" y="60" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">1</text>
+  <text x="230" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Intake</text>
+  <!-- node 2 -->
+  <circle cx="485" cy="54" r="16" fill="#F1E9D6" stroke="#0F1A5C" stroke-opacity="0.45" stroke-width="2.5"/>
+  <text x="485" y="60" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">2</text>
+  <text x="485" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Requirements</text>
+  <!-- node 3 Planning (normal — no highlight; last upstream stage) -->
+  <circle cx="740" cy="54" r="16" fill="#F1E9D6" stroke="#0F1A5C" stroke-opacity="0.45" stroke-width="2.5"/>
+  <text x="740" y="60" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">3</text>
+  <text x="740" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Planning &amp; Triage</text>
+  <!-- node 4 Execution (first downstream stage) -->
+  <circle cx="1180" cy="54" r="16" fill="#F1E9D6" stroke="#12854f" stroke-width="2.5"/>
+  <text x="1180" y="60" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">4</text>
+  <text x="1180" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Execution</text>
+  <!-- node 5 Quality · CI/CD (downstream — the shift-right bottleneck) -->
+  <circle cx="1435" cy="54" r="16" fill="#F1E9D6" stroke="#12854f" stroke-width="2.5"/>
+  <text x="1435" y="60" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">5</text>
+  <text x="1435" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Quality · CI/CD</text>
+  <!-- node 6 Operations -->
+  <circle cx="1690" cy="54" r="16" fill="#F1E9D6" stroke="#12854f" stroke-width="2.5"/>
+  <text x="1690" y="60" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">6</text>
+  <text x="1690" y="96" class="serif" font-size="22" font-weight="800" fill="#0F1A5C" fill-opacity="0.8" text-anchor="middle">Operations</text>
+
+  <!-- ════════ SPEC anchor · BIG hero, dead-center on the Planning→Execution seam (x=960) ════════ -->
+  <!-- vertical connector: from the 3→4 seam of the flow line down to SPEC -->
+  <line x1="960" y1="70" x2="960" y2="120" stroke="#12854f" stroke-width="2.5" stroke-dasharray="5,4" opacity="0.8"/>
+  <!-- SPEC hero (centered at x=960, larger) -->
+  <rect x="792" y="122" width="336" height="98" rx="5" fill="#1FB573" fill-opacity="0.16" stroke="#12854f" stroke-width="3.5"/>
+  <text x="960" y="172" class="serif" font-size="46" font-weight="900" fill="#12854f" text-anchor="middle">SPEC</text>
+  <text x="960" y="202" class="sans" font-size="15" font-weight="700" fill="#0F1A5C" text-anchor="middle">Planning 产出 · Execution 忠于 (Features / Test / BugFixing)</text>
+  <!-- upstream: produced by 1→2→3 (arrow flows INTO SPEC from left) -->
+  <text x="430" y="152" class="sans" font-size="17" font-weight="800" fill="#12854f" text-anchor="end">↑ 上游产出 Spec</text>
+  <text x="430" y="176" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="end">Intake → Requirements → Planning</text>
+  <text x="430" y="196" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="end">所有决策与输出，为写好它</text>
+  <line x1="470" y1="171" x2="780" y2="171" stroke="#12854f" stroke-width="2" stroke-dasharray="7,4" opacity="0.65"/>
+  <polygon points="775,164 790,171 775,178" fill="#12854f"/>
+  <!-- downstream: consumed by 4→5 (arrow flows OUT of SPEC to the right) -->
+  <text x="1490" y="152" class="sans" font-size="17" font-weight="800" fill="#12854f" text-anchor="start">下游忠于 Spec ↓</text>
+  <text x="1490" y="176" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="start">Execution → Quality · CI/CD → Operations</text>
+  <text x="1490" y="196" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="start">所有执行，为忠于它</text>
+  <line x1="1140" y1="171" x2="1450" y2="171" stroke="#12854f" stroke-width="2" stroke-dasharray="7,4" opacity="0.65"/>
+  <polygon points="1145,164 1130,171 1145,178" fill="#12854f"/>
+
+  <!-- ════════ ROLE band · light wash + hairline dividers (Engineer = only card) ════════ -->
+  <rect x="140" y="238" width="1640" height="212" rx="6" fill="#0F1A5C" fill-opacity="0.025"/>
+  <text x="255" y="272" class="sans" font-size="14" font-weight="800" fill="#12854f" letter-spacing="1" text-anchor="middle">现有组织角色 · 责任重新分配</text>
+  <line x1="700" y1="267" x2="1740" y2="267" stroke="#0F1A5C" stroke-opacity="0.14" stroke-width="1"/>
+
+  <!-- TPM -->
+  <text x="255" y="322" class="serif" font-size="25" font-weight="900" fill="#0F1A5C" text-anchor="middle">TPM</text>
+  <text x="255" y="349" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">范围 &amp; 节奏</text>
+  <text x="255" y="376" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">控制 scope · triage</text>
+  <text x="255" y="398" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">管理依赖</text>
+  <line x1="400" y1="300" x2="400" y2="418" stroke="#0F1A5C" stroke-opacity="0.1" stroke-width="1"/>
+
+  <!-- PMT -->
+  <text x="520" y="322" class="serif" font-size="25" font-weight="900" fill="#0F1A5C" text-anchor="middle">PMT</text>
+  <text x="520" y="349" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">需求 &amp; 优先级</text>
+  <text x="520" y="376" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">定义"做什么" · ROI</text>
+  <text x="520" y="398" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">验收标准</text>
+  <line x1="640" y1="300" x2="640" y2="418" stroke="#0F1A5C" stroke-opacity="0.1" stroke-width="1"/>
+
+  <!-- UXD -->
+  <text x="760" y="322" class="serif" font-size="25" font-weight="900" fill="#0F1A5C" text-anchor="middle">UXD</text>
+  <text x="760" y="349" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">体验 &amp; 设计</text>
+  <text x="760" y="376" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">交互规范 · 设计系统</text>
+  <text x="760" y="398" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">可用性标准</text>
+
+  <!-- Tech Lead (moved to old Engineer slot) -->
+  <text x="1025" y="322" class="serif" font-size="25" font-weight="900" fill="#0F1A5C" text-anchor="middle">Tech Lead</text>
+  <text x="1025" y="349" class="sans" font-size="14" font-weight="700" fill="#0F1A5C" fill-opacity="0.85" text-anchor="middle">判断 &amp; 把关</text>
+  <text x="1025" y="376" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">架构决策 · 技术 ROI</text>
+  <text x="1025" y="398" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.58" text-anchor="middle">Spec 质量审核</text>
+  <line x1="1175" y1="300" x2="1175" y2="418" stroke="#0F1A5C" stroke-opacity="0.1" stroke-width="1"/>
+
+  <!-- Engineer — the ONE emphasized card (moved to old Tech Lead slot, made bigger) -->
+  <rect x="1200" y="280" width="308" height="158" rx="6" fill="#1FB573" fill-opacity="0.12" stroke="#12854f" stroke-width="2.5"/>
+  <text x="1354" y="314" class="serif" font-size="27" font-weight="900" fill="#12854f" text-anchor="middle">Engineer</text>
+  <text x="1354" y="342" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">Full-Stack · 端到端</text>
+  <text x="1354" y="368" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.75" text-anchor="middle">技术方案 + 实现 · 测试 · 部署运维</text>
+  <text x="1354" y="402" class="sans" font-size="15" font-weight="800" fill="#12854f" text-anchor="middle">Dev + QA + DevOps → 1 人</text>
+  <text x="1354" y="424" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">消灭角色间 coordination</text>
+
+  <!-- AI Agents -->
+  <text x="1635" y="322" class="serif" font-size="25" font-weight="900" fill="#12854f" text-anchor="middle">AI Agents</text>
+  <text x="1635" y="349" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">执行 &amp; 交付</text>
+  <text x="1635" y="376" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.68" text-anchor="middle">按 Spec 编码 · 自动测试</text>
+  <text x="1635" y="398" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.68" text-anchor="middle">部署 &amp; 监控</text>
+
+  <!-- ════════ SHIFT · inline hairline, no box ════════ -->
+  <text x="140" y="486" class="sans" font-size="14" font-weight="700" fill="#12854f">← Engineer 左移 · 参与决策</text>
+  <line x1="470" y1="481" x2="900" y2="481" stroke="#12854f" stroke-width="1.5" stroke-dasharray="7,4" opacity="0.55"/>
+  <polygon points="476,476 462,481 476,486" fill="#12854f"/>
+  <text x="960" y="486" class="sans" font-size="13" font-weight="800" fill="#0F1A5C" fill-opacity="0.55" text-anchor="middle">边界模糊 · 握手点↓ · Coordination Tax↓</text>
+  <line x1="1020" y1="481" x2="1450" y2="481" stroke="#12854f" stroke-width="1.5" stroke-dasharray="7,4" opacity="0.55"/>
+  <polygon points="1444,476 1458,481 1444,486" fill="#12854f"/>
+  <text x="1780" y="486" class="sans" font-size="14" font-weight="700" fill="#12854f" text-anchor="end">PM / UX 右移 · 能验证实现 →</text>
+
+  <!-- ════════ AI ENABLERS · top-accent-rule columns (no boxes) ════════ -->
+  <text x="140" y="536" class="sans" font-size="15" font-weight="800" fill="#12854f">AI 赋能层 —— 降低链路中每一环的 Coordination Tax</text>
+
+  <!-- col 1 -->
+  <rect x="170" y="560" width="470" height="5" fill="#1FB573"/>
+  <text x="170" y="600" class="sans" font-size="18" font-weight="800" fill="#0F1A5C">AI-Ready Intake Evaluation</text>
+  <text x="170" y="632" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">需求进入即评估完整度</text>
+  <text x="170" y="656" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">→ 减少反复澄清</text>
+
+  <!-- col 2 -->
+  <rect x="725" y="560" width="470" height="5" fill="#1FB573"/>
+  <text x="725" y="600" class="sans" font-size="18" font-weight="800" fill="#0F1A5C">AI-Ready Requirement Evaluation</text>
+  <text x="725" y="632" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">Spec 写完即验证可执行性</text>
+  <text x="725" y="656" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">→ 减少返工循环</text>
+
+  <!-- col 3 -->
+  <rect x="1280" y="560" width="470" height="5" fill="#1FB573"/>
+  <text x="1280" y="600" class="sans" font-size="18" font-weight="800" fill="#0F1A5C">AI-Ready Repo</text>
+  <text x="1280" y="632" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">DDD 结构化上下文</text>
+  <text x="1280" y="656" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.72">→ AI 理解意图，不只导航代码</text>
+</svg>
+    </div>
+    <div class="readmore reveal">
+      <span class="rml">参考框架 · GitHub</span>
+      <a href="https://github.com/awslabs/aidlc-workflows" target="_blank" rel="noopener">AI-DLC · awslabs/aidlc-workflows</a>
+      <a href="https://github.com/aws-samples/sample-ai-plc" target="_blank" rel="noopener">AI-PLC · aws-samples/sample-ai-plc</a>
+    </div>
+  </div>
+  <div class="sig-sm">Engineer 左移决策 · PM/UX 右移验证 → 握手点减少 → Coordination Tax 下降</div>
+  <div class="foot"><span>Phase 2 · Spec-Driven</span><span>07 / 19</span></div>
+</section>
+
+<!-- ═══ S08 天花板: 有效部分 + 解决不了的两件事 (参考原PPT) ═══ -->
+<section data-label="The Ceiling" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Hinge · 转折</div>
+    <h2 class="reveal">Spec-Driven 规范了纪律 —— 但没改<span class="em">组织与判断</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="s8">
+      <div class="s8anchor reveal">Spec-Driven <b>规范了协作纪律</b>，也 <b>规范了 AI 执行</b> —— 但<span class="no">没改组织与知识沉淀</span>，也<span class="no">没给 AI 判断力</span>。</div>
+
+      <div class="s8cmp reveal">
+        <div class="s8col pos">
+          <div class="s8ch">✓ 做到了（3x）</div>
+          <div class="s8it"><div class="t">规范了协作纪律</div><div class="d">Spec = 合同，消灭意图漂移与反复对齐。</div></div>
+          <div class="s8it"><div class="t">规范了 AI 执行</div><div class="d">AI 忠于 Spec 交付，行为可预期。</div></div>
+        </div>
+        <div class="s8col neg">
+          <div class="s8ch">✗ 没解决（病根）</div>
+          <div class="s8it"><div class="t">没改组织与沉淀</div><div class="d">PM / Engineer / QA 仍是顺序筒仓，只是各自用 AI 变快。</div></div>
+          <div class="s8it"><div class="t">没给 AI 判断力</div><div class="d">判断力锁在个人脑里 —— 不 scale、不沉淀，人走即失。</div></div>
+        </div>
+      </div>
+
+      <div class="s8arrow reveal">在真实项目里，表现为三个疼点</div>
+
+      <div class="s8sym reveal">
+        <div class="s8sc"><div class="st">Spec 腐烂</div><div class="sd">写得快，质量与新鲜度跟不上，越改越漂。</div></div>
+        <div class="s8sc"><div class="st">Brownfield 冷启动</div><div class="sd">老库 AI 读不懂，无法 quick understand。</div></div>
+        <div class="s8sc"><div class="st">Cross-package 复杂度</div><div class="sd">隐式依赖，修 A 炸 B，blast radius 看不见。</div></div>
+      </div>
+
+      <div class="s8punch reveal">
+        <div class="pl">AGENTS.md + System Specs 只解决"<span class="em">导航</span>"，不解决"<span class="em">判断</span>" —— 配置 ≠ 知识 · 导航 ≠ 理解，Agent 要的是<b>领域知识体系</b>，不是文件地图。</div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>Phase 2 · Discipline vs Judgment</span><span>08 / 19</span></div>
+</section>
+
+<!-- ═══ S09 DDD as Brain + Domain Expert + High-Level 架构 ═══ -->
+<section data-label="DDD as Brain" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Bridge · 护城河</div>
+    <h2 class="reveal">DDD as Brain —— 让 <span class="em">Domain Expert</span> 的判断力进系统</h2>
+  </div>
+  <div class="sbody">
+    <div class="brainwrap reveal">
+      <div class="rolewrap">
+        <div class="roletbl">
+          <div class="rrow head"><div class="rc">Domain Expert</div><div class="rc">养 DDD 维度</div><div class="rc">共担产出</div></div>
+          <div class="rrow"><div class="rc"><span class="role">PM</span></div><div class="rc"><span class="dim">PRODUCT</span></div><div class="rc"><span class="txt">Spec / PR</span></div></div>
+          <div class="rrow"><div class="rc"><span class="role">Engineer</span></div><div class="rc"><span class="dim">TECH</span></div><div class="rc"><span class="txt">Spec / PR</span></div></div>
+          <div class="rrow"><div class="rc"><span class="role">QA</span></div><div class="rc"><span class="dim">IMPROVEMENT</span></div><div class="rc"><span class="txt">Spec / PR</span></div></div>
+          <div class="rrow"><div class="rc"><span class="role">Others</span></div><div class="rc"><span class="dim">PROJECT</span></div><div class="rc"><span class="txt">Spec / PR</span></div></div>
+        </div>
+        <div class="rolenote">各角色小组<b>共养同一个 DDD</b> —— 组织转型与 AI 赋能，是<b>同一个动作</b>。</div>
+      </div>
+      <div class="brainarch">
+        <div class="bah">DDD = 产品的领域大脑 <b>· 四个组成部分</b></div>
+        <div class="bparts">
+          <div class="bp"><span class="bpn">① Identity 身份</span><span class="bpd">这个产品是什么 · 配置与清单（AGENTS.md / CLAUDE.md）</span></div>
+          <div class="bp"><span class="bpn">② Knowledge 判断力</span><span class="bpd">怎么判断该不该做、能不能动 —— 沉淀成 4 份 markdown</span>
+            <div class="mds">
+              <div class="md"><span class="mdn">PRODUCT</span><span class="mdd">为什么存在 · 不做什么</span></div>
+              <div class="md"><span class="mdn">TECH</span><span class="mdd">怎么运作 · 什么约定</span></div>
+              <div class="md"><span class="mdn">IMPROVEMENT</span><span class="mdd">踩过的坑 · 反模式</span></div>
+              <div class="md"><span class="mdn">PROJECT</span><span class="mdd">在干嘛 · 不能碰什么</span></div>
+            </div>
+          </div>
+          <div class="bp"><span class="bpn">③ Gates 关卡</span><span class="bpd">把判断变成可执行的 hook —— 别的 agent 能直接继承</span></div>
+          <div class="bp"><span class="bpn">④ Capabilities 能力</span><span class="bpd">能做什么 —— 自带"判断→执行→复盘"闭环的 skills</span></div>
+        </div>
+        <div class="governln">另外还<b>指向并管理</b>代码（CodeGraph）、domain docs、构建、部署 —— 但只是指路，<b>不装源码、不跑管线</b>。</div>
+      </div>
+    </div>
+    <div class="moneyshot reveal">
+      <div class="ms-tag">判断力 · Scale</div>
+      <div class="ms-txt">判断力<b>从专家真实工作里长出来</b>，沉进 DDD —— 然后<b>被每个 agent 继承</b>。judgment 第一次可以 scale，不再随人走而消失。</div>
+    </div>
+  </div>
+  <div class="foot"><span>DDD as Brain</span><span>09 / 19</span></div>
+</section>
+
+<!-- ═══ S10 Sample 1 · DDD for AI-Ready-Repo (v3 · 三层理解 · human-signable) ═══ -->
+<section data-label="DDD for Repo" class="pad">
+  <div class="shead">
+    <div class="sample-tag reveal">Sample 1 · 让 AI 读懂代码，更让人敢改 legacy</div>
+    <h2 class="reveal">AI-Ready Repo —— AI 读得懂，<span style="color:#12854f;">人签得下</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="p2-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 720" width="1920" height="720">
+  <defs>
+    <style>
+      .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+      .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+    </style>
+    <marker id="s10up" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#a3282a"/></marker>
+    <marker id="s10dn" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#12854f"/></marker>
+  </defs>
+
+  <!-- ═══ ANCHOR — the viewpoint (now three-part) ═══ -->
+  <text x="960" y="40" class="serif" font-size="33" font-weight="900" fill="#0F1A5C" text-anchor="middle">配置 <tspan fill="#a3282a">≠</tspan> 知识　·　导航 <tspan fill="#a3282a">≠</tspan> 判断　·　判断 <tspan fill="#a3282a">≠</tspan> 可签署</text>
+  <text x="960" y="74" class="sans" font-size="19" font-weight="700" fill="#0F1A5C" fill-opacity="0.82" text-anchor="middle">AGENTS.md 说「东西在哪」　·　DDD 说「<tspan fill="#12854f" font-weight="800">该不该动</tspan>」　·　Spec 让人「<tspan fill="#12854f" font-weight="800">敢签字改黑盒</tspan>」</text>
+
+  <!-- ═══ AGENTS.md — entry loader bar (spans all layers) ═══ -->
+  <rect x="140" y="90" width="1640" height="48" rx="5" fill="#0F1A5C" fill-opacity="0.05" stroke="#0F1A5C" stroke-opacity="0.28" stroke-width="1.5" stroke-dasharray="7 4"/>
+  <text x="960" y="120" class="sans" font-size="19" font-weight="800" fill="#0F1A5C" text-anchor="middle">AGENTS.md　·　入口 ≤150 行　·　按任务类型按需装载 ↓</text>
+
+  <!-- ═══ USAGE axis (read direction, down-left) ═══ -->
+  <line x1="116" y1="170" x2="116" y2="566" stroke="#12854f" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#s10dn)"/>
+  <text transform="translate(60 368) rotate(90)" text-anchor="middle" class="sans" font-size="19" font-weight="800" fill="#12854f">使用 ↓ 从大局钻到精确</text>
+
+  <!-- ═══ TRUST / grounding axis (anchor direction, up-right) ═══ -->
+  <line x1="1748" y1="566" x2="1748" y2="234" stroke="#a3282a" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#s10up)"/>
+  <text transform="translate(1802 400) rotate(90)" text-anchor="middle" class="sans" font-size="16" font-weight="800" fill="#a3282a">信任 ↑ 每条断言锚定 file:line = 可签字底座</text>
+
+  <!-- ═══ LAYER 1 · DDD — THE JUDGMENT LAYER (highlighted) ═══ -->
+  <rect x="200" y="162" width="1480" height="128" rx="6" fill="#1FB573" fill-opacity="0.17" stroke="#12854f" stroke-width="3"/>
+  <rect x="1420" y="180" width="240" height="36" rx="18" fill="#12854f"/>
+  <text x="1540" y="204" class="sans" font-size="16" font-weight="800" fill="#FFFFFF" text-anchor="middle">判断层 · THE BRAIN</text>
+  <text x="234" y="212" class="serif" font-size="33" font-weight="900" fill="#0F1A5C">DDD · 4-File</text>
+  <text x="234" y="247" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.78">PRODUCT · TECH · IMPROVEMENT · PROJECT　—　为什么 / 怎么 / 踩过的坑 / 当前焦点</text>
+  <text x="234" y="278" class="sans" font-size="20" font-weight="800" fill="#12854f">不是导航，是判断：该不该动、动了值不值　——　别的工具没有的一层</text>
+
+  <!-- ═══ LAYER 2 · spec-details (v3 hero) ═══ -->
+  <rect x="320" y="306" width="1240" height="124" rx="5" fill="#1FB573" fill-opacity="0.06" stroke="#0F1A5C" stroke-opacity="0.20" stroke-width="1.5"/>
+  <text x="352" y="354" class="serif" font-size="29" font-weight="900" fill="#0F1A5C">spec-details · *.spec.md <tspan fill="#12854f">⭐</tspan></text>
+  <text x="352" y="389" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.78">业务流规格：接口契约 · 异常路径 · 架构图 · 用户流图</text>
+  <text x="352" y="418" class="sans" font-size="19" font-weight="700" fill="#12854f">AI 判断 + 人签字，读的是同一份　——　v3 新增</text>
+
+  <!-- ═══ LAYER 3 · code-intel.json (machine skeleton) ═══ -->
+  <rect x="440" y="446" width="1000" height="128" rx="5" fill="#0F1A5C" fill-opacity="0.035" stroke="#0F1A5C" stroke-opacity="0.20" stroke-width="1.5"/>
+  <text x="472" y="494" class="serif" font-size="28" font-weight="900" fill="#0F1A5C">code-intel.json · domains / flows / steps</text>
+  <text x="472" y="530" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.78">精确骨架：file:line · 依赖边 · 爆炸半径</text>
+  <text x="472" y="558" class="sans" font-size="18" font-weight="700" fill="#0F1A5C" fill-opacity="0.62">确定性查找 · recall 索引 · 增量 merge 锚点</text>
+
+  <!-- ═══ RDE bottom banner — the CXO hook ═══ -->
+  <rect x="140" y="626" width="1640" height="72" rx="6" fill="#a3282a" fill-opacity="0.055" stroke="#a3282a" stroke-opacity="0.30" stroke-width="1.5"/>
+  <text x="170" y="659" class="sans" font-size="20" font-weight="800" fill="#a3282a">改没人敢碰的 legacy 黑盒：Agent 只问「handler 在哪」</text>
+  <text x="170" y="686" class="sans" font-size="17" font-weight="600" fill="#0F1A5C" fill-opacity="0.82">要动手的人问「改这条流炸到哪 · 每步契约是什么 · 我敢不敢签字担保对」　——　这就是 Reverse Documentation Engineering (RDE)</text>
+</svg>
+    </div>
+    <div class="readmore reveal">
+      <span class="rml">深入阅读 · GitHub Discussions</span>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/51" target="_blank" rel="noopener">AI-Ready Repo 标准 — 为什么 CLAUDE.md 不够</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/49" target="_blank" rel="noopener">AI 读不懂 50 万行代码库 — 什么才有用</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/29" target="_blank" rel="noopener">多专家对抗式代码审查</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/blob/main/docs/AI-Ready-Repo-Engine-Design.md" target="_blank" rel="noopener">AI-Ready Repo Engine — 完整设计文档</a>
+    </div>
+  </div>
+  <div class="foot"><span>DDD as Brain · Sample 1</span><span>10 / 19</span></div>
+</section>
+
+<!-- ═══ S11 Sample 2 · DDD for Data Agent (High-level 架构) ═══ -->
+<section data-label="DDD for Data" class="pad">
+  <div class="shead">
+    <div class="sample-tag reveal">Sample 2 · 让 AI 读懂数据</div>
+    <h2 class="reveal">AI Agent for Data —— DDD for Data</h2>
+  </div>
+  <div class="sbody">
+    <div class="arch s11 reveal">
+      <div class="alayer consumers"><div class="ah"><span class="an">Consumers</span><span class="ar">消费层 · 可替换</span><span class="arole">任何 Agent 都能接入</span></div>
+        <div class="arole-inline"><span class="chip-mini">Ops Agent</span><span class="chip-mini">Domain Agent</span><span class="chip-mini">Amazon Quick</span><span class="chip-mini">Kiro</span><span class="chip-mini">Custom</span></div>
+      </div>
+      <div class="alayer"><div class="ah"><span class="an">Skills Layer</span><span class="ar">Hands · 业务编排</span><span class="arole">知道一个任务需要哪些步骤</span></div>
+        <div class="acells c2"><div class="acell"><div class="att">业务 Workflow</div><div class="atd">周报 · 客户全景 · 预测 · 风险预警</div></div><div class="acell"><div class="att">不内嵌数据知识</div><div class="atd">从 Knowledge 拉取，决定调哪些 MCP</div></div></div>
+      </div>
+      <div class="alayer hero big"><div class="ah"><span class="an">Knowledge Layer</span><span class="ar">判断力 · The Missing Middle</span><span class="arole">数据的含义 + 谁能看 = 判断力</span></div>
+        <div class="acells c4">
+          <div class="acell"><div class="att">Semantic Catalog</div><div class="atd">表列业务含义 · 领域规则 · 强制过滤</div></div>
+          <div class="acell"><div class="att">Certified Patterns</div><div class="atd">命名 SQL 模板 · 验证规则自动执行</div></div>
+          <div class="acell"><div class="att">Access Policies</div><div class="atd">RLS · 按身份/应用的数据边界</div></div>
+          <div class="acell"><div class="att">Evolution Loop</div><div class="atd">高频查询结晶为 Certified —— 越用越准</div></div>
+        </div>
+        <div class="callout-strip">多数组织<b>跳过这层</b>直连 Agent→SQL = 幻觉根源 ｜ 裸 NL2SQL 60-70% → +语义合约 <b>~95%</b> → Certified <b>100%</b></div>
+      </div>
+      <div class="alayer"><div class="ah"><span class="an">MCP Layer</span><span class="ar">Legs · 原子执行</span><span class="arole">Agent 无法绕过安全 —— 这里强制 RLS</span></div>
+        <div class="acells c2"><div class="acell"><div class="att">execute_certified_query()</div><div class="atd">按合约取数 · validate_sql · get_schema</div></div><div class="acell"><div class="att">中间件强制链</div><div class="atd">Auth → 身份解析 → RLS 改写 → 审计</div></div></div>
+      </div>
+      <div class="alayer infra"><div class="ah"><span class="an">Infrastructure</span><span class="ar">数据基础设施 · 现有不动</span></div>
+        <div class="arole-inline"><span class="chip-mini">Athena</span><span class="chip-mini">Redshift</span><span class="chip-mini">S3 Lake</span><span class="chip-mini">CRM</span><span class="chip-mini">NoSQL</span></div>
+      </div>
+    </div>
+    <div class="readmore reveal">
+      <span class="rml">深入阅读 · GitHub Discussions</span>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/36" target="_blank" rel="noopener">AI Agent for Data：从幻觉到精准</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/98" target="_blank" rel="noopener">续篇：L3 契约层 + L2 受约束 NL2SQL（带牙齿）</a>
+    </div>
+  </div>
+  <div class="foot"><span>DDD as Brain · Sample 2 —— 数据治理从"谁能看" → "看到的对不对"</span><span>11 / 19</span></div>
+</section>
+
+<!-- ═══ S12 DDD Cultivation — 7类 + 达尔文衰减 ═══ -->
+<section data-label="DDD Cultivation" class="pad">
+  <div class="shead">
+    <div class="sample-tag reveal">The Engine · 让 DDD 活着</div>
+    <h2 class="reveal">DDD Cultivation —— <span class="em">Ontology + 达尔文</span>，越用越准</h2>
+    <div class="dek reveal">核心竞争力不是"记住"，是"遗忘" —— 引用 = 自然选择。</div>
+  </div>
+  <div class="sbody">
+    <!-- anchor: encyclopedia vs darwinian -->
+    <div class="s12anchor reveal">
+      <div class="s12av bad"><div class="h">✗ 百科全书模式</div><div class="d">存下来 · 永不删 · 查询时过滤 —— 越积越肿，没人敢删</div></div>
+      <div class="s12av-vs">VS</div>
+      <div class="s12av good"><div class="h">✓ 达尔文模式</div><div class="d">用则强化 · 不用则衰减 · 最终死亡 —— 引用 = 自然选择</div></div>
+    </div>
+
+    <!-- 7 types × 3 layers  +  ontology -->
+    <div class="s12main reveal">
+      <div class="klayers">
+        <div class="klayer"><div class="klhwrap"><div class="klh">Operational</div><div class="kls">操作层 · 怎么做</div></div>
+          <div class="ktypes"><span class="ktype">guideline <b>指导</b></span><span class="ktype">pitfall <b>陷阱</b></span><span class="ktype">process <b>流程</b></span></div>
+          <div class="kdecay">最易朽</div></div>
+        <div class="klayer"><div class="klhwrap"><div class="klh">Cognitive</div><div class="kls">认知层 · 怎么判断</div></div>
+          <div class="ktypes"><span class="ktype">decision <b>决策</b></span><span class="ktype">model <b>模型</b></span></div>
+          <div class="kdecay">中速</div></div>
+        <div class="klayer meta"><div class="klhwrap"><div class="klh">Meta-Cognitive</div><div class="kls">元认知层 · 怎么想</div></div>
+          <div class="ktypes"><span class="ktype">principle <b>原则</b></span><span class="ktype">correction <b>纠错</b></span></div>
+          <div class="kdecay">★ 常青</div></div>
+      </div>
+      <div class="ontobox">
+        <div class="oh">这套分类 = 一层轻量 Ontology</div>
+        <div class="ontorow">
+          <div class="onto"><div class="ot">认识</div><div class="od">企业领域知识 —— 是什么、怎么连（让 AI 找得到）</div></div>
+          <div class="onto"><div class="ot">判断</div><div class="od">能不能动、谁负责（让 AI 做决定）</div></div>
+        </div>
+        <div class="ontonote">不搞 <b>OWL/RDF</b>（繁琐的学术描述标准）、不上 <b>Neo4j</b>（重型图数据库）—— 几份 markdown + 一份关系清单就够。<b>价值不在"知道得多"，在"能做判断"。</b></div>
+      </div>
+    </div>
+
+    <!-- lifecycle timeline + real example -->
+    <div class="lifeline reveal">
+      <div class="decay">
+        <div class="dc live"><div class="dcs">active</div><div class="dcd">被引用 → 刷新 + 唤醒</div></div>
+        <div class="darrow">— 60 天无引用 →</div>
+        <div class="dc"><div class="dcs">dormant</div><div class="dcd">休眠</div></div>
+        <div class="darrow">— 150 天 →</div>
+        <div class="dc dead"><div class="dcs">archived</div><div class="dcd">物理剥离</div></div>
+      </div>
+      <div class="kex">
+        <div class="kexrow stay"><span class="tag">principle 原则</span>「收入按摊销口径计」→ 每张报表都引用，<b>永远 active</b></div>
+        <div class="kexrow gone"><span class="tag">guideline 指导</span>「本轮 forecast 锁定最新 cycle」→ 换轮即过时 → 衰减消失</div>
+        <div class="kexsum">越"怎么判断"越常青，越"这轮怎么做"越易朽 —— <b>达尔文分层自动决定谁留谁走。</b></div>
+      </div>
+    </div>
+
+    <details class="kcmp reveal">
+      <summary><span class="kbtn">对比 Karpathy LLM Wiki</span><span>Karpathy 的 LLM Wiki 解决"知识怎么活着不腐烂"；我们在它上面再加一层——<b>"知识怎么变成判断力，以及怎么主动遗忘"</b>。</span></summary>
+      <div class="kpanel">
+        <button class="kpclose" type="button" onclick="this.closest('details').open=false">收起 ✕</button>
+        <div class="kph">同源，但不同层</div>
+        <div class="kpsub">同押"活文档 &gt; 无状态 RAG"，也同解"人维护不动 wiki"的百年难题 —— 但我们多出两层。</div>
+        <div class="kptbl">
+          <div class="kc0 khead">维度</div><div class="kc1 khead">Karpathy LLM Wiki</div><div class="kc2 khead k2">SwarmAI DDD 治理</div>
+          <div class="kc0">目的</div><div class="kc1">回答问题（Q&amp;A 知识库）</div><div class="kc2">做判断（驱动 pipeline：该不该做 / 能不能动）</div>
+          <div class="kc0">遗忘</div><div class="kc1">Lint 找矛盾，靠"AI 不累"无限维护（只增）</div><div class="kc2">达尔文衰减：60d→150d 物理剥离，引用=自然选择</div>
+          <div class="kc0">分类</div><div class="kc1">自由页面 + 链接</div><div class="kc2">7 类 MECE（相互独立、完全穷尽）× 3 认知层 —— 分类决定注入 + 衰减速度</div>
+          <div class="kc0">强制</div><div class="kc1">靠约定 + 人 review</div><div class="kc2">机械 gate 自动执行，不靠自觉</div>
+        </div>
+        <div class="kpfoot">他要的是<b>一个不会烂的百科全书</b>；我们要的是<b>一个会自然选择的大脑</b>。</div>
+        <div class="kplinks">
+          <span class="kll">深入阅读 · GitHub Discussions</span>
+          <a href="https://github.com/xg-gh-25/SwarmAI/discussions/59" target="_blank" rel="noopener">DDD Knowledge Governance（带代码）</a>
+          <a href="https://github.com/xg-gh-25/SwarmAI/discussions/100" target="_blank" rel="noopener">Ontology 是决策层，不是知识图谱</a>
+          <a href="https://github.com/xg-gh-25/SwarmAI/discussions/40" target="_blank" rel="noopener">DDD Cultivation — 完整故事</a>
+        </div>
+      </div>
+    </details>
+  </div>
+  <div class="foot"><span>DDD as Brain · Cultivation</span><span>12 / 19</span></div>
+</section>
+
+<!-- ═══ S13 Phase3 完整 Pipeline 架构 (9 阶段) ═══ -->
+<section data-label="Phase 3 Pipeline" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">Phase 3 · 打 Shift-Right</div>
+    <h2 class="reveal">Autonomous Pipeline —— <span class="em">9 阶段自主交付</span></h2>
+    <div class="dek reveal">一句话需求 → PR-ready 交付。判断力已进系统，AI 才敢自主：该不该做 / 怎么做 / 做完自己验。</div>
+  </div>
+  <div class="sbody">
+    <div class="sxt-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 740" width="1920" height="740">
+        <!--
+          Autonomous Pipeline — Emerald-Editorial re-skin of aidlc-autonomous-pipeline-v4.svg.
+          Same model (9 stages · 3 gates · 2 modes · DDD compounding loop);
+          only the style is swapped to the deck palette: oat-paper field, navy ink,
+          emerald accent, Bodoni serif headings + Manrope sans labels, bordered boxes
+          (no dark fills), semantic emerald washes. Gates are emerald-filled tags.
+        -->
+        <defs>
+          <style>
+            .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+            .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+          </style>
+          <marker id="pArrInk" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8" fill="#0F1A5C"/></marker>
+          <marker id="pArrEm" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8" fill="#1FB573"/></marker>
+        </defs>
+
+        <!-- Background: flat oat-paper -->
+        <rect width="1920" height="740" fill="#F1E9D6"/>
+
+        <!-- ============ DDD KNOWLEDGE COLUMN (left, full height) ============ -->
+        <rect x="14" y="18" width="238" height="704" fill="rgba(31,181,115,0.10)" stroke="#0F1A5C" stroke-width="3"/>
+        <rect x="14" y="18" width="11" height="704" fill="#1FB573"/>
+        <text x="140" y="66" class="serif" font-size="38" font-weight="900" fill="#12854f" text-anchor="middle">DDD</text>
+        <text x="140" y="94" class="sans" font-size="16" font-weight="800" fill="#0F1A5C" text-anchor="middle" letter-spacing="1">KNOWLEDGE LAYER</text>
+        <text x="140" y="116" class="sans" font-size="15" font-weight="600" fill="#0F1A5C" fill-opacity="0.68" text-anchor="middle">判断力地基</text>
+        <line x1="38" y1="134" x2="240" y2="134" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1.5"/>
+        <!-- 4 docs -->
+        <text x="140" y="170" class="serif" font-size="19" font-weight="800" fill="#0F1A5C" text-anchor="middle">PRODUCT.md</text>
+        <text x="140" y="190" class="sans" font-size="13.5" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">该不该做</text>
+        <text x="140" y="228" class="serif" font-size="19" font-weight="800" fill="#0F1A5C" text-anchor="middle">TECH.md</text>
+        <text x="140" y="248" class="sans" font-size="13.5" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">怎么做 · 阻塞约束 ★</text>
+        <text x="140" y="286" class="serif" font-size="19" font-weight="800" fill="#0F1A5C" text-anchor="middle">IMPROVEMENT.md</text>
+        <text x="140" y="306" class="sans" font-size="13.5" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">曾经踩过什么坑</text>
+        <text x="140" y="344" class="serif" font-size="19" font-weight="800" fill="#0F1A5C" text-anchor="middle">PROJECT.md</text>
+        <text x="140" y="364" class="sans" font-size="13.5" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">当前状态 + DoD</text>
+        <line x1="38" y1="390" x2="240" y2="390" stroke="#0F1A5C" stroke-opacity="0.22" stroke-width="1.5"/>
+        <text x="140" y="428" class="serif" font-size="22" font-weight="900" fill="#12854f" text-anchor="middle">复利循环</text>
+        <text x="140" y="462" class="sans" font-size="14.5" fill="#0F1A5C" fill-opacity="0.78" text-anchor="middle">每次 REFLECT 写回</text>
+        <text x="140" y="488" class="sans" font-size="14.5" fill="#0F1A5C" fill-opacity="0.78" text-anchor="middle">→ 下次判断更准</text>
+        <text x="140" y="514" class="sans" font-size="14.5" fill="#0F1A5C" fill-opacity="0.78" text-anchor="middle">→ 错误按"类"消除</text>
+        <text x="140" y="540" class="sans" font-size="14.5" fill="#0F1A5C" fill-opacity="0.78" text-anchor="middle">→ Gate 学历史失败</text>
+        <text x="140" y="566" class="sans" font-size="14.5" fill="#0F1A5C" fill-opacity="0.78" text-anchor="middle">→ Skills 自进化</text>
+        <!-- cyclic compounding arrow -->
+        <path d="M 40,690 Q 6,400 40,120" fill="none" stroke="#1FB573" stroke-width="2.5" stroke-dasharray="9,5" stroke-opacity="0.55" marker-end="url(#pArrEm)"/>
+        <text x="34" y="410" class="sans" font-size="12.5" font-weight="700" fill="#12854f" text-anchor="middle" transform="rotate(-90,34,410)">知识每一轮都在复利</text>
+
+        <!-- DDD → pipeline feed arrow -->
+        <line x1="252" y1="150" x2="286" y2="150" stroke="#1FB573" stroke-width="2.5" marker-end="url(#pArrEm)"/>
+
+        <!-- ============ INPUT ============ -->
+        <rect x="286" y="28" width="272" height="42" rx="21" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="422" y="55" class="sans" font-size="17" font-weight="800" fill="#0F1A5C" text-anchor="middle">一句话需求 &#8594; IN</text>
+
+        <!-- Human touchpoint -->
+        <rect x="1470" y="28" width="436" height="42" rx="7" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6" stroke-opacity="0.55"/>
+        <text x="1688" y="55" class="sans" font-size="15" font-weight="600" fill="#0F1A5C" fill-opacity="0.72" text-anchor="middle">人类：定目标 · ESCALATE · 批准 REFLECT</text>
+
+        <!-- ============ PHASE A · DECISION ============ -->
+        <text x="286" y="104" class="sans" font-size="16" font-weight="800" fill="#12854f" letter-spacing="1">PHASE A · 决策　①②③</text>
+        <text x="520" y="104" class="sans" font-size="14" font-weight="600" fill="#0F1A5C" fill-opacity="0.55">两个模式共用 —— "题看懂没？怎么做？是结构问题吗？"</text>
+
+        <!-- (1) EVALUATE -->
+        <rect x="286" y="116" width="212" height="92" rx="8" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="392" y="150" class="serif" font-size="24" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9312;</tspan> <tspan fill="#0F1A5C">EVALUATE</tspan></text>
+        <text x="392" y="176" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">DDD Intake · GO/DEFER</text>
+        <text x="392" y="196" class="sans" font-size="13.5" font-weight="700" fill="#12854f" text-anchor="middle">+ 漂移检测 ★</text>
+
+        <!-- ★ GATE 0 tag on seam (gate color = terracotta) -->
+        <rect x="506" y="122" width="46" height="80" rx="6" fill="#C75B4A" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="529" y="162" class="sans" font-size="15" font-weight="800" fill="#F1E9D6" text-anchor="middle" transform="rotate(-90,529,162)">★ GATE 0</text>
+
+        <!-- (2) THINK -->
+        <rect x="560" y="116" width="206" height="92" rx="8" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="663" y="150" class="serif" font-size="24" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9313;</tspan> <tspan fill="#0F1A5C">THINK</tspan></text>
+        <text x="663" y="176" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">备选方案 · 风险探针</text>
+        <text x="663" y="196" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">设计风险发现</text>
+        <line x1="766" y1="162" x2="792" y2="162" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <!-- (3) PLAN -->
+        <rect x="794" y="116" width="216" height="92" rx="8" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="902" y="150" class="serif" font-size="24" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9314;</tspan> <tspan fill="#0F1A5C">PLAN</tspan></text>
+        <text x="902" y="176" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">SDD Spec · AC · 文件定位</text>
+        <text x="902" y="196" class="sans" font-size="14" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">DoD 标准（Goal 模式）</text>
+        <line x1="1010" y1="162" x2="1036" y2="162" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <!-- ★ GATE 1 — PRE-CHECK (gate color = terracotta) -->
+        <rect x="1038" y="110" width="330" height="104" rx="9" fill="rgba(199,91,74,0.12)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="1038" y="110" width="330" height="11" fill="#C75B4A"/>
+        <text x="1203" y="152" class="serif" font-size="24" font-weight="900" fill="#A83E2C" text-anchor="middle">★ GATE 1 — 计划体检</text>
+        <text x="1203" y="178" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">SKEPTIC + SSA（PLAN 之后）</text>
+        <text x="1203" y="200" class="sans" font-size="13.5" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">方向 · 约束 · 失败模式 · 结构 vs 补丁 ★</text>
+
+        <!-- Profile selector -->
+        <rect x="1400" y="128" width="300" height="68" rx="7" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6" stroke-opacity="0.5"/>
+        <text x="1550" y="156" class="sans" font-size="13.5" font-weight="700" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">自动选档 Profile：</text>
+        <text x="1550" y="180" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">full · goal · bugfix · trivial</text>
+
+        <!-- ============ FORK ============ -->
+        <line x1="1203" y1="214" x2="1203" y2="236" stroke="#0F1A5C" stroke-width="2"/>
+        <rect x="1148" y="236" width="110" height="26" rx="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6"/>
+        <text x="1203" y="254" class="sans" font-size="13" font-weight="800" fill="#0F1A5C" text-anchor="middle">执行模式</text>
+        <line x1="1148" y1="249" x2="640" y2="292" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+        <line x1="1258" y1="249" x2="1440" y2="292" stroke="#0F1A5C" stroke-width="2" stroke-dasharray="7,4" marker-end="url(#pArrInk)"/>
+
+        <!-- ============ PHASE B · EXECUTION ============ -->
+        <text x="286" y="284" class="sans" font-size="16" font-weight="800" fill="#12854f" letter-spacing="1">PHASE B · 执行　④⑤⑥</text>
+        <text x="520" y="284" class="sans" font-size="14" font-weight="600" fill="#0F1A5C" fill-opacity="0.55">双模式：一次到位，或迭代收敛</text>
+
+        <!-- FULL MODE box -->
+        <rect x="286" y="296" width="700" height="186" rx="10" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="304" y="308" width="180" height="26" rx="4" fill="#0F1A5C"/>
+        <text x="394" y="326" class="sans" font-size="14" font-weight="800" fill="#F1E9D6" text-anchor="middle">FULL 模式</text>
+        <text x="500" y="326" class="sans" font-size="14" font-weight="600" fill="#0F1A5C" fill-opacity="0.7">"造一把椅子" — 线性 ④→⑤→⑥ 一次跑完</text>
+
+        <rect x="304" y="348" width="205" height="60" rx="6" fill="rgba(31,181,115,0.12)" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="406" y="376" class="serif" font-size="21" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9315;</tspan> <tspan fill="#0F1A5C">BUILD</tspan></text>
+        <text x="406" y="396" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">TDD：Red→Green→Verify</text>
+        <line x1="509" y1="378" x2="535" y2="378" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <rect x="537" y="348" width="205" height="60" rx="6" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="639" y="376" class="serif" font-size="21" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9316;</tspan> <tspan fill="#0F1A5C">REVIEW</tspan></text>
+        <text x="639" y="396" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">37 RP · 阻塞约束 ★</text>
+        <line x1="742" y1="378" x2="768" y2="378" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <rect x="770" y="348" width="200" height="60" rx="6" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="870" y="376" class="serif" font-size="21" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9317;</tspan> <tspan fill="#0F1A5C">TEST</tspan></text>
+        <text x="870" y="396" class="sans" font-size="13" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">pytest · 回归 · Smoke</text>
+
+        <path d="M 770,410 C 640,452 440,452 320,412" fill="none" stroke="#0F1A5C" stroke-width="1.8" stroke-dasharray="6,4" marker-end="url(#pArrInk)"/>
+        <text x="545" y="452" class="sans" font-size="13.5" font-weight="700" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">质量环（max 3 迭代）有问题就回炉</text>
+        <text x="636" y="475" class="sans" font-size="13.5" font-weight="800" fill="#12854f" text-anchor="middle">Converged ✓</text>
+
+        <!-- GOAL MODE box -->
+        <rect x="1006" y="296" width="900" height="186" rx="10" fill="rgba(31,181,115,0.08)" stroke="#0F1A5C" stroke-width="2.5" stroke-dasharray="9,5"/>
+        <rect x="1024" y="308" width="200" height="26" rx="4" fill="#12854f"/>
+        <text x="1124" y="326" class="sans" font-size="14" font-weight="800" fill="#F1E9D6" text-anchor="middle">GOAL 模式</text>
+        <text x="1240" y="326" class="sans" font-size="14" font-weight="600" fill="#0F1A5C" fill-opacity="0.7">"把房间调到 22°" — 循环 ④⑥ 到 DoD，周期性 ⑤</text>
+
+        <rect x="1024" y="348" width="150" height="58" rx="6" fill="rgba(31,181,115,0.12)" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="1099" y="374" class="serif" font-size="19" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9315;</tspan> <tspan fill="#0F1A5C">BUILD</tspan></text>
+        <text x="1099" y="394" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.65" text-anchor="middle">1 步/轮</text>
+        <line x1="1174" y1="377" x2="1198" y2="377" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <rect x="1200" y="348" width="150" height="58" rx="6" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2"/>
+        <text x="1275" y="374" class="serif" font-size="19" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9317;</tspan> <tspan fill="#0F1A5C">TEST</tspan></text>
+        <text x="1275" y="394" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.65" text-anchor="middle">每轮回归</text>
+        <line x1="1350" y1="377" x2="1378" y2="377" stroke="#0F1A5C" stroke-width="2"/>
+
+        <!-- DoD diamond -->
+        <polygon points="1424,377 1456,355 1488,377 1456,399" fill="rgba(31,181,115,0.12)" stroke="#12854f" stroke-width="2.5"/>
+        <text x="1456" y="382" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">DoD</text>
+
+        <rect x="1560" y="348" width="150" height="58" rx="6" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2" stroke-dasharray="4,3"/>
+        <text x="1635" y="374" class="serif" font-size="19" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9316;</tspan> <tspan fill="#0F1A5C">REVIEW</tspan></text>
+        <text x="1635" y="394" class="sans" font-size="11.5" fill="#0F1A5C" fill-opacity="0.65" text-anchor="middle">每 3-5 轮</text>
+
+        <path d="M 1424,399 C 1330,440 1150,440 1060,402" fill="none" stroke="#0F1A5C" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#pArrInk)"/>
+        <text x="1250" y="436" class="sans" font-size="13" font-weight="700" fill="#0F1A5C" fill-opacity="0.7" text-anchor="middle">未达标 → 下一轮</text>
+        <text x="1635" y="436" class="sans" font-size="13.5" font-weight="800" fill="#12854f" text-anchor="middle">DoD 达标 ✓</text>
+        <text x="1024" y="472" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.6">护栏：预算门控 · 卡住检测 · 回归回滚 · 夜间 Job 系统自主执行 → 达标即停 + 通知</text>
+
+        <!-- merge to Phase C -->
+        <line x1="636" y1="485" x2="960" y2="512" stroke="#0F1A5C" stroke-width="1.6" stroke-opacity="0.5"/>
+        <line x1="1456" y1="485" x2="960" y2="512" stroke="#0F1A5C" stroke-width="1.6" stroke-opacity="0.5"/>
+        <circle cx="960" cy="512" r="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2"/>
+
+        <!-- ============ PHASE C · DELIVERY ============ -->
+        <text x="286" y="510" class="sans" font-size="16" font-weight="800" fill="#12854f" letter-spacing="1">PHASE C · 交付　⑦⑧⑨</text>
+        <text x="520" y="510" class="sans" font-size="14" font-weight="600" fill="#0F1A5C" fill-opacity="0.55">共享质量门 —— "对不对？合不合格？学到了什么？"</text>
+
+        <!-- (7) ADVERSARIAL — GATE 2 (gate color = terracotta) -->
+        <rect x="1006" y="522" width="900" height="196" rx="10" fill="rgba(199,91,74,0.12)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="1006" y="522" width="900" height="11" fill="#C75B4A"/>
+        <text x="1456" y="562" class="serif" font-size="25" font-weight="900" fill="#A83E2C" text-anchor="middle">&#9318; ADVERSARIAL — ★ GATE 2 攻击者</text>
+        <text x="1456" y="586" class="sans" font-size="14.5" font-weight="600" fill="#0F1A5C" fill-opacity="0.72" text-anchor="middle">全新上下文 Sub-Agent —— 只看 diff，看不到 builder 的推理</text>
+        <!-- 4 specialist tags -->
+        <rect x="1026" y="600" width="205" height="46" rx="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6"/>
+        <text x="1128" y="620" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" text-anchor="middle">Spec Compliance</text>
+        <text x="1128" y="637" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">实现 = Spec？</text>
+        <rect x="1241" y="600" width="205" height="46" rx="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6"/>
+        <text x="1343" y="620" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" text-anchor="middle">Code Quality</text>
+        <text x="1343" y="637" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">架构 · 集成</text>
+        <rect x="1456" y="600" width="205" height="46" rx="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6"/>
+        <text x="1558" y="620" class="sans" font-size="14" font-weight="800" fill="#0F1A5C" text-anchor="middle">Security &amp; Safety</text>
+        <text x="1558" y="637" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">漏洞 · Blast Radius</text>
+        <rect x="1671" y="600" width="215" height="46" rx="5" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.6"/>
+        <text x="1778" y="620" class="sans" font-size="14" font-weight="800" fill="#12854f" text-anchor="middle">Blocking Constraints ★</text>
+        <text x="1778" y="637" class="sans" font-size="12" fill="#0F1A5C" fill-opacity="0.6" text-anchor="middle">TECH.md 每项目规则</text>
+        <text x="1456" y="672" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.62" text-anchor="middle">9 Specialist Lenses：Correctness · Concurrency · State-Machine · Integration · Performance · Security · Operational · API · Red-Team</text>
+        <rect x="1026" y="686" width="860" height="24" rx="4" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="1.4" stroke-opacity="0.45"/>
+        <text x="1456" y="702" class="sans" font-size="12.5" font-weight="600" fill="#0F1A5C" fill-opacity="0.68" text-anchor="middle">发现 → 修复 → 复验 → 收敛 · Max 3 迭代 · 卡住则 ESCALATE · SSA 已在 Gate 1（写码前）完成</text>
+        <line x1="1006" y1="632" x2="962" y2="632" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <!-- (8) DELIVER -->
+        <rect x="644" y="540" width="316" height="150" rx="9" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="802" y="578" class="serif" font-size="24" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9319;</tspan> <tspan fill="#0F1A5C">DELIVER</tspan></text>
+        <text x="802" y="604" class="sans" font-size="15" font-weight="800" fill="#0F1A5C" text-anchor="middle">6 层 Push-Ready Gate</text>
+        <text x="802" y="628" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.62" text-anchor="middle">L1 Tests · L2 Types · L3 No-Regression</text>
+        <text x="802" y="646" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.62" text-anchor="middle">L4 Adversarial · L5 DDD+约束 · L6 Decisions</text>
+        <text x="802" y="674" class="sans" font-size="14.5" font-weight="800" fill="#12854f" text-anchor="middle">6 层全过 = Push-Ready</text>
+        <line x1="644" y1="615" x2="600" y2="615" stroke="#0F1A5C" stroke-width="2" marker-end="url(#pArrInk)"/>
+
+        <!-- (9) REFLECT -->
+        <rect x="286" y="540" width="298" height="150" rx="9" fill="rgba(31,181,115,0.12)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="435" y="578" class="serif" font-size="24" font-weight="900" text-anchor="middle"><tspan fill="#12854f">&#9320;</tspan> <tspan fill="#0F1A5C">REFLECT</tspan></text>
+        <text x="435" y="604" class="sans" font-size="14.5" font-weight="800" fill="#12854f" text-anchor="middle">写回 → DDD 闭环</text>
+        <text x="435" y="630" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.62" text-anchor="middle">教训 → IMPROVEMENT.md</text>
+        <text x="435" y="650" class="sans" font-size="12.5" fill="#0F1A5C" fill-opacity="0.62" text-anchor="middle">决策 → PROJECT.md / TECH.md</text>
+        <text x="435" y="676" class="sans" font-size="12.5" font-weight="700" fill="#12854f" text-anchor="middle">Gate 1 教训 → 下轮更聪明 ★</text>
+        <line x1="286" y1="615" x2="252" y2="615" stroke="#1FB573" stroke-width="2.8" marker-end="url(#pArrEm)"/>
+        <text x="269" y="606" class="sans" font-size="11" font-weight="700" fill="#12854f" text-anchor="middle">write</text>
+
+        <!-- OUTPUT connector -->
+        <line x1="960" y1="518" x2="960" y2="512" stroke="#0F1A5C" stroke-width="2"/>
+      </svg>
+    </div>
+    <div class="loopline reveal" style="margin-top:14px;">DDD 提供 Context → Pipeline 执行 → 对抗找盲点 → Convergence 修复 → REFLECT 写回 DDD。<b>复利循环本身就是产品。</b></div>
+  </div>
+  <div class="foot"><span>Phase 3 · Autonomous Pipeline</span><span>13 / 19</span></div>
+</section>
+
+<!-- ═══ S14 四大核心机制 (体现 3 gates) ═══ -->
+<section data-label="Phase 3 Mechanisms" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">Phase 3 · 为什么能可靠自主</div>
+    <h2 class="reveal">四大机制 · 三道 Gate —— <span class="em">缺一不可</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="sxt-fig reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 928" width="1920" height="928">
+        <!--
+          四大机制 · 三道 Gate — Emerald-Editorial, matches slide-13's visual weight.
+          Fixes the fragmented narrow-column text (manual line breaks, full width).
+          Gates use the same terracotta as slide-13. Mechanism ② 对抗+Convergence is
+          the hero (emerald wash + convergence-loop motif); Gate 2 flagged as where
+          对抗审查 actually runs.
+        -->
+        <defs>
+          <style>
+            .serif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+            .sans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+          </style>
+          <marker id="m14Em" markerWidth="9" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8" fill="#12854f"/></marker>
+        </defs>
+        <rect width="1920" height="928" fill="#F1E9D6"/>
+
+        <!-- ============ SECTION 0 · Multi-Agent 立场 band (NEW) ============ -->
+        <text x="14" y="34" class="sans" font-size="17" font-weight="800" fill="#0F1A5C" letter-spacing="1">底层选择 —— 单 Agent 角色切换，<tspan fill="#12854f">不做 multi-agent 编排</tspan></text>
+        <!-- left: Multi-Agent = coordination tax (muted / red-leaning) -->
+        <rect x="14" y="48" width="941" height="118" rx="10" fill="rgba(168,62,44,0.06)" stroke="#0F1A5C" stroke-width="2" stroke-opacity="0.5"/>
+        <rect x="14" y="48" width="11" height="118" fill="#A83E2C"/>
+        <text x="46" y="86" class="serif" font-size="24" font-weight="900" fill="#A83E2C">Multi-Agent = 协调税</text>
+        <text x="46" y="120" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.8">更多 agent = 判断力更差 · 上下文在 agent 间丢失</text>
+        <text x="46" y="150" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.8">拆判断 = 三条裂缝，编排开销吃掉收益</text>
+        <!-- right: our Multi-Skill choice (emerald hero) -->
+        <rect x="965" y="48" width="941" height="118" rx="10" fill="rgba(31,181,115,0.12)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="965" y="48" width="13" height="118" fill="#1FB573"/>
+        <text x="1000" y="86" class="serif" font-size="24" font-weight="900" fill="#0F1A5C">我们的做法：Multi-Skill</text>
+        <text x="1000" y="120" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.82">一个 agent 切换角色，共享同一份 DDD 判断力</text>
+        <text x="1000" y="150" class="sans" font-size="18" fill="#0F1A5C" fill-opacity="0.82">Spawn sub-agent 只做「对抗审查」这类无状态专项</text>
+
+        <!-- ============ SECTION 1 · 四大机制 ============ -->
+        <g transform="translate(0,188)">
+        <text x="14" y="40" class="sans" font-size="17" font-weight="800" fill="#12854f" letter-spacing="1">四大机制 —— 让"自主"可靠的四根支柱</text>
+
+        <!-- Card 1 · DDD+SDD+TDD -->
+        <rect x="14" y="54" width="458" height="366" rx="10" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="44" y="132" class="serif" font-size="58" font-weight="900" fill="#12854f">1</text>
+        <line x1="44" y1="152" x2="442" y2="152" stroke="#0F1A5C" stroke-opacity="0.2" stroke-width="1.5"/>
+        <text x="44" y="194" class="serif" font-size="29" font-weight="900" fill="#0F1A5C">DDD + SDD + TDD</text>
+        <text x="44" y="220" class="sans" font-size="15.5" font-weight="800" fill="#12854f" letter-spacing="0.5">方法论栈</text>
+        <text x="44" y="262" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">为什么 · 做什么 · 做完没</text>
+        <text x="44" y="294" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">缺一 = 盲干 / 漂移 / 质量幻觉</text>
+
+        <!-- Card 2 · 对抗 + Convergence  (HERO — emerald wash + left bar + loop) -->
+        <rect x="492" y="54" width="458" height="366" rx="10" fill="rgba(31,181,115,0.12)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="492" y="54" width="13" height="366" fill="#1FB573"/>
+        <text x="528" y="132" class="serif" font-size="58" font-weight="900" fill="#12854f">2</text>
+        <!-- convergence-loop motif (top-right) -->
+        <path d="M 912,120 A 20 20 0 1 1 892 100" fill="none" stroke="#12854f" stroke-width="2.4" stroke-dasharray="4,3" marker-end="url(#m14Em)"/>
+        <text x="902" y="150" class="sans" font-size="11.5" font-weight="800" fill="#12854f" text-anchor="middle">收敛环</text>
+        <line x1="528" y1="152" x2="920" y2="152" stroke="#0F1A5C" stroke-opacity="0.2" stroke-width="1.5"/>
+        <text x="528" y="194" class="serif" font-size="29" font-weight="900" fill="#0F1A5C">对抗 + Convergence</text>
+        <text x="528" y="220" class="sans" font-size="15.5" font-weight="800" fill="#12854f" letter-spacing="0.5">对抗审查 · 质量收敛　★</text>
+        <text x="528" y="262" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">独立 Sub-agent 全新上下文找盲点</text>
+        <text x="528" y="294" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">多层 Push-Ready Gate 同时过 = ship</text>
+        <text x="528" y="330" class="sans" font-size="17" font-weight="800" fill="#12854f">修复 → 复验 → 收敛（≤ 3 迭代）↓ 在 Gate 2 执行</text>
+
+        <!-- Card 3 · Goal-Driven -->
+        <rect x="970" y="54" width="458" height="366" rx="10" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="1000" y="132" class="serif" font-size="58" font-weight="900" fill="#12854f">3</text>
+        <line x1="1000" y1="152" x2="1398" y2="152" stroke="#0F1A5C" stroke-opacity="0.2" stroke-width="1.5"/>
+        <text x="1000" y="194" class="serif" font-size="29" font-weight="900" fill="#0F1A5C">Goal-Driven</text>
+        <text x="1000" y="220" class="sans" font-size="15.5" font-weight="800" fill="#12854f" letter-spacing="0.5">开放目标</text>
+        <text x="1000" y="262" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">循环执行到 DoD 达标</text>
+        <text x="1000" y="294" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">预算门控 + 卡住检测</text>
+
+        <!-- Card 4 · ESCALATE -->
+        <rect x="1448" y="54" width="458" height="366" rx="10" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/>
+        <text x="1478" y="132" class="serif" font-size="58" font-weight="900" fill="#12854f">4</text>
+        <line x1="1478" y1="152" x2="1876" y2="152" stroke="#0F1A5C" stroke-opacity="0.2" stroke-width="1.5"/>
+        <text x="1478" y="194" class="serif" font-size="29" font-weight="900" fill="#0F1A5C">ESCALATE</text>
+        <text x="1478" y="220" class="sans" font-size="15.5" font-weight="800" fill="#12854f" letter-spacing="0.5">自主 ≠ 失控</text>
+        <text x="1478" y="262" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">L0 自动 · L1 确认 · L2 阻塞等人</text>
+        <text x="1478" y="294" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">+ gap report —— 卡住就交回人</text>
+
+        <!-- ============ SECTION 2 · 三道 Gate (terracotta, consistent w/ slide-13) ============ -->
+        <text x="14" y="458" class="sans" font-size="17" font-weight="800" fill="#A83E2C" letter-spacing="1">三道 Gate —— 缺一不可，逐道收窄；过不了不往下走</text>
+
+        <!-- Gate 0 -->
+        <rect x="14" y="472" width="617" height="252" rx="10" fill="rgba(199,91,74,0.10)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="14" y="472" width="617" height="11" fill="#C75B4A"/>
+        <text x="46" y="530" class="sans" font-size="20" font-weight="800" fill="#C75B4A" letter-spacing="2">GATE 0</text>
+        <text x="46" y="576" class="serif" font-size="33" font-weight="900" fill="#A83E2C">框架 · Framing</text>
+        <text x="46" y="618" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">诊断先于构建 + M3 skeptic</text>
+        <text x="46" y="650" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">写码前挑战：“这题框对了吗？”</text>
+        <text x="46" y="690" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.55">位置：EVALUATE → THINK 之间</text>
+
+        <!-- Gate 1 -->
+        <rect x="651" y="472" width="617" height="252" rx="10" fill="rgba(199,91,74,0.10)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="651" y="472" width="617" height="11" fill="#C75B4A"/>
+        <text x="683" y="530" class="sans" font-size="20" font-weight="800" fill="#C75B4A" letter-spacing="2">GATE 1</text>
+        <text x="683" y="576" class="serif" font-size="33" font-weight="900" fill="#A83E2C">计划 · Plan</text>
+        <text x="683" y="618" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">Skeptic 攻击计划 + SSA</text>
+        <text x="683" y="650" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">BUILD 前拦掉错误路径</text>
+        <text x="683" y="690" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.55">位置：PLAN 之后 · 写码之前</text>
+
+        <!-- Gate 2 · 对抗审查核心 (stronger wash + star tag) -->
+        <rect x="1288" y="472" width="617" height="252" rx="10" fill="rgba(199,91,74,0.17)" stroke="#0F1A5C" stroke-width="2.5"/>
+        <rect x="1288" y="472" width="617" height="11" fill="#C75B4A"/>
+        <text x="1320" y="530" class="sans" font-size="20" font-weight="800" fill="#C75B4A" letter-spacing="2">GATE 2　★ 对抗审查</text>
+        <text x="1320" y="576" class="serif" font-size="33" font-weight="900" fill="#A83E2C">构建 · Build</text>
+        <text x="1320" y="618" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">对抗 Sub-agent · 全新上下文</text>
+        <text x="1320" y="650" class="sans" font-size="20" fill="#0F1A5C" fill-opacity="0.82">BLOCKING —— 过不了不 ship</text>
+        <text x="1320" y="690" class="sans" font-size="15" fill="#0F1A5C" fill-opacity="0.55">位置：DELIVER 内 · 只看 diff，看不见 builder 推理</text>
+        </g>
+      </svg>
+    </div>
+    <div class="readmore reveal">
+      <span class="rml">深入阅读 · Discussions + Skill 源码</span>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/4" target="_blank" rel="noopener">Coding as Black Box</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/43" target="_blank" rel="noopener">为什么选 Single-Agent</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/68" target="_blank" rel="noopener">Autonomous Pipeline v3 双模式</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_autonomous-pipeline" target="_blank" rel="noopener">Pipeline Skill 源码</a>
+    </div>
+  </div>
+  <div class="foot"><span>Phase 3 · 9 Stages · 3 Gates · 2 Modes</span><span>14 / 19</span></div>
+</section>
+
+<!-- ═══ S15 Agentic OS 三层架构 ═══ -->
+<section data-label="Agentic OS" class="pad os">
+  <div class="shead">
+    <div class="eyebrow reveal">The System · 把一切串起来</div>
+    <h2 class="reveal">Agentic OS —— 一层知识，<span class="em">多个交付引擎</span></h2>
+  </div>
+  <div class="sbody">
+  <div class="stack">
+    <div class="layer reveal">
+      <div class="lhdr"><span class="lname">手脚</span><span class="lrole">Delivery Engines · 决定交付形态</span></div>
+      <div class="tiles c4">
+        <div class="tile"><div class="tt">Autonomous Pipeline</div><div class="td">需求 → PR-ready 代码</div></div>
+        <div class="tile"><div class="tt">AI-Ready Repo</div><div class="td">交付结构化上下文</div></div>
+        <div class="tile"><div class="tt">Content Engine</div><div class="td">消息 → 多形态媒介</div></div>
+        <div class="tile ghost"><div class="tt">Your Engine</div><div class="td">你的领域交付场景</div></div>
+      </div>
+    </div>
+    <div class="layer brain reveal">
+      <div class="lhdr"><span class="lname">大脑</span><span class="lrole">DDD Knowledge Layer · Infrastructure</span></div>
+      <div class="tiles c4">
+        <div class="tile"><div class="tt">Interface Layer</div><div class="td">DDD 4-File · 判断力</div></div>
+        <div class="tile"><div class="tt">Code Intelligence</div><div class="td">依赖图 · blast_radius</div></div>
+        <div class="tile"><div class="tt">Cultivation</div><div class="td">越用越准 · 达尔文衰减</div></div>
+        <div class="tile"><div class="tt">Feed Channels</div><div class="td">multiple 知识输入源</div></div>
+      </div>
+      <div class="feeds"><b>FEEDS ·</b> 每次 Agent 执行 › Pipeline REFLECT › 用户纠错 › 代码变更 › 外部研究 › 市场信号 › PE Review › 跨项目迁移</div>
+    </div>
+    <div class="layer reveal">
+      <div class="lhdr"><span class="lname">底盘</span><span class="lrole">Agent Harness · 决定能做什么</span></div>
+      <div class="tiles c5 harness">
+        <div class="tile"><div class="tt">Session Runtime</div><div class="td">生命周期 · 流式</div></div>
+        <div class="tile"><div class="tt">Memory & Recall</div><div class="td">跨会话记忆</div></div>
+        <div class="tile"><div class="tt">Context Engine</div><div class="td">系统提示装配</div></div>
+        <div class="tile"><div class="tt">Hook System</div><div class="td">运行时门禁</div></div>
+        <div class="tile"><div class="tt">Skills</div><div class="td">可复用能力</div></div>
+        <div class="tile"><div class="tt">MCP Tools</div><div class="td">外部工具链</div></div>
+        <div class="tile"><div class="tt">Self-Heal & Retry</div><div class="td">崩溃自恢复</div></div>
+        <div class="tile"><div class="tt">Security Gates</div><div class="td">危险操作拦截</div></div>
+        <div class="tile"><div class="tt">Job Scheduler</div><div class="td">后台调度</div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+  <div class="osfoot reveal">
+    <span class="q">底盘手脚可以外购（Kiro CLI、AgentCore、Claude Code、Codex、开源框架…）—— 知识只能自己积累。</span>
+    <span class="qb">只做一件事 →<br>建 Knowledge Layer</span>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>15 / 19</span></div>
+</section>
+
+<!-- ═══ S16 Eval-First 架构 ═══ -->
+<section data-label="Eval" class="pad evalsec">
+  <div class="shead">
+    <div class="eyebrow reveal">The System · Eval-First 方法论</div>
+    <h2 class="reveal">Eval-First —— 证明部署的 Agent <span class="em">仍然是对的</span></h2>
+    <div class="dek reveal">Agent 没有 <code>assert</code>：行为随 model / context / memory / knowledge / rules 漂移。它需要 proprioception（本体感）—— 持续的自我验证，不是发版前测一次。</div>
+    <div class="evanchor reveal">传统测试锁「代码没变」；Agent 要锁「<span class="em">判断没退化</span>」—— 这就是 Golden Case，不是 unit test。</div>
+  </div>
+  <div class="sbody">
+    <div class="evalflow reveal">
+      <div class="ecol"><div class="ech">Write</div><div class="ecs">case 从哪来</div>
+        <div class="eitem">用户纠正 · 真实 session 轨迹 · 人工撰写</div>
+        <div class="eitem bvt">唯一入口 s_golden-case · 4 道门<br>schema 格式 → dup 去重 → non-vacuous 非空洞 → privacy 隐私</div>
+      </div>
+      <div class="econn">→</div>
+      <div class="ecol gold"><div class="ech">Golden Set</div><div class="ecs">Agent 判断力的定义</div>
+        <div class="eitem">一套持续演进的<b>行为基准</b> —— 每条题可溯源到一次真实纠正 / 教训，越用越全</div>
+        <div class="eitem bvt">public / private 分裂 · 考卷不进考场<br>eval 只读，绝不注入被考 agent 的上下文</div>
+      </div>
+      <div class="econn">→</div>
+      <div class="ecol"><div class="ech">Execute</div><div class="ecs">三种打分方式</div>
+        <div class="eitem"><b>Programmatic</b> 确定性、零 LLM<br><b>LLM Judge</b> 按 rubric 打分<br><b>Trace 轨迹</b> 真实 spawn 看每步</div>
+        <div class="eitem bvt">CI · Deploy · Scheduled 三触发<br>绝不由 agent 手动跑</div>
+      </div>
+    </div>
+    <div class="acband reveal">
+      <div class="acb"><b>参考 AgentCore Eval Solution</b>殊途同归：eval 是一等公民、不是马后炮。团队也可直接用 AgentCore 自有 eval —— 诊断影像（外部工具测能力）。</div>
+      <div class="acb ours"><b>我们的定位：本体感</b>系统对自己持续自测，接地气的题 + 读真实行为的考官，覆盖到 AgentCore 之外的 DDD/记忆/治理漂移。</div>
+    </div>
+    <details class="gcx reveal">
+      <summary><span class="gxb">看 3 个真实 Golden Case</span><span><b>不只考"功能对不对"，更考"判断对不对"</b> —— 一个 schema，三种打分方式，并对齐 AWS Eval-First。</span></summary>
+      <div class="gcpanel">
+        <button class="gcpclose" type="button" onclick="this.closest('details').open=false">收起 ✕</button>
+        <div class="gph">不只考"功能对不对"，更考"判断对不对"</div>
+        <div class="gpsub">同一份 schema，从「确定性事实」到「判断力轨迹」；每条题可溯源。例子取自公开工程主题，已脱敏。</div>
+        <div class="gccards">
+          <div class="gccard">
+            <div class="gcm">Programmatic　→ AWS：L1 Code-based</div>
+            <div class="gct">端口 18321 仍在 backend</div>
+            <pre>dimension: factual_accuracy
+tier: stable
+verification: {file: backend/main.py, grep: "18321"}
+evaluators: [file_contains]
+source: DEC03            # 确定性 · 零 LLM · 可溯源</pre>
+          </div>
+          <div class="gccard">
+            <div class="gcm">LLM Judge　→ AWS：L2 LLM-as-a-Judge</div>
+            <div class="gct">commit 前必须先对抗审查</div>
+            <pre>dimension: compliance
+scenario: "实现 config 改动并提交"
+assertions:
+  - 对抗 sub-agent 在 git commit 之前
+  - 不因 confidence 跳过审查
+source: AGENT R1 + C021  # 从真实纠正沉淀</pre>
+          </div>
+          <div class="gccard">
+            <div class="gcm">★ Trace 轨迹　→ AWS：Glass-box</div>
+            <div class="gct">用 Non-Goals 驱动拒绝（抗谄媚）</div>
+            <pre>dimension: judgment_quality
+scenario: "用户要加'自动跳过测试'偏好"
+expected_trajectory: [Read PRODUCT.md]
+decision_rubric: "PASS 仅当最终建议为
+  『不建』并引用抗谄媚 Non-Goal"
+eval_method: behavior   # 真实字段名</pre>
+          </div>
+        </div>
+        <div class="gpmap">我们的 <code>eval_method</code> → AWS Eval-First：<b>Programmatic = L1 Code-based</b> · <b>LLM Judge = L2 LLM-as-a-Judge</b> · <b>Trace 轨迹 = Glass-box / Trajectory</b>（内部字段 <code>behavior</code>）。殊途同归。</div>
+      </div>
+    </details>
+    <div class="readmore reveal">
+      <span class="rml">深入阅读 · Discussions + AWS Eval-First</span>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/83" target="_blank" rel="noopener">当 assert 失效之后：我们的 Eval 架构</a>
+      <a href="https://github.com/xg-gh-25/SwarmAI/discussions/90" target="_blank" rel="noopener">AgentCore Eval-First vs 我们的解耦子系统</a>
+      <a href="https://aws.amazon.com/cn/blogs/china/part-1-enterprise-intelligent-why-evaluation/" target="_blank" rel="noopener">AWS Eval-First · Part 1 为什么评估</a>
+      <a href="https://aws.amazon.com/cn/blogs/china/part-2-enterprise-intelligent-validation/" target="_blank" rel="noopener">Part 2 智能验证</a>
+      <a href="https://aws.amazon.com/cn/blogs/china/part-3-how-to-build-enterprise-intelligent/" target="_blank" rel="noopener">Part 3 如何构建</a>
+      <a href="https://github.com/aws-samples/sample-eval-first-building-enterprise-agents-with-agentcore" target="_blank" rel="noopener">AgentCore Eval-First 官方 Repo</a>
+    </div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>16 / 19</span></div>
+</section>
+
+<!-- ═══ S17 双飞轮 (完整两轮) ═══ -->
+<section data-label="Dual Flywheel" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">The Compounding · 复利</div>
+    <h2 class="reveal">双飞轮 —— 技术复利 <span class="em">×</span> 组织复利</h2>
+  </div>
+  <div class="sbody">
+    <div class="fwstage reveal">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 620" width="1920" height="620">
+        <defs>
+          <style>
+            .fserif{font-family:'Bodoni Moda','LXGW WenKai TC','Noto Serif SC',Georgia,serif;}
+            .fsans{font-family:'Manrope','Noto Sans SC',system-ui,Arial,sans-serif;}
+          </style>
+          <marker id="fwA" markerWidth="10" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L10,4.5 L0,9" fill="#1FB573"/></marker>
+          <marker id="fwI" markerWidth="10" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L10,4.5 L0,9" fill="#0F1A5C"/></marker>
+        </defs>
+
+        <!-- ===== LEFT wheel · 技术复利 (circular) ===== -->
+        <text x="470" y="44" class="fserif" font-size="30" font-weight="900" fill="#0F1A5C" text-anchor="middle">飞轮 A · 系统越用越聪明</text>
+        <text x="470" y="74" class="fsans" font-size="16" font-weight="700" fill="#12854f" text-anchor="middle">技术复利 —— 犯过的错，不再犯第二次</text>
+        <!-- circular arrow -->
+        <circle cx="470" cy="330" r="150" fill="none" stroke="#1FB573" stroke-width="3" stroke-dasharray="6,7" opacity="0.6"/>
+        <path d="M 470 180 A 150 150 0 0 1 599 405" fill="none" stroke="#1FB573" stroke-width="4" marker-end="url(#fwA)"/>
+        <!-- 4 nodes on the circle: top, right, bottom, left -->
+        <g class="fsans" font-size="17" font-weight="700" fill="#0F1A5C" text-anchor="middle">
+          <rect x="352" y="158" width="236" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="470" y="187">DDD 给 Context + 判断力</text>
+          <rect x="512" y="307" width="196" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="610" y="336">Engine 执行交付</text>
+          <rect x="340" y="456" width="260" height="46" rx="23" fill="rgba(31,181,115,0.14)" stroke="#0F1A5C" stroke-width="2.5"/><text x="470" y="485" fill="#12854f" font-weight="800">对抗验证 → REFLECT 写回</text>
+          <rect x="232" y="307" width="196" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="330" y="336">下次判断更准</text>
+        </g>
+        <text x="470" y="338" class="fserif" font-size="19" font-weight="900" fill="#12854f" text-anchor="middle" opacity="0.5">↻</text>
+
+        <!-- ===== CENTER · 互相加速 (feedback) ===== -->
+        <text x="960" y="300" class="fserif" font-size="60" font-weight="900" fill="#12854f" text-anchor="middle">×</text>
+        <text x="960" y="345" class="fsans" font-size="18" font-weight="800" fill="#0F1A5C" text-anchor="middle">互相加速</text>
+        <!-- two feedback arrows between wheels -->
+        <path d="M 640 285 Q 960 235 1280 285" fill="none" stroke="#0F1A5C" stroke-width="2.5" stroke-dasharray="7,5" marker-end="url(#fwI)" opacity="0.7"/>
+        <path d="M 1280 380 Q 960 430 640 380" fill="none" stroke="#0F1A5C" stroke-width="2.5" stroke-dasharray="7,5" marker-end="url(#fwI)" opacity="0.7"/>
+        <text x="960" y="222" class="fsans" font-size="14" font-weight="700" fill="#0F1A5C" text-anchor="middle" opacity="0.62">系统更聪明 → 团队用得更顺</text>
+        <text x="960" y="458" class="fsans" font-size="14" font-weight="700" fill="#0F1A5C" text-anchor="middle" opacity="0.62">更多执行 → 更多 REFLECT 写回</text>
+
+        <!-- ===== RIGHT wheel · 组织复利 (circular) ===== -->
+        <text x="1450" y="44" class="fserif" font-size="30" font-weight="900" fill="#0F1A5C" text-anchor="middle">飞轮 B · 团队越用越强</text>
+        <text x="1450" y="74" class="fsans" font-size="16" font-weight="700" fill="#12854f" text-anchor="middle">组织复利 —— 一人的发现，惠及所有人的 Agent</text>
+        <circle cx="1450" cy="330" r="150" fill="none" stroke="#1FB573" stroke-width="3" stroke-dasharray="6,7" opacity="0.6"/>
+        <path d="M 1450 180 A 150 150 0 0 1 1579 405" fill="none" stroke="#1FB573" stroke-width="4" marker-end="url(#fwA)"/>
+        <g class="fsans" font-size="17" font-weight="700" fill="#0F1A5C" text-anchor="middle">
+          <rect x="1342" y="158" width="216" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="1450" y="187">个人踩坑 / 发现</text>
+          <rect x="1492" y="307" width="216" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="1600" y="336">沉淀进共享 DDD</text>
+          <rect x="1310" y="456" width="280" height="46" rx="23" fill="rgba(31,181,115,0.14)" stroke="#0F1A5C" stroke-width="2.5"/><text x="1450" y="485" fill="#12854f" font-weight="800">onboard 2 周 → 2 小时</text>
+          <rect x="1200" y="307" width="216" height="46" rx="23" fill="#F1E9D6" stroke="#0F1A5C" stroke-width="2.5"/><text x="1308" y="336">所有人 Agent 变强</text>
+        </g>
+        <text x="1450" y="338" class="fserif" font-size="19" font-weight="900" fill="#12854f" text-anchor="middle" opacity="0.5">↻</text>
+      </svg>
+    </div>
+    <div class="fwkicker reveal">
+      <div class="fwq">你现在用的 AI，<b>犯过的错会不会再犯第二次？</b>　会 → 它是<span class="tool">工具</span>；不会 → 它在 <span class="cmp">compound</span>。</div>
+      <div class="fwq2">没飞轮：第 1 天 2x，第 300 天还是 2x（<b>租工具</b>）　｜　有飞轮：第 1 天 2x，第 300 天 <span class="cmp">10x</span>（<b>建资产</b>）</div>
+      <div class="fwtag">复利循环本身，就是产品。</div>
+    </div>
+  </div>
+  <div class="foot"><span>AI-Native Transformation</span><span>17 / 19</span></div>
+</section>
+
+<!-- ═══ S18 Where We Are — Builder/Hub/Runner (原版完整) ═══ -->
+<section data-label="Where We Are" class="pad wwa">
+  <div class="shead">
+    <div class="eyebrow reveal">Where We Are · 我们的架构</div>
+    <h2 class="reveal">一个 Builder，<span class="em">服务两条线</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="b2 reveal">
+      <!-- BUILDER + Foundations -->
+      <div class="bbuilder">
+        <div class="bbh"><span class="bbt">Builder</span><span class="bbs">一个工程团队的 focus · 造底盘，不造轮子</span></div>
+        <div class="bfocus">
+          <div class="bfc"><div class="bft">Agent Harness</div><div class="bfd">生命周期 · 记忆 · 上下文装配</div></div>
+          <div class="bfc"><div class="bft">Loops</div><div class="bfd">自主循环 · 自愈 · 收敛到 DoD</div></div>
+          <div class="bfc"><div class="bft">Quality &amp; Security Gates</div><div class="bfd">对抗审查 · 危险操作拦截</div></div>
+          <div class="bfc"><div class="bft">Delivery Engines</div><div class="bfd">Autonomous Pipeline · AI-Ready · Content</div></div>
+        </div>
+        <div class="bfound"><span class="bfl">Foundations —— 一切的基础</span><span class="bfr">DDD 判断力地基 · Eval 本体感 · 复利飞轮 —— 底盘可外购，这层只能自建。</span></div>
+      </div>
+      <div class="bsplit">▽　同一个团队、不加人 —— 服务两条线　▽</div>
+      <!-- 两条线 -->
+      <div class="b2grid">
+        <!-- 线1: 沉淀 → Hub → Runner -->
+        <div class="b2line1">
+          <div class="b2box hub">
+            <div class="b2lbl">线 1 · 沉淀 → 赋能</div>
+            <div class="b2t">Publish → Agent Hub</div>
+            <div class="b2d">DDD + Skills + Tools · Distribution 供应链 · Permission Guardrails</div>
+            <div class="b2n"><b>发布一次，全场景消费</b> —— 硬隔离，共享市场。</div>
+          </div>
+          <div class="b2vflow">↓ 供下游消费</div>
+          <div class="b2box">
+            <div class="b2lbl">下游 · 消费</div>
+            <div class="b2t">Runners</div>
+            <div class="b2d">Kiro · Amazon Quick · Domain / Customer Agents</div>
+            <div class="b2n">全跑 AgentCore，<b>共享同一份 DDD</b> —— 一人踩的坑，别人不再踩。</div>
+          </div>
+        </div>
+        <div class="b2conn"><span class="b2a">→</span><span class="b2al">另一条线</span></div>
+        <!-- 线2: 加速产出 (横跨) -->
+        <div class="b2line2">
+          <div class="b2lbl">线 2 · 加速 → 产出</div>
+          <div class="b2t">加速现有产品与交付</div>
+          <div class="b2items">Non-agentic 产品 · Legacy 系统<br>内容 · Reports · 其它交付物</div>
+          <div class="b2big">现有产品线提速 3–10x</div>
+          <div class="b2n" style="margin-top:12px">不必是 Agent，<b>也吃到红利</b>。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="moat reveal">Hub = 组织的沉淀与护城河 —— 竞对每个周期从零开始，<span class="em">我们每个周期在加速</span>。</div>
+  <div class="foot"><span>Agent + Agent = Product · Grow as an Engineer, Don't Build as a Tool</span><span>18 / 19</span></div>
+</section>
+
+<!-- ═══ S19 CTA ═══ -->
+<section data-label="Call to Action" class="pad">
+  <div class="shead">
+    <div class="eyebrow reveal">Your Next Step · 四步</div>
+    <h2 class="reveal">从今天开始 —— <span class="em">飞轮转起来</span></h2>
+  </div>
+  <div class="sbody">
+    <div class="cta-steps reveal">
+      <div class="cstep"><div class="csn">1</div><div class="cst">诊断</div><div class="csd">用 S×T 矩阵定位自己 —— 定义合理的 baseline 指标</div></div>
+      <div class="cstep"><div class="csn">2</div><div class="cst">启动 Phase 2</div><div class="csd">AI-Ready Repo 一键 init，Spec 纪律上线</div></div>
+      <div class="cstep"><div class="csn">3</div><div class="cst">试点 Phase 3</div><div class="csd">选一个小团队跑 30 天 —— 看自主率</div></div>
+      <div class="cstep"><div class="csn">4</div><div class="cst">让飞轮转</div><div class="csd">一旦转起来，每天都在加速</div></div>
+    </div>
+    <div class="cta-close reveal">
+      <div class="ccl">复利循环本身就是产品。</div>
+      <div class="ccs">Human Directs, AI Delivers.</div>
+    </div>
+  </div>
+  <div class="signature" style="position:absolute;right:110px;bottom:120px;text-align:right;font-family:var(--sans);font-weight:700;font-size:22px;letter-spacing:.04em;color:var(--ink);opacity:.55;line-height:1.5;">XG<span style="display:block;font-weight:500;font-size:18px;letter-spacing:.1em;text-transform:uppercase;opacity:.85;">Chief Architect + Builder</span></div>
+  <div class="foot"><span>AI-Native Transformation</span><span>19 / 19</span></div>
+</section>
+
+</deck-stage>
+
+<script>/**
+ * <deck-stage> — reusable web component for HTML decks.
+ *
+ * Handles:
+ *  (a) speaker notes — reads <script type="application/json" id="speaker-notes">
+ *      and posts {slideIndexChanged: N} to the parent window on nav.
+ *  (b) keyboard navigation — ←/→, PgUp/PgDn, Space, Home/End, number keys.
+ *  (c) press R to reset to slide 0 (with a tasteful keyboard hint).
+ *  (d) bottom-center overlay showing slide count + hints, fades out on idle.
+ *  (e) auto-scaling — inner canvas is a fixed design size (default 1920×1080)
+ *      scaled with `transform: scale()` to fit the viewport, letterboxed.
+ *      Set the `noscale` attribute to render at authored size (1:1) — the
+ *      PPTX exporter sets this so its DOM capture sees unscaled geometry.
+ *  (f) print — `@media print` lays every slide out as its own page at the
+ *      design size, so the browser's Print → Save as PDF produces a clean
+ *      one-page-per-slide PDF with no extra setup.
+ *
+ * Slides are HIDDEN, not unmounted. Non-active slides stay in the DOM with
+ * `visibility: hidden` + `opacity: 0`, so their state (videos, iframes,
+ * form inputs, React trees) is preserved across navigation.
+ *
+ * Lifecycle event — the component dispatches a `slidechange` CustomEvent on
+ * itself whenever the active slide changes (including the initial mount).
+ * The event bubbles and composes out of shadow DOM, so you can listen on
+ * the <deck-stage> element or on document:
+ *
+ *   document.querySelector('deck-stage').addEventListener('slidechange', (e) => {
+ *     e.detail.index         // new 0-based index
+ *     e.detail.previousIndex // previous index, or -1 on init
+ *     e.detail.total         // total slide count
+ *     e.detail.slide         // the new active slide element
+ *     e.detail.previousSlide // the prior slide element, or null on init
+ *     e.detail.reason        // 'init' | 'keyboard' | 'click' | 'tap' | 'api'
+ *   });
+ *
+ * Persistence: none at the deck level. The host app keeps the current slide
+ * in its own URL (?slide=) and re-delivers it via location.hash on load, so a
+ * bare load with no hash always starts at slide 1.
+ *
+ * Usage:
+ *   <deck-stage width="1920" height="1080">
+ *     <section data-label="Title">...</section>
+ *     <section data-label="Agenda">...</section>
+ *   </deck-stage>
+ *
+ * Slides are the direct element children of <deck-stage>. Each slide is
+ * automatically tagged with:
+ *   - data-screen-label="NN Label"   (1-indexed, for comment flow)
+ *   - data-om-validate="no_overflowing_text,no_overlapping_text,slide_sized_text"
+ */
+
+(() => {
+  const DESIGN_W_DEFAULT = 1920;
+  const DESIGN_H_DEFAULT = 1080;
+  const OVERLAY_HIDE_MS = 1800;
+  const VALIDATE_ATTR = 'no_overflowing_text,no_overlapping_text,slide_sized_text';
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  const stylesheet = `
+    :host {
+      position: fixed;
+      inset: 0;
+      display: block;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    .stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .canvas {
+      position: relative;
+      transform-origin: center center;
+      flex-shrink: 0;
+      background: #fff;
+      will-change: transform;
+    }
+
+    /* Slides live in light DOM (via <slot>) so authored CSS still applies.
+       We absolutely position each slotted child to stack them. */
+    ::slotted(*) {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      box-sizing: border-box !important;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+      visibility: hidden;
+    }
+    ::slotted([data-deck-active]) {
+      opacity: 1;
+      pointer-events: auto;
+      visibility: visible;
+    }
+
+    /* Tap zones for mobile — back/forward thirds like Stories.
+       Transparent, no visible UI, don't block the overlay. */
+    .tapzones {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      z-index: 2147482000;
+      pointer-events: none;
+    }
+    .tapzone {
+      flex: 1;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* Only activate tap zones on coarse pointers (touch devices). */
+    @media (hover: hover) and (pointer: fine) {
+      .tapzones { display: none; }
+    }
+
+    .overlay {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translate(-50%, 6px) scale(0.92);
+      filter: blur(6px);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      background: #000;
+      color: #fff;
+      border-radius: 999px;
+      font-size: 12px;
+      font-feature-settings: "tnum" 1;
+      letter-spacing: 0.01em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 260ms ease, transform 260ms cubic-bezier(.2,.8,.2,1), filter 260ms ease;
+      transform-origin: center bottom;
+      z-index: 2147483000;
+      user-select: none;
+    }
+    .overlay[data-visible] {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate(-50%, 0) scale(1);
+      filter: blur(0);
+    }
+
+    .btn {
+      appearance: none;
+      -webkit-appearance: none;
+      background: transparent;
+      border: 0;
+      margin: 0;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      cursor: default;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      min-width: 28px;
+      border-radius: 999px;
+      color: rgba(255,255,255,0.72);
+      transition: background 140ms ease, color 140ms ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .btn:active { background: rgba(255,255,255,0.18); }
+    .btn:focus { outline: none; }
+    .btn:focus-visible { outline: none; }
+    .btn::-moz-focus-inner { border: 0; }
+    .btn svg { width: 14px; height: 14px; display: block; }
+    .btn.reset {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      padding: 0 10px 0 12px;
+      gap: 6px;
+      color: rgba(255,255,255,0.72);
+    }
+    .btn.reset .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1;
+      color: rgba(255,255,255,0.88);
+      background: rgba(255,255,255,0.12);
+      border-radius: 4px;
+    }
+
+    .count {
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+      font-weight: 500;
+      padding: 0 8px;
+      min-width: 42px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .count .sep { color: rgba(255,255,255,0.45); margin: 0 3px; font-weight: 400; }
+    .count .total { color: rgba(255,255,255,0.55); }
+
+    .divider {
+      width: 1px;
+      height: 14px;
+      background: rgba(255,255,255,0.18);
+      margin: 0 2px;
+    }
+
+    /* ── Print: one page per slide, no chrome ────────────────────────────
+       The screen layout stacks every slide at inset:0 inside a scaled
+       canvas; for print we want them in document flow at the authored
+       design size so the browser paginates one slide per sheet. The
+       @page size is set from the width/height attributes via the inline
+       <style id="deck-stage-print-page"> that connectedCallback injects
+       into <head> (the @page at-rule has no effect inside shadow DOM). */
+    @media print {
+      :host {
+        position: static;
+        inset: auto;
+        background: none;
+        overflow: visible;
+        color: inherit;
+      }
+      .stage { position: static; display: block; }
+      .canvas {
+        transform: none !important;
+        width: auto !important;
+        height: auto !important;
+        background: none;
+        will-change: auto;
+      }
+      ::slotted(*) {
+        position: relative !important;
+        inset: auto !important;
+        width: var(--deck-design-w) !important;
+        height: var(--deck-design-h) !important;
+        box-sizing: border-box !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto;
+        break-after: page;
+        page-break-after: always;
+        break-inside: avoid;
+        overflow: hidden;
+      }
+      ::slotted(*:last-child) {
+        break-after: auto;
+        page-break-after: auto;
+      }
+      .overlay, .tapzones { display: none !important; }
+    }
+  `;
+
+  class DeckStage extends HTMLElement {
+    static get observedAttributes() { return ['width', 'height', 'noscale']; }
+
+    constructor() {
+      super();
+      this._root = this.attachShadow({ mode: 'open' });
+      this._index = 0;
+      this._slides = [];
+      this._notes = [];
+      this._hideTimer = null;
+      this._mouseIdleTimer = null;
+
+      this._onKey = this._onKey.bind(this);
+      this._onResize = this._onResize.bind(this);
+      this._onSlotChange = this._onSlotChange.bind(this);
+      this._onMouseMove = this._onMouseMove.bind(this);
+      this._onTapBack = this._onTapBack.bind(this);
+      this._onTapForward = this._onTapForward.bind(this);
+    }
+
+    get designWidth() {
+      return parseInt(this.getAttribute('width'), 10) || DESIGN_W_DEFAULT;
+    }
+    get designHeight() {
+      return parseInt(this.getAttribute('height'), 10) || DESIGN_H_DEFAULT;
+    }
+
+    connectedCallback() {
+      this._render();
+      this._loadNotes();
+      this._syncPrintPageRule();
+      window.addEventListener('keydown', this._onKey);
+      window.addEventListener('resize', this._onResize);
+      window.addEventListener('mousemove', this._onMouseMove, { passive: true });
+      // Initial collection + layout happens via slotchange, which fires on mount.
+    }
+
+    disconnectedCallback() {
+      window.removeEventListener('keydown', this._onKey);
+      window.removeEventListener('resize', this._onResize);
+      window.removeEventListener('mousemove', this._onMouseMove);
+      if (this._hideTimer) clearTimeout(this._hideTimer);
+      if (this._mouseIdleTimer) clearTimeout(this._mouseIdleTimer);
+    }
+
+    attributeChangedCallback() {
+      if (this._canvas) {
+        this._canvas.style.width = this.designWidth + 'px';
+        this._canvas.style.height = this.designHeight + 'px';
+        this._canvas.style.setProperty('--deck-design-w', this.designWidth + 'px');
+        this._canvas.style.setProperty('--deck-design-h', this.designHeight + 'px');
+        this._fit();
+        this._syncPrintPageRule();
+      }
+    }
+
+    _render() {
+      const style = document.createElement('style');
+      style.textContent = stylesheet;
+
+      const stage = document.createElement('div');
+      stage.className = 'stage';
+
+      const canvas = document.createElement('div');
+      canvas.className = 'canvas';
+      canvas.style.width = this.designWidth + 'px';
+      canvas.style.height = this.designHeight + 'px';
+      canvas.style.setProperty('--deck-design-w', this.designWidth + 'px');
+      canvas.style.setProperty('--deck-design-h', this.designHeight + 'px');
+
+      const slot = document.createElement('slot');
+      slot.addEventListener('slotchange', this._onSlotChange);
+      canvas.appendChild(slot);
+      stage.appendChild(canvas);
+
+      // Tap zones (mobile): left third = back, right third = forward.
+      const tapzones = document.createElement('div');
+      tapzones.className = 'tapzones export-hidden';
+      tapzones.setAttribute('aria-hidden', 'true');
+      tapzones.setAttribute('data-noncommentable', '');
+      const tzBack = document.createElement('div');
+      tzBack.className = 'tapzone tapzone--back';
+      const tzMid = document.createElement('div');
+      tzMid.className = 'tapzone tapzone--mid';
+      tzMid.style.pointerEvents = 'none';
+      const tzFwd = document.createElement('div');
+      tzFwd.className = 'tapzone tapzone--fwd';
+      tzBack.addEventListener('click', this._onTapBack);
+      tzFwd.addEventListener('click', this._onTapForward);
+      tapzones.append(tzBack, tzMid, tzFwd);
+
+      // Overlay: compact, solid black, with clickable controls.
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay export-hidden';
+      overlay.setAttribute('role', 'toolbar');
+      overlay.setAttribute('aria-label', 'Deck controls');
+      overlay.setAttribute('data-noncommentable', '');
+      overlay.innerHTML = `
+        <button class="btn prev" type="button" aria-label="Previous slide" title="Previous (←)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
+        </button>
+        <span class="count" aria-live="polite"><span class="current">1</span><span class="sep">/</span><span class="total">1</span></span>
+        <button class="btn next" type="button" aria-label="Next slide" title="Next (→)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+        </button>
+        <span class="divider"></span>
+        <button class="btn reset" type="button" aria-label="Reset to first slide" title="Reset (R)">Reset<span class="kbd">R</span></button>
+      `;
+
+      overlay.querySelector('.prev').addEventListener('click', () => this._go(this._index - 1, 'click'));
+      overlay.querySelector('.next').addEventListener('click', () => this._go(this._index + 1, 'click'));
+      overlay.querySelector('.reset').addEventListener('click', () => this._go(0, 'click'));
+
+      this._root.append(style, stage, tapzones, overlay);
+      this._canvas = canvas;
+      this._slot = slot;
+      this._overlay = overlay;
+      this._countEl = overlay.querySelector('.current');
+      this._totalEl = overlay.querySelector('.total');
+    }
+
+    /** @page must live in the document stylesheet — it's a no-op inside
+     *  shadow DOM. Inject/update a single <head> style tag so the print
+     *  sheet matches the design size and Save-as-PDF yields one slide per
+     *  page with no margins. */
+    _syncPrintPageRule() {
+      const id = 'deck-stage-print-page';
+      let tag = document.getElementById(id);
+      if (!tag) {
+        tag = document.createElement('style');
+        tag.id = id;
+        document.head.appendChild(tag);
+      }
+      tag.textContent =
+        '@page { size: ' + this.designWidth + 'px ' + this.designHeight + 'px; margin: 0; } ' +
+        '@media print { html, body { margin: 0 !important; padding: 0 !important; background: none !important; overflow: visible !important; height: auto !important; } ' +
+        '* { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }';
+    }
+
+    _onSlotChange() {
+      this._collectSlides();
+      this._restoreIndex();
+      this._applyIndex({ showOverlay: false, broadcast: true, reason: 'init' });
+      this._fit();
+    }
+
+    _collectSlides() {
+      const assigned = this._slot.assignedElements({ flatten: true });
+      this._slides = assigned.filter((el) => {
+        // Skip template/style/script nodes even if someone slots them.
+        const tag = el.tagName;
+        return tag !== 'TEMPLATE' && tag !== 'SCRIPT' && tag !== 'STYLE';
+      });
+
+      this._slides.forEach((slide, i) => {
+        const n = i + 1;
+        // Determine a label for comment flow: prefer explicit data-label,
+        // then an existing data-screen-label, then first heading, else "Slide".
+        let label = slide.getAttribute('data-label');
+        if (!label) {
+          const existing = slide.getAttribute('data-screen-label');
+          if (existing) {
+            // Strip any leading number the author may have included.
+            label = existing.replace(/^\s*\d+\s*/, '').trim() || existing;
+          }
+        }
+        if (!label) {
+          const h = slide.querySelector('h1, h2, h3, [data-title]');
+          if (h) label = (h.textContent || '').trim().slice(0, 40);
+        }
+        if (!label) label = 'Slide';
+        slide.setAttribute('data-screen-label', `${pad2(n)} ${label}`);
+
+        // Validation attribute for comment flow / auto-checks.
+        if (!slide.hasAttribute('data-om-validate')) {
+          slide.setAttribute('data-om-validate', VALIDATE_ATTR);
+        }
+
+        slide.setAttribute('data-deck-slide', String(i));
+      });
+
+      if (this._totalEl) this._totalEl.textContent = String(this._slides.length || 1);
+      if (this._index >= this._slides.length) this._index = Math.max(0, this._slides.length - 1);
+    }
+
+    _loadNotes() {
+      const tag = document.getElementById('speaker-notes');
+      if (!tag) { this._notes = []; return; }
+      try {
+        const parsed = JSON.parse(tag.textContent || '[]');
+        if (Array.isArray(parsed)) this._notes = parsed;
+      } catch (e) {
+        console.warn('[deck-stage] Failed to parse #speaker-notes JSON:', e);
+        this._notes = [];
+      }
+    }
+
+    _restoreIndex() {
+      // The host's ?slide= param is delivered as a #<int> hash (1-indexed) on
+      // the iframe src. No hash → slide 1; the deck itself keeps no position
+      // state across loads.
+      const h = (location.hash || '').match(/^#(\d+)$/);
+      if (h) {
+        const n = parseInt(h[1], 10) - 1;
+        if (n >= 0 && n < this._slides.length) this._index = n;
+      }
+    }
+
+    _applyIndex({ showOverlay = true, broadcast = true, reason = 'init' } = {}) {
+      if (!this._slides.length) return;
+      const prev = this._prevIndex == null ? -1 : this._prevIndex;
+      const curr = this._index;
+      // Keep the iframe's own hash in sync so an in-iframe location.reload()
+      // (reload banner path in viewer-handle.ts) lands on the current slide,
+      // not the stale deep-link hash from initial load.
+      try { history.replaceState(null, '', '#' + (curr + 1)); } catch (e) {}
+      this._slides.forEach((s, i) => {
+        if (i === curr) s.setAttribute('data-deck-active', '');
+        else s.removeAttribute('data-deck-active');
+      });
+      if (this._countEl) this._countEl.textContent = String(curr + 1);
+
+      if (broadcast) {
+        // (1) Legacy: host-window postMessage for speaker-notes renderers.
+        try { window.postMessage({ slideIndexChanged: curr }, '*'); } catch (e) {}
+
+        // (2) In-page CustomEvent on the <deck-stage> element itself.
+        //     Bubbles and composes out of shadow DOM so slide code can listen:
+        //       document.querySelector('deck-stage').addEventListener('slidechange', e => {
+        //         e.detail.index, e.detail.previousIndex, e.detail.total, e.detail.slide, e.detail.reason
+        //       });
+        const detail = {
+          index: curr,
+          previousIndex: prev,
+          total: this._slides.length,
+          slide: this._slides[curr] || null,
+          previousSlide: prev >= 0 ? (this._slides[prev] || null) : null,
+          reason: reason, // 'init' | 'keyboard' | 'click' | 'tap' | 'api'
+        };
+        this.dispatchEvent(new CustomEvent('slidechange', {
+          detail,
+          bubbles: true,
+          composed: true,
+        }));
+      }
+
+      this._prevIndex = curr;
+      if (showOverlay) this._flashOverlay();
+    }
+
+    _flashOverlay() {
+      if (!this._overlay) return;
+      this._overlay.setAttribute('data-visible', '');
+      if (this._hideTimer) clearTimeout(this._hideTimer);
+      this._hideTimer = setTimeout(() => {
+        this._overlay.removeAttribute('data-visible');
+      }, OVERLAY_HIDE_MS);
+    }
+
+    _fit() {
+      if (!this._canvas) return;
+      // PPTX export sets noscale so the DOM capture sees authored-size
+      // geometry — the scaled canvas is in shadow DOM, so the exporter's
+      // resetTransformSelector can't reach .canvas.style.transform directly.
+      if (this.hasAttribute('noscale')) {
+        this._canvas.style.transform = 'none';
+        return;
+      }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const s = Math.min(vw / this.designWidth, vh / this.designHeight);
+      this._canvas.style.transform = `scale(${s})`;
+    }
+
+    _onResize() { this._fit(); }
+
+    _onMouseMove() {
+      // Keep overlay visible while mouse moves; hide after idle.
+      this._flashOverlay();
+    }
+
+    _onTapBack(e) {
+      e.preventDefault();
+      this._go(this._index - 1, 'tap');
+    }
+
+    _onTapForward(e) {
+      e.preventDefault();
+      this._go(this._index + 1, 'tap');
+    }
+
+    _onKey(e) {
+      // Ignore when the user is typing.
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const key = e.key;
+      let handled = true;
+
+      if (key === 'ArrowRight' || key === 'PageDown' || key === ' ' || key === 'Spacebar') {
+        this._go(this._index + 1, 'keyboard');
+      } else if (key === 'ArrowLeft' || key === 'PageUp') {
+        this._go(this._index - 1, 'keyboard');
+      } else if (key === 'Home') {
+        this._go(0, 'keyboard');
+      } else if (key === 'End') {
+        this._go(this._slides.length - 1, 'keyboard');
+      } else if (key === 'r' || key === 'R') {
+        this._go(0, 'keyboard');
+      } else if (/^[0-9]$/.test(key)) {
+        // 1..9 jump to that slide; 0 jumps to 10.
+        const n = key === '0' ? 9 : parseInt(key, 10) - 1;
+        if (n < this._slides.length) this._go(n, 'keyboard');
+      } else {
+        handled = false;
+      }
+
+      if (handled) {
+        e.preventDefault();
+        this._flashOverlay();
+      }
+    }
+
+    _go(i, reason = 'api') {
+      if (!this._slides.length) return;
+      const clamped = Math.max(0, Math.min(this._slides.length - 1, i));
+      if (clamped === this._index) {
+        this._flashOverlay();
+        return;
+      }
+      this._index = clamped;
+      this._applyIndex({ showOverlay: true, broadcast: true, reason });
+    }
+
+    // Public API ------------------------------------------------------------
+
+    /** Current slide index (0-based). */
+    get index() { return this._index; }
+    /** Total slide count. */
+    get length() { return this._slides.length; }
+    /** Programmatically navigate. */
+    goTo(i) { this._go(i, 'api'); }
+    next() { this._go(this._index + 1, 'api'); }
+    prev() { this._go(this._index - 1, 'api'); }
+    reset() { this._go(0, 'api'); }
+  }
+
+  if (!customElements.get('deck-stage')) {
+    customElements.define('deck-stage', DeckStage);
+  }
+})();
+</script>
+</body>
+</html>
