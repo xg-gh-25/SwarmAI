@@ -991,8 +991,9 @@ class DddCultivationOrchestrator:
                         source_path=imp_path, dry_run=False,
                     )
                     if reclaim_report.new_content is not None:
-                        # reclaim_noise_entries already wrote imp_path + .bak
-                        # (source_path given). Just log.
+                        # reclaim_noise_entries already wrote imp_path
+                        # (source_path given); recovery is archive + git, no
+                        # .bak (6463e1ab). Just log.
                         findings.append(
                             f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
                             f"archived+stripped from {project_dir.name} "

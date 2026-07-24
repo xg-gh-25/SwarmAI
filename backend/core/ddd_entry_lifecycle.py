@@ -1069,6 +1069,27 @@ def reclaim_noise_entries(
             continue
         selected.append(entry)
 
+    # Duplicate-guard (parity with retire_entry, run_3e43c7ee): _strip_entries matches
+    # by the (title, section) SET, so if two selected entries share an identical
+    # (title, section) a single strip would remove BOTH while archive_entries records
+    # each once — data loss. This became reachable when cultivated bullets gained
+    # derived titles (a rare 1/839 title collision measured). retire_entry already
+    # raises on this; the autonomous reclaim path must SKIP the ambiguous group (never
+    # silently mass-strip a collision) and fail loud so it can be retired by name.
+    import logging
+    from collections import Counter
+    _key_counts = Counter((e.title, e.section) for e in selected)
+    _ambiguous = {k for k, n in _key_counts.items() if n > 1}
+    if _ambiguous:
+        logging.getLogger(__name__).warning(
+            "reclaim: skipping %d entry(ies) in %d ambiguous (title, section) group(s) "
+            "— a SET-strip would remove all colliders while archiving one (data loss). "
+            "Disambiguate or retire by name. Titles: %s",
+            sum(_key_counts[k] for k in _ambiguous), len(_ambiguous),
+            sorted(t for t, _ in _ambiguous),
+        )
+        selected = [e for e in selected if (e.title, e.section) not in _ambiguous]
+
     report.candidates = [e.title for e in selected]
 
     if dry_run or not selected:

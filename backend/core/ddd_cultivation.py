@@ -592,6 +592,94 @@ def content_signature(line: str) -> str:
     return text
 
 
+# The canonical cultivated-entry shape is ``- [type] **Title** — body`` (see
+# content_signature docstring). But apply_to_ddd historically wrote raw-prose
+# reflect-lessons VERBATIM as ``- {content} (date, run, label)`` with NO bold
+# title — and the lifecycle engine's _ENTRY_RE (ddd_entry_lifecycle.py) only
+# parses ``- [type]? **Title** …``. So a raw-prose bullet was structurally
+# INVISIBLE to parse/decay/reclaim/retire (measured: 707+ per DDD doc, 0 stamped).
+# This normalizer closes that gap at the WRITE side by giving every cultivated
+# bullet a bold title — via an INSERT-ONLY transform that deletes nothing:
+_ALREADY_TITLED_RE = re.compile(r"^(?:\[\w+\] )?\*\*")
+
+
+def _normalize_cultivated_bullet(content: str, entry_type: str) -> "str | None":
+    """Give a cultivated lesson a bold title so the lifecycle engine can parse it.
+
+    INSERT-ONLY: the returned string is ``[{entry_type}] **{prefix}**{rest}`` where
+    ``prefix`` + ``rest`` == the ORIGINAL ``content`` byte-for-byte — the ONLY edits
+    are (a) a leading ``[type] `` and (b) a ``**…**`` pair wrapping a leading span.
+    Nothing is deleted, truncated, or re-separated. This preserves two invariants
+    that any change to the corpus MUST hold (both proven against the real 839-bullet
+    corpus in test_ddd_cultivation, and re-asserted per-bullet by the migration):
+
+      1. TRUE-LOSSLESS — removing exactly the two inserted ``**`` markers and the
+         ``[type] `` prefix restores ``content`` exactly (no data loss — the C044
+         "don't destroy knowledge" red line; BLOCK-A).
+      2. SIGNATURE-INVARIANT — the closing ``**`` is placed immediately before a
+         SPACE (or end-of-string), so content_signature()'s ``text.replace("**", " ")``
+         followed by whitespace-collapse is a NO-OP → the migrated bullet signs
+         IDENTICALLY to the original. The doc-wide dedup chokepoint (run_e9cb7e2a)
+         is NOT re-opened (BLOCK-B).
+
+    Returns None for a degenerate bullet (empty / no usable title span) — the caller
+    keeps the original content unchanged rather than emit a broken ``**``.
+
+    Idempotent: content already carrying a leading ``**`` (optionally ``[type] **``)
+    is returned unchanged — never double-wrapped.
+    """
+    if not content or not content.strip():
+        return None
+    # Idempotency: an already-titled bullet (bold, optionally [type]-prefixed) is
+    # left exactly as-is. This is what makes the migration safe to re-run and keeps
+    # the ~150 reflect-lessons that ALREADY emit `**Title**` untouched.
+    if _ALREADY_TITLED_RE.match(content):
+        return content
+    # A leading `[type] ` on UNTITLED content (e.g. `[guideline] Verify-first …`, a
+    # cultivated lesson that carried a type tag but no bold title) must be CONSUMED,
+    # not kept — else we double-prefix (`[guideline] **[guideline] …**`), which drifts
+    # the content_signature. The type we emit is the one the caller passed (derived
+    # from the same content via classify_entry_type), so dropping the inline tag is
+    # lossless w.r.t. the entry's classification. Prefer the content's own declared
+    # type when present (it was a deliberate tag) over the re-classified one.
+    _tag = re.match(r"^\[(\w+)\] ", content)
+    if _tag:
+        entry_type = _tag.group(1)
+        content = content[_tag.end():]
+        if not content.strip():
+            return None
+
+    # The title span MUST end on a SPACE boundary (or EOL) — two invariants ride on it:
+    #   • signature-invariance: the closing ** then sits immediately before a space, so
+    #     content_signature()'s `**`→space + whitespace-collapse is a no-op.
+    #   • inner-** safety (BLOCK-C): if the span ended mid-text adjacent to an existing
+    #     `**`, the markers would merge into `****` (garbage capture + lossy).
+    # cap = the last space at/before char 80; if the first token is longer, use EOL.
+    cap = content.rfind(" ", 0, 81)
+    if cap <= 20:
+        cap = len(content)
+
+    # Inner-** guard (BLOCK-C): the title span may NOT contain a `**`. If content has an
+    # inner `**` at/before the cap, pull the title end back to the last space STRICTLY
+    # BEFORE that `**`. If no such clean space exists (the `**` is within the first ~20
+    # chars, e.g. `Since it's **already SHIPPED**…`), there is no clean title — SKIP
+    # (return None → caller keeps the original untitled content). Honest: an un-titled
+    # bullet stays un-titled, never a corrupt 4-star one; it can still be retired by name.
+    inner = content.find("**")
+    if inner != -1 and inner < cap:
+        cut = content.rfind(" ", 0, inner)
+        if cut <= 20:
+            return None
+        end = cut
+    else:
+        end = cap
+
+    title = content[:end]
+    if not title.strip() or "**" in title:
+        return None
+    return f"[{entry_type}] **{title}**{content[end:]}"
+
+
 def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
@@ -674,10 +762,18 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     try:
         content = doc_path.read_text(encoding="utf-8")
 
-        # M2 fix: match existing entry format — plain bullet with trailing attribution
+        # Emit the canonical `- [type] **Title** — body (date, run, label)` shape.
+        # Normalize (INSERT-ONLY) so the lifecycle engine's _ENTRY_RE can parse/decay/
+        # reclaim/retire it — a raw untitled bullet (the pre-run_3e43c7ee format) is
+        # structurally invisible to every autonomous path. _normalize_cultivated_bullet
+        # is lossless + signature-invariant; None = degenerate → keep content unchanged.
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         source_label = f"{proposal.source_stage}" if proposal.source_stage != "reflect" else "auto-cultivated"
-        entry = f"- {proposal.content} ({date_str}, {proposal.source_run_id}, {source_label})\n"
+        from core.ddd_entry_lifecycle import classify_entry_type
+        _etype = classify_entry_type(proposal.content)
+        _normalized = _normalize_cultivated_bullet(proposal.content, _etype)
+        _entry_body = _normalized if _normalized is not None else proposal.content
+        entry = f"- {_entry_body} ({date_str}, {proposal.source_run_id}, {source_label})\n"
 
         # M1 fix: match section header at line start (## level only, not ###)
         section_re = re.compile(

@@ -314,7 +314,18 @@ class TestApplyToDDD:
             assert result == "applied"
 
             content = doc.read_text()
-            assert "New pattern discovered during pipeline run" in content
+            # run_3e43c7ee: apply_to_ddd now NORMALIZES to the canonical titled shape
+            # `- [type] **Title** — body` so the lifecycle engine can parse it. The
+            # lesson TEXT is preserved (recoverable by dropping the [type] tag + the
+            # 2 inserted ** markers), just no longer a verbatim substring.
+            import re as _re
+            from core.ddd_entry_lifecycle import _ENTRY_RE, parse_entries
+            new_line = next(l for l in content.splitlines()
+                            if "New pattern discovered" in l)
+            recovered = _re.sub(r"^- \[\w+\] ", "", new_line, count=1).replace("**", "", 2)
+            assert recovered.startswith("New pattern discovered during pipeline run"), recovered
+            assert _ENTRY_RE.match(new_line) is not None  # now parseable (the whole point)
+            assert any("New pattern discovered" in e.raw_text for e in parse_entries(content))
             assert "existing entry" in content  # didn't clobber
             assert "auto-cultivated" in content  # M2: new format attribution
             assert "run_test" in content  # source run ID preserved
@@ -382,8 +393,14 @@ class TestApplyToDDD:
             assert apply_to_ddd(p, project_dir) == "created_section"
             content = doc.read_text()
             # Heading was created AND the lesson written under it (not dropped).
+            # run_3e43c7ee: entry is now titled; the text is recoverable, not verbatim.
+            import re as _re
+            from core.ddd_entry_lifecycle import parse_entries
             assert "## What Worked" in content
-            assert "A genuinely new lesson worth keeping in the brain" in content
+            new_line = next(l for l in content.splitlines() if "genuinely new lesson" in l)
+            recovered = _re.sub(r"^- \[\w+\] ", "", new_line, count=1).replace("**", "", 2)
+            assert recovered.startswith("A genuinely new lesson worth keeping in the brain"), recovered
+            assert any("genuinely new lesson" in e.raw_text for e in parse_entries(content))
             assert "- old failure" in content  # existing content preserved
 
             # Duplicate content in an EXISTING section = benign no-op.
@@ -1689,3 +1706,139 @@ class TestConfidentAutoRetire:
         assert result["escalated"] == 1
         assert doc.read_text(encoding="utf-8") == original  # nothing deleted
         m._auto_retire_ledger.clear()
+
+
+class TestNormalizeCultivatedBullet:
+    """The WRITE-side fix (run_3e43c7ee): give raw-prose cultivated bullets a bold
+    title so the lifecycle engine's _ENTRY_RE can parse/decay/reclaim/retire them.
+    INSERT-ONLY — must be lossless AND content_signature-invariant."""
+
+    def _unwrap(self, out: str) -> str:
+        """Inverse of the normalizer's INSERTION: from the output, drop a single leading
+        [type] tag and exactly the TWO leftmost ** markers (the ones the normalizer
+        inserted). The result must equal the CONTENT with only its own leading [type]
+        tag stripped — content's own inner ** (if any) are preserved on both sides.
+        This is the true lossless invariant (matches the migration's per-bullet assert)."""
+        import re
+        return re.sub(r"^\[\w+\] ", "", out, count=1).replace("**", "", 2)
+
+    def _content_bare(self, content: str) -> str:
+        """Content reduced to compare against _unwrap(output): only its own leading
+        [type] tag is stripped (content carries NO inserted markers)."""
+        import re
+        return re.sub(r"^\[\w+\] ", "", content, count=1)
+
+    def test_raw_prose_gets_bold_title(self):
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        out = _normalize_cultivated_bullet(
+            "Startup-flash guards must publish ALL coupled values together: gate-2 caught it",
+            "guideline",
+        )
+        assert out.startswith("[guideline] **")
+        # the bold title is the leading clause, closing ** before a space boundary
+        assert "**" in out
+
+    def test_true_lossless_insert_only(self):
+        """The bare text (type-tag + ** markers removed) is preserved exactly."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        for content in [
+            "Startup-flash guards must publish ALL coupled values together: gate-2 caught it",
+            "dir rename = R27 contract migration — _materialize_shared silent-skip bug",
+            "s_internal-* is gitignored so a skill-doc fix is disk-effective with zero git action",
+            "A short one",
+        ]:
+            out = _normalize_cultivated_bullet(content, "guideline")
+            assert self._unwrap(out) == self._content_bare(content), f"LOSSY on {content!r} -> {out!r}"
+
+    def test_leading_type_tag_consumed_not_doubled(self):
+        """Content already carrying a leading [type] tag (but no bold title) must NOT
+        be double-prefixed (`[guideline] **[guideline] …**`) — the tag is consumed and
+        re-emitted, the entry's own declared type wins, signature stays invariant."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet, content_signature
+        content = "[pitfall] Python except-clause ORDER is a data-loss trap when narrow is a subclass"
+        out = _normalize_cultivated_bullet(content, "guideline")  # caller-type differs on purpose
+        assert out.count("[pitfall]") == 1 and "[guideline]" not in out, \
+            f"double/typewrong prefix: {out!r}"
+        assert out.startswith("[pitfall] **"), out  # content's OWN tag preserved
+        assert self._unwrap(out) == self._content_bare(content)  # lossless
+        assert content_signature("- " + content) == content_signature("- " + out)  # sig-invariant
+
+    def test_signature_invariant(self):
+        """content_signature(original) == content_signature(normalized) — the
+        closing ** lands before a space so replace('**',' ')+collapse is a no-op.
+        This is what keeps the doc-wide dedup chokepoint (run_e9cb7e2a) intact."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet, content_signature
+        for content in [
+            "Startup-flash guards must publish ALL coupled values together: gate-2 caught it",
+            "dir rename = R27 contract migration: _materialize_shared silent-skip bug",
+            "Gate-2 adversarial earned its keep on a READ-ONLY feature: it mutation-tested it",
+        ]:
+            out = _normalize_cultivated_bullet(content, "guideline")
+            assert content_signature("- " + content) == content_signature("- " + out), \
+                f"SIG DRIFT on {content!r}"
+
+    def test_parses_via_entry_re(self):
+        """The normalized bullet must actually match _ENTRY_RE with a non-empty title."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        from core.ddd_entry_lifecycle import _ENTRY_RE
+        out = _normalize_cultivated_bullet(
+            "When a new signal must surface independently of a gated function add a peer helper",
+            "guideline",
+        )
+        line = f"- {out} (2026-07-16, run_abc1234, auto-cultivated)"
+        m = _ENTRY_RE.match(line)
+        assert m is not None and m.group(2).strip(), f"did not parse: {line!r}"
+
+    def test_idempotent_on_already_titled(self):
+        """A bullet already carrying [type] **Title** (or bare **Title**) is unchanged."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        already = "[decision] **Chose X over Y** — because Z"
+        assert _normalize_cultivated_bullet(already, "guideline") == already
+        bare = "**Title only** — body"
+        assert _normalize_cultivated_bullet(bare, "pitfall") == bare
+
+    def test_inner_bold_in_title_span_is_skipped_not_corrupted(self):
+        """content whose title span would contain an inner ** (BLOCK-C) is SKIPPED
+        (returns None) rather than emitting a 4-star collision that is neither cleanly
+        parseable nor losslessly recoverable. Honest: un-titled stays un-titled."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        # opens with an inner bold, no clean pre-** boundary past char 20
+        content = "Since it's **already SHIPPED**, this is a retrospective review not a gate"
+        assert _normalize_cultivated_bullet(content, "decision") is None
+
+    def test_inner_bold_after_clean_title_boundary_ok(self):
+        """If a clean title boundary exists BEFORE the inner **, the title is cut there
+        and the bullet IS titled (the inner ** stays in the body, untouched)."""
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        from core.ddd_entry_lifecycle import _ENTRY_RE
+        content = "Never mock resource code because a **fake** subprocess hides liveness bugs here"
+        out = _normalize_cultivated_bullet(content, "guideline")
+        assert out is not None and self._unwrap(out) == self._content_bare(content)
+        m = _ENTRY_RE.match(f"- {out} (2026-07-16, run_x, auto-cultivated)")
+        assert m is not None and len(m.group(2).strip()) > 3 and "**" not in m.group(2)
+
+    def test_degenerate_returns_none(self):
+        from core.ddd_cultivation import _normalize_cultivated_bullet
+        assert _normalize_cultivated_bullet("", "guideline") is None
+        assert _normalize_cultivated_bullet("   ", "guideline") is None
+
+    def test_apply_to_ddd_emits_parseable_titled_bullet(self, tmp_path):
+        """End-to-end: apply_to_ddd on a raw-prose lesson writes a bullet that
+        parse_entries (the autonomous default path) can now see."""
+        import os
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+        from core.ddd_entry_lifecycle import parse_entries
+        proj = tmp_path / "P" / "2-understanding"
+        proj.mkdir(parents=True)
+        doc = proj / "IMPROVEMENT.md"
+        doc.write_text("# I\n\n## What Worked\n\n", encoding="utf-8")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="A raw prose lesson with no bold title that must become parseable now",
+            source_run_id="run_test01", confidence=0.9,
+        )
+        result = apply_to_ddd(p, proj.parent)
+        assert result in ("applied", "created_section")
+        entries = parse_entries(doc.read_text(encoding="utf-8"))
+        assert any("raw prose lesson" in e.raw_text for e in entries), \
+            "the newly-written bullet is NOT parseable by parse_entries"

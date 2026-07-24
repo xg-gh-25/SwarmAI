@@ -1443,3 +1443,52 @@ class TestRetireStillProtectsRealEntries:
         with pytest.raises(RetireError):
             retire_entry(content, title="Guarded thread", section="Open Threads",
                          project_dir=tmp_path, dry_run=False)  # no force → refuse
+
+
+_RECLAIM_COLLISION_FIXTURE = """\
+## Key Lessons
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Duplicate derived title** — first colliding body, old. (2025-01-01, run_a)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [guideline] **Duplicate derived title** — second colliding body, old. (2025-02-01, run_b)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [pitfall] **A unique reclaimable one** — operational, no refs, old. (2025-01-01, run_c)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+
+
+class TestReclaimDuplicateGuard:
+    """run_3e43c7ee: reclaim's _strip_entries matches by the (title, section) SET, so
+    two entries sharing an identical (title, section) would BOTH be stripped while
+    archive records one (data loss). retire_entry already raises on this; the
+    autonomous reclaim path must SKIP the ambiguous group (parity), never mass-strip."""
+
+    def test_ambiguous_group_skipped_unique_still_reclaimed(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        today = date(2026, 6, 25)
+        # dry_run selection: the unique entry is a candidate; the 2 colliders are NOT
+        report = reclaim_noise_entries(
+            _RECLAIM_COLLISION_FIXTURE, today, tmp_path, dry_run=True,
+        )
+        assert report.candidates == ["A unique reclaimable one"], (
+            f"collision group not skipped — candidates={report.candidates}"
+        )
+
+    def test_ambiguous_group_not_stripped_from_disk(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        today = date(2026, 6, 25)
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(_RECLAIM_COLLISION_FIXTURE)
+        report = reclaim_noise_entries(
+            _RECLAIM_COLLISION_FIXTURE, today, tmp_path,
+            source_path=src, dry_run=False,
+        )
+        out = src.read_text()
+        # BOTH colliding entries must survive (not silently mass-stripped)
+        assert out.count("Duplicate derived title") == 2, "collision group was stripped — data loss"
+        # the unique reclaimable one WAS moved out
+        assert "A unique reclaimable one" not in out
+        assert report.archived == 1
