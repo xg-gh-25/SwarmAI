@@ -76,6 +76,18 @@ subprocess_executor = ThreadPoolExecutor(
 # Legacy alias for internal callers
 _subprocess_executor = subprocess_executor
 
+# Dedicated pool for HEAVY psutil process-tree walks (process_tree_rss ~= 107ms
+# each, measured run_409392d4). The maintenance loop gathers these per-session
+# RSS reads concurrently; a dedicated pool keeps that gather burst from
+# saturating subprocess_executor and starving force_kill's tree-snapshot/kill
+# sweep (which stays on subprocess_executor). max_workers bounds how many
+# concurrent psutil walks run at once (CPU/mem), sized for the max concurrent
+# session count with headroom.
+rss_executor = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="rss"
+)
+_rss_executor = rss_executor
+
 # ── Load-amplifier caps (Root 2) ───────────────────────────────────
 # Context-ring SOFT compaction threshold: when measured context% crosses this,
 # proactively compact at the next IDLE — BEFORE the slow turn. Soft-first
@@ -3525,8 +3537,10 @@ class SessionUnit:
         try:
             from .resource_monitor import resource_monitor
             loop = asyncio.get_running_loop()
+            # Heavy psutil tree walk (~107ms) → dedicated _rss_executor, off the
+            # shared subprocess_executor that force_kill uses (run_409392d4).
             tree_rss = await loop.run_in_executor(
-                _subprocess_executor,
+                _rss_executor,
                 resource_monitor.process_tree_rss, pid,
             )
         except Exception:

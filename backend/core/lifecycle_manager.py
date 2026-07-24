@@ -30,7 +30,11 @@ import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from .session_unit import SessionState, subprocess_executor as _subprocess_executor
+from .session_unit import (
+    SessionState,
+    subprocess_executor as _subprocess_executor,
+    rss_executor as _rss_executor,
+)
 
 if TYPE_CHECKING:
     from .session_router import SessionRouter
@@ -337,13 +341,19 @@ class LifecycleManager:
         2. Updates the unit's ``_peak_tree_rss_bytes`` watermark.
         3. Logs a per-session summary line for post-mortem analysis.
 
-        Non-fatal — failures are logged and skipped.  The cost is one
-        ``psutil.Process(pid).children(recursive=True)`` per alive unit
-        per cycle, which is ~1ms each.
+        Non-fatal — failures are logged and skipped.  Each per-unit cost is one
+        ``psutil.Process(pid).children(recursive=True)`` tree walk, MEASURED at
+        ~107ms (run_409392d4), NOT the ~1ms once assumed.
 
-        Note: to_thread calls are intentionally sequential, not parallel.
-        At ~1ms per unit in a 60s maintenance loop, the ~4ms total for
-        MAX_CONCURRENT=2 units doesn't justify asyncio.gather complexity.
+        Concurrency (run_409392d4): the per-unit RSS reads are gathered with
+        ``asyncio.gather`` on ``_rss_executor`` so the maintenance-loop coroutine
+        is suspended for ~1x the tree-walk (parallel), NOT SUM(N x 107ms). The
+        old serial ``for unit: await run_in_executor(...)`` loop suspended the
+        loop for the full sum, delaying every SSE reader task on the same event
+        loop -> simultaneous multi-tab SSE stalls. ``return_exceptions=True``
+        keeps one unit's psutil failure from aborting the rest. Per-unit
+        mutations (peak watermark, spawn-cost record, logging) run AFTER the
+        gather, iterating ``zip(alive_units, results)`` — order-safe.
         """
         try:
             from .resource_monitor import resource_monitor
@@ -356,12 +366,21 @@ class LifecycleManager:
             entries = []
 
             loop = asyncio.get_running_loop()
-            for unit in alive_units:
-                tree_rss = await loop.run_in_executor(
-                    _subprocess_executor,
-                    resource_monitor.process_tree_rss, unit.pid,
-                )
-                if tree_rss <= 0:
+            # Gather all per-unit tree-RSS reads CONCURRENTLY (dedicated pool).
+            rss_results = await asyncio.gather(
+                *(
+                    loop.run_in_executor(
+                        _rss_executor,
+                        resource_monitor.process_tree_rss, unit.pid,
+                    )
+                    for unit in alive_units
+                ),
+                return_exceptions=True,
+            )
+
+            for unit, tree_rss in zip(alive_units, rss_results):
+                # return_exceptions=True: skip a unit whose psutil walk raised.
+                if isinstance(tree_rss, BaseException) or tree_rss <= 0:
                     continue
 
                 # Update peak watermark; warn on first 1.5GB crossing.
@@ -373,7 +392,7 @@ class LifecycleManager:
                 prev_peak = unit._peak_tree_rss_bytes
                 if prev_peak == 0 and tree_rss > 0:
                     main_rss = await loop.run_in_executor(
-                        _subprocess_executor,
+                        _rss_executor,
                         resource_monitor.process_rss, unit.pid,
                     )
                     if main_rss > 0:
@@ -428,22 +447,42 @@ class LifecycleManager:
             from .session_unit import SessionUnit
 
             loop = asyncio.get_running_loop()
-            for unit in self._router.list_units():
-                if unit.state != SessionState.IDLE:
-                    continue
-                if not unit.pid:
-                    continue
-                if (
-                    time.monotonic() - unit._last_proactive_restart
-                    < SessionUnit.PROACTIVE_COOLDOWN
-                ):
-                    continue
 
-                tree_rss = await loop.run_in_executor(
-                    _subprocess_executor,
-                    resource_monitor.process_tree_rss, unit.pid,
-                )
+            # Eligibility filter FIRST (state / pid / cooldown) — do NOT spend an
+            # RSS read on a unit we won't act on. Then gather the survivors' RSS
+            # reads concurrently on _rss_executor (run_409392d4: was a serial
+            # await loop = SUM(N x 107ms) suspending the maintenance loop; now
+            # ~1x). Per-unit compact/kill mutations run AFTER the gather, serially
+            # (one kill at a time, semantics preserved).
+            eligible = [
+                unit for unit in self._router.list_units()
+                if unit.state == SessionState.IDLE
+                and unit.pid
+                and (time.monotonic() - unit._last_proactive_restart
+                     >= SessionUnit.PROACTIVE_COOLDOWN)
+            ]
+            if not eligible:
+                return
+
+            rss_results = await asyncio.gather(
+                *(
+                    loop.run_in_executor(
+                        _rss_executor,
+                        resource_monitor.process_tree_rss, unit.pid,
+                    )
+                    for unit in eligible
+                ),
+                return_exceptions=True,
+            )
+
+            for unit, tree_rss in zip(eligible, rss_results):
+                if isinstance(tree_rss, BaseException):
+                    continue
                 if tree_rss <= SessionUnit.PROACTIVE_RSS_THRESHOLD:
+                    continue
+                # Re-check state: a unit may have left IDLE between the RSS
+                # gather and now (TOCTOU) — never interrupt a STREAMING turn.
+                if unit.state != SessionState.IDLE:
                     continue
 
                 logger.warning(
@@ -509,13 +548,25 @@ class LifecycleManager:
             mem = resource_monitor.system_memory()
             loop = asyncio.get_running_loop()
 
-            # Collect RSS for each streaming session
+            # Collect RSS for each streaming session — gathered CONCURRENTLY on
+            # _rss_executor (run_409392d4: was a serial await loop suspending the
+            # maintenance loop for SUM(N x 107ms) → SSE stalls; now ~1x). The
+            # kill logic below (Trigger 1/2) already runs after collection, so
+            # only this read loop needed parallelizing.
+            rss_results = await asyncio.gather(
+                *(
+                    loop.run_in_executor(
+                        _rss_executor,
+                        resource_monitor.process_tree_rss, unit.pid,
+                    )
+                    for unit in streaming_units
+                ),
+                return_exceptions=True,
+            )
             rss_map: dict = {}  # unit → rss_bytes
-            for unit in streaming_units:
-                tree_rss = await loop.run_in_executor(
-                    _subprocess_executor,
-                    resource_monitor.process_tree_rss, unit.pid,
-                )
+            for unit, tree_rss in zip(streaming_units, rss_results):
+                if isinstance(tree_rss, BaseException):
+                    continue
                 if tree_rss > 0:
                     rss_map[unit] = tree_rss
 
