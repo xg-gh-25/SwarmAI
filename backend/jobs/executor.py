@@ -185,7 +185,12 @@ def execute_job(
         elif job.type == "agent_task":
             budget_err = _check_monthly_budget(state, defaults)
             daily_err = _check_daily_agent_limit(state, defaults) if not budget_err else None
-            gate_err = budget_err or daily_err
+            # RAM admission gate (run_409392d4): defer the CLI spawn if system
+            # memory can't safely host another subprocess, so job bursts don't
+            # starve chat-tab spawns. Checked last (cheapest to recover — retry
+            # next tick) and only when the cost/count gates already passed.
+            mem_err = _check_spawn_ram_budget() if not (budget_err or daily_err) else None
+            gate_err = budget_err or daily_err or mem_err
             if gate_err:
                 result = JobResult(
                     job_id=job.id, timestamp=start,
@@ -1616,6 +1621,33 @@ def _check_monthly_budget(state: SchedulerState, defaults: SchedulerDefaults) ->
             f"Reset on 1st of next month."
         )
     return None
+
+
+def _check_spawn_ram_budget() -> str | None:
+    """Return a defer-reason if system RAM can't safely host another CLI, else None.
+
+    A scheduled agent_task spawns a `claude --print` CLI (~1-1.5GB). Before
+    run_409392d4 these spawned OUTSIDE the chat spawn_budget gate, so a job burst
+    starved chat-tab spawns. This reuses the EXISTING central
+    resource_monitor.spawn_budget() (NOT a new per-call cost cap — STEERING #2)
+    and merely DEFERS the job to the next scheduler tick (skip, not truncate) when
+    memory is tight. alive_count is read from the live session_router when present
+    (same process, thread-safe module singleton) so the concurrent-spawn penalty
+    is accurate; falls back to 0 (still reads real memory) if the router isn't up.
+    Never raises — a gate that crashes the scheduler is worse than one that passes.
+    """
+    try:
+        from core.resource_monitor import resource_monitor
+        from core import session_registry
+        router = getattr(session_registry, "session_router", None)
+        alive = router.alive_count if router is not None else 0
+        budget = resource_monitor.spawn_budget(alive_count=alive)
+        if not budget.can_spawn:
+            return f"deferred: memory pressure ({budget.reason}) — retry next tick"
+        return None
+    except Exception as exc:  # never block the scheduler on a gate error
+        logger.debug("spawn RAM budget check skipped (non-fatal): %s", exc)
+        return None
 
 
 def _check_daily_agent_limit(state: SchedulerState, defaults: SchedulerDefaults) -> str | None:
