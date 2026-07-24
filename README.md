@@ -55,6 +55,7 @@ As of **v1.22.0**, that loop is running healthy end-to-end — sessions self-hea
 | 💬 **[All Discussions](https://github.com/xg-gh-25/SwarmAI/discussions)** | Thought leadership, architecture deep-dives, and post-mortems — also mirrored in [`docs/discussions/`](./docs/discussions/) |
 | 🧭 **[Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38)** | The beliefs that became enforcement — why each one earned its place from a failure |
 | 🕸️ **[The Ontology Beneath It All](https://github.com/xg-gh-25/SwarmAI/discussions/95)** | The single ontology (🏷️ classification + 🕸️ relations, no Neo4j) that unifies Memory, DDD, and Code Intelligence |
+| 🎞️ **[AI-Native Transformation — Keynote Deck](https://xg-gh-25.github.io/SwarmAI/AI-Native-Transformation-Deck.html)** | The "2x ceiling → 10x compounding" paradigm shift, as a live slide deck ([中文](https://xg-gh-25.github.io/SwarmAI/AI-Native-Transformation-Deck-CN.html)) · or read the [article](./docs/AI-Native-Transformation.md) |
 
 ![SwarmAI](./assets/swarm-2.png)
 

@@ -54,6 +54,7 @@ SwarmAI 押的是相反的赌注——价值应该**复利**。每一次交互�
 | 💬 **[全部讨论](https://github.com/xg-gh-25/SwarmAI/discussions)** | 思想领导力、架构深潜、复盘报告 —— 同时镜像在 [`docs/discussions/`](./docs/discussions/) |
 | 🧭 **[设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39)** | 信念如何变成强制 —— 每一条都是从一次失败里挣来的 |
 | 🕸️ **[撑起这一切的那套 Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/96)** | 一套 ontology（🏷️ 分类 + 🕸️ 关系，不上 Neo4j）统一记忆、DDD 与代码智能 |
+| 🎞️ **[AI-Native 转型 — 主题演讲 Deck](https://xg-gh-25.github.io/SwarmAI/AI-Native-Transformation-Deck-CN.html)** | "2x 天花板 → 10x 复利"的范式转移，可在线播放的幻灯片（[English](https://xg-gh-25.github.io/SwarmAI/AI-Native-Transformation-Deck.html)）· 或读[文章](./docs/AI-Native-Transformation-CN.md) |
 
 ![SwarmAI](./assets/swarm-2.png)
 
