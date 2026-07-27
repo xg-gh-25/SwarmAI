@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("SWARMAI_VERIFY_BUILD", "1")
-    import backend.main as main  # heavy import; scoped to this fixture
+    import main  # heavy import; scoped to this fixture
     return TestClient(main.app)
 
 

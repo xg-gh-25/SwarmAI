@@ -21,7 +21,7 @@ KEY PROPERTIES:
 import asyncio
 import inspect
 
-from backend.core.security_hooks import inclusive_term_guard
+from core.security_hooks import inclusive_term_guard
 
 
 def guard(input_data, tool_use_id, context) -> dict:
