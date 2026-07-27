@@ -24,6 +24,7 @@ from claude_agent_sdk import HookMatcher
 from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
+    create_external_approval_gate,
     background_command_guard,
     pytest_command_guard,
     eval_command_guard,
@@ -366,10 +367,35 @@ async def build_hooks(
     registry.register("PreToolUse", ask_gate, "ask_question_gate", matcher="AskUserQuestion", no_timeout=True)
     logger.info(f"AskUserQuestion gate attached for session_key: {session_key}")
 
+    # ── PreToolUse: external-approval gate (ALL tools, no matcher) ──
+    # Routes off-machine (EXTERNAL-classed) NON-Bash tool calls — MCP send/post/
+    # CRM-mutate/etc. — through the same PermissionManager approval flow as the
+    # Bash gate, closing the hole where non-Bash external side-effects were ungated.
+    # no_timeout=True (blocks up to 4h in wait_for_permission_decision).
+    #
+    # ⚠️ Gate-1 B1: this hook has NO matcher, so it lands in the ("PreToolUse", None)
+    # group. A no_timeout member makes build_sdk_hooks() give the WHOLE group the 4h
+    # HookMatcher.timeout AND _build_chain awaits every member without the 5s guard.
+    # governance_file_gate is a FAST advisory hook — it must NOT lose its 5s hang-guard.
+    # Fix: governance_file_gate is registered with matcher="Write|Edit" (below), which
+    # is behavior-preserving (it early-returns approve for every non-Edit/Write tool),
+    # so external_approval_gate is the SOLO occupant of the None group (solo → no chain
+    # → its no_timeout only affects itself).
+    external_gate = create_external_approval_gate(
+        hook_session_context, session_key, permission_manager,
+        enable_human_approval=enable_human_approval,
+    )
+    registry.register("PreToolUse", external_gate, "external_approval_gate", no_timeout=True)
+    logger.info(f"External-approval gate attached for session_key: {session_key}")
+
     # ── PreToolUse: governance file gate (Edit/Write-scoped) ──
+    # matcher="Write|Edit" (not None): keeps this fast advisory hook OUT of the
+    # no-matcher group so external_approval_gate's no_timeout can't strip its 5s
+    # hang-guard (Gate-1 B1). Behavior-preserving — governance_file_gate already
+    # early-returns approve for every tool that isn't Write/Edit.
     governance_gate = create_governance_file_gate()
-    registry.register("PreToolUse", governance_gate, "governance_file_gate")
-    logger.debug("Governance file gate attached (advisory mode)")
+    registry.register("PreToolUse", governance_gate, "governance_file_gate", matcher="Write|Edit")
+    logger.debug("Governance file gate attached (advisory mode, Write|Edit-scoped)")
 
     # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])

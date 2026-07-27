@@ -692,6 +692,13 @@ def create_dangerous_command_gate(
             "session_id": actual_session_id,
             "tool_name": "Bash",
             "tool_input": json.dumps(tool_input_data),
+            # Carry tool_call_id so a Bash approval is also PERSISTED durably (the
+            # request survives a daemon restart in the on-disk store) and is
+            # diagnosable by tool-call. NOTE: the Bash gate's re-prompt idempotency
+            # is provided by is_command_approved() (command-hash, session-scoped), NOT
+            # by is_resolved((session,tool_call_id)) — that key guards the external
+            # gate. This field is for durability + audit, not a second idempotency path.
+            "tool_call_id": tool_use_id,
             "reason": "Matches dangerous command pattern",
             "status": "pending",
             "created_at": datetime.now().isoformat(),
@@ -742,6 +749,140 @@ def create_dangerous_command_gate(
         }
 
     return dangerous_command_gate
+
+
+# ---------------------------------------------------------------------------
+# External-approval gate — off-machine side effects (PreToolUse, ALL tools)
+# ---------------------------------------------------------------------------
+# Closes the hole that dangerous_command_gate (Bash-only) and the can_use_tool
+# file handler (file-tools only, and None under global_user_mode) both leave open:
+# a NON-Bash tool with an OFF-MACHINE side effect — an MCP tool that sends email /
+# posts to Slack / mutates a CRM / changes repo visibility — otherwise passes with
+# ZERO approval gating. This generalizes the C041 gh/git protection from "these Bash
+# commands" to "any EXTERNAL-classed tool call" (see core/tool_risk.classify).
+#
+# It is a PreToolUse hook (fires regardless of global_user_mode, unlike can_use_tool)
+# and is registered as the SOLO occupant of the no-matcher PreToolUse group so its
+# no_timeout (4h HITL block) does NOT poison the fast governance gate's hang-guard
+# (hook_builder groups by (event, matcher); see the registration + Gate-1 B1 note).
+def create_external_approval_gate(
+    session_context: dict[str, Any],
+    session_key: str,
+    permission_mgr: "PermissionManager",
+    enable_human_approval: bool = True,
+) -> Callable[..., Any]:
+    """Factory: async PreToolUse hook that routes EXTERNAL-classed (off-machine) tool
+    calls through the PermissionManager approval flow.
+
+    Reuses the exact enqueue → wait → decision flow as dangerous_command_gate, but
+    keyed on the tool's risk CLASS (tool_risk.classify) rather than a Bash pattern.
+    Bash is left entirely to dangerous_command_gate (no double-gate).
+    """
+    from core.tool_risk import RiskClass, classify
+
+    async def external_approval_gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        tool_name = input_data.get("tool_name", "")
+
+        # Bash is owned by the hardened dangerous_command_gate — skip to avoid a
+        # double prompt (a gh/git external Bash op is gated there, not here).
+        if tool_name == "Bash":
+            return {"decision": "approve"}
+
+        # Only EXTERNAL (off-machine) tools are gated. READ / WRITE_LOCAL pass freely.
+        if classify(tool_name) is not RiskClass.EXTERNAL:
+            return {"decision": "approve"}
+
+        # Gate-1 B4: without a tool_use_id we cannot correlate a durable approval
+        # (idempotency key is (session_id, tool_call_id)). Approve + skip tracking
+        # rather than block — mirrors ask_question_gate's missing-id fallback.
+        if not tool_use_id:
+            logger.warning(
+                "external_approval_gate: missing tool_use_id for %s — approving without tracking",
+                tool_name,
+            )
+            return {"decision": "approve"}
+
+        # Auto-deny when human approval is disabled (per-agent config).
+        if not enable_human_approval:
+            logger.warning(
+                "[BLOCKED] External tool (no human approval): %s", tool_name
+            )
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"External tool {tool_name} blocked (human approval disabled)"
+                    ),
+                }
+            }
+
+        # Restart-idempotency: if this (session, tool_call) was already resolved
+        # (e.g. a decision replayed across a daemon restart), do not re-prompt.
+        actual_session_id = session_context.get("sdk_session_id") or session_key
+        if permission_mgr.is_resolved(actual_session_id, tool_use_id):
+            logger.info(
+                "external_approval_gate: %s already resolved for (%s,%s) — approving",
+                tool_name, actual_session_id, tool_use_id,
+            )
+            return {"decision": "approve"}
+
+        request_id = f"perm_{uuid4().hex[:12]}"
+        tool_input_data = input_data.get("tool_input", {})
+        reason = f"External tool call ({tool_name}) has off-machine side effects"
+
+        permission_mgr.store_pending_request({
+            "id": request_id,
+            "session_id": actual_session_id,
+            "tool_name": tool_name,
+            "tool_input": json.dumps(tool_input_data),
+            "tool_call_id": tool_use_id,
+            "reason": reason,
+            "status": "pending",
+            "created_at": datetime.now().isoformat(),
+        })
+
+        await permission_mgr.enqueue_permission_request(actual_session_id, {
+            "sessionId": actual_session_id,
+            "requestId": request_id,
+            "toolName": tool_name,
+            "toolInput": tool_input_data,
+            "reason": reason,
+            "options": ["approve", "deny"],
+        })
+
+        logger.warning(
+            "[PERMISSION_REQUEST] External tool requires approval: %s (request_id: %s)",
+            tool_name, request_id,
+        )
+
+        decision = await permission_mgr.wait_for_permission_decision(request_id)
+        permission_mgr.remove_pending_request(request_id)
+
+        if decision == "approve":
+            return {"decision": "approve"}
+
+        if decision == "timeout":
+            reason = (
+                "审批超时（Approval timed out after 4 hours）: the external tool call "
+                "was auto-denied because no decision was received. Re-run if still needed."
+            )
+        else:
+            reason = f"User denied external tool call: {tool_name}"
+
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+    return external_approval_gate
 
 
 # ---------------------------------------------------------------------------
