@@ -295,7 +295,9 @@ cmd_release() {
     # Clean orphaned temp RW DMG files
     find "$DESKTOP_DIR/src-tauri/target/release/bundle" -name "rw.*.dmg" -delete 2>/dev/null || true
 
-    npm run tauri build
+    # Signing-key-aware wrapper: signs when TAURI_SIGNING_PRIVATE_KEY is set,
+    # skips updater-artifact signing when absent (local dev). See tauri-build.sh.
+    bash "$DESKTOP_DIR/scripts/tauri-build.sh"
 
     # 2e. Inject backend bundle into .app (onedir — no PyInstaller extraction at runtime)
     local app_bundle="$DESKTOP_DIR/src-tauri/target/release/bundle/macos/SwarmAI.app"

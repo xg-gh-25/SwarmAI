@@ -279,7 +279,9 @@ cmd_quick() {
     npm run build
 
     _log "Step 2/2: Tauri build..."
-    npm run tauri build
+    # Signing-key-aware wrapper: signs when TAURI_SIGNING_PRIVATE_KEY is set,
+    # skips updater-artifact signing when absent (local dev). See tauri-build.sh.
+    bash "$DESKTOP_DIR/scripts/tauri-build.sh"
 
     _ok "Quick build complete in $(_build_time $start)"
 

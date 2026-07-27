@@ -91,7 +91,9 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     fi
 fi
 
-npm run tauri build
+# Signing-key-aware wrapper: signs when TAURI_SIGNING_PRIVATE_KEY is set (CI),
+# skips updater-artifact signing when absent (local dev). See tauri-build.sh.
+bash "$SCRIPT_DIR/tauri-build.sh"
 
 echo ""
 echo "========================================"
