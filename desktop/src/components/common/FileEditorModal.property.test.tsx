@@ -471,5 +471,27 @@ describe('FileEditorModal - Property-Based Tests', () => {
         expect(detectLanguage(upper)).toBe(detectLanguage(lower));
       }
     });
+
+    // Regression: an extensionless filename whose whole name equals a known
+    // languageMap key was mis-detected because split('.').pop() returns the
+    // whole name when there is no dot (e.g. 'inI' -> 'ini'). CI counterexample
+    // was ['inI'] (seed 1030514949). These cases exercise the bug deterministically.
+    it('should return plaintext for extensionless names equal to a known extension key', () => {
+      const noDotButKeyLike = ['inI', 'ini', 'toml', 'go', 'sh', 'py', 'ts', 'c', 'env', 'json'];
+      for (const name of noDotButKeyLike) {
+        expect(detectLanguage(name)).toBe('plaintext');
+      }
+    });
+
+    it('should still detect real dotted extensions (guard does not regress the happy path)', () => {
+      expect(detectLanguage('foo.py')).toBe('python');
+      expect(detectLanguage('a.ini')).toBe('ini');
+      expect(detectLanguage('x.TS')).toBe('typescript');
+      expect(detectLanguage('main.go')).toBe('go');
+      // special-name handling stays intact
+      expect(detectLanguage('Dockerfile')).toBe('dockerfile');
+      expect(detectLanguage('Makefile')).toBe('makefile');
+      expect(detectLanguage('.env')).toBe('plaintext');
+    });
   });
 });

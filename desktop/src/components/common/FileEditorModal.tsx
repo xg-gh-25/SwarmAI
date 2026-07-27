@@ -64,7 +64,12 @@ export interface FileEditorState {
  * Detect language from file extension for syntax highlighting
  */
 export function detectLanguage(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  // A name with no dot has no extension — split('.') yields a single element
+  // and .pop() would return the whole name, mis-matching a languageMap key
+  // (e.g. 'inI' -> 'ini'). Only treat the trailing segment as an extension
+  // when a dot actually exists; otherwise fall through to plaintext.
+  const parts = fileName.split('.');
+  const ext = parts.length > 1 ? (parts.pop() ?? '').toLowerCase() : '';
   const languageMap: Record<string, string> = {
     // JavaScript/TypeScript
     js: 'javascript',
