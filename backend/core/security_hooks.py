@@ -2031,6 +2031,168 @@ def create_governance_file_gate() -> Callable[..., Any]:
     return governance_file_gate
 
 
+# ---------------------------------------------------------------------------
+# inclusive_term_guard — WARN on non-inclusive terminology in written content
+# ---------------------------------------------------------------------------
+# Amazon's InclusiveTechScanner (CRUX) caught 8 "whitelist" findings on
+# CR-291472994 that NONE of our own review layers (pipeline Gate-2,
+# s_code-review, s_internal-crux-review) would have caught. This closes that gap
+# on the WRITE path — an in-session nudge BEFORE the term reaches a commit,
+# complementing (never replacing) the post-commit scanner.
+#
+# Design (Gate-1 reviewed, run_74567b08):
+#   • WARN-ONLY. Wording is a style/inclusivity concern, NOT security — the guard
+#     ALWAYS returns decision="approve" and NEVER emits a deny/block. STEERING #2:
+#     a disaster-recovery/blocking control must not truncate real work over a word.
+#   • Self-contained try/except + str() coercion: this hook is registered under a
+#     unique matcher (Write|Edit|MultiEdit) → it runs SOLO, outside _build_chain's
+#     try/except (hook_builder.py bare-register path). A regex/`.get()` throw would
+#     otherwise crash the write path. The self-guard makes a WARN-hook structurally
+#     unable to block a write, even on malformed input.
+#   • Term set is single-sourced from .kiro/specs/legacy-code-cleanup (AC #6):
+#     master, slave, whitelist, blacklist, whiteday, blackday.
+#
+# Per-term flagging policy (case-insensitive, tuned to minimize PIT51 noise):
+#   • whitelist / blacklist — flag any occurrence INCL. embedded/suffixed forms
+#     (_WHITELIST, getWhitelist, whitelisted), EXCEPT:
+#       (a) hypothesis API `whitelist_categories` / `whitelist_characters`
+#           (negative-lookahead — load-bearing, NOT redundant: the `\w*` stem would
+#            otherwise match right through the underscore suffix), and
+#       (b) PAIRED technical-contrast: if BOTH whitelist AND blacklist appear in
+#           this write's text, suppress both (describing a whitelist-vs-blacklist
+#           design decision, e.g. prompt_builder.py's blacklist-model doc).
+#   • master — flag ONLY in the host-role/paired sense (adjacent to slave), NEVER
+#     bare (git master / master copy / DB primary are legitimate English).
+#   • slave — flag standalone (rare in innocent senses).
+#   • whiteday / blackday — flag bare (rare, unambiguous).
+#   • "inclusive" — never in the set, never flagged (math intervals).
+#
+# ACCEPTED LIMITATION (documented, not hidden): the paired-exemption is computed
+# over THIS write's extracted text only. A one-line Edit touching a `whitelist`
+# line in a file that defines `blacklist` elsewhere will not see the pair and
+# will flag it. For a WARN nudge (no deny, no correctness impact) this
+# false-positive is acceptable; reading the whole file was judged too heavy for a
+# pre-write hook (Gate-1 FLAW3, taste decision).
+
+_INCLUSIVE_SCAN_MAX_CHARS = 1_000_000  # above this, skip the scan (fail-safe)
+
+# whitelist/blacklist: no left-\b (catch _WHITELIST, getWhitelist); \w* stem
+# (catch whitelisted); negative-lookahead exempts the hypothesis API params.
+_RE_WHITELIST = re.compile(r"whitelist(?!_(?:categories|characters))\w*", re.IGNORECASE)
+_RE_BLACKLIST = re.compile(r"blacklist\w*", re.IGNORECASE)
+# master flagged ONLY adjacent to slave (either order); standalone slave flagged.
+# Left word-boundary on slave avoids the enslave/enslaved false-positive (Gate-2 M1).
+_RE_MASTER_SLAVE = re.compile(r"master[\s/_-]{0,3}slave|slave[\s/_-]{0,3}master", re.IGNORECASE)
+_RE_SLAVE = re.compile(r"\bslave\w*", re.IGNORECASE)
+_RE_WHITEDAY = re.compile(r"white[\s_-]?day\w*", re.IGNORECASE)
+_RE_BLACKDAY = re.compile(r"black[\s_-]?day\w*", re.IGNORECASE)
+
+# term → (regex, suggested inclusive alternative)
+_INCLUSIVE_ALTERNATIVES = {
+    "whitelist": "allowlist / allowed list",
+    "blacklist": "denylist / blocked list",
+    "master/slave": "primary/replica, leader/follower",
+    "slave": "replica / follower / worker",
+    "whiteday": "an inclusive term",
+    "blackday": "an inclusive term",
+}
+
+
+def _scan_inclusive_terms(text: str) -> list[str]:
+    """Return the list of non-inclusive terms found in ``text`` (dedup'd, ordered).
+
+    Applies the per-term policy + exemptions documented above. Pure; never raises
+    on str input.
+    """
+    findings: list[str] = []
+    has_white = bool(_RE_WHITELIST.search(text))
+    has_black = bool(_RE_BLACKLIST.search(text))
+    # Paired technical-contrast: both present → suppress both (design-decision prose).
+    if has_white and not has_black:
+        findings.append("whitelist")
+    if has_black and not has_white:
+        findings.append("blacklist")
+    if _RE_MASTER_SLAVE.search(text):
+        findings.append("master/slave")
+    elif _RE_SLAVE.search(text):
+        # standalone slave (no adjacent master) — still non-inclusive
+        findings.append("slave")
+    if _RE_WHITEDAY.search(text):
+        findings.append("whiteday")
+    if _RE_BLACKDAY.search(text):
+        findings.append("blackday")
+    return findings
+
+
+def _extract_written_text(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Extract the text a Write/Edit/MultiEdit is about to add. Never raises."""
+    if tool_name == "Write":
+        return str(tool_input.get("content") or "")
+    if tool_name == "Edit":
+        return str(tool_input.get("new_string") or "")
+    if tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+        if not isinstance(edits, list):
+            return ""
+        parts: list[str] = []
+        for e in edits:
+            if isinstance(e, dict) and e.get("new_string") is not None:
+                parts.append(str(e["new_string"]))
+        return "\n".join(parts)
+    return ""
+
+
+async def inclusive_term_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Write|Edit|MultiEdit): WARN on non-inclusive terminology.
+
+    ALWAYS approves — this is an advisory nudge, never a block (STEERING #2:
+    wording is not security). When non-inclusive terms are found in the content
+    about to be written, an ``additionalContext`` note lists them + the inclusive
+    alternative so the agent can self-correct BEFORE the term reaches a commit.
+
+    Fail-safe by construction: any non-target tool, empty/oversized content, or a
+    malformed ``tool_input`` returns a bare ``{"decision": "approve"}`` — a
+    self-contained try/except guarantees a scan error can never crash the write
+    path (this hook runs solo, outside _build_chain's try/except).
+    """
+    try:
+        tool_name = input_data.get("tool_name", "")
+        if tool_name not in ("Write", "Edit", "MultiEdit"):
+            return {"decision": "approve"}
+        tool_input = input_data.get("tool_input") or {}
+        if not isinstance(tool_input, dict):
+            return {"decision": "approve"}
+        text = _extract_written_text(tool_name, tool_input)
+        if not text or len(text) > _INCLUSIVE_SCAN_MAX_CHARS:
+            return {"decision": "approve"}
+
+        findings = _scan_inclusive_terms(text)
+        if not findings:
+            return {"decision": "approve"}
+
+        lines = "\n".join(
+            f"  • “{t}” → prefer {_INCLUSIVE_ALTERNATIVES.get(t, 'an inclusive term')}"
+            for t in findings
+        )
+        reminder = (
+            "🔤 INCLUSIVE-TERM NUDGE (advisory — not a block): this write contains "
+            "non-inclusive terminology that Amazon's InclusiveTechScanner flags on "
+            "CRUX code reviews:\n"
+            f"{lines}\n"
+            "Consider the inclusive alternative before committing. If the term is "
+            "load-bearing (an external API name, a quoted spec), leave it — this is "
+            "a nudge, not a rule."
+        )
+        return {"decision": "approve", "additionalContext": reminder}
+    except Exception:  # noqa: BLE001 — a WARN nudge must NEVER crash the write path
+        logger.exception("inclusive_term_guard raised — failing open (approve)")
+        return {"decision": "approve"}
+
+
 def create_file_access_permission_handler(
     allowed_directories: list[str],
     readonly_files: list[str] | None = None,

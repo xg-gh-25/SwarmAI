@@ -30,6 +30,7 @@ from .security_hooks import (
     eval_command_guard,
     release_publish_guard,
     bash_syntax_guard,
+    inclusive_term_guard,
     create_image_read_dedup_guard,
     create_ask_question_gate,
     create_governance_file_gate,
@@ -308,6 +309,19 @@ async def build_hooks(
     registry.register(
         "PreToolUse", bash_syntax_guard,
         "bash_syntax_guard", matcher="Bash",
+    )
+
+    # ── PreToolUse: inclusive-term guard (Write|Edit|MultiEdit) ──
+    # WARN (never deny) on non-inclusive terminology in written content — an
+    # in-session nudge before a term reaches a commit, complementing Amazon's
+    # post-commit InclusiveTechScanner (which caught 8 findings on CR-291472994
+    # that none of our own review layers would have — run_74567b08). Advisory
+    # only (STEERING #2: wording is not security); the hook is self-guarded so a
+    # scan error can never block a write. Distinct matcher from governance_file_gate
+    # so it also covers MultiEdit (edits[].new_string), which that gate omits.
+    registry.register(
+        "PreToolUse", inclusive_term_guard,
+        "inclusive_term_guard", matcher="Write|Edit|MultiEdit",
     )
 
     # ── PreToolUse: image-read dedup guard (Read-scoped) ─────
