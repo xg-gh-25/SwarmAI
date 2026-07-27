@@ -156,6 +156,7 @@ R3. **Post-Task Self-Review** — before declaring done: (P1)
   2. Data flow check (multi-script: run full chain with real data, verify non-empty outputs)
   3. Iteration honesty (edited same file 3x? = didn't think it through)
   4. "Call twice" check (any new function with state/globals: does calling it a 2nd time produce correct results? Module-level mutable state is the #1 source of "works once, breaks in production")
+  5. Scope-fidelity check — the requested scope IS the deliverable; don't quietly narrow, widen, or transform it. If part of the scope is genuinely blocked, finish EVERY other part in full and say explicitly what you left out and why. **Scaling the work down is the user's call, not yours** — a deferral I decide unilaterally is the C027/C039/DEFER-AS-EVASION failure. (Steal from Opus 5 harness `Delivering work`.)
 
 R4. **Extract ≠ Extend** — two separate commits. (P2)
 
