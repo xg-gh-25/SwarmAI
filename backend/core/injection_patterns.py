@@ -41,25 +41,42 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-# Instruction-shaped patterns. Each is LINE-START-anchored (``^\s*``) and the module
-# compiles with re.MULTILINE so ``^`` matches every embedded line-start. The turn
-# prefixes (human:/assistant:/system:) are ALSO line-anchored on purpose — a fake
-# conversation turn injected as poison starts a line; a legit mid-sentence mention
-# of "the human: prefix bug" does not, so anchoring kills that false-positive too.
+# Lead-in: after a line start, consume common list/quote/number/heading markers
+# and whitespace BEFORE the imperative. Without this the anchor is trivially
+# defeated by "- ignore all previous instructions" / "> from now on ..." / "1. ..."
+# — and "- {lesson}" is exactly how DailyActivity renders every lesson, so the
+# markers are the store's NATIVE shape, not an edge case (Gate-2 HIGH-1).
+_LEADIN = r"^[ \t>*+\-#.)\]\[(0-9​‌‍﻿]*\s*"
+
+# Instruction-shaped patterns. Each starts with _LEADIN (line-anchored + marker-
+# tolerant; re.MULTILINE below makes ^ match every embedded line-start). The
+# critical precision lesson (Gate-2 HIGH-2): a bare imperative like "from now on"
+# / "do not report" is ALSO how a legit distilled lesson reads ("From now on, run
+# tests"; "Do not report secrets in logs"). So the broad patterns REQUIRE an
+# adversarial OBJECT — the thing that makes it an attack, not advice. That object
+# (ignore/skip governance, output-no-findings, approve-everything, become-a-role)
+# is what separates poison from a lesson; line position alone cannot.
 _PATTERN_SOURCES: dict[str, str] = {
-    "ignore_previous": r"^\s*ignore\s+(?:all\s+)?previous\s+(?:instructions|context|rules)",
-    "disregard_previous": r"^\s*disregard\s+(?:all\s+)?(?:previous|above|prior)",
-    "you_are_now": r"^\s*you\s+are\s+now\b",
-    "from_now_on": r"^\s*from\s+now\s+on\b",
-    "do_not_report": r"^\s*do\s+not\s+(?:report|flag|mention)\b",
-    "approve_all": r"^\s*approve\s+(?:all|every|this)\b",
-    "always_output_no_findings": r"^\s*always\s+output\s+no\s+findings",
-    "skip_checks": r"^\s*skip\s+(?:all\s+)?(?:security|review|checks)\b",
+    "ignore_previous": _LEADIN + r"ignore\s+(?:all\s+)?previous\s+(?:instructions|context|rules)",
+    "disregard_previous": _LEADIN + r"disregard\s+(?:all\s+)?(?:previous|above|prior)\s+(?:instructions|context|rules|messages?)",
+    # role-grant shape: "you are now <a/an/the> X" or "you are now <adj> and ..."
+    "you_are_now": _LEADIN + r"you\s+are\s+now\s+(?:a\b|an\b|the\b|allowed|permitted|unrestricted|free\s+to|able\s+to)",
+    # "from now on" is a legit lesson opener UNLESS it commands a governance bypass
+    "from_now_on": _LEADIN + r"from\s+now\s+on\b[^.\n]{0,40}\b(?:ignore|skip|disregard|output\s+no|approve|do\s+not\s+(?:report|flag|check|test))",
+    # "do not report" is legit advice UNLESS the object is review/governance content
+    "do_not_report": _LEADIN + r"do\s+not\s+(?:report|flag|mention)\s+(?:any\s+)?(?:security|findings?|issues?|bugs?|problems?|errors?|the\s+injection|vulnerab)",
+    "approve_all": _LEADIN + r"approve\s+(?:all|every|everything|this|the)\b",
+    "always_output_no_findings": _LEADIN + r"always\s+output\s+no\s+findings",
+    "skip_checks": _LEADIN + r"skip\s+(?:all\s+)?(?:the\s+)?(?:security|review|checks|adversarial|gates?|tests?)\b",
     # Fake conversation turn prefixes — line-anchored (a real turn starts a line).
-    "turn_prefix_human": r"^\s*human\s*:",
-    "turn_prefix_assistant": r"^\s*assistant\s*:",
-    "turn_prefix_system": r"^\s*system\s*:",
+    "turn_prefix_human": _LEADIN + r"human\s*:",
+    "turn_prefix_assistant": _LEADIN + r"assistant\s*:",
+    "turn_prefix_system": _LEADIN + r"system\s*:",
 }
+
+# Zero-width chars are stripped before scanning (they are not \s, so a ZWSP prefix
+# would otherwise slip a payload past even the lead-in). Gate-2 MEDIUM.
+_ZERO_WIDTH = str.maketrans({c: None for c in "​‌‍﻿"})
 
 INJECTION_PATTERNS: dict[str, re.Pattern[str]] = {
     name: re.compile(src, re.IGNORECASE | re.MULTILINE)
@@ -83,6 +100,7 @@ def scan_text(text: object, *, sentence_split: bool = False) -> Optional[str]:
     """
     if not isinstance(text, str) or not text:
         return None
+    text = text.translate(_ZERO_WIDTH)  # strip zero-width chars (Gate-2 MEDIUM)
     for name, pat in INJECTION_PATTERNS.items():
         if pat.search(text):
             return name
