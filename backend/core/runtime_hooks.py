@@ -104,14 +104,46 @@ _CORRECTION_PATTERNS_META = re.compile(
 )
 
 
+# Free-text VALUE fields per correction entry type that carry attacker-influenced
+# content and are later replayed/fed-to-LLM. `user_correction.prompt` is scanned
+# with sentence-split because judgment_classifier feeds it RAW to a live Bedrock
+# call (a 2nd-sentence payload is a real threat there). `tool_failure` fields are
+# deliberately NOT scanned — they are self-generated tool output/input, FP-prone,
+# and an attacker controlling them already controls the agent (low marginal safety).
+_CORRECTION_SCAN_FIELDS: dict[str, tuple[str, ...]] = {
+    "user_correction": ("prompt",),
+    "subagent_finding": ("summary",),
+}
+_CORRECTION_SENTENCE_SPLIT_FIELDS: tuple[str, ...] = ("prompt",)
+
+
 def _append_correction(path: str, entry: dict) -> None:
     """Append a correction entry to JSONL file, rotating when oversized.
+
+    Write-time injection gate (run_6af300b3): before writing, scan the
+    attacker-influenced free-text fields for injection patterns. On a hit the
+    entry is DROPPED (not written) and logged — poison never enters the store, so
+    it can never be replayed into a future agent's context or fed to the judgment
+    classifier's live LLM. See core/injection_patterns.py.
 
     Rotation: delegates to ``utils.jsonl_rotation.rotate_jsonl_if_oversized``
     (512 KB trigger, keeps newest 500 entries).  One stat() per write;
     rotation is rare (~monthly at normal usage).  Best-effort — never raises.
     """
     try:
+        # ── Write-time injection gate: drop a poisoned entry, never store it ──
+        scan_fields_for_type = _CORRECTION_SCAN_FIELDS.get(str(entry.get("type", "")))
+        if scan_fields_for_type:
+            from core.injection_patterns import scan_fields
+            to_scan = {f: entry.get(f) for f in scan_fields_for_type}
+            hits = scan_fields(to_scan, sentence_split_fields=_CORRECTION_SENTENCE_SPLIT_FIELDS)
+            if hits:
+                logger.warning(
+                    "Dropped correction entry (type=%s): injection pattern(s) %s in field(s) %s",
+                    entry.get("type"), list(hits.values()), list(hits.keys()),
+                )
+                return
+
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
 

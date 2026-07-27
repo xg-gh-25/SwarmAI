@@ -368,6 +368,45 @@ def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:
     return records
 
 
+# Free-text StructuredSummary fields that carry attacker-influenceable prose and
+# get distilled into MEMORY/EVOLUTION. Structural fields (files_modified, git_commits,
+# topics, timestamps, coe_signal) are excluded — they are not free-text prose sinks.
+_SUMMARY_INJECTION_FIELDS: tuple[str, ...] = (
+    "decisions", "open_questions", "deliverables", "key_outputs", "lessons",
+    "rejected_approaches", "corrections", "process_reflection",
+    "signal_driven_actions", "actions_taken", "reasoning", "continue_from",
+)
+
+
+def _sanitize_summary_injection(summary: StructuredSummary) -> None:
+    """Redact injection-pattern-matching free-text fields IN PLACE to "".
+
+    A str field that matches is blanked; a list[str] field has matching items
+    dropped. Blanking (not a marker token) means distillation's length gates
+    (>20 for reflection, >15 for actions) naturally exclude the redacted content
+    and no marker leaks into a recalled store (Gate-1 F7). Best-effort — a scan
+    failure must never block the activity write.
+    """
+    try:
+        from core.injection_patterns import scan_text
+    except Exception:  # pragma: no cover - import guard
+        return
+    for fname in _SUMMARY_INJECTION_FIELDS:
+        val = getattr(summary, fname, None)
+        if isinstance(val, str):
+            if scan_text(val):
+                logger.warning("Redacted DailyActivity field %r: injection pattern", fname)
+                setattr(summary, fname, "")
+        elif isinstance(val, list):
+            kept = [item for item in val if not (isinstance(item, str) and scan_text(item))]
+            if len(kept) != len(val):
+                logger.warning(
+                    "Dropped %d injected item(s) from DailyActivity field %r",
+                    len(val) - len(kept), fname,
+                )
+                setattr(summary, fname, kept)
+
+
 async def write_daily_activity(
     summary: StructuredSummary,
     context: HookContext,
@@ -387,6 +426,15 @@ async def write_daily_activity(
     if workspace_path is None:
         from .initialization_manager import initialization_manager
         workspace_path = Path(initialization_manager.get_cached_workspace_path())
+
+    # ── Write-time injection gate (run_6af300b3): sanitize BEFORE either write ──
+    # Both the .md (written first, below) and the JSONL sidecar are serialized from
+    # this same `summary`, and BOTH flow into MEMORY/EVOLUTION via distillation. So
+    # the gate must sit at the SOURCE (this summary), not the sidecar serializer —
+    # else poison would survive in the .md. Redact the offending free-text field
+    # to "" (empty, not a marker) so distillation's length gates naturally exclude
+    # it and no redaction token leaks into a recalled store. See injection_patterns.
+    _sanitize_summary_injection(summary)
 
     today = date.today().isoformat()
     da_dir = workspace_path / "Knowledge" / "DailyActivity"
