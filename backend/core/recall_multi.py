@@ -332,6 +332,61 @@ _DOMAIN_LABELS = {
     "codeintel": "Code Symbols",
 }
 
+# Query tokens that IMPLY a recall domain should have matched (run_3416ad35,
+# steal-from-gbrain gap-analysis). Used ONLY to decide whether an EMPTY requested
+# leg is SURPRISING enough to surface a coverage line — never for retrieval.
+# Gate-1 lesson: a coverage line on EVERY partial hit is wallpaper (1-2 of 4 legs
+# typically hit → fires on most recalls → agent tunes it out). Emit ONLY when a
+# query token implies the specific leg that came back empty → signal, not noise.
+# Conservative by design (false-negative-biased): a miss here just means no line,
+# never a wrong line.
+#
+# Matching is WHOLE-WORD (Gate-2 RP42 fix, run_3416ad35): each token is matched
+# with `\b<token>\b` against the lowercased query, so short tokens can't
+# substring-collide inside unrelated words ("code"∌encode/barcode,
+# "import"∌important, "paper"∌newspaper, "reference"∌preference). Multi-word
+# tokens ("we discussed") work identically under \b…\b. File-extension tokens
+# (".py") use a leading \b + literal dot so ".py" matches "foo.py" and "a .py
+# file" but not "occupy". Single generic nouns that carry no domain intent on
+# their own ("code" alone, bare "the design") were dropped in favour of
+# intent-bearing phrases — a missed weak signal is acceptable (false-negative
+# bias); a false line is not.
+_DOMAIN_EXPECT_TOKENS = {
+    "codeintel": (
+        "symbol", "function", "class", "module", "endpoint",
+        "def", "docstring", ".py", ".ts", ".tsx", ".rs",
+    ),
+    "library": (
+        "article", "the paper", "research paper", "the note", "knowledge base",
+    ),
+    "session": (
+        "last time", "we discussed", "prior session", "we talked",
+        "we decided", "earlier session", "previous session",
+    ),
+    "ddd": (
+        "design decision", "tech spec", "product decision", "improvement.md",
+        "architecture decision",
+    ),
+    "context_files": (
+        "you said", "my preference", "remember that", "i told you",
+    ),
+}
+
+
+def _query_implies_domain(query_lc: str, tokens: tuple[str, ...]) -> bool:
+    """True if any token appears as a WHOLE WORD/PHRASE in the lowercased query.
+
+    Whole-word (``\\b<token>\\b``) match, NOT raw substring — the RP42 fix
+    (Gate-2, run_3416ad35): raw ``"code" in q`` false-fires inside
+    encode/barcode/codebase; ``\\bcode\\b`` does not. ``re.escape`` makes the
+    file-extension tokens (".py") literal, and ``\\b`` before the leading dot
+    still anchors on the word→dot boundary ("foo.py" matches, "occupy" does not).
+    """
+    return any(
+        re.search(r"\b" + re.escape(tok) + r"\b", query_lc) is not None
+        for tok in tokens
+    )
+
 
 def render_bucketed_recall(
     result: "BucketedRecall",
@@ -386,6 +441,35 @@ def render_recall_body(
         parts.append(header + "\n" + _render_domain_hits(domain, hits))
     if graph_context:
         parts.append("### Graph-Connected\n" + graph_context)
+
+    # Surprise-only coverage gap line (run_3416ad35). When recall FOUND something
+    # (parts non-empty) but a REQUESTED leg came back empty AND a query token
+    # implied that leg should have hit — surface it, so the agent distinguishes
+    # "this leg had no match" from "this fact does not exist" (CLASS A′
+    # recall-confabulation). Deterministic, zero-LLM, zero retrieval change.
+    #   • requested = the domains actually queried (hit_layers ∪ buckets keys) —
+    #     NEVER the full DOMAINS constant, so a leg not requested at runtime
+    #     (e.g. ddd, excluded from the unified fan-out) is never a false gap.
+    #   • surprising = requested AND empty AND query implies it (token match).
+    #   • Gate-1 fix: NOT emitted on every partial hit (that was wallpaper) —
+    #     only on a query-implied miss.
+    if parts:
+        q = (result.query or "").lower()
+        requested = set(result.hit_layers.keys()) | set(result.buckets.keys())
+        surprising = [
+            _DOMAIN_LABELS.get(d, d)
+            for d in DOMAINS
+            if d in requested
+            and not (result.buckets.get(d) or [])
+            and _query_implies_domain(q, _DOMAIN_EXPECT_TOKENS.get(d, ()))
+        ]
+        if surprising:
+            parts.append(
+                "_Recall gap: your query implies "
+                + ", ".join(surprising)
+                + " but that leg returned no match — verify (grep/read) rather "
+                "than assume it does not exist._"
+            )
     return "\n\n".join(parts)
 
 

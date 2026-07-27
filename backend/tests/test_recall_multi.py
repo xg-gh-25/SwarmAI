@@ -349,6 +349,120 @@ class TestRenderBucketedRecall:
         assert "a.py::foo" in s and "bar" in s
 
 
+class TestRecallCoverageGapLine:
+    """run_3416ad35 (steal-from-gbrain gap-analysis): render_recall_body emits a
+    SURPRISE-ONLY coverage line — a query token implies a domain that came back
+    empty → one line naming that leg, so the agent distinguishes 'not-in-context'
+    from 'does-not-exist' (CLASS A′ recall-confabulation). Gate-1 killed the
+    original any-partial-hit emit as wallpaper; emit ONLY on a query-implied miss.
+
+    Tests build a BucketedRecall directly (pure-function contract): buckets +
+    hit_layers set explicitly, query carries the domain-expectation token."""
+
+    def _result(self, query, buckets, hit_layers=None):
+        from core.recall_multi import BucketedRecall
+        r = BucketedRecall(query=query)
+        r.buckets = dict(buckets)
+        # requested set = hit_layers ∪ buckets keys; default: every requested
+        # domain has a layer ("none" for empty) — mirrors recall_all.
+        r.hit_layers = dict(hit_layers) if hit_layers is not None else {
+            d: ("keyword" if hits else "none") for d, hits in buckets.items()
+        }
+        return r
+
+    def test_surprising_miss_emits_gap_line(self):
+        """AC1: query implies codeintel (mentions 'function') but codeintel empty
+        while another leg hit → one gap line naming Code Symbols."""
+        from core.recall_multi import render_recall_body
+        r = self._result(
+            "why does the parser function fail on empty input",
+            {"context_files": [{"section": "S", "content": "some memory body"}],
+             "codeintel": []},
+        )
+        s = render_recall_body(r)
+        assert "Recall gap" in s
+        assert "Code Symbols" in s
+        # the leg that HIT must not be named as a gap
+        assert "Memory" not in s.split("Recall gap")[1]
+
+    def test_no_surprise_no_gap_line(self):
+        """AC2 (the Gate-1 wallpaper fix): partial hit with empty legs but NO
+        query-implied token → NO gap line. This is the common case that must
+        stay clean."""
+        from core.recall_multi import render_recall_body
+        r = self._result(
+            "summarize the weekly revenue numbers",   # no code/session/library token
+            {"context_files": [{"section": "S", "content": "some memory body"}],
+             "codeintel": [], "session": []},
+        )
+        s = render_recall_body(r)
+        assert "Recall gap" not in s
+
+    def test_full_coverage_no_gap_line(self):
+        """AC3: every requested leg hit → no gap line even if query has tokens."""
+        from core.recall_multi import render_recall_body
+        r = self._result(
+            "how does the parser function work",       # implies codeintel
+            {"context_files": [{"section": "S", "content": "mem"}],
+             "codeintel": [{"name": "parse", "id": "p.py::parse"}]},  # codeintel HIT
+        )
+        s = render_recall_body(r)
+        assert "Recall gap" not in s
+
+    def test_gap_line_only_names_requested_empty_legs(self):
+        """A leg NOT in the requested set (not in buckets/hit_layers) is never
+        reported as empty — even if the query would imply it."""
+        from core.recall_multi import render_recall_body
+        # ddd not requested (runtime excludes it); query mentions 'design decision' (ddd token)
+        r = self._result(
+            "what design decision drove the parser function",  # 'design decision'→ddd, 'function'→codeintel
+            {"context_files": [{"section": "S", "content": "mem"}],
+             "codeintel": []},   # ddd absent from the requested set entirely
+        )
+        s = render_recall_body(r)
+        assert "Recall gap" in s
+        assert "Code Symbols" in s
+        assert "Project DDD" not in s   # not requested → never a gap
+
+    def test_substring_collisions_do_not_false_fire(self):
+        """RP42 regression (Gate-2, run_3416ad35): whole-word matching means a
+        token must not fire inside an unrelated word — 'code'∌encode/barcode,
+        'import'∌important, 'paper'∌newspaper, 'reference'∌preference. Each query
+        below has an EMPTY implicated leg but NO real domain intent → NO line."""
+        from core.recall_multi import render_recall_body
+        collide = [
+            "how does the encoder decode the barcode payload",   # codeintel: encode/decode/barcode
+            "summarize the important quarterly numbers",         # codeintel: important
+            "what did the newspaper say about paperwork",        # library: newspaper/paperwork
+            "state my preference for a shorter format",          # library: preference (context_files 'my preference' IS intended → see note)
+        ]
+        for q in collide:
+            r = self._result(
+                q,
+                {"library": [{"source": "N.md", "heading": "H", "content": "hit"}],
+                 "codeintel": []},   # codeintel empty; query has NO whole-word codeintel token
+            )
+            s = render_recall_body(r)
+            assert "Code Symbols" not in s, f"false Code Symbols gap on: {q!r}"
+
+    def test_extension_token_matches_real_filename(self):
+        """A file-extension token (.py) still fires on a real filename mention
+        but not inside an unrelated word ('occupy')."""
+        from core.recall_multi import render_recall_body
+        # positive: '.py' present, codeintel empty, another leg hit
+        r_hit = self._result(
+            "trace session_router.py resume handling",
+            {"context_files": [{"section": "S", "content": "mem"}], "codeintel": []},
+        )
+        assert "Code Symbols" in render_recall_body(r_hit)
+        # negative: 'occupy' must NOT match '.py'
+        r_no = self._result(
+            "how many seats does the layout occupy",
+            {"context_files": [{"section": "S", "content": "mem"}], "codeintel": []},
+        )
+        assert "Recall gap" not in render_recall_body(r_no)
+
+
 class TestContentCarriedInBuckets:
     """C-full M1: _recall_context_files + _recall_library must carry `content`
     in their buckets (was dropped → rendering gave bare names = a regression)."""
