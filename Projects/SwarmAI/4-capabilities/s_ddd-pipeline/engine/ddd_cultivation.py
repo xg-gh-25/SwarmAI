@@ -283,7 +283,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
 
     Returns a status string (NOT a bool — callers must compare explicitly):
       - "applied"           — entry written under a pre-existing section heading
-      - "created_section"   — the whitelisted section heading was ABSENT, so it
+      - "created_section"   — the allowlisted section heading was ABSENT, so it
                               was auto-created at end-of-doc and the entry written
                               under it. This makes section-name drift structurally
                               harmless: a lesson is NEVER dropped just because the
@@ -297,7 +297,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
       - "doc_missing"       — target document file does not exist
       - "locked"            — another process holds the write lock (retry later)
 
-    Note: "section_not_found" is NO LONGER returned — a missing whitelisted
+    Note: "section_not_found" is NO LONGER returned — a missing allowlisted
     section is auto-created rather than treated as a drop. The drift is still
     observable via the "created_section" status (logged by callers).
     """
@@ -367,7 +367,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             new_content = content[:body_start] + entry + content[body_start:]
             result_status = "applied"
         else:
-            # Structural drift fix (run_45ab67c7): the whitelisted section is
+            # Structural drift fix (run_45ab67c7): the allowlisted section is
             # absent (doc heading drifted from / never matched the routing table).
             # CREATE it at end-of-doc rather than DROP the lesson. The section
             # name is TRUSTED — is_safe_append() already confirmed the (doc,
@@ -518,7 +518,7 @@ def _cultivate_proposals(
         {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}
 
     drift_errors surfaces section-name drift LOUDLY (a config bug where a
-    whitelisted routing section has no matching heading in the doc) instead of
+    allowlisted routing section has no matching heading in the doc) instead of
     silently counting it as a benign "rejected". See apply_to_ddd docstring /
     run_45ab67c7 root cause.
     """
@@ -571,7 +571,7 @@ def _cultivate_proposals(
                 log_application(proposal, project_dir)
                 applied += 1
             elif status == "created_section":
-                # The lesson WAS applied (not dropped) — the whitelisted section
+                # The lesson WAS applied (not dropped) — the allowlisted section
                 # heading was absent so it was auto-created. Count as applied, but
                 # surface the drift as observable (latent doc/table divergence) so
                 # it can be reconciled. NOT an error — the lesson is safe.
@@ -582,7 +582,7 @@ def _cultivate_proposals(
                 def _safe(v: str) -> str:
                     return str(v).replace("\n", "\\n").replace("\r", "\\r")
                 msg = (
-                    f"DDD drift (auto-healed): created missing whitelisted section "
+                    f"DDD drift (auto-healed): created missing allowlisted section "
                     f"'{_safe(proposal.target_doc)} § {_safe(proposal.target_section)}' "
                     f"(run {_safe(proposal.source_run_id)}). Lesson applied to the new "
                     f"section. Reconcile the doc template / ROUTING_TABLE to avoid drift."

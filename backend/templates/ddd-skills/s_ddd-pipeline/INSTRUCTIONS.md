@@ -74,7 +74,7 @@ py run-update --project <ddd> --run-id <id> \
 py run-cultivate --project <ddd> --run-id <id>    # reads reflect lessons → quality-gate → route → write
 ```
 `run-cultivate` runs the REAL cultivation engine (quality gate + dedup + section routing +
-auto-heal of a missing whitelisted section) — not a naive append. A recurring pitfall
+auto-heal of a missing allowlisted section) — not a naive append. A recurring pitfall
 climbs: prose → rule → (3× recurrence) an executable ③ gate under `gates/` with a
 knockout test (exit-2 = BLOCK).
 
