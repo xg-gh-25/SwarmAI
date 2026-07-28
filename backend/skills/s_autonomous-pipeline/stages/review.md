@@ -23,7 +23,7 @@ this during BUILD" is the single most common CLASS A rationalization.**
 |---|---|---|
 | **Who** | Agent self-reviews with mechanical aids | Fresh sub-agent with zero BUILD context |
 | **What** | Conformance: does code match spec, patterns, conventions? | Bugs: what breaks under adversarial pressure? |
-| **How** | RP1-RP52 checklist, integration trace, DDD conformance | Free-form attack with specialist prompts |
+| **How** | RP1-RP53 checklist, integration trace, DDD conformance | Free-form attack with specialist prompts |
 | **Catches** | Missing exports, wrong naming, violated conventions | Logic errors, race conditions, edge cases |
 
 Both are necessary — REVIEW catches "did you follow the rules" (mechanical),
@@ -33,7 +33,7 @@ ADVERSARIAL catches "does it actually work" (creative). Neither replaces the oth
 
 You wrote this code. You cannot objectively review it. "I already looked at it
 during BUILD" is not a review — it's re-reading your own assumptions. REVIEW
-requires: integration trace (real wiring check), runtime patterns RP1-RP52
+requires: integration trace (real wiring check), runtime patterns RP1-RP53
 (mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
 context. C011: builder rated 10/10, feature was 100% broken.
 
@@ -219,7 +219,7 @@ Sub-agent prompts are in: backend/skills/s_autonomous-pipeline/review-agents/
 [Parallel fan-out agents — spawned in single turn]
 1. Code Quality Agent (review-agents/code-quality.md)
    → TECH.md conformance, integration trace, replace/move parity,
-     runtime patterns RP1-RP52, depth & seam analysis
+     runtime patterns RP1-RP53, depth & seam analysis
 
 2. Security & Safety Agent (review-agents/security-safety.md)
    → Confidence-gated security scan, wire test, blast radius trace
@@ -304,7 +304,7 @@ organized into tiers:
 - 1: Code Review vs TECH.md
 - 2: Security Scan
 - 3: Integration Trace
-- 6: Runtime Pattern Checklist (RP1-RP52) — includes RP35 (pool contention), RP36 (fix-enables-regression), RP37 (process tree lifetime)
+- 6: Runtime Pattern Checklist (RP1-RP53) — includes RP35 (pool contention), RP36 (fix-enables-regression), RP37 (process tree lifetime)
 - 14: Anti-Rationalization Gate
 - 15: Exit Evidence Checklist
 - 17: Blocking Constraints (TECH.md per-project rules — passes silently if section absent)
@@ -479,7 +479,7 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ### 6. Runtime Pattern Checklist
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP52.**
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP53.**
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 
@@ -910,6 +910,6 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test 
 |---|---|---|
 | "Code is straightforward, self-review is sufficient" | Single-person review has structural blind spots regardless of code simplicity. C011: builder + pipeline rated 10/10, feature was 100% broken. You cannot review your own assumptions — you'll validate them instead of challenging them. | C011 |
 | "Integration trace is redundant — unit tests cover wiring" | Unit tests mock boundaries. Integration trace verifies REAL wiring: does caller A actually reach callee B with correct params at runtime? C011: each unit worked perfectly; the data flowing between them was wrong. | C011 |
-| "Runtime patterns RP1-RP52 — most don't apply" | Check each and mark N/A explicitly. LL08: `asyncio.get_event_loop()` (deprecated, RP19) and `date('now')` UTC mismatch (RP18) both passed pipeline because "didn't seem to apply." They applied. | LL08 |
+| "Runtime patterns RP1-RP53 — most don't apply" | Check each and mark N/A explicitly. LL08: `asyncio.get_event_loop()` (deprecated, RP19) and `date('now')` UTC mismatch (RP18) both passed pipeline because "didn't seem to apply." They applied. | LL08 |
 | "Small changeset, fan-out review is overkill" | Fan-out threshold (>3 files OR >100 lines) is carefully calibrated. Below threshold, single-pass STILL runs all checks (integration trace, patterns, wire test). "Small" doesn't mean "skip checks" — it means "one reviewer does all checks." | Review design |
 | "Findings are low-confidence, I'll suppress them all" | Suppressing is valid for confidence ≤4. But suppressing ALL findings = you didn't try to confirm any. At least verify the top-3 by evidence. One confirmed finding > ten suppressed ones. | Unified Confidence Rubric |
