@@ -50,6 +50,9 @@ class SessionMatch:
 class RecallResult:
     query: str
     sessions: list[SessionMatch] = field(default_factory=list)
+    # Count of matched rows CONSIDERED for ranking — capped at _SEARCH_ROW_LIMIT
+    # (run_78bd708f), so for a very broad query this is the top-N-by-rank count, not
+    # the true grand total. No production consumer relies on it as an exact total.
     total_matches: int = 0
 
 
