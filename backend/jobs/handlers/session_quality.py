@@ -126,10 +126,10 @@ def run_session_quality(
             return harvest_draft(session_id=session_id, prompt=prompt, score=score,
                                  invoke_fn=default_invoke_fn, add_case_fn=svc.add_case)
     if recorder is None:
-        from core.evolution.correction_tracker import CorrectionTracker
+        from core.evolution.correction_tracker import CorrectionClassTracker
 
         def recorder(session_id, score):  # noqa: E306
-            CorrectionTracker().record(
+            CorrectionClassTracker().record(
                 "SESSION_LOW_QUALITY",
                 evidence=f"{session_id}: goal={score.get('goal_score')} "
                          f"tool={score.get('tool_score')} — {score.get('reason','')}",
@@ -139,6 +139,7 @@ def run_session_quality(
     sample = sampler()
     session_turns = sample.get("session_turns", {})
     sessions = sample.get("sessions", {})
+    sampler_error = sample.get("sampler_error")  # loud-propagate a broken sampler
     corr_ids = _read_correction_session_ids(corrections_path)
 
     selected = select_sessions(session_turns=session_turns, correction_session_ids=corr_ids)
@@ -160,8 +161,10 @@ def run_session_quality(
                 if harvester(session_id=sid, prompt=s.get("prompt", ""), score=result) is not None:
                     drafts += 1
 
-    return {"status": "success", "scored": scored, "low": low, "drafts": drafts,
-            "low_details": low_details, "selected": len(selected)}
+    return {"status": "degraded" if sampler_error else "success",
+            "scored": scored, "low": low, "drafts": drafts,
+            "low_details": low_details, "selected": len(selected),
+            **({"sampler_error": sampler_error} if sampler_error else {})}
 
 
 def _default_sampler() -> dict:
@@ -182,8 +185,17 @@ def _default_sampler() -> dict:
     try:
         return asyncio.run(_gather())
     except Exception as exc:  # noqa: BLE001 — sampler is best-effort; never crash the job
-        logger.warning("session_quality: sampler failed (%s) — empty sample", exc)
-        return {"session_turns": {}, "sessions": {}}
+        # LOUD, not silent (GC19): a broken sampler must not masquerade as
+        # "0 low-quality sessions, all healthy". Log at ERROR with the exception
+        # TYPE (an AttributeError here = a DAO-contract break, not an empty DB)
+        # and flag the sample so the caller can tell "sampler broke" from
+        # "genuinely no sessions" — the exact bug that let list_all() ship inert.
+        logger.error(
+            "session_quality: sampler FAILED (%s: %s) — returning empty sample; "
+            "layer②③ scored NOTHING this run (this is a fault, not a clean pass)",
+            type(exc).__name__, exc,
+        )
+        return {"session_turns": {}, "sessions": {}, "sampler_error": f"{type(exc).__name__}: {exc}"}
 
 
 async def _enumerate_sessions(db) -> dict:
@@ -191,8 +203,9 @@ async def _enumerate_sessions(db) -> dict:
     the existing messages DAO (list_by_session). Isolated for testability."""
     session_turns: dict[str, int] = {}
     sessions: dict[str, dict] = {}
-    # sessions table lists ids; messages carry the turns.
-    session_rows = await db.sessions.list_all() if hasattr(db, "sessions") else []
+    # sessions table lists ids; messages carry the turns. SQLiteTable exposes
+    # list() (no-arg = all sessions, created_at DESC), NOT list_all().
+    session_rows = await db.sessions.list()
     for srow in session_rows[:200]:  # bound the scan
         sid = srow.get("id")
         if not sid:

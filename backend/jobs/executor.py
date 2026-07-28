@@ -377,12 +377,19 @@ def execute_job(
                 dry_run=bool(job.config.get("dry_run", False)) if job.config else False,
             )
             duration = (datetime.now(timezone.utc) - start).total_seconds()
+            # Map the handler's internal "degraded" (a broken sampler faulted, but
+            # the job didn't crash) → the valid JobResult Literal "partial". Passing
+            # "degraded" straight through would ValidationError (models.py status
+            # Literal has no "degraded") → swallowed → misreported as "failed" with
+            # the sampler_error lost (adversarial catch). Surface the fault in summary.
+            sq_err = sq_result.get("sampler_error")
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status=sq_result.get("status", "success"),
+                status="partial" if sq_err else "success",
                 summary=(f"session-quality: {sq_result.get('scored', 0)} scored, "
                          f"{sq_result.get('low', 0)} low, "
-                         f"{sq_result.get('drafts', 0)} draft(s) harvested"),
+                         f"{sq_result.get('drafts', 0)} draft(s) harvested"
+                         + (f" — SAMPLER FAULT: {sq_err}" if sq_err else "")),
                 duration_seconds=duration,
             )
 
