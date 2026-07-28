@@ -284,6 +284,96 @@ class EvalService:
             for r in self._runs[:limit]
         ]
 
+    def get_session_quality_drafts(self) -> dict:
+        """Layer② pending-draft queue: harvested golden drafts awaiting human
+        ratification (tier=draft, category=session_harvest). Allowlist-projected
+        (same safe-field set as the private-case detail — these drafts derive from
+        real sessions so treat as private). The frontend Session Quality tab
+        renders these with Promote/Discard. Promote reuses POST /golden-set; the
+        SYSTEM never auto-promotes (kernel-not-shell)."""
+        # Harvested drafts carry a canonical category (`quality`) so promotion
+        # doesn't pollute the taxonomy (Gate-2 F1); their identity is the
+        # deterministic GS_HARVEST_ id prefix (session_harvest._draft_id) — that
+        # is the queue filter, NOT the category.
+        drafts = [
+            c for c in self._cases
+            if c.get("tier") == "draft" and str(c.get("id", "")).startswith("GS_HARVEST_")
+        ]
+        return {
+            "count": len(drafts),
+            "drafts": [
+                {
+                    "id": c.get("id"),
+                    "title": c.get("title"),
+                    "dimension": c.get("dimension"),
+                    "eval_method": c.get("eval_method"),
+                    "assertions": c.get("assertions", []),
+                    "scenario": c.get("scenario", {}),
+                    "tier": c.get("tier"),
+                }
+                for c in drafts
+            ],
+        }
+
+    @staticmethod
+    def _project_low_detail(d: dict) -> dict:
+        """Allowlist-project one low-score session detail (Gate-2 F4). Session-
+        derived data → same privacy posture as drafts. Numeric scores + dimension
+        enum pass through; the judge's free-text `reason` (which can quote the real
+        prompt) is bounded to 240 chars; session_id is an opaque uuid kept for human
+        lookup. Any field NOT listed here is dropped (fail-closed allowlist, not a
+        denylist — an unanticipated future field never leaks by default)."""
+        if not isinstance(d, dict):
+            return {}
+        reason = d.get("reason")
+        if isinstance(reason, str) and len(reason) > 240:
+            reason = reason[:237] + "…"
+        return {
+            "session_id": d.get("session_id"),
+            "goal_score": d.get("goal_score"),
+            "tool_score": d.get("tool_score"),
+            "dimension": d.get("dimension"),
+            "reason": reason,
+        }
+
+    def get_session_quality(self) -> dict:
+        """Layer③ overview: the latest session-quality run summary + weekly
+        low-rate trend. Reads the handler's state file (best-effort — absent file
+        → empty overview, never crashes). Trend is the last N weekly low-rates
+        (the drift radar sparkline)."""
+        import json as _json
+
+        state_path = (
+            self._workspace_root / ".context" / ".session-quality-state.json"
+            if self._workspace_root else None
+        )
+        overview = {"scored": 0, "low": 0, "drafts": 0, "last_run": None, "trend": []}
+        if state_path and state_path.exists():
+            try:
+                data = _json.loads(state_path.read_text(encoding="utf-8"))
+                overview.update({
+                    "scored": data.get("scored", 0),
+                    "low": data.get("low", 0),
+                    "drafts": data.get("drafts", 0),
+                    "last_run": data.get("last_run"),
+                    "trend": data.get("trend", [])[-12:],  # last 12 weeks
+                    # Gate-2 F4: low_details derives from REAL sessions — apply the
+                    # same allowlist posture the rest of this subsystem uses for
+                    # session-derived data (drafts / private-case detail). Only
+                    # numeric scores + dimension enum + a BOUNDED reason summary
+                    # (the judge's free-text can echo the real prompt) + session_id
+                    # (opaque uuid, for human lookup). Never pass the raw dict.
+                    "low_details": [
+                        self._project_low_detail(d)
+                        for d in (data.get("low_details") or [])
+                    ],
+                })
+            except (OSError, ValueError):
+                pass
+        # pending-draft count rides along so the tab has it in one call
+        overview["pending_drafts"] = self.get_session_quality_drafts()["count"]
+        return overview
+
     def get_golden_set(self, category: Optional[str] = None) -> dict:
         """Return golden set metadata + cases (optionally filtered)."""
         cases = self._cases

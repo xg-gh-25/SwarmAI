@@ -98,6 +98,22 @@ async def get_golden_set(category: Optional[str] = Query(default=None)):
     return svc.get_golden_set(category=category)
 
 
+@router.get("/session-quality")
+async def get_session_quality():
+    """Layer③ overview for the Session Quality tab: latest run summary (scored/
+    low/drafts), weekly low-rate trend (drift radar), and pending-draft count."""
+    svc = get_eval_service()
+    return svc.get_session_quality()
+
+
+@router.get("/session-quality/drafts")
+async def get_session_quality_drafts():
+    """Layer② pending-draft queue: harvested golden drafts awaiting human
+    ratification. The tab renders Promote (→ POST /golden-set) / Discard."""
+    svc = get_eval_service()
+    return svc.get_session_quality_drafts()
+
+
 @router.get("/golden-set/{case_id}")
 async def get_case_detail(case_id: str):
     """Return full detail for a single golden set case."""

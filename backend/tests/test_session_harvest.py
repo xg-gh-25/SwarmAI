@@ -151,3 +151,8 @@ def test_draft_skeleton_schema():
     assert sk["eval_method"] == "llm"
     assert sk["affected_by"] == []
     assert sk["tier"] == "draft"
+    # Gate-2 F1: category MUST be canonical (a promoted draft with an off-canonical
+    # category trips _validate_case_taxonomy's WARN forever). Provenance is the
+    # GS_HARVEST_ id prefix (the drafts-queue filter key), not a bespoke category.
+    assert sk["category"] == "quality"
+    assert sk["id"].startswith("GS_HARVEST_")

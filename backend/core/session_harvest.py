@@ -69,7 +69,13 @@ def _draft_skeleton(*, session_id: str, dimension: str) -> dict:
     """
     return {
         "id": _draft_id(session_id),
-        "category": "session_harvest",
+        # Canonical category (golden_set.yaml `categories:`) — a harvested draft
+        # tests a real session's QUALITY. NOT an off-canonical "session_harvest"
+        # value: once a human promotes the draft to `active`, an off-canonical
+        # category would trip _validate_case_taxonomy's WARN on every load forever
+        # (Gate-2 F1). Provenance lives in `source` (set by harvest_draft) + the
+        # deterministic GS_HARVEST_ id prefix, which is the drafts-queue filter key.
+        "category": "quality",
         "dimension": dimension,
         "eval_method": "llm",
         "affected_by": [],
