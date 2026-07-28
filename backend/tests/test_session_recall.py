@@ -259,3 +259,81 @@ def test_search_mixed_sent_and_pending(db_path: Path, recall: SessionRecall):
         for m in s.key_messages
     )
     assert "pending message" not in all_content
+
+
+# ---------------------------------------------------------------------------
+# Rank-primary scoring + LIMIT quality-preservation (run_78bd708f)
+#
+# The FTS query is bounded by _SEARCH_ROW_LIMIT so a broad multi-word query can
+# no longer fetchall() tens of thousands of rows (the RECALL DISASTER TIMEOUT
+# root cause). For that LIMIT to be QUALITY-PRESERVING, session scoring is
+# rank-primary: the surfaced session is the one owning the best-BM25 (min
+# fts.rank) message, which `ORDER BY fts.rank LIMIT N` is guaranteed to keep.
+# ---------------------------------------------------------------------------
+
+def test_rank_primary_beats_verbose_session(db_path: Path, recall: SessionRecall):
+    """A session with ONE highly-relevant hit must outrank a VERBOSE session with
+    many mediocre mentions.
+
+    Old density-primary scoring (density*0.4+recency*0.35+richness*0.25) let a
+    wordy session with 20 weak mentions beat a session with a single excellent
+    BM25 match. rank-primary fixes this: best (min) fts.rank wins.
+    """
+    # Session A: ONE message, query term repeated many times → very strong BM25.
+    _insert_message(db_path, "sess-focused", "assistant",
+                    ("kubernetes kubernetes kubernetes kubernetes kubernetes "
+                     "kubernetes kubernetes kubernetes deployment guide"),
+                    created_at="2026-04-08T10:00:00")
+    # Session B: MANY messages each mentioning the term once → high density, weak per-row rank.
+    for i in range(20):
+        _insert_message(db_path, "sess-verbose", "user",
+                        f"a note about kubernetes among many other unrelated topics {i}",
+                        created_at="2026-04-08T09:00:00")
+
+    result = recall.search("kubernetes", max_sessions=2)
+    assert result.sessions, "expected matches"
+    # rank-primary → the focused single-hit session surfaces FIRST.
+    assert result.sessions[0].session_id == "sess-focused", (
+        f"rank-primary should surface the best-BM25 session first, "
+        f"got {result.sessions[0].session_id}"
+    )
+
+
+def test_limit_is_quality_preserving(db_path: Path):
+    """rank-primary top session under a SMALL row-limit == top session over the
+    full unbounded result set — proving the LIMIT never drops the deciding
+    (best-BM25) message.
+
+    Builds a corpus larger than the limit, then compares the top session picked
+    with a tiny limit against the top session with no limit.
+    """
+    import backend.core.session_recall as sr_mod
+
+    # One session owns the single best-BM25 message (term repeated → strong rank);
+    # many filler sessions each contribute one weak-rank match so total rows > limit.
+    _insert_message(db_path, "sess-best", "assistant",
+                    "flywheel flywheel flywheel flywheel flywheel compounding value",
+                    created_at="2026-04-08T10:00:00")
+    for i in range(60):
+        _insert_message(db_path, f"sess-filler-{i}", "user",
+                        f"one passing mention of flywheel in row {i}",
+                        created_at="2026-04-08T09:00:00")
+
+    recall = SessionRecall(db_path=db_path)
+
+    # Full (unbounded) ground truth: temporarily lift the limit high.
+    orig = sr_mod._SEARCH_ROW_LIMIT
+    try:
+        sr_mod._SEARCH_ROW_LIMIT = 100000
+        full_top = recall.search("flywheel", max_sessions=1).sessions[0].session_id
+        # Bounded: a limit well below the total match count.
+        sr_mod._SEARCH_ROW_LIMIT = 10
+        limited_top = recall.search("flywheel", max_sessions=1).sessions[0].session_id
+    finally:
+        sr_mod._SEARCH_ROW_LIMIT = orig
+
+    assert full_top == "sess-best"
+    assert limited_top == full_top, (
+        f"LIMIT changed the top session: full={full_top} limited={limited_top} — "
+        "rank-primary should keep the best-BM25 session under any limit"
+    )

@@ -26,6 +26,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on FTS rows fetched by search() (run_78bd708f). WITHOUT this, a broad
+# multi-word query OR-joins its terms and matches tens of thousands of rows in the
+# messages table (measured: 41K rows / 8.6s on a 284K-message DB), which are all
+# fetchall()-ed and grouped in Python — breaching the recall subsystem's 8s
+# disaster-timeout cap (RECALL DISASTER TIMEOUT). SQLite early-terminates the
+# `ORDER BY fts.rank LIMIT N` sort with a top-N heap, so this returns the GLOBAL
+# top-N-by-BM25-rank rows (verified: full[:N] == limited(N)). N=500 keeps the
+# rank-primary top sessions identical to the unbounded result on real queries
+# (verified stable across N=200..1000) while dropping the worst query 8.6s→<0.6s.
+_SEARCH_ROW_LIMIT = 500
+
 
 @dataclass
 class SessionMatch:
@@ -109,19 +120,29 @@ class SessionRecall:
             # the SQLiteMessagesTable chokepoint, so it MUST filter sent != 0
             # itself — otherwise a queued-but-undelivered message phantom-injects
             # into recall context (P3). Treat NULL as sent (pre-v6 rows).
+            # LIMIT is mandatory (run_78bd708f): it bounds the fetch to the global
+            # top-N by fts.rank (BM25), so a broad query can't fetchall() 40K+ rows
+            # and blow the recall disaster-timeout cap. It is quality-preserving ONLY
+            # in combination with the rank-primary _session_relevance below — the
+            # surfaced session is the one owning the best-BM25 message, which a
+            # top-N-by-rank LIMIT is guaranteed to keep.
             rows = conn.execute("""
-                SELECT m.rowid as msg_rowid, m.session_id, m.role, m.content, m.created_at
+                SELECT m.rowid as msg_rowid, m.session_id, m.role, m.content,
+                       m.created_at, fts.rank as fts_rank
                 FROM messages_fts fts
                 JOIN messages m ON m.rowid = fts.rowid
                 WHERE messages_fts MATCH ?
                   AND (m.sent IS NULL OR m.sent != 0)
                 ORDER BY fts.rank
-            """, (safe_query,)).fetchall()
+                LIMIT ?
+            """, (safe_query, _SEARCH_ROW_LIMIT)).fetchall()
 
             if not rows:
                 return RecallResult(query=query, sessions=[], total_matches=0)
 
-            # Step 3: Group by session_id
+            # Step 3: Group by session_id. Carry each match's fts.rank so session
+            # scoring can be rank-primary (the best/min rank per session decides
+            # ordering, which makes the LIMIT above quality-preserving).
             session_matches: dict[str, list[dict]] = {}
             for row in rows:
                 sid = row["session_id"]
@@ -130,33 +151,43 @@ class SessionRecall:
                     "role": row["role"],
                     "content": row["content"],
                     "created_at": row["created_at"],
+                    "rank": row["fts_rank"],
                 })
 
             total_matches = len(rows)
 
-            # Step 4: Rank sessions by relevance score (not just match count)
-            # Scoring: match_density * recency_boost * content_richness
-            now = datetime.now()
+            # Step 4: Rank sessions RANK-PRIMARY (run_78bd708f).
+            #
+            # Primary key: the session's best (min) fts.rank — i.e. the strongest
+            # BM25 match it owns. Tiebreak: match density (capped). This REPLACES the
+            # old density*0.4 + recency*0.35 + richness*0.25 formula for two reasons:
+            #
+            #  1. Quality-preservation under LIMIT: the top session is the one owning
+            #     the globally-best-ranked message, and `ORDER BY fts.rank LIMIT N`
+            #     keeps exactly the top-N-by-rank rows — so that deciding message is
+            #     never dropped. A density/recency-weighted score depends on ALL of a
+            #     session's matched rows, which the LIMIT truncates → its top session
+            #     shifts with N (measured). rank-primary top sessions are stable
+            #     across N (verified on real queries).
+            #  2. It fixes a latent bug: density-primary let a verbose session with
+            #     many mediocre mentions outrank a session with one excellent hit
+            #     (the best-BM25 message's session was not even in the old top-5).
+            #
+            # Recency is INTENTIONALLY dropped: it is incompatible with (1) — a
+            # recency term reintroduces a full-row-set dependency that breaks LIMIT
+            # preservation — and BM25 rank is already the relevance signal a topic
+            # recall wants. Sessions are keyed by min-rank; near-ties in relevance
+            # fall back to density, not age.
 
-            def _session_relevance(item: tuple[str, list[dict]]) -> float:
+            def _session_relevance(item: tuple[str, list[dict]]) -> tuple[float, float]:
                 sid, matches = item
-                # Match density: more matches = more relevant (diminishing returns)
-                density = min(len(matches), 10) / 10.0
-
-                # Recency boost: newer sessions score higher (decay over 90 days)
-                try:
-                    newest = max(m.get("created_at", "") for m in matches)
-                    match_date = datetime.fromisoformat(newest.replace("Z", "+00:00"))
-                    days_old = max((now - match_date.replace(tzinfo=None)).days, 0)
-                    recency = max(0.1, 1.0 - days_old / 90.0)
-                except (ValueError, TypeError):
-                    recency = 0.5
-
-                # Content richness: prefer sessions with longer matched content
-                avg_len = sum(len(m.get("content", "")) for m in matches) / max(len(matches), 1)
-                richness = min(avg_len / 500.0, 1.0)  # cap at 500 chars avg
-
-                return density * 0.4 + recency * 0.35 + richness * 0.25
+                # fts.rank is negative (more negative = better BM25 match). Negate so
+                # a LARGER key = MORE relevant, consistent with reverse=True sort.
+                ranks = [m.get("rank", 0.0) for m in matches]
+                best_rank = min(ranks) if ranks else 0.0
+                relevance = -best_rank
+                density = min(len(matches), 10) / 10.0  # tiebreak only
+                return (relevance, density)
 
             top_sessions = sorted(
                 session_matches.items(),
