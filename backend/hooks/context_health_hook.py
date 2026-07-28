@@ -47,6 +47,82 @@ _DECISION_NOISE_PREFIXES = (
 )
 
 
+# Episodic war-story detector — the 7th MEMORY admission gate (run_117bcdf4).
+#
+# ROOT CAUSE it closes: a REFLECT lesson whose BODY narrates a single-run event
+# ("Gate-2 caught X", "5th consecutive C042 catch this session", "GUI122
+# RECURRED this run", "又抓到 …") is EPISODIC — it records what happened in one
+# pipeline run, not a reusable rule. It passed all 6 prior gates (it is a
+# well-formed, long, non-governance guideline) and got auto-sunk into the MEMORY
+# Guidelines/Pitfalls HOT PATH, where 92 such entries accumulated before the
+# 2026-07-28 decay-archive sweep. The full lesson still lands in IMPROVEMENT.md /
+# run.json — this gate ONLY keeps the run-narration out of the injected hot path
+# (Principle 1: sediment preserved, only the judgment-substrate is gated).
+#
+# DISCRIMINATOR = a gate-ACTOR token CO-OCCURRING with a run-EVENT verb near the
+# START — NOT a bare topic token (Gate-2 fresh-context adversarial CRITICAL,
+# run_117bcdf4). The first cut anchored on the topic token alone (`Gate-[012]\b`)
+# and silently DROPPED genuine rules ABOUT the gating system — "Gate-2 must always
+# run before merge", "adversarial gate design should assume the author is wrong",
+# "M3 skeptic passes must precede any code write" — exactly the class a
+# self-improving pipeline most needs to keep. The fix: an actor ("Gate-N",
+# "adversarial", "M3 skeptic", "GUIxxx", an Nth-catch ordinal) is episodic ONLY
+# when it co-occurs with a narration VERB (caught/blocked/reframed/flipped/killed/
+# RECURRED/vindicated/flagged/…). A rule about gates ("must run", "should assume",
+# "is cheaper") has the actor but NO event verb → correctly ADMITTED. The verb may
+# PRECEDE the actor (passive "Caught by Gate-2", leading run-id "In run_x, Gate-2
+# caught …") — so we scan a bounded HEAD window for actor×verb co-occurrence in
+# either order, not a strict opener. Still NOT a per-phrasing denylist (PIT40):
+# the actor×verb co-occurrence is the invariant; the verb list is a small closed
+# set of run-event verbs. The window is bounded (~140 chars) so a later-sentence
+# incidental "caught" in a long semantic rule can't retro-flag it.
+_EPISODIC_ACTOR = (
+    r"Gate-\d\b"                                              # Gate-0..9
+    r"|M\d+\s+skeptic\b"                                      # M3 skeptic
+    r"|adversarial\b"                                         # adversarial (gate/review)
+    r"|(?:GUI|PIT|COE|DEC|COR)\d+\b"                          # GUI122 / PIT40 …
+    r"|\d+(?:st|nd|rd|th)\s+(?:consecutive\s+)?\w*\s*catch\b" # 5th consecutive C042 catch
+)
+_EPISODIC_VERB = (
+    r"caught|catch\b|blocked|block\b|reframed|flipped|killed|vindicated"
+    r"|flagged|RECURRED|earned its keep|corrected|refuted|overturned|reopened"
+)
+_EPISODIC_HEAD = 140
+_EPISODIC_AV_RE = re.compile(rf"(?:{_EPISODIC_ACTOR}).{{0,60}}?(?:{_EPISODIC_VERB})", re.I)   # actor → verb
+_EPISODIC_VA_RE = re.compile(rf"(?:{_EPISODIC_VERB}).{{0,20}}?(?:{_EPISODIC_ACTOR})", re.I)   # verb → actor (passive)
+# CJK war-story: an actor/deixis token co-occurring with a caught/recurred verb.
+# CJK carries the event directly (抓到/拦住/复发), so require that verb near an
+# actor or run-deixis (Gate-N / adversarial / skeptic / 又 / 本轮 / 这次 / 第N次).
+_EPISODIC_CJK_RE = re.compile(
+    r"(?:Gate-\d|M\d+\s*skeptic|adversarial|又|本轮|这次|这轮|第.{1,3}次)"
+    r".{0,12}?(?:抓到|抓住|拦住|挡住|复发|又犯|命中)"
+    r"|(?:抓到|抓住|拦住|挡住|复发).{0,12}?(?:Gate-\d|adversarial|skeptic)",
+    re.I,
+)
+
+
+def _is_episodic_warstory(lesson: str) -> bool:
+    """True if `lesson` narrates a single-run gate EVENT (a war-story), so it must
+    be HELD BACK from the MEMORY hot path (it still lands in IMPROVEMENT.md).
+
+    Discriminator = a gate ACTOR (Gate-N / adversarial / M-N skeptic / GUIxxx /
+    Nth-catch) CO-OCCURRING with a run-event VERB (caught/blocked/RECURRED/…)
+    within a bounded head window. A rule ABOUT the gating system ("Gate-2 must
+    always run", "adversarial gate design should…") has the actor but no event
+    verb → returns False (admitted). Verb may precede the actor (passive / leading
+    run-id). NOT a per-phrasing denylist — actor×verb co-occurrence is the
+    invariant (PIT40).
+    """
+    if not lesson:
+        return False
+    head = lesson[:_EPISODIC_HEAD]
+    return bool(
+        _EPISODIC_AV_RE.search(head)
+        or _EPISODIC_VA_RE.search(head)
+        or _EPISODIC_CJK_RE.search(head)
+    )
+
+
 class ContextHealthHook:
     """Unified context health harness.
 
@@ -985,7 +1061,7 @@ class ContextHealthHook:
 
         Returns (admit: bool, reason: str, entry_type: str). A Step-0-equivalent
         admission gate (AGENT.md R30 in spirit) in front of the MEMORY.md write.
-        Six ordered checks; PROTECTION is checked FIRST among the classifiers so a
+        Seven ordered checks; PROTECTION is checked FIRST among the classifiers so a
         keep-class lesson can never reach ADMIT even if the run is qualified:
 
           0. len >= 20                              (too thin)
@@ -1000,9 +1076,15 @@ class ContextHealthHook:
                                                       NEVER reclaim them, so a wrong auto-commit
                                                       is permanent → never auto-write)
           5. run_qualified                          (lesson from a run that itself completed)
+          6. NOT _is_episodic_warstory              (a lesson that OPENS by narrating a
+                                                      single run-event — "Gate-2 caught X",
+                                                      "Nth catch this session", "GUIxxx
+                                                      RECURRED", "又抓到" — is episodic, not
+                                                      a reusable rule → stays in IMPROVEMENT.md,
+                                                      never the injected MEMORY hot path)
 
-        Dedup (step 6) is NOT here — it needs the locked MEMORY.md snapshot, so it
-        runs at the write site inside the lock (avoids a stale-snapshot race).
+        Dedup (the in-lock step) is NOT here — it needs the locked MEMORY.md snapshot,
+        so it runs at the write site inside the lock (avoids a stale-snapshot race).
 
         classify_entry_type is a fallible keyword classifier: a principle phrased
         without a principle-signal token can misroute to 'guideline' and slip past
@@ -1040,6 +1122,13 @@ class ContextHealthHook:
         # Step 5 — run-outcome trust
         if not run_qualified:
             return (False, "unqualified run (status != completed)", entry_type)
+        # Step 6 — episodic war-story gate: a lesson whose BODY narrates a single
+        # run-event (Gate-N caught X / Nth catch this session / GUIxxx RECURRED /
+        # 又抓到 …) is episodic, not a reusable rule — it belongs in
+        # IMPROVEMENT.md/run.json, NOT the injected MEMORY hot path. Root cause of
+        # the 92-entry decay-archive sweep (2026-07-28, run_117bcdf4).
+        if _is_episodic_warstory(lesson):
+            return (False, "episodic war-story (run-event narration, not reusable rule)", entry_type)
         return (True, "admit", entry_type)
 
     def _extract_lessons_to_memory(
