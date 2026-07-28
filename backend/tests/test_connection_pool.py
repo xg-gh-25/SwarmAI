@@ -137,6 +137,31 @@ async def test_concurrent_read_write_no_busy(tmp_db_path):
 
 
 @pytest.mark.asyncio
+async def test_uncommitted_write_discarded_and_not_leaked(tmp_db_path):
+    """Behavior-preservation: an uncommitted write is discarded (old close semantics)
+    AND does not leave a dangling transaction on the shared write conn for the next
+    borrower (pool-specific hazard)."""
+    pool = await _make_pool(tmp_db_path, read_size=2)
+    # Write WITHOUT commit, exit the borrow.
+    async with pool.borrow(readonly=False) as conn:
+        await conn.execute("INSERT INTO t (v) VALUES ('ghost')")
+        # no commit — legacy close() would discard this
+    # Next borrower must see a CLEAN connection (no dangling txn) and 0 rows.
+    async with pool.borrow(readonly=False) as conn:
+        assert conn.in_transaction is False, "dangling transaction leaked to next borrower"
+        cur = await conn.execute("SELECT COUNT(*) FROM t")
+        assert (await cur.fetchone())[0] == 0, "uncommitted write was NOT discarded"
+    # A committed write DOES persist.
+    async with pool.borrow(readonly=False) as conn:
+        await conn.execute("INSERT INTO t (v) VALUES ('real')")
+        await conn.commit()
+    async with pool.borrow(readonly=True) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM t")
+        assert (await cur.fetchone())[0] == 1
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_close_drains_connections(tmp_db_path):
     """close() must drain+close all pooled connections (no thread leak across tests)."""
     pool = await _make_pool(tmp_db_path, read_size=4)

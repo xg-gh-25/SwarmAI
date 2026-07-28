@@ -124,6 +124,7 @@ class _ConnectionPool:
         self._write_lock = asyncio.Lock()
         self._read_pool: asyncio.Queue = asyncio.Queue()
         self._all_conns: list[aiosqlite.Connection] = []
+        self._read_created = 0  # how many read conns created so far (lazy grow ≤ read_size)
         self._started = False
         self._closed = False
 
@@ -138,15 +139,22 @@ class _ConnectionPool:
         return conn
 
     async def start(self) -> None:
-        """Eagerly create the write conn + fill the read pool (call at warmup)."""
+        """Create the write conn + prime ONE read conn (call at warmup).
+
+        Read connections fill LAZILY up to ``read_size`` on demand (see the read
+        borrow path): priming all N eagerly cost ~5 connects on every short-lived
+        pool (notably each test's per-loop pool), for no benefit when only 1-2
+        reads are in flight. One primed read conn keeps the common single-reader
+        path fast; the pool grows to the cap only under real concurrency.
+        """
         if self._started:
             return
         self._write_conn = await self._new_conn()
-        for _ in range(self._read_size):
-            self._read_pool.put_nowait(await self._new_conn())
+        self._read_pool.put_nowait(await self._new_conn())
+        self._read_created = 1
         self._started = True
         logger.info(
-            "SQLite connection pool started for %s (1 write + %d read)",
+            "SQLite connection pool started for %s (1 write + lazy read up to %d)",
             self._db_path, self._read_size,
         )
 
@@ -172,6 +180,7 @@ class _ConnectionPool:
                 logger.debug("pool close: conn.close failed: %s", exc)
         self._all_conns.clear()
         self._write_conn = None
+        self._read_created = 0
         self._started = False
 
 
@@ -194,6 +203,19 @@ class _PoolBorrow:
         if not pool._started:
             await pool.start()
         if self._readonly:
+            # Fast path: a read conn is already idle in the pool.
+            try:
+                self._conn = pool._read_pool.get_nowait()
+                return self._conn
+            except asyncio.QueueEmpty:
+                pass
+            # Lazy grow: if we haven't hit read_size yet, create one more on demand
+            # rather than pre-allocating all N at start (keeps short-lived pools cheap).
+            if pool._read_created < pool._read_size:
+                pool._read_created += 1
+                self._conn = await pool._new_conn()
+                return self._conn
+            # At capacity and all busy: wait for a return, with a backpressure bound.
             try:
                 self._conn = await asyncio.wait_for(
                     pool._read_pool.get(), timeout=pool.borrow_timeout
@@ -213,6 +235,22 @@ class _PoolBorrow:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pool = self._pool
         if self._is_write:
+            # BEHAVIOR-PRESERVING SAFETY NET: the legacy _WALConnection closed the
+            # connection on exit, and sqlite (isolation_level='') implicitly opens a
+            # transaction on DML — so any write NOT explicitly committed by the call
+            # site was DISCARDED on close. A persistent pooled write conn is NOT
+            # closed between borrows, so a dangling uncommitted transaction would
+            # leak onto the NEXT borrower (lock held / stale reads). Roll it back on
+            # return to reproduce the old "uncommitted work is discarded" semantics
+            # exactly and hand the next borrower a clean connection. Committed work
+            # is already durable and unaffected.
+            conn = self._conn
+            if conn is not None:
+                try:
+                    if conn.in_transaction:
+                        await conn.rollback()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug("pool write-conn rollback on return failed: %s", exc)
             try:
                 pool._write_lock.release()
             except RuntimeError:  # pragma: no cover - defensive
@@ -224,6 +262,47 @@ class _PoolBorrow:
         return False  # never suppress exceptions
 
 
+# ── Module-level connection-pool registry ──────────────────────────────────
+# One pool per (db_path, event-loop). Keying on the loop id is REQUIRED for test
+# isolation: aiosqlite connections bind to the loop they were created on, and the
+# test suite uses a fresh event loop per test — a pool cached across loops would
+# hand out connections bound to a dead loop. In production there is exactly one
+# long-lived loop, so this degenerates to one pool per db_path.
+_POOL_REGISTRY: dict[tuple[str, int], _ConnectionPool] = {}
+
+
+def _get_pool(db_path: str) -> _ConnectionPool:
+    """Return the process pool for this db_path on the current event loop.
+
+    Lazily creates (but does not yet start) the pool; the first borrow starts it.
+    """
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        loop_id = 0
+    key = (str(db_path), loop_id)
+    pool = _POOL_REGISTRY.get(key)
+    if pool is None:
+        pool = _ConnectionPool(str(db_path))
+        _POOL_REGISTRY[key] = pool
+    return pool
+
+
+async def close_all_pools() -> None:
+    """Drain + close every pooled connection across all db_paths/loops.
+
+    Called at daemon shutdown (lifespan) and in test teardown so aiosqlite worker
+    threads are joined and no connection leaks across tests.
+    """
+    pools = list(_POOL_REGISTRY.values())
+    _POOL_REGISTRY.clear()
+    for pool in pools:
+        try:
+            await pool.close()
+        except Exception as exc:  # pragma: no cover - best-effort teardown
+            logger.debug("close_all_pools: %s", exc)
+
+
 class SQLiteTable(BaseTable[T], Generic[T]):
     """SQLite table implementation of BaseTable interface."""
 
@@ -231,18 +310,27 @@ class SQLiteTable(BaseTable[T], Generic[T]):
         self.table_name = table_name
         self.db_path = db_path
 
-    def _get_connection(self) -> _WALConnection:
-        """Get an async SQLite connection context manager with WAL mode.
+    def _get_connection(self, readonly: bool = False):
+        """Borrow a pooled async SQLite connection (WAL mode).
 
-        Each connection is configured with WAL journal mode and busy timeout
-        for safe concurrent access from parallel chat sessions.
+        Strangler-fig: this KEEPS the exact ``async with self._get_connection()
+        as conn`` interface the 56 call sites use — it now borrows from the
+        per-db_path connection pool instead of opening a fresh
+        ``aiosqlite.connect()`` (which spawned 1 OS thread per op → executor
+        starvation → /health >3s → false offline; see _ConnectionPool docstring).
+
+        readonly=True  → a concurrent read connection from the pool.
+        readonly=False → the single serialized write connection (DEFAULT — an
+                         ambiguous/unclassified caller must never write on a read
+                         conn). Callers doing only SELECT should pass readonly=True
+                         to run concurrently.
 
         Usage:
-            async with self._get_connection() as conn:
+            async with self._get_connection(readonly=True) as conn:
                 conn.row_factory = aiosqlite.Row
                 # use conn
         """
-        return _WALConnection(str(self.db_path))
+        return _get_pool(str(self.db_path)).borrow(readonly=readonly)
 
     def _row_to_dict(self, row: aiosqlite.Row) -> dict:
         """Convert a SQLite row to a dictionary, parsing JSON fields."""

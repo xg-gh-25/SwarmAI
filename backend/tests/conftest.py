@@ -439,6 +439,15 @@ async def reset_database():
         await _test_db.initialize()
         _schema_initialized = True
 
+    # Close any pooled connections from the PRIOR test's event loop. The pool is
+    # keyed by (db_path, loop_id); aiosqlite conns bind to their creating loop, and
+    # pytest-asyncio gives each test a fresh loop — a stale pooled read conn would
+    # hold a WAL snapshot that never sees this fixture's truncation. close_all_pools
+    # drains them so the next borrow creates fresh conns on the current loop that
+    # see the reset state. (Skeptic R6 — test-isolation for the module-level pool.)
+    from database.sqlite import close_all_pools
+    await close_all_pools()
+
     import aiosqlite
     _delete_script = ";\n".join(f"DELETE FROM {t}" for t in _TABLES_TO_CLEAR)
     async with aiosqlite.connect(str(_test_db.db_path)) as conn:
