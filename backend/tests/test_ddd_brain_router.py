@@ -1,0 +1,206 @@
+"""Tests for the DDD Brain Hub read-only router (GET /api/ddd/brains[/{name}]).
+
+Methodology: integration tests against the REAL workspace Projects/ tree (no
+mocks of parse_entries / git / ddd_paths) — the whole point of the Brain Hub is
+to project real cognitive state, so the tests assert against real data.
+
+Key invariants under test:
+  - AC1: brains list returns every real DDD project with live health signals
+    (sinking = dormant+archived count, pending = staged proposals, uncommitted
+    = git dirty, last_change = relative time) — NO stored metric, computed live.
+  - AC2: brain detail returns the six sections (via ddd_paths SSOT) with real
+    member files; ② canonical docs carry per-entry entry_type + decay_state that
+    MATCH a direct parse_entries() call (no fabricated data).
+  - ⑤/⑥ are enumerated as single well-known files (bindings.yaml / REFRESHER.md),
+    NEVER by iterdir-ing the project root (Gate-1 revision).
+  - No recall-heat / ref_count number is emitted anywhere (ref_count is dead).
+"""
+
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def client():
+    from routers.ddd_brain import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/ddd")
+    return TestClient(app)
+
+
+class TestBrainsList:
+    """GET /api/ddd/brains — Gallery data (AC1)."""
+
+    def test_lists_all_real_projects(self, client):
+        resp = client.get("/api/ddd/brains")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "brains" in data
+        names = {b["name"] for b in data["brains"]}
+        # SwarmAI is the non-deletable default project — MUST be present.
+        assert "SwarmAI" in names
+        # There are multiple real DDD projects in the workspace.
+        assert len(data["brains"]) >= 2
+
+    def test_each_brain_has_live_health_and_sections(self, client):
+        resp = client.get("/api/ddd/brains")
+        brains = {b["name"]: b for b in resp.json()["brains"]}
+        sw = brains["SwarmAI"]
+
+        # six-section presence map — SwarmAI has ② docs + ④ capabilities.
+        sp = sw["sectionsPresent"]
+        assert set(sp.keys()) == {
+            "identity", "knowledge", "gates",
+            "capabilities", "delivery", "refresher",
+        }
+        assert sp["identity"] is True       # AGENTS.md exists at root
+        assert sp["knowledge"] is True      # 2-understanding/ docs exist
+
+        # live health signals present + correctly typed.
+        h = sw["health"]
+        assert isinstance(h["sinking"], int) and h["sinking"] >= 0
+        assert isinstance(h["pending"], int) and h["pending"] >= 0
+        assert isinstance(h["uncommitted"], bool)
+        assert isinstance(h["lastChangeRelative"], str)
+
+        # lifecycle stage is one of the four canonical stages.
+        assert sw["lifecycleStage"] in {"CREATE", "GROW", "REVIEW", "DISTRIBUTE"}
+
+    def test_no_recall_heat_number_anywhere(self, client):
+        """ref_count is dead → NO heat/crown/recall number in the payload (R30#4)."""
+        raw = client.get("/api/ddd/brains").text.lower()
+        for banned in ("ref_count", "refcount", "recall_heat", "recallheat", "crown"):
+            assert banned not in raw
+
+    def test_sinking_matches_direct_parse_entries(self, client):
+        """AC1: health.sinking is NOT a stub — it equals a direct dormant+archived count."""
+        from core.ddd_entry_lifecycle import parse_entries
+        from core.ddd_paths import ddd_path
+
+        # Compute the truth directly over SwarmAI's ② canonical docs.
+        root = _swarmai_dir()
+        expected = 0
+        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+            p = ddd_path(root, doc)
+            if p.exists():
+                for e in parse_entries(p.read_text()):
+                    if e.decay_state in ("dormant", "archived"):
+                        expected += 1
+
+        brains = {b["name"]: b for b in client.get("/api/ddd/brains").json()["brains"]}
+        assert brains["SwarmAI"]["health"]["sinking"] == expected
+
+
+class TestBrainDetail:
+    """GET /api/ddd/brains/{name} — Brain view data (AC2)."""
+
+    def test_returns_six_sections(self, client):
+        resp = client.get("/api/ddd/brains/SwarmAI")
+        assert resp.status_code == 200
+        detail = resp.json()
+        keys = [s["key"] for s in detail["sections"]]
+        assert keys == [
+            "identity", "knowledge", "gates",
+            "capabilities", "delivery", "refresher",
+        ]
+        # each section carries a stable circled-number label + curator + own/govern.
+        by_key = {s["key"]: s for s in detail["sections"]}
+        assert by_key["identity"]["num"] == "①"
+        assert by_key["refresher"]["num"] == "⑥"
+        assert by_key["knowledge"]["ownGovern"] == "OWN"
+        assert by_key["delivery"]["ownGovern"] == "GOVERN"
+
+    def test_delivery_and_refresher_are_single_files_not_root_dump(self, client):
+        """Gate-1 revision: ⑤/⑥ resolve to '.' (root) — must be enumerated as the
+        single well-known file, NEVER by iterdir-ing the whole project root."""
+        detail = client.get("/api/ddd/brains/SwarmAI").json()
+        by_key = {s["key"]: s for s in detail["sections"]}
+
+        deliv_members = [m["path"] for m in by_key["delivery"]["members"]]
+        refr_members = [m["path"] for m in by_key["refresher"]["members"]]
+
+        # ⑤ = bindings.yaml only (if present); NOT AGENTS.md / aim.json / assets/…
+        assert all(m.endswith("bindings.yaml") for m in deliv_members)
+        # ⑥ = REFRESHER.md only.
+        assert all(m.endswith("REFRESHER.md") for m in refr_members)
+        # A root-dump bug would list dozens of members; single-file sections have ≤1.
+        assert len(deliv_members) <= 1
+        assert len(refr_members) <= 1
+
+    def test_knowledge_entries_match_parse_entries(self, client):
+        """AC2: ② per-entry type histogram equals a direct parse_entries call."""
+        from collections import Counter
+        from core.ddd_entry_lifecycle import parse_entries
+        from core.ddd_paths import ddd_path
+
+        tech = ddd_path(_swarmai_dir(), "TECH.md")
+        direct = parse_entries(tech.read_text())
+        direct_hist = Counter(e.entry_type for e in direct)
+
+        detail = client.get("/api/ddd/brains/SwarmAI").json()
+        knowledge = next(s for s in detail["sections"] if s["key"] == "knowledge")
+        # entries carry the real per-entry fields.
+        tech_entries = [e for e in knowledge["entries"]
+                        if e.get("file", "").endswith("TECH.md")]
+        assert tech_entries, "expected TECH.md entries in the knowledge section"
+        for e in tech_entries[:5]:
+            assert e["entryType"] in {
+                "guideline", "pitfall", "decision", "model",
+                "process", "principle", "correction",
+            }
+            assert e["decayState"] in {"active", "dormant", "archived"}
+
+        api_hist = Counter(e["entryType"] for e in tech_entries)
+        assert api_hist == direct_hist
+
+    def test_empty_gates_marked_complete_not_broken(self, client):
+        """R31: an empty ③Gates section is COMPLETE, not degraded."""
+        detail = client.get("/api/ddd/brains/SwarmAI").json()
+        gates = next(s for s in detail["sections"] if s["key"] == "gates")
+        if not gates["members"]:
+            assert gates["completeNotBroken"] is True
+
+    def test_unknown_brain_returns_404(self, client):
+        resp = client.get("/api/ddd/brains/NoSuchProjectXYZ")
+        assert resp.status_code == 404
+
+
+class TestResilience:
+    """Gate-2 adversarial finding: a non-UTF-8 ② doc must NOT 500 the gallery."""
+
+    def test_non_utf8_doc_does_not_crash_gallery(self, client, tmp_path, monkeypatch):
+        """A canonical doc with invalid UTF-8 bytes → read_text raises
+        UnicodeDecodeError (a ValueError, NOT OSError). The gallery must degrade
+        (that project's sinking count = 0), never return 500. Mutation check:
+        revert the `except (OSError, ValueError, UnicodeError)` to `except OSError`
+        and this test goes RED (the request 500s)."""
+        import routers.ddd_brain as mod
+
+        # Build a fake Projects/ with one project carrying a non-UTF-8 TECH.md.
+        projects = tmp_path / "Projects"
+        proj = projects / "BadUtf8"
+        (proj / "2-understanding").mkdir(parents=True)
+        (proj / ".project.json").write_text('{"name":"BadUtf8"}')
+        # 0xFF is invalid UTF-8 → read_text(encoding="utf-8") raises UnicodeDecodeError.
+        (proj / "2-understanding" / "TECH.md").write_bytes(b"# T\n- **x** stuff \xff\xfe bad")
+
+        monkeypatch.setattr(mod, "_projects_root", lambda: projects)
+        monkeypatch.setattr(mod, "_workspace_root", lambda: tmp_path)
+
+        resp = client.get("/api/ddd/brains")
+        assert resp.status_code == 200  # NOT 500
+        brains = {b["name"]: b for b in resp.json()["brains"]}
+        assert "BadUtf8" in brains
+        # the unreadable doc degrades to 0 sinking, doesn't crash.
+        assert brains["BadUtf8"]["health"]["sinking"] == 0
+
+
+def _swarmai_dir() -> Path:
+    """Resolve the real SwarmAI project dir from the active workspace."""
+    from routers.ddd_brain import _projects_root
+
+    return _projects_root() / "SwarmAI"

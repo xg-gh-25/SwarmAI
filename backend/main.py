@@ -1381,6 +1381,10 @@ app.include_router(code_intel_router, prefix="/api/code-intel", tags=["code-inte
 from routers.eval import router as eval_router
 app.include_router(eval_router, prefix="/api/eval", tags=["eval"])
 
+# DDD Brain Hub API (read-only projection over ddd_paths + parse_entries + git)
+from routers.ddd_brain import router as ddd_brain_router
+app.include_router(ddd_brain_router, prefix="/api/ddd", tags=["ddd-brain"])
+
 # Register development-only router when DEBUG=true
 if settings.debug:
     from routers.dev import router as dev_router
