@@ -89,7 +89,11 @@ function _formatAge(isoStr: string): string {
 export function BottomBar() {
   // Safe: useContext returns undefined when provider is missing (no throw)
   const healthCtx = useContext(HealthContext);
-  const isConnected = healthCtx?.health?.status === 'connected';
+  const healthStatus = healthCtx?.health?.status;
+  const isConnected = healthStatus === 'connected';
+  // 'degraded' (run_13094a88): the daemon is ALIVE, just briefly stalled — it must
+  // NOT render as "Offline" (that IS the false-offline bug this state prevents).
+  const isDegraded = healthStatus === 'degraded';
   const { activeSessionMeta } = useSessionMeta();
   const agentName = activeSessionMeta?.agentName || 'Swarm';
 
@@ -199,10 +203,12 @@ export function BottomBar() {
       <div className="flex items-center gap-2.5">
         <span className="flex items-center gap-1.5">
           <span
-            className={`w-[5px] h-[5px] rounded-full flex-shrink-0 ${isConnected ? 'bg-green-500' : 'bg-gray-500'}`}
+            className={`w-[5px] h-[5px] rounded-full flex-shrink-0 ${
+              isConnected ? 'bg-green-500' : isDegraded ? 'bg-amber-500' : 'bg-gray-500'
+            }`}
             aria-hidden="true"
           />
-          <span>{isConnected ? 'Connected' : 'Offline'}</span>
+          <span>{isConnected ? 'Connected' : isDegraded ? 'Reconnecting' : 'Offline'}</span>
         </span>
         <span className="flex items-center gap-1">
           <span className="material-symbols-outlined text-[12px] leading-none">smart_toy</span>

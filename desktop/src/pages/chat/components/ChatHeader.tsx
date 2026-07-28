@@ -79,6 +79,18 @@ export function ChatHeader({
             {t('health.initializing', 'Starting up...')}
           </div>
         )}
+        {/* 'degraded' (run_13094a88): daemon ALIVE but a probe was briefly missed.
+            Amber "reconnecting" hint — inputs stay usable (NOT the red offline state). */}
+        {health.status === 'degraded' && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-2"
+            role="status"
+            aria-label={t('health.degraded', 'Reconnecting…')}
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            {t('health.degraded', 'Reconnecting…')}
+          </div>
+        )}
         {/* New Session Button (+) - Validates: Requirement 2.1, 5.1, 5.2, 5.3 */}
         <button
           onClick={onNewSession}

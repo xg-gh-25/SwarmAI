@@ -796,6 +796,27 @@ fn watchdog_down_decision(
 /// bootout-PID-capture path (see `sync_daemon_version`).
 #[cfg(target_os = "macos")]
 fn daemon_pid_present(uid: &str) -> bool {
+    matches!(daemon_liveness(uid), DaemonLiveness::Alive)
+}
+
+/// Tri-state daemon liveness. The runtime watchdog needs to distinguish "launchctl
+/// says the process is gone" (Gone → real death) from "launchctl itself failed to
+/// run" (Unknown → a transient tool/system hiccup, NOT proof of death). Collapsing
+/// Unknown into "gone" would reintroduce the false-offline bug through the liveness
+/// check: a momentary launchctl failure during a system-load stall would wrongly
+/// declare the (alive) daemon dead. `daemon_pid_present` keeps the old bool contract
+/// for the cold-start callers (Unknown≡not-present there is fine — they only fail
+/// FAST on a confirmed dead STREAK, gated by ever_alive).
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum DaemonLiveness {
+    Alive,
+    Gone,
+    Unknown,
+}
+
+#[cfg(target_os = "macos")]
+fn daemon_liveness(uid: &str) -> DaemonLiveness {
     let service_target = format!("gui/{}/com.swarmai.backend", uid);
     match std::process::Command::new("launchctl")
         .args(["print", &service_target])
@@ -803,11 +824,14 @@ fn daemon_pid_present(uid: &str) -> bool {
     {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout
-                .lines()
-                .any(|l| l.trim_start().starts_with("pid = "))
+            if stdout.lines().any(|l| l.trim_start().starts_with("pid = ")) {
+                DaemonLiveness::Alive
+            } else {
+                DaemonLiveness::Gone
+            }
         }
-        Err(_) => false,
+        // launchctl failed to run (transient) — do NOT treat as death.
+        Err(_) => DaemonLiveness::Unknown,
     }
 }
 
@@ -1755,6 +1779,10 @@ fn spawn_daemon_health_watchdog(
         let mut was_healthy = true;
         let mut recovery_attempts: u32 = 0;
         let mut known_boot_id: Option<String> = None;
+        // Resolve uid ONCE for the watchdog's lifetime (not per-miss) — the launchd
+        // uid is stable, and the cold-start path resolves it once per session too.
+        // Avoids spawning `id -u` on every missed probe during a recovery window.
+        let watchdog_uid = current_uid();
 
         loop {
             // Adaptive interval: 30s when healthy (saves battery), 3s during recovery.
@@ -1817,8 +1845,18 @@ fn spawn_daemon_health_watchdog(
                 let is_daemon = { state.lock().await.is_daemon_mode };
                 // pid check is only meaningful for the launchd-managed daemon; the
                 // subprocess-fallback dev path has no launchctl signal (→ Terminated).
+                // Unknown (launchctl itself failed — a transient hiccup) is treated as
+                // ALIVE, not gone: a tool failure must NOT reintroduce a false death
+                // (Gate-2 finding). Only a definitive Gone declares death.
                 let pid_present = if is_daemon {
-                    daemon_pid_present(&current_uid())
+                    // launchctl is a blocking subprocess — offload so it can never
+                    // stall the async watchdog task (Gate-2: a blocking call on the
+                    // tokio task during a system-load stall could compound it).
+                    let uid = watchdog_uid.clone();
+                    let liveness = tokio::task::spawn_blocking(move || daemon_liveness(&uid))
+                        .await
+                        .unwrap_or(DaemonLiveness::Unknown);
+                    liveness != DaemonLiveness::Gone
                 } else {
                     false
                 };
@@ -1895,7 +1933,14 @@ fn spawn_daemon_health_watchdog(
                     // finally disables inputs. Emitted at the escalation boundary
                     // ONLY (recovery_attempts == threshold) so it fires once.
                     if recovery_attempts == DOWN_ESCALATE_MISSES {
-                        let pid_present = daemon_pid_present(&current_uid());
+                        // Unknown (launchctl hiccup) counts as alive — only a
+                        // definitive Gone forces death before the streak elapses.
+                        // Offloaded (spawn_blocking) like the first-miss check.
+                        let uid = watchdog_uid.clone();
+                        let pid_present = tokio::task::spawn_blocking(move || daemon_liveness(&uid))
+                            .await
+                            .unwrap_or(DaemonLiveness::Unknown)
+                            != DaemonLiveness::Gone;
                         if matches!(
                             watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES),
                             WatchdogDownDecision::Terminated
