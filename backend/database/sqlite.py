@@ -122,6 +122,7 @@ class _ConnectionPool:
         self.borrow_timeout: float = self.DEFAULT_BORROW_TIMEOUT
         self._write_conn: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
+        self._start_lock = asyncio.Lock()  # guards start() against concurrent first-borrows
         self._read_pool: asyncio.Queue = asyncio.Queue()
         self._all_conns: list[aiosqlite.Connection] = []
         self._read_created = 0  # how many read conns created so far (lazy grow ≤ read_size)
@@ -147,16 +148,24 @@ class _ConnectionPool:
         reads are in flight. One primed read conn keeps the common single-reader
         path fast; the pool grows to the cap only under real concurrency.
         """
+        # Double-checked under _start_lock: two concurrent first-borrows both see
+        # _started=False, but the first _new_conn() await is a yield point — without
+        # the lock the second borrow would race past the check and double-create the
+        # write conn + double-fill the read pool. The lock serializes; the re-check
+        # inside makes the loser a no-op.
         if self._started:
             return
-        self._write_conn = await self._new_conn()
-        self._read_pool.put_nowait(await self._new_conn())
-        self._read_created = 1
-        self._started = True
-        logger.info(
-            "SQLite connection pool started for %s (1 write + lazy read up to %d)",
-            self._db_path, self._read_size,
-        )
+        async with self._start_lock:
+            if self._started:
+                return
+            self._write_conn = await self._new_conn()
+            self._read_pool.put_nowait(await self._new_conn())
+            self._read_created = 1
+            self._started = True
+            logger.info(
+                "SQLite connection pool started for %s (1 write + lazy read up to %d)",
+                self._db_path, self._read_size,
+            )
 
     def borrow(self, readonly: bool = False):
         """Borrow a connection. ``async with pool.borrow(readonly=...) as conn:``.

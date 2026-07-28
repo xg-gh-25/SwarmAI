@@ -162,6 +162,24 @@ async def test_uncommitted_write_discarded_and_not_leaked(tmp_db_path):
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_borrow_starts_pool_once(tmp_db_path):
+    """Race: N concurrent first-borrows on an unstarted pool must start it ONCE
+    (start() re-check under _start_lock), not double-create connections."""
+    pool = _ConnectionPool(tmp_db_path, read_size=4)
+    # 10 concurrent borrows on a never-started pool — all race through __aenter__.
+    async def touch():
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+    await asyncio.gather(*[touch() for _ in range(10)])
+    # If start() double-ran, _all_conns would exceed 1 write + read_size read.
+    assert len(pool._all_conns) <= 1 + pool._read_size, (
+        f"pool over-created connections: {len(pool._all_conns)} > {1 + pool._read_size}"
+    )
+    await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_close_drains_connections(tmp_db_path):
     """close() must drain+close all pooled connections (no thread leak across tests)."""
     pool = await _make_pool(tmp_db_path, read_size=4)

@@ -1444,10 +1444,12 @@ async def health_check():
         # TimeoutError / any exception / unexpected value → unknown (fail-open).
         auth_status = "unknown"
 
-    # Keep status="healthy" even on DB timeout — the process is alive and
-    # serving requests. Frontend startup overlay only checks status field;
-    # returning "degraded" on transient thread pool pressure would trigger
-    # false "backend not ready" UX.
+    # status="healthy" unless readiness SAMPLED the DB as genuinely down (False).
+    # "unknown" (not-yet-sampled or stale snapshot) stays healthy — the process IS
+    # serving this request, and a transient sampler gap must not flip the UI to
+    # "backend not ready". Only a confirmed DB-down degrades. Note: the DB check no
+    # longer runs on THIS request path (readiness is sampled off-path), so a slow
+    # DB can never drag /health latency — that severing is the offline-flap fix.
     status = "healthy" if db_healthy is not False else "degraded"
 
     # P3: Expose channel gateway state so monitoring can detect
