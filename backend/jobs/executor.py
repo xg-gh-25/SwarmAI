@@ -370,6 +370,22 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "session_quality":
+            from .handlers.session_quality import run_session_quality
+            sq_result = run_session_quality(
+                config=job.config or {},
+                dry_run=bool(job.config.get("dry_run", False)) if job.config else False,
+            )
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=sq_result.get("status", "success"),
+                summary=(f"session-quality: {sq_result.get('scored', 0)} scored, "
+                         f"{sq_result.get('low', 0)} low, "
+                         f"{sq_result.get('drafts', 0)} draft(s) harvested"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "skill_proposer":
             from .handlers.skill_proposer import run_skill_proposer
             skill_result = run_skill_proposer()

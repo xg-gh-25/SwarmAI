@@ -154,6 +154,23 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Session Quality (layer②③: score real sessions → harvest golden drafts) ---
+    # Weekly low-frequency batch (N=10/week): samples real desktop sessions
+    # (with-correction OR turn-anomalous), scores each on goal+tool axes via the
+    # eval judge, records low scores to correction_tracker (drift radar), and
+    # harvests a golden DRAFT from each low-score session (human ratifies at
+    # promote — NEVER auto-promoted). Sunday, offset from Monday's eval-scheduled.
+    Job(
+        id="session-quality",
+        name="Session Quality — score real sessions + harvest golden drafts (layer②③)",
+        type="session_quality",
+        schedule="0 8 * * 0",          # Sunday UTC 08:00 = ICT 16:00 (offset from Mon eval)
+        enabled=True,
+        category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
+        config={},
+    ),
+
     # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
     Job(
         id="ddd-refresh",
