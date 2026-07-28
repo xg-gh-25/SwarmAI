@@ -1228,10 +1228,30 @@ async def lifespan(app: FastAPI):
     if backend_mode in ("daemon", "hive"):
         asyncio.create_task(_start_code_intel_watchers())
 
+    # Readiness sampler (run_7e8a2030): samples DB + auth health OFF the /health
+    # request path so liveness never blocks on a slow dependency. See
+    # core/readiness_sampler.py + the health_check liveness/readiness split.
+    from core.readiness_sampler import readiness_sampler_loop
+    _readiness_task = asyncio.create_task(readiness_sampler_loop())
+
     yield
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    if _readiness_task and not _readiness_task.done():
+        _readiness_task.cancel()
+        try:
+            await _readiness_task
+        except asyncio.CancelledError:
+            pass
+    # Drain the SQLite connection pool (run_7e8a2030) — join aiosqlite worker
+    # threads so shutdown is clean and no connection leaks.
+    try:
+        from database.sqlite import close_all_pools
+        await close_all_pools()
+        logger.info("SQLite connection pools closed")
+    except Exception:
+        logger.debug("pool close on shutdown skipped", exc_info=True)
     # Stop Code Intelligence FS watchers
     try:
         from core.code_intel.watcher import stop_all_watchers
@@ -1394,51 +1414,29 @@ async def health_check():
         else 0
     )
 
-    # F6: Verify DB is actually reachable — prevents "false healthy"
-    # L1 fix: wrap in wait_for to prevent thread pool exhaustion from
-    # blocking health endpoint indefinitely (aiosqlite uses run_in_executor).
-    # If DB check can't complete in 2s, return healthy with degraded DB
-    # rather than hanging → Tauri "not responding" cascade.
-    # Run the DB check and the credential auth check CONCURRENTLY so total
-    # latency is max(2s, 1s) ≈ 2s, never 3s — the Rust watchdog probes /health
-    # with a 2s timeout, so the auth probe must NEVER extend the budget.
-    async def _check_db():
-        from database import db
-        return await asyncio.wait_for(db.health_check(), timeout=2.0)
+    # LIVENESS / READINESS SEPARATION (run_7e8a2030): the DB + auth checks used to
+    # run HERE on the request critical path (asyncio.gather with 2s/1s caps). Under
+    # executor-thread-pool starvation (unpooled aiosqlite → 20+ threads) even a
+    # 2s-capped wait_for could not get SCHEDULED, so the /health round-trip blew past
+    # the Rust watchdog's 3s budget → false "Backend offline" + disabled inputs, while
+    # the daemon was alive. Fix: liveness (this handler) does ZERO awaited I/O — it
+    # reads a snapshot the background readiness sampler maintains off the request path
+    # (core/readiness_sampler.py). The dependency signal still reaches the frontend
+    # banner via db_healthy/auth below; it just no longer GATES liveness or adds
+    # latency. A stale snapshot (sampler wedged) reports "unknown", never a frozen value.
+    from core.readiness_sampler import readiness_cache
+    _readiness = readiness_cache.snapshot()
+    _db_ready = _readiness["db_healthy"]  # True | False | None(unknown)
+    auth_result = _readiness["auth"]
 
-    async def _check_auth() -> str:
-        # Shared CredentialValidator (same instance + cache as spawn pre-flight).
-        # 1s hard cap; any timeout / error / non-definitive result → "unknown"
-        # so a slow or flaky STS call can never degrade /health.
-        from core import session_registry
-        from core.app_config_manager import AppConfigManager
-        _cfg = AppConfigManager.instance()
-        # Skip STS when the active auth uses NO sigv4 identity — running STS would
-        # falsely report "expired" and fire the AWS CredentialBanner:
-        #   - API-key (Anthropic-direct) mode: use_bedrock=False, no AWS at all
-        #   - Bedrock API-key mode: use_bedrock=True but auth is a bearer token
-        #     (AWS_BEARER_TOKEN_BEDROCK) with no STS-resolvable identity.
-        # Report "valid" (auth is not an AWS-sigv4 concern here) so the banner
-        # stays hidden (AC4/AC5). CredentialBanner only shows on "expired".
-        if not _cfg.get("use_bedrock", True) or _cfg.get("auth_method") == "bedrock_api_key":
-            return "valid"
-        region = _cfg.get("aws_region", "us-east-1")
-        return await asyncio.wait_for(
-            session_registry.get_credential_validator().check(region),
-            timeout=1.0,
-        )
-
-    db_result, auth_result = await asyncio.gather(
-        _check_db(), _check_auth(), return_exceptions=True
-    )
-
-    if isinstance(db_result, asyncio.TimeoutError):
-        db_healthy = "timeout"
-        logger.warning("health_check: DB check timed out (thread pool pressure)")
-    elif isinstance(db_result, BaseException):
+    if _db_ready is None:
+        # Not yet sampled OR sampler stale → unknown. Liveness stays healthy (the
+        # process IS serving this request); we just can't assert DB state.
+        db_healthy: Any = "unknown"
+    elif _db_ready is False:
         db_healthy = False
     else:
-        db_healthy = db_result
+        db_healthy = True
 
     if isinstance(auth_result, str) and auth_result in ("valid", "expired", "unknown"):
         auth_status = auth_result
