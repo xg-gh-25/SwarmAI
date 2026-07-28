@@ -1581,8 +1581,8 @@ const guideContent = {
     zh: '评估器方法论',
   },
   evalIntro: {
-    en: 'Two complementary layers: cheap deterministic checks catch regressions instantly; expensive semantic judges verify nuanced behavioral quality.',
-    zh: '两层互补机制：廉价确定性检查即时捕获回归；昂贵语义裁判验证细微行为质量。',
+    en: 'Three complementary methods: cheap deterministic checks catch regressions instantly; semantic judges verify nuanced behavioral quality; and a behavior method spawns a real agent to capture its actual tool trajectory.',
+    zh: '三种互补机制：廉价确定性检查即时捕获回归；语义裁判验证细微行为质量；behavior 方法 spawn 真实 agent 捕获其真实工具轨迹。',
   },
   programmatic: {
     en: 'Programmatic (Deterministic, <1s, $0)',
@@ -1597,8 +1597,6 @@ const guideContent = {
     { name: 'trajectory_any_order', en: 'Required tools all present regardless of order', zh: '必需工具全部出现（不限顺序）' },
     { name: 'runtime_health', en: 'Live daemon/session liveness probe — deployed, progressing, under RSS budget', zh: '实时 daemon/session 存活探测 — 已部署、在推进、RSS 在预算内' },
   ],
-  // A third method, "behavior", spawns a REAL headless agent and captures its tool
-  // trajectory (eval_trajectory_capture) — used by behavior-tier cases, not a programmatic evaluator.
   llmJudge: {
     en: 'LLM-Judge (Semantic, ~5s, ~$0.02/case)',
     zh: 'LLM-Judge（语义, ~5s, ~$0.02/case）',
@@ -1606,6 +1604,18 @@ const guideContent = {
   llmJudgeItems: [
     { name: 'goal_success', en: 'Did the agent achieve the scenario\'s intended goal? Binary pass/fail with reasoning.', zh: '智能体是否达成场景预期目标？二值通过/失败并附推理。' },
     { name: 'quality_score', en: 'Multi-dimensional quality assessment (0-10) across relevance, completeness, accuracy.', zh: '多维质量评估（0-10），涵盖相关性、完整性、准确性。' },
+  ],
+  // Behavior is a third EXECUTION METHOD, not a programmatic/LLM evaluator: it spawns a
+  // REAL headless agent and captures its actual tool trajectory (eval_trajectory_capture) —
+  // used by behavior-tier cases. Costly, so it runs on the weekly cadence, not per-commit.
+  behavior: {
+    en: 'Behavior (Real-Agent Spawn, ~17-120s/case)',
+    zh: 'Behavior（真实 Agent Spawn, ~17-120s/case）',
+  },
+  behaviorItems: [
+    { name: 'trajectory_capture', en: 'Spawns a REAL headless agent on the case prompt and records the tool calls it actually makes.', zh: 'spawn 真实 headless agent 跑 case prompt，记录它实际发出的工具调用。' },
+    { name: 'behavior-tier cases', en: 'The captured trajectory feeds the trajectory_* evaluators — verifies what the agent DID, not just what it would say.', zh: '捕获的轨迹喂给 trajectory_* 评估器 — 验证 agent 实际做了什么，而非只看它会怎么说。' },
+    { name: 'weekly cadence', en: 'Costly (real spawns) → runs on the Monday drift-watch, never per-commit / per-push.', zh: '昂贵（真 spawn）→ 排在周一漂移监控跑，绝不逐 commit / 逐 push。' },
   ],
   architecture: {
     en: 'Execution Architecture',
@@ -1624,8 +1634,8 @@ const guideContent = {
     zh: '覆盖分布',
   },
   coverageDesc: {
-    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior). The matrix below is an illustrative slice — the Golden Set tab shows the live, filterable distribution.',
-    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。下面的矩阵是示意切片 —— Golden Set tab 显示 live、可筛选的真实分布。',
+    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (draft→active→stable, + behavior/canary), Eval Method (programmatic / llm / behavior).',
+    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（draft→active→stable，外加 behavior/canary）、Eval Method（programmatic / llm / behavior）。',
   },
   lifecycle: {
     en: 'Case Lifecycle',
@@ -1715,26 +1725,6 @@ const guideContent = {
   ],
 };
 
-// Coverage data from golden_set.yaml (verified via grep)
-// Illustrative dimension×category slice (NOT live counts — the Golden Set tab is the
-// live, filterable source). Shows the SHAPE: capability/judgment/compliance dominate;
-// the dot grid conveys where cases cluster, not exact totals (which grow every run).
-const coverageGrid: Record<string, Record<string, number>> = {
-  capability:       { compliance: 0, decision: 0, recall: 0, code_aware: 5, loop_active: 4, runtime_health: 0 },
-  judgment_quality: { compliance: 0, decision: 4, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 0 },
-  compliance:       { compliance: 4, decision: 1, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 0 },
-  factual_accuracy: { compliance: 0, decision: 0, recall: 3, code_aware: 0, loop_active: 0, runtime_health: 0 },
-  context_utility:  { compliance: 0, decision: 0, recall: 1, code_aware: 0, loop_active: 0, runtime_health: 0 },
-  recovery:         { compliance: 0, decision: 0, recall: 0, code_aware: 0, loop_active: 0, runtime_health: 3 },
-};
-
-// Derive the category columns from the grid itself (union of all row keys, first-seen
-// order) so the header and cells can never drift from the data — a hardcoded column
-// list silently renders '·' for any row key it doesn't list (Gate-2 HIGH, run_8c44b7bf).
-const coverageCols: string[] = Array.from(
-  new Set(Object.values(coverageGrid).flatMap((row) => Object.keys(row)))
-);
-
 export function GuideTab() {
   const [lang, setLang] = useState<'en' | 'zh'>('en');
   const t = lang; // shorthand
@@ -1813,7 +1803,7 @@ export function GuideTab() {
         <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.evaluators[t]}</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.evalIntro[t]}</p>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {/* Programmatic */}
           <div className="p-3 rounded-lg border border-green-500/20 bg-green-500/5">
             <div className="text-[10px] font-bold text-green-600 mb-2">{guideContent.programmatic[t]}</div>
@@ -1834,6 +1824,19 @@ export function GuideTab() {
               {guideContent.llmJudgeItems.map((item) => (
                 <div key={item.name} className="text-[10px]">
                   <span className="font-mono text-[var(--color-primary)]">{item.name}</span>
+                  <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Behavior — third EXECUTION METHOD (real-agent spawn), not a programmatic/LLM evaluator */}
+          <div className="p-3 rounded-lg border border-amber-500/20 bg-amber-500/5">
+            <div className="text-[10px] font-bold text-amber-600 mb-2">{guideContent.behavior[t]}</div>
+            <div className="space-y-1.5">
+              {guideContent.behaviorItems.map((item) => (
+                <div key={item.name} className="text-[10px]">
+                  <span className="font-mono text-amber-600">{item.name}</span>
                   <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
                 </div>
               ))}
@@ -1901,39 +1904,18 @@ export function GuideTab() {
         </div>
       </div>
 
-      {/* Section 4: Coverage Distribution */}
+      {/* Section 4: Coverage Distribution — live source is the Golden Set tab (no hardcoded
+          snapshot here: a static dim×cat matrix silently drifts every run — R30#4). */}
       <div className="mb-8">
         <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.coverage[t]}</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.coverageDesc[t]}</p>
-        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-[10px]">
-            <thead>
-              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-2 py-1.5 font-medium text-[var(--color-text-muted)]">
-                  {t === 'en' ? 'Dimension \\ Category' : '维度 \\ 类别'}
-                </th>
-                {coverageCols.map(cat => (
-                  <th key={cat} className="text-center px-1.5 py-1.5 font-medium text-[var(--color-text-muted)] font-mono">{cat}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(coverageGrid).map(([dim, cats]) => (
-                <tr key={dim} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-2 py-1.5 font-medium font-mono text-[var(--color-text-secondary)]">{dim}</td>
-                  {coverageCols.map(cat => (
-                    <td key={cat} className="text-center px-1.5 py-1.5">
-                      {cats[cat] > 0 ? (
-                        <span className={`inline-block w-5 h-5 leading-5 rounded text-[9px] font-bold ${cats[cat] >= 4 ? 'bg-green-500/20 text-green-600' : cats[cat] >= 2 ? 'bg-yellow-500/20 text-yellow-600' : 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'}`}>{cats[cat]}</span>
-                      ) : (
-                        <span className="text-[var(--color-text-muted)]">·</span>
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex items-center gap-2 border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg)]">
+          <span className="material-symbols-outlined text-[16px] text-[var(--color-primary)]">checklist</span>
+          <p className="text-[11px] text-[var(--color-text-muted)]">
+            {t === 'en'
+              ? 'The live, filterable distribution across all 4 axes lives on the Golden Set tab — it grows every run, so it is never snapshotted here.'
+              : '沿全部 4 个轴的 live、可筛选分布在 Golden Set tab — 它每次运行都在增长，故这里不做快照。'}
+          </p>
         </div>
       </div>
 

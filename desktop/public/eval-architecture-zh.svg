@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1320" width="1920" height="1320">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#0c0e14"/>
@@ -15,11 +15,11 @@
       <path d="M0,0 L8,3 L0,6" fill="#6FA88B"/>
     </marker>
   </defs>
-  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1320" fill="url(#bg)"/>
 
   <!-- Title -->
   <text x="80" y="72" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="40" font-weight="700" fill="#E8E4E0">SwarmAI Eval OS</text>
-  <text x="80" y="108" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="21" fill="#8B8D94">解耦的系统层子系统 &#183; 本体感知，不是外部测试 &#183; eval 读 agent 真实的 rules 文件</text>
+  <text x="80" y="108" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="21" fill="#8B8D94">解耦的系统层子系统 &#183; 本体感知，不是外部测试 &#183; 三层：golden 考题 + 真实会话回收 + online 打分</text>
   <text x="80" y="138" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="18" fill="#C9A96E">永不由 agent 触发 &#183; 永不在编码 pipeline 内跑（那样测的是旧 binary）</text>
 
   <!-- ================= (1) WRITE ================= -->
@@ -151,4 +151,52 @@
   <!-- report -> consume arrow -->
   <line x1="1460" y1="680" x2="1460" y2="720" stroke="#7B89A8" stroke-width="2" marker-end="url(#arrowMuted)"/>
   <text x="1475" y="708" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12" fill="#6B6E76">Dashboard（7 tabs）读这些快照 &#8212; 纯投影</text>
+
+  <!-- ================= 层 2+3: 真实会话质量闭环 (2026-07-28 上线) ================= -->
+  <rect x="80" y="1050" width="1760" height="230" rx="12" fill="#101820" stroke="#2A3A3A" stroke-width="1.5"/>
+  <text x="104" y="1092" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="24" font-weight="700" fill="#6FA88B">层 &#9313;&#9314; &#183; 真实会话质量闭环</text>
+  <text x="104" y="1120" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" fill="#8B8D94">每周 job &#183; 闭环：online 打分（&#9314;）喂 golden 回收（&#9313;）喂 防复发（&#9312;）</text>
+
+  <!-- 5-step flow boxes -->
+  <rect x="104" y="1140" width="300" height="110" rx="8" fill="#12171C" stroke="#2A3A3A"/>
+  <text x="120" y="1168" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" font-weight="700" fill="#8BAFD4">&#9314; 采样会话</text>
+  <text x="120" y="1192" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">每周最多 10 场 owner 会话</text>
+  <text x="120" y="1212" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">带 correction 或 轮次异常</text>
+  <text x="120" y="1234" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12.5" fill="#6B6E76">最可能带信号</text>
+
+  <line x1="404" y1="1195" x2="452" y2="1195" stroke="#6FA88B" stroke-width="2" marker-end="url(#arrowSage)"/>
+
+  <rect x="452" y="1140" width="300" height="110" rx="8" fill="#12171C" stroke="#2A3A3A"/>
+  <text x="468" y="1168" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" font-weight="700" fill="#8BAFD4">&#9314; 打分（2 判官）</text>
+  <text x="468" y="1192" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">目标达成 + 工具选择</text>
+  <text x="468" y="1212" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">+ 归因 dimension</text>
+  <text x="468" y="1234" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12.5" fill="#6B6E76">&lt;0.6 &#8594; 低分, 漂移雷达</text>
+
+  <line x1="752" y1="1195" x2="800" y2="1195" stroke="#6FA88B" stroke-width="2" marker-end="url(#arrowSage)"/>
+
+  <rect x="800" y="1140" width="300" height="110" rx="8" fill="#12171C" stroke="#2A3A3A"/>
+  <text x="816" y="1168" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" font-weight="700" fill="#6FA88B">&#9313; 回收 DRAFT</text>
+  <text x="816" y="1192" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">低分会话 &#8594; golden 草稿</text>
+  <text x="816" y="1212" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">tier=draft &#183; 过 refs 门</text>
+  <text x="816" y="1234" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12.5" fill="#6B6E76">断言式期望</text>
+
+  <line x1="1100" y1="1195" x2="1148" y2="1195" stroke="#6FA88B" stroke-width="2" marker-end="url(#arrowSage)"/>
+
+  <rect x="1148" y="1140" width="300" height="110" rx="8" fill="#1A1610" stroke="#3A3222"/>
+  <text x="1164" y="1168" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" font-weight="700" fill="#D4AA6B">&#128100; 人终审</text>
+  <text x="1164" y="1192" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">Session Quality tab: Promote</text>
+  <text x="1164" y="1212" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">draft&#8594;active（保持 private）</text>
+  <text x="1164" y="1234" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12.5" fill="#C75B4A">系统绝不自动 promote</text>
+
+  <line x1="1448" y1="1195" x2="1496" y2="1195" stroke="#6FA88B" stroke-width="2" marker-end="url(#arrowSage)"/>
+
+  <rect x="1496" y="1140" width="320" height="110" rx="8" fill="#12171C" stroke="#2A3A3A"/>
+  <text x="1512" y="1168" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="15" font-weight="700" fill="#6FA88B">&#9312; 防复发</text>
+  <text x="1512" y="1192" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">active case 每周期都跑</text>
+  <text x="1512" y="1212" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#B8B4AF">真实翻车 &#8594; 永久回归题</text>
+  <text x="1512" y="1234" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12.5" fill="#6B6E76">发现 &#8594; 固化 &#8594; 防守</text>
+
+  <!-- feedback arc: 闭环回流到 (1) WRITE sources (会话行为) -->
+  <path d="M 900 1140 C 640 1000, 120 760, 78 360" fill="none" stroke="#6FA88B" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrowSage)"/>
+  <text x="520" y="1030" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="13" fill="#6FA88B">回收的草稿回流进 &#9312; 写入 &#183; 来源（session 行为）</text>
 </svg>

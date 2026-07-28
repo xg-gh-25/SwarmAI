@@ -85,4 +85,28 @@ describe('GuideTab fact freshness', () => {
     expect(screen.getByAltText(/eval.*architecture/i).getAttribute('src')).toBe('/eval-architecture-zh.svg');
     expect(screen.getByAltText(/one run end to end|sequence/i).getAttribute('src')).toBe('/eval-sequence-zh.svg');
   });
+
+  it('renders the Behavior third execution method in Evaluator Methodology (not just Programmatic + LLM-Judge)', () => {
+    const { container } = renderGuide();
+    const text = container.textContent || '';
+    // The 3rd execution method — behavior (real-agent spawn / trajectory_capture) — must be
+    // documented alongside the two evaluator classes. It ships in the SVG + backend but was
+    // missing from this section (grid-cols-2 → grid-cols-3). Assert it and its intro shift 2→3.
+    expect(text).toContain('Behavior');
+    expect(text).toContain('trajectory_capture');
+    expect(text).toContain('Three complementary methods');
+    // the stale "Two complementary layers" intro must be gone
+    expect(text).not.toContain('Two complementary layers');
+  });
+
+  it('does NOT render the removed hardcoded coverage matrix — points to the live Golden Set tab (R30#4)', () => {
+    const { container } = renderGuide();
+    const text = container.textContent || '';
+    // coverageGrid/coverageCols were deleted (static dim×cat snapshot = drift-bait). The
+    // Coverage section now redirects to the live source instead of rendering a hardcoded grid.
+    expect(text).toMatch(/Golden Set tab|Golden Set/);
+    // the old illustrative-matrix caption must be gone
+    expect(text).not.toContain('The matrix below');
+    expect(text).not.toContain('下面的矩阵');
+  });
 });
