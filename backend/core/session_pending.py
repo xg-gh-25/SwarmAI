@@ -492,22 +492,26 @@ def combine_pending(
     return None, blocks
 
 
-def count_pending(session_id: str) -> int:
+async def count_pending(session_id: str) -> int:
     """Number of sent=0 rows for the session (feeds the read API's
-    ``pending_count`` in Phase 2). Synchronous: a quick indexed COUNT."""
-    import sqlite3
+    ``pending_count``).
 
+    ASYNC + pooled (run_7e8a2030): was a SYNCHRONOUS ``sqlite3.connect()`` called
+    un-offloaded inside the async ``/sessions/streaming-state`` endpoint (polled
+    ~every 15s, once PER live session) — it blocked the daemon's single event loop
+    for the connect+COUNT, a SECOND independent cause of the >3s /health stall
+    (distinct from the aiosqlite-thread-starvation the pool fixed). If the DB was
+    briefly locked (WAL checkpoint / git-sync snapshot) the sync connect could stall
+    the loop and /health with it → the exact watchdog false-offline flap. Now a
+    pooled async read borrow: no event-loop block, no per-call thread."""
     db_path = _get_db_path()
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute("PRAGMA busy_timeout=5000")
-        cursor = conn.execute(
+    async with _pooled(db_path, readonly=True) as conn:
+        cursor = await conn.execute(
             "SELECT COUNT(*) FROM messages WHERE session_id = ? AND sent = 0",
             (session_id,),
         )
-        return cursor.fetchone()[0]
-    finally:
-        conn.close()
+        row = await cursor.fetchone()
+        return row[0]
 
 
 async def reopen_dangling_claims(session_id: str | None = None) -> int:

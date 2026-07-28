@@ -868,7 +868,7 @@ async def get_streaming_state_endpoint():
         # original ask_user_question SSE event was dropped (F5).
         try:
             from core import session_pending
-            pending_count = session_pending.count_pending(unit.session_id)
+            pending_count = await session_pending.count_pending(unit.session_id)
         except Exception:
             pending_count = 0
 

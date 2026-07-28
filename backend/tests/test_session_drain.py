@@ -74,7 +74,7 @@ async def test_drain_coalesces_pending_into_one_turn(wired):
 
     await sp.persist_pending(sid, user_message="first", content=None, agent_id="a")
     await sp.persist_pending(sid, user_message="second", content=None, agent_id="a")
-    assert sp.count_pending(sid) == 2
+    assert await sp.count_pending(sid) == 2
 
     # Capture every run_conversation invocation.
     calls: list[dict] = []
@@ -99,7 +99,7 @@ async def test_drain_coalesces_pending_into_one_turn(wired):
     assert calls[0]["user_message"] == "first\n\nsecond"
     assert calls[0]["_drained_pending"] is True
     # Both rows flipped to sent=1 — nothing left pending.
-    assert sp.count_pending(sid) == 0
+    assert await sp.count_pending(sid) == 0
 
 
 @pytest.mark.asyncio
@@ -124,7 +124,7 @@ async def test_drain_rolls_back_on_yielded_error_event(wired):
     await router.drain_pending(sid)  # must not raise
 
     # The row must NOT be marked sent — it must remain pending + re-claimable.
-    assert sp.count_pending(sid) == 1, "error-event drain wrongly marked the message sent (data loss!)"
+    assert await sp.count_pending(sid) == 1, "error-event drain wrongly marked the message sent (data loss!)"
     reclaim = await sp.claim_pending_batch(sid)
     assert len(reclaim) == 1
 
@@ -146,7 +146,7 @@ async def test_drain_marks_sent_only_on_result_event(wired):
 
     router.run_conversation = _ok_run_conversation  # type: ignore[assignment]
     await router.drain_pending(sid)
-    assert sp.count_pending(sid) == 0, "happy-path drain should mark the message sent"
+    assert await sp.count_pending(sid) == 0, "happy-path drain should mark the message sent"
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_drain_drops_corrupt_empty_payload_without_loop(wired):
             (sid,),
         )
         await conn.commit()
-    assert sp.count_pending(sid) == 1
+    assert await sp.count_pending(sid) == 1
 
     called = False
     def _run_conversation(**kwargs):
@@ -179,7 +179,7 @@ async def test_drain_drops_corrupt_empty_payload_without_loop(wired):
 
     await router.drain_pending(sid)  # must terminate, not loop
     assert called is False, "corrupt row should be dropped before delivery, not sent"
-    assert sp.count_pending(sid) == 0, "corrupt row should be cleared from the queue"
+    assert await sp.count_pending(sid) == 0, "corrupt row should be cleared from the queue"
 
 
 @pytest.mark.asyncio
@@ -228,7 +228,7 @@ async def test_drain_noop_when_outstanding_tool_use(wired):
     await router.drain_pending(sid)
 
     assert called is False, "drain must not start a turn while tool_use outstanding"
-    assert sp.count_pending(sid) == 1, "pending message must be preserved"
+    assert await sp.count_pending(sid) == 1, "pending message must be preserved"
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_drain_noop_when_not_idle(wired):
 
     await router.drain_pending(sid)
     assert called is False
-    assert sp.count_pending(sid) == 1
+    assert await sp.count_pending(sid) == 1
 
 
 @pytest.mark.asyncio
@@ -278,7 +278,7 @@ async def test_drain_rollback_on_send_failure(wired):
     await router.drain_pending(sid)  # must NOT raise
 
     # Message preserved as pending, and re-claimable (claimed_at was reset).
-    assert sp.count_pending(sid) == 1
+    assert await sp.count_pending(sid) == 1
     reclaim = await sp.claim_pending_batch(sid)
     assert len(reclaim) == 1, "rolled-back row must be re-claimable"
 

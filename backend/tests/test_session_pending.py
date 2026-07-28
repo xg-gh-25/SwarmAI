@@ -176,10 +176,10 @@ async def test_persist_pending_monotonic_under_concurrency(pending):
 
 @pytest.mark.asyncio
 async def test_count_pending(pending):
-    assert pending.count_pending("sess-cnt") == 0
+    assert await pending.count_pending("sess-cnt") == 0
     await pending.persist_pending("sess-cnt", user_message="a", content=None, agent_id="a")
     await pending.persist_pending("sess-cnt", user_message="b", content=None, agent_id="a")
-    assert pending.count_pending("sess-cnt") == 2
+    assert await pending.count_pending("sess-cnt") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ async def test_mark_pending_by_id_converts_existing_row(pending, db_path: Path):
     assert "local-42" in row[3]  # client_id metadata preserved
 
     # And it is now visible to the pending pipeline.
-    assert pending.count_pending("sess-mp") == 1
+    assert await pending.count_pending("sess-mp") == 1
 
 
 @pytest.mark.asyncio
@@ -269,7 +269,7 @@ async def test_claim_then_mark_sent(pending, db_path: Path):
     async with aiosqlite.connect(str(db_path)) as conn:
         cur = await conn.execute("SELECT sent FROM messages WHERE session_id='sess-m'")
         assert (await cur.fetchone())[0] == 1
-    assert pending.count_pending("sess-m") == 0
+    assert await pending.count_pending("sess-m") == 0
 
 
 @pytest.mark.asyncio
@@ -282,7 +282,7 @@ async def test_rollback_claim_returns_to_pending(pending, db_path: Path):
         cur = await conn.execute("SELECT sent, claimed_at FROM messages WHERE session_id='sess-r'")
         sent, claimed_at = await cur.fetchone()
     assert sent == 0 and claimed_at is None, "rollback must restore pending (sent=0, claimed_at=NULL)"
-    assert pending.count_pending("sess-r") == 1
+    assert await pending.count_pending("sess-r") == 1
 
 
 @pytest.mark.asyncio
@@ -350,7 +350,7 @@ async def test_reopen_dangling_claims(pending, db_path: Path):
         cur = await conn.execute("SELECT sent, claimed_at FROM messages WHERE session_id='sess-d'")
         sent, claimed_at = await cur.fetchone()
     assert sent == 0 and claimed_at is None
-    assert pending.count_pending("sess-d") == 1
+    assert await pending.count_pending("sess-d") == 1
 
 
 @pytest.mark.asyncio
@@ -361,7 +361,7 @@ async def test_reopen_does_not_touch_sent_rows(pending, db_path: Path):
     await pending.mark_sent_batch("sess-s", [c.pending_seq for c in claimed])
 
     await pending.reopen_dangling_claims()
-    assert pending.count_pending("sess-s") == 0, "sent rows must not be reopened"
+    assert await pending.count_pending("sess-s") == 0, "sent rows must not be reopened"
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ async def test_mark_sent_ignores_stale_unclaimed_seq(pending, db_path: Path):
     # Row is pending (claimed_at=NULL). Try to mark it sent WITHOUT claiming.
     await pending.mark_sent_batch("sess-stale", [1])
     # Must remain pending — the claimed_at guard blocked the flip.
-    assert pending.count_pending("sess-stale") == 1
+    assert await pending.count_pending("sess-stale") == 1
 
 
 @pytest.mark.asyncio
@@ -458,7 +458,7 @@ async def test_ttl_cleanup_skips_pending_rows(pending, db_path: Path):
     await table.cleanup_expired()
 
     # Pending row preserved; delivered expired row deleted.
-    assert pending.count_pending("sess-ttl") == 1, "pending row must survive TTL"
+    assert await pending.count_pending("sess-ttl") == 1, "pending row must survive TTL"
     async with aiosqlite.connect(str(db_path)) as conn:
         cur = await conn.execute("SELECT COUNT(*) FROM messages WHERE id='sent-old'")
         assert (await cur.fetchone())[0] == 0, "delivered expired row should be reaped"
