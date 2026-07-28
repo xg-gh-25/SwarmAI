@@ -265,6 +265,15 @@ class _PoolBorrow:
             except RuntimeError:  # pragma: no cover - defensive
                 pass
         elif self._conn is not None:
+            # Reset per-connection mutable state before returning to the pool:
+            # callers set conn.row_factory = aiosqlite.Row for dict rows, and a
+            # persistent pooled conn would leak that factory to the next borrower
+            # that expects tuple rows. Reset to the default so each borrow starts
+            # clean (shared-mutable-state hygiene surfaced by adversarial review).
+            try:
+                self._conn.row_factory = None
+            except Exception:  # pragma: no cover - defensive
+                pass
             # Return the read connection to the pool — ALWAYS, even on exception.
             pool._read_pool.put_nowait(self._conn)
         self._conn = None
@@ -2984,9 +2993,16 @@ class SQLiteDatabase(BaseDatabase):
         return self._chat_messages
 
     async def health_check(self) -> bool:
-        """Check if the database is healthy."""
+        """Check if the database is healthy.
+
+        Borrows a POOLED read connection rather than a fresh aiosqlite.connect()
+        (run_7e8a2030): the readiness sampler calls this every 10s, so a per-call
+        connect would spawn one OS worker-thread each cycle — re-introducing, on
+        the exact background probe this fix protects, the executor thread-churn the
+        pool exists to eliminate. Pooled read borrow = zero new threads per sample.
+        """
         try:
-            async with aiosqlite.connect(str(self.db_path)) as conn:
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
                 await conn.execute("SELECT 1")
             return True
         except Exception:
@@ -3017,7 +3033,10 @@ class SQLiteDatabase(BaseDatabase):
         try:
             from datetime import datetime
             now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            async with aiosqlite.connect(str(self.db_path)) as conn:
+            # Pooled write borrow (run_7e8a2030): record_token_usage runs after
+            # every chat turn — a per-call aiosqlite.connect() spawned an OS thread
+            # each turn (the executor-churn this fix removes). Route through the pool.
+            async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
                 await conn.execute(
                     """
                     INSERT INTO token_usage
@@ -3043,7 +3062,9 @@ class SQLiteDatabase(BaseDatabase):
         try:
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d")
-            async with aiosqlite.connect(str(self.db_path)) as conn:
+            # Pooled read borrow (run_7e8a2030): TopBar polls this ~30s; route
+            # through the pool to avoid a per-poll connect/thread.
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
                 # Total across all time
                 # Only sum input + output tokens (actual consumption).
                 # cache_read/cache_create are observability metrics, not consumption —
