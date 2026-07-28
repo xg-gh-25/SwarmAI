@@ -1138,6 +1138,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-terminal', label: 'Terminal (⌘`)' },
       { testId: 'nav-skills', label: 'Skills' },
       { testId: 'nav-mcp', label: 'MCP Servers' },
+      { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-code-intel', label: 'Code Intelligence' },
       { testId: 'nav-engine', label: 'Engine Metrics' },
       { testId: 'nav-eval', label: 'OS Eval' },

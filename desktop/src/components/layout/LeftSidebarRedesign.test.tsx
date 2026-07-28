@@ -59,6 +59,7 @@ const EXPECTED: Array<[string, string]> = [
   ['nav-terminal', BLUE],
   ['nav-skills', PURPLE],
   ['nav-mcp', PURPLE],
+  ['nav-brain-hub', TEAL],
   ['nav-code-intel', TEAL],
   ['nav-engine', TEAL],
   ['nav-eval', TEAL],
@@ -67,7 +68,7 @@ const EXPECTED: Array<[string, string]> = [
 ];
 
 describe('LeftSidebar redesign — B ordering', () => {
-  it('renders the 8 nav buttons top-to-bottom in group order', () => {
+  it('renders the 9 nav buttons top-to-bottom in group order', () => {
     renderSidebar();
     const nav = screen.getByTestId('nav-icons');
     const ids = within(nav)
@@ -77,6 +78,7 @@ describe('LeftSidebar redesign — B ordering', () => {
       'nav-terminal',
       'nav-skills',
       'nav-mcp',
+      'nav-brain-hub',
       'nav-code-intel',
       'nav-engine',
       'nav-eval',

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DDD Brain Hub — v5 (New-Brain wizard + build progress + code-intel reuse)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e1117;--card:#161b22;--hover:#1f2630;--border:#2a313c;--border-soft:#222831;
+    --txt:#e6edf3;--txt-dim:#8b949e;--txt-faint:#5b636d;--accent:#f0a500;--accent-dim:#7a5600;
+    --green:#3fb950;--blue:#58a6ff;--red:#f85149;--purple:#bc8cff;--cyan:#39c5cf;--pink:#f778ba;--orange:#db8c3a;
+    --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:13px;height:100vh;overflow:hidden;display:flex}
+  .material-icons-outlined{font-size:20px;vertical-align:middle}
+  .leftnav{width:50px;background:#0b0e13;border-right:1px solid var(--border-soft);display:flex;flex-direction:column;align-items:center;padding-top:10px;gap:4px;flex-shrink:0}
+  .leftnav .logo{font-size:22px;margin-bottom:12px}
+  .navbtn{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--txt-faint);cursor:pointer;position:relative}
+  .navbtn:hover{background:var(--hover);color:var(--txt-dim)}
+  .navbtn.active{background:var(--accent-dim);color:var(--accent)}
+  .navbtn.active::before{content:'';position:absolute;left:-10px;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--accent)}
+  .navbtn .badge{position:absolute;top:-2px;right:-2px;background:var(--red);color:#fff;font-size:9px;font-weight:700;width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono)}
+  .navspring{flex:1}
+  .hub{flex:1;display:flex;flex-direction:column;min-width:0}
+  .topbar{height:46px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;padding:0 18px;gap:16px;flex-shrink:0}
+  .topbar h1{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .topbar h1 .material-icons-outlined{color:var(--accent);font-size:19px}
+  .tabs{display:flex;gap:2px;margin-left:6px}
+  .tab{padding:6px 13px;border-radius:7px;color:var(--txt-dim);cursor:pointer;font-weight:500;font-size:12.5px;display:flex;align-items:center;gap:6px}
+  .tab:hover{background:var(--hover);color:var(--txt)}
+  .tab.active{background:var(--card);color:var(--txt);border:1px solid var(--border)}
+  .tab .material-icons-outlined{font-size:16px}
+  .tab .cnt{font-family:var(--mono);font-size:10px;background:var(--red);color:#fff;padding:0 5px;border-radius:8px}
+  .topspring{flex:1}
+  .phase-note{font-size:10px;font-family:var(--mono);color:var(--txt-faint);border:1px solid var(--border);border-radius:6px;padding:3px 8px}
+  .view{flex:1;overflow-y:auto;padding:20px 22px;display:none}
+  .view.active{display:block}
+  .view::-webkit-scrollbar{width:9px}.view::-webkit-scrollbar-thumb{background:#2a313c;border-radius:5px}
+  .viewhead{display:flex;align-items:center;gap:10px}
+  .viewhead h2{font-size:16px;font-weight:600}
+  .sub-line{color:var(--txt-faint);font-size:12px;margin-bottom:16px;margin-top:3px}
+  .btn{border:1px solid var(--border);background:var(--card);color:var(--txt);border-radius:7px;padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:var(--sans)}
+  .btn:hover{background:var(--hover)}.btn .material-icons-outlined{font-size:15px}
+  .btn.primary{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}.btn.primary:hover{background:#93670a}
+  .btn.green{color:var(--green);border-color:#1f5a2a}.btn.blue{color:var(--blue);border-color:#1f3a5a}.btn.red{color:var(--red);border-color:#5a1f1f}
+  .btn.sm{padding:3px 9px;font-size:11px}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .tchip{font-family:var(--mono);font-size:9px;font-weight:500;padding:1px 6px;border-radius:10px;white-space:nowrap}
+  .t-principle{background:#2a2340;color:var(--purple)}.t-correction{background:#3a1f2a;color:var(--pink)}
+  .t-decision{background:#12233a;color:var(--blue)}.t-guideline{background:#233024;color:var(--green)}
+  .t-pitfall{background:#3a2418;color:var(--orange)}.t-process{background:#1a2f30;color:var(--cyan)}.t-model{background:#1f2b3a;color:var(--cyan)}
+  .swatch{width:8px;height:8px;border-radius:2px;display:inline-block;vertical-align:middle}
+  /* Gallery */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+  .ddcard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:15px 16px;cursor:pointer;transition:.12s}
+  .ddcard:hover{border-color:var(--accent-dim);background:var(--hover)}
+  .ddcard.newcard{border:1px dashed var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--txt-faint);min-height:210px;gap:8px}
+  .ddcard.newcard:hover{border-color:var(--accent);color:var(--accent)}
+  .ddcard.newcard .material-icons-outlined{font-size:34px}
+  .ddcard.building{border-color:var(--blue)}
+  .ddcard .row1{display:flex;align-items:center;gap:9px;margin-bottom:3px}
+  .ddcard .name{font-size:14.5px;font-weight:600}
+  .ddcard .kind{font-family:var(--mono);font-size:10px;color:var(--txt-faint);border:1px solid var(--border);border-radius:5px;padding:1px 6px;margin-left:auto}
+  .ddcard .desc{color:var(--txt-dim);font-size:11.5px;line-height:1.45;margin:6px 0 10px;min-height:33px}
+  .sixdots{display:flex;gap:4px;margin-bottom:11px}
+  .sixdot{flex:1;text-align:center;font-family:var(--mono);font-size:8.5px;color:var(--txt-faint);padding:4px 0;border-radius:5px;background:#1b2029;border:1px solid var(--border-soft)}
+  .sixdot .num{display:block;font-size:11px;font-weight:700;color:var(--txt-dim)}
+  .sixdot.empty{opacity:.4}
+  .lifecycle{display:flex;align-items:center;gap:3px}
+  .lc-step{flex:1;height:4px;border-radius:3px;background:#23292f}
+  .lc-step.done{background:var(--green)}.lc-step.now{background:var(--accent)}
+  .lc-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--txt-faint);font-family:var(--mono);margin-top:5px;margin-bottom:11px}
+  .health{display:flex;gap:15px;border-top:1px solid var(--border-soft);padding-top:11px}
+  .hstat{display:flex;flex-direction:column;gap:1px}
+  .hstat .v{font-size:15px;font-weight:700;font-family:var(--mono)}
+  .hstat .l{font-size:9.5px;color:var(--txt-faint);text-transform:uppercase;letter-spacing:.3px}
+  .badge-pill{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;font-family:var(--mono)}
+  .b-growing{background:#12233a;color:var(--blue)}.b-review{background:#3a2e12;color:var(--accent)}
+  .b-dist{background:#12331b;color:var(--green)}.b-build{background:#12233a;color:var(--blue)}
+  /* card build progress */
+  .cardprog{margin:4px 0 6px}
+  .cardprog .lbl{font-size:10px;font-family:var(--mono);color:var(--blue);margin-bottom:4px;display:flex;justify-content:space-between}
+  .pbar{height:5px;border-radius:3px;background:#1b2029;overflow:hidden}
+  .pbar span{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+  /* Brain 2-pane */
+  .brainwrap{display:grid;grid-template-columns:330px 1fr;gap:14px;height:calc(100vh - 46px - 40px - 58px)}
+  .pane{background:var(--card);border:1px solid var(--border);border-radius:11px;overflow-y:auto}
+  .pane::-webkit-scrollbar{width:8px}.pane::-webkit-scrollbar-thumb{background:#2a313c;border-radius:4px}
+  .panehdr{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--txt-faint);font-weight:600;padding:11px 14px 8px;position:sticky;top:0;background:var(--card);z-index:2}
+  .tree{padding:0 8px 12px}
+  .seg{margin-bottom:3px}
+  .seghdr{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:7px;cursor:pointer;font-size:11.5px}
+  .seghdr:hover{background:var(--hover)}
+  .seghdr .snum{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--accent);width:14px}
+  .seg.govern .seghdr .snum{color:var(--cyan)}
+  .seghdr .nm{font-weight:600}
+  .seghdr .og{font-size:8px;font-family:var(--mono);padding:0 4px;border-radius:4px;margin-left:auto}
+  .og-own{background:#3a2e12;color:var(--accent)}.og-gov{background:#123032;color:var(--cyan)}
+  .seghdr .cur{font-size:8.5px;font-family:var(--mono);color:var(--txt-faint)}
+  .fnode{display:flex;align-items:center;gap:7px;padding:4px 8px 4px 30px;border-radius:6px;cursor:pointer;font-size:11.5px;color:var(--txt-dim)}
+  .fnode:hover{background:var(--hover);color:var(--txt)}
+  .fnode.sel{background:#1d2530;color:var(--txt);border:1px solid var(--border)}
+  .fnode .material-icons-outlined{font-size:14px;color:var(--txt-faint)}
+  .fnode .fn{font-family:var(--mono);font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fnode .gs{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .gs-mod{background:var(--accent)}.gs-clean{background:transparent}
+  .fnode .cur{font-size:8px;font-family:var(--mono);color:var(--txt-faint);flex-shrink:0}
+  .seg-empty{padding:5px 8px 5px 30px;font-size:10.5px;color:var(--txt-faint);font-style:italic}
+  .foldericon{color:var(--cyan)!important}
+  .detail{padding:0}
+  .dbar{display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--border-soft);position:sticky;top:0;background:var(--card);z-index:2}
+  .dbar .fp{font-family:var(--mono);font-size:11.5px;color:var(--txt)}
+  .dbar .reuse{font-size:9px;font-family:var(--mono);color:var(--txt-faint);border:1px solid var(--border-soft);border-radius:5px;padding:1px 6px}
+  .dbar .acts{margin-left:auto;display:flex;gap:6px}
+  .dcontent{padding:14px 16px}
+  .dmeta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border-soft)}
+  .dmeta .mk{font-size:10px;font-family:var(--mono);color:var(--txt-faint)}
+  .dmeta .mk b{color:var(--txt-dim)}
+  .md h3{font-size:13px;margin:6px 0 6px;color:var(--txt)}
+  .md p{font-size:11.5px;line-height:1.6;color:var(--txt-dim);margin-bottom:5px}
+  .entryblk{border:1px solid var(--border-soft);border-radius:8px;padding:9px 11px;margin-bottom:8px;background:#12161c}
+  .entryblk .eh{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+  .entryblk .eh .txt{font-size:11.5px;font-weight:500;color:var(--txt);flex:1}
+  .entryblk .eh .src{font-size:8px;font-family:var(--mono);color:var(--txt-faint);border:1px solid var(--border-soft);border-radius:4px;padding:0 4px}
+  .entryblk .eb{font-size:11px;color:var(--txt-dim);line-height:1.5}
+  .entryblk .ef{display:flex;gap:9px;margin-top:6px;font-size:9px;font-family:var(--mono);color:var(--txt-faint);align-items:center}
+  .entryblk .ef .rel{color:var(--pink);display:flex;align-items:center;gap:2px}
+  .entryblk .ef .rel .material-icons-outlined{font-size:11px}
+  .st-active{color:var(--green)}.st-dormant{color:var(--txt-faint)}.dormant{opacity:.55}
+  /* code-intel embed */
+  .codeintel{background:#0b0e13;border:1px solid var(--border);border-radius:9px;height:340px;position:relative;overflow:hidden;margin-top:6px}
+  .ci-reuse{position:absolute;top:8px;left:10px;font-size:9px;font-family:var(--mono);color:var(--txt-faint);background:#161b2299;padding:2px 7px;border-radius:5px;z-index:3}
+  .ci-node{position:absolute;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-family:var(--mono);color:#fff}
+  .ci-edge{position:absolute;height:1px;background:#39424e;transform-origin:left center;z-index:1}
+  /* Wizard modal */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.show{display:flex}
+  .wizard{width:640px;max-height:88vh;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .wizhdr{padding:15px 20px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;gap:10px}
+  .wizhdr h3{font-size:15px;font-weight:600}
+  .wizhdr .x{margin-left:auto;cursor:pointer;color:var(--txt-faint)}
+  .steps{display:flex;gap:6px;padding:12px 20px;border-bottom:1px solid var(--border-soft)}
+  .stepdot{flex:1;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--txt-faint)}
+  .stepdot .n{width:20px;height:20px;border-radius:50%;background:#1b2029;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;flex-shrink:0}
+  .stepdot.active{color:var(--accent)}.stepdot.active .n{background:var(--accent-dim);color:var(--accent)}
+  .stepdot.done{color:var(--green)}.stepdot.done .n{background:#123018;color:var(--green)}
+  .wizbody{padding:18px 20px;overflow-y:auto}
+  .wizstep{display:none}.wizstep.active{display:block}
+  .fld{margin-bottom:15px}
+  .fld label{display:block;font-size:11.5px;font-weight:600;margin-bottom:5px}
+  .fld .hint{font-size:10.5px;color:var(--txt-faint);margin-bottom:7px}
+  .inp{width:100%;background:#0b0e13;border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--txt);font-size:12.5px;font-family:var(--sans)}
+  .inp::placeholder{color:var(--txt-faint)}
+  .kindgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .kindopt{border:1px solid var(--border);border-radius:8px;padding:9px;cursor:pointer;text-align:center;font-size:11px}
+  .kindopt:hover{background:var(--hover)}
+  .kindopt.sel{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+  .kindopt .material-icons-outlined{display:block;margin:0 auto 4px;font-size:20px}
+  /* source rows (multi-combine) */
+  .srctypes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+  .srctype{border:1px solid var(--border);border-radius:8px;padding:9px 11px;cursor:pointer;display:flex;align-items:center;gap:9px;font-size:11.5px}
+  .srctype:hover{background:var(--hover)}
+  .srctype .material-icons-outlined{font-size:18px;color:var(--txt-dim)}
+  .srctype .plus{margin-left:auto;color:var(--accent);font-size:16px}
+  .srclist{display:flex;flex-direction:column;gap:7px}
+  .srcitem{background:#0b0e13;border:1px solid var(--border);border-radius:8px;padding:8px 11px;display:flex;align-items:center;gap:9px;font-size:11.5px}
+  .srcitem .material-icons-outlined{font-size:16px;color:var(--cyan)}
+  .srcitem .tp{font-family:var(--mono);font-size:9px;color:var(--txt-faint);border:1px solid var(--border-soft);border-radius:4px;padding:0 5px}
+  .srcitem .v{font-family:var(--mono);font-size:11px;color:var(--txt-dim);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .srcitem .rm{color:var(--txt-faint);cursor:pointer;font-size:15px}
+  .srcitem .willparse{font-size:8.5px;font-family:var(--mono);color:var(--blue);border:1px solid #1f3a5a;border-radius:4px;padding:0 5px}
+  /* build progress step */
+  .buildbox{padding:6px 0}
+  .buildhead{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .buildhead .spin{width:22px;height:22px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .bigbar{height:8px;border-radius:5px;background:#1b2029;overflow:hidden;margin-bottom:6px}
+  .bigbar span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--cyan));width:62%}
+  .buildpct{font-family:var(--mono);font-size:11px;color:var(--txt-dim);text-align:right;margin-bottom:16px}
+  .bstep{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:12px}
+  .bstep .material-icons-outlined{font-size:17px}
+  .bstep.done{color:var(--txt-dim)}.bstep.done .material-icons-outlined{color:var(--green)}
+  .bstep.now{color:var(--txt)}.bstep.now .material-icons-outlined{color:var(--accent)}
+  .bstep.wait{color:var(--txt-faint)}.bstep.wait .material-icons-outlined{color:var(--txt-faint)}
+  .bstep .bt{font-family:var(--mono);font-size:9.5px;margin-left:auto;color:var(--txt-faint)}
+  .wizftr{padding:13px 20px;border-top:1px solid var(--border-soft);display:flex;gap:8px;align-items:center}
+  .wizftr .spring{flex:1}
+  /* Review + dist reused compact */
+  .gitbar{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:9px 13px;display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:11.5px;font-family:var(--mono);color:var(--txt-dim)}
+  .gitbar .material-icons-outlined{font-size:15px;color:var(--purple)}.gitbar b{color:var(--txt)}.gitbar .spring{flex:1}
+  .zone{margin-bottom:18px}
+  .zonehead{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+  .zonehead .zt{font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .zonehead .zt .material-icons-outlined{font-size:16px}
+  .zonehead .zdesc{font-size:10.5px;color:var(--txt-faint)}
+  .zone-auto .zt{color:var(--blue)}.zone-decay .zt{color:var(--orange)}.zone-pending .zt{color:var(--accent)}
+  .diff{background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden}
+  .diff .dh{display:flex;align-items:center;gap:9px;padding:9px 13px;border-bottom:1px solid var(--border-soft);background:#12161c}
+  .diff .dh .path{font-family:var(--mono);font-size:11px;color:var(--txt)}
+  .diff .dh .acts{margin-left:auto;display:flex;gap:6px}
+  .diffbody{font-family:var(--mono);font-size:11px;line-height:1.7;padding:8px 0}
+  .dl{padding:1px 13px;white-space:pre-wrap}
+  .dl.add{background:#0f2a14;color:#7ee787;border-left:2px solid var(--green)}
+  .dl.del{background:#2a1214;color:#ff9a94;border-left:2px solid var(--red)}
+  .dl.ctx{color:var(--txt-faint)}
+  .provbar{padding:6px 13px;border-top:1px solid var(--border-soft);font-size:10px;color:var(--txt-faint);display:flex;gap:7px;align-items:center;font-family:var(--mono);flex-wrap:wrap}
+  .provbar .material-icons-outlined{font-size:12px}
+  .note{background:#12161c;border:1px dashed var(--border);border-radius:9px;padding:11px 14px;margin-top:8px;font-size:11px;color:var(--txt-dim);display:flex;gap:9px;align-items:flex-start}
+  .note .material-icons-outlined{font-size:16px;color:var(--accent);flex-shrink:0}
+  .disttable{background:var(--card);border:1px solid var(--border);border-radius:11px;overflow:hidden}
+  .disttable .drow{display:grid;grid-template-columns:1.3fr 1.6fr 1fr 1.1fr;gap:12px;padding:12px 15px;border-top:1px solid var(--border-soft);align-items:center;font-size:12px}
+  .disttable .drow.head{border-top:none;background:#12161c;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--txt-faint);font-weight:600}
+  .disttable .target{display:flex;align-items:center;gap:8px;font-weight:500}
+  .disttable .target .material-icons-outlined{font-size:17px;color:var(--txt-dim)}
+  .srcm{font-family:var(--mono);font-size:10.5px;color:var(--txt-dim)}
+  .changed-yes{color:var(--accent);font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:4px}
+  .changed-no{color:var(--green);font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:4px}
+  .changed-yes .material-icons-outlined,.changed-no .material-icons-outlined{font-size:14px}
+</style>
+</head>
+<body>
+
+<div class="leftnav">
+  <div class="logo">🐝</div>
+  <div class="navbtn" title="Chat"><span class="material-icons-outlined">forum</span></div>
+  <div class="navbtn" title="Explorer"><span class="material-icons-outlined">folder_open</span></div>
+  <div class="navbtn" title="Radar"><span class="material-icons-outlined">radar</span></div>
+  <div class="navbtn active" title="Brain Hub"><span class="material-icons-outlined">psychology</span><span class="badge">2</span></div>
+  <div class="navbtn" title="Skills"><span class="material-icons-outlined">extension</span></div>
+  <div class="navspring"></div>
+  <div class="navbtn" title="Settings"><span class="material-icons-outlined">settings</span></div>
+</div>
+
+<div class="hub">
+  <div class="topbar">
+    <h1><span class="material-icons-outlined">psychology</span> Brain Hub</h1>
+    <div class="tabs">
+      <div class="tab" data-v="gallery"><span class="material-icons-outlined">dashboard</span>Gallery</div>
+      <div class="tab active" data-v="brain"><span class="material-icons-outlined">account_tree</span>Brain</div>
+      <div class="tab" data-v="review"><span class="material-icons-outlined">rate_review</span>Review<span class="cnt">3</span></div>
+      <div class="tab" data-v="dist"><span class="material-icons-outlined">hub</span>Distribute</div>
+    </div>
+    <div class="topspring"></div>
+    <span class="phase-note">v5 · +New-Brain wizard +build progress +code-intel reuse · knowledge-graph deferred</span>
+  </div>
+
+  <!-- ============ GALLERY ============ -->
+  <div class="view" id="gallery">
+    <div class="viewhead"><h2>Your Brains</h2>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn"><span class="material-icons-outlined">tune</span>Filter</button>
+        <button class="btn primary" onclick="openWiz()"><span class="material-icons-outlined">add</span>New Brain</button>
+      </div>
+    </div>
+    <div class="sub-line">7 domain brains · six-section cognitive brain governing 0..N assets · signals live from git + parse_entries()</div>
+    <div class="grid">
+      <!-- a BUILDING card (just created via wizard) -->
+      <div class="ddcard building">
+        <div class="row1"><span class="name">PhysicalAI</span><span class="badge-pill b-build">BUILDING</span><span class="kind">code-repo</span></div>
+        <div class="desc">CMHK Physical AI V-Team domain brain — parsing sources…</div>
+        <div class="cardprog">
+          <div class="lbl"><span>③ building code-intel graph…</span><span>62%</span></div>
+          <div class="pbar"><span style="width:62%"></span></div>
+        </div>
+        <div style="font-size:10px;color:var(--txt-faint);font-family:var(--mono)">2 sources · 1 repo + 3 files · ~90s remaining</div>
+      </div>
+      <div class="ddcard" onclick="go('brain')">
+        <div class="row1"><span class="name">SwarmAI</span><span class="badge-pill b-review">REVIEW-DUE</span><span class="kind">code-repo</span></div>
+        <div class="desc">自进化的 Agent OS —— 每次交互升级的是系统的认知本身。</div>
+        <div class="sixdots"><div class="sixdot"><span class="num">✓</span>①ID</div><div class="sixdot"><span class="num">142</span>②Kno</div><div class="sixdot empty"><span class="num">0</span>③Gate</div><div class="sixdot"><span class="num">5</span>④Cap</div><div class="sixdot"><span class="num">1</span>⑤Ctr</div><div class="sixdot"><span class="num">✓</span>⑥Ref</div></div>
+        <div class="lifecycle"><div class="lc-step done"></div><div class="lc-step done"></div><div class="lc-step now"></div><div class="lc-step"></div></div>
+        <div class="lc-labels"><span>CREATE</span><span>GROW</span><span>REVIEW</span><span>DISTRIBUTE</span></div>
+        <div class="health"><div class="hstat"><span class="v" style="color:var(--accent)">3</span><span class="l">Pending</span></div><div class="hstat"><span class="v dormant">18</span><span class="l">Sinking</span></div><div class="hstat"><span class="v" style="color:var(--red)">●</span><span class="l">Uncommitted</span></div><div class="hstat"><span class="v" style="color:var(--txt-dim)">2h</span><span class="l">Last change</span></div></div>
+      </div>
+      <div class="ddcard" onclick="go('brain')">
+        <div class="row1"><span class="name">AIDLC</span><span class="badge-pill b-dist">DISTRIBUTED</span><span class="kind">knowledge</span></div>
+        <div class="desc">AI-Driven Development Lifecycle —— 方法论本身即价值,另治理 1..N 派生 repo。</div>
+        <div class="sixdots"><div class="sixdot"><span class="num">✓</span>①ID</div><div class="sixdot"><span class="num">89</span>②Kno</div><div class="sixdot empty"><span class="num">0</span>③Gate</div><div class="sixdot"><span class="num">6</span>④Cap</div><div class="sixdot"><span class="num">2</span>⑤Ctr</div><div class="sixdot"><span class="num">✓</span>⑥Ref</div></div>
+        <div class="lifecycle"><div class="lc-step done"></div><div class="lc-step done"></div><div class="lc-step done"></div><div class="lc-step done"></div></div>
+        <div class="lc-labels"><span>CREATE</span><span>GROW</span><span>REVIEW</span><span>DISTRIBUTE</span></div>
+        <div class="health"><div class="hstat"><span class="v" style="color:var(--accent)">0</span><span class="l">Pending</span></div><div class="hstat"><span class="v dormant">9</span><span class="l">Sinking</span></div><div class="hstat"><span class="v" style="color:var(--green)">○</span><span class="l">Clean</span></div><div class="hstat"><span class="v" style="color:var(--txt-dim)">5d</span><span class="l">Last change</span></div></div>
+      </div>
+      <!-- NEW card -->
+      <div class="ddcard newcard" onclick="openWiz()">
+        <span class="material-icons-outlined">add_circle_outline</span>
+        <div style="font-weight:600">New Brain</div>
+        <div style="font-size:10.5px;text-align:center;max-width:200px">name · sources (files / repo / pipeline, multi-combine) · build code-intel</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ BRAIN (2-pane: tree | detail, ⑥ embeds CodeGraph) ============ -->
+  <div class="view active" id="brain">
+    <div class="viewhead"><h2 style="display:flex;align-items:center;gap:9px"><span class="material-icons-outlined" style="color:var(--accent)">psychology</span>SwarmAI</h2>
+      <span class="badge-pill b-review" style="margin-left:4px">REVIEW-DUE</span>
+      <span style="font-size:11px;color:var(--txt-faint);font-family:var(--mono)">code-repo · governs 1 asset</span>
+      <div style="margin-left:auto;display:flex;gap:8px"><button class="btn" onclick="go('review')"><span class="material-icons-outlined">rate_review</span>Review 3</button><button class="btn"><span class="material-icons-outlined">hub</span>Distribute</button></div>
+    </div>
+    <div class="sub-line">six-section tree of real files · click a node → opens in FileEditorModal (reused) · ⑥ node embeds the existing CodeGraph component</div>
+    <div class="brainwrap">
+      <div class="pane">
+        <div class="panehdr">Six-section tree · Projects/SwarmAI/</div>
+        <div class="tree">
+          <div class="seg"><div class="seghdr"><span class="snum">①</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">badge</span><span class="nm">Identity</span><span class="og og-own">OWN</span></div>
+            <div class="fnode" onclick="sel(this,'①','AGENTS.md',0)"><span class="material-icons-outlined">description</span><span class="fn">AGENTS.md</span><span class="cur">owner</span><span class="gs gs-clean"></span></div>
+            <div class="fnode" onclick="sel(this,'①','aim.json',0)"><span class="material-icons-outlined">data_object</span><span class="fn">aim.json</span><span class="gs gs-clean"></span></div>
+          </div>
+          <div class="seg"><div class="seghdr"><span class="snum">②</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">menu_book</span><span class="nm">Knowledge</span><span class="og og-own">OWN</span></div>
+            <div class="fnode sel" onclick="sel(this,'②','2-understanding/PRODUCT.md',0)"><span class="material-icons-outlined">inventory_2</span><span class="fn">PRODUCT.md</span><span class="cur">PM</span><span class="gs gs-mod"></span></div>
+            <div class="fnode" onclick="sel(this,'②','2-understanding/TECH.md',0)"><span class="material-icons-outlined">architecture</span><span class="fn">TECH.md</span><span class="cur">Tech Lead</span><span class="gs gs-mod"></span></div>
+            <div class="fnode" onclick="sel(this,'②','2-understanding/IMPROVEMENT.md',0)"><span class="material-icons-outlined">trending_up</span><span class="fn">IMPROVEMENT.md</span><span class="cur">QA</span><span class="gs gs-mod"></span></div>
+            <div class="fnode" onclick="sel(this,'②','2-understanding/PROJECT.md',0)"><span class="material-icons-outlined">flag</span><span class="fn">PROJECT.md</span><span class="cur">TPM</span><span class="gs gs-clean"></span></div>
+            <div class="fnode" onclick="sel(this,'②','knowledge/designs/',0)"><span class="material-icons-outlined foldericon">folder</span><span class="fn">knowledge/ (designs +14)</span><span class="gs gs-clean"></span></div>
+          </div>
+          <div class="seg"><div class="seghdr"><span class="snum">③</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">shield</span><span class="nm">Gates</span><span class="og og-own">OWN</span><span class="cur" style="margin-left:auto">Tech Lead</span></div>
+            <div class="seg-empty">empty — no judgment matured into a gate yet (complete · R31)</div>
+          </div>
+          <div class="seg"><div class="seghdr"><span class="snum">④</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">extension</span><span class="nm">Capabilities</span><span class="og og-own">OWN</span><span class="cur" style="margin-left:auto">Eng</span></div>
+            <div class="fnode" onclick="sel(this,'④','s_ddd-manager',0)"><span class="material-icons-outlined">bolt</span><span class="fn">s_ddd-manager</span><span class="cur">enable</span><span class="gs gs-clean"></span></div>
+            <div class="fnode" onclick="sel(this,'④','s_ddd-persist',0)"><span class="material-icons-outlined">bolt</span><span class="fn">s_ddd-persist</span><span class="cur">enable</span><span class="gs gs-clean"></span></div>
+            <div class="fnode" onclick="sel(this,'④','s_repo-to-ddd',0)"><span class="material-icons-outlined">bolt</span><span class="fn">s_repo-to-ddd</span><span class="cur">enable</span><span class="gs gs-clean"></span></div>
+          </div>
+          <div class="seg govern"><div class="seghdr"><span class="snum">⑤</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">description</span><span class="nm">Delivery Contract</span><span class="og og-gov">GOVERN</span><span class="cur" style="margin-left:auto">TPM/SDM</span></div>
+            <div class="fnode" onclick="sel(this,'⑤','bindings.yaml',0)"><span class="material-icons-outlined">link</span><span class="fn">bindings.yaml</span><span class="cur">1 asset</span><span class="gs gs-clean"></span></div>
+          </div>
+          <div class="seg govern"><div class="seghdr"><span class="snum">⑥</span><span class="material-icons-outlined" style="font-size:15px;color:var(--txt-dim)">sync</span><span class="nm">Refresher</span><span class="og og-gov">GOVERN</span></div>
+            <div class="fnode" onclick="sel(this,'⑥','REFRESHER.md',0)"><span class="material-icons-outlined">sync</span><span class="fn">REFRESHER.md</span><span class="gs gs-clean"></span></div>
+            <div class="fnode" onclick="sel(this,'⑥','code-intel.json (graph)',1)"><span class="material-icons-outlined">hub</span><span class="fn">code-intel graph</span><span class="cur">3MB</span><span class="gs gs-clean"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane detail">
+        <!-- default: a knowledge doc overview -->
+        <div id="detail-doc">
+          <div class="dbar"><span class="material-icons-outlined" style="color:var(--txt-dim);font-size:16px">inventory_2</span><span class="fp">2-understanding/PRODUCT.md</span><span class="reuse">reuses FileEditorModal + MarkdownRenderer</span>
+            <div class="acts"><button class="btn sm blue"><span class="material-icons-outlined">edit</span>Edit in FileEditor</button></div></div>
+          <div class="dcontent">
+            <div class="dmeta"><span class="mk"><b>curator:</b> PM</span><span class="mk"><b>section:</b> ② Knowledge · PRODUCT</span><span class="mk"><b>entries:</b> 34</span><span class="mk"><b>git:</b> <span style="color:var(--accent)">modified</span> · 2h ago</span></div>
+            <div class="md"><h3>PRODUCT — priorities · non-goals</h3><p style="color:var(--txt-faint)">Overall view of the section. Each entry carries its 7-type tag, decay state, source, relations. "Edit" opens the raw file in the FileEditor modal.</p>
+              <div class="entryblk"><div class="eh"><span class="tchip t-principle">principle</span><span class="txt">PRINCIPLE 1 — a DDD is my cognitive brain, not a doc store</span><span class="src">manual</span></div><div class="eb">Sedimented knowledge that helps the agent JUDGE better — a cognitive organ, not a filing cabinet.</div><div class="ef"><span class="st-active">● active</span><span>created 2026-07-20</span><span class="rel"><span class="material-icons-outlined">hub</span>refines 3</span></div></div>
+              <div class="entryblk dormant"><div class="eh"><span class="tchip t-decision">decision</span><span class="txt">Memory sovereignty is a first principle</span><span class="src">manual</span></div><div class="eb">Self-owned memory over platform auto-memory.</div><div class="ef"><span class="st-dormant">◐ dormant 71d</span><span class="rel"><span class="material-icons-outlined">link</span>contradicts 1</span></div></div>
+            </div>
+          </div>
+        </div>
+        <!-- ⑥ view: embedded code-intel graph (reused component) -->
+        <div id="detail-ci" style="display:none">
+          <div class="dbar"><span class="material-icons-outlined" style="color:var(--cyan);font-size:16px">hub</span><span class="fp">⑥ Refresher · code-intel graph</span><span class="reuse">reuses code-intel/CodeGraph.tsx</span>
+            <div class="acts"><button class="btn sm"><span class="material-icons-outlined">refresh</span>Regenerate (s_repo-to-ddd)</button></div></div>
+          <div class="dcontent">
+            <div class="dmeta"><span class="mk"><b>asset:</b> code-repo xg-gh-25/SwarmAI</span><span class="mk"><b>projection:</b> code-intel.json</span><span class="mk"><b>last regen:</b> 4d ago</span><span class="mk"><b>nodes:</b> ~2.9K</span></div>
+            <div class="codeintel" id="cigraph"><span class="ci-reuse">◈ existing ForceGraph2D — already built (CodeGraph.tsx, 265 lines)</span></div>
+            <div style="font-size:10.5px;color:var(--txt-faint);margin-top:8px">This is the ASSET-side graph (classes/methods/call-edges) — the ⑥ Refresher's product. NOT the knowledge-graph. The reused component already renders it; we just mount it here scoped to this DDD.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ REVIEW ============ -->
+  <div class="view" id="review">
+    <div class="viewhead"><h2>Review Queue — SwarmAI</h2><div style="margin-left:auto"><button class="btn green"><span class="material-icons-outlined">visibility</span>Mark all seen → advance watermark</button></div></div>
+    <div class="gitbar"><span class="material-icons-outlined">commit</span><span>diff <b>Projects/SwarmAI/</b> · last-reviewed <b>a00ae46</b> → HEAD <b>ddbcfcd8</b></span><span class="spring"></span><span>watermark = per-DDD SHA in .artifacts/</span></div>
+    <div class="zone zone-auto"><div class="zonehead"><span class="zt"><span class="material-icons-outlined">auto_awesome</span>Auto-cultivated · already in brain</span><span class="zdesc">applied + git-committed — NOT awaiting approval. Edit or Revert only.</span></div>
+      <div class="diff"><div class="dh"><span class="tchip t-decision">decision</span><span class="path">2-understanding/TECH.md</span><div class="acts"><button class="btn sm blue"><span class="material-icons-outlined">edit</span>Edit</button><button class="btn sm red"><span class="material-icons-outlined">undo</span>Revert</button></div></div>
+        <div class="diffbody"><div class="dl ctx">  ## Eval Golden-Case Policy [decision]</div><div class="dl add">+ ### Eval-as-release-gate — a DDD version ships only if its golden set</div><div class="dl add">+ recalls load-bearing knowledge, is non-vacuous, no regression vs prior.</div></div>
+        <div class="provbar"><span>auto</span><span class="material-icons-outlined">source</span>run_ff4364e3 · committed ddbcfcd8 · Edit → new commit</div></div>
+    </div>
+    <div class="zone zone-decay"><div class="zonehead"><span class="zt"><span class="material-icons-outlined">south</span>Decay · engine-driven sinking</span><span class="zdesc">still recallable, reversible.</span></div>
+      <div class="diff"><div class="dh"><span class="tchip t-decision">decision</span><span class="path">PRODUCT.md</span><div class="acts"><button class="btn sm green"><span class="material-icons-outlined">check</span>Confirm sink</button><button class="btn sm"><span class="material-icons-outlined">bolt</span>Keep active</button></div></div>
+        <div class="diffbody"><div class="dl del">- Memory sovereignty is a first principle</div><div class="dl ctx">  → active → dormant (idle 71d)</div></div><div class="provbar"><span class="material-icons-outlined">schedule</span>last_ref 71d · reversible</div></div>
+    </div>
+    <div class="zone zone-pending"><div class="zonehead"><span class="zt"><span class="material-icons-outlined">gpp_maybe</span>Pending approval · NOT yet in brain</span><span class="zdesc">risky proposals in .artifacts/proposals/ — the real gate.</span></div>
+      <div class="diff" style="border-style:dashed"><div class="dh" style="background:#1a1710"><span class="tchip t-guideline">guideline</span><span class="path">PRODUCT.md · protected zone</span><div class="acts"><button class="btn sm green">Approve</button><button class="btn sm blue">Edit</button><button class="btn sm red">Reject</button></div></div>
+        <div class="diffbody"><div class="dl add">+ (proposed) Brain Hub is the legibility surface — not a destination agent.</div></div><div class="provbar"><span>manual</span>conversation-derived · <b style="color:var(--accent)">awaiting decision</b></div></div>
+    </div>
+    <div class="note"><span class="material-icons-outlined">info</span><div><b>Zone A/B = informational + correctable</b>; only <b>Zone C</b> is a true Approve/Reject gate. Revert = git-revert a hunk, never <span style="font-family:var(--mono)">git checkout &lt;file&gt;</span> (GUI127).</div></div>
+  </div>
+
+  <!-- ============ DISTRIBUTE ============ -->
+  <div class="view" id="dist">
+    <div class="viewhead"><h2>Distribute</h2><div style="margin-left:auto"><button class="btn primary"><span class="material-icons-outlined">rocket_launch</span>Distribute a brain</button></div></div>
+    <div class="sub-line">git-package distribution (s_ddd-distribute) — phase-1 tracks source + last-change only.</div>
+    <div class="disttable"><div class="drow head"><span>Brain → Target</span><span>Package source</span><span>Last distributed</span><span>Source changed since?</span></div>
+      <div class="drow"><span class="target"><span class="material-icons-outlined">smart_toy</span>AIDLC → Kiro</span><span class="srcm">Projects/AIDLC/ · AIM package</span><span class="srcm">12d ago</span><span class="changed-yes"><span class="material-icons-outlined">edit</span>changed — redistribute?</span></div>
+      <div class="drow"><span class="target"><span class="material-icons-outlined">smart_toy</span>GitHub_Community → Quick</span><span class="srcm">Projects/GitHub_Community/ · Open-Plugin</span><span class="srcm">3d ago</span><span class="changed-no"><span class="material-icons-outlined">check_circle</span>no change</span></div>
+    </div>
+    <div class="note"><span class="material-icons-outlined">info</span><div><b>Scope (locked):</b> source path, last shipped, source-changed-since (yes/no). No drift-count, no consumption (needs deferred MCP hub).</div></div>
+  </div>
+</div>
+
+<!-- ============ NEW-BRAIN WIZARD ============ -->
+<div class="overlay" id="wiz">
+  <div class="wizard">
+    <div class="wizhdr"><span class="material-icons-outlined" style="color:var(--accent)">add_circle</span><h3>New Brain</h3><span class="x" onclick="closeWiz()"><span class="material-icons-outlined">close</span></span></div>
+    <div class="steps">
+      <div class="stepdot active" id="sd0"><span class="n">1</span>Identity</div>
+      <div class="stepdot" id="sd1"><span class="n">2</span>Sources</div>
+      <div class="stepdot" id="sd2"><span class="n">3</span>Build</div>
+      <div class="stepdot" id="sd3"><span class="n">4</span>Done</div>
+    </div>
+    <div class="wizbody">
+      <!-- STEP 1: identity -->
+      <div class="wizstep active" id="ws0">
+        <div class="fld"><label>Brain name</label><div class="hint">the DDD / project name — becomes Projects/&lt;name&gt;/</div><input class="inp" placeholder="e.g. PhysicalAI" value="PhysicalAI"></div>
+        <div class="fld"><label>One-line description</label><input class="inp" placeholder="what domain does this brain govern?" value="CMHK Physical AI V-Team domain brain"></div>
+        <div class="fld"><label>Asset kind <span style="color:var(--txt-faint);font-weight:400">(read-out, not a rigid type — a 0-asset knowledge brain is complete)</span></label>
+          <div class="kindgrid">
+            <div class="kindopt sel"><span class="material-icons-outlined">code</span>code-repo</div>
+            <div class="kindopt"><span class="material-icons-outlined">database</span>data-source</div>
+            <div class="kindopt"><span class="material-icons-outlined">menu_book</span>knowledge</div>
+          </div>
+        </div>
+      </div>
+      <!-- STEP 2: sources (multi-combine) -->
+      <div class="wizstep" id="ws1">
+        <div class="fld"><label>Add initial sources <span style="color:var(--txt-faint);font-weight:400">— multi-combine, 0..N (matches DDD's 0..N assets)</span></label>
+          <div class="hint">these seed ② Knowledge; repo/pipeline sources also get parsed into the ⑥ code-intel graph.</div>
+          <div class="srctypes">
+            <div class="srctype" onclick="addSrc('files')"><span class="material-icons-outlined">upload_file</span>Upload files<span class="plus">+</span></div>
+            <div class="srctype" onclick="addSrc('link')"><span class="material-icons-outlined">link</span>File links (URLs)<span class="plus">+</span></div>
+            <div class="srctype" onclick="addSrc('gh')"><span class="material-icons-outlined">code</span>GitHub repo<span class="plus">+</span></div>
+            <div class="srctype" onclick="addSrc('internal')"><span class="material-icons-outlined">lan</span>Internal repo (gitfarm)<span class="plus">+</span></div>
+            <div class="srctype" onclick="addSrc('pipeline')"><span class="material-icons-outlined">account_tree</span>Internal pipeline<span class="plus">+</span></div>
+          </div>
+        </div>
+        <div class="fld"><label>Sources added <span style="color:var(--txt-faint);font-weight:400" id="srccount">(3)</span></label>
+          <div class="srclist" id="srclist">
+            <div class="srcitem"><span class="material-icons-outlined">lan</span><span class="tp">internal-repo</span><span class="v">gitfarm/PhysicalAIPlatform · mainline</span><span class="willparse">→ code-intel</span><span class="rm" onclick="this.parentElement.remove()"><span class="material-icons-outlined">close</span></span></div>
+            <div class="srcitem"><span class="material-icons-outlined">upload_file</span><span class="tp">files</span><span class="v">V-team-charter.pdf, arch-notes.md, roadmap.xlsx</span><span class="rm" onclick="this.parentElement.remove()"><span class="material-icons-outlined">close</span></span></div>
+            <div class="srcitem"><span class="material-icons-outlined">link</span><span class="tp">link</span><span class="v">https://quip-amazon.com/abc/physical-ai-prfaq</span><span class="rm" onclick="this.parentElement.remove()"><span class="material-icons-outlined">close</span></span></div>
+          </div>
+        </div>
+      </div>
+      <!-- STEP 3: build progress -->
+      <div class="wizstep" id="ws2">
+        <div class="buildbox">
+          <div class="buildhead"><div class="spin"></div><div><div style="font-weight:600;font-size:13px">Building brain…</div><div style="font-size:10.5px;color:var(--txt-faint);font-family:var(--mono)">provision skeleton → ingest sources → parse code-intel + code-graph</div></div></div>
+          <div class="bigbar"><span></span></div>
+          <div class="buildpct">62% · ~90s remaining</div>
+          <div class="bstep done"><span class="material-icons-outlined">check_circle</span>Provision six-section skeleton (s_project-manager)<span class="bt">2s</span></div>
+          <div class="bstep done"><span class="material-icons-outlined">check_circle</span>Clone / fetch sources (1 repo + 3 files + 1 link)<span class="bt">18s</span></div>
+          <div class="bstep done"><span class="material-icons-outlined">check_circle</span>Ingest docs → seed ② Knowledge (admission gate)<span class="bt">9s</span></div>
+          <div class="bstep now"><span class="material-icons-outlined">sync</span>Parse code-intel + build code-graph (⑥ Refresher)…<span class="bt">running</span></div>
+          <div class="bstep wait"><span class="material-icons-outlined">radio_button_unchecked</span>Generate AGENTS.md + aim.json + REFRESHER.md<span class="bt">waiting</span></div>
+          <div class="bstep wait"><span class="material-icons-outlined">radio_button_unchecked</span>First git commit (initial brain)<span class="bt">waiting</span></div>
+          <div class="note" style="margin-top:14px"><span class="material-icons-outlined">info</span><div>The <b>build progress bar</b> is unique to CREATE — unlike every other view (instant reads), building a brain runs a real multi-minute job (clone + parse code-intel + code-graph). It streams step-level progress and can run in the background (the Gallery card shows a mini progress bar meanwhile).</div></div>
+        </div>
+      </div>
+      <!-- STEP 4: done -->
+      <div class="wizstep" id="ws3">
+        <div style="text-align:center;padding:20px 0">
+          <span class="material-icons-outlined" style="font-size:46px;color:var(--green)">check_circle</span>
+          <div style="font-size:15px;font-weight:600;margin:10px 0 4px">PhysicalAI brain created</div>
+          <div style="font-size:11.5px;color:var(--txt-faint);max-width:380px;margin:0 auto 16px">six-section skeleton provisioned · 2 sources ingested (24 entries seeded into ② Knowledge) · code-graph built (1,204 nodes) · initial commit done.</div>
+          <div style="display:flex;gap:8px;justify-content:center">
+            <button class="btn primary" onclick="go('brain');closeWiz()"><span class="material-icons-outlined">account_tree</span>Open the brain</button>
+            <button class="btn" onclick="closeWiz()">Back to Gallery</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="wizftr" id="wizftr">
+      <button class="btn" id="wbBack" onclick="wizStep(-1)" style="visibility:hidden"><span class="material-icons-outlined">arrow_back</span>Back</button>
+      <span class="spring"></span>
+      <span style="font-size:10.5px;color:var(--txt-faint);font-family:var(--mono)" id="wizstate">step 1 / 4</span>
+      <button class="btn primary" id="wbNext" onclick="wizStep(1)">Next<span class="material-icons-outlined">arrow_forward</span></button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function go(v){document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===v));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===v));var a=document.querySelector('.view.active');if(a)a.scrollTop=0;}
+  document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>go(t.dataset.v)));
+  function sel(el,seg,name,isCI){document.querySelectorAll('.fnode').forEach(n=>n.classList.remove('sel'));el.classList.add('sel');
+    document.getElementById('detail-doc').style.display=isCI?'none':'block';document.getElementById('detail-ci').style.display=isCI?'block':'none';
+    if(!isCI){document.querySelector('#detail-doc .fp').textContent='Projects/SwarmAI/'+name;}
+    if(isCI){drawCI();}}
+  // wizard
+  let step=0;
+  function openWiz(){step=0;document.getElementById('wiz').classList.add('show');renderWiz();}
+  function closeWiz(){document.getElementById('wiz').classList.remove('show');}
+  function wizStep(d){step=Math.max(0,Math.min(3,step+d));renderWiz();}
+  function renderWiz(){
+    for(let i=0;i<4;i++){document.getElementById('ws'+i).classList.toggle('active',i===step);
+      const sd=document.getElementById('sd'+i);sd.classList.toggle('active',i===step);sd.classList.toggle('done',i<step);}
+    document.getElementById('wizstate').textContent='step '+(step+1)+' / 4';
+    document.getElementById('wbBack').style.visibility=step===0?'hidden':'visible';
+    const nx=document.getElementById('wbNext');
+    if(step===1){nx.innerHTML='Build brain<span class="material-icons-outlined">rocket_launch</span>';}
+    else if(step===2){nx.innerHTML='(building…)';}
+    else if(step===3){nx.style.display='none';}
+    else {nx.innerHTML='Next<span class="material-icons-outlined">arrow_forward</span>';nx.style.display='';}
+    if(step!==3)nx.style.display='';
+  }
+  function addSrc(t){const map={files:['upload_file','files','new-file.md'],link:['link','link','https://…'],gh:['code','github-repo','github.com/org/repo'],internal:['lan','internal-repo','gitfarm/Pkg · mainline'],pipeline:['account_tree','pipeline','MyPipeline']};
+    const m=map[t];const el=document.createElement('div');el.className='srcitem';
+    const parse=(t==='gh'||t==='internal'||t==='pipeline')?'<span class="willparse">→ code-intel</span>':'';
+    el.innerHTML='<span class="material-icons-outlined">'+m[0]+'</span><span class="tp">'+m[1]+'</span><span class="v">'+m[2]+'</span>'+parse+'<span class="rm" onclick="this.parentElement.remove();updateCount()"><span class="material-icons-outlined">close</span></span>';
+    document.getElementById('srclist').appendChild(el);updateCount();}
+  function updateCount(){document.getElementById('srccount').textContent='('+document.querySelectorAll('#srclist .srcitem').length+')';}
+  // fake code-intel graph
+  function drawCI(){const g=document.getElementById('cigraph');if(g.dataset.drawn)return;g.dataset.drawn=1;
+    const cols=['#6366f1','#ec4899','#14b8a6','#f59e0b','#8b5cf6','#10b981','#06b6d4'];const W=g.clientWidth||520,H=340;const N=26;const pts=[];
+    for(let i=0;i<N;i++){const x=40+Math.random()*(W-80),y=40+Math.random()*(H-80),r=6+Math.random()*14;pts.push({x,y,r,c:cols[i%cols.length]});}
+    for(let i=0;i<N;i++){for(let j=i+1;j<N;j++){if(Math.random()<0.12){const a=pts[i],b=pts[j];const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy),ang=Math.atan2(dy,dx)*180/Math.PI;const e=document.createElement('div');e.className='ci-edge';e.style.left=a.x+'px';e.style.top=a.y+'px';e.style.width=len+'px';e.style.transform='rotate('+ang+'deg)';g.appendChild(e);}}}
+    pts.forEach(p=>{const n=document.createElement('div');n.className='ci-node';n.style.left=(p.x-p.r)+'px';n.style.top=(p.y-p.r)+'px';n.style.width=(p.r*2)+'px';n.style.height=(p.r*2)+'px';n.style.background=p.c;n.style.zIndex=2;g.appendChild(n);});}
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 import FileEditorModal from '../common/FileEditorModal';
 import FileViewerPanel from '../file-viewer/FileViewerPanel';
+import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -247,6 +248,13 @@ function LeftSidebar() {
         <NavGroupSeparator />
 
         {/* 观测 — Insights (Code Intelligence, Engine Metrics, OS Eval) */}
+        <NavIconButton
+          icon="psychology"
+          label="Brain Hub"
+          accent={NAV_GROUP_COLOR.observe}
+          onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))}
+          data-testid="nav-brain-hub"
+        />
         <NavIconButton
           icon="graph"
           label="Code Intelligence"
@@ -949,6 +957,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         workspaceId={workspaceSettingsId}
       />
       <EvalModal isOpen={activeModal === 'eval'} onClose={closeModal} />
+      {/* Brain Hub demo overlay — self-contained, listens for swarm:show-brain-hub (nav-brain-hub) */}
+      <BrainHubDemoOverlay />
     </div>
   );
 }
