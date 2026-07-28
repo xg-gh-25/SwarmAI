@@ -132,6 +132,23 @@ def _get_db_path() -> str:
     return str(db.messages.db_path)
 
 
+def _pooled(db_path: str, readonly: bool = False):
+    """Borrow a pooled connection for db_path (run_7e8a2030).
+
+    These pending-message ops share the messages DB, so they must share the same
+    connection pool as SQLiteTable — otherwise they'd keep spawning one aiosqlite
+    worker-thread per call (the executor-starvation source this fix removes). Same
+    ``async with _pooled(db_path, readonly=...) as conn`` shape as the raw
+    ``aiosqlite.connect`` it replaces; PRAGMA busy_timeout is already set once at
+    pool-connection creation, so the per-call ``PRAGMA busy_timeout`` lines are
+    now redundant (left in place — harmless, and removing them is out of scope).
+    readonly=True only for pure SELECT paths; any read-modify-write uses the
+    serialized write connection (default).
+    """
+    from database.sqlite import _get_pool
+    return _get_pool(db_path).borrow(readonly=readonly)
+
+
 def _get_seq_lock(session_id: str) -> asyncio.Lock:
     """Return the per-session lock guarding pending_seq assignment + lifecycle
     transitions for one session.
@@ -249,7 +266,7 @@ async def persist_pending(
         # pending_seq (F6). Retry wraps the whole thing so a transient
         # "database is locked" never loses the message.
         async with _get_seq_lock(session_id):
-            async with aiosqlite.connect(db_path) as conn:
+            async with _pooled(db_path, readonly=True) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 cursor = await conn.execute(
                     "SELECT COALESCE(MAX(pending_seq), 0) FROM messages "
@@ -298,7 +315,7 @@ async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
         # MAX(pending_seq)+1 + UPDATE held under the per-session lock so the seq
         # stays monotonic against concurrent persist_pending on the same session.
         async with _get_seq_lock(session_id):
-            async with aiosqlite.connect(db_path) as conn:
+            async with _pooled(db_path, readonly=True) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 # Already pending? keep its seq (don't reassign / don't clobber).
                 cursor = await conn.execute(
@@ -337,7 +354,7 @@ async def peek_pending_batch(session_id: str) -> list[PendingMessage]:
     db_path = _get_db_path()
 
     async def _do() -> list:
-        async with aiosqlite.connect(db_path) as conn:
+        async with _pooled(db_path, readonly=True) as conn:
             await conn.execute("PRAGMA busy_timeout=5000")
             cursor = await conn.execute(
                 "SELECT id, session_id, pending_seq, content, created_at "
@@ -366,7 +383,7 @@ async def claim_pending_batch(session_id: str) -> list[PendingMessage]:
 
     async def _do() -> list:
         async with _get_seq_lock(session_id):
-            async with aiosqlite.connect(db_path) as conn:
+            async with _pooled(db_path, readonly=True) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 cursor = await conn.execute(
                     "SELECT id, session_id, pending_seq, content, created_at "
@@ -405,7 +422,7 @@ async def mark_sent_batch(session_id: str, pending_seqs: list[int]) -> None:
 
     async def _do() -> None:
         async with _get_seq_lock(session_id):
-            async with aiosqlite.connect(db_path) as conn:
+            async with _pooled(db_path) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute(
                     f"UPDATE messages SET sent = 1, claimed_at = NULL "
@@ -431,7 +448,7 @@ async def rollback_claim_batch(session_id: str, pending_seqs: list[int]) -> None
 
     async def _do() -> None:
         async with _get_seq_lock(session_id):
-            async with aiosqlite.connect(db_path) as conn:
+            async with _pooled(db_path) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute(
                     f"UPDATE messages SET claimed_at = NULL "
@@ -505,7 +522,7 @@ async def reopen_dangling_claims(session_id: str | None = None) -> int:
     (the startup case). Pass a session_id to scope to one session (tests).
     """
     db_path = _get_db_path()
-    async with aiosqlite.connect(db_path) as conn:
+    async with _pooled(db_path) as conn:
         await conn.execute("PRAGMA busy_timeout=5000")
         if session_id is None:
             cursor = await conn.execute(
