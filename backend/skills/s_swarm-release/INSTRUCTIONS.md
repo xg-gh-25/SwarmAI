@@ -363,8 +363,7 @@ before flipping.
 > for the pubkey embedded in `tauri.conf.json` (`7B9CEDB5D3C58A4D`). That pairing is
 > **unverifiable ahead of time** (GitHub secrets are write-only). Git history shows a key
 > fork: `cf4caeb0` (2026-03-27) set the config pubkey to `E034…`; `64a917e2` (2026-03-28,
-> "update pubkey to match new signing keypair") changed it to the current `7B9C…`, while
-> the local `~/.tauri/SwarmAI.key` was never rotated (stranded on the old `E034…`). So the
+> "update pubkey to match new signing keypair") changed it to the current `7B9C…`. So the
 > CI secret is *presumed* to be the `7B9C` key. **Verify on the first post-fix release:**
 > download the published `latest.json`, take its `darwin-aarch64.signature`, and confirm it
 > verifies against the `7B9C` pubkey (e.g. `minisign -V -P <7B9C pubkey> -m SwarmAI.app.tar.gz -x <sig>`,
@@ -372,6 +371,18 @@ before flipping.
 > update applies). If verification FAILS → the secret is a different key: rotate to a new
 > keypair (update the CI secret + `tauri.conf.json` pubkey together). Until this one check
 > passes, still treat the DMG/exe/msi as the primary delivery channel.
+>
+> **🔑 Signing key authority (unified 2026-07-28 — read this before touching signing):**
+> There is exactly ONE valid signing key: pubkey `7B9CEDB5D3C58A4D` (embedded in
+> `tauri.conf.json` + every shipped app). Its **private key lives ONLY in the GitHub CI
+> secret `TAURI_SIGNING_PRIVATE_KEY`** (Updated ~2026-03-28, same source as the `64a917e2`
+> pubkey switch — a strong date-coincidence inference, NOT yet cryptographically proven;
+> the first-tag verify above is the final proof). **This build machine holds NO signing
+> private key, and should not** — releases are signed in CI, never locally. The old
+> `E034920AC30D40E6` keypair (set 2026-03-27, abandoned next day) was the source of the
+> "which key?" drift; it has been **archived** to `~/.tauri/_archived-E034.key(.pub).bak`
+> (recoverable until `7B9C` is confirmed, then delete). If you ever find a `SwarmAI.key`
+> back in `~/.tauri`, someone re-introduced the drift — it is not needed for any release.
 
 Poll via the CLI (one bounded call per invocation — **do NOT use `gh run watch` or wrap a
 `sleep`-loop in one bash call**; both are multi-minute single foreground calls that get
