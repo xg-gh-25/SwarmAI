@@ -739,6 +739,52 @@ fn probe_loop_decision(
     }
 }
 
+/// Decision for the RUNTIME health watchdog when a /health probe MISSES (the
+/// daemon was healthy, now a probe failed/timed out). Pure — unit-testable
+/// without launchctl/network/sleep. Distinguishes a transient stall (the
+/// process is alive, just blocked >3s) from a genuine death.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum WatchdogDownDecision {
+    /// Process is alive, this is an early miss → DEGRADED, not dead. Keep the UI
+    /// usable; do NOT emit terminated. (Emits `backend-degraded`.)
+    Degraded,
+    /// Process is gone, OR the miss streak reached the escalation threshold →
+    /// treat as a real death. (Emits `backend-terminated-restarting`.)
+    Terminated,
+}
+
+/// Pure down-decision for the runtime watchdog. A single missed probe on a LIVE
+/// daemon must NOT be reported as death (the false-offline bug): a transient
+/// event-loop stall >3s (GC, a heavy background hook, thread-pool contention)
+/// trips one probe while the process is perfectly alive. So:
+///   - subprocess-fallback mode (`is_daemon=false`, macOS dev path): there is no
+///     launchctl-managed process to check, so `pid_present` is meaningless —
+///     preserve the pre-existing straight-to-terminated behavior.
+///   - daemon mode, process ALIVE, miss streak below threshold → Degraded.
+///   - daemon mode, process GONE, or streak >= threshold → Terminated.
+/// `consecutive_misses` counts misses INCLUDING the current one (caller passes 1
+/// on the first miss). `escalate_threshold` is the miss count at which an alive-
+/// but-persistently-unreachable daemon is finally declared terminated (symmetry
+/// with the frontend 30s-poll failureThreshold=2).
+#[cfg(target_os = "macos")]
+fn watchdog_down_decision(
+    is_daemon: bool,
+    pid_present: bool,
+    consecutive_misses: u32,
+    escalate_threshold: u32,
+) -> WatchdogDownDecision {
+    if !is_daemon {
+        // Subprocess fallback: no launchd pid signal — keep old behavior.
+        return WatchdogDownDecision::Terminated;
+    }
+    if pid_present && consecutive_misses < escalate_threshold {
+        WatchdogDownDecision::Degraded
+    } else {
+        WatchdogDownDecision::Terminated
+    }
+}
+
 /// Check whether the launchd-managed daemon PROCESS is currently alive, given a
 /// pre-resolved `uid` (resolve once per probe, not per attempt — the caller loops).
 ///
@@ -1691,6 +1737,11 @@ fn spawn_daemon_health_watchdog(
     const MAX_RECOVERY_ATTEMPTS: u32 = 40; // 40 × 3s = 120s — emit warning to frontend
     const MAX_DAEMON_WAIT: u32 = 200; // 200 × 3s = 600s — hard cap, stop polling
     const RECOVERY_POLL_SECS: u64 = 3;
+    // Miss streak at which a DEGRADED (live-but-stalled) daemon is escalated to a
+    // real terminated signal (run_13094a88). 2 misses × RECOVERY_POLL_SECS(3s) ≈ 6s
+    // of persistent unreachability before the UI disables inputs — symmetric with
+    // the frontend 30s-poll failureThreshold=2, well over any transient stall.
+    const DOWN_ESCALATE_MISSES: u32 = 2;
 
     tauri::async_runtime::spawn(async move {
         let client = match reqwest::Client::builder()
@@ -1756,10 +1807,38 @@ fn spawn_daemon_health_watchdog(
             }
 
             if was_healthy && !healthy {
-                // Backend just went down
+                // Backend probe MISSED after being healthy. A single miss does NOT
+                // mean death (run_13094a88 false-offline root-fix): a transient
+                // event-loop stall >3s (GC, a heavy background hook, thread-pool
+                // contention) trips one probe while the daemon is perfectly alive.
+                // Verify process liveness (launchctl pid) and DEGRADE — keep the UI
+                // usable — instead of crying death on the first miss.
                 recovery_attempts = 1;
                 let is_daemon = { state.lock().await.is_daemon_mode };
-                let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+                // pid check is only meaningful for the launchd-managed daemon; the
+                // subprocess-fallback dev path has no launchctl signal (→ Terminated).
+                let pid_present = if is_daemon {
+                    daemon_pid_present(&current_uid())
+                } else {
+                    false
+                };
+                match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES) {
+                    WatchdogDownDecision::Degraded => {
+                        // Alive but stalled: tell the UI to show a reconnecting
+                        // banner WITHOUT disabling inputs. Escalation to terminated
+                        // happens in the !was_healthy && !healthy block below once
+                        // the miss streak reaches DOWN_ESCALATE_MISSES.
+                        println!("[Tauri] Watchdog: daemon /health missed but PROCESS ALIVE — DEGRADED (miss {}/{}), not declaring death",
+                            recovery_attempts, DOWN_ESCALATE_MISSES);
+                        let _ = app_handle.emit("backend-degraded", DAEMON_PORT);
+                        was_healthy = false;
+                        continue; // poll again at RECOVERY_POLL_SECS; may resume or escalate
+                    }
+                    WatchdogDownDecision::Terminated => {
+                        // Process gone (or subprocess mode): a real death signal.
+                        let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+                    }
+                }
 
                 if is_daemon {
                     // Daemon mode: launchd KeepAlive will restart it — just wait
@@ -1808,6 +1887,24 @@ fn spawn_daemon_health_watchdog(
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                 } else if is_daemon {
+                    // Degraded→Terminated escalation (run_13094a88): if we entered
+                    // this block while DEGRADED (a live-but-stalled daemon reported
+                    // via backend-degraded above), re-check liveness + the miss
+                    // streak. Once the streak reaches DOWN_ESCALATE_MISSES, or the
+                    // process is now GONE, promote DEGRADED → real death so the UI
+                    // finally disables inputs. Emitted at the escalation boundary
+                    // ONLY (recovery_attempts == threshold) so it fires once.
+                    if recovery_attempts == DOWN_ESCALATE_MISSES {
+                        let pid_present = daemon_pid_present(&current_uid());
+                        if matches!(
+                            watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES),
+                            WatchdogDownDecision::Terminated
+                        ) {
+                            println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}) — escalating to terminated",
+                                recovery_attempts, pid_present);
+                            let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+                        }
+                    }
                     // Daemon mode: launchd will restart — wait up to MAX_DAEMON_WAIT.
                     // Log every 10 attempts (30s) to avoid spam.
                     if recovery_attempts % 10 == 0 {
@@ -2579,6 +2676,51 @@ mod adaptive_probe_tests {
     fn alive_at_ceiling_fails_ceiling() {
         let d = probe_loop_decision(ProbeOutcome::Alive, COLD_START_CEILING_SECS, 0, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, true);
         assert_eq!(d, LoopDecision::FailCeiling);
+    }
+
+    // ── Runtime watchdog down-decision (run_13094a88, false-offline root-fix) ──
+    // AC1: a LIVE daemon on the FIRST miss is DEGRADED, never Terminated — the
+    // single-3s-stall false-offline is structurally impossible now.
+    #[test]
+    fn down_first_miss_alive_daemon_is_degraded() {
+        assert_eq!(
+            watchdog_down_decision(true, true, 1, 2),
+            WatchdogDownDecision::Degraded
+        );
+    }
+
+    // AC3: a LIVE daemon still unreachable at the escalation threshold IS declared
+    // terminated (a genuine persistent outage, not a blip).
+    #[test]
+    fn down_streak_reaches_threshold_terminates() {
+        assert_eq!(
+            watchdog_down_decision(true, true, 2, 2),
+            WatchdogDownDecision::Terminated
+        );
+    }
+
+    // AC3: a GONE process on the very first miss is terminated immediately —
+    // liveness, not the counter, is the primary death signal.
+    #[test]
+    fn down_pid_gone_terminates_immediately() {
+        assert_eq!(
+            watchdog_down_decision(true, false, 1, 2),
+            WatchdogDownDecision::Terminated
+        );
+    }
+
+    // AC5: subprocess-fallback mode (is_daemon=false) has no launchctl signal, so
+    // it preserves the pre-fix straight-to-terminated behavior regardless of pid.
+    #[test]
+    fn down_subprocess_mode_always_terminates() {
+        assert_eq!(
+            watchdog_down_decision(false, true, 1, 2),
+            WatchdogDownDecision::Terminated
+        );
+        assert_eq!(
+            watchdog_down_decision(false, false, 1, 2),
+            WatchdogDownDecision::Terminated
+        );
     }
 
     // AC3: a truly-dead daemon (that WAS alive, then crashed) fails FAST once the

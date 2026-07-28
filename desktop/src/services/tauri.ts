@@ -132,6 +132,14 @@ export const tauriService = {
     return listen<number>('backend-resumed', (event) => callback(event.payload));
   },
 
+  /** Backend DEGRADED (run_13094a88): a /health probe was missed but the daemon
+   *  PROCESS is verified alive (launchctl pid) — a transient >3s stall, not death.
+   *  The UI shows a reconnecting banner but keeps inputs ENABLED. Only a persistent
+   *  outage (miss streak) or a gone process escalates to backend-terminated-restarting. */
+  async onBackendDegraded(callback: (port: number) => void): Promise<UnlistenFn> {
+    return listen<number>('backend-degraded', (event) => callback(event.payload));
+  },
+
   /** Backend mode notification: always "daemon" in production. */
   async onBackendMode(callback: (mode: string) => void): Promise<UnlistenFn> {
     return listen<string>('backend-mode', (event) => callback(event.payload));

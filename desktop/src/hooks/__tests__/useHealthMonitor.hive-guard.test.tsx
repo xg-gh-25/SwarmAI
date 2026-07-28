@@ -21,8 +21,9 @@ const spies = vi.hoisted(() => ({
   onRestarted: vi.fn().mockResolvedValue(() => {}),
   onResumed: vi.fn().mockResolvedValue(() => {}),
   onTerminated: vi.fn().mockResolvedValue(() => {}),
+  onDegraded: vi.fn().mockResolvedValue(() => {}),
 }));
-const { onTerminatedRestarting, onRestarted, onResumed, onTerminated } = spies;
+const { onTerminatedRestarting, onRestarted, onResumed, onTerminated, onDegraded } = spies;
 
 vi.mock('../../services/tauri', () => ({
   isDesktop: () => false, // Hive browser
@@ -33,6 +34,7 @@ vi.mock('../../services/tauri', () => ({
     onBackendRestarted: spies.onRestarted,
     onBackendResumed: spies.onResumed,
     onBackendTerminated: spies.onTerminated,
+    onBackendDegraded: spies.onDegraded,
   },
 }));
 
@@ -49,6 +51,7 @@ describe('A5: useHealthMonitor does not subscribe to Tauri events in Hive/browse
     onRestarted.mockClear();
     onResumed.mockClear();
     onTerminated.mockClear();
+    onDegraded.mockClear();
   });
 
   it('does not call any tauriService.onBackend* in production browser (!isDesktop)', () => {

@@ -1154,7 +1154,12 @@ export interface StreamingStateEntry {
 
 // ============== Health Monitor Types ==============
 
-export type BackendStatus = 'connected' | 'disconnected' | 'initializing';
+// 'degraded' (run_13094a88): the daemon PROCESS is alive but a /health probe was
+// briefly missed (a transient >3s event-loop stall). The UI shows a reconnecting
+// banner but keeps chat inputs ENABLED — only 'disconnected' (a proven death, or a
+// persistent outage) disables them. This is the false-offline root-fix: a single
+// transient stall can no longer nuke the UI.
+export type BackendStatus = 'connected' | 'disconnected' | 'initializing' | 'degraded';
 
 /** AWS credential status reported by GET /health (`auth` field).
  *  - 'valid':   STS GetCallerIdentity succeeded

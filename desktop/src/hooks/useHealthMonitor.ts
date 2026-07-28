@@ -118,10 +118,17 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       failureCountRef.current = 0;
       currentStatusRef.current = backendStatus;
 
-      // Transition: disconnected → ANY responsive state — clear error toast + notify.
+      // Transition: disconnected OR degraded → ANY responsive state — clear the
+      // error/reconnecting toast + notify. degraded (run_13094a88) uses the SAME
+      // toast id (HEALTH_DISCONNECTED_TOAST_ID) for its "reconnecting…" banner, so
+      // a degraded→connected recovery must clear it too (else the banner sticks).
       // Previous bug: only cleared on disconnected→connected, missing
       // disconnected→initializing→connected path (toast stayed permanently).
-      if (previousStatus === 'disconnected' && backendStatus !== 'disconnected') {
+      if (
+        (previousStatus === 'disconnected' || previousStatus === 'degraded') &&
+        backendStatus !== 'disconnected' &&
+        backendStatus !== 'degraded'
+      ) {
         removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
         if (backendStatus === 'connected') {
           // Pick an honest recovery message based on what actually happened.
@@ -301,6 +308,38 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
           auth: undefined,
           lastCheckedAt: Date.now(),
           consecutiveFailures: DEFAULT_FAILURE_THRESHOLD,
+        }));
+      }),
+    );
+
+    // Backend DEGRADED — a /health probe was missed but the daemon PROCESS is
+    // verified alive (run_13094a88). This is a transient >3s stall, NOT death.
+    // Show a reconnecting banner but keep status usable: map to 'degraded', which
+    // does NOT disable chat inputs (ChatPage disables iff status==='disconnected').
+    // Do NOT touch failureCount — a real persistent outage escalates to
+    // onBackendTerminatedRestarting on the Rust side (miss streak), and the 30s
+    // poll's own failureThreshold path is independent.
+    unlisteners.push(
+      tauriService.onBackendDegraded(() => {
+        if (!mountedRef.current) return;
+
+        // Don't downgrade a real 'disconnected' back to 'degraded' — a live-death
+        // that already disabled inputs must stay disabled until a genuine recovery.
+        if (currentStatusRef.current === 'disconnected') return;
+
+        currentStatusRef.current = 'degraded';
+        recoveryKindRef.current = null;
+
+        addToastRef.current({
+          severity: 'warning',
+          message: 'Backend busy — reconnecting…',
+          id: HEALTH_DISCONNECTED_TOAST_ID,
+        });
+
+        setHealthState((prev) => ({
+          ...prev,
+          status: 'degraded',
+          lastCheckedAt: Date.now(),
         }));
       }),
     );
