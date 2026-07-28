@@ -180,6 +180,16 @@ async def test_concurrent_first_borrow_starts_pool_once(tmp_db_path):
 
 
 @pytest.mark.asyncio
+async def test_borrow_after_close_raises(tmp_db_path):
+    """Borrow on a closed pool must fail loud (lifecycle bug), not hand a dead conn."""
+    pool = await _make_pool(tmp_db_path, read_size=2)
+    await pool.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        async with pool.borrow(readonly=True) as conn:
+            await conn.execute("SELECT 1")
+
+
+@pytest.mark.asyncio
 async def test_close_drains_connections(tmp_db_path):
     """close() must drain+close all pooled connections (no thread leak across tests)."""
     pool = await _make_pool(tmp_db_path, read_size=4)

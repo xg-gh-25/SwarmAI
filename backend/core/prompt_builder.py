@@ -824,7 +824,15 @@ class PromptBuilder:
             if not is_channel:
                 try:
                     from .proactive_intelligence import build_session_briefing
-                    briefing = build_session_briefing(working_directory)
+                    # OFFLOAD (run_7e8a2030, RP53): build_session_briefing is a SYNC
+                    # function that opens raw sqlite3.connect() (via _get_todo_highlights
+                    # / _get_signal_highlights). This runs inside async build_system_prompt
+                    # at every session spawn/resume — a sync connect ON the event loop
+                    # freezes /health and every coroutine for its duration (the same
+                    # loop-starvation class as count_pending). Its Welcome-Screen twin
+                    # build_session_briefing_data is ALREADY to_thread-wrapped
+                    # (system.py:1011); this path was the asymmetric miss. Wrap to match.
+                    briefing = await asyncio.to_thread(build_session_briefing, working_directory)
                     if briefing:
                         context_text += f"\n\n{briefing}"
                 except Exception as exc:

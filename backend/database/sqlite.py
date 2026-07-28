@@ -110,8 +110,12 @@ class _ConnectionPool:
     """
 
     # Default read-pool size. 4 absorbed 20 concurrent ops at peak 5 threads in
-    # the live probe; tunable per instance via the constructor.
-    DEFAULT_READ_SIZE: int = 4
+    # the live probe; raised to 6 for the 24/7 daemon where persistent background
+    # readers (readiness sampler 10s, TopBar 30s poll, streaming-state 15s reconcile,
+    # cold-resume history loads) co-exist with 1-4 tabs — 4 could momentarily
+    # saturate on a multi-tab reconnect burst. WAL reads are cheap; 6 still caps
+    # threads far below the old unbounded per-connect model. (Meta-review LOW.)
+    DEFAULT_READ_SIZE: int = 6
     # Backpressure bound on a read borrow. A read that can't get a connection in
     # this window raises PoolBorrowTimeout rather than hanging the request path.
     DEFAULT_BORROW_TIMEOUT: float = 10.0
@@ -209,6 +213,13 @@ class _PoolBorrow:
 
     async def __aenter__(self) -> aiosqlite.Connection:
         pool = self._pool
+        if pool._closed:
+            # Borrow after close() would hand out (or wait forever for) a drained
+            # connection. Fail loud instead — a re-borrow on a closed pool is a
+            # lifecycle bug (shutdown race), not a normal path. (Meta-review LOW.)
+            raise RuntimeError(
+                f"connection pool for {pool._db_path} is closed — borrow after close()"
+            )
         if not pool._started:
             await pool.start()
         if self._readonly:
@@ -297,7 +308,18 @@ def _get_pool(db_path: str) -> _ConnectionPool:
     try:
         loop_id = id(asyncio.get_running_loop())
     except RuntimeError:
+        # No running loop → a pool created here would be bound to loop_id=0 and its
+        # aiosqlite connections to whatever loop first borrows — a latent
+        # dead-loop-binding hazard. In the daemon EVERY pooled call must run on the
+        # one running loop, so this branch is a bug signal, not a normal path. Log
+        # loudly (observable) rather than silently creating a loop-0 pool.
+        # (Meta-review LOW, run_7e8a2030: make the off-loop case visible.)
         loop_id = 0
+        logger.warning(
+            "sqlite pool requested with NO running event loop (db=%s) — "
+            "loop_id=0 fallback; a pooled DB call is running off the daemon loop",
+            db_path,
+        )
     key = (str(db_path), loop_id)
     pool = _POOL_REGISTRY.get(key)
     if pool is None:
