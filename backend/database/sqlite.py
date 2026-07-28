@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import aiosqlite
+import asyncio
 import json
 import logging
 import shutil
@@ -67,6 +68,160 @@ class _WALConnection:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._conn:
             await self._conn.__aexit__(exc_type, exc_val, exc_tb)
+
+
+class PoolBorrowTimeout(Exception):
+    """Raised when a read-pool borrow can't be satisfied within borrow_timeout.
+
+    This is BACKPRESSURE / liveness signalling, NOT the O030 disaster-recovery
+    timeout antipattern: its job is to convert a silent forever-hang (all read
+    connections stuck) into a loud, catchable error so a slow/hung read can
+    never deadlock the request path. It does not truncate legitimate in-progress
+    work — the holder keeps its connection; only the *waiter* gives up.
+    """
+
+
+class _ConnectionPool:
+    """Bounded aiosqlite connection pool: 1 write connection + N read connections.
+
+    ROOT-CAUSE FIX (run_7e8a2030): the old model did ``aiosqlite.connect()`` on
+    every DB op, and aiosqlite spawns ONE OS worker-thread per connection. Under
+    concurrent load (multi-tab + background hooks) this spawned 20+ short-lived
+    threads (live probe: 20 concurrent connects → peak 21 threads), starving the
+    default asyncio executor so even a 2s-capped ``/health`` DB check could not get
+    SCHEDULED → request queued → round-trip >3s → Rust watchdog false "offline".
+    A bounded pool caps threads at ``1 + read_size`` (probe: 20 ops → peak ~5).
+
+    Design (matches aiosqlite + WAL's real concurrency model):
+    - **1 persistent WRITE connection** serialized by an ``asyncio.Lock``. SQLite
+      already serializes writers via the file lock, so a single write conn adds no
+      artificial bottleneck — it just removes connect+PRAGMA churn and SQLITE_BUSY
+      thrash between our OWN writers.
+    - **N persistent READ connections** in an ``asyncio.Queue`` (borrow/return). WAL
+      lets readers run concurrently with the writer, so reads never block on writes.
+    - WAL PRAGMA is set ONCE per connection at creation (not per-op).
+    - ``borrow()`` is an async context manager; the connection is ALWAYS returned
+      (try/finally) even if the caller raises — no leak.
+
+    aiosqlite connections are safe for SEQUENTIAL borrowers (each op serializes
+    through the connection's own worker thread+queue); the pool guarantees a
+    connection is owned by at most one task at a time, so interleaved-cursor
+    corruption is impossible.
+    """
+
+    # Default read-pool size. 4 absorbed 20 concurrent ops at peak 5 threads in
+    # the live probe; tunable per instance via the constructor.
+    DEFAULT_READ_SIZE: int = 4
+    # Backpressure bound on a read borrow. A read that can't get a connection in
+    # this window raises PoolBorrowTimeout rather than hanging the request path.
+    DEFAULT_BORROW_TIMEOUT: float = 10.0
+
+    def __init__(self, db_path: str, read_size: int | None = None):
+        self._db_path = str(db_path)
+        self._read_size = read_size if read_size is not None else self.DEFAULT_READ_SIZE
+        self.borrow_timeout: float = self.DEFAULT_BORROW_TIMEOUT
+        self._write_conn: aiosqlite.Connection | None = None
+        self._write_lock = asyncio.Lock()
+        self._read_pool: asyncio.Queue = asyncio.Queue()
+        self._all_conns: list[aiosqlite.Connection] = []
+        self._started = False
+        self._closed = False
+
+    async def _new_conn(self) -> aiosqlite.Connection:
+        conn = await aiosqlite.connect(self._db_path)
+        # WAL + busy_timeout set ONCE per connection at creation. journal_mode=WAL
+        # persists in the DB file (idempotent); busy_timeout is per-connection.
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
+        await conn.execute("PRAGMA wal_autocheckpoint=1000")
+        self._all_conns.append(conn)
+        return conn
+
+    async def start(self) -> None:
+        """Eagerly create the write conn + fill the read pool (call at warmup)."""
+        if self._started:
+            return
+        self._write_conn = await self._new_conn()
+        for _ in range(self._read_size):
+            self._read_pool.put_nowait(await self._new_conn())
+        self._started = True
+        logger.info(
+            "SQLite connection pool started for %s (1 write + %d read)",
+            self._db_path, self._read_size,
+        )
+
+    def borrow(self, readonly: bool = False):
+        """Borrow a connection. ``async with pool.borrow(readonly=...) as conn:``.
+
+        readonly=True  → a read connection from the pool (concurrent).
+        readonly=False → the single write connection under the write lock (serial).
+        Default is WRITE (fail-safe: an ambiguous caller must never be routed to a
+        read conn and hit SQLITE_BUSY on a write).
+        """
+        return _PoolBorrow(self, readonly)
+
+    async def close(self) -> None:
+        """Drain + close every pooled connection (graceful teardown / test reset)."""
+        if self._closed:
+            return
+        self._closed = True
+        for conn in self._all_conns:
+            try:
+                await conn.close()
+            except Exception as exc:  # pragma: no cover - best-effort teardown
+                logger.debug("pool close: conn.close failed: %s", exc)
+        self._all_conns.clear()
+        self._write_conn = None
+        self._started = False
+
+
+class _PoolBorrow:
+    """Async-context-manager returned by ``_ConnectionPool.borrow()``.
+
+    Same ``async with ... as conn`` shape as the legacy ``_WALConnection`` so the
+    56 call sites are unchanged (strangler-fig). Guarantees return-to-pool on the
+    exception path (AC5) and typed timeout on read-pool exhaustion (AC8).
+    """
+
+    def __init__(self, pool: "_ConnectionPool", readonly: bool):
+        self._pool = pool
+        self._readonly = readonly
+        self._conn: aiosqlite.Connection | None = None
+        self._is_write = False
+
+    async def __aenter__(self) -> aiosqlite.Connection:
+        pool = self._pool
+        if not pool._started:
+            await pool.start()
+        if self._readonly:
+            try:
+                self._conn = await asyncio.wait_for(
+                    pool._read_pool.get(), timeout=pool.borrow_timeout
+                )
+            except asyncio.TimeoutError as exc:
+                raise PoolBorrowTimeout(
+                    f"read-pool borrow timed out after {pool.borrow_timeout}s "
+                    f"({pool._db_path}) — all {pool._read_size} read connections busy"
+                ) from exc
+            return self._conn
+        # Write path: acquire the single write connection under the lock.
+        self._is_write = True
+        await pool._write_lock.acquire()
+        self._conn = pool._write_conn
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pool = self._pool
+        if self._is_write:
+            try:
+                pool._write_lock.release()
+            except RuntimeError:  # pragma: no cover - defensive
+                pass
+        elif self._conn is not None:
+            # Return the read connection to the pool — ALWAYS, even on exception.
+            pool._read_pool.put_nowait(self._conn)
+        self._conn = None
+        return False  # never suppress exceptions
 
 
 class SQLiteTable(BaseTable[T], Generic[T]):
