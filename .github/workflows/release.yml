@@ -94,6 +94,16 @@ jobs:
           path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
+      # Updater bundle + minisign signature (createUpdaterArtifacts:true + the
+      # signing key produce SwarmAI.app.tar.gz AND SwarmAI.app.tar.gz.sig here).
+      # The glob '*.tar.gz*' captures BOTH; the publish job reads the .sig into latest.json.
+      - name: Upload macOS updater bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64-updater
+          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.tar.gz*
+          if-no-files-found: error
+
   build-windows:
     needs: prepare
     runs-on: windows-latest
@@ -151,6 +161,16 @@ jobs:
         with:
           name: windows-msi
           path: desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+      # Windows updater bundle + sig (NSIS updater artifact). Best-effort like the
+      # MSI above — if the path differs on a future tauri version, the publish job
+      # omits the windows-x86_64 platform from latest.json rather than failing.
+      - name: Upload Windows updater bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-updater
+          path: desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip*
           if-no-files-found: warn
 
   build-hive:
@@ -220,6 +240,9 @@ jobs:
     needs: [prepare, build-macos, build-windows, build-hive]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (for the latest.json generator script)
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -232,8 +255,31 @@ jobs:
           find artifacts -name "*-setup.exe" -exec cp {} release/ \;
           find artifacts -name "*.msi" -exec cp {} release/ \;
           find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          # Updater bundles + their minisign signatures (the .sig siblings the
+          # generic *.tar.gz glob above does NOT catch, plus the Windows nsis.zip).
+          find artifacts -name "*.tar.gz.sig" -exec cp {} release/ \;
+          find artifacts -name "*.nsis.zip" -exec cp {} release/ \;
+          find artifacts -name "*.nsis.zip.sig" -exec cp {} release/ \;
           find artifacts -name "checksums.txt" -exec cp {} release/ \;
           ls -la release/
+
+      # Assemble the Tauri updater manifest from the downloaded artifacts and drop
+      # it into release/ so the action-gh-release step below uploads it as an asset.
+      # Without this the in-app auto-updater 404s on latest.json (silent no-op).
+      # The generator (a) reads each platform's .sig contents into the manifest,
+      # (b) points urls at the updater BUNDLE not the installer, (c) fails loud if
+      # macOS built-but-missing, (d) gracefully skips macOS when build-macos did not
+      # succeed (hive-only release still ships), (e) omits Windows if absent.
+      - name: Generate latest.json (updater manifest)
+        run: |
+          bash .github/scripts/gen-latest-json.sh \
+            "${{ needs.prepare.outputs.version }}" \
+            artifacts \
+            release/latest.json \
+            "${{ needs.build-macos.result == 'success' }}" \
+            "${{ needs.build-windows.result == 'success' }}"
+          echo "--- release/latest.json ---"
+          cat release/latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

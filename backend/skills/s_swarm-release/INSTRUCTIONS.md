@@ -348,30 +348,30 @@ flip. If you want Windows, re-run the failed `build-windows` job, don't hold the
 release.yml run → the CI build hasn't finished (or fully failed); re-check the workflow
 before flipping.
 
-> **⚠️ Updater artifacts are NOT published — auto-update is a silent no-op (verified 2026-07-27).**
-> Do NOT expect a `.sig` or `latest.json` in the draft assets, and do NOT assume the
-> in-app auto-updater is protecting users — it currently does nothing. The chain is
-> broken end-to-end: (1) `release.yml`'s publish job only `cp`s `*.dmg` / `*-setup.exe` /
-> `*.msi` / `*.tar.gz` / `checksums.txt` — it **never uploads the `.sig` files or a
-> `latest.json` manifest** (grep the workflow: zero updater handling); (2) so
-> `createUpdaterArtifacts: true` in `tauri.conf.json` makes CI *generate* signed updater
-> artifacts that are then **thrown away, never attached**; (3) the updater endpoint
-> `releases/latest/download/latest.json` returns **404** (that file is never produced);
-> (4) the frontend `check()` catches the 404 → `console.warn` → idle (`UpdateNotification.tsx`),
-> so users see **no error and no update** — a silent no-op, not a crash.
-> **Key note (unverified + moot):** the pubkey embedded in `tauri.conf.json`
-> (`7B9CEDB5D3C58A4D`) and the local `~/.tauri/SwarmAI.key` (`E034920AC30D40E6`) are a
-> DIFFERENT pair. Timeline (git): `cf4caeb0` (2026-03-27) set the config pubkey to
-> `E034…` (matching the local key); the next day `64a917e2` (2026-03-28, "update pubkey
-> to match new signing keypair") changed the config pubkey to the current `7B9C…` — but
-> the local `~/.tauri/SwarmAI.key` was NOT rotated, so it is stranded on the OLD `E034…`.
-> Whether the CI secret
-> `TAURI_SIGNING_PRIVATE_KEY` matches the config pubkey is **unverifiable** (GitHub
-> secrets are write-only) AND **moot** — nothing signed is ever published, so verification
-> never runs. Making auto-update actually work is a separate, deliberate run (fix
-> `release.yml` to build+upload `.sig`+`latest.json`, flip the release out of `draft`, and
-> resolve the key fork) — NOT something to bolt onto a normal release. Until then, treat
-> the DMG/exe/msi as the ONLY real delivery channel.
+> **✅ Updater artifacts ARE now published — but the first post-fix release needs a one-time signature verification (fixed 2026-07-28).**
+> `release.yml` now uploads the updater bundles + their `.sig` and generates
+> `latest.json` (`.github/scripts/gen-latest-json.sh`, run in the publish job before
+> the release is created). Expect these assets on the draft/published release:
+> `SwarmAI.app.tar.gz` + `SwarmAI.app.tar.gz.sig` (macOS, load-bearing), the Windows
+> `*.nsis.zip` + `.sig` (best-effort), and **`latest.json`**. The generator points each
+> platform url at the updater BUNDLE (not the DMG/exe), reads `signature` from the `.sig`
+> contents, keys platforms `darwin-aarch64` / `windows-x86_64`, fails loud if macOS built
+> but its bundle/sig is missing, and gracefully omits a platform that didn't build (a
+> hive-only release still ships).
+> **⚠️ ONE-TIME CHECK on the first release after this fix (assumption A — key pairing):**
+> auto-update only works if the CI secret `TAURI_SIGNING_PRIVATE_KEY` is the private key
+> for the pubkey embedded in `tauri.conf.json` (`7B9CEDB5D3C58A4D`). That pairing is
+> **unverifiable ahead of time** (GitHub secrets are write-only). Git history shows a key
+> fork: `cf4caeb0` (2026-03-27) set the config pubkey to `E034…`; `64a917e2` (2026-03-28,
+> "update pubkey to match new signing keypair") changed it to the current `7B9C…`, while
+> the local `~/.tauri/SwarmAI.key` was never rotated (stranded on the old `E034…`). So the
+> CI secret is *presumed* to be the `7B9C` key. **Verify on the first post-fix release:**
+> download the published `latest.json`, take its `darwin-aarch64.signature`, and confirm it
+> verifies against the `7B9C` pubkey (e.g. `minisign -V -P <7B9C pubkey> -m SwarmAI.app.tar.gz -x <sig>`,
+> or install the new build on a machine running the prior version and confirm the in-app
+> update applies). If verification FAILS → the secret is a different key: rotate to a new
+> keypair (update the CI secret + `tauri.conf.json` pubkey together). Until this one check
+> passes, still treat the DMG/exe/msi as the primary delivery channel.
 
 Poll via the CLI (one bounded call per invocation — **do NOT use `gh run watch` or wrap a
 `sleep`-loop in one bash call**; both are multi-minute single foreground calls that get
