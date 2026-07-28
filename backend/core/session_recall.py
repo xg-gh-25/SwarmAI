@@ -21,7 +21,6 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
