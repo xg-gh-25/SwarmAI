@@ -25,7 +25,7 @@ from pathlib import Path
 # Add backend to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database.sqlite import SQLiteDatabase
+from database.sqlite import SQLiteDatabase, close_all_pools
 
 # Configure logging
 logging.basicConfig(
@@ -81,6 +81,15 @@ class SeedDatabaseGenerator:
             logger.error("Seed database validation failed")
             return False
         
+        # Close the WAL connection pool FIRST — its still-open connections hold a
+        # WAL lock on seed.db. Switching journal_mode=DELETE below needs an
+        # EXCLUSIVE lock, so a live pooled connection makes the PRAGMA fail with
+        # "database is locked" (self-lock: same process, pool conn vs. the new
+        # connection). Releasing the pool first lets the DELETE-mode switch (and
+        # its WAL checkpoint) acquire the exclusive lock cleanly, and also flushes
+        # the -wal/-shm sidecars into the single file before bundling.
+        await close_all_pools()
+
         # Ensure DELETE journal mode so the seed DB is a single portable file
         # (WAL mode creates -wal and -shm sidecar files that break bundling)
         conn = sqlite3.connect(str(self.output_path))
