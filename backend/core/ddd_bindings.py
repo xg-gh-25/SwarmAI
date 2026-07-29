@@ -302,7 +302,7 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
     try:
         graph.clear()  # Gate-1 blocker 3: bulk_insert is additive; clear first for a clean rebuild.
         if parse_results:
-            graph.bulk_insert(parse_results)
+            graph.bulk_insert(parse_results, repo_root=worktree)
         node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
     finally:
         graph.close()

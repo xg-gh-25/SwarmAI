@@ -107,7 +107,7 @@ def reindex_projects(full: bool = False) -> dict:
             parse_status = parse_out.status
             if parse_results:
                 graph.clear()
-                graph.bulk_insert(parse_results)
+                graph.bulk_insert(parse_results, repo_root=repo_root)
                 # bulk_insert already rebuilds FTS + resolves cross-file
                 # Persist the freshness marker ONLY after a genuine rebuild.
                 # freshness.current_head is now populated even on the

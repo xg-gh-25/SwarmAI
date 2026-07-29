@@ -1137,12 +1137,22 @@ class GraphStore:
         self._conn.execute("DELETE FROM graph_meta")
         self._conn.commit()
 
-    def bulk_insert(self, parse_results: list) -> None:
+    def bulk_insert(self, parse_results: list, repo_root: str | Path | None = None) -> None:
         """Insert all results from a full repo parse.
 
         Each element of *parse_results* should be a dict (or ParseResult) with
         keys ``file_path``, ``nodes``, ``edges``, and ``file_hash``.
         FTS is rebuilt at the end.
+
+        ``repo_root``: when provided, persisted into ``graph_meta`` as the absolute
+        ``repo_root`` key. This is REQUIRED for the code_intel hook to work — its
+        ``_build_context`` converts an absolute file path to repo-relative via
+        ``get_meta("repo_root")``; if unset, injection is silently dead for every
+        file, and ``context_health_hook``'s incremental reindex (which also gates
+        on this key) never engages. All prod full-rebuild callers MUST pass it —
+        this is the single choke-point every create/full-rebuild path funnels
+        through, so stamping it here (not per-caller) makes it drift-proof.
+        Optional for back-compat with test callers that set_meta by hand.
         """
         for pr in parse_results:
             d = pr if isinstance(pr, dict) else pr.__dict__
@@ -1180,6 +1190,14 @@ class GraphStore:
         # Full rebuild wrote the whole graph into the WAL — reclaim it now so the
         # -wal file doesn't stay multi-GB on disk (the 2.73GB-bloat root cause).
         self.checkpoint_truncate()
+
+        # Persist repo_root so the code_intel hook can resolve absolute file paths
+        # to repo-relative (get_meta("repo_root") in _build_context). Without this,
+        # injection is silently dead for every file. set_meta is INSERT OR REPLACE,
+        # so re-stamping on every rebuild is idempotent AND self-healing (backfills
+        # a db that predates this fix on its next full rebuild).
+        if repo_root:
+            self.set_meta("repo_root", str(Path(repo_root).resolve()))
 
     def incremental_update(
         self,

@@ -249,7 +249,7 @@ def _run_reindex(project: str) -> None:
 
         graph = GraphStore(db_path)
         parse_results = parse_repo(_Path(repo_path))
-        graph.bulk_insert(parse_results)
+        graph.bulk_insert(parse_results, repo_root=repo_path)
         graph.set_meta("last_full_index", datetime.now(timezone.utc).isoformat())
         graph.close()
 

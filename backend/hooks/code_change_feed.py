@@ -452,7 +452,7 @@ def _reindex_changed_files(
                 continue
 
         if parse_results:
-            graph.bulk_insert(parse_results)
+            graph.bulk_insert(parse_results, repo_root=root)
             logger.info(
                 "code_change_feed: re-indexed %d file(s) into code_intel",
                 len(parse_results),

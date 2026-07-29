@@ -2,6 +2,7 @@
 
 import sqlite3
 import time
+from pathlib import Path
 
 import pytest
 
@@ -449,6 +450,40 @@ class TestMeta:
         store.set_meta("k", "v1")
         store.set_meta("k", "v2")
         assert store.get_meta("k") == "v2"
+
+    def test_bulk_insert_persists_repo_root(self, store, tmp_path):
+        """A full rebuild via bulk_insert MUST persist repo_root into graph_meta.
+
+        Root-cause regression for the silent-dead code_intel hook: prod builders
+        called bulk_insert but never set_meta('repo_root'), so get_meta returned
+        None → _build_context returned empty → injection dead system-wide.
+
+        Mutation proof: delete the `if repo_root: self.set_meta('repo_root', ...)`
+        line in GraphStore.bulk_insert and this test goes RED.
+        """
+        parse_results = [{
+            "file_path": "src/foo.py",
+            "nodes": [_make_node()],
+            "edges": [],
+            "file_hash": "h1",
+        }]
+        # repo_root passed as a non-normalized path with trailing slash — the
+        # store must resolve it, matching what _build_context's relative_to expects.
+        raw_root = str(tmp_path) + "/"
+        store.bulk_insert(parse_results, repo_root=raw_root)
+        assert store.get_meta("repo_root") == str(Path(tmp_path).resolve())
+
+    def test_bulk_insert_without_repo_root_is_backward_compatible(self, store):
+        """bulk_insert(results) with no repo_root still works (param is optional);
+        repo_root simply stays unset — existing callers/tests are unaffected."""
+        parse_results = [{
+            "file_path": "src/foo.py",
+            "nodes": [_make_node()],
+            "edges": [],
+            "file_hash": "h1",
+        }]
+        store.bulk_insert(parse_results)  # no repo_root kwarg
+        assert store.get_meta("repo_root") is None
 
 
 # ── Atomic file replacement ─────────────────────────────────────────────
