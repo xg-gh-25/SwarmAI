@@ -71,20 +71,22 @@ def test_select_dedups_correction_and_anomaly():
     assert sel.count("both") == 1
 
 
-# ── DAO-contract regression (the list_all() bug that shipped layer②③ inert) ──
-# Root cause: _enumerate_sessions called db.sessions.list_all() — a method that
-# does NOT exist on SQLiteTable (real API is .list()). A blanket except swallowed
-# the AttributeError → 0 sessions → job "success" with 0 drafts. The prior tests
-# injected a fake sampler, so this DAO seam was never exercised. These pin it.
-
-class _FakeSessions:
-    def __init__(self, rows):
-        self._rows = rows
-    async def list(self, user_id=None):            # the REAL SQLiteTable contract
-        return self._rows
+# ── DAO-contract + N+1-efficiency regression ──
+# History: _enumerate_sessions once called db.sessions.list_all() (nonexistent) →
+# swallowed → inert. Then the N+1 fix: it now (1) gets turn counts from ONE indexed
+# aggregate db.messages.role_counts_by_session("user"), then (2) hydrates messages
+# ONLY for the ≤N sessions select_sessions picks — NOT all sessions. These pin BOTH
+# the count-source contract AND the "only hydrate selected" efficiency invariant.
 
 class _FakeMessages:
+    def __init__(self, counts):
+        self._counts = counts
+        self.hydrated: list[str] = []          # spy: which sids got list_by_session
+    async def role_counts_by_session(self, role):
+        assert role == "user"                  # the sampler counts USER turns
+        return dict(self._counts)
     async def list_by_session(self, sid):
+        self.hydrated.append(sid)              # record every hydration
         return [
             {"role": "user", "content": "fix the bug in X"},
             {"role": "assistant", "content": [
@@ -94,19 +96,34 @@ class _FakeMessages:
         ]
 
 class _FakeDB:
-    def __init__(self, rows):
-        self.sessions = _FakeSessions(rows)
-        self.messages = _FakeMessages()
+    def __init__(self, counts):
+        self.messages = _FakeMessages(counts)
 
 
-def test_enumerate_uses_list_not_list_all():
-    """_enumerate_sessions must call the DAO's .list() and return real turns +
-    (prompt, response, tool_names). If the code reverts to .list_all(), _FakeSessions
-    has no such attr → AttributeError → this test goes RED (non-vacuous)."""
-    out = asyncio.run(_enumerate_sessions(_FakeDB([{"id": "s1"}, {"id": "s2"}])))
-    assert set(out["session_turns"]) == {"s1", "s2"}
-    assert out["sessions"]["s1"]["prompt"] == "fix the bug in X"
-    assert out["sessions"]["s1"]["tool_names"] == ["Edit"]
+def test_enumerate_counts_via_aggregate_not_per_session_loop():
+    """Turn counts must come from ONE role_counts_by_session aggregate — NOT a
+    per-session list_by_session loop. If reverted to the loop, _FakeMessages has no
+    such attr → AttributeError → RED (non-vacuous)."""
+    # 3 sessions; only 'anom' (turns>20) qualifies for sampling
+    db = _FakeDB({"anom": 30, "normal": 5, "tiny": 2})
+    out = asyncio.run(_enumerate_sessions(db, correction_session_ids=set()))
+    assert out["session_turns"] == {"anom": 30, "normal": 5, "tiny": 2}
+    # hydrated ONLY the selected (turns>20) session — not all 3 (the N+1 fix)
+    assert db.messages.hydrated == ["anom"]
+    assert out["sessions"]["anom"]["tool_names"] == ["Edit"]
+    # non-selected sessions are counted but NOT hydrated
+    assert "normal" not in out["sessions"]
+
+
+def test_enumerate_hydrates_only_selected_scales_with_N_not_total():
+    """The efficiency invariant: message reads == len(selected), independent of how
+    many sessions exist. 100 sessions, 2 anomalous → exactly 2 hydrations."""
+    counts = {f"s{i}": 3 for i in range(100)}   # 100 normal (won't select)
+    counts["big1"] = 25; counts["big2"] = 40    # 2 anomalous (turns>20)
+    db = _FakeDB(counts)
+    out = asyncio.run(_enumerate_sessions(db, correction_session_ids=set()))
+    assert sorted(db.messages.hydrated) == ["big1", "big2"]   # 2 reads, not 102
+    assert set(out["sessions"]) == {"big1", "big2"}
 
 
 def test_sampler_failure_is_loud_not_silent_empty():

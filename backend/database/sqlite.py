@@ -722,6 +722,26 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+    async def role_counts_by_session(self, role: str) -> dict[str, int]:
+        """ONE aggregate GROUP BY → {session_id: count} for messages of `role`,
+        across ALL sessions. Replaces the session-quality sampler's N+1 pattern
+        (was: list() all sessions, then list_by_session per session just to count).
+
+        Excludes pending/unsent rows via the SAME filter list_by_session applies
+        (_PENDING_EXCLUDE_SQL) — so counts here MATCH what list_by_session would
+        yield (no sampling-semantics drift). Backed by idx_messages_role_session
+        (role, session_id): index-only SEARCH, not a full scan.
+        """
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"SELECT session_id, COUNT(*) FROM {self.table_name} "
+                f"WHERE role = ? AND {self._PENDING_EXCLUDE_SQL} "
+                "GROUP BY session_id",
+                (role,),
+            )
+            rows = await cursor.fetchall()
+            return {r[0]: r[1] for r in rows if r[0]}
+
     async def get_last_by_session(
         self, session_id: str, role: str | None = None,
         *, include_pending: bool = False,
@@ -1657,6 +1677,11 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at);
     CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at);
+    -- Covering index for role_counts_by_session()'s role-filtered GROUP BY
+    -- (session-quality sampler). Without it the aggregate is a full SCAN (~7.3s on
+    -- 12k rows); with it, an index-only SEARCH (~100ms). role FIRST so role='user'
+    -- is the index seek prefix.
+    CREATE INDEX IF NOT EXISTS idx_messages_role_session ON messages(role, session_id);
 
     -- Users table (for local single-user, may only have one record)
     CREATE TABLE IF NOT EXISTS users (

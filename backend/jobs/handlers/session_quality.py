@@ -167,20 +167,25 @@ def run_session_quality(
             **({"sampler_error": sampler_error} if sampler_error else {})}
 
 
-def _default_sampler() -> dict:
-    """Production sampler: enumerate recent desktop sessions from db.messages,
-    count turns, and pull each session's (prompt, response, tool_names). Kept out
-    of the test path (tests inject a sampler). Async DB is bridged via asyncio.run
-    since the weekly job runs in a plain worker thread."""
+def _default_sampler(corrections_path: Optional[Path] = None) -> dict:
+    """Production sampler: 1 indexed aggregate for turn counts + hydrate ONLY the
+    ≤N selected sessions (see _enumerate_sessions). Kept out of the test path
+    (tests inject a sampler). Async DB is bridged via asyncio.run since the weekly
+    job runs in a plain worker thread.
+
+    Reads corrections itself so hydration can be scoped to the SELECTED sessions —
+    select_sessions needs the correction ids to decide the single-turn + anomaly
+    口径, and hydration must happen after select to avoid the old N+1."""
     import asyncio
     from database import get_database
 
+    corr_ids = _read_correction_session_ids(
+        corrections_path or (Path.home() / ".swarm-ai" / "state" / "corrections.jsonl")
+    )
+
     async def _gather():
         db = get_database()
-        # Distinct recent sessions — reuse the messages table's session listing.
-        # (A dedicated "list sessions in window" query is a future optimization;
-        # for N=10 weekly the scan is negligible.)
-        return await _enumerate_sessions(db)
+        return await _enumerate_sessions(db, corr_ids)
 
     try:
         return asyncio.run(_gather())
@@ -198,21 +203,31 @@ def _default_sampler() -> dict:
         return {"session_turns": {}, "sessions": {}, "sampler_error": f"{type(exc).__name__}: {exc}"}
 
 
-async def _enumerate_sessions(db) -> dict:
-    """Read recent sessions → turn counts + (prompt, response, tool_names). Uses
-    the existing messages DAO (list_by_session). Isolated for testability."""
-    session_turns: dict[str, int] = {}
+async def _enumerate_sessions(db, correction_session_ids: set[str]) -> dict:
+    """Turn counts (ALL sessions, 1 aggregate) + hydrated (prompt, response,
+    tool_names) for ONLY the sessions that select_sessions picks (≤N).
+
+    Was an N+1 pattern: list() all ~1500 sessions, then list_by_session per session
+    (200 full-message reads/week) just to count turns + grab first/last message.
+    Now: ONE indexed GROUP BY for counts (role_counts_by_session, backed by
+    idx_messages_role_session), then list_by_session for only the ≤10 SELECTED —
+    message reads drop from ~200 to ≤10, and the 1500-row sessions.list() scan is
+    gone entirely (the aggregate already yields the session_ids).
+
+    `select` is applied here (with the SAME 口径 run_session_quality uses) purely to
+    decide WHAT to hydrate; run_session_quality re-selects as the scoring authority.
+    """
+    # 1 indexed aggregate → {sid: user_turn_count} for every session (sent-filtered
+    # to match list_by_session, so counts don't drift the sampling gates).
+    session_turns: dict[str, int] = await db.messages.role_counts_by_session("user")
+
+    # Hydrate ONLY the sessions that will be sampled (≤N), not all of them.
+    selected = select_sessions(session_turns=session_turns,
+                               correction_session_ids=correction_session_ids)
     sessions: dict[str, dict] = {}
-    # sessions table lists ids; messages carry the turns. SQLiteTable exposes
-    # list() (no-arg = all sessions, created_at DESC), NOT list_all().
-    session_rows = await db.sessions.list()
-    for srow in session_rows[:200]:  # bound the scan
-        sid = srow.get("id")
-        if not sid:
-            continue
+    for sid in selected:
         msgs = await db.messages.list_by_session(sid)
         user_msgs = [m for m in msgs if m.get("role") == "user"]
-        session_turns[sid] = len(user_msgs)
         first_prompt = user_msgs[0].get("content", "") if user_msgs else ""
         asst = [m for m in msgs if m.get("role") == "assistant"]
         last_resp, tool_names = _extract_response_and_tools(asst)
