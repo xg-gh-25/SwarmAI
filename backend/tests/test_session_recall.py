@@ -307,7 +307,7 @@ def test_limit_is_quality_preserving(db_path: Path):
     Builds a corpus larger than the limit, then compares the top session picked
     with a tiny limit against the top session with no limit.
     """
-    import backend.core.session_recall as sr_mod
+    import core.session_recall as sr_mod
 
     # One session owns the single best-BM25 message (term repeated → strong rank);
     # many filler sessions each contribute one weak-rank match so total rows > limit.
