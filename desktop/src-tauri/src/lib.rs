@@ -743,7 +743,10 @@ fn probe_loop_decision(
 /// daemon was healthy, now a probe failed/timed out). Pure — unit-testable
 /// without launchctl/network/sleep. Distinguishes a transient stall (the
 /// process is alive, just blocked >3s) from a genuine death.
-#[cfg(target_os = "macos")]
+// Pure decision logic (no OS calls) — compiled on ALL platforms. The watchdog
+// runs on every platform (macOS daemon mode + Windows/Linux subprocess mode);
+// only the launchctl-pid LIVENESS probe is macOS-only. Over-gating this to macOS
+// broke the Windows/Linux build (symbols not found in scope).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum WatchdogDownDecision {
     /// Process is alive, this is an early miss → DEGRADED, not dead. Keep the UI
@@ -767,7 +770,7 @@ enum WatchdogDownDecision {
 /// on the first miss). `escalate_threshold` is the miss count at which an alive-
 /// but-persistently-unreachable daemon is finally declared terminated (symmetry
 /// with the frontend 30s-poll failureThreshold=2).
-#[cfg(target_os = "macos")]
+// Pure logic, no OS calls — compiled on all platforms (see enum note above).
 fn watchdog_down_decision(
     is_daemon: bool,
     pid_present: bool,
@@ -1782,6 +1785,9 @@ fn spawn_daemon_health_watchdog(
         // Resolve uid ONCE for the watchdog's lifetime (not per-miss) — the launchd
         // uid is stable, and the cold-start path resolves it once per session too.
         // Avoids spawning `id -u` on every missed probe during a recovery window.
+        // macOS-only: the launchctl liveness probe needs it; non-macOS (subprocess
+        // mode) has no launchctl signal, so the uid is unused there.
+        #[cfg(target_os = "macos")]
         let watchdog_uid = current_uid();
 
         loop {
@@ -1848,6 +1854,11 @@ fn spawn_daemon_health_watchdog(
                 // Unknown (launchctl itself failed — a transient hiccup) is treated as
                 // ALIVE, not gone: a tool failure must NOT reintroduce a false death
                 // (Gate-2 finding). Only a definitive Gone declares death.
+                // launchctl-pid liveness is macOS-only. On non-macOS, is_daemon is
+                // always false (subprocess mode has no launchd), so pid_present=false
+                // and watchdog_down_decision returns Terminated — the pre-existing
+                // Windows/Linux behavior, preserved.
+                #[cfg(target_os = "macos")]
                 let pid_present = if is_daemon {
                     // launchctl is a blocking subprocess — offload so it can never
                     // stall the async watchdog task (Gate-2: a blocking call on the
@@ -1860,6 +1871,8 @@ fn spawn_daemon_health_watchdog(
                 } else {
                     false
                 };
+                #[cfg(not(target_os = "macos"))]
+                let pid_present = false;
                 match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES) {
                     WatchdogDownDecision::Degraded => {
                         // Alive but stalled: tell the UI to show a reconnecting
@@ -1936,11 +1949,18 @@ fn spawn_daemon_health_watchdog(
                         // Unknown (launchctl hiccup) counts as alive — only a
                         // definitive Gone forces death before the streak elapses.
                         // Offloaded (spawn_blocking) like the first-miss check.
-                        let uid = watchdog_uid.clone();
-                        let pid_present = tokio::task::spawn_blocking(move || daemon_liveness(&uid))
-                            .await
-                            .unwrap_or(DaemonLiveness::Unknown)
-                            != DaemonLiveness::Gone;
+                        // macOS-only launchctl probe; non-macOS (subprocess mode)
+                        // has no launchd signal → pid_present=false → Terminated.
+                        #[cfg(target_os = "macos")]
+                        let pid_present = {
+                            let uid = watchdog_uid.clone();
+                            tokio::task::spawn_blocking(move || daemon_liveness(&uid))
+                                .await
+                                .unwrap_or(DaemonLiveness::Unknown)
+                                != DaemonLiveness::Gone
+                        };
+                        #[cfg(not(target_os = "macos"))]
+                        let pid_present = false;
                         if matches!(
                             watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES),
                             WatchdogDownDecision::Terminated
