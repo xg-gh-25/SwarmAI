@@ -96,6 +96,6 @@
     <rect x="120" y="900" width="1600" height="96" rx="8" fill="#13151C" stroke="#2A2E3A"/>
     <text x="140" y="928" font-family="Inter, -apple-system, Arial" font-size="15" font-weight="700" fill="#C9A96E">7 &#183; consume (depends on trigger)</text>
     <text x="140" y="954" fill="#E8694E">CI/deploy &#8594; HARD gate: regression or BVT-red &#8594; block merge / no ship</text>
-    <text x="140" y="978" fill="#6FA88B">scheduled &#8594; never gates &#8594; BVT-red / score-drop &#8594; Slack drift alert &#183; Dashboard (7 tabs) reads the snapshot</text>
+    <text x="140" y="978" fill="#6FA88B">scheduled &#8594; never gates &#8594; BVT-red / score-drop &#8594; Slack drift alert &#183; Dashboard (8 tabs) reads the snapshot</text>
   </g>
 </svg>

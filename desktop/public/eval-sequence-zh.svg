@@ -94,6 +94,6 @@
     <rect x="120" y="900" width="1600" height="96" rx="8" fill="#13151C" stroke="#2A2E3A"/>
     <text x="140" y="928" font-size="15" font-weight="700" fill="#C9A96E">7 &#183; 消费（取决于触发器）</text>
     <text x="140" y="954" fill="#E8694E">CI/部署 &#8594; 硬门：回归或 BVT 红 &#8594; 挡合并 / 不发</text>
-    <text x="140" y="978" fill="#6FA88B">定时 &#8594; 永不当门 &#8594; BVT 红 / 分数下降 &#8594; Slack 漂移告警 &#183; Dashboard（7 tabs）读快照</text>
+    <text x="140" y="978" fill="#6FA88B">定时 &#8594; 永不当门 &#8594; BVT 红 / 分数下降 &#8594; Slack 漂移告警 &#183; Dashboard（8 tabs）读快照</text>
   </g>
 </svg>

@@ -61,7 +61,7 @@
   <text x="584" y="392" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="16" font-weight="600" fill="#A8B0C0">每个 case 沿 4 个正交轴打标签</text>
 
   <rect x="584" y="408" width="422" height="60" rx="6" fill="#171A24" stroke="#2A2E3A"/>
-  <text x="600" y="432" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="14" font-weight="600" fill="#8BAFD4">Category 分类（15）</text>
+  <text x="600" y="432" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="14" font-weight="600" fill="#8BAFD4">Category 分类（数据驱动）</text>
   <text x="600" y="454" font-family="monospace" font-size="12" fill="#8B8D94">decision compliance recall safety memory runtime_health &#8230;</text>
 
   <rect x="584" y="476" width="422" height="60" rx="6" fill="#171A24" stroke="#2A2E3A"/>
@@ -150,7 +150,7 @@
 
   <!-- report -> consume arrow -->
   <line x1="1460" y1="680" x2="1460" y2="720" stroke="#7B89A8" stroke-width="2" marker-end="url(#arrowMuted)"/>
-  <text x="1475" y="708" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12" fill="#6B6E76">Dashboard（7 tabs）读这些快照 &#8212; 纯投影</text>
+  <text x="1475" y="708" font-family="Inter, -apple-system, PingFang SC, Microsoft YaHei, Arial" font-size="12" fill="#6B6E76">Dashboard（8 tabs）读这些快照 &#8212; 纯投影</text>
 
   <!-- ================= 层 2+3: 真实会话质量闭环 (2026-07-28 上线) ================= -->
   <rect x="80" y="1050" width="1760" height="230" rx="12" fill="#101820" stroke="#2A3A3A" stroke-width="1.5"/>
