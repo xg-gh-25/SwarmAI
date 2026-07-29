@@ -51,6 +51,20 @@ vi.mock('../workspace/FilePreviewModal', () => ({
   },
 }));
 
+// Mock the heavy force-graph CodeGraph (Run 4 #10) — assert the props it receives
+// (esp. project === current brain name, NOT a hardcoded literal), don't render the canvas.
+const mockCodeGraph = vi.fn();
+vi.mock('../code-intel/CodeGraph', () => ({
+  CodeGraph: (props: { project: string; onClose?: () => void }) => {
+    mockCodeGraph(props);
+    return <div data-testid="code-graph-mock">{props.project}</div>;
+  },
+}));
+
+// The six canonical section keys, in order (mirrors backend _SECTIONS / SECTION_ORDER).
+const SECTION_KEYS: Array<BrainDetail['sections'][number]['key']> =
+  ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
+
 import { BrainHub } from './BrainHub';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 
@@ -156,28 +170,45 @@ describe('BrainHub — Gallery (AC3)', () => {
 });
 
 describe('BrainHub — Brain view (AC4)', () => {
+  // Run 4 (#8): the Brain view is now 2-pane — only the ACTIVE section's card is
+  // mounted at a time, revealed by clicking its left-nav item. These helpers
+  // open the brain then click the section's nav item so the content pane shows it
+  // (default active section = the FIRST section returned by the backend).
   async function openBrain() {
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
+  async function openSection(key: string) {
+    await openBrain();
+    fireEvent.click(screen.getByTestId(`nav-item-${key}`));
+    await waitFor(() => expect(screen.getByTestId(`section-${key}`)).toBeTruthy());
+  }
 
-  it('renders all six sections in order', async () => {
+  it('renders all six section NAV items (2-pane left nav)', async () => {
+    // Spec change (#8, Gate-1 HIGH, directed by user): content is now
+    // one-section-at-a-time behind a nav click, NOT all six rendered at once.
+    // Six-section COMPLETENESS is asserted on the nav; each card is reachable by
+    // clicking its nav item (covered in the tests below + the Run-4 block).
     await openBrain();
     for (const key of ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher']) {
-      expect(screen.getByTestId(`section-${key}`)).toBeTruthy();
+      expect(screen.getByTestId(`nav-item-${key}`)).toBeTruthy();
     }
+    // default active section = the first section → its card is in the content pane.
+    expect(screen.getByTestId('section-identity')).toBeTruthy();
+    // a non-active section's card is NOT mounted (one-at-a-time).
+    expect(screen.queryByTestId('section-refresher')).toBeNull();
   });
 
   it('marks an empty ③Gates section as complete-not-broken (R31)', async () => {
-    await openBrain();
+    await openSection('gates');
     const empty = screen.getByTestId('empty-gates');
     expect(empty.textContent).toContain('complete, not broken');
   });
 
   it('renders decay-colored 7-type entries for ② knowledge', async () => {
-    await openBrain();
+    await openSection('knowledge');
     const lines = screen.getAllByTestId('entry-line');
     expect(lines.length).toBe(2);
     // the dormant entry has a dimmed style class (decay coloring)
@@ -193,7 +224,7 @@ describe('BrainHub — Brain view (AC4)', () => {
     // relative (get_workspace_root resolves it against the cached SwarmWS root
     // only when no basePath is passed). A bare member path or a relative basePath
     // would resolve against the backend CWD → 404.
-    await openBrain();
+    await openSection('identity');   // AGENTS.md lives under ① identity (the default active)
     fireEvent.click(screen.getByTestId('member-AGENTS.md'));
     await waitFor(() => expect(screen.getByTestId('file-preview-open')).toBeTruthy());
     // the mock echoes props.file.path — assert the resolvable full path.
@@ -201,6 +232,95 @@ describe('BrainHub — Brain view (AC4)', () => {
     // and NO basePath was passed (would be taken as the fs root verbatim).
     const lastCall = mockPreview.mock.calls[mockPreview.mock.calls.length - 1][0];
     expect(lastCall.basePath).toBeUndefined();
+  });
+});
+
+describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robustness)', () => {
+  async function openBrain() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+  }
+
+  it('AC1: renders 2-pane (nav + content); clicking a nav item switches the content pane', async () => {
+    await openBrain();
+    expect(screen.getByTestId('brainhub-brain-nav')).toBeTruthy();
+    expect(screen.getByTestId('brainhub-brain-content')).toBeTruthy();
+    // default active = first section (identity) shown, knowledge card not yet mounted.
+    expect(screen.getByTestId('section-identity')).toBeTruthy();
+    expect(screen.queryByTestId('section-knowledge')).toBeNull();
+    // click knowledge nav → knowledge card mounts, identity card unmounts.
+    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
+    await waitFor(() => expect(screen.getByTestId('section-knowledge')).toBeTruthy());
+    expect(screen.queryByTestId('section-identity')).toBeNull();
+  });
+
+  it('AC3 (#10): "View code graph" mounts CodeGraph with project === brain name (no hardcoded literal)', async () => {
+    await openBrain();
+    expect(screen.queryByTestId('code-graph-mock')).toBeNull();  // not mounted until clicked
+    fireEvent.click(screen.getByTestId('open-codegraph'));
+    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
+    // CodeGraph MUST receive the CURRENT brain name, never a hardcoded "SwarmAI" literal.
+    const call = mockCodeGraph.mock.calls[mockCodeGraph.mock.calls.length - 1][0];
+    expect(call.project).toBe('SwarmAI');   // === the opened brain's name (DETAIL.name)
+    expect(typeof call.onClose).toBe('function');
+  });
+
+  it('AC4: a knowledge-only bare DDD (no code_intel / aim.json / gates) renders every section with NO crash', async () => {
+    // A DDD from another user's workspace: gates + capabilities + delivery + refresher
+    // empty, knowledge-only, kind="knowledge". Must render all six nav items + honest
+    // empty states, never throw. project passed to CodeGraph = this DDD's name.
+    const BARE: BrainDetail = {
+      name: 'SomeoneElsesProject', kind: 'knowledge',
+      sections: SECTION_KEYS.map((key, i) => ({
+        key, num: ['①', '②', '③', '④', '⑤', '⑥'][i], label: key, ownGovern: 'OWN' as const, curator: '—',
+        members: key === 'knowledge' ? [{ path: '2-understanding/PRODUCT.md', gitStatus: 'clean' }] : [],
+        entries: [], completeNotBroken: key !== 'knowledge',
+      })),
+    };
+    mockGetBrains.mockResolvedValue([{
+      name: 'SomeoneElsesProject', kind: 'knowledge',
+      sectionsPresent: { identity: false, knowledge: true, gates: false, capabilities: false, delivery: false, refresher: false },
+      lifecycleStage: 'GROW',
+      health: { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '1d ago' },
+    }]);
+    mockGetBrainDetail.mockResolvedValue(BARE);
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SomeoneElsesProject')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SomeoneElsesProject'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    // all six nav items present even though 5 sections are empty
+    for (const key of SECTION_KEYS) {
+      expect(screen.getByTestId(`nav-item-${key}`)).toBeTruthy();
+    }
+    // click an empty section → renders "complete, not broken", no throw
+    fireEvent.click(screen.getByTestId('nav-item-gates'));
+    await waitFor(() => expect(screen.getByTestId('empty-gates')).toBeTruthy());
+    // Gate-2 meta-review MED: a knowledge-only (non-code-repo) DDD has no code to
+    // graph → the "View code graph" button must NOT be offered (avoids the misleading
+    // "re-index" empty state on a brain that will always be empty).
+    expect(screen.queryByTestId('open-codegraph')).toBeNull();
+  });
+
+  it('AC3+meta: ESC with the code graph open closes ONLY the graph, not the whole Brain Hub', async () => {
+    // Gate-2 meta-review MED: the Brain Hub lives in a shared Modal with a
+    // document-level ESC→close listener; CodeGraph has no ESC handler. BrainView
+    // must intercept ESC (capture phase) while the graph is open so ESC dismisses
+    // the graph, not the hub.
+    await openBrain();  // DETAIL.kind === 'code-repo' → button present
+    fireEvent.click(screen.getByTestId('open-codegraph'));
+    await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('code-graph-mock')).toBeNull());
+    // the Brain Hub itself is still mounted (ESC did NOT close the hub)
+    expect(screen.getByTestId('brainhub-brain')).toBeTruthy();
+  });
+
+  it('AC4: an empty gallery (no DDDs at all) renders the honest empty state, no crash', async () => {
+    mockGetBrains.mockResolvedValue([]);
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByText('No DDD brains found.')).toBeTruthy());
   });
 });
 

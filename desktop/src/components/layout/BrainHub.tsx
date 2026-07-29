@@ -27,6 +27,7 @@ import type {
 } from '../../services/ddd';
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
+import { CodeGraph } from '../code-intel/CodeGraph';
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -200,17 +201,41 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   const [detail, setDetail] = useState<BrainDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+  // #8 2-pane: which section's card is shown in the right content pane.
+  const [activeKey, setActiveKey] = useState<SectionKey | null>(null);
+  // #10: mount the existing full-screen CodeGraph overlay on demand.
+  const [showGraph, setShowGraph] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setError(null);
+    setActiveKey(null);   // reset selection when switching brains
+    setShowGraph(false);
     getBrainDetail(name).then(
       (d) => alive && setDetail(d),
       (e) => alive && setError(String(e?.message ?? e)),
     );
     return () => { alive = false; };
   }, [name]);
+
+  // ESC-routing guard (Gate-2 meta-review MED): the Brain Hub lives inside a shared
+  // Modal that installs a document-level ESC→onClose listener; the full-screen
+  // CodeGraph overlay (shared with BottomBar, not ours to edit) has NO ESC handler.
+  // Without this, pressing ESC with the graph open would close the ENTIRE Brain Hub
+  // instead of the graph. We intercept ESC in the CAPTURE phase while the graph is
+  // open, close only the graph, and stop it reaching the Modal's handler.
+  useEffect(() => {
+    if (!showGraph) return;
+    const onKeyDownCapture = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowGraph(false);
+      }
+    };
+    document.addEventListener('keydown', onKeyDownCapture, true);  // capture: runs before Modal's bubble listener
+    return () => document.removeEventListener('keydown', onKeyDownCapture, true);
+  }, [showGraph]);
 
   const openFile = useCallback((sectionMemberPath: string) => {
     // FilePreviewModal's readFile resolves `path` against the DEFAULT workspace
@@ -226,15 +251,74 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]">Failed to load brain: {error}</div>;
   if (!detail) return <div className="p-4 text-[#8b949e] text-[13px]">Loading {name}…</div>;
 
+  // Gate-1 CRITICAL: nav AND content both derive from the RUNTIME detail.sections
+  // (never a hardcoded SECTION_ORDER) — so a backend that drops/reorders a section
+  // can't strand the nav against a missing card. Default active = the first section
+  // the backend returned; the `.find()` is guarded (active may be undefined).
+  const sections = detail.sections;
+  const currentKey: SectionKey | null =
+    activeKey && sections.some((s) => s.key === activeKey)
+      ? activeKey
+      : (sections[0]?.key ?? null);
+  const active = sections.find((s) => s.key === currentKey) ?? null;
+
   return (
-    <div className="p-4" data-testid="brainhub-brain">
-      <div className="flex items-center gap-2 mb-3">
+    <div className="flex flex-col h-full" data-testid="brainhub-brain">
+      <div className="flex items-center gap-2 px-4 pt-4 pb-3 flex-shrink-0">
         <span className="text-[14px] font-semibold">{detail.name}</span>
         <span className="text-[10px] font-mono text-[#5b636d] px-1.5 py-0.5 rounded bg-[#161b22]">{detail.kind}</span>
+        {/* #10 — open the EXISTING CodeGraph overlay for THIS brain (project={name},
+            never a hardcoded literal). Gated on kind === 'code-repo' (Gate-2 meta-review
+            MED): a knowledge-only / non-code DDD has no code to graph, so offering the
+            button there (→ "No code symbols indexed, re-index" hint) is misleading. Only
+            a code-repo brain can meaningfully have a code-intel graph. */}
+        {detail.kind === 'code-repo' && (
+          <button
+            onClick={() => setShowGraph(true)}
+            data-testid="open-codegraph"
+            className="ml-auto flex items-center gap-1 text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-0.5 hover:bg-[#12233a]"
+            title="Open the code intelligence graph for this brain"
+          >
+            <span className="material-symbols-outlined text-[14px]">hub</span>
+            View code graph
+          </button>
+        )}
       </div>
 
-      <div className="flex flex-col gap-2">
-        {detail.sections.map((s) => <SectionCard key={s.key} section={s} onOpenFile={openFile} />)}
+      {/* #8 — 2-pane: left section-nav + right content pane (one section at a time) */}
+      <div className="flex-1 flex min-h-0">
+        <nav
+          data-testid="brainhub-brain-nav"
+          className="w-44 flex-shrink-0 border-r border-[#222831] overflow-y-auto py-2"
+        >
+          {sections.map((s) => {
+            const isActive = s.key === currentKey;
+            return (
+              <button
+                key={s.key}
+                data-testid={`nav-item-${s.key}`}
+                onClick={() => setActiveKey(s.key)}
+                className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
+                  isActive ? 'bg-[#1f2630] text-[#e6edf3] border-l-2 border-[#f0a500]' : 'text-[#8b949e] hover:text-[#e6edf3] border-l-2 border-transparent'
+                }`}
+              >
+                <span className="font-mono text-[#f0a500]">{SECTION_NUM[s.key] ?? s.num}</span>
+                <span className="truncate">{s.label}</span>
+                {s.members.length > 0 && (
+                  <span className="ml-auto text-[9px] text-[#5b636d]">{s.members.length}</span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div data-testid="brainhub-brain-content" className="flex-1 overflow-y-auto p-4">
+          {active ? (
+            <SectionCard key={active.key} section={active} onOpenFile={openFile} />
+          ) : (
+            <div className="text-[12px] text-[#5b636d] italic">No sections to display.</div>
+          )}
+        </div>
       </div>
 
       <FilePreviewModal
@@ -243,6 +327,13 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
         agentId={agentId}
         file={previewFile}
       />
+
+      {/* #10 — sibling-mount the existing full-screen CodeGraph overlay (BottomBar
+          pattern). Proven safe nested in this Modal (FilePreviewModal is the same
+          shape). project={name} — NEVER a hardcoded literal (Gate-1 flag). */}
+      {showGraph && (
+        <CodeGraph project={name} onClose={() => setShowGraph(false)} />
+      )}
     </div>
   );
 }
