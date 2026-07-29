@@ -514,7 +514,7 @@ def locked_field_modify(
 
 def locked_read_modify_write(
     file_path: Path, section: str, text: str, mode: str = "append",
-    *, dedup: bool = False,
+    *, dedup: bool = False, reindex_memory: bool = False,
 ):
     """Acquire flock, read file, modify section, write back, release.
 
@@ -531,6 +531,17 @@ def locked_read_modify_write(
             False keeps all existing callers byte-identical. (R3-C: gives the
             memory_extractor write path the same mechanical dedup distillation
             already has, single-sourced.)
+        reindex_memory: When True, rebuild the MEMORY_INDEX block IN THE SAME
+            LOCK after the section write, so the compact index stays consistent
+            with the entries regardless of which writer wrote them. Closes the
+            pre-existing bug where distillation_hook and memory_extractor wrote
+            MEMORY.md but never reindexed → new entries were invisible in the
+            index (run_b356b552). Uses the PURE ``inject_index_into_memory``
+            (extract_body→generate→inject); it does NOT call
+            ContextHealthHook._refresh_memory_index, which would re-acquire this
+            same MEMORY.md.lock and deadlock. No-op guard skips it for non-MEMORY
+            files and for a no-op dedup return. Default False keeps all existing
+            callers byte-identical.
 
     Raises:
         LockedWriteError: If the lock cannot be acquired within
@@ -628,6 +639,22 @@ def locked_read_modify_write(
 
         # Modify the content
         new_content = _modify_content(content, section, text, mode)
+
+        # Reindex IN-LOCK (single source of truth for the MEMORY index across
+        # every writer). PURE inject_index_into_memory only — NEVER
+        # _refresh_memory_index, which re-acquires this same MEMORY.md.lock and
+        # would deadlock. Best-effort: an index-rebuild failure must not lose the
+        # entry write we already computed. (run_b356b552)
+        if reindex_memory and file_path.name == "MEMORY.md":
+            try:
+                from core.memory_index import inject_index_into_memory
+                new_content = inject_index_into_memory(new_content)
+            except Exception as e:  # noqa: BLE001 — reindex is non-fatal to the write
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "reindex_memory skipped (write still applied) for %s: %s",
+                    file_path, e,
+                )
 
         # Write back (surrogateescape preserves non-UTF-8 bytes on round-trip)
         file_path.parent.mkdir(parents=True, exist_ok=True)

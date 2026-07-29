@@ -1327,76 +1327,29 @@ class DistillationTriggerHook:
         section: str,
         text: str,
     ) -> None:
-        """Write to MEMORY.md via flock + _modify_content (single lock).
+        """Write a distilled section to MEMORY.md via the SINGLE shared facade.
 
-        Deduplicates entries before writing: acquires the lock first, then
-        reads existing content and skips entries whose first 120 chars
-        already appear.  This prevents double-writes when the distilled
-        frontmatter update fails after content extraction succeeds.
-
-        Calls ``_modify_content`` directly under the same flock instead
-        of ``locked_read_modify_write`` to avoid a nested-lock deadlock
-        (flock is per-open-file-description on POSIX).
+        Delegates to ``scripts.locked_write.locked_read_modify_write`` — the one
+        writer that owns flock + MemoryGuard + line-level dedup + (for MEMORY.md)
+        in-lock reindex. This used to be a hand-rolled PARALLEL copy of that
+        facade (its own flock + guard + filter_duplicate_entries + _modify_content
+        + prepend) — byte-for-byte the same pipeline, just diverged. Collapsed to
+        the facade so the write path can't drift and distillation's writes now
+        reindex too (they previously left the MEMORY index stale). The old
+        "call _modify_content directly to avoid a nested-lock deadlock" note no
+        longer applies: this is a SINGLE call into the facade's own lock, not a
+        lock nested inside another. (run_b356b552)
         """
-        from utils.file_lock import flock_exclusive, flock_unlock
-        from scripts.locked_write import _modify_content
-
-        # MemoryGuard: sanitize content before any file I/O
+        from scripts.locked_write import locked_read_modify_write, LockedWriteError
         try:
-            from core.memory_guard import MemoryGuard, MemoryGuardError
-            _guard = MemoryGuard()
-            text = _guard.sanitize(text)
-        except MemoryGuardError:
-            logger.warning("MemoryGuard rejected distillation write to %s", section)
-            return
-        except ImportError:
-            pass  # memory_guard not available yet
-
-        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = None
-        try:
-            fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive(fd)
-
-            # Read current content under lock
-            if memory_path.exists():
-                existing = memory_path.read_text(encoding="utf-8")
-            else:
-                existing = ""
-
-            # Dedup: filter out entries already present, via the SHARED
-            # single-source helper (R3-C, run_55c6ab8f). Same two strategies
-            # this code used inline since dedup was added — now living in ONE
-            # place (scripts.locked_write.filter_duplicate_entries) so the
-            # memory_extractor write path uses identical logic and the two
-            # can't drift:
-            # (1) 120-char prefix match (catches exact duplicates)
-            # (2) Bold-title match (catches same-topic reworded dups — e.g.
-            #     [LL06]/[LL10] both titled "CJK 没有词边界...")
-            # The helper preserves the deliberate asymmetry: prefix-set is
-            # static (existing only), title-set is mutated intra-batch.
-            if existing:
-                from scripts.locked_write import filter_duplicate_entries
-                text = filter_duplicate_entries(existing, text)
-                if not text.strip():
-                    return  # all entries already present
-
-            # Modify + write under the same lock
-            new_content = _modify_content(existing, section, text, "prepend")
-            memory_path.parent.mkdir(parents=True, exist_ok=True)
-            memory_path.write_text(new_content, encoding="utf-8")
+            locked_read_modify_write(
+                memory_path, section, text, mode="prepend",
+                dedup=True, reindex_memory=True,
+            )
         except LockedWriteError as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — best-effort distillation write
             logger.warning("locked_write failed for section %s: %s", section, e)
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                except OSError:
-                    pass
-                fd.close()
 
     # Regex for COE lines: **COE:** `signal` — topic
     # Uses regex instead of str.index() to avoid ValueError on malformed lines.

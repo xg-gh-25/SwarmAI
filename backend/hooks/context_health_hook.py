@@ -1266,6 +1266,25 @@ class ContextHealthHook:
                 wrote += len(fresh_blocks)
 
             if wrote:
+                # Reindex IN-LOCK via the SAME pure function the facade uses
+                # (run_b356b552) — single source of truth for the MEMORY index
+                # across all three writers. W1 keeps its own title-level lock
+                # transaction (stronger than the facade's line-level dedup, so it
+                # is NOT collapsed into locked_read_modify_write), but its reindex
+                # must not diverge: previously this write relied on an EXTERNAL
+                # later _refresh_memory_index to catch up, leaving a window where
+                # the new entry was absent from the index. inject_index_into_memory
+                # is pure (no lock) so calling it while holding lock_fd cannot
+                # deadlock — unlike _refresh_memory_index, which re-acquires this
+                # same MEMORY.md.lock.
+                try:
+                    from core.memory_index import inject_index_into_memory
+                    content = inject_index_into_memory(content)
+                except Exception as e:  # noqa: BLE001 — reindex non-fatal to the write
+                    logger.warning(
+                        "context_health: in-lock reindex skipped (entries still "
+                        "written): %s", e,
+                    )
                 memory_path.write_text(content, encoding="utf-8")
         finally:
             flock_unlock(lock_fd)
