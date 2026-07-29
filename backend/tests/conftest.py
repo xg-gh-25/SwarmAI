@@ -476,6 +476,19 @@ async def reset_database():
     })
     yield
 
+    # Teardown: drain THIS test's pools while its event loop is STILL ALIVE.
+    # The persistent connection pool binds each aiosqlite conn (and its non-daemon
+    # worker thread) to the loop that created it. pytest-asyncio gives each test a
+    # fresh loop, so the setup close_all_pools() above can only ever see the PRIOR
+    # test's pools — from the wrong loop, where `await conn.close()` cannot join the
+    # parked worker. Undrained workers accumulate and hang threading._shutdown() at
+    # interpreter exit (every DB test "passes" then hangs forever). Draining here,
+    # on the current live loop, joins this test's workers correctly. Best-effort:
+    # close_all_pools swallows per-pool errors (sqlite.py) so teardown never masks
+    # a test failure; a hard-crashing test may skip this, which only reintroduces
+    # the (pre-existing) leak for that one aborted test — acceptable.
+    await close_all_pools()
+
 
 # ---------------------------------------------------------------------------
 # Sample test data fixtures
