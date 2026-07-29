@@ -115,6 +115,7 @@ const REVIEW = {
   proposals: [
     { id: 'prop-1', target_doc: 'PRODUCT.md', target_section: 'Strategic', content: 'a risky proposal', confidence: 0.7, source_run_id: 'run_x' },
   ],
+  diff_incomplete: false,
 };
 
 beforeEach(() => {
@@ -347,11 +348,12 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
   }
 
-  it('renders the 3 zones + diff header with both SHAs', async () => {
+  it('renders 2 zones (A + C) + diff header with both SHAs — Zone B removed (F1)', async () => {
     await openReview();
     expect(screen.getByTestId('review-zone-a')).toBeTruthy();
-    expect(screen.getByTestId('review-zone-b')).toBeTruthy();
     expect(screen.getByTestId('review-zone-c')).toBeTruthy();
+    // F1: the dead "decay·sinking" Zone B (backend never emitted the tag) is gone.
+    expect(screen.queryByTestId('review-zone-b')).toBeNull();
     const hdr = screen.getByTestId('review-diff-header').textContent ?? '';
     expect(hdr).toContain('a00ae46');   // last-reviewed short sha
     expect(hdr).toContain('ddbcfcd8');  // HEAD short sha
@@ -404,6 +406,88 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     fireEvent.click(approveBtn);
     await waitFor(() => expect(mockApproveProposal).toHaveBeenCalledWith('prop-1', 'SwarmAI'));
   });
+
+  it('F3: reject-hunk API error is SURFACED inline (transient) — does NOT blank the queue', async () => {
+    mockRejectHunk.mockRejectedValueOnce(new Error('409 hunk no longer applies'));
+    await openReview();
+    fireEvent.click(screen.getByTestId('review-reject-hunk'));
+    // transient inline action-error, NOT the full-view "Failed to load review"
+    await waitFor(() => expect(screen.getByTestId('review-action-error')).toBeTruthy());
+    expect(screen.getByTestId('review-action-error').textContent).toContain('409');
+    // Gate-2: the queue is STILL rendered (not blanked by a full-view error)
+    expect(screen.getByTestId('brainhub-review')).toBeTruthy();
+    expect(screen.getByTestId('review-zone-a')).toBeTruthy();
+    expect(screen.queryByTestId('review-error')).toBeNull();
+  });
+
+  it('F4: Zone C proposal card renders the confidence signal', async () => {
+    await openReview();
+    const conf = screen.getByTestId('proposal-confidence');
+    expect(conf.textContent).toContain('0.70');   // confidence 0.7 shown, not hidden
+  });
+
+  it('F4: a null-confidence proposal renders gracefully (— not "null")', async () => {
+    mockGetReview.mockResolvedValue({
+      ...REVIEW,
+      proposals: [{ id: 'p2', target_doc: 'TECH.md', target_section: 'X', content: 'c', confidence: null, source_run_id: 'r' }],
+    });
+    await openReview();
+    const conf = screen.getByTestId('proposal-confidence');
+    expect(conf.textContent).toContain('—');
+    expect(conf.textContent).not.toContain('null');
+  });
+
+  it('F5: 7-type composition bar segment order is STABLE (canonical, not insertion order)', async () => {
+    // Two brains whose entries arrive in DIFFERENT type order must yield the SAME
+    // left-to-right segment order (canonical TYPE_COLOR order: guideline before pitfall).
+    const mkDetail = (order: Array<'guideline' | 'pitfall'>) => ({
+      ...DETAIL,
+      sections: DETAIL.sections.map((s) =>
+        s.key === 'knowledge'
+          ? { ...s, entries: order.map((t, i) => ({ title: `${t}${i}`, entryType: t, decayState: 'active' as const, section: 'A', source: '', file: 'f' })) }
+          : s,
+      ),
+    });
+    const orderOf = () => {
+      const bar = screen.getByTestId('typebar-guideline').parentElement!;
+      return Array.from(bar.querySelectorAll('[data-testid^="typebar-"]')).map((n) => n.getAttribute('data-testid'));
+    };
+    // pitfall-first arrival
+    mockGetBrainDetail.mockResolvedValue(mkDetail(['pitfall', 'guideline']));
+    const { unmount } = render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
+    await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
+    const orderA = orderOf();
+    unmount();
+    // guideline-first arrival → must produce the SAME segment order
+    mockGetBrainDetail.mockResolvedValue(mkDetail(['guideline', 'pitfall']));
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
+    await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
+    const orderB = orderOf();
+    expect(orderA).toEqual(orderB);
+    // canonical: guideline segment precedes pitfall segment
+    expect(orderA.indexOf('typebar-guideline')).toBeLessThan(orderA.indexOf('typebar-pitfall'));
+  });
+
+  it('F8: diff_incomplete DISABLES "Mark all seen" + shows a warning with a Retry', async () => {
+    mockGetReview.mockResolvedValue({ ...REVIEW, diff_incomplete: true });
+    await openReview();
+    expect(screen.getByTestId('review-diff-incomplete')).toBeTruthy();
+    expect((screen.getByTestId('review-approve-all') as HTMLButtonElement).disabled).toBe(true);
+    // Gate-2: an explicit Retry affordance exists (not a dead-end lockout) and re-fetches.
+    const retry = screen.getByTestId('review-diff-retry');
+    mockGetReview.mockResolvedValue({ ...REVIEW, diff_incomplete: false });  // next load succeeds
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByTestId('review-diff-incomplete')).toBeNull());
+    expect((screen.getByTestId('review-approve-all') as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
 describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
@@ -421,6 +505,21 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     const rows = screen.getAllByTestId('distribute-target-row');
     expect(rows.length).toBe(1);
     expect(rows[0].textContent).toContain('open-plugin');
+  });
+
+  it('F2: null source_changed_since renders "freshness unknown", NOT "up to date"', async () => {
+    // The tristate null (uncommitted output) must never fall into the "up to date"
+    // branch — that was the exact re-buried-bug Gate-1 flagged. Spec-review gap-fix.
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: ['open-plugin'], visibility: 'internal',
+      distributable: true, declared: true, warnings: [],
+      has_output: true, output_path: 'distribute', last_distribute_time: '2026-07-30T00:00:00+00:00',
+      source_changed_since: null,
+    });
+    await openDistribute();
+    const row = screen.getByTestId('distribute-target-row');
+    expect(row.textContent).toContain('freshness unknown');
+    expect(row.textContent).not.toContain('up to date');
   });
 
   it('shows honest not-distributable state (no fabricated targets)', async () => {

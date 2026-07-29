@@ -74,8 +74,9 @@ export interface BrainDetail {
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────
 
-/** Provenance tag for a review hunk. */
-export type HunkTag = 'cultivation·auto-applied' | 'decay·sinking' | 'risky·staged';
+/** Provenance tag for a review hunk. (decay·sinking removed — the backend
+ *  _tag_hunk never emits it; the Gallery's health.sinking count carries that signal.) */
+export type HunkTag = 'cultivation·auto-applied' | 'risky·staged';
 
 export interface ReviewHunk {
   file: string;         // project-relative path the hunk touches
@@ -99,6 +100,10 @@ export interface ReviewData {
   head_sha: string;
   hunks: ReviewHunk[];
   proposals: PendingProposal[];
+  /** true if the scoped git-diff timed out — the hunk list is INCOMPLETE, so
+   *  "Mark all seen" must be disabled (advancing the watermark over an
+   *  empty-because-timed-out queue would silently mark unreviewed work as seen). */
+  diff_incomplete: boolean;
 }
 
 // ── Distribute tab (Run 3) ────────────────────────────────────────────────────
@@ -114,7 +119,10 @@ export interface DistributionState {
   has_output: boolean;                   // a distribute output exists under .artifacts/
   output_path: string | null;            // the .artifacts/<name> stem
   last_distribute_time: string | null;   // ISO, from output dir mtime (display-only)
-  source_changed_since: boolean;         // knowledge committed AFTER last distribute
+  /** TRISTATE: true = knowledge changed since last distribute; false = up to date;
+   *  null = freshness UNKNOWN (the output dir isn't git-committed, so there's no
+   *  reliable commit anchor to compare against — never assert a confident boolean). */
+  source_changed_since: boolean | null;
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────

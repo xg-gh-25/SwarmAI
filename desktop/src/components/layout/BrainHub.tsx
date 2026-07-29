@@ -383,11 +383,20 @@ function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
   return (
     <div className="mt-2 pt-2 border-t border-[#222831]">
       <div className="flex gap-0.5 mb-1.5 h-1.5 rounded-sm overflow-hidden" title="7-type composition">
-        {(Object.keys(counts) as EntryType[]).map((t) => (
+        {/* F5: STABLE order — canonical TYPE_COLOR order first (deterministic across
+            brains, vs Object.keys(counts) insertion order). Gate-2: also append any
+            UNKNOWN type (not in TYPE_COLOR) with the fallback color so the bar stays
+            exhaustive + consistent with the per-entry dot (:below), never silently
+            dropping a segment. (Backend clamps to VALID_TYPES, so unknowns are rare,
+            but the bar must not disagree with the entry list if one slips through.) */}
+        {[
+          ...(Object.keys(TYPE_COLOR) as EntryType[]).filter((t) => counts[t] > 0),
+          ...Object.keys(counts).filter((t) => !(t in TYPE_COLOR) && counts[t] > 0),
+        ].map((t) => (
           <span
             key={t}
             data-testid={`typebar-${t}`}
-            style={{ background: TYPE_COLOR[t] ?? '#5b636d', flex: counts[t] }}
+            style={{ background: TYPE_COLOR[t as EntryType] ?? '#5b636d', flex: counts[t] }}
           />
         ))}
       </div>
@@ -414,6 +423,10 @@ function shortSha(sha: string): string {
 function ReviewView({ name }: { name: string }) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Per-ACTION errors (reject/proposal 409s etc.) are TRANSIENT + inline — they must
+  // NOT blank the whole queue via the top-level `if (error)` return (Gate-2: a routine
+  // retryable 409 shouldn't wipe the review view). Separate channel from the load error.
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // H2: "Mark all seen" advances the watermark IRREVERSIBLY (wipes the review
   // queue from the diff). Require a two-click armed confirm so a single stray
@@ -425,6 +438,7 @@ function ReviewView({ name }: { name: string }) {
     let alive = true;
     setData(null);
     setError(null);
+    setActionError(null);   // clear any transient action error on (re)load
     setArmed(false);   // disarm on every (re)load: brain switch, or after any action
     getReview(name).then(
       (d) => alive && setData(d),
@@ -445,7 +459,7 @@ function ReviewView({ name }: { name: string }) {
       await approveReview(name);
       load();
     } catch (e) {
-      setError(String((e as { message?: string })?.message ?? e));
+      setActionError(String((e as { message?: string })?.message ?? e));
     } finally {
       setArmed(false);
       setBusy(false);
@@ -454,7 +468,15 @@ function ReviewView({ name }: { name: string }) {
 
   const onRejectHunk = useCallback(async (h: ReviewHunk) => {
     setBusy(true);
-    try { await rejectReviewHunk(name, h.file, h.signature); load(); } finally { setBusy(false); }
+    // F3: surface API errors (parity with onApproveAll) via the TRANSIENT actionError
+    // channel — a rejected git apply -R (409/404/500) must not fail silently, but it
+    // also must NOT blank the whole queue (Gate-2: a routine retryable 409 is inline).
+    try {
+      await rejectReviewHunk(name, h.file, h.signature);
+      load();
+    } catch (e) {
+      setActionError(String((e as { message?: string })?.message ?? e));
+    } finally { setBusy(false); }
   }, [name, load]);
 
   const onProposal = useCallback(async (p: PendingProposal, accept: boolean) => {
@@ -463,16 +485,19 @@ function ReviewView({ name }: { name: string }) {
       if (accept) await approveProposal(p.id, name);
       else await rejectProposal(p.id, name);
       load();
+    } catch (e) {
+      setActionError(String((e as { message?: string })?.message ?? e));
     } finally { setBusy(false); }
   }, [name, load]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="review-error">Failed to load review: {error}</div>;
   if (!data) return <div className="p-4 text-[#8b949e] text-[13px]">Loading review…</div>;
 
-  // Zone A = auto-applied hunks; Zone B (decay·sinking) reserved (engine-driven,
-  // not derivable from the git diff in phase-1 — shown empty, never fabricated).
+  // Zone A = auto-applied hunks; Zone C = pending risky proposals. (F1: the former
+  // Zone B "decay·sinking" was removed — the backend never emitted that tag, so it
+  // was a permanently-empty misleading zone; the Gallery's health.sinking count
+  // already surfaces dormant/archived entries.)
   const zoneA = data.hunks.filter((h) => h.tag === 'cultivation·auto-applied');
-  const zoneB = data.hunks.filter((h) => h.tag === 'decay·sinking');
   const riskyHunks = data.hunks.filter((h) => h.tag === 'risky·staged');
 
   return (
@@ -485,7 +510,9 @@ function ReviewView({ name }: { name: string }) {
         → HEAD <span className="text-[#e6edf3]">{shortSha(data.head_sha)}</span>
         <button
           onClick={onApproveAll}
-          disabled={busy || data.hunks.length === 0}
+          // F8: NEVER advance the watermark when the diff is incomplete (timed out) —
+          // the empty/partial hunk list would silently mark unreviewed work as seen.
+          disabled={busy || data.hunks.length === 0 || data.diff_incomplete}
           data-testid="review-approve-all"
           className={`ml-auto flex items-center gap-1 text-[11px] rounded-md px-2 py-0.5 disabled:opacity-40 ${
             armed
@@ -499,6 +526,31 @@ function ReviewView({ name }: { name: string }) {
         </button>
       </div>
 
+      {/* F8: loud degraded state — the diff timed out, so the queue below is INCOMPLETE.
+          Gate-2: give an explicit Retry affordance (not just "retry shortly" text) so a
+          large-repo timeout isn't a dead-end lockout of the review. */}
+      {data.diff_incomplete && (
+        <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#f0a500] bg-[#241f10] border border-[#5a4a1f] rounded-md px-2 py-1" data-testid="review-diff-incomplete">
+          <span className="material-symbols-outlined text-[14px]">warning</span>
+          The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
+          <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
+            className="ml-auto flex items-center gap-1 text-[10px] text-[#f0a500] border border-[#5a4a1f] rounded px-1.5 py-0.5 hover:bg-[#2e2814] disabled:opacity-40">
+            <span className="material-symbols-outlined text-[12px]">refresh</span>Retry
+          </button>
+        </div>
+      )}
+
+      {/* F3: transient per-action error (reject/proposal 409 etc.) — inline, does NOT
+          blank the whole queue (Gate-2). Dismissible; also cleared on next load(). */}
+      {actionError && (
+        <div className="flex items-center gap-1.5 mb-3 text-[11px] text-[#ff9a94] bg-[#2a1214] border border-[#5a1f1f] rounded-md px-2 py-1" data-testid="review-action-error">
+          <span className="material-symbols-outlined text-[14px]">error</span>
+          Action failed: {actionError}
+          <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
+            className="ml-auto text-[10px] text-[#8b949e] hover:text-[#e6edf3] px-1.5">dismiss</button>
+        </div>
+      )}
+
       {/* Zone A — auto-cultivated (already committed) */}
       <ReviewZone
         testid="review-zone-a" title="Auto-cultivated · already in brain"
@@ -507,19 +559,6 @@ function ReviewView({ name }: { name: string }) {
       >
         {zoneA.length === 0 ? <ZoneEmpty text="no auto-applied changes since last review" />
           : zoneA.map((h) => (
-            <HunkCard key={h.signature} hunk={h} busy={busy}
-              onReject={() => onRejectHunk(h)} />
-          ))}
-      </ReviewZone>
-
-      {/* Zone B — decay·sinking (engine-driven; phase-1 informational) */}
-      <ReviewZone
-        testid="review-zone-b" title="Decay · engine-driven sinking"
-        desc="entries crossing dormant/archived — engine-driven, reversible."
-        color="#db8c3a"
-      >
-        {zoneB.length === 0 ? <ZoneEmpty text="no sinking entries surfaced in this diff" />
-          : zoneB.map((h) => (
             <HunkCard key={h.signature} hunk={h} busy={busy}
               onReject={() => onRejectHunk(h)} />
           ))}
@@ -538,6 +577,11 @@ function ReviewView({ name }: { name: string }) {
               <div className="flex items-center gap-1.5 mb-1 text-[11px]">
                 <span className="font-mono text-[#f0a500]">{p.target_doc}</span>
                 <span className="text-[#5b636d]">· {p.target_section}</span>
+                {/* F4: confidence is the human-gate decision signal — render it
+                    (null-guarded: an un-scored proposal shows "—", never "null"). */}
+                <span className="text-[10px] text-[#8b949e]" data-testid="proposal-confidence" title="cultivation confidence">
+                  conf {p.confidence != null ? p.confidence.toFixed(2) : '—'}
+                </span>
                 <div className="ml-auto flex gap-1">
                   <button onClick={() => onProposal(p, true)} disabled={busy}
                     className="text-[10px] text-[#3fb950] border border-[#1f5a2a] rounded px-1.5 py-0.5 hover:bg-[#132918] disabled:opacity-40">Approve</button>
@@ -651,14 +695,17 @@ function DistributeView({ name }: { name: string }) {
               <div key={t} className="flex items-center gap-2 rounded-md border border-[#222831] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
                 <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
                 <span className="font-mono text-[11px] text-[#e6edf3]">{t}</span>
-                {data.has_output && data.source_changed_since && (
-                  <span className="ml-auto text-[9px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
-                )}
-                {data.has_output && !data.source_changed_since && (
-                  <span className="ml-auto text-[9px] text-[#5b636d]">up to date</span>
-                )}
-                {!data.has_output && (
+                {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
+                    uncommitted output) must NOT fall into "up to date" (the old
+                    `!source_changed_since` did exactly that, re-burying staleness). */}
+                {!data.has_output ? (
                   <span className="ml-auto text-[9px] text-[#5b636d]">never distributed</span>
+                ) : data.source_changed_since === true ? (
+                  <span className="ml-auto text-[9px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
+                ) : data.source_changed_since === false ? (
+                  <span className="ml-auto text-[9px] text-[#5b636d]">up to date</span>
+                ) : (
+                  <span className="ml-auto text-[9px] text-[#8b949e]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
                 )}
               </div>
             ))}

@@ -723,8 +723,21 @@ def _resolve_watermark(project_dir: Path, ws: Path, rel: str, fallback: str) -> 
     return _default_watermark(ws, rel) or fallback
 
 
+class DiffIncompleteError(Exception):
+    """The scoped git-diff could not complete (timeout) — the hunk list would be
+    silently EMPTY, indistinguishable from a genuinely clean subtree. Raised so
+    callers can distinguish 'nothing to review' from 'diff timed out' and refuse
+    to advance the review watermark over an unknown queue (F8). Never swallowed
+    into an empty list on the review path."""
+
+
 def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
-    """Live scoped diff base..HEAD for this DDD subtree, parsed into tagged hunks."""
+    """Live scoped diff base..HEAD for this DDD subtree, parsed into tagged hunks.
+
+    Raises DiffIncompleteError on a git timeout (the ONE case where an empty
+    result would be a false 'nothing to review' — F8). A genuinely clean diff
+    still returns []. Both callers (get_review / reject_review) catch it.
+    """
     ws = _workspace_root()
     if not (ws / ".git").exists():
         return []
@@ -741,7 +754,15 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
              rel, f":(exclude){rel}/.artifacts/**"],
             cwd=str(ws), capture_output=True, text=True, timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired as e:
+        # LOUD on degradation (F8): a silent [] here reads as "nothing to review"
+        # and would let the reviewer advance the watermark over unseen work.
+        logger.warning(
+            "review diff timed out for %s (base=%s) — surfacing diff_incomplete",
+            project_dir.name, base_sha[:8] if base_sha else "?",
+        )
+        raise DiffIncompleteError from e
+    except OSError:
         return []
     if r.returncode != 0:
         return []
@@ -799,12 +820,21 @@ async def get_review(name: str) -> dict:
         except ValueError:
             rel = project_dir.as_posix()
         wm = _resolve_watermark(project_dir, ws, rel, head)   # stale-safe (Gate-2)
-        hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
+        diff_incomplete = False
+        try:
+            hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
+        except DiffIncompleteError:
+            # F8: the diff timed out — return an EMPTY hunk list but FLAG it, so the
+            # frontend disables "Mark all seen" instead of advancing the watermark
+            # over an empty-because-timed-out queue (silent review-bypass).
+            hunks = []
+            diff_incomplete = True
         return {
             "last_reviewed_sha": wm,
             "head_sha": head,
             "hunks": hunks,
             "proposals": _pending_proposals_payload(project_dir),
+            "diff_incomplete": diff_incomplete,
         }
 
     result = await asyncio.to_thread(_work)
@@ -853,7 +883,16 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
         except ValueError:
             rel = project_dir.as_posix()
         wm = _resolve_watermark(project_dir, ws, rel, _rev_parse_head(ws) or "")   # stale-safe
-        hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
+        try:
+            hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
+        except DiffIncompleteError:
+            # F8: diff timed out — we CANNOT locate the target hunk, so reverting
+            # would be blind. Fail loud (409, retry) rather than 404 "no match"
+            # (which would falsely imply the hunk is gone) or a blind revert.
+            raise HTTPException(
+                status_code=409,
+                detail="Review diff timed out — cannot locate the hunk to revert; retry.",
+            )
         target = next(
             (h for h in hunks if h["signature"] == body.hunk_signature), None
         )
@@ -948,6 +987,29 @@ def _last_content_commit_iso(project_dir: Path) -> Optional[str]:
     return r.stdout.strip() or None
 
 
+def _output_is_committed(project_dir: Path, out_dir: Path) -> bool:
+    """True if the distribute-output dir has at least one commit touching it in
+    this tree — i.e. its mtime is a trustworthy freshness anchor (F2). An
+    uncommitted output (freshly emitted, or a just-checked-out copy) has no
+    reliable commit time, so freshness is UNKNOWN. `git log -1 -- <output path>`
+    returning a commit == committed."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():
+        return False
+    try:
+        rel = out_dir.relative_to(ws).as_posix()
+    except ValueError:
+        return False
+    try:
+        r = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", rel],
+            cwd=str(ws), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 def _distribution_state(project_dir: Path) -> dict:
     """Live distribution projection for one DDD (declared reach + output state)."""
     from core.ddd_distribution_policy import validate_distribution_file
@@ -956,7 +1018,15 @@ def _distribution_state(project_dir: Path) -> dict:
     out_dir = _distribute_output_dir(project_dir)
     output_path: Optional[str] = None
     last_distribute_time: Optional[str] = None
-    source_changed_since = False
+    # TRISTATE (F2): None = freshness UNKNOWN. The freshness signal anchors on the
+    # output dir's filesystem mtime, which git does NOT preserve — after a clone /
+    # checkout / worktree switch every mtime is reset to checkout-time, so an
+    # mtime-based boolean would read "up to date" (or "changed") at random for a
+    # genuinely-stale output. We can only trust the mtime when the output dir is
+    # actually git-committed in THIS tree (so its content is anchored, not a
+    # just-checked-out copy). Uncommitted output → we don't know → None, and the
+    # frontend shows "freshness unknown" rather than a confident-but-wrong boolean.
+    source_changed_since: Optional[bool] = None
     if out_dir is not None:
         output_path = out_dir.name  # the .artifacts/<name> stem (never an abs host path)
         try:
@@ -964,19 +1034,21 @@ def _distribution_state(project_dir: Path) -> dict:
             last_distribute_time = datetime.fromtimestamp(
                 out_mtime, tz=timezone.utc
             ).isoformat()
-            # source_changed_since: the subtree's last KNOWLEDGE commit is NEWER
-            # than the output. "Source" = the DDD's reviewable content, EXCLUDING
-            # .artifacts/ — otherwise committing the distribute output itself (which
-            # lives under .artifacts/) would count as a source change and every
-            # freshly-distributed DDD would falsely read "changed since" (the same
-            # .artifacts exclusion the Run-2 review diff uses). Compare epoch-to-epoch
-            # (Gate-1 #2: parse the ISO commit time — never str-vs-float).
-            iso = _last_content_commit_iso(project_dir)
-            if iso:
-                commit_epoch = datetime.fromisoformat(iso).timestamp()
-                source_changed_since = commit_epoch > out_mtime
+            if _output_is_committed(project_dir, out_dir):
+                # source_changed_since: the subtree's last KNOWLEDGE commit is NEWER
+                # than the output. "Source" = the DDD's reviewable content, EXCLUDING
+                # .artifacts/ (the same exclusion the Run-2 review diff uses), so
+                # committing the output itself never counts as a source change.
+                # Compare epoch-to-epoch (parse the ISO commit time — never str-vs-float).
+                iso = _last_content_commit_iso(project_dir)
+                if iso:
+                    commit_epoch = datetime.fromisoformat(iso).timestamp()
+                    source_changed_since = commit_epoch > out_mtime
+                else:
+                    source_changed_since = False  # committed output, no content commits → up to date
+            # else: uncommitted output → leave None (freshness unknown)
         except (OSError, ValueError):
-            pass
+            source_changed_since = None
     return {
         "declared_targets": list(pol.targets),
         "visibility": pol.visibility,

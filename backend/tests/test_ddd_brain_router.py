@@ -67,6 +67,82 @@ class TestLifecycleStageOrdering:
         assert m._lifecycle_stage(tmp_path, present={}, pending=0) == "CREATE"
 
 
+class TestDiffIncompleteFlag:
+    """F8: a review-diff git timeout must surface diff_incomplete (loud, not silent-empty)."""
+
+    def test_scoped_diff_raises_on_timeout(self, monkeypatch, tmp_path):
+        import subprocess as _sp
+        import routers.ddd_brain as m
+        ws = tmp_path
+        (ws / ".git").mkdir()
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+
+        def _boom(*a, **k):
+            raise _sp.TimeoutExpired(cmd="git diff", timeout=5)
+        monkeypatch.setattr(m.subprocess, "run", _boom)
+        with pytest.raises(m.DiffIncompleteError):
+            m._scoped_diff_hunks(ws / "Projects" / "X", "abc123")
+
+    def test_clean_empty_diff_does_not_raise(self, monkeypatch, tmp_path):
+        """A genuinely clean diff returns [] — only a TIMEOUT raises (F8 distinguishes them)."""
+        import routers.ddd_brain as m
+
+        class _R:
+            returncode = 0
+            stdout = ""
+        ws = tmp_path
+        (ws / ".git").mkdir()
+        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
+        monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: _R())
+        assert m._scoped_diff_hunks(ws / "Projects" / "X", "abc123") == []
+
+
+class TestSourceChangedSinceTristate:
+    """F2: source_changed_since is None (freshness-unknown) when the output is uncommitted."""
+
+    def test_uncommitted_output_is_none_not_false(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        from pathlib import Path as _P
+
+        pd = tmp_path / "Proj"
+        out = pd / ".artifacts" / "distribute"
+        out.mkdir(parents=True)
+        (pd / "aim.json").write_text('{"distribution": {"targets": ["open-plugin"], "visibility": "internal"}}')
+        monkeypatch.setattr(m, "_distribute_output_dir", lambda p: out)
+        # output NOT committed → _output_is_committed False → tristate None
+        monkeypatch.setattr(m, "_output_is_committed", lambda p, o: False)
+        d = m._distribution_state(pd)
+        assert d["has_output"] is True
+        assert d["source_changed_since"] is None, "uncommitted output must be freshness-UNKNOWN (None), never a confident False"
+
+    def test_committed_output_content_newer_is_true(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        out = pd / ".artifacts" / "distribute"
+        out.mkdir(parents=True)
+        (pd / "aim.json").write_text('{"distribution": {"targets": ["open-plugin"], "visibility": "internal"}}')
+        monkeypatch.setattr(m, "_distribute_output_dir", lambda p: out)
+        monkeypatch.setattr(m, "_output_is_committed", lambda p, o: True)
+        # content commit is far in the FUTURE relative to the output dir mtime → changed
+        from datetime import datetime, timezone
+        future = datetime(2999, 1, 1, tzinfo=timezone.utc).isoformat()
+        monkeypatch.setattr(m, "_last_content_commit_iso", lambda p: future)
+        d = m._distribution_state(pd)
+        assert d["source_changed_since"] is True
+
+    def test_committed_output_no_content_commit_is_false(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        pd = tmp_path / "Proj"
+        out = pd / ".artifacts" / "distribute"
+        out.mkdir(parents=True)
+        (pd / "aim.json").write_text('{"distribution": {"targets": ["open-plugin"], "visibility": "internal"}}')
+        monkeypatch.setattr(m, "_distribute_output_dir", lambda p: out)
+        monkeypatch.setattr(m, "_output_is_committed", lambda p, o: True)
+        monkeypatch.setattr(m, "_last_content_commit_iso", lambda p: None)
+        d = m._distribution_state(pd)
+        assert d["source_changed_since"] is False
+
+
 class TestDocstringHonesty:
     """H1: the module docstring must not falsely claim pure-read / two endpoints."""
 
