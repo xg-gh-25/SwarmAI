@@ -17,9 +17,13 @@
  * Reuses: FilePreviewModal (read-only file viewer). No new tree/editor built.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { getBrains, getBrainDetail } from '../../services/ddd';
+import {
+  getBrains, getBrainDetail, getReview, approveReview, rejectReviewHunk,
+  approveProposal, rejectProposal,
+} from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
+  ReviewData, ReviewHunk, PendingProposal,
 } from '../../services/ddd';
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
@@ -54,7 +58,7 @@ const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
 
 // ── Root ───────────────────────────────────────────────────────────────────────
 
-type Tab = 'gallery' | 'brain';
+type Tab = 'gallery' | 'brain' | 'review';
 
 export function BrainHub() {
   const [tab, setTab] = useState<Tab>('gallery');
@@ -88,12 +92,16 @@ export function BrainHub() {
         <TabBtn active={tab === 'brain'} onClick={() => setTab('brain')} disabled={!selected} testid="brainhub-tab-brain">
           Brain{selected ? ` · ${selected}` : ''}
         </TabBtn>
+        <TabBtn active={tab === 'review'} onClick={() => setTab('review')} disabled={!selected} testid="brainhub-tab-review">
+          Review
+        </TabBtn>
       </div>
 
       <div className="flex-1 overflow-auto">
         {error && <div className="p-4 text-[#ef4444] text-[13px]" data-testid="brainhub-error">Failed to load brains: {error}</div>}
         {!error && tab === 'gallery' && <Gallery brains={brains} onOpen={openBrain} />}
         {!error && tab === 'brain' && selected && <BrainView name={selected} agentId={agentId} />}
+        {!error && tab === 'review' && selected && <ReviewView name={selected} />}
       </div>
     </div>
   );
@@ -298,6 +306,176 @@ function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
         ))}
         {entries.length > 60 && <div className="text-[10px] text-[#5b636d] italic">+{entries.length - 60} more…</div>}
       </div>
+    </div>
+  );
+}
+
+// ── Review view (Run 2) ──────────────────────────────────────────────────────
+
+function shortSha(sha: string): string {
+  return sha ? sha.slice(0, 8) : '—';
+}
+
+function ReviewView({ name }: { name: string }) {
+  const [data, setData] = useState<ReviewData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    let alive = true;
+    setData(null);
+    setError(null);
+    getReview(name).then(
+      (d) => alive && setData(d),
+      (e) => alive && setError(String(e?.message ?? e)),
+    );
+    return () => { alive = false; };
+  }, [name]);
+
+  useEffect(() => load(), [load]);  // load() returns its own alive-cleanup, invoked on unmount/re-run
+
+  const onApproveAll = useCallback(async () => {
+    setBusy(true);
+    try { await approveReview(name); load(); } finally { setBusy(false); }
+  }, [name, load]);
+
+  const onRejectHunk = useCallback(async (h: ReviewHunk) => {
+    setBusy(true);
+    try { await rejectReviewHunk(name, h.file, h.signature); load(); } finally { setBusy(false); }
+  }, [name, load]);
+
+  const onProposal = useCallback(async (p: PendingProposal, accept: boolean) => {
+    setBusy(true);
+    try {
+      if (accept) await approveProposal(p.id, name);
+      else await rejectProposal(p.id, name);
+      load();
+    } finally { setBusy(false); }
+  }, [name, load]);
+
+  if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="review-error">Failed to load review: {error}</div>;
+  if (!data) return <div className="p-4 text-[#8b949e] text-[13px]">Loading review…</div>;
+
+  // Zone A = auto-applied hunks; Zone B (decay·sinking) reserved (engine-driven,
+  // not derivable from the git diff in phase-1 — shown empty, never fabricated).
+  const zoneA = data.hunks.filter((h) => h.tag === 'cultivation·auto-applied');
+  const zoneB = data.hunks.filter((h) => h.tag === 'decay·sinking');
+  const riskyHunks = data.hunks.filter((h) => h.tag === 'risky·staged');
+
+  return (
+    <div className="p-4" data-testid="brainhub-review">
+      {/* diff header */}
+      <div className="flex items-center gap-2 mb-3 text-[11px] font-mono text-[#8b949e]" data-testid="review-diff-header">
+        <span className="material-symbols-outlined text-[15px] text-[#a855f7]">commit</span>
+        diff <span className="text-[#e6edf3]">Projects/{name}/</span>
+        · last-reviewed <span className="text-[#e6edf3]">{shortSha(data.last_reviewed_sha)}</span>
+        → HEAD <span className="text-[#e6edf3]">{shortSha(data.head_sha)}</span>
+        <button
+          onClick={onApproveAll}
+          disabled={busy || data.hunks.length === 0}
+          data-testid="review-approve-all"
+          className="ml-auto flex items-center gap-1 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2 py-0.5 hover:bg-[#132918] disabled:opacity-40"
+        >
+          <span className="material-symbols-outlined text-[14px]">visibility</span>
+          Mark all seen → advance watermark
+        </button>
+      </div>
+
+      {/* Zone A — auto-cultivated (already committed) */}
+      <ReviewZone
+        testid="review-zone-a" title="Auto-cultivated · already in brain"
+        desc="applied + git-committed — NOT awaiting approval. Reject reverts that hunk."
+        color="#58a6ff"
+      >
+        {zoneA.length === 0 ? <ZoneEmpty text="no auto-applied changes since last review" />
+          : zoneA.map((h) => (
+            <HunkCard key={h.signature} hunk={h} busy={busy}
+              onReject={() => onRejectHunk(h)} />
+          ))}
+      </ReviewZone>
+
+      {/* Zone B — decay·sinking (engine-driven; phase-1 informational) */}
+      <ReviewZone
+        testid="review-zone-b" title="Decay · engine-driven sinking"
+        desc="entries crossing dormant/archived — engine-driven, reversible."
+        color="#db8c3a"
+      >
+        {zoneB.length === 0 ? <ZoneEmpty text="no sinking entries surfaced in this diff" />
+          : zoneB.map((h) => (
+            <HunkCard key={h.signature} hunk={h} busy={busy}
+              onReject={() => onRejectHunk(h)} />
+          ))}
+      </ReviewZone>
+
+      {/* Zone C — pending risky proposals (the ONLY true Approve/Reject gate) */}
+      <ReviewZone
+        testid="review-zone-c" title="Pending approval · NOT yet in brain"
+        desc="risky proposals in .artifacts/proposals/ — the real gate."
+        color="#f0a500"
+      >
+        {data.proposals.length === 0 && riskyHunks.length === 0
+          ? <ZoneEmpty text="no proposals awaiting decision" />
+          : data.proposals.map((p) => (
+            <div key={p.id} className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-2 mb-1.5" data-testid="review-proposal">
+              <div className="flex items-center gap-1.5 mb-1 text-[11px]">
+                <span className="font-mono text-[#f0a500]">{p.target_doc}</span>
+                <span className="text-[#5b636d]">· {p.target_section}</span>
+                <div className="ml-auto flex gap-1">
+                  <button onClick={() => onProposal(p, true)} disabled={busy}
+                    className="text-[10px] text-[#3fb950] border border-[#1f5a2a] rounded px-1.5 py-0.5 hover:bg-[#132918] disabled:opacity-40">Approve</button>
+                  <button onClick={() => onProposal(p, false)} disabled={busy}
+                    className="text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40">Reject</button>
+                </div>
+              </div>
+              <div className="text-[10px] text-[#8b949e] line-clamp-2">{p.content}</div>
+            </div>
+          ))}
+      </ReviewZone>
+    </div>
+  );
+}
+
+function ReviewZone({ testid, title, desc, color, children }: {
+  testid: string; title: string; desc: string; color: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="mb-4" data-testid={testid}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[12px] font-semibold" style={{ color }}>{title}</span>
+        <span className="text-[10px] text-[#5b636d]">{desc}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ZoneEmpty({ text }: { text: string }) {
+  return <div className="text-[11px] text-[#5b636d] italic px-1 py-1">{text}</div>;
+}
+
+function HunkCard({ hunk, busy, onReject }: { hunk: ReviewHunk; busy: boolean; onReject: () => void }) {
+  return (
+    <div className="rounded-md border border-[#222831] bg-[#12161c] mb-1.5 overflow-hidden" data-testid="review-hunk">
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[#222831]">
+        <span className="font-mono text-[10px] text-[#8b949e]">{hunk.file}</span>
+        <button
+          onClick={onReject}
+          disabled={busy}
+          data-testid="review-reject-hunk"
+          className="ml-auto flex items-center gap-1 text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40"
+        >
+          <span className="material-symbols-outlined text-[13px]">undo</span>
+          Revert hunk
+        </button>
+      </div>
+      <pre className="text-[10px] font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40">
+        {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
+          const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
+            : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
+            : '#5b636d';
+          return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
+        })}
+      </pre>
     </div>
   );
 }

@@ -19,9 +19,19 @@ import type { BrainSummary, BrainDetail } from '../../services/ddd';
 
 const mockGetBrains = vi.fn();
 const mockGetBrainDetail = vi.fn();
+const mockGetReview = vi.fn();
+const mockApproveReview = vi.fn();
+const mockRejectHunk = vi.fn();
+const mockApproveProposal = vi.fn();
+const mockRejectProposal = vi.fn();
 vi.mock('../../services/ddd', () => ({
   getBrains: (...a: unknown[]) => mockGetBrains(...a),
   getBrainDetail: (...a: unknown[]) => mockGetBrainDetail(...a),
+  getReview: (...a: unknown[]) => mockGetReview(...a),
+  approveReview: (...a: unknown[]) => mockApproveReview(...a),
+  rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
+  approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
+  rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
 }));
 
 vi.mock('../../services/agents', () => ({
@@ -79,10 +89,27 @@ const DETAIL: BrainDetail = {
   ],
 };
 
+const REVIEW = {
+  last_reviewed_sha: 'a00ae4600000000000000000000000000000000',
+  head_sha: 'ddbcfcd800000000000000000000000000000000',
+  hunks: [
+    { file: 'Projects/SwarmAI/2-understanding/TECH.md', signature: 'sigA1', tag: 'cultivation·auto-applied' as const,
+      diff_text: 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new' },
+  ],
+  proposals: [
+    { id: 'prop-1', target_doc: 'PRODUCT.md', target_section: 'Strategic', content: 'a risky proposal', confidence: 0.7, source_run_id: 'run_x' },
+  ],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetBrains.mockResolvedValue(GALLERY);
   mockGetBrainDetail.mockResolvedValue(DETAIL);
+  mockGetReview.mockResolvedValue(REVIEW);
+  mockApproveReview.mockResolvedValue({ last_reviewed_sha: REVIEW.head_sha });
+  mockRejectHunk.mockResolvedValue({ reverted: true });
+  mockApproveProposal.mockResolvedValue({});
+  mockRejectProposal.mockResolvedValue({});
 });
 
 describe('BrainHub — Gallery (AC3)', () => {
@@ -179,5 +206,48 @@ describe('BrainHubDemoOverlay (AC5)', () => {
     // real React BrainHub mounted, NO iframe
     expect(screen.getByTestId('brain-hub')).toBeTruthy();
     expect(container.querySelector('iframe')).toBeNull();
+  });
+});
+
+describe('BrainHub — Review tab (Run 2, AC5)', () => {
+  async function openReview() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));         // selects + opens Brain
+    await waitFor(() => expect(screen.getByTestId('brainhub-tab-review')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brainhub-tab-review'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
+  }
+
+  it('renders the 3 zones + diff header with both SHAs', async () => {
+    await openReview();
+    expect(screen.getByTestId('review-zone-a')).toBeTruthy();
+    expect(screen.getByTestId('review-zone-b')).toBeTruthy();
+    expect(screen.getByTestId('review-zone-c')).toBeTruthy();
+    const hdr = screen.getByTestId('review-diff-header').textContent ?? '';
+    expect(hdr).toContain('a00ae46');   // last-reviewed short sha
+    expect(hdr).toContain('ddbcfcd8');  // HEAD short sha
+    expect(hdr).toContain('Projects/SwarmAI/');
+  });
+
+  it('reject-hunk calls rejectReviewHunk with the content SIGNATURE (not an index)', async () => {
+    await openReview();
+    fireEvent.click(screen.getByTestId('review-reject-hunk'));
+    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
+    expect(mockRejectHunk).toHaveBeenCalledWith('SwarmAI', 'Projects/SwarmAI/2-understanding/TECH.md', 'sigA1');
+  });
+
+  it('mark-all-seen calls approveReview (advance watermark)', async () => {
+    await openReview();
+    fireEvent.click(screen.getByTestId('review-approve-all'));
+    await waitFor(() => expect(mockApproveReview).toHaveBeenCalledWith('SwarmAI'));
+  });
+
+  it('Zone C proposal Approve delegates to cultivation (approveProposal)', async () => {
+    await openReview();
+    const zoneC = screen.getByTestId('review-zone-c');
+    const approveBtn = Array.from(zoneC.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!;
+    fireEvent.click(approveBtn);
+    await waitFor(() => expect(mockApproveProposal).toHaveBeenCalledWith('prop-1', 'SwarmAI'));
   });
 });
