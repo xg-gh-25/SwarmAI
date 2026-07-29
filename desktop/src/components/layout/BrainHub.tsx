@@ -415,11 +415,17 @@ function ReviewView({ name }: { name: string }) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // H2: "Mark all seen" advances the watermark IRREVERSIBLY (wipes the review
+  // queue from the diff). Require a two-click armed confirm so a single stray
+  // click can't wipe it. `armed` MUST reset on any context change (reload after
+  // any action, brain switch) so it never persists stale — reset in load() below.
+  const [armed, setArmed] = useState(false);
 
   const load = useCallback(() => {
     let alive = true;
     setData(null);
     setError(null);
+    setArmed(false);   // disarm on every (re)load: brain switch, or after any action
     getReview(name).then(
       (d) => alive && setData(d),
       (e) => alive && setError(String(e?.message ?? e)),
@@ -430,9 +436,21 @@ function ReviewView({ name }: { name: string }) {
   useEffect(() => load(), [load]);  // load() returns its own alive-cleanup, invoked on unmount/re-run
 
   const onApproveAll = useCallback(async () => {
+    if (!armed) { setArmed(true); return; }   // first click arms; no API call yet
     setBusy(true);
-    try { await approveReview(name); load(); } finally { setBusy(false); }
-  }, [name, load]);
+    // ALWAYS disarm (finally) — Gate-2: if approveReview throws, armed must NOT stay
+    // stuck true (a stale-armed button would let the next single click re-fire the
+    // POST, bypassing the two-click guard). Surface the error instead of swallowing.
+    try {
+      await approveReview(name);
+      load();
+    } catch (e) {
+      setError(String((e as { message?: string })?.message ?? e));
+    } finally {
+      setArmed(false);
+      setBusy(false);
+    }
+  }, [name, load, armed]);
 
   const onRejectHunk = useCallback(async (h: ReviewHunk) => {
     setBusy(true);
@@ -469,10 +487,15 @@ function ReviewView({ name }: { name: string }) {
           onClick={onApproveAll}
           disabled={busy || data.hunks.length === 0}
           data-testid="review-approve-all"
-          className="ml-auto flex items-center gap-1 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2 py-0.5 hover:bg-[#132918] disabled:opacity-40"
+          className={`ml-auto flex items-center gap-1 text-[11px] rounded-md px-2 py-0.5 disabled:opacity-40 ${
+            armed
+              ? 'text-[#f0a500] border border-[#5a4a1f] bg-[#241f10] hover:bg-[#2e2814]'
+              : 'text-[#3fb950] border border-[#1f5a2a] hover:bg-[#132918]'
+          }`}
+          title={armed ? 'This advances the watermark and clears the review queue — click again to confirm' : undefined}
         >
-          <span className="material-symbols-outlined text-[14px]">visibility</span>
-          Mark all seen → advance watermark
+          <span className="material-symbols-outlined text-[14px]">{armed ? 'warning' : 'visibility'}</span>
+          {armed ? 'Click again to confirm — advances watermark' : 'Mark all seen → advance watermark'}
         </button>
       </div>
 

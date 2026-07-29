@@ -32,6 +32,52 @@ def client():
     return TestClient(app)
 
 
+class TestLifecycleStageOrdering:
+    """M3: REVIEW (pending human decision) must dominate DISTRIBUTE.
+
+    A brain that has already distributed AND accrued new pending proposals must
+    surface REVIEW — the frontend renders lifecycleStage as a linear stepper with
+    DISTRIBUTE terminal, so DISTRIBUTE-first would light the bar fully green and
+    HIDE the un-reviewed work.
+    """
+
+    def test_pending_dominates_distribute_output(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        # A brain that HAS a distribute output AND HAS pending proposals.
+        monkeypatch.setattr(m, "_has_distribute_output", lambda pd: True)
+        monkeypatch.setattr(m, "_entry_count", lambda pd: 5)
+        stage = m._lifecycle_stage(tmp_path, present={}, pending=2)
+        assert stage == "REVIEW", (
+            "pending>0 must yield REVIEW even when a distribute output exists — "
+            "else the stepper hides the un-reviewed queue behind a terminal DISTRIBUTE"
+        )
+
+    def test_distribute_when_no_pending(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        monkeypatch.setattr(m, "_has_distribute_output", lambda pd: True)
+        monkeypatch.setattr(m, "_entry_count", lambda pd: 5)
+        assert m._lifecycle_stage(tmp_path, present={}, pending=0) == "DISTRIBUTE"
+
+    def test_grow_and_create_fallthrough_unchanged(self, monkeypatch, tmp_path):
+        import routers.ddd_brain as m
+        monkeypatch.setattr(m, "_has_distribute_output", lambda pd: False)
+        monkeypatch.setattr(m, "_entry_count", lambda pd: 3)
+        assert m._lifecycle_stage(tmp_path, present={}, pending=0) == "GROW"
+        monkeypatch.setattr(m, "_entry_count", lambda pd: 0)
+        assert m._lifecycle_stage(tmp_path, present={}, pending=0) == "CREATE"
+
+
+class TestDocstringHonesty:
+    """H1: the module docstring must not falsely claim pure-read / two endpoints."""
+
+    def test_docstring_does_not_claim_pure_read(self):
+        import routers.ddd_brain as m
+        doc = m.__doc__ or ""
+        assert "PURE READ" not in doc, "docstring still claims PURE READ — Run2 added mutating POSTs"
+        # names the mutating reality
+        assert "apply -R" in doc and "watermark" in doc.lower()
+
+
 class TestBrainsList:
     """GET /api/ddd/brains — Gallery data (AC1)."""
 

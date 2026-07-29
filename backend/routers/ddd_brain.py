@@ -1,15 +1,33 @@
-"""DDD Brain Hub — read-only projection router (GET /api/ddd/brains[/{name}]).
+"""DDD Brain Hub — projection + review router (/api/ddd/brains…).
 
-The backend half of the Brain Hub Phase-1 "lens" (design 2026-07-28). It is a
-PURE READ projection over existing state — it introduces NO new source of truth
-and NO stored metric (R30#4: every count is computed live per request). Two
-endpoints:
+The backend half of the Brain Hub "lens" (design 2026-07-28), grown across four
+Runs. Most endpoints are READ projections over existing state that introduce NO
+stored metric (R30#4: every count is computed live per request) — but the Review
+tab (Run 2) added two **mutating** POSTs, so this router is NO LONGER pure-read.
 
-  GET /api/ddd/brains          → Gallery: one summary card per DDD project.
-  GET /api/ddd/brains/{name}   → Brain view: the six-section breakdown + the
-                                 per-entry decay/type state of the ② docs.
+Six handlers (4 read, 2 mutating):
 
-Data sources (all existing, all read-only):
+  READ:
+  GET  /api/ddd/brains                     → Gallery: one summary card per DDD.
+  GET  /api/ddd/brains/{name}              → Brain view: six-section breakdown +
+                                             per-entry decay/type state of ② docs.
+  GET  /api/ddd/brains/{name}/review       → Review queue: tagged git-diff hunks
+                                             since the watermark + pending proposals.
+  GET  /api/ddd/brains/{name}/distribution → Distribute: declared reach + output state.
+
+  MUTATING (write the working tree / a stored artifact — NOT read-only):
+  POST /api/ddd/brains/{name}/review/approve → advances the last-reviewed watermark
+                                             to HEAD by WRITING .artifacts/.last-reviewed-sha
+                                             (a per-DDD stored file — the one persisted artifact).
+  POST /api/ddd/brains/{name}/review/reject  → reverse-applies ONE hunk via
+                                             `git apply -R` (MODIFIES the working tree,
+                                             subtree-scoped, --check-guarded).
+
+⚠️ No app-layer auth on these POSTs — consistent with every other SwarmAI router
+(the daemon binds 127.0.0.1 and Hive fronts /api/* with Caddy basic_auth; app-layer
+auth is not the codebase pattern). Do not add route auth to only this router.
+
+Data sources:
   - structure   ← core.ddd_paths (six-section layout SSOT — NEVER hardcode dirs)
   - judgment    ← core.ddd_entry_lifecycle.parse_entries (decay_state/type/…)
   - change      ← `git status --porcelain -z` (run here via asyncio.to_thread —
@@ -332,11 +350,18 @@ def _lifecycle_stage(project_dir: Path, present: dict[str, bool], pending: int) 
     DISTRIBUTE — has a distribute output under .artifacts/.
     A brain with 0 governed assets is COMPLETE, not stuck (R31) — so we never
     emit a 'blocked' stage; the four are progressive-but-non-terminal.
+
+    ORDER — REVIEW dominates DISTRIBUTE (not step-index order). A brain that has
+    already distributed AND has accrued new pending proposals must surface REVIEW,
+    not DISTRIBUTE: a pending human decision is the more actionable signal, and the
+    frontend renders lifecycleStage as a linear stepper (DISTRIBUTE = terminal),
+    so DISTRIBUTE-first would light the bar fully green and HIDE the un-reviewed
+    work. `health.pending` still carries the count independently.
     """
-    if _has_distribute_output(project_dir):
-        return "DISTRIBUTE"
     if pending > 0:
         return "REVIEW"
+    if _has_distribute_output(project_dir):
+        return "DISTRIBUTE"
     if _entry_count(project_dir) > 0:
         return "GROW"
     return "CREATE"
@@ -477,11 +502,16 @@ async def list_brains() -> dict:
 
 @router.get("/brains/{name}")
 async def get_brain(name: str) -> dict:
-    """Brain view: six-section breakdown + ② per-entry decay/type state."""
-    project_dir = _projects_root() / name
+    """Brain view: six-section breakdown + ② per-entry decay/type state.
 
+    Resolves via _resolve_brain_dir for the SAME containment (parent==root +
+    resolved-symlink) guard the review/distribution endpoints use — get_brain is
+    read-only, but keeping all brain endpoints on one resolver removes the
+    "why is this one different" seam (no bare _projects_root()/name join).
+    """
     def _detail_or_none():
-        if not (project_dir.is_dir() and (project_dir / ".project.json").exists()):
+        project_dir = _resolve_brain_dir(name)   # containment-checked (parent==root, resolved)
+        if project_dir is None:
             return None
         return _brain_detail(project_dir)
 

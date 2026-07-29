@@ -365,10 +365,36 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     expect(mockRejectHunk).toHaveBeenCalledWith('SwarmAI', 'Projects/SwarmAI/2-understanding/TECH.md', 'sigA1');
   });
 
-  it('mark-all-seen calls approveReview (advance watermark)', async () => {
+  it('mark-all-seen (H2) ARMS on first click — does NOT advance the watermark', async () => {
     await openReview();
-    fireEvent.click(screen.getByTestId('review-approve-all'));
+    const btn = screen.getByTestId('review-approve-all');
+    fireEvent.click(btn);
+    // first click must NOT call approveReview — it only arms the confirm.
+    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
+    expect(mockApproveReview).not.toHaveBeenCalled();
+  });
+
+  it('mark-all-seen (H2) advances the watermark on the SECOND (confirm) click', async () => {
+    await openReview();
+    const btn = screen.getByTestId('review-approve-all');
+    fireEvent.click(btn);                                  // arm
+    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
+    fireEvent.click(btn);                                  // confirm
     await waitFor(() => expect(mockApproveReview).toHaveBeenCalledWith('SwarmAI'));
+  });
+
+  it('mark-all-seen (H2) armed state DISARMS after rejecting a hunk (load() reset)', async () => {
+    // REVIEW-flagged coverage gap: arming approve-all then taking another action
+    // (which calls load()) must reset the armed state so a later stray click on
+    // approve-all does NOT immediately confirm.
+    await openReview();
+    const btn = screen.getByTestId('review-approve-all');
+    fireEvent.click(btn);                                  // arm approve-all
+    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
+    fireEvent.click(screen.getByTestId('review-reject-hunk')); // different action → load() → disarm
+    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('review-approve-all').textContent).toContain('Mark all seen'));
+    expect(mockApproveReview).not.toHaveBeenCalled();      // never confirmed
   });
 
   it('Zone C proposal Approve delegates to cultivation (approveProposal)', async () => {
