@@ -19,11 +19,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   getBrains, getBrainDetail, getReview, approveReview, rejectReviewHunk,
-  approveProposal, rejectProposal,
+  approveProposal, rejectProposal, getDistribution,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
-  ReviewData, ReviewHunk, PendingProposal,
+  ReviewData, ReviewHunk, PendingProposal, DistributionState,
 } from '../../services/ddd';
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
@@ -58,7 +58,7 @@ const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
 
 // ── Root ───────────────────────────────────────────────────────────────────────
 
-type Tab = 'gallery' | 'brain' | 'review';
+type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
 
 export function BrainHub() {
   const [tab, setTab] = useState<Tab>('gallery');
@@ -95,6 +95,9 @@ export function BrainHub() {
         <TabBtn active={tab === 'review'} onClick={() => setTab('review')} disabled={!selected} testid="brainhub-tab-review">
           Review
         </TabBtn>
+        <TabBtn active={tab === 'distribute'} onClick={() => setTab('distribute')} disabled={!selected} testid="brainhub-tab-distribute">
+          Distribute
+        </TabBtn>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -102,6 +105,7 @@ export function BrainHub() {
         {!error && tab === 'gallery' && <Gallery brains={brains} onOpen={openBrain} />}
         {!error && tab === 'brain' && selected && <BrainView name={selected} agentId={agentId} />}
         {!error && tab === 'review' && selected && <ReviewView name={selected} />}
+        {!error && tab === 'distribute' && selected && <DistributeView name={selected} />}
       </div>
     </div>
   );
@@ -476,6 +480,118 @@ function HunkCard({ hunk, busy, onReject }: { hunk: ReviewHunk; busy: boolean; o
           return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
         })}
       </pre>
+    </div>
+  );
+}
+
+// ── Distribute view (Run 3) ──────────────────────────────────────────────────
+
+function DistributeView({ name }: { name: string }) {
+  const [data, setData] = useState<DistributionState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null);
+    setError(null);
+    getDistribution(name).then(
+      (d) => alive && setData(d),
+      (e) => alive && setError(String(e?.message ?? e)),
+    );
+    return () => { alive = false; };
+  }, [name]);
+
+  // [Distribute a brain] does NOT auto-run — s_ddd-distribute is human-in-the-loop
+  // (confirms targets + content-safety scan + emit≠publish). We surface the exact
+  // chat command; the user invokes it in a chat tab where the HITL gate runs.
+  const distributeCmd = `distribute this ddd: ${name}`;
+  const [copied, setCopied] = useState(false);
+  const onDistribute = useCallback(() => {
+    // Guard BOTH the method (clipboard may be absent in an older webview) AND the
+    // returned promise (?. on .then too) — Gate-2 HIGH: `clipboard?.writeText(x).then`
+    // still throws if clipboard exists but writeText returns undefined.
+    const p = navigator.clipboard?.writeText(distributeCmd);
+    p?.then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
+      () => {},
+    );
+  }, [distributeCmd]);
+
+  if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="distribute-error">Failed to load distribution: {error}</div>;
+  if (!data) return <div className="p-4 text-[#8b949e] text-[13px]">Loading distribution…</div>;
+
+  return (
+    <div className="p-4" data-testid="brainhub-distribute">
+      {/* declared reach */}
+      {data.distributable ? (
+        <>
+          <div className="flex items-center gap-2 mb-3 text-[12px]">
+            <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
+            <span className="font-semibold text-[#e6edf3]">Distributable</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[#1f2630] text-[#8b949e]'}`}>
+              {data.visibility}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5 mb-4" data-testid="distribute-targets">
+            {data.declared_targets.map((t) => (
+              <div key={t} className="flex items-center gap-2 rounded-md border border-[#222831] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
+                <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
+                <span className="font-mono text-[11px] text-[#e6edf3]">{t}</span>
+                {data.has_output && data.source_changed_since && (
+                  <span className="ml-auto text-[9px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
+                )}
+                {data.has_output && !data.source_changed_since && (
+                  <span className="ml-auto text-[9px] text-[#5b636d]">up to date</span>
+                )}
+                {!data.has_output && (
+                  <span className="ml-auto text-[9px] text-[#5b636d]">never distributed</span>
+                )}
+              </div>
+            ))}
+          </div>
+          {data.has_output && (
+            <div className="text-[10px] text-[#5b636d] mb-3 font-mono">
+              last output: {data.output_path} {data.last_distribute_time ? `· ${data.last_distribute_time.slice(0, 10)}` : ''}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-3 mb-4" data-testid="distribute-not-distributable">
+          <div className="flex items-center gap-2 text-[12px] text-[#f0a500] mb-1">
+            <span className="material-symbols-outlined text-[16px]">block</span>
+            Not distributable
+          </div>
+          <div className="text-[10px] text-[#8b949e] leading-relaxed">
+            This brain has no <span className="font-mono">distribution</span> block in its <span className="font-mono">aim.json</span>.
+            The owner must declare a reach before it can be distributed — add to <span className="font-mono">aim.json</span>:
+            <code className="block mt-1 px-2 py-1 rounded bg-[#0e1117] text-[#8b949e] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
+            {data.warnings.length > 0 && <span className="block mt-1 text-[#ff9a94]">⚠ {data.warnings.join('; ')}</span>}
+            {/* Gate-2 MED: a stale output with the block since removed — surface it, don't hide it. */}
+            {data.has_output && (
+              <span className="block mt-1 text-[#db8c3a]" data-testid="distribute-stale-output">
+                ⚠ an orphaned distribute output still exists (<span className="font-mono">{data.output_path}</span>) — the reach was declared before, then removed.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* [Distribute a brain] — guidance, not auto-run (HITL) */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onDistribute}
+          disabled={!data.distributable}
+          data-testid="distribute-button"
+          className="flex items-center gap-1.5 text-[11px] text-[#3fb950] border border-[#1f5a2a] rounded-md px-2.5 py-1 hover:bg-[#132918] disabled:opacity-40 disabled:cursor-not-allowed"
+          title={data.distributable ? 'Copy the chat command to run s_ddd-distribute' : 'Declare a distribution block first'}
+        >
+          <span className="material-symbols-outlined text-[14px]">content_copy</span>
+          {copied ? 'Copied — paste into a chat tab' : 'Distribute a brain'}
+        </button>
+        {data.distributable && (
+          <span className="text-[10px] text-[#5b636d] font-mono">→ {distributeCmd}</span>
+        )}
+      </div>
     </div>
   );
 }

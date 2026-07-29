@@ -101,6 +101,22 @@ export interface ReviewData {
   proposals: PendingProposal[];
 }
 
+// ── Distribute tab (Run 3) ────────────────────────────────────────────────────
+
+/** A DDD's live distribution state — declared reach + output state. No stored metric. */
+export interface DistributionState {
+  /** declared targets (aim-capabilities / open-plugin); [] = not declared */
+  declared_targets: string[];
+  visibility: string;                    // internal | external
+  distributable: boolean;                // true iff declared_targets non-empty
+  declared: boolean;                     // aim.json had a distribution block
+  warnings: string[];                    // policy warnings (malformed/unknown token)
+  has_output: boolean;                   // a distribute output exists under .artifacts/
+  output_path: string | null;            // the .artifacts/<name> stem
+  last_distribute_time: string | null;   // ISO, from output dir mtime (display-only)
+  source_changed_since: boolean;         // knowledge committed AFTER last distribute
+}
+
 // ── API ──────────────────────────────────────────────────────────────────────
 
 /** GET /api/ddd/brains — Gallery: one live summary per DDD project. */
@@ -153,6 +169,14 @@ export async function approveProposal(id: string, project: string): Promise<unkn
 export async function rejectProposal(id: string, project: string): Promise<unknown> {
   const resp = await api.post(
     `/cultivation/proposals/${encodeURIComponent(id)}/reject?project=${encodeURIComponent(project)}`,
+  );
+  return resp.data;
+}
+
+/** GET …/distribution — live declared reach + output state (read-only). */
+export async function getDistribution(name: string): Promise<DistributionState> {
+  const resp = await api.get<DistributionState>(
+    `/ddd/brains/${encodeURIComponent(name)}/distribution`,
   );
   return resp.data;
 }

@@ -342,14 +342,24 @@ def _lifecycle_stage(project_dir: Path, present: dict[str, bool], pending: int) 
     return "CREATE"
 
 
-def _has_distribute_output(project_dir: Path) -> bool:
+def _distribute_output_dir(project_dir: Path) -> Optional[Path]:
+    """The distribute-output dir under .artifacts/ if one exists, else None.
+
+    Single source for BOTH the lifecycle-stage bool (via _has_distribute_output)
+    and the Run-3 distribution projection (which needs the PATH + mtime). Returns
+    the FIRST matching well-known output dir."""
     art = project_dir / ".artifacts"
     if not art.is_dir():
-        return False
+        return None
     for pat in ("dist", "distribute", "package", "packages"):
-        if (art / pat).exists():
-            return True
-    return False
+        cand = art / pat
+        if cand.exists():
+            return cand
+    return None
+
+
+def _has_distribute_output(project_dir: Path) -> bool:
+    return _distribute_output_dir(project_dir) is not None
 
 
 def _read_kind(project_dir: Path) -> str:
@@ -866,3 +876,101 @@ async def reject_review(name: str, body: RejectHunkBody) -> dict:
         return {"reverted": True, "file": target["file"], "signature": body.hunk_signature}
 
     return await asyncio.to_thread(_work)
+
+
+# ─── Distribute tab (Run 3) ──────────────────────────────────────────────────
+#
+# A READ-ONLY projection of each DDD's distribution state. The data model is the
+# DDD's DECLARED REACH — NOT a "target host": aim.json carries a `distribution`
+# block {targets ⊆ [aim-capabilities, open-plugin], visibility} read via the
+# policy validator (ddd_distribution_policy.validate_distribution_file — the SSOT;
+# we NEVER hand-parse it). A DDD with no block is fail-closed "not distributable"
+# (the honest phase-1 state for every current DDD — never fabricate targets).
+#
+# The [Distribute a brain] button does NOT run distribution server-side:
+# s_ddd-distribute is human-in-the-loop by design (confirms targets + fail-closed
+# content-safety scan + emit≠publish). The frontend surfaces the exact chat
+# command instead — the HITL skill stays the only emit path (Gate-1/THINK).
+# No stored metric — all live-computed (R30#4).
+
+
+def _last_content_commit_iso(project_dir: Path) -> Optional[str]:
+    """ISO time of the last commit touching this DDD's KNOWLEDGE content —
+    the subtree EXCLUDING .artifacts/ (pipeline bookkeeping, incl. the distribute
+    output itself). Mirrors the Run-2 review-diff .artifacts exclusion."""
+    ws = _workspace_root()
+    if not (ws / ".git").exists():
+        return None
+    try:
+        rel = project_dir.relative_to(ws).as_posix()
+    except ValueError:
+        rel = project_dir.as_posix()
+    try:
+        r = subprocess.run(
+            ["git", "log", "-1", "--format=%cI", "--",
+             rel, f":(exclude){rel}/.artifacts/**"],
+            cwd=str(ws), capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None
+
+
+def _distribution_state(project_dir: Path) -> dict:
+    """Live distribution projection for one DDD (declared reach + output state)."""
+    from core.ddd_distribution_policy import validate_distribution_file
+
+    pol = validate_distribution_file(project_dir / "aim.json")
+    out_dir = _distribute_output_dir(project_dir)
+    output_path: Optional[str] = None
+    last_distribute_time: Optional[str] = None
+    source_changed_since = False
+    if out_dir is not None:
+        output_path = out_dir.name  # the .artifacts/<name> stem (never an abs host path)
+        try:
+            out_mtime = out_dir.stat().st_mtime
+            last_distribute_time = datetime.fromtimestamp(
+                out_mtime, tz=timezone.utc
+            ).isoformat()
+            # source_changed_since: the subtree's last KNOWLEDGE commit is NEWER
+            # than the output. "Source" = the DDD's reviewable content, EXCLUDING
+            # .artifacts/ — otherwise committing the distribute output itself (which
+            # lives under .artifacts/) would count as a source change and every
+            # freshly-distributed DDD would falsely read "changed since" (the same
+            # .artifacts exclusion the Run-2 review diff uses). Compare epoch-to-epoch
+            # (Gate-1 #2: parse the ISO commit time — never str-vs-float).
+            iso = _last_content_commit_iso(project_dir)
+            if iso:
+                commit_epoch = datetime.fromisoformat(iso).timestamp()
+                source_changed_since = commit_epoch > out_mtime
+        except (OSError, ValueError):
+            pass
+    return {
+        "declared_targets": list(pol.targets),
+        "visibility": pol.visibility,
+        "distributable": pol.is_distributable,
+        "declared": pol.declared,
+        "warnings": list(pol.warnings),
+        "has_output": out_dir is not None,
+        "output_path": output_path,
+        "last_distribute_time": last_distribute_time,
+        "source_changed_since": source_changed_since,
+    }
+
+
+@router.get("/brains/{name}/distribution")
+async def get_distribution(name: str) -> dict:
+    """Distribution state: declared reach (targets+visibility) + output state."""
+
+    def _work() -> Optional[dict]:
+        project_dir = _resolve_brain_dir(name)   # containment-checked (Run 2 guard)
+        if project_dir is None:
+            return None
+        return _distribution_state(project_dir)
+
+    result = await asyncio.to_thread(_work)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    return result

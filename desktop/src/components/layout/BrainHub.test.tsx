@@ -24,6 +24,7 @@ const mockApproveReview = vi.fn();
 const mockRejectHunk = vi.fn();
 const mockApproveProposal = vi.fn();
 const mockRejectProposal = vi.fn();
+const mockGetDistribution = vi.fn();
 vi.mock('../../services/ddd', () => ({
   getBrains: (...a: unknown[]) => mockGetBrains(...a),
   getBrainDetail: (...a: unknown[]) => mockGetBrainDetail(...a),
@@ -32,6 +33,7 @@ vi.mock('../../services/ddd', () => ({
   rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
   approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
   rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
+  getDistribution: (...a: unknown[]) => mockGetDistribution(...a),
 }));
 
 vi.mock('../../services/agents', () => ({
@@ -110,6 +112,12 @@ beforeEach(() => {
   mockRejectHunk.mockResolvedValue({ reverted: true });
   mockApproveProposal.mockResolvedValue({});
   mockRejectProposal.mockResolvedValue({});
+  mockGetDistribution.mockResolvedValue({
+    declared_targets: ['open-plugin'], visibility: 'internal',
+    distributable: true, declared: true, warnings: [],
+    has_output: false, output_path: null, last_distribute_time: null,
+    source_changed_since: false,
+  });
 });
 
 describe('BrainHub — Gallery (AC3)', () => {
@@ -249,5 +257,44 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     const approveBtn = Array.from(zoneC.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!;
     fireEvent.click(approveBtn);
     await waitFor(() => expect(mockApproveProposal).toHaveBeenCalledWith('prop-1', 'SwarmAI'));
+  });
+});
+
+describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
+  async function openDistribute() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
+  }
+
+  it('renders declared targets for a distributable brain', async () => {
+    await openDistribute();
+    const rows = screen.getAllByTestId('distribute-target-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0].textContent).toContain('open-plugin');
+  });
+
+  it('shows honest not-distributable state (no fabricated targets)', async () => {
+    mockGetDistribution.mockResolvedValue({
+      declared_targets: [], visibility: 'internal',
+      distributable: false, declared: false, warnings: [],
+      has_output: false, output_path: null, last_distribute_time: null,
+      source_changed_since: false,
+    });
+    await openDistribute();
+    expect(screen.getByTestId('distribute-not-distributable')).toBeTruthy();
+    expect(screen.queryByTestId('distribute-target-row')).toBeNull();
+  });
+
+  it('[Distribute a brain] copies the chat command, does NOT auto-run (HITL)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    await openDistribute();
+    fireEvent.click(screen.getByTestId('distribute-button'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('distribute this ddd: SwarmAI'));
+    // No server-side distribute call exists — the button only surfaces the command.
   });
 });
