@@ -199,6 +199,52 @@ class TestResilience:
         assert brains["BadUtf8"]["health"]["sinking"] == 0
 
 
+class TestPathTraversal:
+    """Security: {name} → filesystem path is the only external→FS surface, and one
+    review endpoint runs a destructive `git apply -R`. Force the escape (R28/GUI15:
+    a security guard needs a test that FORCES the traversal, not just the happy 404).
+
+    Mutation check: delete the `if pd.parent != root: return None` containment line
+    in _resolve_brain_dir (ddd_brain.py) and the tmp-dir escape assertion below goes
+    RED (the crafted name would resolve to a dir outside Projects/)."""
+
+    def test_resolve_rejects_traversal_names(self, tmp_path, monkeypatch):
+        """_resolve_brain_dir must return None for any name that escapes Projects/,
+        even when the escape target genuinely exists on disk."""
+        import routers.ddd_brain as mod
+
+        projects = tmp_path / "Projects"
+        (projects / "RealBrain").mkdir(parents=True)
+        (projects / "RealBrain" / ".project.json").write_text('{"name":"RealBrain"}')
+        # A real, resolvable dir OUTSIDE Projects/ that a traversal would reach:
+        secret = tmp_path / "secret"
+        secret.mkdir()
+        (secret / ".project.json").write_text('{"name":"secret"}')  # even if it looks like a project
+
+        monkeypatch.setattr(mod, "_projects_root", lambda: projects)
+        monkeypatch.setattr(mod, "_workspace_root", lambda: tmp_path)
+
+        # Sanity: the legit direct child resolves.
+        assert mod._resolve_brain_dir("RealBrain") is not None
+        # Every escape shape → None (containment: pd.parent must be Projects/).
+        for evil in (
+            "../secret",            # relative parent escape to a real project-looking dir
+            "../../etc",            # deep escape
+            "RealBrain/../../secret",
+            "/etc",                 # absolute path
+            "..",                   # the Projects parent itself
+            "sub/child",            # a non-direct child (nested) is not a brain
+        ):
+            assert mod._resolve_brain_dir(evil) is None, f"traversal not blocked: {evil!r}"
+
+    def test_http_traversal_name_404s(self, client):
+        """The HTTP surface never serves a path outside Projects/. Starlette
+        normalizes `%2e%2e` at routing; the containment check backstops the rest."""
+        for evil in ("..", "%2e%2e", "..%2f..%2fetc", "RealBrain%2f..%2f..%2fsecret"):
+            resp = client.get(f"/api/ddd/brains/{evil}")
+            assert resp.status_code == 404, f"{evil!r} did not 404 (status {resp.status_code})"
+
+
 def _swarmai_dir() -> Path:
     """Resolve the real SwarmAI project dir from the active workspace."""
     from routers.ddd_brain import _projects_root
