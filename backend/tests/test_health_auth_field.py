@@ -1,20 +1,25 @@
 """GET /health exposes an `auth` field (valid|expired|unknown).
 
 Tests call health_check() directly (not via TestClient) to avoid the full
-lifespan startup. The auth check is gathered with the DB check under a 1s
-cap; timeout/error → unknown; initializing branch hardcodes unknown.
+lifespan startup.
+
+⚠️ LIVENESS/READINESS SPLIT (run_7e8a2030): health_check() no longer runs the
+STS auth check on the request path. It reads a snapshot the background
+readiness sampler maintains off-path (`core.readiness_sampler.readiness_cache`).
+So these tests SEED the readiness cache (not patch the validator) — that is the
+source health_check() actually reads now. A stale/never-sampled cache → auth
+snapshot is "unknown" (fail-open), liveness stays healthy.
 """
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
+from core.readiness_sampler import readiness_cache
 
-def _patch_validator(status):
-    fake = type("V", (), {"check": AsyncMock(return_value=status)})()
-    return patch("core.session_registry.get_credential_validator", return_value=fake)
+
+def _seed_auth(status: str, db_healthy: bool | None = True):
+    """Seed the readiness cache the way the background sampler would."""
+    readiness_cache.update(db_healthy=db_healthy, auth=status)
 
 
 @pytest.mark.asyncio
@@ -23,8 +28,8 @@ async def test_health_auth_valid():
     orig = main._startup_complete
     main._startup_complete = True
     try:
-        with _patch_validator("valid"):
-            data = await main.health_check()
+        _seed_auth("valid")
+        data = await main.health_check()
     finally:
         main._startup_complete = orig
     assert data.get("auth") == "valid", data
@@ -36,28 +41,23 @@ async def test_health_auth_expired():
     orig = main._startup_complete
     main._startup_complete = True
     try:
-        with _patch_validator("expired"):
-            data = await main.health_check()
+        _seed_auth("expired")
+        data = await main.health_check()
     finally:
         main._startup_complete = orig
     assert data.get("auth") == "expired"
 
 
 @pytest.mark.asyncio
-async def test_health_auth_timeout_maps_unknown():
-    """check() exceeding the 1s budget → auth='unknown', health unaffected."""
+async def test_health_auth_unknown_maps_unknown():
+    """A sampler value of 'unknown' (timeout/error sampled off-path) → auth='unknown',
+    health unaffected (liveness never gates on auth)."""
     import main
-
-    async def _slow(_region):
-        await asyncio.sleep(5)
-        return "valid"
-
-    fake = type("V", (), {"check": _slow})()
     orig = main._startup_complete
     main._startup_complete = True
     try:
-        with patch("core.session_registry.get_credential_validator", return_value=fake):
-            data = await main.health_check()
+        _seed_auth("unknown")
+        data = await main.health_check()
     finally:
         main._startup_complete = orig
     assert data.get("auth") == "unknown", data
@@ -65,15 +65,15 @@ async def test_health_auth_timeout_maps_unknown():
 
 
 @pytest.mark.asyncio
-async def test_health_auth_error_maps_unknown():
-    """check() raising → auth='unknown' (fail-open, gather return_exceptions)."""
+async def test_health_auth_unexpected_value_maps_unknown():
+    """An out-of-domain sampler value → coerced to 'unknown' (fail-open guard in
+    health_check: only valid|expired|unknown pass through)."""
     import main
-    fake = type("V", (), {"check": AsyncMock(side_effect=RuntimeError("boom"))})()
     orig = main._startup_complete
     main._startup_complete = True
     try:
-        with patch("core.session_registry.get_credential_validator", return_value=fake):
-            data = await main.health_check()
+        _seed_auth("garbage-not-a-status")
+        data = await main.health_check()
     finally:
         main._startup_complete = orig
     assert data.get("auth") == "unknown"

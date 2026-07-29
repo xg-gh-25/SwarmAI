@@ -61,13 +61,15 @@ from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import parse_entries
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
+from core.project_registry import DDD_CANONICAL_DOCS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ddd-brain"])
 
-# The 4 canonical ② docs whose entries carry decay/type state.
-_KNOWLEDGE_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+# The 4 canonical ② docs whose entries carry decay/type state. Single-source
+# from project_registry (Run 0 rule — never hardcode the canonical-4 tuple).
+_KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
 
 # Section descriptor: (key, circled-num, display label, OWN|GOVERN, curator role).
 # Curator roles are informational seams for future multi-user ownership (design
@@ -637,7 +639,11 @@ def _hunk_signature(file_rel: str, hunk_header: str, hunk_body: str) -> str:
         if ln[:1] in ("+", "-") and not ln.startswith(("+++", "---"))
     ]
     payload = file_rel + "\n" + old_span + "\n" + "\n".join(payload_lines)
-    return hashlib.sha1(payload.encode("utf-8", "replace")).hexdigest()[:16]
+    # Non-cryptographic content-signature (hunk identity/dedup watermark), NOT a
+    # security digest — usedforsecurity=False (bandit B324, no collision-attack surface).
+    return hashlib.sha1(
+        payload.encode("utf-8", "replace"), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 def _parse_hunks(diff_text: str) -> list[dict]:
