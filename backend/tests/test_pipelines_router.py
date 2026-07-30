@@ -262,6 +262,78 @@ class TestPipelinesEndpoint:
         resp = client.get("/api/pipelines")
         assert resp.json()["pipelines"][0]["status"] == "running"
 
+    # --- terminal-but-crashed stale runs must NOT be false-failed (run_0f03fa9d) --
+    #
+    # A run that finished all stages (a completed reflect/deliver marker) but
+    # crashed before `run-update --status completed` is left status="running" on
+    # disk. The stale detector must honor is_terminal_run (the SAME predicate
+    # artifact_cli._abandon_verdict:804 and proactive_intelligence:858 use to SKIP
+    # terminal runs) and NOT flip it to "failed" — that mislabels a delivered run.
+    # Real mid-pipeline orphans (no reflect/deliver) keep the "failed" verdict.
+
+    def test_stale_terminal_run_not_marked_failed(self, client, workspace):
+        """A stale status=running run with a completed reflect stage is terminal
+        (it delivered, just crashed before the completion gate) — the stale
+        detector must NOT rewrite it to 'failed'. On-disk status is preserved."""
+        stale_time = "2026-01-01T00:00:00+00:00"
+        run_file = _create_run(
+            workspace, "Proj", "run_terminal_stale",
+            status="running", updated_at=stale_time, profile="bugfix",
+            stages=[
+                {"stage": "evaluate", "status": "completed", "token_cost": 5000},
+                {"stage": "think", "status": "completed", "token_cost": 5000},
+                {"stage": "plan", "status": "completed", "token_cost": 5000},
+                {"stage": "build", "status": "completed", "token_cost": 5000},
+                {"stage": "review", "status": "completed", "token_cost": 5000},
+                {"stage": "test", "status": "completed", "token_cost": 5000},
+                {"stage": "deliver", "status": "completed", "token_cost": 5000},
+                {"stage": "reflect", "status": "completed", "token_cost": 5000},
+            ],
+        )
+        client.get("/api/pipelines")
+        on_disk = json.loads(run_file.read_text())
+        assert on_disk["status"] != "failed", \
+            "terminal-but-crashed run must not be false-failed"
+        # No spurious failure_reason written
+        assert "failure_reason" not in on_disk
+
+    def test_stale_nonterminal_run_still_marked_failed(self, client, workspace):
+        """Regression guard: a genuinely mid-pipeline stale run (no reflect/deliver
+        completed) is a real orphan and MUST still be marked failed — the fix must
+        not over-broaden and hide real failures."""
+        stale_time = "2026-01-01T00:00:00+00:00"
+        run_file = _create_run(
+            workspace, "Proj", "run_nonterminal_stale",
+            status="running", updated_at=stale_time, profile="bugfix",
+            stages=[
+                {"stage": "evaluate", "status": "completed", "token_cost": 5000},
+                {"stage": "think", "status": "completed", "token_cost": 5000},
+            ],
+        )
+        client.get("/api/pipelines")
+        on_disk = json.loads(run_file.read_text())
+        assert on_disk["status"] == "failed"
+        assert "auto-detected stale" in on_disk.get("failure_reason", "")
+
+    def test_stale_terminal_run_excluded_from_default_active(self, client, workspace):
+        """A terminal-but-running run must not render as an active 'running' run in
+        the DEFAULT dashboard view either (not just ?active=true). Otherwise it
+        shows 'running forever' — the lie the false-fail was masking."""
+        stale_time = "2026-01-01T00:00:00+00:00"
+        _create_run(
+            workspace, "Proj", "run_terminal_default",
+            status="running", updated_at=stale_time, profile="bugfix",
+            stages=[
+                {"stage": "evaluate", "status": "completed", "token_cost": 5000},
+                {"stage": "deliver", "status": "completed", "token_cost": 5000},
+            ],
+        )
+        resp = client.get("/api/pipelines")
+        summary = resp.json()["summary"]
+        # A terminal zombie must not inflate the 'running' count in the default view.
+        assert summary["running"] == 0, \
+            "terminal-but-crashed run must not count as running in default view"
+
 
 # --- pause_kind classification + terminal-zombie exclude (run_3d61db5b) -------
 #

@@ -58,8 +58,22 @@ def _get_profile_stage_count(profile: str | None) -> int:
 
 
 def _is_stale(state: dict) -> bool:
-    """Check if a running pipeline has gone stale (no update in threshold)."""
+    """Check if a running pipeline has gone stale (no update in threshold).
+
+    A TERMINAL run is never stale — even if left status="running" on disk.
+    A run that finished all stages (a completed reflect/deliver marker) but
+    crashed before `run-update --status completed` ran is FINISHED, not a
+    failure. Honoring `is_terminal_run` here mirrors the SAME guard that
+    `artifact_cli._abandon_verdict` (before its abandon verdict) and
+    `proactive_intelligence` (before auto-resume) already apply — so all three
+    consumers of on-disk run state agree: terminal runs are skipped, never
+    re-labeled. Without this, `_mark_failed` flipped delivered-but-crashed runs
+    to "failed" on every dashboard poll (run_aad474c7: 9/9 stages completed,
+    status=failed).
+    """
     if state.get("status") != "running":
+        return False
+    if is_terminal_run(state):
         return False
     updated_at = state.get("updated_at", "")
     if not updated_at:
@@ -164,6 +178,17 @@ def _to_response(raw: dict) -> PipelineRunResponse:
         status = PipelineRunStatus(raw.get("status", "running"))
     except ValueError:
         status = PipelineRunStatus.RUNNING
+
+    # Terminal-but-crashed presentation (run_0f03fa9d): a run that finished all
+    # stages (completed reflect/deliver) but crashed before `run-update --status
+    # completed` is left status=running/paused on disk. It DELIVERED — present it
+    # as completed rather than "running forever". Disk is NOT mutated (the stale
+    # detector now skips terminal runs); this is read-path only, so the honest
+    # status reaches BOTH the list partition and the summary counts. Only the
+    # running/paused live-status values are coerced — an explicit terminal status
+    # (failed/cancelled/abandoned) is never overridden.
+    if status in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED) and is_terminal_run(raw):
+        status = PipelineRunStatus.COMPLETED
 
     # Classify a paused run for attention-queue consumers (Radar "NEEDS YOU").
     # Only a genuine decision-pause should demand the user's attention; a pause
