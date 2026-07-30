@@ -290,6 +290,32 @@ class TestBrainDetail:
         resp = client.get("/api/ddd/brains/NoSuchProjectXYZ")
         assert resp.status_code == 404
 
+    def test_has_code_intel_reflects_db_presence(self, client):
+        """AC1: hasCodeIntel is a live presence check of the on-disk code_intel.db,
+        NOT gated on `kind`. SwarmAI has a real code_intel.db → true; a knowledge
+        DDD without one → false. This is the field the frontend gates the CodeIntel
+        entry on (presence, never kind — all DDDs resolve to kind='knowledge')."""
+        from core.code_intel import get_code_intel_db_path
+
+        detail = client.get("/api/ddd/brains/SwarmAI").json()
+        assert "hasCodeIntel" in detail, "detail must expose hasCodeIntel"
+        # Truth from disk — the field must match the actual .exists() of the db.
+        assert detail["hasCodeIntel"] == get_code_intel_db_path("SwarmAI").exists()
+
+    def test_has_code_intel_false_when_db_absent(self, client):
+        """A DDD with no code_intel.db must report hasCodeIntel=false (no entry)."""
+        from core.code_intel import get_code_intel_db_path
+
+        # Find a real brain that has NO code_intel.db on disk.
+        brains = client.get("/api/ddd/brains").json()["brains"]
+        without = [
+            b["name"] for b in brains
+            if not get_code_intel_db_path(b["name"]).exists()
+        ]
+        assert without, "expected at least one DDD without a code_intel.db"
+        detail = client.get(f"/api/ddd/brains/{without[0]}").json()
+        assert detail["hasCodeIntel"] is False
+
 
 class TestResilience:
     """Gate-2 adversarial finding: a non-UTF-8 ② doc must NOT 500 the gallery."""

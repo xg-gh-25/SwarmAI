@@ -457,6 +457,13 @@ def _brain_detail(project_dir: Path) -> dict:
         # glob (~N filenames) — safe HERE in _brain_detail (per-brain, on open);
         # NB: must NOT be added to _brain_summary (would N-glob the gallery).
         "specs": _spec_files(project_dir),
+        # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT
+        # gated on `kind` (all DDDs resolve to kind='knowledge' — aim.json carries
+        # brain_kind, never kind/asset_kind, so a kind gate never fires). One stat;
+        # per-brain-on-open (like specs). NB: must NOT be added to _brain_summary
+        # (would N-stat the gallery). A 0-symbol/stale db still reports true — the
+        # CodeIntel panel renders a graceful "No code intelligence indexed" copy.
+        "hasCodeIntel": (project_dir / "code_intel.db").exists(),
     }
 
 
