@@ -70,7 +70,8 @@ class BucketedRecall:
 # ── DDD domain: generic ##-section keyword scorer ─────────────────────
 
 
-def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int) -> list[dict]:
+def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
+                    include_superseded: bool = False) -> list[dict]:
     """Entry-level BM25 over the ``- [type]``/``- ``-prefixed entries of MULTIPLE
     DDD docs, scored in ONE shared corpus so scores are COMPARABLE across docs.
 
@@ -92,6 +93,15 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int) -> list[d
     import re as _re
     from core import memory_index
 
+    # Bi-temporal supersession (run_24299917): a superseded DDD entry is filtered
+    # from default recall (its lineage is preserved on disk, but it must not
+    # surface as live judgment). Anchored on the exact metadata-comment field
+    # (`superseded_by:<non-null-anchor>`), NOT a bare substring — a legit entry
+    # whose BODY mentions the word "superseded" is not matched. `null` is treated
+    # as not-superseded (parity with memory_index's `superseded_by: null` idiom,
+    # though the DDD writer omits the field entirely when unset).
+    _SUPERSEDED_RE = _re.compile(r"superseded_by:(?!null\b)[^\s|]+")
+
     entries: dict[str, str] = {}           # key → entry text
     entry_doc: dict[str, str] = {}         # key → owning doc
     entry_section: dict[str, str] = {}     # key → owning section name
@@ -106,6 +116,8 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int) -> list[d
                 e = chunk.strip()
                 if not e.startswith("- "):
                     continue
+                if not include_superseded and _SUPERSEDED_RE.search(e):
+                    continue  # filtered from default recall (lineage kept on disk)
                 k = str(len(entries))
                 entries[k] = e
                 entry_doc[k] = doc

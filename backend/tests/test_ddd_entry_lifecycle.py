@@ -1492,3 +1492,142 @@ class TestReclaimDuplicateGuard:
         # the unique reclaimable one WAS moved out
         assert "A unique reclaimable one" not in out
         assert report.archived == 1
+
+
+# ── Bi-temporal supersession (失效但留链, run_24299917) ──────────────────────
+#
+# A superseded DDD entry keeps its lineage: it is FILTERED from default recall,
+# SKIPPED by age-decay, and NEVER deleted. Storage-first / human-marked (方案A).
+# Field vocabulary (superseded_by) aligns with memory_index's temporal format but
+# the DDD engine owns its own _META_RE + disposition (filter + skip-decay), not
+# memory_index's key-anchor + 0.1x down-weight.
+
+class TestSupersession:
+    def _entry(self, **kw):
+        base = dict(title="T", entry_type="guideline", ref_count=0,
+                    decay_state="active", created_date=date(2026, 1, 1))
+        base.update(kw)
+        return EntryMetadata(**base)
+
+    # AC1 — round-trip byte-stability
+    def test_marked_entry_roundtrips(self):
+        e = self._entry(valid_until=date(2026, 7, 30), superseded_by="new-anchor")
+        parsed = parse_entries(f"## S\n- **T** — body (2026-01-01)\n{e.to_comment()}\n")
+        assert len(parsed) == 1
+        assert parsed[0].valid_until == date(2026, 7, 30)
+        assert parsed[0].superseded_by == "new-anchor"
+
+    def test_unmarked_comment_byte_identical_to_legacy(self):
+        # The critical backward-compat guarantee: an entry with no supersession
+        # emits EXACTLY today's comment shape (no valid_until/superseded_by segment).
+        e = self._entry(ref_count=3, last_referenced=date(2026, 5, 18),
+                        decay_state="active", source="auto")
+        assert e.to_comment() == "  <!-- ref:3 | last:2026-05-18 | decay:active | source:auto -->"
+        e2 = self._entry(ref_count=0, last_referenced=None, decay_state="active")
+        assert e2.to_comment() == "  <!-- ref:0 | last:none | decay:active -->"
+
+    def test_legacy_comment_still_parses(self):
+        # Existing on-disk comments (no new fields) must parse with None defaults.
+        parsed = parse_entries(
+            "## S\n- [guideline] **Old** — x (2026-01-01)\n"
+            "  <!-- ref:5 | last:2026-05-18 | decay:active | source:auto -->\n"
+        )
+        assert len(parsed) == 1
+        assert parsed[0].valid_until is None
+        assert parsed[0].superseded_by is None
+        assert parsed[0].ref_count == 5
+
+    def test_superseded_without_source_parses(self):
+        # source is optional AND comes before the new fields — a comment with
+        # superseded_by but NO source must still parse (independent optional groups).
+        parsed = parse_entries(
+            "## S\n- **T** — body (2026-01-01)\n"
+            "  <!-- ref:0 | last:none | decay:active | superseded_by:new-x -->\n"
+        )
+        assert len(parsed) == 1
+        assert parsed[0].superseded_by == "new-x"
+        assert parsed[0].source == ""
+
+    # AC2 — assess_decay skips superseded (non-vacuous)
+    def test_assess_decay_skips_superseded(self):
+        today = date(2026, 7, 30)
+        old = date(2026, 1, 1)  # ~210 days — past 150d archive threshold
+        superseded = self._entry(created_date=old, last_referenced=old,
+                                  decay_state="dormant", superseded_by="new-x")
+        assert assess_decay([superseded], today) == []
+
+    def test_assess_decay_non_vacuous_without_mark(self):
+        # Same entry WITHOUT the mark DOES archive — proves the skip is real.
+        today = date(2026, 7, 30)
+        old = date(2026, 1, 1)
+        plain = self._entry(created_date=old, last_referenced=old,
+                            decay_state="dormant", superseded_by=None)
+        trans = assess_decay([plain], today)
+        assert len(trans) == 1 and trans[0].new_state == "archived"
+
+    # AC5 — mark_superseded is the sole writer; never deletes; idempotent; no-op if absent
+    def test_mark_superseded_sets_fields_and_preserves_bullet(self):
+        from core.ddd_entry_lifecycle import mark_superseded
+        content = ("## S\n- **Old Judgment** — the original take (2026-01-01)\n"
+                   "  <!-- ref:0 | last:none | decay:active -->\n")
+        out = mark_superseded(content, "Old Judgment", "new-anchor", date(2026, 7, 30))
+        assert "Old Judgment" in out  # bullet preserved (never deleted)
+        parsed = parse_entries(out)
+        assert parsed[0].superseded_by == "new-anchor"
+        assert parsed[0].valid_until == date(2026, 7, 30)
+
+    def test_mark_superseded_noop_when_absent(self):
+        from core.ddd_entry_lifecycle import mark_superseded
+        content = "## S\n- **Real** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
+        out = mark_superseded(content, "Nonexistent Title", "new-x", date(2026, 7, 30))
+        assert out == content
+
+    def test_mark_superseded_idempotent(self):
+        from core.ddd_entry_lifecycle import mark_superseded
+        content = "## S\n- **Old** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
+        once = mark_superseded(content, "Old", "anchor-1", date(2026, 7, 30))
+        twice = mark_superseded(once, "Old", "anchor-2", date(2026, 7, 31))
+        parsed = parse_entries(twice)
+        # re-marking updates, does NOT duplicate the entry or stack comments
+        assert parsed[0].superseded_by == "anchor-2"
+        assert twice.count("superseded_by") == 1
+
+    # C4 (Gate-1) — reclaim must NEVER physically strip a superseded entry
+    def test_reclaim_never_strips_superseded(self):
+        from core.ddd_entry_lifecycle import _is_reclaimable_noise
+        today = date(2026, 7, 30)
+        old = date(2026, 1, 1)
+        # a plain operational entry with ref0+dormant+past-grace IS reclaimable...
+        plain = self._entry(created_date=old, decay_state="dormant", superseded_by=None)
+        assert _is_reclaimable_noise(plain, today, 30) is True
+        # ...but the SAME entry marked superseded must NOT be reclaimable (lineage kept)
+        sup = self._entry(created_date=old, decay_state="dormant", superseded_by="new-x")
+        assert _is_reclaimable_noise(sup, today, 30) is False
+
+
+class TestSupersessionRecall:
+    # AC3 — recall excludes superseded by default (non-vacuous); AC4 — flag re-includes
+    def _doc(self, superseded: bool):
+        mark = " | superseded_by:new-x" if superseded else ""
+        return {
+            "IMPROVEMENT.md": (
+                "## What Failed\n"
+                "- [guideline] **Zebra quokka mechanism** — a very distinctive lesson"
+                " about zebra quokka handling (2026-01-01)\n"
+                f"  <!-- ref:0 | last:none | decay:active{mark} -->\n"
+            )
+        }
+
+    def test_recall_excludes_superseded_by_default(self):
+        from core.recall_multi import _ddd_entry_hits
+        q = "zebra quokka mechanism"
+        active_hits = _ddd_entry_hits(q, self._doc(superseded=False), 5)
+        superseded_hits = _ddd_entry_hits(q, self._doc(superseded=True), 5)
+        assert len(active_hits) >= 1, "active entry should be recalled (non-vacuous)"
+        assert superseded_hits == [], "superseded entry must be filtered from default recall"
+
+    def test_recall_includes_superseded_with_flag(self):
+        from core.recall_multi import _ddd_entry_hits
+        q = "zebra quokka mechanism"
+        hits = _ddd_entry_hits(q, self._doc(superseded=True), 5, include_superseded=True)
+        assert len(hits) >= 1, "lineage flag must re-include the superseded entry (filtered, not deleted)"

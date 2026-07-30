@@ -246,8 +246,20 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
 # Regex for inline metadata comment
 # Matches: "  <!-- ref:N | last:YYYY-MM-DD | decay:state -->"
 # Optional: "  <!-- ref:N | last:YYYY-MM-DD | decay:state | source:auto -->"
+# Bi-temporal supersession (run_24299917): two more OPTIONAL trailing segments:
+#   "... | valid_until:YYYY-MM-DD | superseded_by:<anchor>"
+# All three trailing groups (source, valid_until, superseded_by) are independent
+# and optional — the leading space of each lives INSIDE its own group so a comment
+# carrying only a later field (e.g. superseded_by, no source) still matches, and a
+# legacy comment with none of them is byte-identical to the pre-supersession form.
+# superseded_by uses [^\s|] (not \S) so it cannot greedily swallow the ` -->`
+# terminator or a following ` | ` separator.
 _META_RE = re.compile(
-    r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)(?:\s*\|\s*source:(\w+))? -->$"
+    r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)"
+    r"(?:\s*\|\s*source:(\w+))?"
+    r"(?:\s*\|\s*valid_until:([\w\-]+))?"
+    r"(?:\s*\|\s*superseded_by:([^\s|]+))?"
+    r" -->$"
 )
 
 # Regex for date extraction from entry text "(YYYY-MM-DD, ...)"
@@ -270,6 +282,14 @@ class EntryMetadata:
     line_number: int = 0  # Line in the file (for injection)
     raw_text: str = ""  # Full bullet text (for archival)
     source: str = ""  # "auto" | "manual" | "" (legacy entries without tag)
+    # Bi-temporal supersession (run_24299917). When superseded_by is set, this
+    # entry has been REPLACED by a newer entry (anchor = the superseding entry's
+    # title): it is FILTERED from default recall + SKIPPED by age-decay + NEVER
+    # deleted (lineage preserved — Principle 1: sediment flows UP, not just OUT).
+    # valid_until = the date supersession was marked (the entry was "true" over
+    # [created_date, valid_until]). Both None for a live entry.
+    valid_until: Optional[date] = None
+    superseded_by: Optional[str] = None  # title-anchor of the superseding entry
 
     def __post_init__(self):
         if self.entry_type not in VALID_TYPES:
@@ -287,6 +307,12 @@ class EntryMetadata:
         base = f"  <!-- ref:{self.ref_count} | last:{last_str} | decay:{self.decay_state}"
         if self.source:
             base += f" | source:{self.source}"
+        # Supersession segments emitted ONLY when set → a live entry's comment is
+        # byte-identical to the pre-supersession format (backward-compat guarantee).
+        if self.valid_until:
+            base += f" | valid_until:{self.valid_until.isoformat()}"
+        if self.superseded_by:
+            base += f" | superseded_by:{self.superseded_by}"
         base += " -->"
         return base
 
@@ -451,6 +477,8 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
             ref_count = 0
             last_referenced = None
             decay_state = "active"
+            valid_until = None
+            superseded_by = None
 
             meta_line_idx = j
             source = ""
@@ -466,6 +494,13 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
                             last_referenced = None
                     decay_state = meta_match.group(3)
                     source = meta_match.group(4) or ""
+                    vu_str = meta_match.group(5)
+                    if vu_str:
+                        try:
+                            valid_until = date.fromisoformat(vu_str)
+                        except ValueError:
+                            valid_until = None
+                    superseded_by = meta_match.group(6) or None
                     j = meta_line_idx + 1  # Skip the metadata line
 
             # Classify type if not explicitly tagged
@@ -483,6 +518,8 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
                 line_number=i,
                 raw_text=raw_text,
                 source=source,
+                valid_until=valid_until,
+                superseded_by=superseded_by,
             ))
             i = j
         else:
@@ -586,6 +623,42 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
     if trailing and not result.endswith("\n"):
         result += "\n"
     return result
+
+
+def mark_superseded(
+    content: str,
+    old_anchor: str,
+    new_anchor: str,
+    today: date,
+) -> str:
+    """Mark the DDD entry titled ``old_anchor`` as superseded by ``new_anchor``.
+
+    Bi-temporal supersession (方案A, run_24299917) — the DDD-native counterpart of
+    ``memory_index.mark_entry_superseded`` (which is KEY-anchored + down-weights;
+    this is TITLE-anchored + filters). Sets ``valid_until=today`` and
+    ``superseded_by=new_anchor`` on the matching entry, then re-serializes via
+    ``inject_entry_metadata``. The bullet is NEVER stripped or deleted — its
+    lineage is preserved (Principle 1); it is merely filtered from default recall
+    (``recall_multi._ddd_entry_hits``) and skipped by age-decay (``assess_decay``).
+
+    Human/cultivation-marked ONLY — supersession is NOT auto-detected (方案B is
+    out of scope). ``new_anchor`` is a human-readable title-slug pointer to the
+    superseding entry, not a strict FK (appropriate for a human-marked signal).
+
+    Idempotent: re-marking an already-superseded entry UPDATES the pointer
+    (no duplicate entry, no stacked comment). No-op (returns ``content``
+    unchanged) if no entry's title matches ``old_anchor``.
+    """
+    entries = parse_entries(content)
+    matched = [e for e in entries if e.title == old_anchor]
+    if not matched:
+        return content  # no-op — nothing matches the anchor
+    for e in matched:
+        e.valid_until = today
+        e.superseded_by = new_anchor
+    # inject_entry_metadata rewrites ONLY the matched entries' comment lines
+    # (keyed by (title, section)); untouched entries pass through verbatim.
+    return inject_entry_metadata(content, matched)
 
 
 def bump_references(
@@ -701,6 +774,12 @@ def assess_decay(
 
     for entry in entries:
         if entry.decay_state == "archived":
+            continue
+
+        # Supersession immunity (run_24299917): a superseded entry keeps its
+        # lineage — it is NEVER age-decayed (nor deleted; see _is_reclaimable_noise).
+        # Its disposition is filter-from-recall, not timer-death (Principle 1).
+        if entry.superseded_by:
             continue
 
         # Evergreen section immunity
@@ -965,6 +1044,13 @@ def _is_reclaimable_noise(
     and reclaim_noise_entries (the action) call this, so they can never drift.
     Does NOT apply keep-class — callers layer that on top.
     """
+    # Supersession is never reclaimable (run_24299917, Gate-1 C4): a superseded
+    # entry is FILTERED from recall + SKIPPED by age-decay, and it must ALSO be
+    # immune to the physical strip path — otherwise a superseded operational
+    # entry (guideline/pitfall/process, ref 0, dormant, past grace) would be
+    # deleted from disk, destroying the very lineage supersession preserves.
+    if entry.superseded_by:
+        return False
     if entry.ref_count != 0:
         return False
     if entry.decay_state not in _NOISY_DECAY_STATES:
