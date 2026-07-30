@@ -70,6 +70,10 @@ export interface BrainDetail {
   name: string;
   kind: string;
   sections: BrainSection[];
+  /** spec-details/*.spec.md filenames — a DERIVED PROJECTION (NOT a section);
+   *  [] when the brain has no spec-details/ dir. Backend emits camelCase-safe
+   *  single-word key; getBrainDetail is a direct passthrough (no transform). */
+  specs: string[];
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────

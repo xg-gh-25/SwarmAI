@@ -61,7 +61,7 @@ from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import parse_entries
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
-from core.project_registry import DDD_CANONICAL_DOCS
+from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +451,27 @@ def _brain_detail(project_dir: Path) -> dict:
         "name": name,
         "kind": _read_kind(project_dir),
         "sections": sections,
+        # specs = spec-details/*.spec.md filenames (a DERIVED PROJECTION, NOT a
+        # _SECTIONS entry — six-section invariant untouched, R31). A sibling
+        # informational field so a DDD owner can find the domain's specs. Cheap
+        # glob (~N filenames) — safe HERE in _brain_detail (per-brain, on open);
+        # NB: must NOT be added to _brain_summary (would N-glob the gallery).
+        "specs": _spec_files(project_dir),
     }
+
+
+def _spec_files(project_dir: Path) -> list[str]:
+    """spec-details/*.spec.md filenames for a brain (sorted); [] when absent.
+
+    Containment: project_dir is already resolved by _resolve_brain_dir
+    (parent==root guard), and .glob is scoped to the SPEC_DETAILS_DIR subdir —
+    no traversal. Filenames only (owner opens content via the existing file
+    preview), mirroring how section members[] are surfaced.
+    """
+    d = project_dir / SPEC_DETAILS_DIR
+    if not d.is_dir():
+        return []
+    return sorted(p.name for p in d.glob("*.spec.md"))
 
 
 def _knowledge_entries(project_dir: Path) -> list[dict]:

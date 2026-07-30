@@ -103,6 +103,7 @@ const DETAIL: BrainDetail = {
     { key: 'refresher', num: '⑥', label: 'Refresher', ownGovern: 'GOVERN', curator: 'TPM',
       members: [{ path: 'REFRESHER.md', gitStatus: 'clean' }], entries: [], completeNotBroken: false },
   ],
+  specs: [],
 };
 
 const REVIEW = {
@@ -208,14 +209,21 @@ describe('BrainHub — Brain view (AC4)', () => {
     expect(empty.textContent).toContain('complete, not broken');
   });
 
-  it('renders decay-colored 7-type entries for ② knowledge', async () => {
+  it('renders decay-colored 7-type entries GROUPED by type for ② knowledge', async () => {
     await openSection('knowledge');
+    // AC3: entries are grouped by type (collapsed by default), NOT a flat list.
+    // The 2 fixture entries are 1 guideline + 1 pitfall → 2 type-groups.
+    expect(screen.getByTestId('entry-group-guideline')).toBeTruthy();
+    expect(screen.getByTestId('entry-group-pitfall')).toBeTruthy();
+    // collapsed → no entry-line rendered until a group is expanded
+    expect(screen.queryAllByTestId('entry-line').length).toBe(0);
+    // expand the pitfall group → its (dormant) entry appears with decay styling
+    fireEvent.click(screen.getByTestId('entry-group-toggle-pitfall'));
     const lines = screen.getAllByTestId('entry-line');
-    expect(lines.length).toBe(2);
-    // the dormant entry has a dimmed style class (decay coloring)
+    expect(lines.length).toBe(1);
     const dormant = lines.find((l) => l.textContent?.includes('Old dormant note'));
     expect(dormant?.querySelector('.opacity-70, [class*="opacity-70"]') || dormant?.innerHTML).toBeTruthy();
-    // a 7-type composition bar is rendered
+    // the 7-type composition bar is still rendered (F5 regression guard preserved)
     expect(screen.getByTestId('typebar-guideline')).toBeTruthy();
     expect(screen.getByTestId('typebar-pitfall')).toBeTruthy();
   });
@@ -279,6 +287,7 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
         members: key === 'knowledge' ? [{ path: '2-understanding/PRODUCT.md', gitStatus: 'clean' }] : [],
         entries: [], completeNotBroken: key !== 'knowledge',
       })),
+      specs: [],
     };
     mockGetBrains.mockResolvedValue([{
       name: 'SomeoneElsesProject', kind: 'knowledge',

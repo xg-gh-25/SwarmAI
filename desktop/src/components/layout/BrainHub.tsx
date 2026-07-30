@@ -28,6 +28,7 @@ import type {
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
 import { CodeGraph } from '../code-intel/CodeGraph';
+import { getCodeIntelSummary, type CodeIntelSummary } from '../../services/codeIntel';
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -49,6 +50,10 @@ const TYPE_COLOR: Record<EntryType, string> = {
   model: '#14b8a6', process: '#f59e0b', principle: '#eab308',
   correction: '#ec4899',
 };
+
+// Project-relative dir where spec-details/*.spec.md live (mirrors the backend
+// SPEC_DETAILS_DIR constant); used to build the file-preview open path.
+const SPEC_DETAILS_REL = 'spec-details';
 
 const GIT_DOT: Record<string, string> = {
   clean: 'transparent', modified: '#f0a500', added: '#3fb950',
@@ -318,6 +323,11 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           ) : (
             <div className="text-[12px] text-[#5b636d] italic">No sections to display.</div>
           )}
+          {/* Asset projections (specs + code-intel) — informational panels shown
+              BELOW the six sections, NOT section entries (R31 six-section
+              invariant). Specs panel hides itself when the brain has none. */}
+          <SpecsPanel specs={detail.specs ?? []} onOpenFile={openFile} />
+          {detail.kind === 'code-repo' && <CodeIntelPanel project={name} />}
         </div>
       </div>
 
@@ -333,6 +343,105 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           shape). project={name} — NEVER a hardcoded literal (Gate-1 flag). */}
       {showGraph && (
         <CodeGraph project={name} onClose={() => setShowGraph(false)} />
+      )}
+    </div>
+  );
+}
+
+// Specs panel — spec-details/*.spec.md filenames (AC1). A DERIVED PROJECTION,
+// hidden entirely when the brain has no specs (no empty-panel noise). Clicking a
+// spec opens it via the same FilePreviewModal path the section members use.
+function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
+  const [open, setOpen] = useState(true);
+  if (specs.length === 0) return null;   // AC1: no specs → no panel
+  return (
+    <div className="mt-3 rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="specs-panel">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        data-testid="specs-panel-toggle"
+        className="w-full flex items-center gap-2 text-[12px] font-semibold text-left"
+      >
+        <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">description</span>
+        <span>Specs</span>
+        <span className="text-[9px] text-[#5b636d] font-normal">{specs.length}</span>
+        <span className="ml-auto text-[10px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-0.5 mt-1.5">
+          {specs.map((f) => (
+            <button
+              key={f}
+              onClick={() => onOpenFile(`${SPEC_DETAILS_REL}/${f}`)}
+              data-testid={`spec-${f}`}
+              className="flex items-center gap-1.5 text-[11px] text-[#8b949e] hover:text-[#e6edf3] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+            >
+              <span className="font-mono truncate">{f}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Code-intel panel — reuses the EXISTING GET /api/code-intel/{project}/summary
+// (getCodeIntelSummary). Fetched ON-DEMAND (only when this panel first expands),
+// NOT on brain load — the summary triggers find_dead_code (O(n) full scan), so
+// wiring it into getBrainDetail would slow every brain open (AC2). null (no db /
+// 404 — the service already maps 404→null) renders a graceful line.
+function CodeIntelPanel({ project }: { project: string }) {
+  const [open, setOpen] = useState(false);   // collapsed → no fetch until opened
+  const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+
+  const toggle = useCallback(() => {
+    setOpen((wasOpen) => {
+      const next = !wasOpen;
+      if (next && state === 'idle') {
+        setState('loading');
+        getCodeIntelSummary(project).then(
+          (s) => { setSummary(s); setState('loaded'); },
+          () => setState('error'),
+        );
+      }
+      return next;
+    });
+  }, [project, state]);
+
+  return (
+    <div className="mt-3 rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="code-intel-panel">
+      <button
+        onClick={toggle}
+        data-testid="code-intel-toggle"
+        className="w-full flex items-center gap-2 text-[12px] font-semibold text-left"
+      >
+        <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">hub</span>
+        <span>Code Intelligence</span>
+        <span className="ml-auto text-[10px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 text-[11px] text-[#8b949e]" data-testid="code-intel-body">
+          {state === 'loading' && <div className="italic text-[#5b636d]">Loading code map…</div>}
+          {state === 'error' && <div className="italic text-[#5b636d]">Code intel unavailable.</div>}
+          {state === 'loaded' && summary === null && (
+            <div className="italic text-[#5b636d]">No code intelligence indexed for this brain.</div>
+          )}
+          {state === 'loaded' && summary && (
+            <>
+              <div className="mb-1">{summary.symbolCount} symbols indexed</div>
+              <div className="flex flex-col gap-0.5">
+                {summary.modulesTop5.map((mod) => (
+                  <div key={mod.name} className="flex items-center gap-2" data-testid={`ci-module-${mod.name}`}>
+                    <span className="font-mono truncate">{mod.name}</span>
+                    <span className="ml-auto text-[9px] text-[#5b636d]">
+                      {mod.function_count}fn / {mod.class_count}cls / {mod.file_count}f
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
@@ -401,15 +510,56 @@ function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
         ))}
       </div>
       <div className="text-[10px] text-[#5b636d] mb-1">{entries.length} entries</div>
-      <div className="flex flex-col gap-0.5 max-h-48 overflow-auto">
-        {entries.slice(0, 60).map((e, i) => (
-          <div key={`${e.file}-${i}`} className="flex items-center gap-1.5 text-[10px]" data-testid="entry-line">
-            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? '#5b636d' }} title={e.entryType} />
-            <span className={`truncate font-mono ${DECAY_STYLE[e.decayState]}`}>{e.title}</span>
-          </div>
+      {/* AC3: entries GROUPED BY 7-type (collapsible), not a flat list — structure
+          is visible without scrolling 700 uniform titles. Group order = canonical
+          TYPE_COLOR order + any unknown type appended (matches the composition bar).
+          `entry-line` + `typebar-*` testids preserved (Gate-1 F5 regression guard). */}
+      <div className="flex flex-col gap-1 max-h-64 overflow-auto">
+        {[
+          ...(Object.keys(TYPE_COLOR) as EntryType[]).filter((t) => counts[t] > 0),
+          ...Object.keys(counts).filter((t) => !(t in TYPE_COLOR) && counts[t] > 0),
+        ].map((t) => (
+          <EntryGroup
+            key={t}
+            type={t}
+            entries={entries.filter((e) => e.entryType === t)}
+          />
         ))}
-        {entries.length > 60 && <div className="text-[10px] text-[#5b636d] italic">+{entries.length - 60} more…</div>}
       </div>
+    </div>
+  );
+}
+
+// One collapsible type-group in the grouped Knowledge list (AC3). Collapsed by
+// default so the 7 group headers ARE the structure the owner reads first; expand
+// to see that type's entries. Caps rendered rows per group (a type can have
+// hundreds) with a "+N more" line, mirroring the old flat-list cap.
+function EntryGroup({ type, entries }: { type: string; entries: KnowledgeEntry[] }) {
+  const [open, setOpen] = useState(false);
+  const CAP = 40;
+  return (
+    <div data-testid={`entry-group-${type}`}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        data-testid={`entry-group-toggle-${type}`}
+        className="w-full flex items-center gap-1.5 text-[10px] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+      >
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[type as EntryType] ?? '#5b636d' }} />
+        <span className="font-mono text-[#8b949e]">{type}</span>
+        <span className="text-[9px] text-[#5b636d]">{entries.length}</span>
+        <span className="ml-auto text-[9px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-0.5 pl-3">
+          {entries.slice(0, CAP).map((e, i) => (
+            <div key={`${e.file}-${i}`} className="flex items-center gap-1.5 text-[10px]" data-testid="entry-line">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? '#5b636d' }} title={e.entryType} />
+              <span className={`truncate font-mono ${DECAY_STYLE[e.decayState]}`}>{e.title}</span>
+            </div>
+          ))}
+          {entries.length > CAP && <div className="text-[10px] text-[#5b636d] italic">+{entries.length - CAP} more…</div>}
+        </div>
+      )}
     </div>
   );
 }

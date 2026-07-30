@@ -372,3 +372,36 @@ def _swarmai_dir() -> Path:
     from routers.ddd_brain import _projects_root
 
     return _projects_root() / "SwarmAI"
+
+
+class TestSpecsInBrainDetail:
+    """AC1: _brain_detail exposes spec-details/*.spec.md filenames (a DERIVED
+    PROJECTION), so a DDD owner can find the domain's specs. NOT a _SECTIONS
+    entry — a sibling informational field (six-section invariant untouched, R31)."""
+
+    def test_specs_listed_when_present(self, tmp_path, monkeypatch):
+        from routers import ddd_brain as m
+        from core.project_registry import SPEC_DETAILS_DIR
+        pd = tmp_path / "Proj"
+        (pd / SPEC_DETAILS_DIR).mkdir(parents=True)
+        (pd / SPEC_DETAILS_DIR / "chat-session.spec.md").write_text("# spec")
+        (pd / SPEC_DETAILS_DIR / "eval.spec.md").write_text("# spec")
+        (pd / SPEC_DETAILS_DIR / "not-a-spec.md").write_text("# ignore")  # only *.spec.md
+        detail = m._brain_detail(pd)
+        assert detail["specs"] == ["chat-session.spec.md", "eval.spec.md"], detail.get("specs")
+
+    def test_specs_empty_when_absent(self, tmp_path):
+        from routers import ddd_brain as m
+        pd = tmp_path / "NoSpecs"
+        pd.mkdir()
+        detail = m._brain_detail(pd)
+        assert detail["specs"] == []
+
+    def test_sections_still_six_untouched(self, tmp_path):
+        """AC4: adding specs must NOT change _SECTIONS (six-section invariant)."""
+        from routers import ddd_brain as m
+        assert len(m._SECTIONS) == 6
+        pd = tmp_path / "P"
+        pd.mkdir()
+        detail = m._brain_detail(pd)
+        assert len(detail["sections"]) == 6
