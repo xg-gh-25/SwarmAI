@@ -395,18 +395,19 @@ function CodeIntelPanel({ project }: { project: string }) {
   const [state, setState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
   const toggle = useCallback(() => {
-    setOpen((wasOpen) => {
-      const next = !wasOpen;
-      if (next && state === 'idle') {
-        setState('loading');
-        getCodeIntelSummary(project).then(
-          (s) => { setSummary(s); setState('loaded'); },
-          () => setState('error'),
-        );
-      }
-      return next;
-    });
-  }, [project, state]);
+    // Sequence the side effect in the handler body — NOT inside a setState
+    // updater (updaters must be pure; StrictMode double-invokes them in dev,
+    // which would double-fire the fetch). Compute next from current `open`.
+    const next = !open;
+    setOpen(next);
+    if (next && state === 'idle') {
+      setState('loading');
+      getCodeIntelSummary(project).then(
+        (s) => { setSummary(s); setState('loaded'); },
+        () => setState('error'),
+      );
+    }
+  }, [open, project, state]);
 
   return (
     <div className="mt-3 rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="code-intel-panel">
@@ -554,7 +555,7 @@ function EntryGroup({ type, entries }: { type: string; entries: KnowledgeEntry[]
           {entries.slice(0, CAP).map((e, i) => (
             <div key={`${e.file}-${i}`} className="flex items-center gap-1.5 text-[10px]" data-testid="entry-line">
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? '#5b636d' }} title={e.entryType} />
-              <span className={`truncate font-mono ${DECAY_STYLE[e.decayState]}`}>{e.title}</span>
+              <span className={`truncate font-mono ${DECAY_STYLE[e.decayState] ?? DECAY_STYLE.active}`}>{e.title}</span>
             </div>
           ))}
           {entries.length > CAP && <div className="text-[10px] text-[#5b636d] italic">+{entries.length - CAP} more…</div>}

@@ -471,7 +471,10 @@ def _spec_files(project_dir: Path) -> list[str]:
     d = project_dir / SPEC_DETAILS_DIR
     if not d.is_dir():
         return []
-    return sorted(p.name for p in d.glob("*.spec.md"))
+    # is_file() (not is_symlink()) — surface only regular files: a subdir or a
+    # symlink named *.spec.md must not appear as a spec (a dir would feed the file
+    # preview a directory path; a symlink could resolve outside spec-details).
+    return sorted(p.name for p in d.glob("*.spec.md") if p.is_file() and not p.is_symlink())
 
 
 def _knowledge_entries(project_dir: Path) -> list[dict]:
