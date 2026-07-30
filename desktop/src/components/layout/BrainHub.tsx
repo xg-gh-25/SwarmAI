@@ -120,7 +120,16 @@ export function BrainHub() {
       <div className="flex-1 overflow-auto">
         {error && <div className="p-4 text-[#ef4444] text-[13px]" data-testid="brainhub-error">Failed to load brains: {error}</div>}
         {!error && tab === 'gallery' && <Gallery brains={brains} onOpen={openBrain} />}
-        {!error && tab === 'brain' && selected && <BrainView name={selected} agentId={agentId} />}
+        {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE (Gate-2
+            MED, verified NOT-currently-reachable): today every `selected` change is a
+            gallery-card click, and the gallery tab only renders when tab==='gallery',
+            so a brain switch is always brain→gallery→brain and THIS conditional already
+            unmounts BrainView on the gallery step (fresh mount on return). The key
+            guards a FUTURE in-place brain switch (e.g. a "jump to brain" affordance in
+            the brain view) from surviving a stale activeKey='asset:codeintel' and
+            transiently firing CodeIntelPanel's O(n) fetch for the new brain. Cheap +
+            intent-clear; no test asserts it because the transient isn't reachable yet. */}
+        {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} agentId={agentId} />}
         {!error && tab === 'review' && selected && <ReviewView name={selected} />}
         {!error && tab === 'distribute' && selected && <DistributeView name={selected} />}
       </div>
