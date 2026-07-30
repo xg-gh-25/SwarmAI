@@ -228,6 +228,100 @@ That's all for today."""
         assert ctx["created_by"] == "job:inbox-123"
 
 
+# ── Part 2b: Negative-content rejection (junk-todo bug) ──────────────
+
+
+class TestNegativeContentRejection:
+    """Both parsers must reject no-op / negative reflect lines instead of
+    turning them into (HIGH) Radar todos. Regression for the real 2026-07-27
+    morning-reflect line '**Urgent:** None (weekend day)' → junk HIGH todo.
+    """
+
+    def test_legacy_rejects_real_weekend_none_line(self):
+        """THE canary: the exact line that leaked a HIGH junk todo."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos("**Urgent:** None (weekend day)", job_id="morning-reflect", job_name="Morning Reflect")
+        assert items == [], f"negative line must produce no todo, got {items}"
+
+    @pytest.mark.parametrize("line", [
+        "Urgent: none.",
+        "Action needed: N/A",
+        "Reply needed: no action required",
+        "Follow up: nothing",
+        "- Urgent: — none —",
+        "Urgent: **",                       # title is pure emphasis → empty after strip
+        "Urgent: no urgent items today",
+        "Action needed: nil",
+        "**Follow up:** N/A (weekend)",
+    ])
+    def test_legacy_rejects_negative_variants(self, line):
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos(line, job_id="morning-reflect", job_name="Morning Reflect")
+        assert items == [], f"{line!r} must produce no todo, got {items}"
+
+    def test_legacy_survivor_startswith_none_is_kept(self):
+        """A REAL item that merely STARTS with 'none' must survive (exact-match, not substring)."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos("Urgent: None of the vendors replied — follow up", job_id="j", job_name="J")
+        assert len(items) == 1
+        assert items[0]["title"] == "None of the vendors replied — follow up"
+
+    def test_legacy_survivor_strips_markdown_residue(self):
+        """A genuine urgent item wrapped in ** must survive with a CLEAN title (no '**')."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos("**Urgent:** Ship the release blocker fix", job_id="j", job_name="J")
+        assert len(items) == 1
+        assert items[0]["title"] == "Ship the release blocker fix"
+
+    def test_legacy_survivor_keeps_trailing_parenthetical(self):
+        """Parenthetical strip is for the reject-decision ONLY — stored title keeps '(Q3)'."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos("Follow up: Call Acme about renewal (Q3)", job_id="j", job_name="J")
+        assert len(items) == 1
+        assert items[0]["title"] == "Call Acme about renewal (Q3)"
+
+    @pytest.mark.parametrize("line", [
+        "**Urgent:** None (weekend) (skip)",   # double parenthetical (Gate-2 HIGH)
+        "**Urgent:** none needed",
+        "**Urgent:** no urgent matters",
+        "**Urgent:** n/a — weekend",
+        "**Urgent:** nothing urgent",
+        "**Urgent:** No urgent items this morning",
+        "**Urgent:** No items today",
+        "**Urgent:** Nothing to report",
+        "**Urgent:** none for now",
+        "**Urgent:** no action this week",
+    ])
+    def test_legacy_rejects_freetext_negatives(self, line):
+        """Gate-2 HIGH: structural rule must catch synonyms/multi-paren an exact
+        list misses — else the same junk-todo bug class re-opens."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos(line, job_id="morning-reflect", job_name="Morning Reflect")
+        assert items == [], f"{line!r} must produce no todo, got {items}"
+
+    def test_legacy_survivor_leading_underscore_kept(self):
+        """Gate-2 MED: markdown-strip must not eat a legit leading '_' (identifier titles)."""
+        from jobs.executor import _parse_legacy_todos
+
+        items = _parse_legacy_todos("Urgent: _internal_ audit blocked", job_id="j", job_name="J")
+        assert len(items) == 1
+        assert items[0]["title"] == "_internal_ audit blocked"
+
+    def test_structured_rejects_negative_title(self):
+        """Defense-in-depth: a structured block carrying {'title':'None'} must be dropped too."""
+        from jobs.executor import _parse_structured_todos
+
+        text = '<!-- RADAR_TODOS\n[{"title":"None","priority":"high","context":{"next_step":"x"}}]\n-->'
+        items = _parse_structured_todos(text, source_type="email", job_id="morning-reflect", job_name="Morning Reflect")
+        assert items == [], f"structured negative title must be dropped, got {items}"
+
+
 # ── Part 3: Lifecycle Purge ──────────────────────────────────────────
 
 

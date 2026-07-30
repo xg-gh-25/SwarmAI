@@ -1812,6 +1812,10 @@ def _parse_structured_todos(
     for raw in todos_raw[:max_todos]:
         if not isinstance(raw, dict) or not raw.get("title"):
             continue
+        # Defense-in-depth: drop a structured block carrying a negative title
+        # (e.g. {"title": "None"}) — same no-op filter as the legacy path.
+        if _is_negative_title(raw["title"]):
+            continue
 
         # Build linked_context from the item's context + job metadata
         ctx = raw.get("context", {})
@@ -1832,6 +1836,51 @@ def _parse_structured_todos(
         })
 
     return items
+
+
+# Structural no-op detection (not an exhaustive phrase list — that under-matches
+# free-text LLM output, Gate-2). A title is a no-op iff it BEGINS with a negation
+# stem AND every remaining token is a content-free qualifier. This keeps real
+# items that merely START negative ("None of the vendors replied — follow up",
+# "Nothing is monitoring the queue → add alert") because they carry a non-filler
+# content word, while dropping "none", "nothing urgent", "no urgent matters", etc.
+_NEGATION_STEMS = frozenset({"none", "no", "n/a", "na", "nil", "nothing"})
+_NOOP_FILLER = frozenset({
+    "needed", "urgent", "required", "pending", "outstanding",
+    "matter", "matters", "item", "items", "action", "actions",
+    "update", "updates", "report", "reported", "reply", "follow-up", "followup",
+    "now", "today", "tonight", "this", "week", "morning", "weekend", "day",
+    "currently", "yet", "far", "so", "for", "to", "at", "the", "of", "on",
+    "moment", "time", "week's", "there", "are", "is",
+})
+
+
+def _is_negative_title(title: str) -> bool:
+    """True iff ``title`` is a no-op / negative marker (e.g. 'None (weekend day)',
+    'N/A', 'nothing urgent', 'no urgent matters') that must not become a todo.
+
+    Normalizes markdown emphasis + ALL trailing parentheticals, then applies a
+    STRUCTURAL rule: first token is a negation stem AND every remaining token is a
+    content-free qualifier. Substring/exact-phrase matching was too brittle
+    (Gate-2: 'None (weekend) (skip)' and synonyms leaked); this generalizes without
+    false-dropping real negation-led items (they carry a non-filler content word)."""
+    import re
+
+    t = str(title).strip().strip("*_:").strip()
+    # Strip EVERY trailing parenthetical, not just one ("None (weekend) (skip)").
+    prev = None
+    while prev != t:
+        prev = t
+        t = re.sub(r"\s*\([^)]*\)\s*$", "", t).strip()
+    t = t.strip(" .!?-—*_").lower()
+    if not t:
+        return True
+    tokens = [w.strip(".,;:!?()*_-—") for w in t.split()]
+    tokens = [w for w in tokens if w]
+    if not tokens or tokens[0] not in _NEGATION_STEMS:
+        return False
+    # Negation-led: a no-op iff EVERY remaining token is a content-free qualifier.
+    return all(w in _NOOP_FILLER for w in tokens[1:])
 
 
 def _parse_legacy_todos(
@@ -1873,7 +1922,14 @@ def _parse_legacy_todos(
         elif lower.startswith("[skip]") or lower.startswith("skip:"):
             continue
 
-        if title and len(title) > 5:
+        # Strip markdown emphasis residue left by e.g. "**Urgent:** ..." so the
+        # stored title is clean. Only remove a leading run of '*' (the closing
+        # '**' orphaned by the "urgent:"-split) — NOT lone '_', which would eat a
+        # legit leading char of items like "_internal_ audit" (Gate-2 MED).
+        if title:
+            title = title.strip().lstrip("*").strip()
+
+        if title and len(title) > 5 and not _is_negative_title(title):
             ctx = {
                 "job_id": job_id,
                 "job_name": job_name,
