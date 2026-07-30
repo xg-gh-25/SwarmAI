@@ -1631,3 +1631,38 @@ class TestSupersessionRecall:
         q = "zebra quokka mechanism"
         hits = _ddd_entry_hits(q, self._doc(superseded=True), 5, include_superseded=True)
         assert len(hits) >= 1, "lineage flag must re-include the superseded entry (filtered, not deleted)"
+
+
+class TestSupersessionGate2Fixes:
+    """Gate-2 adversarial findings (run_24299917): spaced-title anchor (HIGH) +
+    recall body false-positive (MED)."""
+
+    # HIGH — a real title anchor has SPACES; must round-trip + preserve ref/last
+    def test_spaced_title_anchor_roundtrips_and_preserves_metadata(self):
+        from core.ddd_entry_lifecycle import mark_superseded
+        content = ("## What Failed\n"
+                   "- [guideline] **Old take on caching** — the original (2026-01-01)\n"
+                   "  <!-- ref:4 | last:2026-05-18 | decay:active | source:auto -->\n")
+        out = mark_superseded(content, "Old take on caching",
+                              "New unified cache strategy", date(2026, 7, 30))
+        e = parse_entries(out)[0]
+        # the mark itself must survive re-parse (the HIGH bug: space broke _META_RE)
+        assert e.superseded_by == "New unified cache strategy"
+        assert e.valid_until == date(2026, 7, 30)
+        # and the pre-existing metadata must NOT be lost
+        assert e.ref_count == 4
+        assert e.last_referenced == date(2026, 5, 18)
+        assert e.source == "auto"
+
+    # MED — an ACTIVE entry whose BODY contains "superseded_by:x" must NOT be filtered
+    def test_recall_not_fooled_by_body_mentioning_superseded(self):
+        from core.recall_multi import _ddd_entry_hits
+        # This mirrors THIS feature's own lesson entry, which discusses superseded_by.
+        doc = {"IMPROVEMENT.md": (
+            "## What Worked\n"
+            "- [guideline] **Wombat telemetry pipeline** — the fix sets"
+            " superseded_by:new_anchor on replaced wombat entries (2026-01-01)\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )}
+        hits = _ddd_entry_hits("wombat telemetry pipeline", doc, 5)
+        assert len(hits) >= 1, "active entry wrongly filtered because its BODY mentions superseded_by"

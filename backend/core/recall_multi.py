@@ -95,12 +95,14 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
 
     # Bi-temporal supersession (run_24299917): a superseded DDD entry is filtered
     # from default recall (its lineage is preserved on disk, but it must not
-    # surface as live judgment). Anchored on the exact metadata-comment field
-    # (`superseded_by:<non-null-anchor>`), NOT a bare substring — a legit entry
-    # whose BODY mentions the word "superseded" is not matched. `null` is treated
-    # as not-superseded (parity with memory_index's `superseded_by: null` idiom,
-    # though the DDD writer omits the field entirely when unset).
-    _SUPERSEDED_RE = _re.compile(r"superseded_by:(?!null\b)[^\s|]+")
+    # surface as live judgment). Anchored to the ENTRY METADATA COMMENT
+    # (`<!-- ... | superseded_by:<anchor> -->`), NOT a bare substring over the
+    # whole chunk — a legit ACTIVE entry whose BODY prose mentions
+    # "superseded_by:x" (e.g. this feature's own lesson entry) must NOT be filtered
+    # (Gate-2 MED, run_24299917). The `null` sentinel is treated as not-superseded.
+    # `[^|]+?` (not [^\s|]) so a spaced TITLE anchor is matched; `-->` terminator
+    # bounds it. Requires the comment prefix so only the metadata line can trigger.
+    _SUPERSEDED_RE = _re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
 
     entries: dict[str, str] = {}           # key → entry text
     entry_doc: dict[str, str] = {}         # key → owning doc

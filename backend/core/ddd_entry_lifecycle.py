@@ -252,14 +252,18 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
 # and optional — the leading space of each lives INSIDE its own group so a comment
 # carrying only a later field (e.g. superseded_by, no source) still matches, and a
 # legacy comment with none of them is byte-identical to the pre-supersession form.
-# superseded_by uses [^\s|] (not \S) so it cannot greedily swallow the ` -->`
-# terminator or a following ` | ` separator.
+# superseded_by is a TITLE anchor and titles contain SPACES (e.g. "New unified
+# cache strategy"), so its group is `([^|]+?)` — any run of non-pipe chars,
+# non-greedy, terminated by the trailing ` -->$` anchor. It is the LAST field so
+# it cannot collide with a following ` | ` separator; the captured value is
+# .strip()'d at parse time to drop the space before ` -->`. (valid_until stays a
+# strict date token; the `null` sentinel + missing-field both mean "not set".)
 _META_RE = re.compile(
     r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)"
     r"(?:\s*\|\s*source:(\w+))?"
     r"(?:\s*\|\s*valid_until:([\w\-]+))?"
-    r"(?:\s*\|\s*superseded_by:([^\s|]+))?"
-    r" -->$"
+    r"(?:\s*\|\s*superseded_by:([^|]+?))?"
+    r"\s*-->$"
 )
 
 # Regex for date extraction from entry text "(YYYY-MM-DD, ...)"
@@ -500,7 +504,11 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
                             valid_until = date.fromisoformat(vu_str)
                         except ValueError:
                             valid_until = None
-                    superseded_by = meta_match.group(6) or None
+                    sup_raw = meta_match.group(6)
+                    superseded_by = sup_raw.strip() if sup_raw else None
+                    # `null` sentinel (memory_index idiom) means not-superseded
+                    if superseded_by == "null":
+                        superseded_by = None
                     j = meta_line_idx + 1  # Skip the metadata line
 
             # Classify type if not explicitly tagged
