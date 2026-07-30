@@ -88,7 +88,11 @@ def test_apply_rewrites_backs_up_and_is_idempotent(runs_root):
     assert n == 1
     after = json.loads(match_file.read_text())
     assert after["status"] == "completed", "matched run rewritten to completed"
-    assert after["reconciled_from"] == "failed", "audit marker recorded"
+    # audit marker preserves BOTH the original status and the stale reason (not thinned)
+    assert after["reconciled_from"] == {
+        "status": "failed", "failure_reason": _STALE_FAILURE_REASON,
+    }, "audit marker records original status + reason"
+    assert "failure_reason" not in after, "stale reason cleared from top level"
     assert (runs_root / "run_match1" / "run.json.bak").exists(), "backup created"
     # backup preserves the original failed status
     bak = json.loads((runs_root / "run_match1" / "run.json.bak").read_text())

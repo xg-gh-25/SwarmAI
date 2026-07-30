@@ -28,12 +28,15 @@ SELECTION — the triple gate (ALL three, AND-ed)
 SAFETY
 ------
 - **Dry-run is the default.** Nothing is written without ``--apply``.
-- **Backup**: each rewritten ``run.json`` is copied to ``run.json.bak`` first.
+- **Backup**: each rewritten ``run.json`` is byte-for-byte copied (``shutil.copy2``,
+  preserves mtime) to ``run.json.bak`` first — a faithful, reversible image. An
+  existing ``.bak`` is never clobbered; the backup rotates to ``.bak.1``, ``.bak.2``…
 - **Atomic write**: tmp-file + ``os.replace`` (mirrors _mark_failed).
 - **Idempotent**: a rewritten run is ``completed`` and no longer matches gate 1,
   so a re-run is a no-op.
-- **Audit**: an ``reconciled_from: "failed"`` marker is added to each rewritten
-  run, and a manifest (id / project / before→after) is printed.
+- **Audit**: a ``reconciled_from: {"status": "failed", "failure_reason": <orig>}``
+  marker preserves the original status AND stale reason on each rewritten run, and a
+  manifest (id / project / before→after) is printed.
 
 USAGE
 -----
@@ -45,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -119,14 +123,33 @@ def select_mislabeled(workspace_root: Path) -> list[dict]:
     return out
 
 
-def _rewrite(rf: Path, state: dict) -> None:
-    """Backup then atomically rewrite one run.json: failed -> completed + marker."""
+def _backup_path(rf: Path) -> Path:
+    """A .json.bak next to ``rf`` that NEVER clobbers an existing faithful backup.
+    If ``run.json.bak`` already exists (e.g. a prior --apply that later re-failed),
+    rotate to ``run.json.bak.1``, ``.bak.2``, … so no earlier image is lost."""
     bak = rf.with_suffix(".json.bak")
-    if not bak.exists():  # never clobber an existing backup
-        bak.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    if not bak.exists():
+        return bak
+    i = 1
+    while True:
+        rotated = rf.with_suffix(f".json.bak.{i}")
+        if not rotated.exists():
+            return rotated
+        i += 1
+
+
+def _rewrite(rf: Path, state: dict) -> None:
+    """Backup then atomically rewrite one run.json: failed -> completed + marker.
+
+    Backup is a true byte-for-byte image (``shutil.copy2``, preserves mtime) so the
+    migration is genuinely reversible — a re-serialize would silently normalize
+    formatting/ordering and is NOT a faithful backup (adversarial MED)."""
+    shutil.copy2(rf, _backup_path(rf))
     new = dict(state)
     new["status"] = "completed"
-    new["reconciled_from"] = "failed"
+    # Preserve the original reason in the audit marker rather than dropping it —
+    # the reconciliation must remain fully traceable (adversarial LOW: audit-thin).
+    new["reconciled_from"] = {"status": "failed", "failure_reason": state.get("failure_reason")}
     new.pop("failure_reason", None)  # the reason was the stale-detector's, no longer true
     tmp = rf.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(new, indent=2), encoding="utf-8")
