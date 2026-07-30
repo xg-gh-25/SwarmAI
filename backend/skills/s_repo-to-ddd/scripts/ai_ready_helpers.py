@@ -2297,7 +2297,7 @@ def render_agents_md(data: dict[str, Any]) -> str:
     lines.append("")
     lines.append(
         f"> AI-Ready (DDD) | Generated {data['generated_date']} "
-        f"| Score: {data['score']}/10 | [Review Report](.ai-ready/REVIEW-REPORT.md)"
+        f"| Score: {data['score']}/10 | [Review Report](.ai-context/REVIEW-REPORT.md)"
     )
     lines.append("")
 
@@ -2347,11 +2347,11 @@ def render_agents_md(data: dict[str, Any]) -> str:
     lines.append("## Deep Context (DDD)")
     lines.append("| Need to understand... | Read |")
     lines.append("|---|---|")
-    lines.append("| Why this exists, what's out of scope | [PRODUCT.md](.ai-ready/PRODUCT.md) |")
-    lines.append("| Architecture, conventions, invariants | [TECH.md](.ai-ready/TECH.md) |")
-    lines.append("| What failed, known issues, patterns | [IMPROVEMENT.md](.ai-ready/IMPROVEMENT.md) |")
-    lines.append("| Current priorities, active decisions | [PROJECT.md](.ai-ready/PROJECT.md) |")
-    lines.append("| Module dependencies, blast radius | [code-intel.json](.ai-ready/code-intel.json) |")
+    lines.append("| Why this exists, what's out of scope | [PRODUCT.md](.ai-context/PRODUCT.md) |")
+    lines.append("| Architecture, conventions, invariants | [TECH.md](.ai-context/TECH.md) |")
+    lines.append("| What failed, known issues, patterns | [IMPROVEMENT.md](.ai-context/IMPROVEMENT.md) |")
+    lines.append("| Current priorities, active decisions | [PROJECT.md](.ai-context/PROJECT.md) |")
+    lines.append("| Module dependencies, blast radius | [code-intel.json](.ai-context/code-intel.json) |")
     lines.append("")
 
     # User section marker
@@ -2640,7 +2640,7 @@ def check_staleness(output_path: Path, repo_path: Path) -> dict[str, Any]:
     repo_path = _validate_repo_path(Path(repo_path))
 
     # Read stored snapshot
-    meta_path = output_path / ".ai-ready" / "ai-ready.json"
+    meta_path = output_path / ".ai-context" / "ai-ready.json"
     if not meta_path.exists():
         return {"overall": "stale", "commits_since": -1, "stale_files": ["all"], "changes": ["no ai-ready.json found"]}
 
@@ -2767,7 +2767,7 @@ def incremental_update(output_path: Path, repo_path: Path) -> dict[str, Any]:
     output_path = Path(output_path)
 
     # Read stored generation commit
-    meta_path = output_path / ".ai-ready" / "ai-ready.json"
+    meta_path = output_path / ".ai-context" / "ai-ready.json"
     if not meta_path.exists():
         return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
                 "commits_since": -1, "last_commit": "", "reason": "no ai-ready.json — full regeneration needed"}
@@ -3863,7 +3863,7 @@ def render_blind_spots_md(scan: dict, package_name: str) -> str:
     This is the human-facing consumer for the reverse-coverage detector (run_d7b78923).
     ``blind_spot_scan`` was fully implemented + tested but had ZERO callers — its result
     died unreferenced. This renderer + the INSTRUCTIONS Phase-5/6 wiring give it a durable
-    home, one file PER package's own ``.ai-ready/`` dir (blind spots are that repo's own —
+    home, one file PER package's own ``.ai-context/`` dir (blind spots are that repo's own —
     NEVER a shared/global file).
 
     Two shapes, both honest:

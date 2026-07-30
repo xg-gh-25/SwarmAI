@@ -708,7 +708,7 @@ class TestAgentsMdTemplate:
         lines = output.strip().split("\n")
         assert len(lines) <= 150, f"AGENTS.md is {len(lines)} lines, must be ≤150"
         assert "payment-service" in output
-        assert ".ai-ready/PRODUCT.md" in output
+        assert ".ai-context/PRODUCT.md" in output
 
 
 # ─── Import Graph Extraction ───
@@ -905,10 +905,10 @@ class TestIncrementalUpdate:
         # Get current HEAD and store in meta
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
         output = tmp_path / "output"
-        (output / ".ai-ready").mkdir(parents=True)
+        (output / ".ai-context").mkdir(parents=True)
         meta = build_ai_ready_meta(5.0, "test")
         meta["_last_commit"] = head
-        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+        (output / ".ai-context" / "ai-ready.json").write_text(json.dumps(meta))
 
         result = incremental_update(output, repo)
         assert result["needs_update"] is False
@@ -931,10 +931,10 @@ class TestIncrementalUpdate:
         # Store current HEAD
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
         output = tmp_path / "output"
-        (output / ".ai-ready").mkdir(parents=True)
+        (output / ".ai-context").mkdir(parents=True)
         meta = build_ai_ready_meta(5.0, "test")
         meta["_last_commit"] = head
-        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+        (output / ".ai-context" / "ai-ready.json").write_text(json.dumps(meta))
 
         # Make a new commit
         (repo / "new_module.py").write_text("def new(): pass")
@@ -1001,10 +1001,10 @@ class TestStalenessDetection:
 
         # Generate output
         output = tmp_path / "output"
-        (output / ".ai-ready").mkdir(parents=True)
+        (output / ".ai-context").mkdir(parents=True)
         import json
         meta = build_ai_ready_meta(5.0, "test")
-        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+        (output / ".ai-context" / "ai-ready.json").write_text(json.dumps(meta))
 
         result = check_staleness(output, repo)
         assert result["overall"] == "fresh"

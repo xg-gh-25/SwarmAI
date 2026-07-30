@@ -8,7 +8,7 @@
 #   bash install.sh <source_dir> <target_project> --uninstall
 #   bash install.sh --list-platforms
 #
-# source_dir: directory containing AGENTS.md + .ai-ready/ (engine output)
+# source_dir: directory containing AGENTS.md + .ai-context/ (engine output)
 # target_project: root of the project to make AI-ready
 # platform: optional — auto-detects if not specified
 #
@@ -19,22 +19,22 @@ set -eo pipefail
 # ─── Platforms Table ───
 # Format: id|agents_file_target|ddd_dir_target|detect_pattern
 # detect_pattern: file/dir to check in target for auto-detection
-# Agents file = entry point (AGENTS.md content). DDD dir = .ai-ready/ content.
+# Agents file = entry point (AGENTS.md content). DDD dir = .ai-context/ content.
 
 platforms_table() {
   cat <<'EOF'
-claude-code|AGENTS.md|.ai-ready|.claude
+claude-code|AGENTS.md|.ai-context|.claude
 kiro|.kiro/steering/ai-ready-context.md|.kiro/docs/ai-ready|.kiro
-cursor|AGENTS.md|.ai-ready|.cursor
-codex|AGENTS.md|.ai-ready|.codex
-gemini|AGENTS.md|.ai-ready|.gemini
-opencode|AGENTS.md|.ai-ready|.opencode
-vscode-copilot|AGENTS.md|.ai-ready|.copilot
-windsurf|AGENTS.md|.ai-ready|.windsurf
-cline|AGENTS.md|.ai-ready|.cline
-hermes|AGENTS.md|.ai-ready|.hermes
-trae|AGENTS.md|.ai-ready|.trae
-generic|AGENTS.md|.ai-ready|NONE
+cursor|AGENTS.md|.ai-context|.cursor
+codex|AGENTS.md|.ai-context|.codex
+gemini|AGENTS.md|.ai-context|.gemini
+opencode|AGENTS.md|.ai-context|.opencode
+vscode-copilot|AGENTS.md|.ai-context|.copilot
+windsurf|AGENTS.md|.ai-context|.windsurf
+cline|AGENTS.md|.ai-context|.cline
+hermes|AGENTS.md|.ai-context|.hermes
+trae|AGENTS.md|.ai-context|.trae
+generic|AGENTS.md|.ai-context|NONE
 EOF
 }
 
@@ -78,7 +78,7 @@ fi
 if [ -z "$SOURCE" ] || [ -z "$TARGET" ]; then
     echo "Usage: bash install.sh <source_dir> <target_project> [platform] [--force] [--uninstall]"
     echo ""
-    echo "  source_dir:     Directory containing AGENTS.md + .ai-ready/"
+    echo "  source_dir:     Directory containing AGENTS.md + .ai-context/"
     echo "  target_project: Root of the project to install into"
     echo "  platform:       Optional (auto-detects). Use --list-platforms to see all."
     echo ""
@@ -122,7 +122,7 @@ if [ "$UNINSTALL" = true ]; then
     if [ -d "$TARGET/.kiro" ]; then
         MANIFEST="$TARGET/.kiro/docs/ai-ready/WHAT_WAS_ADDED.md"
     else
-        MANIFEST="$TARGET/.ai-ready/WHAT_WAS_ADDED.md"
+        MANIFEST="$TARGET/.ai-context/WHAT_WAS_ADDED.md"
     fi
     if [ ! -f "$MANIFEST" ]; then
         echo "❌ No WHAT_WAS_ADDED.md found — nothing to uninstall."
@@ -137,7 +137,7 @@ if [ "$UNINSTALL" = true ]; then
             echo "  removed: $filepath"
         fi
     done
-    [ -d "$TARGET/.ai-ready" ] && rmdir "$TARGET/.ai-ready" 2>/dev/null && echo "  removed: .ai-ready/" || true
+    [ -d "$TARGET/.ai-context" ] && rmdir "$TARGET/.ai-context" 2>/dev/null && echo "  removed: .ai-context/" || true
     rm -f "$MANIFEST" 2>/dev/null
     echo "✅ Uninstall complete."
     exit 0
@@ -151,8 +151,8 @@ if [ ! -f "$SOURCE/AGENTS.md" ]; then
     exit 1
 fi
 
-if [ ! -d "$SOURCE/.ai-ready" ]; then
-    echo "❌ Source directory missing .ai-ready/: $SOURCE"
+if [ ! -d "$SOURCE/.ai-context" ]; then
+    echo "❌ Source directory missing .ai-context/: $SOURCE"
     exit 1
 fi
 
@@ -213,8 +213,8 @@ echo ""
 # Install agents entry point
 install_file "$SOURCE/AGENTS.md" "$TARGET/$P_AGENTS"
 
-# Install .ai-ready/ contents to DDD target
-for f in "$SOURCE/.ai-ready/"*; do
+# Install .ai-context/ contents to DDD target
+for f in "$SOURCE/.ai-context/"*; do
     [ -f "$f" ] || continue
     filename="$(basename "$f")"
     install_file "$f" "$TARGET/$P_DDD/$filename"

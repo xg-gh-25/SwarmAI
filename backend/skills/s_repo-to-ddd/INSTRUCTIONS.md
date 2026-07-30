@@ -5,7 +5,7 @@ Generate DDD-structured artifacts that make any codebase genuinely understood by
 ## Overview
 
 **Input:** Repo path + optional signal sources (docs, wikis, Slack exports)
-**Output:** `.ai-ready/` directory with 7 files + `AGENTS.md` entry point
+**Output:** `.ai-context/` directory with 7 files + `AGENTS.md` entry point
 
 **Phases:** INPUT → INGEST → UNDERSTAND → GENERATE
 
@@ -37,18 +37,18 @@ Making {repo_name} genuinely understood by AI agents.
     2. INGEST    — Parse files, detect stack, gather git history
     3. UNDERSTAND — Read code, map modules, extract patterns
     3.5 ENRICH  — Ask user max 5 questions (what code can't tell)
-    4. GENERATE  — Produce DDD artifacts (.ai-ready/ + AGENTS.md)
+    4. GENERATE  — Produce DDD artifacts (.ai-context/ + AGENTS.md)
     5. VERIFY    — Sub-agent test: can it use the output? (3 tasks)
     6. DELIVER   — Present output + next steps to user
 
   Output:
     AGENTS.md              ← Entry point (≤150 lines)
-    .ai-ready/PRODUCT.md   ← Why: purpose, audience, constraints
-    .ai-ready/TECH.md      ← How: architecture, conventions
-    .ai-ready/IMPROVEMENT.md ← Learned: gotchas, failures, patterns
-    .ai-ready/PROJECT.md   ← Now: priorities, decisions, blockers
-    .ai-ready/code-intel.json ← Graph: modules, deps, entry points
-    .ai-ready/REVIEW-REPORT.md ← For humans: score, gaps, assignments
+    .ai-context/PRODUCT.md   ← Why: purpose, audience, constraints
+    .ai-context/TECH.md      ← How: architecture, conventions
+    .ai-context/IMPROVEMENT.md ← Learned: gotchas, failures, patterns
+    .ai-context/PROJECT.md   ← Now: priorities, decisions, blockers
+    .ai-context/code-intel.json ← Graph: modules, deps, entry points
+    .ai-context/REVIEW-REPORT.md ← For humans: score, gaps, assignments
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -75,13 +75,13 @@ Making {repo_name} genuinely understood by AI agents.
 → Score: {X.X}/10 | AGENTS.md: {N} lines
   Output: {output_path}/
   ├── AGENTS.md ({N} lines)
-  ├── .ai-ready/PRODUCT.md
-  ├── .ai-ready/TECH.md
-  ├── .ai-ready/IMPROVEMENT.md ({N} gotchas)
-  ├── .ai-ready/PROJECT.md
-  ├── .ai-ready/code-intel.json ({N} modules, {M} edges)
-  ├── .ai-ready/ai-ready.json
-  └── .ai-ready/REVIEW-REPORT.md
+  ├── .ai-context/PRODUCT.md
+  ├── .ai-context/TECH.md
+  ├── .ai-context/IMPROVEMENT.md ({N} gotchas)
+  ├── .ai-context/PROJECT.md
+  ├── .ai-context/code-intel.json ({N} modules, {M} edges)
+  ├── .ai-context/ai-ready.json
+  └── .ai-context/REVIEW-REPORT.md
 ```
 
 **Completion (print at end):**
@@ -89,7 +89,7 @@ Making {repo_name} genuinely understood by AI agents.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✦ COMPLETE | AI-Ready Score: {X.X}/10
   {project_name}: {N} modules, {M} gotchas, {K} conventions
-  Review: .ai-ready/REVIEW-REPORT.md
+  Review: .ai-context/REVIEW-REPORT.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -463,7 +463,7 @@ Produce all output files. The structure for each file is defined inline below.
 ```python
 from ai_ready_helpers import resolve_output_path
 output_path = resolve_output_path(Path(repo_path), project_name="...", target=user_target_if_specified)
-# Creates: {output_path}/AGENTS.md + {output_path}/.ai-ready/
+# Creates: {output_path}/AGENTS.md + {output_path}/.ai-context/
 ```
 
 Priority: user-specified path > SwarmWS .artifacts/ > alongside repo.
@@ -728,7 +728,7 @@ Generate a human-readable report covering:
 
 #### 4.8.5: BLIND-SPOTS.md (reverse-coverage — code→doc direction)
 
-Write a **per-package** `{output_path}/.ai-ready/BLIND-SPOTS.md` — the Spec Studio-style
+Write a **per-package** `{output_path}/.ai-context/BLIND-SPOTS.md` — the Spec Studio-style
 reverse-coverage check: risky code spans (high fan-in / flagged risk) that the DDD domain
 layer does NOT document. This is the human-facing consumer for `blind_spot_scan`; it runs
 off the SAME `code-intel.json` doc built in §4.6/§4.6.5 (needs `risk_areas`/`hot_zones` +
@@ -739,20 +739,20 @@ import json
 from pathlib import Path
 from ai_ready_helpers import blind_spot_scan, render_blind_spots_md
 
-doc = json.loads((Path(output_path) / ".ai-ready" / "code-intel.json").read_text())
+doc = json.loads((Path(output_path) / ".ai-context" / "code-intel.json").read_text())
 scan = blind_spot_scan(doc)                       # {total_risky, documented, blind, clean, blind_spots}
 # TITLE ARG = the name of THIS unit. Single-repo path → project_name. In the §4.9
 # monorepo fan-out → package.name (NOT project_name — else every package's doc is
 # titled with the repo name; Gate-2 MED, run_d7b78923). The FILE is already per-package
 # because output_path is the per-package dir inside the fan-out loop.
 md = render_blind_spots_md(scan, unit_name)        # unit_name = project_name | package.name
-(Path(output_path) / ".ai-ready" / "BLIND-SPOTS.md").write_text(md)
+(Path(output_path) / ".ai-context" / "BLIND-SPOTS.md").write_text(md)
 # carry scan["blind"] into the Phase-6 DELIVER summary line for THIS package
 ```
 
 Rules (load-bearing):
 - **PER-PACKAGE, never shared.** Blind spots are that repo's own — one `BLIND-SPOTS.md`
-  per package `.ai-ready/` dir. In the §4.9 monorepo fan-out, each package writes its own
+  per package `.ai-context/` dir. In the §4.9 monorepo fan-out, each package writes its own
   (inside its per-package dir); there is NO global/merged BLIND-SPOTS.md.
 - **REPORT-ONLY, never a gate.** `blind_spot_scan` is deterministic (keys off real
   risk_areas/hot_zones, not an LLM negative assertion) and explicitly NOT fail-closed
@@ -771,7 +771,7 @@ cross-package synthesis:
 from ai_ready_helpers import run_multi_package
 # Deterministic per-package material + cross-package synthesis (auto-detects
 # boundaries; do NOT hand it a package list — it calls detect_package_roots).
-mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-ready" / "packages")
+mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-context" / "packages")
 # mp["packages"]     → [{name, root, path, language_mix, detected_by, stats}]
 # mp["partition"]    → the packages[] navigation partition
 # mp["cross_package"]→ {shared_deps, dep_order}
@@ -792,7 +792,7 @@ mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-ready" / 
    for N packages (a collision that dropped one = coverage violated). Silently
    skipping packages = "we understand the repo" being false.
 
-**Cross-package synthesis — write `{output_path}/.ai-ready/CROSS-PACKAGE.md`:**
+**Cross-package synthesis — write `{output_path}/.ai-context/CROSS-PACKAGE.md`:**
 - The package inventory (`mp["partition"]` — name, root, language_mix, detected_by).
 - Shared dependencies (`mp["cross_package"]["shared_deps"]`) — libs used by ≥2 packages.
 - Dependency order (`mp["cross_package"]["dep_order"]`) — which package imports which
@@ -825,9 +825,9 @@ from ai_ready_helpers import build_verification_prompt
 # Collect the generated DDD content
 ddd_content = {
     "AGENTS.md": Path(output_path / "AGENTS.md").read_text(),
-    "TECH.md": Path(output_path / ".ai-ready/TECH.md").read_text(),
-    "IMPROVEMENT.md": Path(output_path / ".ai-ready/IMPROVEMENT.md").read_text(),
-    "code-intel.json": Path(output_path / ".ai-ready/code-intel.json").read_text(),
+    "TECH.md": Path(output_path / ".ai-context/TECH.md").read_text(),
+    "IMPROVEMENT.md": Path(output_path / ".ai-context/IMPROVEMENT.md").read_text(),
+    "code-intel.json": Path(output_path / ".ai-context/code-intel.json").read_text(),
 }
 
 prompt = build_verification_prompt(ddd_content, tasks)
@@ -882,7 +882,7 @@ Present to user:
 
 Output: {output_path}/
 ├── AGENTS.md (XX lines, score: X.X/10)
-├── .ai-ready/
+├── .ai-context/
 │   ├── PRODUCT.md
 │   ├── TECH.md
 │   ├── IMPROVEMENT.md
