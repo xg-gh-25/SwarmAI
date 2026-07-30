@@ -61,6 +61,13 @@ vi.mock('../code-intel/CodeGraph', () => ({
   },
 }));
 
+// CodeIntelPanel now fetches the summary on mount (Gate-1 F5) — mock the service
+// boundary so a Code-Intelligence nav click doesn't hit the real API.
+const mockGetCodeIntelSummary = vi.fn();
+vi.mock('../../services/codeIntel', () => ({
+  getCodeIntelSummary: (...a: unknown[]) => mockGetCodeIntelSummary(...a),
+}));
+
 // The six canonical section keys, in order (mirrors backend _SECTIONS / SECTION_ORDER).
 const SECTION_KEYS: Array<BrainDetail['sections'][number]['key']> =
   ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
@@ -103,7 +110,8 @@ const DETAIL: BrainDetail = {
     { key: 'refresher', num: '⑥', label: 'Refresher', ownGovern: 'GOVERN', curator: 'TPM',
       members: [{ path: 'REFRESHER.md', gitStatus: 'clean' }], entries: [], completeNotBroken: false },
   ],
-  specs: [],
+  specs: ['channels.spec.md', 'pipeline.spec.md'],
+  hasCodeIntel: true,
 };
 
 const REVIEW = {
@@ -133,6 +141,10 @@ beforeEach(() => {
     distributable: true, declared: true, warnings: [],
     has_output: false, output_path: null, last_distribute_time: null,
     source_changed_since: false,
+  });
+  mockGetCodeIntelSummary.mockResolvedValue({
+    symbolCount: 42,
+    modulesTop5: [{ name: 'core', function_count: 10, class_count: 2, file_count: 3 }],
   });
 });
 
@@ -288,6 +300,7 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
         entries: [], completeNotBroken: key !== 'knowledge',
       })),
       specs: [],
+      hasCodeIntel: false,
     };
     mockGetBrains.mockResolvedValue([{
       name: 'SomeoneElsesProject', kind: 'knowledge',
@@ -307,10 +320,13 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
     // click an empty section → renders "complete, not broken", no throw
     fireEvent.click(screen.getByTestId('nav-item-gates'));
     await waitFor(() => expect(screen.getByTestId('empty-gates')).toBeTruthy());
-    // Gate-2 meta-review MED: a knowledge-only (non-code-repo) DDD has no code to
-    // graph → the "View code graph" button must NOT be offered (avoids the misleading
-    // "re-index" empty state on a brain that will always be empty).
+    // A DDD with no code_intel.db (hasCodeIntel=false) → the "View code graph"
+    // button must NOT be offered (presence-gated, not kind-gated).
     expect(screen.queryByTestId('open-codegraph')).toBeNull();
+    // AC4: no specs AND no code_intel → NO Assets group at all (no empty-group noise).
+    expect(screen.queryByTestId('assets-group-header')).toBeNull();
+    expect(screen.queryByTestId('nav-item-asset:specs')).toBeNull();
+    expect(screen.queryByTestId('nav-item-asset:codeintel')).toBeNull();
   });
 
   it('AC3+meta: ESC with the code graph open closes ONLY the graph, not the whole Brain Hub', async () => {
@@ -318,7 +334,7 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
     // document-level ESC→close listener; CodeGraph has no ESC handler. BrainView
     // must intercept ESC (capture phase) while the graph is open so ESC dismisses
     // the graph, not the hub.
-    await openBrain();  // DETAIL.kind === 'code-repo' → button present
+    await openBrain();  // DETAIL.hasCodeIntel === true → button present
     fireEvent.click(screen.getByTestId('open-codegraph'));
     await waitFor(() => expect(screen.getByTestId('code-graph-mock')).toBeTruthy());
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -331,6 +347,73 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
     mockGetBrains.mockResolvedValue([]);
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByText('No DDD brains found.')).toBeTruthy());
+  });
+});
+
+describe('BrainHub — Assets group in left nav (Specs + Code Intelligence)', () => {
+  async function openBrain() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+  }
+
+  it('AC2: Specs + Code Intelligence appear as left-nav items under an Assets group', async () => {
+    await openBrain();
+    expect(screen.getByTestId('assets-group-header')).toBeTruthy();
+    expect(screen.getByTestId('nav-item-asset:specs')).toBeTruthy();
+    expect(screen.getByTestId('nav-item-asset:codeintel')).toBeTruthy();
+    // NOT persistent panels in the content pane on load — the default view is the
+    // first SECTION's card, not an asset panel.
+    expect(screen.getByTestId('section-identity')).toBeTruthy();
+    expect(screen.queryByTestId('specs-panel')).toBeNull();
+    expect(screen.queryByTestId('code-intel-panel')).toBeNull();
+  });
+
+  it('AC2: clicking Specs shows the spec list in the right pane; the section card unmounts', async () => {
+    await openBrain();
+    fireEvent.click(screen.getByTestId('nav-item-asset:specs'));
+    await waitFor(() => expect(screen.getByTestId('specs-panel')).toBeTruthy());
+    // the spec files (from DETAIL.specs) are listed + clickable
+    expect(screen.getByTestId('spec-channels.spec.md')).toBeTruthy();
+    expect(screen.getByTestId('spec-pipeline.spec.md')).toBeTruthy();
+    // Gate-1 F4: exactly one pane — the section card is NOT also rendered
+    expect(screen.queryByTestId('section-identity')).toBeNull();
+  });
+
+  it('AC2/F5: clicking Code Intelligence mounts the panel and fetches on mount (not on load)', async () => {
+    await openBrain();
+    // F5: the O(n) summary fetch must NOT run on brain load — only when selected.
+    expect(mockGetCodeIntelSummary).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('nav-item-asset:codeintel'));
+    await waitFor(() => expect(screen.getByTestId('code-intel-panel')).toBeTruthy());
+    // fetched on mount (no redundant inner toggle click needed)
+    await waitFor(() => expect(mockGetCodeIntelSummary).toHaveBeenCalledWith('SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('code-intel-body').textContent).toContain('42 symbols'));
+    expect(screen.queryByTestId('section-identity')).toBeNull();
+  });
+
+  it('AC3: section → asset → section round-trip keeps the 6-section logic intact', async () => {
+    await openBrain();
+    fireEvent.click(screen.getByTestId('nav-item-knowledge'));
+    await waitFor(() => expect(screen.getByTestId('section-knowledge')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('nav-item-asset:specs'));
+    await waitFor(() => expect(screen.getByTestId('specs-panel')).toBeTruthy());
+    expect(screen.queryByTestId('section-knowledge')).toBeNull();
+    // back to a section — the asset panel unmounts, the section card returns
+    fireEvent.click(screen.getByTestId('nav-item-refresher'));
+    await waitFor(() => expect(screen.getByTestId('section-refresher')).toBeTruthy());
+    expect(screen.queryByTestId('specs-panel')).toBeNull();
+  });
+
+  it('AC4: a brain with specs but NO code_intel shows only the Specs asset item', async () => {
+    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, specs: ['x.spec.md'], hasCodeIntel: false });
+    await openBrain();
+    expect(screen.getByTestId('assets-group-header')).toBeTruthy();
+    expect(screen.getByTestId('nav-item-asset:specs')).toBeTruthy();
+    expect(screen.queryByTestId('nav-item-asset:codeintel')).toBeNull();
+    // and the View-code-graph button is absent (no code_intel)
+    expect(screen.queryByTestId('open-codegraph')).toBeNull();
   });
 });
 

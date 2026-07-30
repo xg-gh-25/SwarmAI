@@ -76,6 +76,12 @@ export interface BrainDetail {
    *  OPTIONAL by design: an old daemon (pre-deploy skew) omits it — consumers
    *  MUST keep the `?? []` guard (meta-review: type must match wire reality). */
   specs?: string[];
+  /** hasCodeIntel — true iff a code_intel.db exists on disk for this brain (a
+   *  live PRESENCE check, NOT gated on kind: all DDDs resolve to kind='knowledge').
+   *  The CodeIntel nav entry + View-code-graph button gate on THIS, never on kind.
+   *  OPTIONAL by design (daemon skew): an old daemon omits it — consumers MUST
+   *  treat `undefined` as false (`detail.hasCodeIntel === true` / `?? false`). */
+  hasCodeIntel?: boolean;
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────

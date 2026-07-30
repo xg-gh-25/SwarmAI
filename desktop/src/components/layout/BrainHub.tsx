@@ -55,6 +55,17 @@ const TYPE_COLOR: Record<EntryType, string> = {
 // SPEC_DETAILS_DIR constant); used to build the file-preview open path.
 const SPEC_DETAILS_REL = 'spec-details';
 
+// ── Asset nav keys ──────────────────────────────────────────────────────────
+// Specs + Code-Intelligence are ASSET PROJECTIONS, NOT the six canonical DDD
+// sections (R31: the SectionKey union + backend _SECTIONS stay untouched). They
+// live in the left nav under a divided "Assets" group, selected exactly like a
+// section, but keyed on a SEPARATE channel so they can NEVER collide with a real
+// SectionKey (the `asset:` prefix guarantees disjointness) and so widening never
+// breaks the section-derived currentKey fall-through (Gate-1 F4).
+type AssetKey = 'asset:specs' | 'asset:codeintel';
+const isAssetKey = (k: string | null): k is AssetKey =>
+  k === 'asset:specs' || k === 'asset:codeintel';
+
 const GIT_DOT: Record<string, string> = {
   clean: 'transparent', modified: '#f0a500', added: '#3fb950',
   untracked: '#8b949e', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
@@ -206,8 +217,10 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   const [detail, setDetail] = useState<BrainDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
-  // #8 2-pane: which section's card is shown in the right content pane.
-  const [activeKey, setActiveKey] = useState<SectionKey | null>(null);
+  // #8 2-pane: which nav item is shown in the right content pane — a section
+  // OR an asset projection (Specs / Code Intelligence). Asset keys ride a
+  // separate channel from SectionKey (see AssetKey) so they never collide.
+  const [activeKey, setActiveKey] = useState<SectionKey | AssetKey | null>(null);
   // #10: mount the existing full-screen CodeGraph overlay on demand.
   const [showGraph, setShowGraph] = useState(false);
 
@@ -260,12 +273,21 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   // (never a hardcoded SECTION_ORDER) — so a backend that drops/reorders a section
   // can't strand the nav against a missing card. Default active = the first section
   // the backend returned; the `.find()` is guarded (active may be undefined).
+  // Gate-1 F4: currentKey MUST accept an asset key too — else selecting Specs/CodeIntel
+  // (not in sections) would fall through to sections[0] and the section-0 card would
+  // render instead of the asset panel.
   const sections = detail.sections;
-  const currentKey: SectionKey | null =
-    activeKey && sections.some((s) => s.key === activeKey)
+  const specs = detail.specs ?? [];
+  const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
+  const hasSpecs = specs.length > 0;
+  const hasAssets = hasSpecs || hasCodeIntel;
+  const currentKey: SectionKey | AssetKey | null =
+    activeKey && (isAssetKey(activeKey) || sections.some((s) => s.key === activeKey))
       ? activeKey
       : (sections[0]?.key ?? null);
-  const active = sections.find((s) => s.key === currentKey) ?? null;
+  const active = isAssetKey(currentKey)
+    ? null
+    : (sections.find((s) => s.key === currentKey) ?? null);
 
   return (
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
@@ -273,11 +295,11 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
         <span className="text-[14px] font-semibold">{detail.name}</span>
         <span className="text-[10px] font-mono text-[#5b636d] px-1.5 py-0.5 rounded bg-[#161b22]">{detail.kind}</span>
         {/* #10 — open the EXISTING CodeGraph overlay for THIS brain (project={name},
-            never a hardcoded literal). Gated on kind === 'code-repo' (Gate-2 meta-review
-            MED): a knowledge-only / non-code DDD has no code to graph, so offering the
-            button there (→ "No code symbols indexed, re-index" hint) is misleading. Only
-            a code-repo brain can meaningfully have a code-intel graph. */}
-        {detail.kind === 'code-repo' && (
+            never a hardcoded literal). Gated on hasCodeIntel (a live code_intel.db
+            presence check), NOT on kind: every DDD resolves to kind='knowledge'
+            (aim.json carries brain_kind, never kind), so a kind gate NEVER fires —
+            SwarmAI + IVTHub have a real graph but the button was unreachable. */}
+        {hasCodeIntel && (
           <button
             onClick={() => setShowGraph(true)}
             data-testid="open-codegraph"
@@ -315,24 +337,56 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
               </button>
             );
           })}
+
+          {/* Assets group — Specs + Code Intelligence are ASSET PROJECTIONS, not
+              the six canonical sections (R31). Rendered as a visually-divided
+              sub-group BELOW the sections; each is a nav item selected exactly like
+              a section (right pane swaps). AC4: the whole group is hidden when the
+              brain has neither — no empty-group noise. */}
+          {hasAssets && (
+            <>
+              <div
+                data-testid="assets-group-header"
+                className="mt-2 pt-2 px-3 border-t border-[#222831] text-[9px] uppercase tracking-wider text-[#5b636d] font-semibold"
+              >
+                Assets
+              </div>
+              {hasSpecs && (
+                <AssetNavItem
+                  assetKey="asset:specs"
+                  icon="description"
+                  label="Specs"
+                  count={specs.length}
+                  active={currentKey === 'asset:specs'}
+                  onSelect={setActiveKey}
+                />
+              )}
+              {hasCodeIntel && (
+                <AssetNavItem
+                  assetKey="asset:codeintel"
+                  icon="hub"
+                  label="Code Intelligence"
+                  active={currentKey === 'asset:codeintel'}
+                  onSelect={setActiveKey}
+                />
+              )}
+            </>
+          )}
         </nav>
 
+        {/* Gate-1 F4: EXACTLY ONE of {asset panel, section card, empty} renders —
+            an if/else short-circuit, never asset-panel ALONGSIDE a section card. */}
         <div data-testid="brainhub-brain-content" className="flex-1 overflow-y-auto p-4">
-          {active ? (
+          {currentKey === 'asset:specs' ? (
+            // key={name} → clean remount on brain switch (avoid stale-across-brains).
+            <SpecsPanel key={`specs-${name}`} specs={specs} onOpenFile={openFile} />
+          ) : currentKey === 'asset:codeintel' ? (
+            <CodeIntelPanel key={`ci-${name}`} project={name} />
+          ) : active ? (
             <SectionCard key={active.key} section={active} onOpenFile={openFile} />
           ) : (
             <div className="text-[12px] text-[#5b636d] italic">No sections to display.</div>
           )}
-          {/* Asset projections (specs + code-intel) — informational panels shown
-              BELOW the six sections, NOT section entries (R31 six-section
-              invariant). Specs panel hides itself when the brain has none. */}
-          {/* key={name} forces a clean remount on brain switch — CodeIntelPanel
-              caches its summary + gates re-fetch on state==='idle' (never returns
-              to idle), so without a keyed remount, switching from code-repo brain
-              A to code-repo brain B would show A's cached summary under B
-              (stale-once — meta-review MED). SpecsPanel keyed for symmetry. */}
-          <SpecsPanel key={`specs-${name}`} specs={detail.specs ?? []} onOpenFile={openFile} />
-          {detail.kind === 'code-repo' && <CodeIntelPanel key={`ci-${name}`} project={name} />}
         </div>
       </div>
 
@@ -353,102 +407,108 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   );
 }
 
-// Specs panel — spec-details/*.spec.md filenames (AC1). A DERIVED PROJECTION,
-// hidden entirely when the brain has no specs (no empty-panel noise). Clicking a
-// spec opens it via the same FilePreviewModal path the section members use.
-function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
-  const [open, setOpen] = useState(true);
-  if (specs.length === 0) return null;   // AC1: no specs → no panel
+// One left-nav item for an asset projection (Specs / Code Intelligence). Mirrors
+// the section nav button's shape so the two groups read as one consistent list.
+function AssetNavItem({
+  assetKey, icon, label, count, active, onSelect,
+}: {
+  assetKey: AssetKey; icon: string; label: string; count?: number;
+  active: boolean; onSelect: (k: AssetKey) => void;
+}) {
   return (
-    <div className="mt-3 rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="specs-panel">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        data-testid="specs-panel-toggle"
-        className="w-full flex items-center gap-2 text-[12px] font-semibold text-left"
-      >
+    <button
+      data-testid={`nav-item-${assetKey}`}
+      onClick={() => onSelect(assetKey)}
+      className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
+        active ? 'bg-[#1f2630] text-[#e6edf3] border-l-2 border-[#58a6ff]' : 'text-[#8b949e] hover:text-[#e6edf3] border-l-2 border-transparent'
+      }`}
+    >
+      <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">{icon}</span>
+      <span className="truncate">{label}</span>
+      {count != null && count > 0 && (
+        <span className="ml-auto text-[9px] text-[#5b636d]">{count}</span>
+      )}
+    </button>
+  );
+}
+
+// Specs panel — spec-details/*.spec.md filenames (AC1/AC2). Now rendered in the
+// right content pane when the "Specs" nav item is selected (no self-toggle — the
+// nav selection IS the show/hide). Clicking a spec opens it via the same
+// FilePreviewModal path the section members use.
+function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
+  return (
+    <div className="rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="specs-panel">
+      <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
         <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">description</span>
         <span>Specs</span>
         <span className="text-[9px] text-[#5b636d] font-normal">{specs.length}</span>
-        <span className="ml-auto text-[10px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-0.5 mt-1.5">
-          {specs.map((f) => (
-            <button
-              key={f}
-              onClick={() => onOpenFile(`${SPEC_DETAILS_REL}/${f}`)}
-              data-testid={`spec-${f}`}
-              className="flex items-center gap-1.5 text-[11px] text-[#8b949e] hover:text-[#e6edf3] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
-            >
-              <span className="font-mono truncate">{f}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {specs.map((f) => (
+          <button
+            key={f}
+            onClick={() => onOpenFile(`${SPEC_DETAILS_REL}/${f}`)}
+            data-testid={`spec-${f}`}
+            className="flex items-center gap-1.5 text-[11px] text-[#8b949e] hover:text-[#e6edf3] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+          >
+            <span className="font-mono truncate">{f}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
 // Code-intel panel — reuses the EXISTING GET /api/code-intel/{project}/summary
-// (getCodeIntelSummary). Fetched ON-DEMAND (only when this panel first expands),
-// NOT on brain load — the summary triggers find_dead_code (O(n) full scan), so
-// wiring it into getBrainDetail would slow every brain open (AC2). null (no db /
-// 404 — the service already maps 404→null) renders a graceful line.
+// (getCodeIntelSummary). Still ON-DEMAND: this component only MOUNTS when its
+// "Code Intelligence" nav item is selected (Gate-1 F5), so the fetch — which
+// triggers find_dead_code (O(n) full scan) — never runs on brain load, only when
+// the user opens the asset. Fetches on mount (not a redundant inner toggle click).
+// null (no db / 404 — the service maps 404→null) or a 0-symbol/stale db renders a
+// graceful line (a bare .exists() can surface an empty/foreign db — Gate-1 F6).
 function CodeIntelPanel({ project }: { project: string }) {
-  const [open, setOpen] = useState(false);   // collapsed → no fetch until opened
   const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
-  const [state, setState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [state, setState] = useState<'loading' | 'loaded' | 'error'>('loading');
 
-  const toggle = useCallback(() => {
-    // Sequence the side effect in the handler body — NOT inside a setState
-    // updater (updaters must be pure; StrictMode double-invokes them in dev,
-    // which would double-fire the fetch). Compute next from current `open`.
-    const next = !open;
-    setOpen(next);
-    if (next && state === 'idle') {
-      setState('loading');
-      getCodeIntelSummary(project).then(
-        (s) => { setSummary(s); setState('loaded'); },
-        () => setState('error'),
-      );
-    }
-  }, [open, project, state]);
+  useEffect(() => {
+    let alive = true;
+    setState('loading');
+    getCodeIntelSummary(project).then(
+      (s) => { if (alive) { setSummary(s); setState('loaded'); } },
+      () => { if (alive) setState('error'); },
+    );
+    return () => { alive = false; };
+  }, [project]);
 
   return (
-    <div className="mt-3 rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="code-intel-panel">
-      <button
-        onClick={toggle}
-        data-testid="code-intel-toggle"
-        className="w-full flex items-center gap-2 text-[12px] font-semibold text-left"
-      >
+    <div className="rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="code-intel-panel">
+      <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
         <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">hub</span>
         <span>Code Intelligence</span>
-        <span className="ml-auto text-[10px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div className="mt-1.5 text-[11px] text-[#8b949e]" data-testid="code-intel-body">
-          {state === 'loading' && <div className="italic text-[#5b636d]">Loading code map…</div>}
-          {state === 'error' && <div className="italic text-[#5b636d]">Code intel unavailable.</div>}
-          {state === 'loaded' && summary === null && (
-            <div className="italic text-[#5b636d]">No code intelligence indexed for this brain.</div>
-          )}
-          {state === 'loaded' && summary && (
-            <>
-              <div className="mb-1">{summary.symbolCount} symbols indexed</div>
-              <div className="flex flex-col gap-0.5">
-                {summary.modulesTop5.map((mod) => (
-                  <div key={mod.name} className="flex items-center gap-2" data-testid={`ci-module-${mod.name}`}>
-                    <span className="font-mono truncate">{mod.name}</span>
-                    <span className="ml-auto text-[9px] text-[#5b636d]">
-                      {mod.function_count}fn / {mod.class_count}cls / {mod.file_count}f
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      </div>
+      <div className="text-[11px] text-[#8b949e]" data-testid="code-intel-body">
+        {state === 'loading' && <div className="italic text-[#5b636d]">Loading code map…</div>}
+        {state === 'error' && <div className="italic text-[#5b636d]">Code intel unavailable.</div>}
+        {state === 'loaded' && summary === null && (
+          <div className="italic text-[#5b636d]">No code intelligence indexed for this brain.</div>
+        )}
+        {state === 'loaded' && summary && (
+          <>
+            <div className="mb-1">{summary.symbolCount} symbols indexed</div>
+            <div className="flex flex-col gap-0.5">
+              {summary.modulesTop5.map((mod) => (
+                <div key={mod.name} className="flex items-center gap-2" data-testid={`ci-module-${mod.name}`}>
+                  <span className="font-mono truncate">{mod.name}</span>
+                  <span className="ml-auto text-[9px] text-[#5b636d]">
+                    {mod.function_count}fn / {mod.class_count}cls / {mod.file_count}f
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
