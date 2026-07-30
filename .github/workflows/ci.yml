@@ -170,6 +170,19 @@ jobs:
         shell: bash
         run: python ../scripts/smoke_import.py
 
+      # Rust cross-platform compile gate (native Windows MSVC). CI never
+      # cargo-compiled the Tauri shell, so a #[cfg(target_os)] mismatch (a
+      # macOS-only symbol referenced on a path that compiles everywhere) stayed
+      # invisible until the tag-triggered release.yml build-windows — v1.28.0
+      # shipped with NO Windows assets because of exactly this (E0425/E0433 in
+      # spawn_daemon_health_watchdog). `cargo check` (not build — no bundling,
+      # ~2-3min) catches that whole class at push time on the real MSVC target.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust typecheck (Windows MSVC) — catch cross-platform cfg breaks
+        working-directory: ./desktop/src-tauri
+        shell: bash
+        run: cargo check --quiet --all-targets
+
   # ── Version consistency check ───────────────────────────────
   version-check:
     runs-on: ubuntu-latest
