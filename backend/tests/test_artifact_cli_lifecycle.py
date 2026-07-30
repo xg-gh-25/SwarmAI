@@ -1325,6 +1325,36 @@ class TestAbandonReasonSurfacedInStatus:
         # Key present (additive contract), value None for non-abandoned.
         assert rentry["abandon_reason"] is None
 
+    def test_status_entry_presents_terminal_but_running_as_completed(self):
+        """CLI `run-status` parity with the web dashboard (routers/pipelines.py
+        _to_response): a terminal-but-crashed run (completed reflect/deliver, status
+        left running/paused on disk) is presented as 'completed', NOT 'running'.
+        Without this the CLI dashboard and web dashboard split-brain on the same
+        run.json. Read-path only — the input dict's on-disk status is unchanged."""
+        import scripts.artifact_cli as cli
+
+        # A genuinely mid-pipeline running run is NOT coerced.
+        mid = {
+            "id": "run_mid", "requirement": "x", "status": "running", "profile": "bugfix",
+            "stages": [{"stage": "evaluate", "status": "completed"}],
+            "created_at": "2026-07-30T00:00:00+00:00", "updated_at": "2026-07-30T00:00:00+00:00",
+        }
+        assert cli._status_entry(mid, "P")["status"] == "running"
+
+        # Terminal-but-running (reflect completed) → presented completed.
+        term_running = dict(mid, id="run_term", stages=[
+            {"stage": "evaluate", "status": "completed"},
+            {"stage": "reflect", "status": "completed"},
+        ])
+        assert cli._status_entry(term_running, "P")["status"] == "completed"
+        assert term_running["status"] == "running", "input dict must not be mutated"
+
+        # Terminal-but-paused (deliver completed) → presented completed.
+        term_paused = dict(mid, id="run_termp", status="paused", stages=[
+            {"stage": "deliver", "status": "completed"},
+        ])
+        assert cli._status_entry(term_paused, "P")["status"] == "completed"
+
     def test_run_status_summary_counts_abandoned(self, tmp_path, monkeypatch, capsys):
         """run-status summary SPLITS abandoned into genuine failures vs replaced
         duplicates (Gap-2): a `superseded_by_*` run is a rerun replaced by a

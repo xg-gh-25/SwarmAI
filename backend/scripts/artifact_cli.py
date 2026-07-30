@@ -2489,11 +2489,22 @@ def _status_entry(state: dict, project_name: str) -> dict:
     completed_stages = [s for s in state.get("stages", []) if s.get("status") == "completed"]
     total_stages = len(_get_profile_stages(state.get("profile")))
     consumed = sum(s.get("token_cost", 0) for s in state.get("stages", []))
+    # Terminal-but-crashed presentation (parity with routers/pipelines.py _to_response):
+    # a run that finished all stages (completed reflect/deliver) but crashed before
+    # `run-update --status completed` is left status=running/paused on disk. Present it
+    # as completed here too, so the CLI `run-status` dashboard and the web dashboard
+    # agree — otherwise the two surfaces split-brain (CLI "running" vs web "completed")
+    # for the identical run.json. Read-path only; disk is not mutated. Explicit terminal
+    # statuses (failed/cancelled/abandoned) pass through is_terminal_run unchanged.
+    raw_status = state.get("status", "running")
+    display_status = raw_status
+    if raw_status in ("running", "paused") and is_terminal_run(state):
+        display_status = "completed"
     return {
         "id": state["id"],
         "project": project_name,
         "requirement": state.get("requirement", "")[:80],
-        "status": state.get("status", "running"),
+        "status": display_status,
         "profile": state.get("profile", "full"),
         "progress": f"{len(completed_stages)}/{total_stages}",
         "stages_completed": len(completed_stages),
