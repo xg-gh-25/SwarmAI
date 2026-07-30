@@ -72,8 +72,10 @@ export interface BrainDetail {
   sections: BrainSection[];
   /** spec-details/*.spec.md filenames — a DERIVED PROJECTION (NOT a section);
    *  [] when the brain has no spec-details/ dir. Backend emits camelCase-safe
-   *  single-word key; getBrainDetail is a direct passthrough (no transform). */
-  specs: string[];
+   *  single-word key; getBrainDetail is a direct passthrough (no transform).
+   *  OPTIONAL by design: an old daemon (pre-deploy skew) omits it — consumers
+   *  MUST keep the `?? []` guard (meta-review: type must match wire reality). */
+  specs?: string[];
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────

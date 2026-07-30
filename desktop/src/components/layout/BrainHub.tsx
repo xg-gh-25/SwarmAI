@@ -326,8 +326,13 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           {/* Asset projections (specs + code-intel) — informational panels shown
               BELOW the six sections, NOT section entries (R31 six-section
               invariant). Specs panel hides itself when the brain has none. */}
-          <SpecsPanel specs={detail.specs ?? []} onOpenFile={openFile} />
-          {detail.kind === 'code-repo' && <CodeIntelPanel project={name} />}
+          {/* key={name} forces a clean remount on brain switch — CodeIntelPanel
+              caches its summary + gates re-fetch on state==='idle' (never returns
+              to idle), so without a keyed remount, switching from code-repo brain
+              A to code-repo brain B would show A's cached summary under B
+              (stale-once — meta-review MED). SpecsPanel keyed for symmetry. */}
+          <SpecsPanel key={`specs-${name}`} specs={detail.specs ?? []} onOpenFile={openFile} />
+          {detail.kind === 'code-repo' && <CodeIntelPanel key={`ci-${name}`} project={name} />}
         </div>
       </div>
 
