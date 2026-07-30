@@ -657,6 +657,14 @@ def mark_superseded(
     (no duplicate entry, no stacked comment). No-op (returns ``content``
     unchanged) if no entry's title matches ``old_anchor``.
     """
+    # Guard the anchor grammar (meta-review MED): `|` or `-->` in the anchor would
+    # void the ENTIRE metadata comment on re-parse (the field is pipe/terminator
+    # delimited), silently discarding ref/last/decay. Reject rather than corrupt —
+    # matters once 方案B wires an automated caller.
+    if "|" in new_anchor or "-->" in new_anchor:
+        raise ValueError(
+            f"superseded_by anchor may not contain '|' or '-->': {new_anchor!r}"
+        )
     entries = parse_entries(content)
     matched = [e for e in entries if e.title == old_anchor]
     if not matched:

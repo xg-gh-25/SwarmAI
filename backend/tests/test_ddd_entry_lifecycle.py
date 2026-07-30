@@ -1666,3 +1666,12 @@ class TestSupersessionGate2Fixes:
         )}
         hits = _ddd_entry_hits("wombat telemetry pipeline", doc, 5)
         assert len(hits) >= 1, "active entry wrongly filtered because its BODY mentions superseded_by"
+
+    # meta-review MED — anchor with '|' or '-->' would void the comment; reject it
+    def test_mark_superseded_rejects_pipe_anchor(self):
+        from core.ddd_entry_lifecycle import mark_superseded
+        content = "## S\n- **Old** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
+        with pytest.raises(ValueError):
+            mark_superseded(content, "Old", "A | B", date(2026, 7, 30))
+        with pytest.raises(ValueError):
+            mark_superseded(content, "Old", "bad--> anchor", date(2026, 7, 30))
