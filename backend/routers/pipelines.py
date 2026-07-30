@@ -47,6 +47,12 @@ try:
 except (ValueError, TypeError):
     _STALE_THRESHOLD_MINUTES = 60
 
+# The exact failure_reason the stale-detector stamps on an auto-failed run. Named
+# so the one-time reconciliation script (scripts/reconcile_mislabeled_runs.py) can
+# import + match it byte-for-byte instead of hardcoding a copy that silently drifts
+# if this string is ever edited. Single writer: _mark_failed below.
+_STALE_FAILURE_REASON = "session ended without completion (auto-detected stale)"
+
 
 def _get_swarmws() -> Path:
     """Resolve SwarmWS path. Function (not constant) for testability."""
@@ -89,7 +95,7 @@ def _is_stale(state: dict) -> bool:
 def _mark_failed(run_file: Path, state: dict) -> None:
     """Atomically mark a stale run as failed on disk."""
     state["status"] = "failed"
-    state["failure_reason"] = "session ended without completion (auto-detected stale)"
+    state["failure_reason"] = _STALE_FAILURE_REASON
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
     try:
         tmp = run_file.with_suffix(".tmp")
