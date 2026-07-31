@@ -603,13 +603,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * preserving the underlying layout.
    */
   describe('Feature: three-column-layout, Property 4: Navigation Modal Opening', () => {
-    const navModalTypes = ['skills', 'mcp', 'settings'] as const;
+    // A10 redesign: the modal-opening domain cards are Settings (nav-settings ->
+    // settings modal) and OS Eval (nav-eval -> eval modal). Each is an INDEPENDENT
+    // single modal that toggles open/closed on click (no settings-tab machine —
+    // Skills/MCP folded into Capabilities, which routes elsewhere).
+    const navModalTypes = ['settings', 'eval'] as const;
     type NavModalType = typeof navModalTypes[number];
 
     const navToTestId: Record<NavModalType, string> = {
-      skills: 'nav-skills',
-      mcp: 'nav-mcp',
       settings: 'nav-settings',
+      eval: 'nav-eval',
     };
 
     const navModalTypeArb = fc.constantFrom(...navModalTypes);
@@ -697,14 +700,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          // Model the toggle state machine:
-          // - Settings: if modal open → close; else open (tab=undefined)
-          // - Skills/MCP: if modal open AND same tab → close; else open (tab=X)
-          let modalOpen = false;
-          let activeTab: string | undefined = undefined;
-          const tabMap: Record<NavModalType, string | undefined> = {
-            skills: 'skills', mcp: 'mcp-servers', settings: undefined
-          };
+          // A10: settings + eval are independent single modals. Only ONE
+          // activeModal slot exists, so opening one closes the other. Model it:
+          let activeModal: NavModalType | null = null;
 
           for (const modalType of clickSequence) {
             const navButton = screen.getByTestId(navToTestId[modalType]);
@@ -712,23 +710,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
               navButton.click();
             });
 
-            // Compute expected state after click
-            if (modalType === 'settings') {
-              if (modalOpen) { modalOpen = false; activeTab = undefined; }
-              else { modalOpen = true; activeTab = undefined; }
-            } else {
-              const targetTab = tabMap[modalType];
-              if (modalOpen && activeTab === targetTab) { modalOpen = false; activeTab = undefined; }
-              else { modalOpen = true; activeTab = targetTab; }
-            }
+            // Toggle: clicking the open one closes it; clicking another switches.
+            activeModal = activeModal === modalType ? null : modalType;
 
             // Property: button active state matches modeled state
-            const expectedActive = modalOpen && (
-              (modalType === 'settings' && activeTab === undefined) ||
-              (modalType === 'skills' && activeTab === 'skills') ||
-              (modalType === 'mcp' && activeTab === 'mcp-servers')
-            );
-            expect(navButton.getAttribute('aria-pressed')).toBe(String(expectedActive));
+            expect(navButton.getAttribute('aria-pressed')).toBe(String(activeModal === modalType));
 
             // Property: Layout SHALL be preserved after each click
             const structure = verifyLayoutStructure();
@@ -744,12 +730,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     });
 
     it('should switch active modal when clicking a different navigation icon', () => {
-      // With toggle behavior: Settings closes modal if it's already open (any tab).
-      // Skills/MCP: close if same tab already active, else switch to their tab.
-      // So skills→mcp = switch (active stays). skills→settings = close (since modal is open).
-      // Only test the skills↔mcp transition which is a true switch.
-      const skillsMcpArb = fc.constantFrom<NavModalType>('skills', 'mcp');
-      const twoDistinctArb = fc.tuple(skillsMcpArb, skillsMcpArb)
+      // A10: settings + eval are independent single modals sharing one activeModal
+      // slot — opening the second closes the first (a true switch).
+      const twoDistinctArb = fc.tuple(navModalTypeArb, navModalTypeArb)
         .filter(([first, second]) => first !== second);
 
       fc.assert(
@@ -772,7 +755,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             secondButton.click();
           });
 
-          // Property: Second button SHALL now be active (tab switch within settings modal)
+          // Property: Second button SHALL now be active
           expect(secondButton.getAttribute('aria-pressed')).toBe('true');
 
           // Property: First button SHALL no longer be active
@@ -830,17 +813,15 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * Left_Sidebar SHALL display the active visual indicator (highlighted state).
    */
   describe('Feature: three-column-layout, Property 5: Active Navigation Indicator', () => {
-    // Navigation items and their test IDs
-    // Skills and MCP now open Settings modal with a specific tab pre-selected.
-    // Settings button opens Settings modal with default tab (general).
-    // Active indicator depends on: (1) settings modal is open, (2) the correct tab is selected.
-    const navItems = ['skills', 'mcp', 'settings'] as const;
+    // A10: the modal-opening domain cards are Settings + OS Eval — independent
+    // single modals sharing one activeModal slot. The active card is exactly the
+    // one whose modal is open.
+    const navItems = ['settings', 'eval'] as const;
     type NavItem = typeof navItems[number];
 
     const navToTestId: Record<NavItem, string> = {
-      skills: 'nav-skills',
-      mcp: 'nav-mcp',
       settings: 'nav-settings',
+      eval: 'nav-eval',
     };
 
     const navItemArb = fc.constantFrom(...navItems);
@@ -862,11 +843,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: Clicked button SHALL have aria-pressed="true"
           expect(activeButton.getAttribute('aria-pressed')).toBe('true');
 
-          // Property: Active button SHALL carry the .nav-btn class (active
-          // bg+ring+bar are now CSS-driven via .nav-btn[aria-pressed=true] +
-          // the --ac group color, no longer inline Tailwind classes — 2026-07-12
-          // B2 redesign). The behavioral contract is aria-pressed + .nav-btn.
-          expect(activeButton.classList.contains('nav-btn')).toBe(true);
+          // Property: Active button SHALL carry the .a10-card class (active
+          // bg+ring are CSS-driven via .a10-card--active + the --ac group color).
+          // The behavioral contract is aria-pressed + .a10-card.
+          expect(activeButton.classList.contains('a10-card')).toBe(true);
 
           unmount();
         }),
@@ -925,8 +905,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Track state to predict toggle behavior
           // Settings button: closes if modal already open (any tab)
           // Skills/MCP: closes if same tab active, else switches tab
-          let modalOpen = false;
-          let activeTab: string | undefined = undefined;
+          // A10: settings + eval are independent single modals sharing one
+          // activeModal slot. Toggle: click the open one → close; click another → switch.
+          let activeModal: NavItem | null = null;
 
           for (let i = 0; i < navSequence.length; i++) {
             const currentItem = navSequence[i];
@@ -936,39 +917,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
               currentButton.click();
             });
 
-            // Predict toggle behavior based on implementation:
-            const tabMap: Record<NavItem, string | undefined> = {
-              skills: 'skills', mcp: 'mcp-servers', settings: undefined
-            };
-
-            if (currentItem === 'settings') {
-              // Settings: if modal open → close; else open with no tab
-              if (modalOpen) {
-                modalOpen = false;
-                activeTab = undefined;
-              } else {
-                modalOpen = true;
-                activeTab = undefined;
-              }
-            } else {
-              // Skills/MCP: if modal open AND same tab → close; else open with tab
-              const targetTab = tabMap[currentItem];
-              if (modalOpen && activeTab === targetTab) {
-                modalOpen = false;
-                activeTab = undefined;
-              } else {
-                modalOpen = true;
-                activeTab = targetTab;
-              }
-            }
+            activeModal = activeModal === currentItem ? null : currentItem;
 
             // Property: Button active state matches predicted state
-            const expectedActive = modalOpen && (
-              (currentItem === 'settings' && !activeTab) ||
-              (currentItem === 'skills' && activeTab === 'skills') ||
-              (currentItem === 'mcp' && activeTab === 'mcp-servers')
-            );
-            expect(currentButton.getAttribute('aria-pressed')).toBe(String(expectedActive));
+            expect(currentButton.getAttribute('aria-pressed')).toBe(String(activeModal === currentItem));
 
             // Property: All other buttons SHALL NOT have active indicator
             for (const otherItem of navItems) {
@@ -1090,15 +1042,15 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             const buttonClasses = button.className;
 
             if (item === activeItem) {
-              // Active button: styling is CSS-driven via .nav-btn[aria-pressed=true]
-              // (bg+ring+bar from --ac), so assert the class + the pressed state
-              // rather than a stale inline color-primary/ring-1 literal (2026-07-12).
-              expect(button.classList.contains('nav-btn')).toBe(true);
+              // A10: active styling is CSS-driven via .a10-card--active (bg+ring
+              // from --ac). Assert the base class + active class + pressed state.
+              expect(button.classList.contains('a10-card')).toBe(true);
+              expect(button.classList.contains('a10-card--active')).toBe(true);
               expect(button.getAttribute('aria-pressed')).toBe('true');
             } else {
-              // Inactive buttons: same .nav-btn class, muted default + hover tint
-              // both live in .nav-btn CSS; the distinguishing signal is aria-pressed.
-              expect(button.classList.contains('nav-btn')).toBe(true);
+              // Inactive: same .a10-card, no active class; distinguisher is aria-pressed.
+              expect(button.classList.contains('a10-card')).toBe(true);
+              expect(button.classList.contains('a10-card--active')).toBe(false);
               expect(button.getAttribute('aria-pressed')).toBe('false');
             }
           }
@@ -1120,19 +1072,20 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // Expected navigation items in exact order (B ordering, 2026-07-12):
-    // 做事(Terminal) → 能力(Skills,MCP) → 观测(CodeIntel,Engine,OSEval) → 知识(Memory,Signals).
-    // Settings + GitHub live in the footer, OUTSIDE the nav container.
+    // A10 domain cards in exact order: Cognitive (Context/Memory/Brain Hub) →
+    // Work (Pipeline/Pollinate/SwarmWS) → System (Capabilities/OS Eval/Settings/
+    // Community). Terminal + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
-      { testId: 'nav-terminal', label: 'Terminal (⌘`)' },
-      { testId: 'nav-skills', label: 'Skills' },
-      { testId: 'nav-mcp', label: 'MCP Servers' },
-      { testId: 'nav-brain-hub', label: 'Brain Hub' },
-      { testId: 'nav-code-intel', label: 'Code Intelligence' },
-      { testId: 'nav-engine', label: 'Engine Metrics' },
-      { testId: 'nav-eval', label: 'OS Eval' },
+      { testId: 'nav-context', label: 'Context' },
       { testId: 'nav-memory', label: 'Memory' },
-      { testId: 'nav-signals', label: 'Signals' },
+      { testId: 'nav-brain-hub', label: 'Brain Hub' },
+      { testId: 'nav-pipeline', label: 'Pipeline' },
+      { testId: 'nav-pollinate', label: 'Pollinate' },
+      { testId: 'nav-swarmws', label: 'SwarmWS' },
+      { testId: 'nav-capabilities', label: 'Capabilities' },
+      { testId: 'nav-eval', label: 'OS Eval' },
+      { testId: 'nav-settings', label: 'Settings' },
+      { testId: 'nav-community', label: 'Community' },
     ] as const;
 
     const validWindowWidthArb = fc.integer({ min: 320, max: 2000 });
@@ -1310,7 +1263,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     });
 
     it('should maintain navigation order when modals are opened', () => {
-      const navModalTypes = ['skills', 'mcp'] as const;
+      const navModalTypes = ['settings', 'eval'] as const;
       const navModalTypeArb = fc.constantFrom(...navModalTypes);
 
       fc.assert(
@@ -1395,8 +1348,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
   describe('Feature: left-navigation-redesign, Property 2: Navigation Click Opens Corresponding Modal', () => {
     // All navigation items (v1 navbar)
     const allNavItems = [
-      { testId: 'nav-skills', modalType: 'skills', label: 'Skills' },
-      { testId: 'nav-mcp', modalType: 'mcp', label: 'MCP Servers' },
+      { testId: 'nav-settings', modalType: 'settings', label: 'Settings' },
+      { testId: 'nav-eval', modalType: 'eval', label: 'OS Eval' },
     ] as const;
 
     type NavItemType = typeof allNavItems[number];
@@ -1695,8 +1648,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
   describe('Feature: left-navigation-redesign, Property 5: Active State Reflects Open Modal', () => {
     // v1 navigation items
     const allNavItems = [
-      { testId: 'nav-skills', modalType: 'skills', label: 'Skills' },
-      { testId: 'nav-mcp', modalType: 'mcp', label: 'MCP Servers' },
+      { testId: 'nav-settings', modalType: 'settings', label: 'Settings' },
+      { testId: 'nav-eval', modalType: 'eval', label: 'OS Eval' },
     ] as const;
 
     type NavItemType = typeof allNavItems[number];
@@ -1754,10 +1707,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: The navigation item SHALL display active visual state
           expect(navButton.getAttribute('aria-pressed')).toBe('true');
 
-          // Property: Active button carries the .nav-btn class — its active
-          // bg+ring+bar are CSS-driven via .nav-btn[aria-pressed=true] + --ac
-          // (2026-07-12 B2 redesign), no longer inline Tailwind literals.
-          expect(navButton.classList.contains('nav-btn')).toBe(true);
+          // Property: Active card carries the .a10-card class — its active
+          // bg+ring are CSS-driven via .a10-card--active + --ac (A10 redesign).
+          expect(navButton.classList.contains('a10-card')).toBe(true);
 
           unmount();
         }),
@@ -1999,10 +1951,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             navButton.click();
           });
 
-          // Property: Active button carries the .nav-btn class + aria-pressed=true.
-          // Highlighted bg + ring are CSS-driven via .nav-btn[aria-pressed=true]
-          // reading the --ac group color (2026-07-12 B2 redesign), not inline classes.
-          expect(navButton.classList.contains('nav-btn')).toBe(true);
+          // Property: Active card carries .a10-card + .a10-card--active + aria-pressed=true.
+          // Highlighted bg + ring are CSS-driven via .a10-card--active reading --ac (A10).
+          expect(navButton.classList.contains('a10-card')).toBe(true);
+          expect(navButton.classList.contains('a10-card--active')).toBe(true);
           expect(navButton.getAttribute('aria-pressed')).toBe('true');
 
           unmount();
@@ -2080,20 +2032,20 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
 
   /**
-   * Property 6: Active Indicator Bar is Layout-Shift-Free (leftnav-redesign)
-   * **Feature: leftnav-redesign, Property 6: Active Left Bar**
-   * **Validates: AC4**
+   * Property 6: A10 active-card indicator (leftnav-redesign)
+   * **Feature: leftnav-redesign, Property 6: Active Card**
+   * **Validates: AC1**
    *
-   * Every nav button SHALL contain an active-indicator bar element that is
-   * PRESENT in both active and inactive states (so toggling does not shift
-   * layout — GUI10). The bar SHALL be visible (opacity-100) only when the
-   * button is active, and hidden (opacity-0) otherwise.
+   * A10 replaced the icon-rail's opacity-toggled active-bar span with the
+   * `.a10-card--active` state class (bg+ring driven by --ac). The modal-opening
+   * cards (Settings, OS Eval) gain `.a10-card--active` only while their modal is
+   * open; clicking one flips exactly its state.
    */
-  describe('Feature: leftnav-redesign, Property 6: Active Left Bar', () => {
-    const navTestIds = ['nav-skills', 'nav-mcp'] as const;
+  describe('Feature: leftnav-redesign, Property 6: Active Card', () => {
+    const navTestIds = ['nav-settings', 'nav-eval'] as const;
     const navTestIdArb = fc.constantFrom(...navTestIds);
 
-    it('should render an active-bar element inside every nav button (present in all states)', () => {
+    it('renders every domain card as an .a10-card (present in all states)', () => {
       fc.assert(
         fc.property(fc.integer({ min: 1, max: 100 }), (_iteration) => {
           mockStorage.clear();
@@ -2102,14 +2054,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          // Property: every nav button SHALL contain an active-bar element,
-          // regardless of active state (layout-shift-free invariant)
           const navContainer = document.querySelector('[data-testid="nav-icons"]');
           const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]') ?? [];
           expect(navButtons.length).toBeGreaterThanOrEqual(2);
           for (const btn of Array.from(navButtons)) {
-            const bar = btn.querySelector('[data-testid="active-bar"]');
-            expect(bar).not.toBeNull();
+            expect(btn.classList.contains('a10-card')).toBe(true);
           }
 
           unmount();
@@ -2118,7 +2067,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should show the bar (opacity-100) only on the active button, hidden (opacity-0) otherwise', () => {
+    it('adds .a10-card--active only to the active card (its modal open), none otherwise', () => {
       fc.assert(
         fc.property(navTestIdArb, (clickedTestId) => {
           mockStorage.clear();
@@ -2132,18 +2081,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             clickedButton.click();
           });
 
-          // Active button's bar SHALL be visible
-          const activeBar = clickedButton.querySelector('[data-testid="active-bar"]');
-          expect(activeBar).not.toBeNull();
-          expect(activeBar?.className).toContain('opacity-100');
+          // Active card carries the active state class
+          expect(clickedButton.classList.contains('a10-card--active')).toBe(true);
 
-          // Inactive buttons' bars SHALL be present but hidden
+          // The other modal-opening card does NOT (single activeModal slot)
           for (const testId of navTestIds) {
             if (testId === clickedTestId) continue;
             const otherButton = screen.getByTestId(testId);
-            const otherBar = otherButton.querySelector('[data-testid="active-bar"]');
-            expect(otherBar).not.toBeNull();
-            expect(otherBar?.className).toContain('opacity-0');
+            expect(otherButton.classList.contains('a10-card--active')).toBe(false);
           }
 
           unmount();

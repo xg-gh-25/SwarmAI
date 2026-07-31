@@ -294,6 +294,8 @@ export const LAYOUT_CONSTANTS = {
   MIN_WORKSPACE_EXPLORER_WIDTH,
   MAX_WORKSPACE_EXPLORER_WIDTH,
   NARROW_VIEWPORT_BREAKPOINT: 768,
-  LEFT_SIDEBAR_WIDTH: 44,
+  // A10 redesign (run_1aab916c): the left nav is a 150px row-card column
+  // (was a 44px icon rail).
+  LEFT_SIDEBAR_WIDTH: 150,
   STORAGE_KEYS,
 } as const;

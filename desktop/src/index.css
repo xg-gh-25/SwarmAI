@@ -362,6 +362,104 @@ body {
   background-color: var(--ac);
 }
 
+/* ── A10 left-nav row-cards (run_1aab916c) ───────────────────────────────────
+   The nav is a 150px column of horizontal row-cards grouped by region. Domain
+   cards are quiet at rest (semi-transparent, borderless), lift on hover, and
+   glow on active. Chat is the hero (saturated blue→violet). Attention flags
+   (Y/R) are corner badges. All colors use existing chrome tokens. */
+.a10-hero {
+  overflow: hidden;
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--color-primary) 42%, transparent),
+    color-mix(in srgb, #8f7dfb 30%, transparent) 60%,
+    color-mix(in srgb, #8f7dfb 16%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.16) inset,
+    0 6px 22px color-mix(in srgb, var(--color-primary) 28%, transparent);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.a10-hero:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset,
+    0 8px 26px color-mix(in srgb, var(--color-primary) 38%, transparent);
+}
+
+/* Region accent spine on the right edge of each group (Radar-like, muted). */
+.a10-group::after {
+  content: '';
+  position: absolute;
+  top: 30px;
+  bottom: 8px;
+  right: -8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--gc);
+  opacity: 0.55;
+}
+
+.a10-card {
+  --ac: var(--color-primary);
+  background: color-mix(in srgb, var(--color-card) 55%, transparent);
+  border: 1px solid transparent;
+  transition: transform 0.14s ease, background-color 0.14s ease,
+    border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.a10-card:hover {
+  background: var(--color-card);
+  border-color: var(--color-border-strong, var(--color-border));
+  transform: translateX(3px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+.a10-card--active {
+  background: color-mix(in srgb, var(--ac) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ac) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 35%, transparent);
+}
+.a10-card .a10-chip {
+  color: var(--color-sidebar-icon);
+  background: linear-gradient(180deg, #222736, #14171f);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.09) inset, 0 1px 5px rgba(0, 0, 0, 0.45);
+  transition: color 0.14s ease;
+}
+.a10-card:hover .a10-chip { color: var(--color-text); }
+.a10-card--active .a10-chip { color: var(--ac); }
+
+/* Attention flag — corner badge, floats to the card's top-right. */
+.a10-flag {
+  position: absolute;
+  top: -6px;
+  right: -5px;
+  z-index: 2;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  font-family: var(--font-mono, monospace);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), 0 0 0 2px var(--color-bg-chrome);
+}
+.a10-flag--y { background: linear-gradient(180deg, #ffd873, #f0a92e); color: #3a2600; }
+.a10-flag--r {
+  background: linear-gradient(180deg, #ff9d9d, #f05656);
+  color: #4a0000;
+  animation: a10-flag-blink 1.2s infinite;
+}
+@keyframes a10-flag-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.a10-fcard {
+  background: color-mix(in srgb, var(--color-card) 50%, transparent);
+  border: 1px solid var(--color-border);
+  transition: color 0.14s ease, border-color 0.14s ease, background-color 0.14s ease;
+}
+.a10-fcard:hover {
+  border-color: var(--color-border-strong, var(--color-border));
+  background: var(--color-card);
+}
+
 :root:not(.dark) .glass-effect {
   background: rgba(255, 255, 255, 0.8);
 }

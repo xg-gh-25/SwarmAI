@@ -27,6 +27,13 @@ import { useToast } from '../../contexts/ToastContext';
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
 
+// A10 group tint (muted, Radar-like) — Cognitive violet / Work green / System grey.
+const A10_GROUP = {
+  cognitive: '#8b82c4',
+  work: '#5aa87e',
+  system: '#7c8194',
+} as const;
+
 // Minimum width for main chat panel to ensure usability
 const MIN_MAIN_CHAT_PANEL_WIDTH = 300;
 
@@ -108,21 +115,6 @@ function TopBar() {
   );
 }
 
-// Group brand colors (B2 group-tint, 2026-07-12). Passed to each NavIconButton
-// as the inline `--ac` CSS custom property so hover/active bg+ring+bar tint by
-// group WITHOUT a Tailwind class (arbitrary-color classes risk JIT purge; an
-// inline custom property never does — matches the existing color-mix convention
-// in index.css). 4 groups: 做事(Terminal) / 能力(Skills,MCP) / 观测(CodeIntel,
-// Engine,OSEval) / 知识(Memory,Signals). Footer (Settings) passes NO accent →
-// .nav-btn falls back to the user's --color-primary accent (app-chrome follows
-// the accent system, not a fixed group color); GitHub is a plain <a>, untouched.
-const NAV_GROUP_COLOR = {
-  do: '#60a5fa', // blue — 做事 (Terminal, the active tool)
-  power: '#a78bfa', // purple — 能力 (Skills, MCP)
-  observe: '#2dd4bf', // teal — 观测 (Code Intel, Engine, OS Eval)
-  know: '#fbbf24', // amber — 知识 (Memory, Signals)
-} as const;
-
 /** Pure resolution core for the Signals nav click (exported for test).
  *  Given the /workspace/tree/expand children of Knowledge/Signals, return the
  *  path of the newest digest — names are YYYY-MM-DD-digest.md so the lexical max
@@ -159,11 +151,6 @@ function LeftSidebar() {
     }
   };
 
-  // Open Code Intelligence graph overlay via custom event (BottomBar listens)
-  const handleCodeIntelClick = () => {
-    window.dispatchEvent(new CustomEvent('swarm:show-code-graph'));
-  };
-
   // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens on document)
   const handleMemoryClick = () => {
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
@@ -191,11 +178,14 @@ function LeftSidebar() {
     }
   };
 
-  // Tools group nav items
-  const toolItems: { icon: string; label: string; target: 'skills' | 'mcp' }[] = [
-    { icon: 'lightning', label: 'Skills', target: 'skills' },
-    { icon: 'server', label: 'MCP Servers', target: 'mcp' },
-  ];
+  // Capabilities overlay folds Skills + MCP + jobs (A10). Opening it lands on the
+  // Settings modal's skills tab as the concrete surface (Run-2 wiring; a dedicated
+  // Capabilities overlay is a later cycle). Engine Metrics → Settings tab (choice A).
+  const openCapabilities = () => handleNavClick('skills');
+
+  // Community folds Signals (choice A): the domain card opens the latest signal
+  // digest (the community/GitHub surface is external — the card is a soft entry).
+  const openCommunity = () => { void handleSignalsClick(); };
 
   return (
     <aside
@@ -203,134 +193,75 @@ function LeftSidebar() {
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
-      {/* Logo/Brand area — opens the SwarmWS explorer overlay (A10 redesign:
-          the explorer is an on-demand fullscreen overlay, no longer a column). */}
-      <button
-        className="h-10 flex items-center justify-center border-b border-[var(--color-border)] w-full hover:bg-[var(--color-hover)] transition-colors"
-        onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-swarmws'))}
-        title="Open workspace explorer"
-        aria-label="Open workspace explorer"
-        data-testid="logo-toggle"
-      >
-        <SwarmAILogo />
-      </button>
+      {/* Chat hero — brand logo + label; the primary surface. Click returns to
+          chat (closes any open overlay). */}
+      <div className="p-2.5 pb-1.5">
+        <button
+          className="a10-hero relative w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5"
+          onClick={() => window.dispatchEvent(new CustomEvent('swarm:back-to-chat'))}
+          title="Chat"
+          data-testid="chat-hero"
+        >
+          <span className="flex-shrink-0 w-[26px] h-[26px] rounded-md overflow-hidden flex items-center justify-center">
+            <SwarmAILogo />
+          </span>
+          <span className="text-[13.5px] font-bold text-white flex-1 text-left">Chat</span>
+        </button>
 
-      {/* Navigation icons — B ordering (2026-07-12): 4 groups top-to-bottom,
-          most-active tool first. 做事 → 能力 → 观测 → 知识. Each button carries
-          its group's `accent` (→ inline --ac) for B2 group-tint hover/active. */}
-      <nav className="flex-1 pt-2.5 pb-1 space-y-1.5 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
-        {/* 做事 — Integrated terminal (also reachable via ⌘` + explorer right-click).
-            isActive reflects real panel open-state; onClick shares the SAME
-            togglePanel so all three entries stay in sync. Placed first: it is the
-            primary active tool, not a config surface. */}
-        <NavIconButton
-          icon="terminal"
-          label="Terminal (⌘`)"
-          accent={NAV_GROUP_COLOR.do}
-          isActive={terminalPanelOpen}
-          onClick={toggleTerminal}
-          data-testid="nav-terminal"
-        />
+        {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
+        <button
+          className="a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+          onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-history'))}
+          title="History"
+          data-testid="history-row"
+        >
+          <span className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
+          <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide">History</span>
+          <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
+        </button>
+      </div>
 
-        <NavGroupSeparator />
+      {/* A10 domain cards — 3 groups (Cognitive / Work / System), each a titled
+          color-coded divider + row-cards. Y/R signal flags only where attention
+          is needed (Memory=Y, Brain Hub=Y, OS Eval=R); no flag = all good. */}
+      <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
+        <A10Group label="Cognitive" tint={A10_GROUP.cognitive}>
+          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-context'))} data-testid="nav-context" />
+          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))} data-testid="nav-brain-hub" />
+        </A10Group>
 
-        {/* 能力 — Tools (Skills, MCP Servers) */}
-        {toolItems.map((item) => (
-          <NavIconButton
-            key={item.target}
-            icon={item.icon}
-            label={item.label}
-            accent={NAV_GROUP_COLOR.power}
-            isActive={activeModal === 'settings' && settingsTab === (item.target === 'mcp' ? 'mcp-servers' : item.target)}
-            onClick={() => handleNavClick(item.target)}
-            data-testid={`nav-${item.target}`}
-          />
-        ))}
+        <A10Group label="Work" tint={A10_GROUP.work}>
+          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'))} data-testid="nav-pipeline" />
+          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pollinate'))} data-testid="nav-pollinate" />
+          <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-swarmws'))} data-testid="nav-swarmws" />
+        </A10Group>
 
-        <NavGroupSeparator />
-
-        {/* 观测 — Insights (Code Intelligence, Engine Metrics, OS Eval) */}
-        <NavIconButton
-          icon="psychology"
-          label="Brain Hub"
-          accent={NAV_GROUP_COLOR.observe}
-          onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))}
-          data-testid="nav-brain-hub"
-        />
-        <NavIconButton
-          icon="graph"
-          label="Code Intelligence"
-          accent={NAV_GROUP_COLOR.observe}
-          onClick={handleCodeIntelClick}
-          data-testid="nav-code-intel"
-        />
-        <NavIconButton
-          icon="activity"
-          label="Engine Metrics"
-          accent={NAV_GROUP_COLOR.observe}
-          isActive={activeModal === 'settings' && settingsTab === 'engine'}
-          onClick={() => handleNavClick('engine')}
-          data-testid="nav-engine"
-        />
-        <NavIconButton
-          icon="heartbeat"
-          label="OS Eval"
-          accent={NAV_GROUP_COLOR.observe}
-          isActive={activeModal === 'eval'}
-          onClick={() => {
-            if (activeModal === 'eval') {
-              closeModal();
-            } else {
-              openModal('eval');
-            }
-          }}
-          data-testid="nav-eval"
-        />
-
-        <NavGroupSeparator />
-
-        {/* 知识 — Knowledge (Memory, Signals) */}
-        <NavIconButton
-          icon="book"
-          label="Memory"
-          accent={NAV_GROUP_COLOR.know}
-          onClick={handleMemoryClick}
-          data-testid="nav-memory"
-        />
-        <NavIconButton
-          icon="radio"
-          label="Signals"
-          accent={NAV_GROUP_COLOR.know}
-          onClick={handleSignalsClick}
-          data-testid="nav-signals"
-        />
+        <A10Group label="System" tint={A10_GROUP.system}>
+          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
+          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { closeModal(); } else { openModal('eval'); } }} data-testid="nav-eval" />
+          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { closeModal(); } else { setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
+          <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
+        </A10Group>
       </nav>
 
-      {/* Bottom section - Settings and GitHub */}
-      <div className="pt-1.5 pb-2 border-t border-[var(--color-border)] space-y-1 flex flex-col items-center">
-        <NavIconButton
-          icon="gear"
-          label="Settings"
-          isActive={activeModal === 'settings' && !settingsTab}
-          onClick={() => {
-            if (activeModal === 'settings') {
-              closeModal();
-            } else {
-              setSettingsTab(undefined);
-              openModal('settings');
-            }
-          }}
-          data-testid="nav-settings"
-        />
+      {/* Footer — ⌘K command palette + GitHub. Terminal stays in the BottomBar. */}
+      <div className="px-2.5 pt-1.5 pb-2 border-t border-[var(--color-border)] grid grid-cols-2 gap-1.5">
+        <button
+          className="a10-fcard flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          title="Terminal (⌘`)"
+          onClick={toggleTerminal}
+          aria-pressed={terminalPanelOpen}
+          data-testid="nav-terminal"
+        >
+          <NavSvgIcon name="terminal" />
+        </button>
         <a
           href="https://github.com/xg-gh-25/SwarmAI.git"
           title="GitHub"
-          className="flex items-center justify-center w-8 h-8 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
+          className="a10-fcard flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] cursor-pointer"
           data-testid="github-link"
-          onClick={(e) => {
-            e.preventDefault();
-            openExternal('https://github.com/xg-gh-25/SwarmAI.git');
-          }}
+          onClick={(e) => { e.preventDefault(); openExternal('https://github.com/xg-gh-25/SwarmAI.git'); }}
         >
           <GitHubIcon className="w-4 h-4" />
         </a>
@@ -339,28 +270,35 @@ function LeftSidebar() {
   );
 }
 
-// SwarmAI Logo component
+// SwarmAI Logo — inline S-monogram honeycomb (matches desktop/src/assets/
+// swarm-avatar.svg). Inlined (not <img src>) so it renders with zero network
+// dependency and is assertable in tests (a bare <img> is not an <svg>).
 function SwarmAILogo() {
   return (
-    <div
+    <span
       className="w-[26px] h-[26px] rounded-md flex items-center justify-center overflow-hidden"
       title="SwarmAI"
       data-testid="swarm-logo"
     >
-      <img src="/swarm-avatar.svg" alt="SwarmAI" className="w-full h-full object-contain" />
-    </div>
-  );
-}
-
-// Inset group separator between nav groups (B ordering, 2026-07-12).
-// data-testid lets the redesign test count groups (4 groups → 3 separators).
-function NavGroupSeparator() {
-  return (
-    <div
-      className="w-4 my-1 border-t border-[var(--color-border)]"
-      aria-hidden="true"
-      data-testid="nav-group-sep"
-    />
+      <svg viewBox="0 0 200 200" width="100%" height="100%" aria-label="SwarmAI">
+        <defs>
+          <linearGradient id="swarmHexNav" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#fde047" />
+            <stop offset="55%" stopColor="#f59e0b" />
+            <stop offset="100%" stopColor="#d97706" />
+          </linearGradient>
+        </defs>
+        <polygon points="100,30 162,65 162,135 100,170 38,135 38,65" fill="url(#swarmHexNav)" />
+        <path
+          d="M128 74 C128 60 114 54 100 54 C84 54 73 63 73 76 C73 88 84 92 100 95 C116 98 127 102 127 114 C127 127 115 133 100 133 C86 133 73 127 72 114"
+          fill="none"
+          stroke="#101527"
+          strokeWidth="15"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
   );
 }
 
@@ -479,6 +417,77 @@ function NavSvgIcon({ name }: { name: string }) {
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       );
+    case 'layers':
+      // Context — stacked layers (what's loaded into the prompt right now).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <polygon points="12 2 2 7 12 12 22 7 12 2" />
+          <polyline points="2 17 12 22 22 17" />
+          <polyline points="2 12 12 17 22 12" />
+        </svg>
+      );
+    case 'hub':
+      // Brain Hub — central node with 3 linked satellites (DDD brains).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <circle cx="12" cy="12" r="2.5" />
+          <circle cx="12" cy="4" r="1.9" />
+          <circle cx="5" cy="18" r="1.9" />
+          <circle cx="19" cy="18" r="1.9" />
+          <line x1="12" y1="6.5" x2="12" y2="9.5" />
+          <line x1="10.3" y1="13.6" x2="6.5" y2="16.4" />
+          <line x1="13.7" y1="13.6" x2="17.5" y2="16.4" />
+        </svg>
+      );
+    case 'pipeline':
+      // Pipeline — two stages linked by a flow arrow (code delivery).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <rect x="2" y="4" width="7" height="7" rx="1.5" />
+          <rect x="15" y="13" width="7" height="7" rx="1.5" />
+          <path d="M5.5 11v3a2.5 2.5 0 0 0 2.5 2.5h7" />
+        </svg>
+      );
+    case 'hive':
+      // Pollinate — hexagon honeycomb cell with a center (media out).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <polygon points="12 2 20 7 20 17 12 22 4 17 4 7 12 2" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      );
+    case 'folder':
+      // SwarmWS — workspace folder.
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+        </svg>
+      );
+    case 'extension':
+      // Capabilities — puzzle/extension piece (skills + MCP + jobs).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M6 4h5V3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H6a1 1 0 0 1-1-1v-3H4a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1z" />
+        </svg>
+      );
+    case 'public':
+      // Community — globe (external GitHub domain).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+        </svg>
+      );
+    case 'history':
+      // History — clock with a counter-clockwise arrow (past conversations).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M3 3v5h5" />
+          <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+          <path d="M12 7v5l4 2" />
+        </svg>
+      );
     default:
       // Fallback to material-symbols for unknown icons
       return <span className="material-symbols-outlined text-[18px]">{name}</span>;
@@ -512,6 +521,63 @@ function NavIconButton({ icon, label, isActive, onClick, accent, 'data-testid': 
         }`}
       />
       <NavSvgIcon name={icon} />
+    </button>
+  );
+}
+
+// ── A10 row-card nav (run_1aab916c) ──────────────────────────────────────────
+
+/** Titled, color-coded group divider: ── Label ── + a muted accent spine.
+ *  `tint` colors the label + the right-edge spine per region. */
+function A10Group({ label, tint, children }: { label: string; tint: string; children: ReactNode }) {
+  return (
+    <div className="a10-group relative pb-2" style={{ '--gc': tint } as CSSProperties}>
+      <div
+        className="flex items-center gap-2 px-1 pt-2.5 pb-1.5 text-[8.5px] font-bold font-mono uppercase tracking-[0.18em]"
+        style={{ color: tint }}
+        data-testid="navgroup-label"
+      >
+        <span className="flex-1 h-px" style={{ background: `linear-gradient(90deg,transparent,${tint},transparent)`, opacity: 0.4 }} />
+        {label}
+        <span className="flex-1 h-px" style={{ background: `linear-gradient(90deg,transparent,${tint},transparent)`, opacity: 0.4 }} />
+      </div>
+      <div className="space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
+interface A10CardProps {
+  icon: string;
+  label: string;
+  tint: string;
+  flag?: 'y' | 'r';
+  isActive?: boolean;
+  onClick?: () => void;
+  'data-testid'?: string;
+}
+
+/** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
+ *  the attention flag is a corner badge (never eats the title). */
+function A10Card({ icon, label, tint, flag, isActive, onClick, 'data-testid': testId }: A10CardProps) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      data-testid={testId}
+      aria-pressed={isActive}
+      style={{ '--ac': tint } as CSSProperties}
+      className={`a10-card${isActive ? ' a10-card--active' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-2`}
+    >
+      <span className="a10-chip flex-shrink-0 w-[29px] h-[29px] rounded-[9px] flex items-center justify-center">
+        <NavSvgIcon name={icon} />
+      </span>
+      <span className="flex-1 text-left text-[12.5px] font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
+      {flag === 'y' && (
+        <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label="needs attention">Y</span>
+      )}
+      {flag === 'r' && (
+        <span className="a10-flag a10-flag--r" data-testid="flag-r" aria-label="action required">R</span>
+      )}
     </button>
   );
 }

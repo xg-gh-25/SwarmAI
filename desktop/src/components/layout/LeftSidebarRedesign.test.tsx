@@ -1,20 +1,18 @@
 /**
- * Tests for the LeftSidebar redesign (2026-07-12): B ordering + B2 group-tint.
+ * Tests for the LeftSidebar A10 redesign (run_1aab916c): horizontal row-cards.
  *
- * Verifies the *behavioral* contract of the visual redesign (things a snapshot
- * can't assert cheaply):
- *   1. NAV ORDER (B) — the 8 nav buttons appear top-to-bottom in group order:
- *        Terminal | Skills, MCP | Code Intel, Engine, OS Eval | Memory, Signals
- *      with Settings + GitHub in the footer (outside <nav>).
- *   2. GROUP TINT (B2) — every nav button carries its group's brand color as the
- *      inline `--ac` CSS custom property (drives hover/active bg+ring+bar without
- *      a Tailwind class → JIT-safe). Terminal=blue, Skills/MCP=purple,
- *      CodeIntel/Engine/OSEval=teal, Memory/Signals=amber.
- *   3. SEPARATORS — 3 group separators inside <nav> (4 groups → 3 rules).
+ * Behavioral contract of the A10 nav (things a snapshot can't assert cheaply):
+ *   1. CHAT HERO — a hero card at the top carrying the SwarmAI brand logo.
+ *   2. HISTORY ROW — a History entry directly under the Chat hero.
+ *   3. THREE GROUPS in order — Cognitive (Context/Memory/Brain Hub),
+ *      Work (Pipeline/Pollinate/SwarmWS), System (Capabilities/OS Eval/
+ *      Settings/Community), each with a titled+colored group label.
+ *   4. DOMAIN CARDS top-to-bottom in that exact order.
+ *   5. Y/R SIGNAL FLAGS — Memory=Y, Brain Hub=Y, OS Eval=R, none elsewhere.
  *
- * We drive the REAL LeftSidebar through its real providers (no mock of the
- * component under change — GUI32 prompt-source = answer-source). Only the pty
- * service boundary is mocked (a render spawns nothing).
+ * Drives the REAL LeftSidebar through real providers (no mock of the component
+ * under change — GUI32 prompt-source = answer-source). Only the pty boundary is
+ * mocked (a render spawns nothing).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, within } from '@testing-library/react';
@@ -34,12 +32,6 @@ vi.mock('../../services/pty', () => ({
   })),
 }));
 
-// group brand colors (B2) — single source mirrored from the component
-const BLUE = '#60a5fa';
-const PURPLE = '#a78bfa';
-const TEAL = '#2dd4bf';
-const AMBER = '#fbbf24';
-
 function renderSidebar() {
   return render(
     <ToastProvider>
@@ -54,73 +46,82 @@ function renderSidebar() {
 
 afterEach(() => cleanup());
 
-// The group color each nav button must expose via inline `--ac`.
-const EXPECTED: Array<[string, string]> = [
-  ['nav-terminal', BLUE],
-  ['nav-skills', PURPLE],
-  ['nav-mcp', PURPLE],
-  ['nav-brain-hub', TEAL],
-  ['nav-code-intel', TEAL],
-  ['nav-engine', TEAL],
-  ['nav-eval', TEAL],
-  ['nav-memory', AMBER],
-  ['nav-signals', AMBER],
+const DOMAIN_ORDER = [
+  'nav-context',
+  'nav-memory',
+  'nav-brain-hub',
+  'nav-pipeline',
+  'nav-pollinate',
+  'nav-swarmws',
+  'nav-capabilities',
+  'nav-eval',
+  'nav-settings',
+  'nav-community',
 ];
 
-describe('LeftSidebar redesign — B ordering', () => {
-  it('renders the 9 nav buttons top-to-bottom in group order', () => {
+describe('LeftSidebar A10 — chat hero + history', () => {
+  it('renders the Chat hero card carrying the SwarmAI brand logo', () => {
     renderSidebar();
-    const nav = screen.getByTestId('nav-icons');
-    const ids = within(nav)
-      .getAllByRole('button')
-      .map((b) => b.getAttribute('data-testid'));
-    expect(ids).toEqual([
-      'nav-terminal',
-      'nav-skills',
-      'nav-mcp',
-      'nav-brain-hub',
-      'nav-code-intel',
-      'nav-engine',
-      'nav-eval',
-      'nav-memory',
-      'nav-signals',
-    ]);
+    const hero = screen.getByTestId('chat-hero');
+    expect(hero).toBeInTheDocument();
+    // brand logo is an <svg> inside the hero (S-monogram)
+    expect(hero.querySelector('svg')).not.toBeNull();
   });
 
-  it('keeps Settings + GitHub OUT of the nav group (footer)', () => {
+  it('renders a History row under the Chat hero', () => {
     renderSidebar();
-    const nav = screen.getByTestId('nav-icons');
-    expect(within(nav).queryByTestId('nav-settings')).toBeNull();
-    // Settings still exists somewhere in the sidebar (the footer)
-    expect(screen.getByTestId('nav-settings')).toBeInTheDocument();
-  });
-
-  it('has 3 group separators inside the nav (4 groups → 3 rules)', () => {
-    renderSidebar();
-    const nav = screen.getByTestId('nav-icons');
-    const seps = nav.querySelectorAll('[data-testid="nav-group-sep"]');
-    expect(seps.length).toBe(3);
+    expect(screen.getByTestId('history-row')).toBeInTheDocument();
   });
 });
 
-describe('LeftSidebar redesign — B2 group tint', () => {
-  it.each(EXPECTED)('%s carries its group --ac color', (testid, color) => {
+describe('LeftSidebar A10 — three groups + domain order', () => {
+  it('renders the 3 group labels in order: Cognitive, Work, System', () => {
     renderSidebar();
-    const btn = screen.getByTestId(testid);
-    // inline style custom property survives Tailwind JIT purge
-    expect(btn.style.getPropertyValue('--ac').trim()).toBe(color);
+    const nav = screen.getByTestId('nav-icons');
+    const labels = Array.from(nav.querySelectorAll('[data-testid="navgroup-label"]')).map(
+      (el) => el.textContent?.trim(),
+    );
+    expect(labels).toEqual(['Cognitive', 'Work', 'System']);
   });
 
-  // B (default-tint, 2026-07-12): accent-bearing nav-group icons are toned by
-  // DEFAULT (not grey-until-hover) via the .nav-btn--tinted marker class; the
-  // footer Settings button (no accent) stays neutral grey.
-  it.each(EXPECTED)('%s is tinted by default (.nav-btn--tinted)', (testid) => {
+  it('renders the 10 domain cards top-to-bottom in group order', () => {
     renderSidebar();
-    expect(screen.getByTestId(testid).classList.contains('nav-btn--tinted')).toBe(true);
+    const nav = screen.getByTestId('nav-icons');
+    const ids = Array.from(nav.querySelectorAll('[data-testid^="nav-"]'))
+      .map((b) => b.getAttribute('data-testid'))
+      .filter((id) => id !== 'nav-icons');
+    expect(ids).toEqual(DOMAIN_ORDER);
   });
 
-  it('footer Settings is NOT default-tinted (stays neutral grey)', () => {
+  it('every domain card renders an inline-SVG icon (no CDN icon font)', () => {
     renderSidebar();
-    expect(screen.getByTestId('nav-settings').classList.contains('nav-btn--tinted')).toBe(false);
+    for (const id of DOMAIN_ORDER) {
+      const card = screen.getByTestId(id);
+      expect(card.querySelector('svg')).not.toBeNull();
+      // must NOT rely on the material-symbols icon font
+      expect(card.querySelector('.material-symbols-outlined')).toBeNull();
+    }
+  });
+});
+
+describe('LeftSidebar A10 — Y/R signal flags', () => {
+  it('shows a Y flag on Memory and Brain Hub', () => {
+    renderSidebar();
+    expect(within(screen.getByTestId('nav-memory')).getByTestId('flag-y')).toBeInTheDocument();
+    expect(within(screen.getByTestId('nav-brain-hub')).getByTestId('flag-y')).toBeInTheDocument();
+  });
+
+  it('shows an R flag on OS Eval', () => {
+    renderSidebar();
+    expect(within(screen.getByTestId('nav-eval')).getByTestId('flag-r')).toBeInTheDocument();
+  });
+
+  it('shows NO flag on the other domains (no-news = no flag)', () => {
+    renderSidebar();
+    for (const id of ['nav-context', 'nav-pipeline', 'nav-pollinate', 'nav-swarmws', 'nav-capabilities', 'nav-settings', 'nav-community']) {
+      const card = screen.getByTestId(id);
+      expect(within(card).queryByTestId('flag-y')).toBeNull();
+      expect(within(card).queryByTestId('flag-r')).toBeNull();
+    }
   });
 });
