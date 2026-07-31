@@ -160,4 +160,37 @@ describe('WorkspaceExplorer', () => {
     expect(screen.queryByTestId('new-workspace-button')).not.toBeInTheDocument();
     expect(screen.queryByTestId('show-archived-toggle')).not.toBeInTheDocument();
   });
+
+  // ── embedded mode (rendered inside the SwarmWS fullscreen overlay) ──
+  describe('embedded mode', () => {
+    it('ignores the collapsed state and renders the tree even when collapsed=true', () => {
+      // In an overlay there is no column to collapse; embedded must bypass the rail.
+      setupMocks({ collapsed: true });
+      render(<WorkspaceExplorer embedded />);
+      expect(screen.queryByTestId('workspace-explorer-collapsed')).not.toBeInTheDocument();
+      expect(screen.getByTestId('workspace-explorer')).toBeInTheDocument();
+      expect(screen.getByTestId('virtualized-tree')).toBeInTheDocument();
+    });
+
+    it('does NOT render the ResizeHandle in embedded mode (overlay owns the width)', () => {
+      render(<WorkspaceExplorer embedded />);
+      expect(screen.queryByTestId('resize-handle')).not.toBeInTheDocument();
+    });
+
+    it('fills its parent (no fixed column width / border-r rail) in embedded mode', () => {
+      render(<WorkspaceExplorer embedded />);
+      const root = screen.getByTestId('workspace-explorer');
+      // embedded root fills parent instead of the fixed-width bordered column
+      expect(root.className).toContain('h-full');
+      expect(root.className).not.toContain('border-r');
+      expect(root.className).not.toContain('flex-shrink-0');
+      // no inline fixed width applied
+      expect(root.style.width).toBe('');
+    });
+
+    it('still renders the ExplorerHeader in embedded mode', () => {
+      render(<WorkspaceExplorer embedded />);
+      expect(screen.getByTestId('explorer-header')).toBeInTheDocument();
+    });
+  });
 });

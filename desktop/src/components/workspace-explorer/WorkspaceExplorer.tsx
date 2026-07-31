@@ -88,9 +88,18 @@ export interface WorkspaceExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
   /** Callback when "Attach to Chat" is selected from the context menu. */
   onAttachToChat?: (item: FileTreeItem) => void;
+  /**
+   * Embedded mode — rendered inside the SwarmWS fullscreen overlay (Modal)
+   * rather than as an always-on sibling column. In this mode the explorer:
+   *  - IGNORES `workspaceExplorerCollapsed` (there is no column to collapse), and
+   *  - drops the column chrome (fixed width, `border-r`, `flex-shrink-0`,
+   *    ResizeHandle) to fill the overlay instead.
+   * The tree content + header are identical to the column render.
+   */
+  embedded?: boolean;
 }
 
-export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }: WorkspaceExplorerProps) {
+export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, embedded = false }: WorkspaceExplorerProps) {
   const {
     workspaceExplorerCollapsed,
     workspaceExplorerWidth,
@@ -112,8 +121,9 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
     setWorkspaceExplorerCollapsed(!workspaceExplorerCollapsed);
   }, [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed]);
 
-  // Collapsed state — 24px wide expand button
-  if (workspaceExplorerCollapsed) {
+  // Collapsed state — 24px wide expand button.
+  // Embedded (overlay) mode has no column to collapse — always render the tree.
+  if (workspaceExplorerCollapsed && !embedded) {
     return (
       <div
         className="flex-shrink-0 bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
@@ -139,18 +149,31 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
     );
   }
 
-  // Expanded state
+  // Expanded state.
+  // Embedded (overlay) mode: fill the parent, no fixed-width bordered column,
+  // no ResizeHandle (the overlay owns the width). Column mode: the original
+  // fixed-width `border-r` sibling column with resize + collapse.
   return (
     <div
-      className="relative flex-shrink-0 h-full bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
-      style={{
-        width: workspaceExplorerWidth,
-        minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,
-        maxWidth: LAYOUT_CONSTANTS.MAX_WORKSPACE_EXPLORER_WIDTH,
-      }}
+      className={
+        embedded
+          ? 'relative h-full w-full bg-[var(--color-bg-chrome)] flex flex-col'
+          : 'relative flex-shrink-0 h-full bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out'
+      }
+      style={
+        embedded
+          ? undefined
+          : {
+              width: workspaceExplorerWidth,
+              minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,
+              maxWidth: LAYOUT_CONSTANTS.MAX_WORKSPACE_EXPLORER_WIDTH,
+            }
+      }
       data-testid="workspace-explorer"
     >
-      <ResizeHandle currentWidth={workspaceExplorerWidth} onWidthChange={handleWidthChange} />
+      {!embedded && (
+        <ResizeHandle currentWidth={workspaceExplorerWidth} onWidthChange={handleWidthChange} />
+      )}
 
       <ExplorerHeader onCollapseToggle={handleCollapseToggle} />
 

@@ -143,58 +143,56 @@ function simulateWindowResize(width: number): void {
 }
 
 /**
- * Verifies the three-column layout structure is present and correctly ordered
+ * Verifies the layout structure is present and correctly ordered.
+ *
+ * A10 redesign (run_1aab916c): the WorkspaceExplorer is no longer an always-on
+ * middle column — it opens on demand as the SwarmWS fullscreen overlay. So the
+ * main flex row is now TWO columns: LeftSidebar (ASIDE) -> MainChatPanel (MAIN).
+ * `explorerColumnPresent` verifies the OLD column is GONE from the main row
+ * (should always be false now); the explorer lives in an overlay instead.
  */
 function verifyLayoutStructure(): {
   hasLeftSidebar: boolean;
-  hasWorkspaceExplorer: boolean;
+  explorerColumnPresent: boolean;
   hasMainChatPanel: boolean;
   isCorrectlyOrdered: boolean;
-  explorerIsCollapsed: boolean;
 } {
-  // Find the main layout container (flex container with the three columns)
+  // Find the main layout container (flex row holding the columns)
   const layoutContainer = document.querySelector('.flex.flex-1.overflow-hidden');
-  
+
   if (!layoutContainer) {
     return {
       hasLeftSidebar: false,
-      hasWorkspaceExplorer: false,
+      explorerColumnPresent: false,
       hasMainChatPanel: false,
       isCorrectlyOrdered: false,
-      explorerIsCollapsed: false,
     };
   }
 
   const children = Array.from(layoutContainer.children);
-  
+
   // Left Sidebar should be first child (aside element with fixed width)
   const leftSidebar = children[0] as HTMLElement;
-  const hasLeftSidebar = leftSidebar?.tagName === 'ASIDE' && 
+  const hasLeftSidebar = leftSidebar?.tagName === 'ASIDE' &&
     leftSidebar.style.width === `${LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH}px`;
 
-  // Workspace Explorer should be second child (div with border-r)
-  const workspaceExplorer = children[1] as HTMLElement;
-  const hasWorkspaceExplorer = workspaceExplorer?.tagName === 'DIV' && 
-    workspaceExplorer.classList.contains('border-r');
+  // The old explorer column (a border-r DIV sibling) must NOT be in the main row.
+  const explorerColumnPresent = children.some(
+    (c) => c.tagName === 'DIV' && c.getAttribute('data-testid') === 'workspace-explorer',
+  );
 
-  // Check if explorer is collapsed (narrow width with expand button)
-  const explorerIsCollapsed = workspaceExplorer?.querySelector('button[title*="Expand"]') !== null ||
-    workspaceExplorer?.querySelector('button[title*="expand"]') !== null;
+  // Main Chat Panel is now the SECOND child (main element with flex-1).
+  const mainChatPanel = children.find((c) => c.tagName === 'MAIN') as HTMLElement | undefined;
+  const hasMainChatPanel = mainChatPanel?.classList.contains('flex-1') ?? false;
 
-  // Main Chat Panel should be third child (main element with flex-1)
-  const mainChatPanel = children[2] as HTMLElement;
-  const hasMainChatPanel = mainChatPanel?.tagName === 'MAIN' && 
-    mainChatPanel.classList.contains('flex-1');
-
-  // Verify correct ordering: LeftSidebar -> WorkspaceExplorer -> MainChatPanel
-  const isCorrectlyOrdered = hasLeftSidebar && hasWorkspaceExplorer && hasMainChatPanel;
+  // Correct ordering (2-col): LeftSidebar -> MainChatPanel, no explorer column.
+  const isCorrectlyOrdered = hasLeftSidebar && hasMainChatPanel && !explorerColumnPresent;
 
   return {
     hasLeftSidebar,
-    hasWorkspaceExplorer,
+    explorerColumnPresent,
     hasMainChatPanel,
     isCorrectlyOrdered,
-    explorerIsCollapsed,
   };
 }
 
@@ -297,7 +295,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
 
@@ -328,7 +326,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
 
@@ -342,13 +340,6 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       fc.assert(
         fc.property(narrowWindowWidthArb, (narrowWidth) => {
           mockStorage.clear();
-          // Default is now collapsed; this test verifies narrow-viewport
-          // AUTO-collapse, so explicitly start EXPANDED to make the collapse
-          // observable (not masked by the new collapsed-by-default).
-          mockStorage.setItem(
-            LAYOUT_CONSTANTS.STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED,
-            'false'
-          );
 
           Object.defineProperty(window, 'innerWidth', {
             value: 1200,
@@ -360,8 +351,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          // A10 redesign: the explorer is no longer a column that collapses on
+          // narrow width — it's an on-demand overlay. The invariant is now that
+          // resizing to a narrow width keeps the stable 2-column layout with NO
+          // explorer column at any width.
           let structure = verifyLayoutStructure();
-          expect(structure.explorerIsCollapsed).toBe(false);
+          expect(structure.explorerColumnPresent).toBe(false);
 
           act(() => {
             simulateWindowResize(narrowWidth);
@@ -369,10 +364,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
-          expect(structure.explorerIsCollapsed).toBe(true);
 
           unmount();
         }),
@@ -380,18 +374,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should keep workspace explorer expanded on wide width when user has expanded it', () => {
+    it('keeps the 2-column layout (no explorer column) at any wide width', () => {
       fc.assert(
         fc.property(wideWindowWidthArb, (wideWidth) => {
           mockStorage.clear();
-          // Default is now collapsed; this test verifies that a WIDE viewport
-          // does NOT force-collapse an explorer the user has expanded. Set the
-          // expanded preference explicitly so we're testing viewport behavior,
-          // not the default.
-          mockStorage.setItem(
-            LAYOUT_CONSTANTS.STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED,
-            'false'
-          );
 
           Object.defineProperty(window, 'innerWidth', {
             value: wideWidth,
@@ -403,12 +389,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          // A10 redesign: explorer is overlay-only, never an always-on column.
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
-          expect(structure.explorerIsCollapsed).toBe(false);
 
           unmount();
         }),
@@ -441,14 +427,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
             const structure = verifyLayoutStructure();
             expect(structure.hasLeftSidebar).toBe(true);
-            expect(structure.hasWorkspaceExplorer).toBe(true);
+            expect(structure.explorerColumnPresent).toBe(false);
             expect(structure.hasMainChatPanel).toBe(true);
             expect(structure.isCorrectlyOrdered).toBe(true);
 
-            const finalWidth = resizeSequence[resizeSequence.length - 1];
-            if (finalWidth < LAYOUT_CONSTANTS.NARROW_VIEWPORT_BREAKPOINT) {
-              expect(structure.explorerIsCollapsed).toBe(true);
-            }
+            // A10 redesign: no explorer column at any width, narrow or wide.
 
             unmount();
           }
@@ -562,7 +545,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
             const structure = verifyLayoutStructure();
             expect(structure.hasLeftSidebar).toBe(true);
-            expect(structure.hasWorkspaceExplorer).toBe(true);
+            expect(structure.explorerColumnPresent).toBe(false);
             expect(structure.hasMainChatPanel).toBe(true);
             expect(structure.isCorrectlyOrdered).toBe(true);
 
@@ -573,7 +556,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should maintain correct DOM order: sidebar -> explorer -> main panel', () => {
+    it('should maintain correct DOM order: sidebar -> main panel (explorer is overlay)', () => {
       fc.assert(
         fc.property(validWindowWidthArb, (windowWidth) => {
           mockStorage.clear();
@@ -591,10 +574,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           const layoutContainer = document.querySelector('.flex.flex-1.overflow-hidden');
           const children = Array.from(layoutContainer?.children || []);
 
-          expect(children.length).toBe(3);
+          // A10 redesign: 2-column main row — LeftSidebar (ASIDE) -> MainChatPanel (MAIN).
+          // The explorer column DIV that used to sit between them is gone (overlay now).
           expect(children[0].tagName).toBe('ASIDE');
-          expect(children[1].tagName).toBe('DIV');
-          expect(children[2].tagName).toBe('MAIN');
+          const lastChild = children[children.length - 1];
+          expect(lastChild.tagName).toBe('MAIN');
+          // no explorer column in the main row
+          const hasExplorerColumn = children.some(
+            (c) => c.getAttribute('data-testid') === 'workspace-explorer',
+          );
+          expect(hasExplorerColumn).toBe(false);
 
           unmount();
         }),
@@ -649,7 +638,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: The underlying layout SHALL be preserved
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
 
@@ -689,7 +678,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: Layout structure SHALL be preserved regardless of window width
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
 
@@ -744,7 +733,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             // Property: Layout SHALL be preserved after each click
             const structure = verifyLayoutStructure();
             expect(structure.hasLeftSidebar).toBe(true);
-            expect(structure.hasWorkspaceExplorer).toBe(true);
+            expect(structure.explorerColumnPresent).toBe(false);
             expect(structure.hasMainChatPanel).toBe(true);
           }
 
@@ -1641,7 +1630,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: Layout structure SHALL be preserved
           const structure = verifyLayoutStructure();
           expect(structure.hasLeftSidebar).toBe(true);
-          expect(structure.hasWorkspaceExplorer).toBe(true);
+          expect(structure.explorerColumnPresent).toBe(false);
           expect(structure.hasMainChatPanel).toBe(true);
           expect(structure.isCorrectlyOrdered).toBe(true);
 

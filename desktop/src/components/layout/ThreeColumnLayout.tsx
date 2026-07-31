@@ -11,6 +11,7 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 import FileEditorModal from '../common/FileEditorModal';
 import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
+import { SwarmWSOverlay } from './SwarmWSOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -138,7 +139,7 @@ export function pickLatestDigest(children: Array<{ name?: string; path?: string 
 
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
-  const { activeModal, openModal, closeModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
+  const { activeModal, openModal, closeModal, settingsTab, setSettingsTab } = useLayout();
   const { addToast } = useToast();
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
@@ -202,12 +203,13 @@ function LeftSidebar() {
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
-      {/* Logo/Brand area — click toggles workspace explorer */}
+      {/* Logo/Brand area — opens the SwarmWS explorer overlay (A10 redesign:
+          the explorer is an on-demand fullscreen overlay, no longer a column). */}
       <button
         className="h-10 flex items-center justify-center border-b border-[var(--color-border)] w-full hover:bg-[var(--color-hover)] transition-colors"
-        onClick={() => setWorkspaceExplorerCollapsed(!workspaceExplorerCollapsed)}
-        title={workspaceExplorerCollapsed ? 'Show workspace explorer' : 'Hide workspace explorer'}
-        aria-label="Toggle workspace explorer"
+        onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-swarmws'))}
+        title="Open workspace explorer"
+        aria-label="Open workspace explorer"
         data-testid="logo-toggle"
       >
         <SwarmAILogo />
@@ -894,7 +896,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
             AutoSizer can't get a resolved height from the flex algorithm. */}
         <div className="flex flex-1 overflow-hidden min-h-0">
           <LeftSidebar />
-          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
+          {/* A10 redesign: the workspace explorer is no longer an always-on
+              column — it opens on demand as SwarmWSOverlay (below). */}
           <MainChatPanel>{children}</MainChatPanel>
           {/* Unified File Viewer — resizable side panel for all file types */}
           {fileViewerFile && editorMode === 'panel' && (
@@ -915,6 +918,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
             unmount → term.dispose() → history loss. The Ctrl/Cmd-` hotkey / ▾
             button flip panelOpen, which drives the self-hide. */}
         <TerminalPanel />
+
+        {/* SwarmWS explorer overlay — on-demand fullscreen (A10 redesign).
+            Kept inside ExplorerProvider so it reads the same live tree state
+            (the 30s ETag poll lives in the provider, runs whether or not the
+            overlay is open). Opening a file self-closes the overlay first
+            (Gate-1 z-index fix) then delegates to handleFileDoubleClick. */}
+        <SwarmWSOverlay onFileDoubleClick={handleFileDoubleClick} />
 
         {/* Bottom status bar */}
         <BottomBar />
