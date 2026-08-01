@@ -29,6 +29,15 @@ const DEFAULT_INTERVAL_MS = 30_000;
 /** Default number of consecutive failures before marking disconnected. */
 const DEFAULT_FAILURE_THRESHOLD = 2;
 
+/** Liveness window (ms) for the JS poll's disconnected decision.
+ *  The Rust watchdog emits `backend-degraded` every ~3s (RECOVERY_POLL_SECS)
+ *  while the daemon PROCESS is alive but the event loop is stalled (heartbeat
+ *  fresh). If such a signal arrived within this window, a JS-poll failure is a
+ *  *busy* backend, not a dead one → map to 'degraded' (inputs stay usable), not
+ *  'disconnected'. 10s comfortably spans multiple 3s emits yet is short enough
+ *  that a genuine death (no more degraded events) escalates promptly. */
+const DEGRADED_LIVENESS_WINDOW_MS = 10_000;
+
 /** Toast id used for the persistent disconnected warning. */
 const HEALTH_DISCONNECTED_TOAST_ID = 'health-disconnected';
 
@@ -97,6 +106,13 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   // to pick an honest toast: a real restart (new process) vs a resume (same
   // process that was merely blocked) vs a plain JS-poller recovery (null).
   const recoveryKindRef = useRef<RecoveryKind>(null);
+  // Timestamp (ms) of the last Tauri `backend-degraded` event = the last time the
+  // Rust watchdog PROVED the daemon process alive (heartbeat fresh) despite a
+  // missed /health. handleFailure reads it so the JS poll doesn't independently
+  // declare 'disconnected' on a backend that is merely busy. 0 = never seen
+  // (Hive/browser has no Tauri events → legacy behavior preserved). A real death
+  // event resets it to 0 so a genuine outage is never masked.
+  const lastDegradedAtRef = useRef(0);
   // Guard against state updates after unmount.
   const mountedRef = useRef(true);
 
@@ -165,19 +181,47 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       const previousStatus = currentStatusRef.current;
 
       if (failures >= failureThreshold) {
-        currentStatusRef.current = 'disconnected';
+        // Liveness override: if the Rust watchdog recently proved the process
+        // alive (a `backend-degraded` within the window = heartbeat fresh), a JS
+        // /health failure means BUSY, not DEAD. Map to 'degraded' (inputs stay
+        // usable) instead of independently declaring 'disconnected'. This closes
+        // the second, independent offline judge — the JS poll — against the same
+        // heartbeat signal the Rust watchdog already honors (run_4f32022a). Only
+        // reachable on desktop (Tauri emits the event); Hive/browser keeps
+        // lastDegradedAt=0 → the else-branch = exact legacy behavior.
+        const livenessFresh =
+          lastDegradedAtRef.current > 0 &&
+          now - lastDegradedAtRef.current <= DEGRADED_LIVENESS_WINDOW_MS;
 
-        // Transition: connected/initializing → disconnected — fire warning.
-        if (previousStatus !== 'disconnected') {
-          // Start each disconnect episode with a clean recovery kind so a
-          // value set by a prior, never-consumed event can't mislabel this
-          // episode's recovery toast.
-          recoveryKindRef.current = null;
-          addToastRef.current({
-            severity: 'warning',
-            message: 'Backend is unavailable',
-            id: HEALTH_DISCONNECTED_TOAST_ID,
-          });
+        if (livenessFresh) {
+          // Don't downgrade a real 'disconnected' (a proven death already
+          // disabled inputs) back to 'degraded' — mirrors the degraded handler.
+          if (previousStatus !== 'disconnected') {
+            currentStatusRef.current = 'degraded';
+            if (previousStatus !== 'degraded') {
+              recoveryKindRef.current = null;
+              addToastRef.current({
+                severity: 'warning',
+                message: 'Backend busy — reconnecting…',
+                id: HEALTH_DISCONNECTED_TOAST_ID,
+              });
+            }
+          }
+        } else {
+          currentStatusRef.current = 'disconnected';
+
+          // Transition: connected/initializing → disconnected — fire warning.
+          if (previousStatus !== 'disconnected') {
+            // Start each disconnect episode with a clean recovery kind so a
+            // value set by a prior, never-consumed event can't mislabel this
+            // episode's recovery toast.
+            recoveryKindRef.current = null;
+            addToastRef.current({
+              severity: 'warning',
+              message: 'Backend is unavailable',
+              id: HEALTH_DISCONNECTED_TOAST_ID,
+            });
+          }
         }
       }
 
@@ -294,6 +338,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
         currentStatusRef.current = 'disconnected';
         recoveryKindRef.current = null; // clean episode; resumed/restarted sets it next
+        lastDegradedAtRef.current = 0;  // real death → drop stale liveness proof so it can't mask this outage
 
         addToastRef.current({
           severity: 'warning',
@@ -327,6 +372,10 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         // that already disabled inputs must stay disabled until a genuine recovery.
         if (currentStatusRef.current === 'disconnected') return;
 
+        // Record the liveness proof: the Rust watchdog verified the process alive
+        // (heartbeat fresh). handleFailure reads this so the JS poll won't
+        // independently flip to 'disconnected' within DEGRADED_LIVENESS_WINDOW_MS.
+        lastDegradedAtRef.current = Date.now();
         currentStatusRef.current = 'degraded';
         recoveryKindRef.current = null;
 
@@ -393,6 +442,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
         currentStatusRef.current = 'disconnected';
         recoveryKindRef.current = null;
+        lastDegradedAtRef.current = 0;  // permanent death → drop stale liveness proof
 
         addToastRef.current({
           severity: 'warning',
