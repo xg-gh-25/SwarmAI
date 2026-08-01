@@ -227,6 +227,84 @@ class SessionRecall:
         finally:
             conn.close()
 
+    def search_session_list(
+        self,
+        query: str,
+        limit: int = 50,
+        workspace_id: str | None = None,
+    ) -> list[dict]:
+        """FTS-search message CONTENT and return a de-duplicated SESSION list.
+
+        This is the History-overlay backend (``GET /api/search/sessions``). Unlike
+        ``search()`` — which is tuned for recall injection (top-3 sessions, ±10
+        context windows) — this returns a flat list of session *display rows*
+        (id/agent_id/title/created_at/last_accessed) suitable for the History UI.
+
+        Key contract (distinct from ``search()``):
+        - **Content search:** matches a word inside a message BODY, so a session
+          whose *title* doesn't contain the term still surfaces.
+        - **De-duplicated per session:** ``GROUP BY s.id`` collapses a session's N
+          matching messages to ONE row, ordered by the session's best (MIN) BM25
+          rank. (A ``SELECT DISTINCT ... ORDER BY fts.rank`` would emit dup rows —
+          the message-level rank is not in the DISTINCT key.)
+        - **Unsent drafts excluded:** ``(m.sent IS NULL OR m.sent != 0)`` — the same
+          P3 phantom-injection guard ``search()`` applies; a queued-but-undelivered
+          message must never surface a session.
+        - **Scope:** ``workspace_id=None`` is app-wide (matches the workspace-blind
+          ``list_sessions`` the empty-query fallback view uses, so search never
+          hides a session the fallback shows); a ``workspace_id`` scopes to it.
+
+        Returns ``[]`` for a blank query (the frontend falls back to its grouped
+        session list) and on any error (fail-safe, like ``search()``).
+        """
+        _terms = [t for t in query.split() if t]
+        if not _terms:
+            return []
+        # Reuse search()'s OR-join, injection-safe term quoting: each term is a
+        # phrase-literal, so an FTS5 keyword (OR/NEAR/NOT) can never act as an
+        # operator. Single term → OR-of-one → identical to a plain phrase search.
+        safe_query = " OR ".join('"' + t.replace('"', '""') + '"' for t in _terms)
+
+        conn = self._open_conn()
+        conn.row_factory = sqlite3.Row
+        try:
+            sql = """
+                SELECT s.id, s.agent_id, s.title, s.created_at, s.last_accessed,
+                       MIN(fts.rank) AS best_rank
+                FROM messages_fts fts
+                JOIN messages m ON m.rowid = fts.rowid
+                JOIN sessions s ON s.id = m.session_id
+                WHERE messages_fts MATCH ?
+                  AND (m.sent IS NULL OR m.sent != 0)
+            """
+            params: list = [safe_query]
+            if workspace_id is not None:
+                sql += " AND s.workspace_id = ?"
+                params.append(workspace_id)
+            sql += """
+                GROUP BY s.id
+                ORDER BY best_rank
+                LIMIT ?
+            """
+            params.append(limit)
+
+            rows = conn.execute(sql, params).fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "agent_id": r["agent_id"],
+                    "title": r["title"],
+                    "created_at": r["created_at"],
+                    "last_accessed": r["last_accessed"],
+                }
+                for r in rows
+            ]
+        except Exception as exc:
+            logger.error("Session list search failed: %s", exc)
+            return []
+        finally:
+            conn.close()
+
     def _load_context_window(
         self,
         conn: sqlite3.Connection,
