@@ -272,6 +272,61 @@ async def review_todo(todo_id: str, request: ReviewTodoRequest):
     }
 
 
+class DispatchTodoRequest(BaseModel):
+    """Request body for dispatching a todo ①→② into a chat tab (run_5088b841, A2)."""
+    tab_label: str
+    session_id: str | None = None  # optional — backfilled at the tab's first send
+
+
+@router.post("/{todo_id}/dispatch")
+async def dispatch_todo(todo_id: str, request: DispatchTodoRequest):
+    """Dispatch ①→②: record the dead snapshot on the todo so the A1 sweep can
+    later auto-complete it. Writes dispatched_tab_label + dispatched_at (always
+    known at dispatch) and, if the target tab's session already exists,
+    dispatched_session_id too. A NEW tab has no session_id until first send, so
+    the frontend calls this again (or PUT) to backfill it then.
+
+    CRITICAL: status STAYS 'pending' (the locked invariant) — dispatch does NOT
+    set 'in_discussion' (that's the separate drag-to-chat bind-session concern).
+    A dispatched todo is derived into ② by (dispatched_session_id OR
+    dispatched_tab_label) non-null AND review_state NULL.
+    """
+    todo = await todo_manager.get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    patch: dict = {
+        "dispatched_tab_label": request.tab_label,
+        "dispatched_at": now,
+        "updated_at": now,
+    }
+    if request.session_id:
+        patch["dispatched_session_id"] = request.session_id
+    await db.todos.update(todo_id, patch)
+    updated = await todo_manager.get(todo_id)
+    return updated
+
+
+@router.post("/{todo_id}/retreat")
+async def retreat_todo(todo_id: str):
+    """↩ Retreat ②→①: clear the dispatch snapshot so a dispatched-but-not-yet-
+    progressed todo returns to the To Do zone (run_5088b841, A2). Handles the
+    job-only gap: a todo dispatched (injected) but never sent would otherwise
+    sit in ② forever (the sweep has no session reply to complete it)."""
+    todo = await todo_manager.get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    await db.todos.update(todo_id, {
+        "dispatched_session_id": None,
+        "dispatched_tab_label": None,
+        "dispatched_at": None,
+        "updated_at": now,
+    })
+    return await todo_manager.get(todo_id)
+
+
 # ---------------------------------------------------------------------------
 # Session ↔ ToDo binding (drag-to-chat)
 # ---------------------------------------------------------------------------

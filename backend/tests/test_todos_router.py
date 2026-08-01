@@ -407,3 +407,44 @@ class TestFlowClosureEndpoints:
         todo = _create_todo(client, workspace_id, title="bad action")
         resp = client.post(f"/api/todos/{todo['id']}/review", json={"action": "nope"})
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# ToDo Flow-Closure — Dispatch + Retreat (run_5088b841, A2)
+# ---------------------------------------------------------------------------
+
+class TestDispatchRetreat:
+    """POST /{id}/dispatch writes dispatched_* + keeps status pending; /retreat clears it."""
+
+    def test_dispatch_writes_snapshot_keeps_pending(self, client: TestClient, workspace_id: str):
+        """AC3/AC4: dispatch writes tab_label+dispatched_at, status STAYS pending."""
+        todo = _create_todo(client, workspace_id, title="to dispatch")
+        resp = client.post(f"/api/todos/{todo['id']}/dispatch", json={"tab_label": "Tab 2"})
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["dispatched_tab_label"] == "Tab 2"
+        assert d["dispatched_at"] is not None
+        assert d["status"] == "pending"  # locked invariant — NOT in_discussion
+        assert d["dispatched_session_id"] is None  # not given → backfilled later
+
+    def test_dispatch_with_session_id(self, client: TestClient, workspace_id: str):
+        todo = _create_todo(client, workspace_id, title="dispatch w/ sid")
+        resp = client.post(f"/api/todos/{todo['id']}/dispatch", json={"tab_label": "Tab 1", "session_id": "sess-abc"})
+        assert resp.status_code == 200
+        assert resp.json()["dispatched_session_id"] == "sess-abc"
+
+    def test_retreat_clears_snapshot(self, client: TestClient, workspace_id: str):
+        """AC5: retreat clears dispatched_* → back to ① To Do zone."""
+        todo = _create_todo(client, workspace_id, title="to retreat")
+        client.post(f"/api/todos/{todo['id']}/dispatch", json={"tab_label": "Tab 3", "session_id": "s1"})
+        resp = client.post(f"/api/todos/{todo['id']}/retreat")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["dispatched_session_id"] is None
+        assert d["dispatched_tab_label"] is None
+        assert d["dispatched_at"] is None
+        assert d["status"] == "pending"
+
+    def test_dispatch_404(self, client: TestClient):
+        resp = client.post("/api/todos/nonexistent/dispatch", json={"tab_label": "Tab 1"})
+        assert resp.status_code == 404

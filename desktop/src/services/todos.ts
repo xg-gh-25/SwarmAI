@@ -24,9 +24,28 @@ export function toCamelCase(data: Record<string, unknown>): ToDo {
     dueDate: (data.due_date as string) ?? null,
     linkedContext: (data.linked_context as string) ?? null,
     taskId: (data.task_id as string) ?? null,
+    // Flow-closure fields (A2) — thread all 7 or the overlay's zone derivation
+    // silently sees undefined (the A1 _dict_to_response lesson, frontend side).
+    reviewState: (data.review_state as ToDo['reviewState']) ?? null,
+    reviewKind: (data.review_kind as ToDo['reviewKind']) ?? null,
+    dispatchedSessionId: (data.dispatched_session_id as string) ?? null,
+    dispatchedTabLabel: (data.dispatched_tab_label as string) ?? null,
+    dispatchedAt: (data.dispatched_at as string) ?? null,
+    completedAt: (data.completed_at as string) ?? null,
+    reviewedAt: (data.reviewed_at as string) ?? null,
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
   };
+}
+
+/** History stats shape from GET /api/todos/history/stats (5 aggregations). */
+export interface ToDoHistoryStats {
+  throughputWeekly: { week: string; created: number; completed: number }[];
+  completionRate: number;
+  sourceDistribution: Record<string, number>;
+  confirmVsAuto: { manual: number; auto: number };
+  rejectRate: number;
+  totals: { created: number; completed: number; confirmed: number; rejected: number; reviewed: number };
 }
 
 /** Convert camelCase frontend request to snake_case for API. */
@@ -107,5 +126,54 @@ export const todosService = {
   /** Bind a ToDo to a chat session (drag-to-chat). */
   async bindToSession(sessionId: string, todoId: string): Promise<void> {
     await api.post(`/todos/bind-session/${sessionId}`, { todo_id: todoId });
+  },
+
+  // ── ToDo flow-closure (A2) ──────────────────────────────────────────
+
+  /** Dispatch ①→②: record the dead snapshot (tab_label + timestamp now;
+   *  session_id backfilled later at the tab's first send). Keeps status=pending. */
+  async dispatch(id: string, tabLabel: string, sessionId?: string): Promise<ToDo> {
+    const body: Record<string, unknown> = { tab_label: tabLabel };
+    if (sessionId) body.session_id = sessionId;
+    const response = await api.post(`/todos/${id}/dispatch`, body);
+    return toCamelCase(response.data);
+  },
+
+  /** ↩ Retreat ②→①: clear the dispatch snapshot (dispatched but never progressed). */
+  async retreat(id: string): Promise<ToDo> {
+    const response = await api.post(`/todos/${id}/retreat`);
+    return toCamelCase(response.data);
+  },
+
+  /** Review a ③ Completed todo. confirm→handled/confirmed; reject→rejected + a
+   *  NEW pending todo (returns new_todo_id). */
+  async review(id: string, action: 'confirm' | 'reject'): Promise<{ action: string; todoId: string; status: string; newTodoId?: string }> {
+    const response = await api.post(`/todos/${id}/review`, { action });
+    const d = response.data;
+    return { action: d.action, todoId: d.todo_id, status: d.status, newTodoId: d.new_todo_id };
+  },
+
+  /** History rows (DB recent + archive), most-recent-first, absolute timestamps. */
+  async history(limit?: number, windowDays?: number): Promise<{ todos: ToDo[]; count: number }> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.append('limit', String(limit));
+    if (windowDays !== undefined) params.append('window_days', String(windowDays));
+    const qs = params.toString();
+    const response = await api.get(qs ? `/todos/history?${qs}` : '/todos/history');
+    return { todos: (response.data.todos ?? []).map(toCamelCase), count: response.data.count ?? 0 };
+  },
+
+  /** The 5 History aggregations. */
+  async historyStats(): Promise<ToDoHistoryStats> {
+    const response = await api.get('/todos/history/stats');
+    const d = response.data;
+    return {
+      throughputWeekly: d.throughput_weekly ?? [],
+      completionRate: d.completion_rate ?? 0,
+      sourceDistribution: d.source_distribution ?? {},
+      confirmVsAuto: d.confirm_vs_auto ?? { manual: 0, auto: 0 },
+      rejectRate: d.reject_rate ?? 0,
+      totals: d.totals ?? { created: 0, completed: 0, confirmed: 0, rejected: 0, reviewed: 0 },
+    };
   },
 };

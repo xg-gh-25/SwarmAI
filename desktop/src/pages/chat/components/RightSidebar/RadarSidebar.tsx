@@ -30,7 +30,6 @@ import { useState, useEffect } from 'react';
 import type { RadarSidebarProps } from './types';
 import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
-import { TodoSection } from './TodoSection';
 import { ChangesSection } from './ChangesSection';
 import { AttentionSection } from './AttentionSection';
 import { JobsRunsSection } from './JobsRunsSection';
@@ -68,7 +67,8 @@ function persistWidth(width: number): void {
 // ---------------------------------------------------------------------------
 
 export function RadarSidebar({
-  workspaceId,
+  // workspaceId no longer consumed here — ToDo section moved to the ToDo overlay
+  // (A2). Kept in RadarSidebarProps for caller compatibility (harmless if passed).
   sessionId,
   onItemClick,
   onSelectTab,
@@ -110,9 +110,6 @@ export function RadarSidebar({
     };
   }, [isResizing]);
 
-  // Section counts
-  const [todoCount, setTodoCount] = useState(0);
-
   // Attention queue (3 pure-read sources) is now polled ONCE at ChatPage via
   // useRadarAttention and passed down as `attentionItems` — shared with the
   // ChatHeader Alerts pill so there is a SINGLE 30s poll (run_843962a5). The
@@ -148,14 +145,11 @@ export function RadarSidebar({
         </span>
       </div>
 
-      {/* Scrollable sections: ToDo → 🔔 需要你 → Files */}
+      {/* Scrollable sections: 🔔 需要你 → Changes → Files.
+          ToDo moved to the left-nav ToDo overlay (A2, run_5088b841) — the full
+          flow-closure workbench lives there, not in this narrow rail. */}
       <div className="flex-1 overflow-y-auto">
-        {/* ① ToDo — red (action urgency); you own the priority */}
-        <CollapsibleSection name="todo" icon="checklist" label="ToDo" count={todoCount} defaultExpanded={true} accent="rgba(239,68,68,0.35)">
-          <TodoSection workspaceId={workspaceId} onCountChange={setTodoCount} onItemClick={onItemClick} />
-        </CollapsibleSection>
-
-        {/* ② 🔔 需要你 — the attention queue (paused pipelines / failed jobs /
+        {/* ① 🔔 需要你 — the attention queue (paused pipelines / failed jobs /
             waiting tabs). Renders null when empty (section disappears). */}
         <AttentionSection
           items={attentionItems}

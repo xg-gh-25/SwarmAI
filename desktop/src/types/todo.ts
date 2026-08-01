@@ -47,6 +47,15 @@ export interface ToDo {
   dueDate: string | null;
   linkedContext: string | null;
   taskId: string | null;
+  // ToDo flow-closure fields (run_5088b841, A2) — mirror A1's 7 backend columns.
+  // review dimension is ORTHOGONAL to status (zones derived from both).
+  reviewState: 'completed' | 'confirmed' | 'rejected' | null;
+  reviewKind: 'manual' | 'auto' | null;
+  dispatchedSessionId: string | null;
+  dispatchedTabLabel: string | null;
+  dispatchedAt: string | null;
+  completedAt: string | null;
+  reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

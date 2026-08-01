@@ -51,7 +51,10 @@ import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
+import { ToDoOverlay } from '../components/layout/ToDoOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
+import { todosService } from '../services/todos';
+import type { ToDo } from '../types/todo';
 import { observeChatArea } from '../components/layout/chatAreaBounds';
 import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
@@ -94,6 +97,10 @@ export default function ChatPage() {
   const mountTimeRef = useRef(performance.now());
   /** Per-tab draft text storage — NOT serialized to open_tabs.json to avoid large text writes. */
   const inputValueMapRef = useRef<Map<string, string>>(new Map());
+  /** ToDo Dispatch (A2): append-only pending records whose target tab has no
+   *  session_id yet — backfilled at first send, dropped per-tab after backfill or
+   *  on tab close (bounds growth, Gate-2 MEDIUM #9). */
+  const dispatchPendingRef = useRef<{ tabId: string; todoId: string; tabLabel: string }[]>([]);
   /** Ref mirror of isExpanded for synchronous reads in handleTabSelect (avoids dep array churn). */
   const isExpandedRef = useRef(isExpanded);
   isExpandedRef.current = isExpanded;
@@ -952,6 +959,9 @@ export default function ChatPage() {
     clearPendingStreamTab(tabId);
     // Clean up per-tab draft text to prevent unbounded memory growth
     inputValueMapRef.current.delete(tabId);
+    // Clean up any unfilled ToDo dispatch records for this tab (Gate-2 MEDIUM #9:
+    // a closed tab's session never materializes → its record would leak forever).
+    dispatchPendingRef.current = dispatchPendingRef.current.filter((p) => p.tabId !== tabId);
 
     // Destroy MessageStore for this tab (cleanup timers, listeners, prevent leak)
     messageStoreRegistry.destroy(tabId);
@@ -1026,6 +1036,85 @@ export default function ChatPage() {
     doCloseTab(pending.tabId, pending.sessionId, stillStreaming);
   }, [closeConfirmTab, doCloseTab, pendingStreamTabs, tabMapRef]);
 
+  // ToDo Dispatch ①→② (A2, run_5088b841). APPEND-ONLY record of dispatches whose
+  // target tab has no session_id yet — backfilled at the tab's first send (the
+  // :1542 sessionId→tabMap effect). Append-only (NOT a mutable map) so two
+  // dispatches to the same tab before send can't silently overwrite each other
+  // (Gate-1 HIGH). Each entry filled exactly once (filled flag).
+
+  // Dispatch a todo into a chat tab: land via the shared resolver (newtab /
+  // reuse-current / needs-close — never focus, a todo is new work), inject its
+  // text (not auto-sent), write the dead snapshot, and (when the tab already has
+  // a session) set dispatched_session_id now; else defer to first-send backfill.
+  // Returns true if it landed (caller auto-closes the overlay), false on needs-close.
+  const handleDispatchTodo = useCallback((todo: ToDo): boolean => {
+    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
+      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
+    }));
+    // A sentinel sessionId that never matches an open tab → dispatch never takes
+    // the `focus` branch (a todo has no existing session to focus).
+    const decision = resolveResumeTarget(`__dispatch__${todo.id}`, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
+
+    if (decision.action === 'needs-close') {
+      addToast({
+        severity: 'warning',
+        message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for it to finish), then Dispatch.`,
+        autoDismiss: true,
+      });
+      return false;
+    }
+
+    let targetTabId: string;
+    if (decision.action === 'reuse-current') {
+      // Gate-2 HIGH: reuse-current CLEARS the active idle tab. If it holds a draft
+      // (typed input or attachments), clearing would silently lose the user's work.
+      // isReusableIdle only guards against in-flight streaming, NOT draft state — so
+      // guard it here: refuse + toast rather than destroy a draft. (The active tab's
+      // live draft is inputValueRef / attachmentsRef.)
+      const hasDraft = inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0;
+      if (hasDraft) {
+        addToast({
+          severity: 'warning',
+          message: 'This tab has an unsent draft — send or clear it, or open a new tab, then Dispatch.',
+          autoDismiss: true,
+        });
+        return false;
+      }
+      targetTabId = decision.tabId;
+      initTabState(targetTabId, []);
+      updateTabState(targetTabId, { sessionId: undefined });
+      setSessionId(undefined);
+      setMessages([]);
+    } else { // newtab
+      const newTab = addTab(selectedAgentId || 'default');
+      if (!newTab) {
+        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+        return false;
+      }
+      targetTabId = newTab.id;
+      initTabState(targetTabId, []);
+    }
+
+    const tabIdx = openTabsRef.current.findIndex((t) => t.id === targetTabId);
+    const tabLabel = `Tab ${tabIdx >= 0 ? tabIdx + 1 : openTabsRef.current.length}`;
+    const existingSid = tabMapRef.current.get(targetTabId)?.sessionId;
+    // Fire the injection into the (now active) target tab — not auto-sent.
+    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
+      detail: { text: todo.title, focus: true, autoSend: false },
+    }));
+    // Snapshot: tab_label + timestamp now; session_id now if the tab already has
+    // one (reuse-current of a tab that previously sent), else backfill at send.
+    void todosService.dispatch(todo.id, tabLabel, existingSid).catch(() => {/* non-fatal */});
+    if (!existingSid) {
+      // Drop any prior unsent dispatch record for this tab (superseded — newest
+      // wins), then record this one. Bounds growth + keeps newest-wins semantics.
+      dispatchPendingRef.current = dispatchPendingRef.current.filter((p) => p.tabId !== targetTabId);
+      dispatchPendingRef.current.push({ tabId: targetTabId, todoId: todo.id, tabLabel });
+    }
+    return true;
+  }, [tabMapRef, maxTabsInfo.chatMax, activeTabIdRef, addToast, initTabState, updateTabState,
+      setSessionId, setMessages, addTab, selectedAgentId]);
+
   // Resume a session from the History overlay into a chat tab (方案 B).
   // Pure decision (resolveResumeTarget) + real execution via handleTabSelect —
   // agent switch + message load happen ONLY after we hold the target tab, so a
@@ -1038,12 +1127,12 @@ export default function ChatPage() {
       status: t.status,
       isStreaming: t.isStreaming,
     }));
-    const decision = resolveResumeTarget(session.id, tabs, maxTabsInfo.chatMax);
+    const decision = resolveResumeTarget(session.id, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
 
-    if (decision.action === 'busy') {
+    if (decision.action === 'needs-close') {
       addToast({
         severity: 'warning',
-        message: `All ${maxTabsInfo.chatMax} tabs are busy — free one (or wait for it to finish), then Resume.`,
+        message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for it to finish), then Resume.`,
         autoDismiss: true,
       });
       return false;
@@ -1080,7 +1169,9 @@ export default function ChatPage() {
     }
 
     let targetTabId: string;
-    if (decision.action === 'reuse') {
+    if (decision.action === 'reuse-current') {
+      // The active idle tab, cleared + reused (the only reuse we allow — never a
+      // background idle tab with a different session; A2 Gate-1 CRITICAL fix).
       targetTabId = decision.tabId;
     } else {
       const newTab = addTab(session.agentId || selectedAgentId || 'default');
@@ -1543,6 +1634,18 @@ export default function ChatPage() {
       const tabState = tabMapRef.current.get(activeTabId);
       if (tabState && !tabState.sessionId) {
         updateTabSessionId(activeTabId, sessionId);
+      }
+      // ToDo Dispatch backfill (A2): this tab's session just materialized — fill
+      // dispatched_session_id for the NEWEST record on this tab (append-only;
+      // newest wins if the user dispatched twice before sending), then DROP all
+      // of this tab's records (backfill is done for this tab — prevents unbounded
+      // growth, Gate-2 MEDIUM #9). Older superseded records are correctly discarded.
+      const pend = dispatchPendingRef.current;
+      const mine = pend.filter((p) => p.tabId === activeTabId);
+      if (mine.length > 0) {
+        const newest = mine[mine.length - 1];
+        void todosService.dispatch(newest.todoId, newest.tabLabel, sessionId).catch(() => {/* non-fatal */});
+        dispatchPendingRef.current = pend.filter((p) => p.tabId !== activeTabId);
       }
     }
   }, [sessionId, activeTabId, updateTabSessionId, tabMapRef]);
@@ -3010,6 +3113,10 @@ export default function ChatPage() {
           onResume={handleResumeSession}
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
         />
+
+        {/* ToDo flow-closure overlay (A2) — left-nav Work card. onDispatch owns
+            tab landing + inject + snapshot; overlay auto-closes on landed. */}
+        <ToDoOverlay onDispatch={handleDispatchTodo} />
       </div>
 
       {/* Modals */}

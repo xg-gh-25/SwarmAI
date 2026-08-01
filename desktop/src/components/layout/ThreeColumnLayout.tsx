@@ -273,6 +273,7 @@ function LeftSidebar() {
         </div>
 
         <A10Group label="Work" tint={A10_GROUP.work}>
+          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
           <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
@@ -468,6 +469,14 @@ function NavSvgIcon({ name }: { name: string }) {
           <line x1="12" y1="6.5" x2="12" y2="9.5" />
           <line x1="10.3" y1="13.6" x2="6.5" y2="16.4" />
           <line x1="13.7" y1="13.6" x2="17.5" y2="16.4" />
+        </svg>
+      );
+    case 'todo':
+      // ToDo — a checklist: a card with a check mark (queued work you own).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2.5" />
+          <path d="M8 12l2.5 2.5L16 9" />
         </svg>
       );
     case 'pipeline':
