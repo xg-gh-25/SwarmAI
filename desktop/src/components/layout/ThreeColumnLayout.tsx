@@ -12,6 +12,7 @@ import FileEditorModal from '../common/FileEditorModal';
 import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import { SwarmWSOverlay } from './SwarmWSOverlay';
+import { DomainStubOverlays } from './DomainStubOverlays';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -1035,6 +1036,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       <EvalModal isOpen={activeModal === 'eval'} onClose={closeModal} />
       {/* Brain Hub demo overlay — self-contained, listens for swarm:show-brain-hub (nav-brain-hub) */}
       <BrainHubDemoOverlay />
+
+      {/* A10 domain stub overlays — Context / Pipeline / Pollinate / History open
+          labeled placeholders (real surfaces land in later per-card cycles). */}
+      <DomainStubOverlays />
     </div>
   );
 }

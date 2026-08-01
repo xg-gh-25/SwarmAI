@@ -1693,11 +1693,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
         fc.property(navItemArb, (navItem: NavItemType) => {
           mockStorage.clear();
 
-          const { unmount } = renderWithCleanup(
+          // Scope to this render's container (global screen queries can match an
+          // orphaned tree left by a heavy prior fast-check block — test-infra
+          // isolation, not a component bug).
+          const { unmount, container } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const navButton = screen.getByTestId(navItem.testId);
+          const navButton = container.querySelector<HTMLElement>(`[data-testid="${navItem.testId}"]`)!;
 
           // Click to open modal
           act(() => {
@@ -2072,11 +2075,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
         fc.property(navTestIdArb, (clickedTestId) => {
           mockStorage.clear();
 
-          const { unmount } = renderWithCleanup(
+          // Scope queries to THIS render's container (getByTestId on `screen`
+          // searches all of document.body — a heavy prior fast-check block can
+          // leave an orphaned tree that global queries then match, so we bind to
+          // the fresh container instead).
+          const { unmount, container } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
+          const q = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 
-          const clickedButton = screen.getByTestId(clickedTestId);
+          const clickedButton = q(clickedTestId);
           act(() => {
             clickedButton.click();
           });
@@ -2087,7 +2095,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // The other modal-opening card does NOT (single activeModal slot)
           for (const testId of navTestIds) {
             if (testId === clickedTestId) continue;
-            const otherButton = screen.getByTestId(testId);
+            const otherButton = q(testId);
             expect(otherButton.classList.contains('a10-card--active')).toBe(false);
           }
 
