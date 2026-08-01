@@ -723,3 +723,151 @@ class TestP10ExistingReaperPatterns:
         assert pytest_calls[0]["require_orphaned"] is True, (
             "pytest pattern should require orphaned"
         )
+
+
+# ---------------------------------------------------------------------------
+# spawn_budget aggregate-spike guard (run_6e3d0f2a)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS EXISTS (R28/GC17 — every guard path needs a test that ENTERS it):
+# `_CONCURRENT_PENALTY_FACTOR` is the COE05 "simultaneous-peak floor". Its whole
+# job is to deny the Nth concurrent spawn BEFORE N sessions all peak at once and
+# trip macOS jetsam. Before this class, that guard path had ZERO coverage — the
+# ceiling 4→6 bump (run_a7252400) raised the max in-flight spawns from ~3 to ~5,
+# widening the exact aggregate-spike window the penalty is meant to close, so the
+# guard needed a test that actually drives it.
+#
+# It ALSO documents an honest limitation surfaced while writing it (a fail-loud
+# guard, not a green rubber-stamp): with the DEFAULT spawn cost (1200MB, used when
+# no adaptive sample exists), the penalty only bites on SMALL (≈16GB) machines
+# where 1200MB is a large fraction of RAM. On 36-64GB machines 1200×(1+n·0.5) stays
+# a small fraction of total, so the penalty NEVER denies within the 0..6 range —
+# the real streaming peak (~2.5-4.5GB full tree) is ~3-5× the main-process cost the
+# budget prices in. test_large_machine_penalty_is_structurally_weak pins this fact
+# so a future cost-model change can't silently alter large-machine behavior.
+class TestSpawnBudgetAggregateSpike:
+    """spawn_budget's _CONCURRENT_PENALTY_FACTOR gates the aggregate simultaneous
+    peak — verified by entering the guard, and its limits documented honestly."""
+
+    @staticmethod
+    def _monitor_with(total_gb: float, used_pct: float):
+        """Return (monitor, mem). Caller must patch monitor.system_memory to
+        return `mem` — spawn_budget() calls invalidate_cache() then
+        system_memory() (resource_monitor.py:314-315), so setting _cached_memory
+        does NOT survive (verified run_6e3d0f2a: the injected cache is wiped and
+        real system RAM is read). Patch the method, not the cache."""
+        from core.resource_monitor import ResourceMonitor, SystemMemory
+
+        total = int(total_gb * 1024**3)
+        used = int(total * used_pct / 100.0)
+        m = ResourceMonitor()
+        # No adaptive samples → _estimated_spawn_cost_mb() returns the 1200MB
+        # default, the exact fresh-boot / no-data path the aggregate window hits.
+        m._spawn_cost_samples = []
+        mem = SystemMemory(
+            total=total,
+            available=total - used,
+            used=used,
+            percent_used=used_pct,
+        )
+        return m, mem
+
+    def test_penalty_denies_rising_alive_count_on_small_machine(self):
+        """16GB near-full: penalty must flip can_spawn False as alive_count rises.
+
+        Profile (16GB @ 78% used, 1200MB base cost):
+          projected% = (78%·16384 + 1200·(1+n·0.5)) / 16384 · 100
+          n=0→85% ok, n=1→89% ok, n=2→93% DENY  (crosses the 90% floor at n=2).
+        """
+        m, mem = self._monitor_with(16, 78.0)
+        with patch.object(m, "system_memory", return_value=mem):
+            assert m.spawn_budget(alive_count=0).can_spawn is True
+            assert m.spawn_budget(alive_count=1).can_spawn is True
+            # Aggregate spike: the 3rd concurrent peak is where penalty must bite.
+            denied = m.spawn_budget(alive_count=2)
+            assert denied.can_spawn is False, (
+                f"penalty must deny at alive_count=2 on 16GB@78% "
+                f"(projected {denied.estimated_cost_mb=}), got {denied}"
+            )
+            assert m.spawn_budget(alive_count=4).can_spawn is False
+
+    def test_penalty_is_the_load_bearing_factor_not_the_base_cost(self):
+        """Mutation-style proof this test ENTERS the penalty path (not base cost).
+
+        Neutralize _CONCURRENT_PENALTY_FACTOR → 0.0 and the SAME profile that
+        denied at n=2 must now PASS at every n (85% flat, penalty removed). If this
+        assertion ever fails, the deny above was coming from something other than
+        the penalty and the guard-path coverage is vacuous.
+        """
+        m, mem = self._monitor_with(16, 78.0)
+        with patch.object(m, "system_memory", return_value=mem), \
+             patch.object(type(m), "_CONCURRENT_PENALTY_FACTOR", 0.0):
+            for n in range(0, 5):
+                assert m.spawn_budget(alive_count=n).can_spawn is True, (
+                    f"with penalty neutralized, n={n} should pass (base-cost only)"
+                )
+
+    def test_ceiling_caps_the_offer_while_spawn_budget_gates_the_spawn(self):
+        """The ceiling (UX cap, compute_max_tabs) and spawn_budget (RAM gate) are
+        DISTINCT gates with distinct jobs — verified by their divergent outputs on
+        the SAME machine at a HEALTHY profile:
+          - compute_max_tabs CAPS the offer at exactly _MAX_TABS_CEILING (6) — it
+            never exceeds the ceiling even with abundant RAM (that's its whole job:
+            bound the UI offer);
+          - spawn_budget PERMITS the spawn (RAM is healthy) — a separate answer to
+            a separate question ("is a spawn safe right now").
+        (Runtime-verified, run_6e3d0f2a: at a NEAR-FULL profile BOTH degrade
+        together — ceiling→2, spawn→denied — so they are correlated through RAM,
+        NOT independent-at-a-point. The honest claim is 'distinct gates, distinct
+        jobs', not 'independent values'.)"""
+        m, mem = self._monitor_with(64, 65.0)  # healthy: huge raw headroom
+        with patch.object(m, "system_memory", return_value=mem):
+            offered = m.compute_max_tabs()
+            budget = m.spawn_budget(alive_count=0)
+
+        # The ceiling CAPS the offer: 64GB has room for far more than 6 by the raw
+        # RAM formula, yet compute_max_tabs never exceeds the ceiling.
+        assert offered == m._MAX_TABS_CEILING, (
+            f"compute_max_tabs must cap the offer at the ceiling "
+            f"({m._MAX_TABS_CEILING}) even with abundant RAM, got {offered}"
+        )
+        # spawn_budget answers the ORTHOGONAL question and permits here.
+        assert budget.can_spawn is True, (
+            f"spawn_budget should permit a spawn on a healthy 64GB machine, got {budget}"
+        )
+
+    def test_spawn_budget_denies_near_full_regardless_of_ceiling(self):
+        """spawn_budget is the real admission gate: on a near-full 64GB machine it
+        DENIES the spawn — the tab ceiling (a UX cap) cannot authorize a spawn the
+        RAM gate refuses (R6a / design §9.5). At this profile compute_max_tabs also
+        RAM-degrades (to 2), which is the point: the ceiling is not a spawn permit."""
+        m, mem = self._monitor_with(64, 89.5)  # >90% after any spawn cost
+        with patch.object(m, "system_memory", return_value=mem):
+            budget = m.spawn_budget(alive_count=0)
+            offered = m.compute_max_tabs()
+        assert budget.can_spawn is False, (
+            f"spawn_budget must deny on a near-full machine, got {budget}"
+        )
+        # And the UX ceiling itself RAM-degrades below 6 here — neither gate
+        # authorizes a spawn when RAM is full.
+        assert offered < m._MAX_TABS_CEILING, (
+            f"on a near-full machine compute_max_tabs should RAM-degrade below the "
+            f"ceiling ({m._MAX_TABS_CEILING}), got {offered}"
+        )
+
+    def test_large_machine_penalty_is_structurally_weak(self):
+        """HONEST LIMITATION (Risk 1, quantified): with the DEFAULT 1200MB cost,
+        the concurrent penalty does NOT deny any spawn in 0..6 on a 36GB machine at
+        realistic load — because 1200MB (main-process RSS) is a small fraction of
+        36GB and is ~3-5× below the real streaming tree peak (2.5-4.5GB) the budget
+        should price. This is a KNOWN gap, not a bug in the test: the penalty's
+        real protection lives on small machines. Pinned so a cost-model change
+        (e.g. pricing the full tree) can't silently flip large-machine behavior."""
+        m, mem = self._monitor_with(36, 65.0)
+        with patch.object(m, "system_memory", return_value=mem):
+            for n in range(0, 7):
+                assert m.spawn_budget(alive_count=n).can_spawn is True, (
+                    f"documented: default-cost penalty does not gate 36GB@65% at n={n}; "
+                    f"if this now denies, the spawn cost model changed — re-evaluate "
+                    f"the aggregate-spike protection story (Risk 1)."
+                )
