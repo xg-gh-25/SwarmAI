@@ -129,24 +129,23 @@ export const groupSessionsByTime = (sessions: ChatSession[]): GroupedSessions[] 
 };
 
 /**
- * Format timestamp for display in chat history
+ * Format a session timestamp for the History list as an absolute LOCAL time
+ * `YYYY-MM-DD HH:MM` (24-hour, no timezone conversion, no relative "Xh ago").
+ *
+ * Rationale (XG, 2026-08-02): History is a scan surface — a stable, sortable,
+ * unambiguous absolute stamp beats a drifting relative one. Uses local getters
+ * (getFullYear/getMonth/getDate/getHours/getMinutes) so it reflects the user's
+ * wall clock, matching every other absolute timestamp shown in the app.
+ * Sole caller: HistoryView.
  */
 export const formatTimestamp = (timestamp: string | undefined): string => {
   if (!timestamp) return '';
   const date = new Date(timestamp);
   if (isNaN(date.getTime())) return '';
 
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / MS_PER_DAY);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
 /**

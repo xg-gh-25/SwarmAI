@@ -213,8 +213,10 @@ describe('Chat Utilities - Property-Based Tests', () => {
    * Property 2: Timestamp Formatting
    * **Feature: chat-utilities, Property 2: Timestamp Formatting**
    *
-   * For any valid timestamp, formatTimestamp SHALL return a human-readable
-   * relative time string.
+   * For any valid timestamp, formatTimestamp SHALL return an absolute LOCAL
+   * time string `YYYY-MM-DD HH:MM` (24-hour, zero-padded, no timezone
+   * conversion, no relative "Xh ago"). Changed 2026-08-02 (XG): History is a
+   * scan surface — an absolute, sortable stamp beats a drifting relative one.
    */
   describe('Feature: chat-utilities, Property 2: Timestamp Formatting', () => {
     const fixedNow = new Date('2025-02-19T12:00:00.000Z');
@@ -227,6 +229,13 @@ describe('Chat Utilities - Property-Based Tests', () => {
     afterEach(() => {
       vi.useRealTimers();
     });
+
+    /** Reference formatter: the exact absolute-local shape the SUT must produce. */
+    const expectedLocal = (date: Date): string => {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+        `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    };
 
     it('should return empty string for undefined timestamp', () => {
       fc.assert(
@@ -251,78 +260,43 @@ describe('Chat Utilities - Property-Based Tests', () => {
       );
     });
 
-    it('should return "Just now" for timestamps less than 1 minute ago', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 0, max: 59 }), (secondsAgo) => {
-          const timestamp = new Date(fixedNow.getTime() - secondsAgo * 1000).toISOString();
-          const result = formatTimestamp(timestamp);
-          expect(result).toBe('Just now');
-        }),
-        { numRuns: 50 }
-      );
-    });
-
-    it('should return minutes ago for timestamps 1-59 minutes ago', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 1, max: 59 }), (minutesAgo) => {
-          const timestamp = new Date(fixedNow.getTime() - minutesAgo * 60000).toISOString();
-          const result = formatTimestamp(timestamp);
-          expect(result).toBe(`${minutesAgo}m ago`);
-        }),
-        { numRuns: 50 }
-      );
-    });
-
-    it('should return hours ago for timestamps 1-23 hours ago', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 1, max: 23 }), (hoursAgo) => {
-          const timestamp = new Date(fixedNow.getTime() - hoursAgo * 3600000).toISOString();
-          const result = formatTimestamp(timestamp);
-          expect(result).toBe(`${hoursAgo}h ago`);
-        }),
-        { numRuns: 50 }
-      );
-    });
-
-    it('should return days ago for timestamps 1-6 days ago', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 1, max: 6 }), (daysAgo) => {
-          const timestamp = new Date(fixedNow.getTime() - daysAgo * MS_PER_DAY).toISOString();
-          const result = formatTimestamp(timestamp);
-          expect(result).toBe(`${daysAgo}d ago`);
-        }),
-        { numRuns: 50 }
-      );
-    });
-
-    it('should return formatted date for timestamps 7+ days ago', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 7, max: 365 }), (daysAgo) => {
-          const date = new Date(fixedNow.getTime() - daysAgo * MS_PER_DAY);
-          const timestamp = date.toISOString();
-          const result = formatTimestamp(timestamp);
-
-          // Property: Result SHALL be a locale date string
-          expect(result).toBe(date.toLocaleDateString());
-        }),
-        { numRuns: 50 }
-      );
-    });
-
-    it('should handle valid ISO timestamps correctly', () => {
+    it('should match the absolute-local YYYY-MM-DD HH:MM shape (regex)', () => {
       fc.assert(
         fc.property(
           fc.date({ min: new Date('2020-01-01'), max: fixedNow }).filter((d) => !isNaN(d.getTime())),
           (date) => {
-            const timestamp = date.toISOString();
-            const result = formatTimestamp(timestamp);
-
-            // Property: Result SHALL be a non-empty string for valid dates
-            expect(result.length).toBeGreaterThan(0);
+            const result = formatTimestamp(date.toISOString());
+            // Property: strict absolute shape, never a relative token.
+            expect(result).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+            expect(result).not.toMatch(/ago|Just now/i);
           }
         ),
         { numRuns: 100 }
       );
+    });
+
+    it('should equal the local getters for any valid timestamp', () => {
+      fc.assert(
+        fc.property(
+          fc.date({ min: new Date('2020-01-01'), max: new Date('2030-12-31') })
+            .filter((d) => !isNaN(d.getTime())),
+          (date) => {
+            const result = formatTimestamp(date.toISOString());
+            expect(result).toBe(expectedLocal(date));
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('does NOT drift with the current clock (absolute, not relative)', () => {
+      const ts = new Date('2024-11-03T09:07:00.000Z').toISOString();
+      const first = formatTimestamp(ts);
+      // Advance the wall clock a year — an absolute stamp is unchanged.
+      vi.setSystemTime(new Date('2026-02-19T12:00:00.000Z'));
+      const later = formatTimestamp(ts);
+      expect(later).toBe(first);
+      expect(first).toBe(expectedLocal(new Date(ts)));
     });
   });
 });

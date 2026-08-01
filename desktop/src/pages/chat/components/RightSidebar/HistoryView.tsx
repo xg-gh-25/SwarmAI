@@ -98,7 +98,7 @@ export function HistoryView({
   const renderSessionRow = (session: ChatSession) => (
     <div
       key={session.id}
-      className={`group flex items-center gap-2 px-3 py-2 rounded-lg
+      className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg
         transition-colors cursor-pointer
         ${session.id === selectedSessionId
           ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
@@ -114,14 +114,14 @@ export function HistoryView({
         }
       }}
     >
-      <span className="material-symbols-outlined text-lg shrink-0">
+      <span className="material-symbols-outlined text-[16px] shrink-0">
         chat_bubble_outline
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] leading-5 font-medium truncate text-[var(--color-text)]">
+        <p className="text-[12.5px] leading-4 font-medium truncate text-[var(--color-text)]">
           {session.title}
         </p>
-        <p className="text-[10px] opacity-70">
+        <p className="text-[10.5px] opacity-70">
           {agentName(session.agentId)} • {formatTimestamp(session.lastAccessedAt)}
         </p>
       </div>
@@ -184,7 +184,7 @@ export function HistoryView({
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder={isControlled ? 'Search conversations…' : 'Search sessions…'}
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded
+            className="w-full pl-7 pr-2 py-1.5 text-[12.5px] rounded
               bg-[var(--color-input-bg,var(--color-bg))]
               border border-[var(--color-border)]
               text-[var(--color-text)]
@@ -201,19 +201,19 @@ export function HistoryView({
              null while the first query is still in flight → treat as empty +
              isSearching so the "Searching…" hint shows. */
           (searchResults?.length ?? 0) === 0 ? (
-            <p className="px-3 py-4 text-xs text-[var(--color-text-muted)] text-center">
+            <p className="px-3 py-4 text-[10.5px] text-[var(--color-text-muted)] text-center">
               {isSearching ? 'Searching…' : 'No matching conversations'}
             </p>
           ) : (
             <>
-              <p className="px-3 py-2 text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+              <p className="px-3 py-1.5 text-[10.5px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
                 {searchResults!.length} result{searchResults!.length === 1 ? '' : 's'}
               </p>
               {searchResults!.map(renderSessionRow)}
             </>
           )
         ) : filteredGroups.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-[var(--color-text-muted)] text-center">
+          <p className="px-3 py-4 text-[10.5px] text-[var(--color-text-muted)] text-center">
             {hasQuery ? 'No matching sessions' : t('chat.noHistory')}
           </p>
         ) : (
@@ -221,8 +221,8 @@ export function HistoryView({
             <div key={group.group}>
               {/* Time-period heading */}
               <p
-                className={`px-3 py-2 text-xs font-medium text-[var(--color-text-muted)]
-                  uppercase tracking-wider${groupIndex > 0 ? ' mt-3' : ''}`}
+                className={`px-3 py-1.5 text-[10.5px] font-medium text-[var(--color-text-muted)]
+                  uppercase tracking-wider${groupIndex > 0 ? ' mt-2.5' : ''}`}
               >
                 {t(TIME_GROUP_LABEL_KEYS[group.group])}
               </p>

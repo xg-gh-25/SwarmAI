@@ -178,15 +178,15 @@ export function HistoryOverlay({
             0 when the modal clamps narrow (list is a fixed 320px). */}
         <div className="flex-1 flex flex-col min-h-0 min-w-[280px]" data-testid="history-preview">
           {!previewSession ? (
-            <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
+            <div className="flex-1 flex items-center justify-center text-[12.5px] text-[var(--color-text-muted)]">
               Select a conversation to preview
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--color-border)]">
+              <div className="flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate text-[var(--color-text)]">{previewSession.title}</p>
-                  <p className="text-[11px] text-[var(--color-text-muted)]">Read-only preview</p>
+                  <p className="text-[13px] font-medium truncate text-[var(--color-text)]">{previewSession.title}</p>
+                  <p className="text-[10.5px] text-[var(--color-text-muted)]">Read-only preview</p>
                 </div>
                 <button
                   onClick={handleResume}
@@ -201,9 +201,9 @@ export function HistoryOverlay({
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-3">
                 {previewLoading ? (
-                  <p className="text-xs text-[var(--color-text-muted)] text-center py-6">Loading…</p>
+                  <p className="text-[10.5px] text-[var(--color-text-muted)] text-center py-6">Loading…</p>
                 ) : previewMessages.length === 0 ? (
-                  <p className="text-xs text-[var(--color-text-muted)] text-center py-6">No messages</p>
+                  <p className="text-[10.5px] text-[var(--color-text-muted)] text-center py-6">No messages</p>
                 ) : (
                   previewMessages.map((m) => <MessageBubble key={m.id} message={m} readOnly />)
                 )}
