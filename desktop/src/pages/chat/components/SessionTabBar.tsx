@@ -1,4 +1,5 @@
 import { useRef, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTab } from './SessionTab';
@@ -10,6 +11,10 @@ interface SessionTabBarProps {
   onTabClose: (tabId: string) => void;
   tabStatuses?: Record<string, TabStatus>;
   maxTitleLength?: number;
+  /** New-session "+" — rendered at the TAIL of the tab strip. Omit to hide it. */
+  onNewTab?: () => void;
+  /** Disables the tail "+" when the tab limit is reached. */
+  isNewTabDisabled?: boolean;
 }
 
 /**
@@ -26,7 +31,10 @@ export function SessionTabBar({
   onTabClose,
   tabStatuses,
   maxTitleLength = 25,
+  onNewTab,
+  isNewTabDisabled,
 }: SessionTabBarProps) {
+  const { t } = useTranslation();
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const setTabRef = useCallback((tabId: string, element: HTMLDivElement | null) => {
@@ -95,29 +103,54 @@ export function SessionTabBar({
   }, [tabs, focusTab]);
 
   return (
+    // Flex row: [role=tablist scroll container with tabs] + [tail "+" button].
+    // The "+" is a sibling of the tablist (NOT a role=tablist child — WAI-ARIA
+    // keeps tablist children tabs-only), but lives inside the SAME horizontal
+    // scroll container so it trails the last tab and scrolls with the strip.
     <div
-      role="tablist"
-      aria-label="Session tabs"
       className="session-tab-bar flex items-center gap-1 flex-1 min-w-0 overflow-x-auto"
       style={{
         scrollBehavior: 'smooth',
         scrollbarWidth: 'thin',
       }}
     >
-      {tabs.map((tab, index) => (
-        <SessionTab
-          key={tab.id}
-          tab={tab}
-          index={index}
-          isActive={tab.id === activeTabId}
-          onSelect={onTabSelect}
-          onClose={onTabClose}
-          status={tabStatuses?.[tab.id]}
-          maxTitleLength={maxTitleLength}
-          onKeyDown={(e) => handleKeyDown(e, tab.id)}
-          ref={(el) => setTabRef(tab.id, el)}
-        />
-      ))}
+      <div role="tablist" aria-label="Session tabs" className="flex items-center gap-1">
+        {tabs.map((tab, index) => (
+          <SessionTab
+            key={tab.id}
+            tab={tab}
+            index={index}
+            isActive={tab.id === activeTabId}
+            onSelect={onTabSelect}
+            onClose={onTabClose}
+            status={tabStatuses?.[tab.id]}
+            maxTitleLength={maxTitleLength}
+            onKeyDown={(e) => handleKeyDown(e, tab.id)}
+            ref={(el) => setTabRef(tab.id, el)}
+          />
+        ))}
+      </div>
+
+      {onNewTab && (
+        <button
+          type="button"
+          onClick={onNewTab}
+          disabled={isNewTabDisabled}
+          aria-label={isNewTabDisabled
+            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+            : t('chat.newSession', 'New Session')}
+          title={isNewTabDisabled
+            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+            : t('chat.newSession', 'New Session (⌘N)')}
+          className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg transition-colors ${
+            isNewTabDisabled
+              ? 'text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
+              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[18px]">add</span>
+        </button>
+      )}
 
       <style>{`
         .session-tab-bar::-webkit-scrollbar {

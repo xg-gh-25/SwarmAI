@@ -3,6 +3,11 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { SessionTabBar } from './SessionTabBar';
 import type { OpenTab } from '../types';
 
+// SessionTabBar uses useTranslation for the tail "+" button labels.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
+}));
+
 /**
  * Unit tests for SessionTabBar keyboard navigation
  * 
@@ -164,10 +169,16 @@ describe('SessionTabBar', () => {
   });
 
   describe('active tab visual distinction', () => {
-    it('active tab carries the blue bottom-border underline', () => {
+    // run_843962a5: active tab now uses the product accent var (--color-primary,
+    // which follows the user's accent preset) instead of a hardcoded blue-500,
+    // so the active tab matches the app theme (GUI12 underline-no-layout-shift
+    // still holds via border-b-2 on all tabs).
+    it('active tab carries the accent bottom-border underline', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('border-blue-500');
+      expect(tabs[1].className).toContain('border-[var(--color-primary)]');
+      // and it is genuinely distinct — inactive tabs do NOT carry the accent border
+      expect(tabs[0].className).not.toContain('border-[var(--color-primary)]');
     });
 
     it('inactive tabs carry a transparent border placeholder (no layout shift)', () => {
@@ -183,10 +194,14 @@ describe('SessionTabBar', () => {
       tabs.forEach((t) => expect(t.className).toContain('border-b-2'));
     });
 
-    it('active tab uses the card-level background', () => {
+    it('active tab has a distinct accent-tinted background (not inactive)', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('bg-[var(--color-card)]');
+      // accent-tinted fill via color-mix on the product accent var
+      expect(tabs[1].className).toContain('color-mix');
+      expect(tabs[1].className).toContain('var(--color-primary)');
+      // inactive tab has no such tinted fill
+      expect(tabs[0].className).not.toContain('color-mix');
     });
   });
 
@@ -205,6 +220,59 @@ describe('SessionTabBar', () => {
       // ArrowLeft should stay on same tab (wrap around)
       fireEvent.keyDown(tabs[0], { key: 'ArrowLeft' });
       expect(document.activeElement).toBe(tabs[0]);
+    });
+  });
+
+  describe('tail "+" new-session button (run_843962a5)', () => {
+    it('renders the "+" as the last element of the tab row, AFTER the last tab', () => {
+      const onNewTab = vi.fn();
+      const { container } = render(
+        <SessionTabBar {...defaultProps} onNewTab={onNewTab} />
+      );
+      const row = container.querySelector('.session-tab-bar') as HTMLElement;
+      const plus = screen.getByRole('button', { name: /new session/i });
+      // The "+" is the LAST child of the tab-row flex container.
+      expect(row.lastElementChild === plus || row.contains(plus)).toBe(true);
+      // And it comes AFTER the tablist (which holds the tabs).
+      const tablist = screen.getByRole('tablist');
+      expect(
+        tablist.compareDocumentPosition(plus) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it('the "+" is NOT a tab — getAllByRole("tab") count is unchanged (WAI-ARIA)', () => {
+      render(<SessionTabBar {...defaultProps} onNewTab={vi.fn()} />);
+      // 3 mock tabs → exactly 3 role=tab, the "+" (a <button>) is excluded.
+      expect(screen.getAllByRole('tab')).toHaveLength(3);
+    });
+
+    it('clicking the "+" calls onNewTab', () => {
+      const onNewTab = vi.fn();
+      render(<SessionTabBar {...defaultProps} onNewTab={onNewTab} />);
+      fireEvent.click(screen.getByRole('button', { name: /new session/i }));
+      expect(onNewTab).toHaveBeenCalledTimes(1);
+    });
+
+    it('disabled "+" does not fire onNewTab', () => {
+      const onNewTab = vi.fn();
+      render(<SessionTabBar {...defaultProps} onNewTab={onNewTab} isNewTabDisabled />);
+      const plus = screen.getByRole('button', { name: /limit|new session/i });
+      expect(plus).toBeDisabled();
+      fireEvent.click(plus);
+      expect(onNewTab).not.toHaveBeenCalled();
+    });
+
+    it('omits the "+" when onNewTab is not provided', () => {
+      render(<SessionTabBar {...defaultProps} />);
+      expect(screen.queryByRole('button', { name: /new session/i })).toBeNull();
+    });
+
+    it('arrow-key nav still cycles only tabs with the "+" present', () => {
+      render(<SessionTabBar {...defaultProps} activeTabId="tab-0" onNewTab={vi.fn()} />);
+      const tabs = screen.getAllByRole('tab');
+      tabs[0].focus();
+      fireEvent.keyDown(tabs[0], { key: 'ArrowRight' });
+      expect(document.activeElement).toBe(tabs[1]);
     });
   });
 });
