@@ -272,11 +272,17 @@ function LeftSidebar() {
           </button>
         </div>
 
+        {/* WORK zone (A4): daily-common pair (ToDo + Workspace) first and
+            `highlight`ed (resting-brighter) to lift them above the power pair
+            (Pipeline + Pollinate). Reuses the existing highlight prop — NOT a 2nd
+            green panel: cognition's green zone stays the sole differentiated
+            surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
+            workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label="Work" tint={A10_GROUP.work}>
-          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
+          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
+          <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
-          <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>

@@ -4,9 +4,10 @@
  * Behavioral contract of the A10 nav (things a snapshot can't assert cheaply):
  *   1. CHAT HERO — a hero card at the top carrying the SwarmAI brand logo.
  *   2. HISTORY ROW — a History entry directly under the Chat hero.
- *   3. THREE GROUPS in order — Work (Pipeline/Pollinate/SwarmWS),
- *      Cognitive (Context/Memory/Brain Hub), System (Capabilities/OS Eval/
- *      Settings/Community), each with a titled+colored group label.
+ *   3. THREE GROUPS in order — Cognitive (Context/Memory/Brain Hub),
+ *      Work (ToDo/Workspace/Pipeline/Pollinate — daily-common pair first, A4),
+ *      System (Capabilities/OS Eval/Settings/Community), each with a
+ *      titled+colored group label.
  *   4. DOMAIN CARDS top-to-bottom in that exact order.
  *   5. Y/R SIGNAL FLAGS — Memory=Y, Brain Hub=Y, OS Eval=R, none elsewhere.
  *
@@ -55,9 +56,10 @@ const DOMAIN_ORDER = [
   'nav-memory',
   'nav-brain-hub',
   'nav-new-brain',
+  'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
+  'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
   'nav-pipeline',
   'nav-pollinate',
-  'nav-swarmws',
   'nav-capabilities',
   'nav-eval',
   'nav-settings',

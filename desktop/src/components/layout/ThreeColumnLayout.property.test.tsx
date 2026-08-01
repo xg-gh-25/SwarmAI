@@ -1072,16 +1072,19 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // A10 domain cards in exact order: Work (Pipeline/Pollinate/SwarmWS) →
-    // Cognitive (Context/Memory/Brain Hub) → System (Capabilities/OS Eval/Settings/
-    // Community). Terminal + GitHub live in the footer, OUTSIDE the nav container.
+    // Exact DOM order of the DOMAIN cards (excludes nav-new-brain, a distinct
+    // .a10-newbrain create-affordance). Cognition (Context/Memory/Brain Hub) →
+    // Work (ToDo/Workspace/Pipeline/Pollinate — daily-common pair first, A4) →
+    // System. "Workspace" is the de-jargoned label for the SwarmWS card.
+    // Terminal + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
-      { testId: 'nav-pipeline', label: 'Pipeline' },
-      { testId: 'nav-pollinate', label: 'Pollinate' },
-      { testId: 'nav-swarmws', label: 'SwarmWS' },
       { testId: 'nav-context', label: 'Context' },
       { testId: 'nav-memory', label: 'Memory' },
       { testId: 'nav-brain-hub', label: 'Brain Hub' },
+      { testId: 'nav-todo', label: 'ToDo' },
+      { testId: 'nav-swarmws', label: 'Workspace' },
+      { testId: 'nav-pipeline', label: 'Pipeline' },
+      { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },
@@ -1109,8 +1112,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
         };
       }
 
-      // Get all nav buttons in DOM order
-      const navButtons = navContainer.querySelectorAll('button[data-testid^="nav-"]');
+      // Get all DOMAIN cards in DOM order. nav-new-brain matches the nav-* prefix
+      // but is a "+ New Brain" create-affordance (.a10-newbrain), NOT a domain
+      // card — exclude it so the order aligns with expectedNavOrder (domain cards
+      // only). (Repairs pre-existing drift: a prior session added new-brain +
+      // nav-todo without syncing this selector.)
+      const navButtons = navContainer.querySelectorAll('button[data-testid^="nav-"]:not([data-testid="nav-new-brain"])');
       const foundTestIds = Array.from(navButtons).map(btn => btn.getAttribute('data-testid'));
 
       // Check all expected items are present
@@ -2058,7 +2065,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           );
 
           const navContainer = document.querySelector('[data-testid="nav-icons"]');
-          const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]') ?? [];
+          // Exclude nav-new-brain: a .a10-newbrain create-affordance, not a
+          // domain .a10-card (matches the nav-* prefix but is a distinct control).
+          const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]:not([data-testid="nav-new-brain"])') ?? [];
           expect(navButtons.length).toBeGreaterThanOrEqual(2);
           for (const btn of Array.from(navButtons)) {
             expect(btn.classList.contains('a10-card')).toBe(true);
