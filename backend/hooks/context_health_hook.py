@@ -2706,6 +2706,15 @@ class ContextHealthHook:
         # 11. Context token budget measurement
         if context_dir.is_dir():
             findings += self._check_token_budget(context_dir)
+            # 11a. Daily size-snapshot for the C&M brain trend charts (run_d0ba3f69).
+            #      Uses the numbers _check_token_budget just populated into
+            #      self._token_measurement. UPSERT-by-date (idempotent — this
+            #      deep-check can re-run same-day across restarts). Net-new series,
+            #      no backfill (XG: count from launch date forward).
+            try:
+                self._append_brain_size_snapshot(root, context_dir)
+            except Exception as e:  # observability write — never block the hook
+                logger.debug("brain size snapshot skipped: %s: %s", type(e).__name__, e)
 
         # 11b. Self-report drift: a context file that states its own token size
         #      in prose ("~44K tokens") and has since grown misleads the agent
@@ -3112,6 +3121,34 @@ class ContextHealthHook:
             )
 
         return findings
+
+    def _append_brain_size_snapshot(self, root: Path, context_dir: Path) -> None:
+        """Append today's C&M brain size snapshot to the trend series (run_d0ba3f69).
+
+        Reuses the numbers ``_check_token_budget`` just populated into
+        ``self._token_measurement`` (prompt tokens + per-file), plus MEMORY.md's
+        on-disk byte size. UPSERT-by-date via ``brain_size_series.append_snapshot``
+        (idempotent — safe to re-run same-day across daemon restarts). Net-new
+        series, NO backfill: the chart shows "collecting since launch" until it has
+        enough points. Observability write — the caller wraps this in try/except so
+        a snapshot failure never blocks the deep-check.
+        """
+        from core.brain_size_series import append_snapshot, SERIES_RELPATH
+
+        measurement = getattr(self, "_token_measurement", None)
+        if not isinstance(measurement, dict) or not measurement.get("total_tokens"):
+            return  # budget wasn't measured this run — nothing to snapshot
+
+        memory_path = context_dir / "MEMORY.md"
+        memory_bytes = memory_path.stat().st_size if memory_path.is_file() else 0
+
+        append_snapshot(
+            root / SERIES_RELPATH,
+            date_str=date.today().isoformat(),
+            prompt_tokens=int(measurement.get("total_tokens", 0)),
+            memory_bytes=int(memory_bytes),
+            per_file=dict(measurement.get("per_file", {})),
+        )
 
     # Matches embedded token self-claims like "~47K tokens", "~44K tokens",
     # "≈ 30,000 tokens", "152K tok" — a NUMBER (with optional K/k suffix) near

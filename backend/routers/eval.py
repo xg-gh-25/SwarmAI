@@ -462,6 +462,40 @@ def _build_learning_dashboard(root) -> dict:
     }
 
 
+# ─── C&M Brain size trend (run_d0ba3f69) ─────────────────────────────────
+
+
+@router.get("/brain-trend")
+async def get_brain_trend():
+    """Daily size-snapshot series for the C&M overlay trend charts.
+
+    Returns the recorded {date, prompt_tokens, memory_bytes} points (per_file
+    omitted from the trend response — it's large and only the totals drive the
+    two line charts). NO backfill: the series starts at the feature's launch date
+    and fills in one point per day. The frontend shows "collecting since launch"
+    until there are >=2 points (never fabricates a baseline — R30).
+    """
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+    from core.brain_size_series import read_series, SERIES_RELPATH
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return {"points": [], "count": 0, "launch_date": None}
+
+    rows = read_series(Path(ws_path) / SERIES_RELPATH)
+    points = [
+        {"date": r.get("date"), "prompt_tokens": r.get("prompt_tokens", 0),
+         "memory_bytes": r.get("memory_bytes", 0)}
+        for r in rows
+    ]
+    return {
+        "points": points,
+        "count": len(points),
+        "launch_date": points[0]["date"] if points else None,
+    }
+
+
 # ─── Reports (HTML) ───────────────────────────────────────────────────────
 
 
