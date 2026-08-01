@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { readNavSource, clearNavSource } from '../layout/navSource';
+import { readChatAreaRect, subscribeChatArea, type ChatAreaRect } from '../layout/chatAreaBounds';
 
 interface ModalProps {
   isOpen: boolean;
@@ -83,6 +84,10 @@ export default function Modal({
   // header underline) so the panel reads as "spat out from THAT region".
   // null = neutral fallback (--color-primary, the theme accent).
   const [panelTint, setPanelTint] = useState<string | null>(null);
+  // Live chat-message-area rect — the fullscreen panel bounds itself to THIS
+  // (not the viewport), so it never overlaps the dynamic-width Radar. Subscribed
+  // so radar-drag / hide / window-resize re-bounds the open panel (run_a95e266a).
+  const [chatRect, setChatRect] = useState<ChatAreaRect | null>(readChatAreaRect());
 
   const isFullscreen = size === 'fullscreen';
 
@@ -98,16 +103,20 @@ export default function Modal({
     if (isOpen) {
       setIsRendering(true);
       // Capture the spit-out origin at open (fullscreen only). Convert the card's
-      // viewport centerY to a position inside the panel: the panel's top edge is
-      // at viewport y = PANEL_TOP, so panel-local y = centerY - PANEL_TOP. Offset
-      // by half the spout size (7) to center the nub; clamp into the chat area so
-      // it never overflows top/bottom. null source (non-card open) → no spout.
+      // viewport centerY into a position inside the panel: the panel's top edge is
+      // the chat-area rect's top (rect.top), so panel-local y = centerY - rect.top.
+      // Offset by half the spout size (10 for the 20px nub) to center it; clamp into
+      // the panel height so it never overflows. null source (non-card open) → no spout.
       if (isFullscreen) {
         const src = readNavSource();
+        const rect = readChatAreaRect();
+        setChatRect(rect);
+        // panel top = rect.top (viewport). Fall back to PANEL_TOP if unobserved.
+        const panelTop = rect?.top ?? PANEL_TOP;
+        const panelH = rect?.height ?? (window.innerHeight - PANEL_TOP - PANEL_GAP);
         if (src) {
-          const chatH = window.innerHeight - PANEL_TOP - PANEL_GAP;
-          const y = src.centerY - PANEL_TOP - 7;
-          setSpoutY(Math.max(12, Math.min(y, chatH - 26)));
+          const y = src.centerY - panelTop - 10;
+          setSpoutY(Math.max(12, Math.min(y, panelH - 32)));
           setPanelTint(src.tint ?? null);
         } else {
           setSpoutY(null);
@@ -174,6 +183,14 @@ export default function Modal({
     };
   }, []);
 
+  // Track the live chat-area rect while a fullscreen panel is open, so radar-drag /
+  // hide / window-resize re-bounds it. Seed on open; unsubscribe on close.
+  useEffect(() => {
+    if (!isFullscreen || !isOpen) return;
+    setChatRect(readChatAreaRect());
+    return subscribeChatArea(setChatRect);
+  }, [isFullscreen, isOpen]);
+
   if (!isRendering) return null;
 
   return (
@@ -191,7 +208,13 @@ export default function Modal({
       )}
       style={
         isFullscreen
-          ? { left: PANEL_LEFT, top: PANEL_TOP, right: 0, bottom: 0, background: 'rgba(0,0,0,0.35)' }
+          // Scrim covers ONLY the live chat-message area (not the viewport), so it
+          // never dims/covers the Radar sidebar or the leftNav (run_a95e266a).
+          // Falls back to the old viewport-anchored box if the rect isn't observed
+          // yet (e.g. first paint before ChatPage registers).
+          ? (chatRect
+              ? { left: chatRect.left, top: chatRect.top, width: chatRect.width, height: chatRect.height, background: 'rgba(0,0,0,0.35)' }
+              : { left: PANEL_LEFT, top: PANEL_TOP, right: 0, bottom: 0, background: 'rgba(0,0,0,0.35)' })
           : undefined
       }
       data-testid="modal-scrim"
@@ -226,17 +249,17 @@ export default function Modal({
         style={
           isFullscreen
             ? {
-                // LEFT gap: clear the leftNav by PANEL_GAP so the panel doesn't hug
-                // it (symmetric with the right/bottom gap) — the spout is drawn in
-                // this gap, connecting leftNav → panel.
+                // The scrim IS the chat-area rect, so the panel positions RELATIVE
+                // to it: a LEFT gap clears the leftNav edge (spout drawn here), and
+                // maxWidth = the scrim's own width minus both gaps — so the panel can
+                // NEVER exceed the chat area, whatever the window/radar size.
                 left: PANEL_GAP,
                 top: 0,
                 width: FS_WIDTH[fullscreenWidth],
                 minWidth: 320,
-                // never past the right edge of the chat area (right gap) …
-                maxWidth: `calc(100vw - ${PANEL_LEFT + PANEL_GAP * 2}px)`,
+                maxWidth: `calc(100% - ${PANEL_GAP * 2}px)`,
                 // spit-out from the source card's y (falls back to left-center)
-                transformOrigin: spoutY != null ? `left ${spoutY + 7}px` : 'left center',
+                transformOrigin: spoutY != null ? `left ${spoutY + 10}px` : 'left center',
                 // region accent — border/ring/spout/underline align to this.
                 // Fallback = --color-primary (the theme accent). NOTE: the pre-
                 // existing header used var(--color-accent) which is UNDEFINED in
@@ -247,8 +270,10 @@ export default function Modal({
                 // so full-height flex children (AutoSizer/explorer/dashboards) get a
                 // real height and don't collapse to 0. autoHeight = content-driven,
                 // clamped by max, for doc-flow panels.
+                // heights are relative to the scrim (= chat-area rect): default
+                // fills to a bottom gap; autoHeight clamps to the scrim height − gaps.
                 ...(fullscreenAutoHeight
-                  ? { maxHeight: `calc(100vh - ${PANEL_TOP + PANEL_GAP}px)` }
+                  ? { maxHeight: `calc(100% - ${PANEL_GAP * 2}px)` }
                   : { bottom: PANEL_GAP }),
               }
             : undefined

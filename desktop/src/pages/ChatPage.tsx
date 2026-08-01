@@ -51,6 +51,7 @@ import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
+import { observeChatArea } from '../components/layout/chatAreaBounds';
 import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
@@ -1066,6 +1067,11 @@ export default function ChatPage() {
 
   // Scroll to bottom on new messages — conditional on user scroll position (Fix 2)
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  // The chat MESSAGE-area column (flex-1, between leftNav and Radar). Published to
+  // chatAreaBounds so the fullscreen card-detail Modal bounds itself to this rect
+  // instead of the viewport — the Radar has a dynamic width (run_a95e266a).
+  const chatAreaRef = useRef<HTMLDivElement>(null);
+  useEffect(() => observeChatArea(chatAreaRef.current), []);
   const prevScrollHeightRef = useRef(0);
   /** Pending scroll restore from tab switch — consumed by useLayoutEffect. */
   const pendingScrollRestoreRef = useRef<{ tabId: string; scrollPosition?: number } | null>(null);
@@ -2794,7 +2800,7 @@ export default function ChatPage() {
         />
 
         {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div ref={chatAreaRef} className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">

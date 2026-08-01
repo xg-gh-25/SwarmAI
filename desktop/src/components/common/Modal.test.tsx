@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup } from '@testing-library/react';
 import Modal from './Modal';
 import { setNavSource, clearNavSource } from '../layout/navSource';
+import { observeChatArea } from '../layout/chatAreaBounds';
 
 // Run rAF callbacks synchronously (double-rAF enter would otherwise never fire
 // under fake timers). Each call resolves on the next microtask-ish tick.
@@ -171,10 +172,10 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     // the card is the scrim's child div carrying the width style
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
     expect(card.style.width).toBe('380px'); // FS_WIDTH.s
-    // maxWidth stops short by leftNav 150 + a LEFT gap (20) + a RIGHT gap (20) =
-    // 190px — the panel now clears the leftNav by a gap on the left too (spout gap),
-    // symmetric with the right/bottom breathing gap (run_5634980e).
-    expect(card.style.maxWidth).toBe('calc(100vw - 190px)');
+    // maxWidth is now RELATIVE to the scrim (= the chat-area rect): scrim width
+    // minus both gaps. The panel can never exceed the chat area whatever the
+    // window/radar size — the scrim, not the viewport, is the bound (run_a95e266a).
+    expect(card.style.maxWidth).toBe('calc(100% - 40px)');
   });
 
   it('DEFAULT fullscreen = definite full height (bottom anchored) so flex children do not collapse', () => {
@@ -193,7 +194,38 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     );
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
     expect(card.style.bottom).toBe('');
-    expect(card.style.maxHeight).toBe('calc(100vh - 100px)'); // top 80 + 20 gap
+    // maxHeight relative to the scrim (= chat-area rect): scrim height minus both gaps.
+    expect(card.style.maxHeight).toBe('calc(100% - 40px)');
+  });
+
+  it('bounds the scrim to the observed chat-area rect (NOT the viewport) — never overflows the radar', () => {
+    // jsdom has no ResizeObserver — stub it (observeChatArea publishes the initial
+    // rect synchronously, so the RO callback need not fire for this assertion).
+    const origRO = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {} unobserve() {} disconnect() {}
+    };
+    // Drive chatAreaBounds with a known rect (the message column between leftNav
+    // and the dynamic-width radar). observeChatArea publishes synchronously.
+    const stub = document.createElement('div');
+    stub.getBoundingClientRect = () =>
+      ({ left: 150, top: 80, width: 900, height: 700, right: 1050, bottom: 780, x: 150, y: 80, toJSON: () => {} } as DOMRect);
+    const stop = observeChatArea(stub);
+    try {
+      const { container } = render(
+        <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+      );
+      const scrim = container.querySelector('[data-testid="modal-scrim"]') as HTMLElement;
+      // scrim uses the RECT's width/height, not viewport right:0/bottom:0
+      expect(scrim.style.left).toBe('150px');
+      expect(scrim.style.top).toBe('80px');
+      expect(scrim.style.width).toBe('900px');
+      expect(scrim.style.height).toBe('700px');
+      expect(scrim.style.right).toBe(''); // not viewport-anchored anymore
+    } finally {
+      stop();
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = origRO;
+    }
   });
 
   it('grows from the left (spat-out origin) — falls back to left center when no source card', () => {
@@ -215,10 +247,11 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     );
     const spout = container.querySelector('[data-testid="modal-spout"]') as HTMLElement;
     expect(spout).not.toBeNull();
-    // panel-local y = centerY(400) - PANEL_TOP(80) - 7 = 313 → spout top:313px
-    expect(spout.style.top).toBe('313px');
+    // panel-local y = centerY(400) - panelTop(80, fallback) - 10 = 310 → spout top:310px
+    // (20px nub → offset 10; no chatRect observed in the test → falls back to PANEL_TOP)
+    expect(spout.style.top).toBe('310px');
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
-    // origin follows the source: left {spoutY + 7}px = 320px
+    // origin follows the source: left {spoutY + 10}px = 320px
     expect(card.style.transformOrigin).toBe('left 320px');
   });
 
