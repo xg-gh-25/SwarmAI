@@ -207,9 +207,13 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     };
     // Drive chatAreaBounds with a known rect (the message column between leftNav
     // and the dynamic-width radar). observeChatArea publishes synchronously.
+    // Fixture fits within the viewport (bottom 680 < innerHeight) so the
+    // viewport-clamp in measure() is a no-op here — this test isolates the
+    // "scrim = rect, not viewport" contract. The below-fold clamp itself is
+    // covered by chatAreaBounds.test.ts.
     const stub = document.createElement('div');
     stub.getBoundingClientRect = () =>
-      ({ left: 150, top: 80, width: 900, height: 700, right: 1050, bottom: 780, x: 150, y: 80, toJSON: () => {} } as DOMRect);
+      ({ left: 150, top: 80, width: 900, height: 600, right: 1050, bottom: 680, x: 150, y: 80, toJSON: () => {} } as DOMRect);
     const stop = observeChatArea(stub);
     try {
       const { container } = render(
@@ -220,7 +224,7 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
       expect(scrim.style.left).toBe('150px');
       expect(scrim.style.top).toBe('80px');
       expect(scrim.style.width).toBe('900px');
-      expect(scrim.style.height).toBe('700px');
+      expect(scrim.style.height).toBe('600px');
       expect(scrim.style.right).toBe(''); // not viewport-anchored anymore
     } finally {
       stop();

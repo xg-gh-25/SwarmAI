@@ -154,7 +154,7 @@ export function HistoryOverlay({
   };
 
   return (
-    <Modal isOpen={open} onClose={close} title="History" size="fullscreen" mode="HISTORY" fullscreenWidth="l">
+    <Modal isOpen={open} onClose={close} title="History" size="fullscreen" mode="HISTORY" fullscreenWidth="xl">
       <div className="flex-1 min-h-0 flex" data-testid="history-overlay">
         {/* LEFT — session list */}
         <div className="w-80 shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">

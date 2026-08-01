@@ -37,7 +37,15 @@ function publish(r: ChatAreaRect | null): void {
 
 function measure(el: HTMLElement): ChatAreaRect {
   const b = el.getBoundingClientRect();
-  return { left: b.left, top: b.top, width: b.width, height: b.height };
+  // Clamp the rect's BOTTOM to the viewport. The observed chat-area element can
+  // report a bottom below the fold (its flex/overflow chain lets it extend past
+  // window.innerHeight); a fullscreen Modal binds its scrim to this rect and
+  // anchors the panel bottom to rect.height, so an un-clamped height pushes the
+  // panel below the visible window. The VISIBLE chat area ends at the viewport
+  // bottom — so the published height must too. (Width unaffected — the radar
+  // already bounds it horizontally.)
+  const height = Math.max(0, Math.min(b.height, window.innerHeight - b.top));
+  return { left: b.left, top: b.top, width: b.width, height };
 }
 
 /** ChatPage registers its message-area container here. Returns a cleanup fn.
