@@ -108,10 +108,6 @@ export type ItemClickHandler = (message: string, context?: string) => void;
 
 /** Props for the top-level RadarSidebar shell component. */
 export interface RadarSidebarProps {
-  groupedSessions: GroupedSessions[];
-  agents: Agent[];
-  onSelectSession: (session: ChatSession) => void;
-  onDeleteSession: (session: ChatSession) => void;
   workspaceId: string | null;
   /** Current active session ID — used for Referenced Files tracking */
   sessionId?: string;
@@ -159,6 +155,25 @@ export interface HistoryViewProps {
   onSelectSession: (session: ChatSession) => void;
   onDeleteSession: (session: ChatSession) => void;
   onBack: () => void;
+  /**
+   * Controlled search text. When BOTH `searchText` and `onSearchTextChange`
+   * are provided, the search input is controlled by the parent (so the parent
+   * can debounce + drive a backend FTS query). When omitted, HistoryView keeps
+   * its own internal search state (legacy title-only client filter).
+   */
+  searchText?: string;
+  onSearchTextChange?: (value: string) => void;
+  /**
+   * Injected search results (content FTS). When non-null, these sessions are
+   * rendered as a flat "search results" list INSTEAD of the internally-filtered
+   * groupedSessions. `null`/undefined → show the time-grouped fallback. An empty
+   * array → render the "no matching sessions" empty state.
+   */
+  searchResults?: ChatSession[] | null;
+  /** True while a backend search request is in flight (shows a hint). */
+  isSearching?: boolean;
+  /** Suppress the internal back-arrow header (the host Modal provides its own). */
+  hideHeader?: boolean;
 }
 
 // ---------------------------------------------------------------------------

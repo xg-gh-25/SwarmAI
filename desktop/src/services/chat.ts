@@ -131,7 +131,9 @@ const toSnakeCaseContent = (content: unknown[]): unknown[] => {
 };
 
 // Transform session data from snake_case (backend) to camelCase (frontend)
-const toSessionCamelCase = (data: Record<string, unknown>): ChatSession => {
+// Exported so search.ts (GET /api/search/sessions) reuses the SAME mapping —
+// both endpoints return the ChatSessionResponse shape; do not re-derive it.
+export const toSessionCamelCase = (data: Record<string, unknown>): ChatSession => {
   return {
     id: data.id as string,
     agentId: data.agent_id as string,

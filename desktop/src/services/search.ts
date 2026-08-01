@@ -3,6 +3,8 @@
  */
 import api from './api';
 import type { ThreadSummary } from '../types/chat-thread';
+import type { ChatSession } from '../types';
+import { toSessionCamelCase } from './chat';
 
 export interface SearchResultItem {
   id: string;
@@ -86,5 +88,19 @@ export const searchService = {
 
     const response = await api.get(`/search/threads?${params.toString()}`);
     return response.data.map(threadSummaryToCamelCase);
+  },
+
+  /**
+   * Full-text search over chat MESSAGE CONTENT → matching sessions.
+   * Powers the History overlay search box. Reuses the session converter
+   * (toSessionCamelCase) — the endpoint returns the ChatSessionResponse shape,
+   * NOT the thread-summary shape.
+   */
+  async searchSessions(query: string): Promise<ChatSession[]> {
+    const params = new URLSearchParams();
+    params.append('query', query);
+
+    const response = await api.get(`/search/sessions?${params.toString()}`);
+    return (response.data as Record<string, unknown>[]).map(toSessionCamelCase);
   },
 };

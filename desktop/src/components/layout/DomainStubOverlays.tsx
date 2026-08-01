@@ -39,12 +39,10 @@ const STUBS: StubDef[] = [
     title: 'Pollinate',
     blurb: 'Media-delivery packages — poster / video / narrative / shorts. Full view coming in a later cycle.',
   },
-  {
-    key: 'history',
-    event: 'swarm:show-history',
-    title: 'History',
-    blurb: 'Past conversations beyond the open tabs (90d, FTS5-searchable). Full view coming in a later cycle.',
-  },
+  // NOTE: `history` is NOT a stub — it has a real surface. The left-nav History
+  // row's `swarm:show-history` event is handled by HistoryOverlay (rendered in
+  // ChatPage), which hosts the searchable HistoryView. It must NOT also be a stub
+  // here, or both would open on the same event (double fullscreen overlay).
 ];
 
 function StubOverlay({ def }: { def: StubDef }): ReactNode {

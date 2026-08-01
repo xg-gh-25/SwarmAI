@@ -26,7 +26,7 @@
  * @exports RadarSidebar
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import type { RadarSidebarProps } from './types';
 import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
@@ -35,7 +35,6 @@ import { ChangesSection } from './ChangesSection';
 import { AttentionSection } from './AttentionSection';
 import { JobsRunsSection } from './JobsRunsSection';
 import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
-import { HistoryPopover } from './HistoryPopover';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -69,10 +68,6 @@ function persistWidth(width: number): void {
 // ---------------------------------------------------------------------------
 
 export function RadarSidebar({
-  groupedSessions,
-  agents,
-  onSelectSession,
-  onDeleteSession,
   workspaceId,
   sessionId,
   onItemClick,
@@ -115,9 +110,6 @@ export function RadarSidebar({
     };
   }, [isResizing]);
 
-  // History popover
-  const [historyOpen, setHistoryOpen] = useState(false);
-
   // Section counts
   const [todoCount, setTodoCount] = useState(0);
 
@@ -129,15 +121,6 @@ export function RadarSidebar({
 
   // Referenced Files tracking
   const { files: referencedFiles, totalCount: referencedCount } = useReferencedFiles(sessionId);
-
-  // History popover session select → switch tab
-  const handleHistorySelect = useCallback(
-    (session: Parameters<typeof onSelectSession>[0]) => {
-      setHistoryOpen(false);
-      onSelectSession(session);
-    },
-    [onSelectSession],
-  );
 
   if (hiddenByEditorPanel) return null;
 
@@ -155,7 +138,7 @@ export function RadarSidebar({
         aria-label="Resize sidebar"
       />
 
-      {/* Header */}
+      {/* Header. History search moved to the left-nav History row (HistoryOverlay). */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="flex items-center gap-1.5 flex-1">
           <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">radar</span>
@@ -163,29 +146,6 @@ export function RadarSidebar({
             SwarmRadar
           </span>
         </span>
-        {/* History search button — uses onMouseDown to avoid race with popover's click-outside */}
-        <div className="relative">
-          <button
-            onMouseDown={(e) => {
-              e.stopPropagation(); // prevent popover's click-outside from firing first
-              setHistoryOpen((prev) => !prev);
-            }}
-            className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors"
-            aria-label="Search chat history"
-            title="Search history"
-          >
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">search</span>
-          </button>
-          {historyOpen && (
-            <HistoryPopover
-              groupedSessions={groupedSessions}
-              agents={agents}
-              onSelectSession={handleHistorySelect}
-              onDeleteSession={onDeleteSession}
-              onClose={() => setHistoryOpen(false)}
-            />
-          )}
-        </div>
       </div>
 
       {/* Scrollable sections: ToDo → 🔔 需要你 → Files */}

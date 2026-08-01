@@ -50,6 +50,7 @@ import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
+import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
@@ -2914,10 +2915,6 @@ export default function ChatPage() {
 
         {/* Right Sidebar — persistent Radar panel */}
         <RadarSidebar
-          groupedSessions={groupedSessions}
-          agents={agents}
-          onSelectSession={handleSelectSession}
-          onDeleteSession={(session) => setDeleteConfirmSession(session)}
           workspaceId={DEFAULT_WORKSPACE_ID}
           sessionId={sessionId}
           onItemClick={handleItemClick}
@@ -2925,6 +2922,16 @@ export default function ChatPage() {
           onSelectTab={selectTab}
           openTabs={openTabs}
           attentionItems={attentionItems}
+        />
+
+        {/* History — full-screen overlay opened from the left-nav History row
+            (swarm:show-history). Props-direct (Wiring B): reuses the same
+            session data RadarSidebar gets; content-FTS search inside. */}
+        <HistoryOverlay
+          groupedSessions={groupedSessions}
+          agents={agents}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={(session) => setDeleteConfirmSession(session)}
         />
       </div>
 

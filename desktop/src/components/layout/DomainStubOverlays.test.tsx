@@ -1,9 +1,13 @@
 /**
  * Tests for DomainStubOverlays — the placeholder fullscreen overlays for A10
- * domains that don't yet have a full surface (Context / Pipeline / Pollinate /
- * History). Each opens on its `swarm:show-<domain>` window event (same contract
- * as BrainHubDemoOverlay) and renders a labeled skeleton. Cycle-3 scope: every
+ * domains that don't yet have a full surface (Context / Pipeline / Pollinate).
+ * Each opens on its `swarm:show-<domain>` window event (same contract as
+ * BrainHubDemoOverlay) and renders a labeled skeleton. Cycle-3 scope: every
  * domain card opens SOMETHING; content精修 is a later cycle.
+ *
+ * NOTE: `history` is NOT a stub — it has a real surface (HistoryOverlay in
+ * ChatPage handles swarm:show-history). It was removed from STUBS so both don't
+ * open on the same event.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
@@ -16,7 +20,6 @@ const CASES: Array<[string, string, string]> = [
   ['swarm:show-context', 'stub-overlay-context', 'Context'],
   ['swarm:show-pipeline', 'stub-overlay-pipeline', 'Pipeline'],
   ['swarm:show-pollinate', 'stub-overlay-pollinate', 'Pollinate'],
-  ['swarm:show-history', 'stub-overlay-history', 'History'],
 ];
 
 describe('DomainStubOverlays', () => {
@@ -46,6 +49,5 @@ describe('DomainStubOverlays', () => {
     expect(screen.getByTestId('stub-overlay-pipeline')).toBeInTheDocument();
     expect(screen.queryByTestId('stub-overlay-context')).toBeNull();
     expect(screen.queryByTestId('stub-overlay-pollinate')).toBeNull();
-    expect(screen.queryByTestId('stub-overlay-history')).toBeNull();
   });
 });
