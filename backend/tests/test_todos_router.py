@@ -341,3 +341,69 @@ class TestResponseFormat:
         assert "workspaceId" not in data
         assert "sourceType" not in data
         assert "createdAt" not in data
+
+
+# ---------------------------------------------------------------------------
+# ToDo Flow-Closure — History, Stats, Review (run_d28de5fd)
+# ---------------------------------------------------------------------------
+
+class TestFlowClosureEndpoints:
+    """/history, /history/stats, /{id}/review + new response fields (AC1/AC5/AC6)."""
+
+    def test_response_exposes_flow_fields(self, client: TestClient, workspace_id: str):
+        """AC1: the 7 new columns reach the API response via _dict_to_response."""
+        todo = _create_todo(client, workspace_id, title="flow fields")
+        # new fields present (None by default), proving _dict_to_response threads them
+        for f in ("review_state", "review_kind", "dispatched_session_id",
+                  "dispatched_tab_label", "dispatched_at", "completed_at", "reviewed_at"):
+            assert f in todo, f"{f} missing from ToDoResponse"
+        assert todo["review_state"] is None
+
+    def test_history_stats_shape(self, client: TestClient, workspace_id: str):
+        """AC6: /history/stats returns the 5 aggregations."""
+        _create_todo(client, workspace_id, title="h1")
+        resp = client.get("/api/todos/history/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        for k in ("throughput_weekly", "completion_rate", "source_distribution",
+                  "confirm_vs_auto", "reject_rate", "totals"):
+            assert k in data
+
+    def test_history_returns_todos(self, client: TestClient, workspace_id: str):
+        """AC5: /history returns a todos list (not soft-filtered)."""
+        _create_todo(client, workspace_id, title="hist item")
+        resp = client.get("/api/todos/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "todos" in data and "count" in data
+        assert any(t["title"] == "hist item" for t in data["todos"])
+
+    def test_review_confirm_sets_handled(self, client: TestClient, workspace_id: str):
+        """AC5: confirm → status=handled + review_state=confirmed (locked invariant)."""
+        todo = _create_todo(client, workspace_id, title="to confirm")
+        resp = client.post(f"/api/todos/{todo['id']}/review", json={"action": "confirm"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "handled"
+        after = client.get(f"/api/todos/{todo['id']}").json()
+        assert after["status"] == "handled"
+        assert after["review_state"] == "confirmed"
+        assert after["review_kind"] == "manual"
+
+    def test_review_reject_creates_new_todo(self, client: TestClient, workspace_id: str):
+        """AC5: reject → original closed rejected + a NEW pending todo is created."""
+        todo = _create_todo(client, workspace_id, title="to reject")
+        resp = client.post(f"/api/todos/{todo['id']}/review", json={"action": "reject"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "cancelled"
+        assert body["new_todo_id"] and body["new_todo_id"] != todo["id"]
+        orig = client.get(f"/api/todos/{todo['id']}").json()
+        assert orig["review_state"] == "rejected"
+        new = client.get(f"/api/todos/{body['new_todo_id']}").json()
+        assert new["status"] == "pending"
+        assert new["title"] == "to reject"
+
+    def test_review_invalid_action(self, client: TestClient, workspace_id: str):
+        todo = _create_todo(client, workspace_id, title="bad action")
+        resp = client.post(f"/api/todos/{todo['id']}/review", json={"action": "nope"})
+        assert resp.status_code == 400

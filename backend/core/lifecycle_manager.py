@@ -1215,15 +1215,99 @@ class LifecycleManager:
             except Exception as exc:
                 logger.debug("todo_sweep: evolution expire error: %s", exc)
 
-            total = overdue_count + handled_count + expired_count
+            # 4. ToDo flow-closure: auto-complete + 7-day auto-confirm (run_d28de5fd).
+            # XG decision: this is a background JOB (this ~30-min sweep), NOT a hook —
+            # hooks cost per-turn session resources; ToDo does not need to be real-time.
+            # DECOUPLING: NONE of this touches the SSE/streaming path (one-way invariant).
+            auto_completed = 0
+            auto_confirmed = 0
+            try:
+                auto_completed = await self._sweep_auto_complete_todos()
+                auto_confirmed = await self._sweep_auto_confirm_todos()
+            except Exception as exc:
+                logger.debug("todo_sweep: flow-closure error: %s", exc)
+
+            total = (overdue_count + handled_count + expired_count
+                     + auto_completed + auto_confirmed)
             if total > 0:
                 logger.info(
                     "lifecycle_manager.todo_sweep: %d transitions "
-                    "(overdue=%d, pipeline_handled=%d, expired=%d)",
+                    "(overdue=%d, pipeline_handled=%d, expired=%d, "
+                    "auto_completed=%d, auto_confirmed=%d)",
                     total, overdue_count, handled_count, expired_count,
+                    auto_completed, auto_confirmed,
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.todo_sweep failed: %s", exc)
+
+    async def _sweep_auto_complete_todos(self) -> int:
+        """Auto-complete dispatched todos whose session got an AI reply after dispatch.
+
+        Candidate = dispatched_session_id set AND review_state IS NULL (i.e. ②
+        In Progress). Done-check = an assistant message in that session created after
+        dispatched_at (index-hit LIMIT-1 on idx_messages_session_created — cheap).
+        On completion: set review_state='completed' + completed_at ONLY. status STAYS
+        'pending' per the LOCKED status invariant (status→handled happens at Confirm).
+
+        Gate-1 B (accepted): an UNRELATED later assistant reply in the same session
+        also trips this. The human Confirm/Reject is the backstop — a false 'completed'
+        is only an early review prompt, never an auto-action. We do NOT turn-scope
+        (no reliable dispatch-turn id).
+
+        Batch: one candidate query + one LIMIT-1 check per candidate + batch UPDATE.
+        No network/file call (STEERING #2 — keeps the maintenance loop fast).
+        """
+        from database import db
+        from datetime import datetime, timezone
+
+        rows = await db.todos.list()  # small set; we re-filter for dispatched+unreviewed
+        candidates = [
+            r for r in rows
+            if r.get("dispatched_session_id")
+            and r.get("review_state") is None
+            and r.get("dispatched_at")
+        ]
+        if not candidates:
+            return 0
+
+        completed_ids: list[str] = []
+        for todo in candidates:
+            sid = todo["dispatched_session_id"]
+            dispatched_at = todo["dispatched_at"]
+            replied = await db.messages.assistant_replied_since(sid, dispatched_at)
+            if replied:
+                completed_ids.append(todo["id"])
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        for tid in completed_ids:
+            # review_state + completed_at ONLY — status stays pending (locked invariant)
+            await db.todos.update(tid, {"review_state": "completed", "completed_at": now})
+        return len(completed_ids)
+
+    async def _sweep_auto_confirm_todos(self) -> int:
+        """7-day auto-confirm: a completed-awaiting-review todo not reviewed within
+        7 days → review_state='confirmed', review_kind='auto', reviewed_at=now.
+        This resolves the review BEFORE the 14-day purge, so every archived row
+        carries a final review_state (no 'never reviewed' gaps). Batch UPDATE."""
+        from database import db
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        rows = await db.todos.list()
+        stale = [
+            r for r in rows
+            if r.get("review_state") == "completed"
+            and (r.get("completed_at") or "") < cutoff
+            and r.get("completed_at")
+        ]
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        for todo in stale:
+            await db.todos.update(
+                todo["id"],
+                {"review_state": "confirmed", "review_kind": "auto", "reviewed_at": now_iso},
+            )
+        return len(stale)
 
     # ── Cultivation event consumer (PE-1) ────────────────────────────
 

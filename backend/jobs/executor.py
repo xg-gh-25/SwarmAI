@@ -2146,10 +2146,18 @@ def _purge_terminal_todos(
             conn.execute("PRAGMA journal_mode=WAL")
             conn.row_factory = sqlite3.Row
 
-            # Fetch rows to archive before deleting
+            # Fetch rows to archive before deleting.
+            # Review-window protection (run_d28de5fd, Gate-1 E): NEVER hard-delete a
+            # todo still awaiting human review (review_state='completed'), even if it
+            # crossed retention_days. The 7-day auto-confirm resolves review to
+            # confirmed/rejected before this purge would fire; this guard is the
+            # belt-and-suspenders for the (invariant-forbidden but defended) case of a
+            # terminal-status row that never got its review resolved. Uses COALESCE so
+            # rows predating the migration (NULL review_state) are unaffected.
             rows = conn.execute(
                 f"""SELECT * FROM todos
-                    WHERE status IN ({placeholders}) AND updated_at < ?""",
+                    WHERE status IN ({placeholders}) AND updated_at < ?
+                      AND COALESCE(review_state, '') != 'completed'""",
                 (*terminal_states, cutoff),
             ).fetchall()
 

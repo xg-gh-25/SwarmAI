@@ -547,7 +547,19 @@ class ToDoManager:
             status=data["status"],
             priority=data["priority"],
             due_date=self._parse_datetime(data.get("due_date")),
+            linked_context=data.get("linked_context"),
             task_id=data.get("task_id"),
+            # ToDo flow-closure fields (run_d28de5fd) — Gate-1 C: _dict_to_response is an
+            # EXPLICIT field map, so new columns MUST be threaded here or they silently
+            # return None in every API response. (linked_context above was a pre-existing
+            # drop of the same class, fixed in the same edit.)
+            review_state=data.get("review_state"),
+            review_kind=data.get("review_kind"),
+            dispatched_session_id=data.get("dispatched_session_id"),
+            dispatched_tab_label=data.get("dispatched_tab_label"),
+            dispatched_at=self._parse_datetime(data.get("dispatched_at")),
+            completed_at=self._parse_datetime(data.get("completed_at")),
+            reviewed_at=self._parse_datetime(data.get("reviewed_at")),
             created_at=self._parse_datetime(data["created_at"]) or datetime.now(timezone.utc),
             updated_at=self._parse_datetime(data["updated_at"]) or datetime.now(timezone.utc),
         )

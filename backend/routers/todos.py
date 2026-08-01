@@ -11,7 +11,7 @@ Requirements: 6.1-6.8
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -66,6 +66,66 @@ async def create_todo(data: ToDoCreate):
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── ToDo flow-closure History (run_d28de5fd) ────────────────────────────────
+# NOTE: these STATIC paths MUST be declared BEFORE the dynamic /{todo_id} route,
+# or FastAPI matches "history" as a todo_id. Order is load-bearing.
+
+def _load_archive_rows() -> list[dict]:
+    """Read cold rows from todo-archive.jsonl (written by purge before hard-delete).
+    Sync file I/O — callers wrap in asyncio.to_thread. Missing file → []."""
+    import json as _json
+    from jobs.paths import SWARMWS
+    archive = SWARMWS / "Knowledge" / "Archives" / "todo-archive.jsonl"
+    if not archive.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        for line in archive.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+@router.get("/history")
+async def list_todo_history(
+    limit: int = Query(500, ge=1, le=2000),
+    window_days: Optional[int] = Query(None, ge=1, le=3650),
+    include_archive: bool = Query(True),
+):
+    """History view — DB recent rows (bypassing the list() soft-filter) merged with
+    cold archive rows. Most-recent-first, absolute timestamps (Gate-1 E)."""
+    import asyncio
+    db_rows = await db.todos.list_history(limit=limit, window_days=window_days)
+    archive_rows = (
+        await asyncio.to_thread(_load_archive_rows) if include_archive else []
+    )
+    # Dedup by id (DB is authoritative over an older archived copy)
+    seen = {r["id"] for r in db_rows if r.get("id")}
+    merged = list(db_rows) + [r for r in archive_rows if r.get("id") not in seen]
+    merged.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    return {"todos": merged[:limit], "count": len(merged)}
+
+
+@router.get("/history/stats")
+async def get_todo_history_stats(include_archive: bool = Query(True)):
+    """The 5 History aggregations over DB + archive (pure todo_stats helper)."""
+    import asyncio
+    from core.todo_stats import compute_history_stats
+    db_rows = await db.todos.list_history(limit=5000)
+    archive_rows = (
+        await asyncio.to_thread(_load_archive_rows) if include_archive else []
+    )
+    seen = {r["id"] for r in db_rows if r.get("id")}
+    merged = list(db_rows) + [r for r in archive_rows if r.get("id") not in seen]
+    return compute_history_stats(merged)
 
 
 @router.get("/{todo_id}", response_model=ToDoResponse)
@@ -152,6 +212,64 @@ async def mark_todo_cancelled(todo_id: str):
     if transitioned is None:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
     return {"status": "cancelled", "todo_id": todo_id}
+
+
+class ReviewTodoRequest(BaseModel):
+    """Request body for reviewing a completed-awaiting-review todo."""
+    action: str  # "confirm" | "reject"
+
+
+@router.post("/{todo_id}/review")
+async def review_todo(todo_id: str, request: ReviewTodoRequest):
+    """Human review of a ③ Completed todo (run_d28de5fd).
+
+    - confirm → review_state='confirmed', review_kind='manual', reviewed_at=now,
+      status='handled' (the ONLY point status flips to handled — locked invariant).
+    - reject  → close the original (review_state='rejected', reviewed_at=now,
+      status='cancelled') AND create a NEW pending todo pre-filled from it, so the
+      History keeps the honest rejected record while the work re-enters ① To Do.
+    """
+    if request.action not in ("confirm", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'confirm' or 'reject'")
+
+    todo = await todo_manager.get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+    if request.action == "confirm":
+        await db.todos.update(todo_id, {
+            "review_state": "confirmed",
+            "review_kind": "manual",
+            "reviewed_at": now,
+            "status": "handled",
+            "updated_at": now,
+        })
+        return {"action": "confirm", "todo_id": todo_id, "status": "handled"}
+
+    # reject: close original + spawn a fresh pending todo
+    await db.todos.update(todo_id, {
+        "review_state": "rejected",
+        "review_kind": "manual",
+        "reviewed_at": now,
+        "status": "cancelled",
+        "updated_at": now,
+    })
+    new_todo = await todo_manager.create(ToDoCreate(
+        workspace_id=todo.workspace_id,
+        title=todo.title,
+        description=todo.description,
+        source=todo.source,
+        source_type=todo.source_type,
+        priority=todo.priority,
+    ))
+    return {
+        "action": "reject",
+        "todo_id": todo_id,
+        "status": "cancelled",
+        "new_todo_id": new_todo.id,
+    }
 
 
 # ---------------------------------------------------------------------------

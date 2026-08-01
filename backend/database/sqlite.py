@@ -578,6 +578,47 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
 
+    async def assistant_replied_since(self, session_id: str, since_iso: str) -> bool:
+        """Return True if the session has ≥1 assistant message created at/after
+        `since_iso`. Used by the todo auto-complete sweep (run_d28de5fd).
+
+        TIMEZONE SAFETY (Gate-2 CRITICAL): message `created_at` is written by put()
+        as `datetime.now().isoformat()` — NAIVE LOCAL time, no tz suffix — while
+        callers may pass an aware `since_iso` (…+00:00). A raw SQL string `>` compare
+        of mixed-offset timestamps is WRONG (a naive local string sorts differently
+        from an aware UTC one). So we do NOT compare in SQL. We fetch this session's
+        latest assistant message time and compare as tz-AWARE datetimes in Python
+        (naive is assumed local and converted), which is correct regardless of how
+        either side stored its tz. Still index-friendly: one indexed lookup of the
+        session's most-recent assistant row.
+        """
+        from datetime import datetime, timezone
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT created_at FROM {self.table_name} "
+                f"WHERE session_id = ? AND role = 'assistant' "
+                f"AND {self._PENDING_EXCLUDE_SQL} "
+                f"ORDER BY created_at DESC LIMIT 1",
+                (session_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None or not row[0]:
+            return False
+
+        def _aware(s: str) -> Optional[datetime]:
+            try:
+                dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return None
+            # naive → assume LOCAL (matches messages.put datetime.now()), make aware
+            return dt.astimezone(timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+        last_reply = _aware(row[0])
+        threshold = _aware(since_iso)
+        if last_reply is None or threshold is None:
+            return False
+        return last_reply >= threshold
+
     async def list_by_session_paginated(
         self,
         session_id: str,
@@ -1188,6 +1229,38 @@ class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
     async def count_by_workspace_and_status(self, workspace_id: str, status: str) -> int:
         """Count ToDos by workspace and status."""
         return await self.count_by_workspace_and_filter(workspace_id, status)
+
+    async def list_history(self, limit: int = 500, window_days: int | None = None) -> list[T]:
+        """List todos for the History view — a DIRECT query that BYPASSES the
+        todo_manager.list() python-side soft-filter (which hides handled/cancelled
+        older than 7 days). Gate-1 E: a confirmed todo in the 7-14d window would be
+        silently dropped by list(); History must see it. Ordered most-recent-first.
+
+        Args:
+            limit: max rows (default 500).
+            window_days: if set, only rows whose updated_at is within N days.
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if window_days is not None:
+                from datetime import datetime, timedelta, timezone
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(days=window_days)
+                ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+                sql = (
+                    f"SELECT * FROM {self.table_name} WHERE updated_at >= ? "
+                    f"ORDER BY updated_at DESC LIMIT ?"
+                )
+                params: tuple = (cutoff, limit)
+            else:
+                sql = (
+                    f"SELECT * FROM {self.table_name} "
+                    f"ORDER BY updated_at DESC LIMIT ?"
+                )
+                params = (limit,)
+            async with conn.execute(sql, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
 
 
 class SQLiteWorkspaceMcpsTable(SQLiteTable[T], Generic[T]):
@@ -1881,6 +1954,13 @@ class SQLiteDatabase(BaseDatabase):
         due_date TEXT,
         linked_context TEXT,
         task_id TEXT,
+        review_state TEXT CHECK (review_state IS NULL OR review_state IN ('completed','confirmed','rejected')),
+        review_kind TEXT CHECK (review_kind IS NULL OR review_kind IN ('manual','auto')),
+        dispatched_session_id TEXT,
+        dispatched_tab_label TEXT,
+        dispatched_at TEXT,
+        completed_at TEXT,
+        reviewed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
@@ -2652,6 +2732,14 @@ class SQLiteDatabase(BaseDatabase):
 
         if "'chat'" not in create_sql:
             logger.info("Running migration: Updating source_type CHECK constraint in todos table")
+            # ⚠️ FUTURE-TRAP (run_d28de5fd): this table-rebuild's INSERT..SELECT copies
+            # ONLY the columns listed below. It is a one-time source_type migration and
+            # is inert on any DB that already has 'chat' (all current DBs). If you EVER
+            # re-trigger a todos rebuild, you MUST add the 7 flow-closure columns
+            # (review_state, review_kind, dispatched_session_id, dispatched_tab_label,
+            # dispatched_at, completed_at, reviewed_at) to BOTH the CREATE and the
+            # INSERT..SELECT here, or they will be silently DROPPED. The flow-closure
+            # migration (Step 3) runs AFTER this block precisely to avoid that drop.
             await conn.execute("BEGIN IMMEDIATE")
             try:
                 await conn.execute("""
@@ -2694,6 +2782,38 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.execute("ROLLBACK")
                 logger.error("Migration failed: source_type CHECK update in todos: %s", e)
                 raise
+
+        # Migration Step 3: ToDo flow-closure columns (run_d28de5fd, 2026-08-01).
+        # 7 additive nullable columns for the review/dispatch flow. MUST run AFTER
+        # the Step 2 source_type table-rebuild — that rebuild's INSERT..SELECT copies
+        # only the 13 legacy columns, so adding these BEFORE it would silently DROP
+        # them. Re-fetch PRAGMA here because the rebuild may have just replaced todos.
+        # Each new column carries its OWN CHECK — verified enforced on ALTER TABLE ADD
+        # COLUMN in sqlite 3.47.1 (only ALTERING an existing column's CHECK needs the
+        # table-rebuild pattern). status enum is NOT touched.
+        cursor = await conn.execute("PRAGMA table_info(todos)")
+        todo_column_names = [col[1] for col in await cursor.fetchall()]
+        _flow_cols = {
+            "review_state": "TEXT CHECK (review_state IS NULL OR review_state IN ('completed','confirmed','rejected'))",
+            "review_kind": "TEXT CHECK (review_kind IS NULL OR review_kind IN ('manual','auto'))",
+            "dispatched_session_id": "TEXT",
+            "dispatched_tab_label": "TEXT",
+            "dispatched_at": "TEXT",
+            "completed_at": "TEXT",
+            "reviewed_at": "TEXT",
+        }
+        for _col, _decl in _flow_cols.items():
+            if _col not in todo_column_names:
+                logger.info("Running migration: Adding %s column to todos table", _col)
+                await conn.execute(f"ALTER TABLE todos ADD COLUMN {_col} {_decl}")
+                await conn.commit()
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todos_review_state ON todos(review_state)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_todos_dispatched_session ON todos(dispatched_session_id)"
+        )
+        await conn.commit()
 
         # NOTE: task data migration moved to _run_data_cleanups().
         # skill_metrics, token_usage, hive tables, and FTS5 are now

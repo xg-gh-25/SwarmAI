@@ -141,6 +141,14 @@ class ToDoResponse(BaseModel):
         description="JSON string with reference metadata"
     )
     task_id: Optional[str] = Field(None, description="ID of the Task if this ToDo was converted")
+    # ToDo flow-closure fields (run_d28de5fd) — review dimension is ORTHOGONAL to status.
+    review_state: Optional[str] = Field(None, description="Review dimension: completed (awaiting review) / confirmed / rejected. NULL = not yet in review.")
+    review_kind: Optional[str] = Field(None, description="How the review resolved: manual (human) or auto (7-day auto-confirm).")
+    dispatched_session_id: Optional[str] = Field(None, description="Dead snapshot of the chat session this todo was dispatched to (one-way link, never a live ref).")
+    dispatched_tab_label: Optional[str] = Field(None, description="Display-only tab label at dispatch time (e.g. 'Tab 3').")
+    dispatched_at: Optional[datetime] = Field(None, description="When the todo was dispatched to a tab.")
+    completed_at: Optional[datetime] = Field(None, description="When the AI reply marked it completed (via sweep).")
+    reviewed_at: Optional[datetime] = Field(None, description="When the review resolved (confirm/reject/auto).")
     created_at: datetime = Field(..., description="Timestamp when the ToDo was created")
     updated_at: datetime = Field(..., description="Timestamp when the ToDo was last updated")
 

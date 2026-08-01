@@ -347,6 +347,13 @@ class TestLifecyclePurge:
                 due_date TEXT,
                 linked_context TEXT,
                 task_id TEXT,
+                review_state TEXT,
+                review_kind TEXT,
+                dispatched_session_id TEXT,
+                dispatched_tab_label TEXT,
+                dispatched_at TEXT,
+                completed_at TEXT,
+                reviewed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -497,6 +504,13 @@ class TestOverdueEscalation:
                 due_date TEXT,
                 linked_context TEXT,
                 task_id TEXT,
+                review_state TEXT,
+                review_kind TEXT,
+                dispatched_session_id TEXT,
+                dispatched_tab_label TEXT,
+                dispatched_at TEXT,
+                completed_at TEXT,
+                reviewed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -514,16 +528,13 @@ class TestOverdueEscalation:
         recent_ts = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
         conn = sqlite3.connect(str(db_path))
+        _cols = ("id, workspace_id, title, description, source, source_type, status, "
+                 "priority, due_date, linked_context, task_id, created_at, updated_at")
+        _ins = f"INSERT INTO todos ({_cols}) VALUES (?, 'swarmws', ?, NULL, NULL, 'email', 'overdue', 'high', NULL, '{{}}', NULL, ?, ?)"
         # Old overdue — should be cancelled
-        conn.execute(
-            "INSERT INTO todos VALUES (?, 'swarmws', ?, NULL, NULL, 'email', 'overdue', 'high', NULL, '{}', NULL, ?, ?)",
-            (str(uuid.uuid4()), "Old overdue task", old_ts, old_ts),
-        )
+        conn.execute(_ins, (str(uuid.uuid4()), "Old overdue task", old_ts, old_ts))
         # Recent overdue — should survive
-        conn.execute(
-            "INSERT INTO todos VALUES (?, 'swarmws', ?, NULL, NULL, 'email', 'overdue', 'high', NULL, '{}', NULL, ?, ?)",
-            (str(uuid.uuid4()), "Recent overdue task", recent_ts, recent_ts),
-        )
+        conn.execute(_ins, (str(uuid.uuid4()), "Recent overdue task", recent_ts, recent_ts))
         conn.commit()
         conn.close()
 
