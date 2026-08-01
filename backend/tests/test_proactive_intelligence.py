@@ -948,6 +948,9 @@ class TestGetJobResultHighlights:
 
 # ── Pipeline Auto-Resume Tests ──
 
+
+# ── Pipeline Auto-Resume Tests ──
+
 _get_paused_pipeline_highlights = _mod._get_paused_pipeline_highlights
 
 
@@ -1453,71 +1456,3 @@ class TestPipelineSupersedeAndActiveSkip:
 
 
 # --- M3b: Recurrence Radar (zone-gated) (run_123a6530) ---
-
-class TestRecurrenceRadar:
-    """Radar fires ONLY when the session touches a tracked hot zone; counts
-    derive from real IMPROVEMENT data, not hardcoded."""
-
-    _IMPROVEMENT = """\
-# Lessons
-## What Failed
-- [pitfall] **reconcile race** — tab-switch truncated render. (2026-06-20, run_a)
-- [pitfall] **reconcile gap** — turn-end render lost. (2026-06-21, run_b)
-- [pitfall] **reconcile stale** — resume dropped content. (2026-06-22, run_c)
-- [pitfall] **unrelated auth bug** — token expiry. (2026-06-10, run_z)
-"""
-
-    def test_radar_fires_on_hot_zone(self, tmp_path):
-        from core.proactive_intelligence import compute_recurrence_radar
-        # session context mentions "reconcile" — a hot zone with 3 prior fixes
-        lines = compute_recurrence_radar(
-            improvement_text=self._IMPROVEMENT,
-            session_context="working on the reconcile render path again",
-        )
-        assert lines, "radar should fire for a hot-zone session"
-        joined = " ".join(lines).lower()
-        assert "reconcile" in joined
-        import re as _re
-        m = _re.search(r"(\d+) prior incidents", joined)
-        assert m and int(m.group(1)) >= 3  # derived incident count, not hardcoded
-
-    def test_radar_silent_on_unrelated_session(self, tmp_path):
-        from core.proactive_intelligence import compute_recurrence_radar
-        lines = compute_recurrence_radar(
-            improvement_text=self._IMPROVEMENT,
-            session_context="adding a new weather skill, nothing to do with sessions",
-        )
-        assert lines == [], "radar must stay silent when no hot zone is touched"
-
-    def test_radar_count_is_real_not_hardcoded(self, tmp_path):
-        from core.proactive_intelligence import compute_recurrence_radar
-        # only 1 reconcile entry -> count reflects reality, and below-threshold stays silent
-        one = "## What Failed\n- [pitfall] **reconcile race** — once. (2026-06-20, run_a)\n"
-        lines = compute_recurrence_radar(
-            improvement_text=one, session_context="reconcile path",
-        )
-        # single occurrence is below the recurrence threshold (>=3) -> silent
-        assert lines == []
-
-    def test_no_substring_inflation_from_large_doc(self, tmp_path):
-        # Adversarial: a zone keyword appearing many times in PROSE (outside
-        # ## What Failed) must NOT inflate the count. Only What-Failed bullet
-        # lines count as incidents.
-        from core.proactive_intelligence import compute_recurrence_radar
-        doc = (
-            "## What Worked\n"
-            + ("- streaming content loss discussion prose here\n" * 50)
-            + "## What Failed\n"
-            + "- [pitfall] **streaming content loss** once. (2026-06-20, run_a)\n"
-        )
-        lines = compute_recurrence_radar(doc, session_context="streaming content loss path")
-        # only 1 real incident in What Failed -> below threshold -> silent
-        assert lines == []
-
-    def test_unrelated_session_quiet_against_large_failed_section(self, tmp_path):
-        # Adversarial: even with many reconcile incidents, an unrelated session
-        # (no hot-zone keyword in context) stays silent.
-        from core.proactive_intelligence import compute_recurrence_radar
-        doc = "## What Failed\n" + ("- [pitfall] **reconcile race** bug. (2026-06-20, run_x)\n" * 10)
-        lines = compute_recurrence_radar(doc, session_context="adding a weather skill today")
-        assert lines == []

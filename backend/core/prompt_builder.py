@@ -824,14 +824,14 @@ class PromptBuilder:
             if not is_channel:
                 try:
                     from .proactive_intelligence import build_session_briefing
-                    # OFFLOAD (run_7e8a2030, RP53): build_session_briefing is a SYNC
-                    # function that opens raw sqlite3.connect() (via _get_todo_highlights
-                    # / _get_signal_highlights). This runs inside async build_system_prompt
-                    # at every session spawn/resume — a sync connect ON the event loop
-                    # freezes /health and every coroutine for its duration (the same
-                    # loop-starvation class as count_pending). Its Welcome-Screen twin
-                    # build_session_briefing_data is ALREADY to_thread-wrapped
-                    # (system.py:1011); this path was the asymmetric miss. Wrap to match.
+                    # build_session_briefing is now filesystem-ONLY (run_05b42b8b,
+                    # SwarmAI TECH.md purity invariant): it reads only MEMORY.md +
+                    # DailyActivity to produce the Suggested-focus section. The DB /
+                    # eval / glob-all-pipelines legs that made it a loop-starvation
+                    # risk (99s peak, the RP53 concern this OFFLOAD once mitigated)
+                    # are DELETED, not offloaded. The to_thread wrap is kept as cheap
+                    # insurance (fs reads are still I/O), but the function no longer
+                    # opens a sqlite connection on the assembly path.
                     briefing = await asyncio.to_thread(build_session_briefing, working_directory)
                     if briefing:
                         context_text += f"\n\n{briefing}"
@@ -1252,14 +1252,23 @@ class PromptBuilder:
 
         Returns a markdown section like:
             ## Active Sessions (sibling context)
-            - [Tab, 5m ago] Deploy the new feature to staging
-            - [Channel, 2m ago] 帮我查下昨天的 meeting notes
+            - [Tab, 5m ago] active
+            - [Channel, 2m ago] active
 
         Only includes alive sessions (STREAMING, IDLE, WAITING_INPUT).
-        Costs ~50 tokens per sibling — negligible.
+
+        SYSTEM-PROMPT PURITY (run_05b42b8b, SwarmAI TECH.md invariant): this digest
+        is sourced ENTIRELY from the in-memory session registry (unit source +
+        last_used) — it does NOT read the database. The prior implementation did a
+        per-sibling indexed message lookup to show each tab's last message text;
+        that was the 2nd database source on the system-prompt assembly path (the 1st
+        was build_session_briefing's Radar-todos). The judgment-relevant signal is
+        "a sibling session IS active" (R29 parallel-session coordination), which the
+        in-memory registry already carries; the last-message CONTENT was feed data
+        that belongs to the dashboard, not the system prompt. HARD invariant: no
+        database read on this path.
         """
         from . import session_registry
-        from database import db
         import time
 
         router = getattr(session_registry, "session_router", None)
@@ -1275,7 +1284,7 @@ class PromptBuilder:
             if not unit.is_alive:
                 continue
 
-            # Time since last activity
+            # Time since last activity (in-memory — no DB)
             elapsed_s = now - unit.last_used
             if elapsed_s < 60:
                 time_ago = f"{int(elapsed_s)}s ago"
@@ -1285,24 +1294,7 @@ class PromptBuilder:
                 time_ago = f"{int(elapsed_s / 3600)}h ago"
 
             source = "Channel" if unit.is_channel_session else "Tab"
-
-            # Get last user message from DB (cheap — indexed query)
-            try:
-                last_msg = await db.messages.get_last_by_session(
-                    unit.session_id, role="user",
-                )
-                text = (last_msg.get("content", "") if isinstance(last_msg, dict) else "")
-                if isinstance(text, list):
-                    # content is a list of blocks — extract text
-                    text = " ".join(
-                        b.get("text", "") for b in text
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                text = (text or "(no message)")[:100]
-            except Exception:
-                text = "(unavailable)"
-
-            lines.append(f"- [{source}, {time_ago}] {text}")
+            lines.append(f"- [{source}, {time_ago}] active")
 
         if not lines:
             return ""

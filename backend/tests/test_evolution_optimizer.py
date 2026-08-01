@@ -20,6 +20,8 @@ from core.evolution_optimizer import (
     SkillHealthEntry,
     Recommendation,
     SkillHealthReport,
+    ExecutionTraceCollector,
+    AntiPatternGenerator,
 )
 from core.session_miner import EvalExample
 
@@ -743,76 +745,6 @@ class TestHeuristicFirstForRecommendTier:
             assert not mock_llm.called, (
                 "Recommend-tier skill with heuristic match: cycle peek should skip LLM"
             )
-
-
-class TestSkillHealthHighlightsApplyAffordance:
-    """G1: _get_skill_health_highlights should include 'apply' affordance for recommend-tier."""
-
-    def test_recommend_tier_shows_apply_affordance(self, tmp_path):
-        """Recommend-tier skill should show 'apply <skill> fix' text."""
-        from core.proactive_intelligence import _get_skill_health_highlights
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        health_data = {
-            "cycle_id": "test",
-            "skills": [{
-                "skill_name": "radar-todo",
-                "action": "recommend",
-                "confidence": 0.30,
-                "correction_count": 1,
-                "fitness_score": 0.2,
-                "recommendation": {
-                    "evidence_summary": ["不要做 GitHub push, 都做local codebase commit"],
-                    "changes": [{"original": "x", "replacement": "y"}],
-                },
-            }],
-        }
-        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
-
-        highlights = _get_skill_health_highlights(ctx_dir)
-        assert len(highlights) == 1
-        line = highlights[0]
-        assert "radar-todo" in line
-        assert "不要做 GitHub push" in line
-        # G1: Must include apply affordance (wording: "review changes", not "deploy")
-        assert "apply radar-todo fix" in line.lower()
-        assert "review changes" in line.lower()
-
-    def test_deploy_tier_no_apply_affordance(self, tmp_path):
-        """Deploy-tier (already deployed) should NOT show 'apply' text."""
-        from core.proactive_intelligence import _get_skill_health_highlights
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        health_data = {
-            "cycle_id": "test",
-            "skills": [{
-                "skill_name": "save-memory",
-                "action": "deploy",
-                "confidence": 0.35,
-                "correction_count": 2,
-                "fitness_score": 0.5,
-                "recommendation": {
-                    "evidence_summary": ["remove test entry"],
-                    "changes": [{"original": "a", "replacement": "b"}],
-                },
-            }],
-        }
-        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
-
-        highlights = _get_skill_health_highlights(ctx_dir)
-        # deploy-tier may or may not be shown, but if shown, should NOT say "apply"
-        for line in highlights:
-            if "save-memory" in line:
-                assert "apply" not in line.lower()
-
-
-# ── v2.3 GEPA-inspired components ──
-
-from core.evolution_optimizer import ExecutionTraceCollector, AntiPatternGenerator
-
-
 class TestExecutionTraceCollector:
     """Tests for trace extraction from eval examples."""
 
@@ -944,33 +876,6 @@ class TestAntiPatternGenerator:
         # Should only add the new one, not duplicate "verbose output"
         assert merged.count("verbose output") == 1
         assert "deprecated APIs" in merged
-
-    def test_empty_evidence_no_crash(self, tmp_path):
-        """Recommend-tier with empty evidence_summary should not crash."""
-        from core.proactive_intelligence import _get_skill_health_highlights
-
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir()
-        health_data = {
-            "cycle_id": "test",
-            "skills": [{
-                "skill_name": "some-skill",
-                "action": "recommend",
-                "confidence": 0.20,
-                "correction_count": 1,
-                "fitness_score": 0.3,
-                "recommendation": {
-                    "evidence_summary": [],
-                    "changes": [],
-                },
-            }],
-        }
-        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
-
-        highlights = _get_skill_health_highlights(ctx_dir)
-        assert len(highlights) >= 1
-        # Should not contain "apply" affordance when no changes
-        assert "apply" not in highlights[0].lower() or "evidence" not in highlights[0]
 
 
 class TestProposalFreshnessCheck:

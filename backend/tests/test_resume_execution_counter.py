@@ -115,6 +115,8 @@ def test_both_counters_reset_on_stage_completion(tmp_path, monkeypatch):
         "execution counter must reset with attempt counter (else stale diagnostic)"
 
 
+
+
 # ─── AC2: exhausted briefing line distinguishes the two failure modes ─────
 
 

@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.session_utils import fuzzy_title_matches_deliverable
-from core.ddd_paths import ddd_path
 
 # L2 scoring engine
 from core.proactive_scoring import (
@@ -708,6 +707,125 @@ _RESUME_COOLDOWN_SECONDS = [30, 60, 120]
 _ACTIVE_RUN_THRESHOLD_SECONDS = 90
 
 
+def _create_health_todo(
+    message: str, severity: str = "warning", escalate: bool = False
+) -> None:
+    """Create a Radar todo for a health finding — the propose-action reflex.
+
+    Creates a todo when the finding is `critical`, OR when a caller explicitly
+    opts in with `escalate=True` (a recurring/high-priority warning that should
+    stop being passive display and become an action item). A plain `warning`
+    with escalate=False is a no-op — this preserves the existing
+    ddd_orchestrator.py caller's contract (it passes severity="warning" and must
+    not flood todos every refresh).
+
+    Writes via DIRECT sync sqlite3 into data.db `todos`. The previous implementation called
+    ToDoManager.list_todos/create_todo — methods that DO NOT EXIST on the async
+    ToDoManager, so the path threw on every call and was swallowed (a silent
+    no-op masked by a mock in tests). Direct sqlite is sync-safe from this
+    briefing context (no event loop bridging) and matches the read path.
+
+    Deduplicates against existing active todos with the same finding prefix.
+    Best-effort — never raises (briefing assembly must not break).
+    """
+    if severity != "critical" and not escalate:
+        return
+
+    import sqlite3
+    import uuid
+    from datetime import datetime, timezone
+    from jobs.paths import DB_PATH as _db_path
+
+    if not _db_path.exists():
+        return
+
+    title = f"Health Alert: {message[:80]}"
+    dedup_key = message[:40]
+    # Cooldown for recently-HANDLED findings: a recurring source signal (e.g. a
+    # capability gap that persists until the underlying pattern stops) would
+    # otherwise recreate a todo the instant the user completes it (status=handled
+    # leaves the active-only dedup) — recreate-forever. So a finding handled within
+    # this window is NOT re-escalated; the user's action sticks. (adversarial HIGH)
+    _HANDLED_COOLDOWN_DAYS = 7
+    try:
+        from datetime import timedelta
+        conn = sqlite3.connect(str(_db_path), timeout=5)
+        try:
+            # Dedup: skip if an ACTIVE Health Alert todo already covers this finding.
+            existing = conn.execute(
+                "SELECT title FROM todos WHERE status IN ('pending','in_discussion') "
+                "AND title LIKE 'Health Alert:%'"
+            ).fetchall()
+            for (etitle,) in existing:
+                if dedup_key in (etitle or ""):
+                    return  # already tracked
+
+            # Cooldown: skip if the SAME finding was handled/cancelled recently.
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=_HANDLED_COOLDOWN_DAYS)).isoformat()
+            recently_closed = conn.execute(
+                "SELECT title FROM todos WHERE status IN ('handled','cancelled','deleted') "
+                "AND title LIKE 'Health Alert:%' AND updated_at >= ?",
+                (cutoff,),
+            ).fetchall()
+            for (etitle,) in recently_closed:
+                if dedup_key in (etitle or ""):
+                    return  # user acted recently — respect it, don't resurrect
+
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT INTO todos (id, workspace_id, title, description, source, "
+                "source_type, status, priority, created_at, updated_at) "
+                "VALUES (?, 'swarmws', ?, ?, 'health-alert', 'ai_detected', "
+                "'pending', 'high', ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    title,
+                    f"Auto-created by health alerting system.\n\nFinding: {message}",
+                    now, now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("Failed to create health todo: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Internal bridge functions (delegate to sub-modules with _DATE_REF_RE)
+# ---------------------------------------------------------------------------
+
+from core.proactive_scoring import estimate_thread_age as _raw_estimate_thread_age  # noqa: E402
+
+
+def _estimate_thread_age(thread: dict) -> int:
+    """Estimate thread age using module-level _DATE_REF_RE."""
+    return _raw_estimate_thread_age(thread, _DATE_REF_RE)
+
+
+def _build_suggestions(
+    threads: list[dict],
+    continue_hints: list[str],
+    signals: list[str],
+) -> list[ScoredItem]:
+    """Bridge: call scoring engine's build_suggestions with _DATE_REF_RE."""
+    return _build_suggestions_raw(threads, continue_hints, signals, _DATE_REF_RE)
+
+
+# M3b: Recurrence Radar — known hot-zone keywords mapped to a display label.
+# A "zone" is a recurring failure cluster; the radar fires only when the
+# CURRENT session touches one AND it has recurred >= threshold DISTINCT times.
+# Keywords are COMPOUND/specific (not bare English) so generic mentions of
+# "resume"/"streaming" in prose don't false-fire (adversarial run_123a6530).
+_RADAR_ZONES: dict[str, tuple[str, ...]] = {
+    "reconcile": ("reconcile", "truncated render", "tab-switch render"),
+    "session lifecycle": ("session_unit", "session_router", "self-heal session"),
+    "streaming render": ("streaming content loss", "stream state machine", "isstreaming"),
+    "deploy": ("prod.sh build", "daemon restart", "deploy scope"),
+}
+_RADAR_THRESHOLD = 3  # a zone must have recurred this many DISTINCT times to warn
+
+
 def _newest_completed_run(runs_dir: Path) -> "tuple[float, str | None]":
     """Return (max_updated_at_epoch, run_id) across all COMPLETED runs in a
     project's runs dir, or (0.0, None) if none. ONE pass — pure read, no mutation.
@@ -1160,654 +1278,6 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
     return lines
 
 
-def _get_todo_highlights(max_items: int = 3) -> list[str]:
-    """Read pending/overdue Radar todos from SQLite for system prompt injection.
-
-    Direct SQLite read (sync, WAL mode safe). Returns formatted lines
-    like ``  - [HIGH] Fix streaming bug — Next: reproduce in dev``.
-    Graceful no-op if DB unavailable.
-    """
-    import sqlite3
-    from jobs.paths import DB_PATH as _db_path
-    if not _db_path.exists():
-        return []
-    try:
-        conn = sqlite3.connect(str(_db_path), timeout=5)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT title, priority, status, linked_context "
-            "FROM todos WHERE status IN ('pending', 'overdue') "
-            "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
-            "WHEN 'low' THEN 2 ELSE 3 END, created_at DESC LIMIT ?",
-            (max_items,),
-        ).fetchall()
-        conn.close()
-    except (sqlite3.Error, OSError) as exc:
-        logger.debug("Todo highlights read failed: %s", exc)
-        return []
-
-    lines: list[str] = []
-    priority_labels = {"high": "HIGH", "medium": "MED", "low": "LOW"}
-    for row in rows:
-        label = priority_labels.get(row["priority"], "")
-        prefix = f"[{label}] " if label else ""
-        overdue = " ⚠️ OVERDUE" if row["status"] == "overdue" else ""
-        next_step = ""
-        if row["linked_context"]:
-            try:
-                ctx = json.loads(row["linked_context"])
-                ns = ctx.get("next_step", "")
-                if ns:
-                    next_step = f" — Next: {ns[:80]}"
-            except (json.JSONDecodeError, TypeError):
-                pass
-        lines.append(f"  - {prefix}{row['title']}{overdue}{next_step}")
-    return lines
-
-
-# _get_ddd_trust_summary DELETED (run_a16d61ad, §4.2.1 #11): the DDD-trust
-# briefing section was falsified by live data (1273 `trust: high` : 2 `trust: low`,
-# both empty doc placeholders → zero discrimination). Trust value is PULL-only now
-# (recall's ddd leg attaches trust metadata when a doc is actually queried), so this
-# Projects/*-traversal helper had 0 callers and is removed.
-
-
-def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
-    """Read skill_health.json and surface medium-confidence recommendations.
-
-    Staleness filter: items unchanged for >7 days are suppressed. If the user
-    hasn't acted on a recommendation in a week, repeating it every session
-    is noise, not a reminder. The item stays in skill_health.json for the
-    evolution pipeline — it just stops polluting the briefing.
-    """
-    import time as _time
-
-    health_path = ctx_dir / "skill_health.json"
-    if not health_path.exists():
-        return []
-
-    try:
-        report = json.loads(health_path.read_text(encoding="utf-8"))
-        # Staleness gate: if file hasn't been modified in >7 days, all items are stale
-        file_age_days = (_time.time() - health_path.stat().st_mtime) / 86400
-        if file_age_days > 7:
-            return []  # All recommendations are stale — suppress entirely
-
-        highlights = []
-        for skill in report.get("skills", []):
-            try:
-                action = skill.get("action", "")
-                if action == "recommend" and skill.get("recommendation"):
-                    rec = skill["recommendation"]
-                    evidence = rec.get("evidence_summary", [])
-                    first_evidence = evidence[0] if evidence else "multiple corrections detected"
-                    name = skill.get("skill_name", "unknown")
-                    corr = skill.get("correction_count", 0)
-                    fitness = skill.get("fitness_score", 0.0)
-                    # G1: Include apply affordance when actionable changes exist
-                    has_changes = bool(rec.get("changes"))
-                    affordance = f'. Say "apply {name} fix" to review changes' if has_changes else ""
-                    highlights.append(
-                        f"[medium] **{name}** needs attention -- "
-                        f"{corr} corrections, "
-                        f"fitness {fitness:.1%}. "
-                        f"Suggested: {first_evidence}{affordance}"
-                    )
-            except (KeyError, TypeError, ValueError):
-                continue  # Skip malformed entry, don't lose all highlights
-        return highlights[:3]  # Max 3 in briefing
-    except Exception:
-        return []
-
-
-def _get_auto_apply_review_window(workspace: Path) -> list[str]:
-    """Surface recent DDD auto-applies within the 72h review window (Gap #21).
-
-    Reads the auto_refresh_log.jsonl and shows entries applied within the last
-    72 hours with a countdown timer. This gives the user visibility into what
-    was auto-changed and time to revert if something looks wrong.
-    """
-    log_path = workspace / ".context" / ".auto_refresh_log.jsonl"
-    if not log_path.exists():
-        return []
-
-    import time as _t
-    now = _t.time()
-    review_window = 72 * 60 * 60  # 72 hours
-    lines: list[str] = []
-
-    try:
-        for raw_line in log_path.read_text(encoding="utf-8").splitlines()[-20:]:
-            if not raw_line.strip():
-                continue
-            try:
-                entry = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-
-            applied_at = entry.get("applied_at", 0)
-            age = now - applied_at
-            if age > review_window or age < 0:
-                continue
-
-            hours_left = max(0, int((review_window - age) / 3600))
-            target = entry.get("target_file", "?")
-            change = entry.get("description", entry.get("old_value", ""))[:50]
-            lines.append(f"{target}: {change}… ({hours_left}h left to revert)")
-
-    except (OSError, ValueError):
-        pass
-
-    return lines[:5]  # Max 5 items in briefing
-
-
-def _get_health_highlights(working_directory: str) -> list[str]:
-    """Read health_findings.json and return formatted alerts for session briefing.
-
-    Shows warnings/critical findings from ContextHealthHook and weekly
-    memory maintenance results. Graceful no-op if file doesn't exist.
-    """
-    findings_path = (
-        Path(working_directory) / "Services" / "swarm-jobs" / "health_findings.json"
-    )
-    if not findings_path.exists():
-        return []
-
-    try:
-        data = json.loads(findings_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-
-    lines: list[str] = []
-
-    # Context health findings (warnings and critical only)
-    for finding in data.get("findings", []):
-        level = finding.get("level", "info")
-        msg = _sanitize_prompt_field(finding.get("message", ""), 150)
-        if level == "critical":
-            lines.append(f"  - [critical] {msg}")
-            # Auto-create Radar todo for critical findings
-            try:
-                _create_health_todo(msg, severity="critical")
-            except Exception:
-                pass  # Non-blocking
-        elif level == "warning":
-            lines.append(f"  - [warning] {msg}")
-
-    # Weekly memory health summary — only surface gaps (not routine maintenance)
-    # Maintenance actions (stale memory cleanup, compression) are expected automated
-    # housekeeping — showing them every session is pure noise.
-    mem_health = data.get("memory_health")
-    if mem_health:
-        # Capability gaps — recurring error patterns detected by weekly analysis
-        gaps = mem_health.get("capability_gaps", [])
-        for gap in gaps[:3]:
-            pattern = _sanitize_prompt_field(gap.get("pattern", ""), 80)
-            priority = gap.get("priority", "medium")
-            occurrences = gap.get("occurrences", 0)
-            action = _sanitize_prompt_field(gap.get("suggested_action", ""), 50)
-            lines.append(
-                f"  - [gap/{priority}] {pattern} ({occurrences}x) — suggest: {action}"
-            )
-            # Active-maintenance reflex (run_e681a61d): a HIGH-priority capability
-            # gap stops being passive display — escalate it to an actionable Radar
-            # todo so a recurring pain proposes its own fix. Dedup-guarded inside
-            # _create_health_todo; medium/low gaps stay display-only (no noise).
-            if priority == "high":
-                try:
-                    _create_health_todo(
-                        f"{pattern} ({occurrences}x) — {action}",
-                        severity="warning",
-                        escalate=True,
-                    )
-                except Exception:
-                    pass  # Non-blocking — escalation is best-effort
-
-        # Stale corrections — corrections referencing deleted code
-        stale = mem_health.get("stale_corrections", [])
-        for corr in stale[:2]:
-            cid = corr.get("id", "")
-            reason = _sanitize_prompt_field(corr.get("reason", ""), 60)
-            lines.append(f"  - [stale-correction] {cid}: {reason}")
-
-    # L4.0: DDD refresh proposals ready for review
-    projects_dir = Path(working_directory) / "Projects"
-    if projects_dir.is_dir():
-        for project_dir in sorted(projects_dir.iterdir()):
-            if not project_dir.is_dir():
-                continue
-            artifacts = project_dir / ".artifacts"
-            if not artifacts.is_dir():
-                continue
-            for proposal in sorted(artifacts.glob("ddd-refresh-*.md"), reverse=True):
-                # Only show proposals from last 7 days
-                try:
-                    age_days = (datetime.now() - datetime.fromtimestamp(proposal.stat().st_mtime)).days
-                    if age_days <= 7:
-                        lines.append(
-                            f"  - [ddd-proposal] {project_dir.name}: "
-                            f"DDD refresh proposal ready ({proposal.name})"
-                        )
-                        break  # Only latest per project
-                except OSError:
-                    continue
-
-            # L4.1: Skill proposals ready for review
-            skill_proposals = artifacts / "skill-proposals"
-            if skill_proposals.is_dir():
-                for skill_dir in sorted(skill_proposals.iterdir(), reverse=True):
-                    if not skill_dir.is_dir():
-                        continue
-                    meta_path = skill_dir / "metadata.json"
-                    if not meta_path.exists():
-                        continue
-                    try:
-                        age_days = (datetime.now() - datetime.fromtimestamp(meta_path.stat().st_mtime)).days
-                        if age_days <= 7:
-                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                            gap = meta.get("gap_pattern", "unknown gap")[:60]
-                            conf = meta.get("confidence", "?")
-                            lines.append(
-                                f"  - [skill-proposal] {skill_dir.name}: "
-                                f"addresses '{gap}' (confidence={conf})"
-                            )
-                    except (OSError, json.JSONDecodeError):
-                        continue
-
-    # L4.2: Governance promotion candidates (Three-Layer Governance)
-    # Signal file written by evolution_maintenance_hook when bias class reaches 3x
-    governance_signal = (
-        Path(working_directory) / ".context" / ".governance_promotion_candidates.json"
-    )
-    if governance_signal.exists():
-        try:
-            sig_data = json.loads(governance_signal.read_text(encoding="utf-8"))
-            candidates = sig_data.get("candidates", {})
-            if candidates:
-                parts = [f"Bias {b} ({c}x)" for b, c in candidates.items()]
-                lines.append(
-                    f"  - [governance/promote] Promotion threshold reached: "
-                    f"{', '.join(parts)} — run s_self-evolution PROMOTE"
-                )
-        except (json.JSONDecodeError, OSError):
-            pass  # Graceful — malformed signal is not critical
-
-    # L4.3: Evolution v3 — correction class tracker status
-    try:
-        from core.evolution.correction_tracker import CorrectionClassTracker
-        tracker = CorrectionClassTracker()
-        tracker_lines = tracker.briefing_lines()
-        if tracker_lines:
-            for tl in tracker_lines:
-                lines.append(f"  - [evolution] {tl}")
-    except Exception:
-        pass  # Non-blocking — tracker absence must never break briefing
-
-    # L4.3b: Growth report headline — constitution (SOUL/AGENT/STEERING) writes
-    # since last week, git-tracked + visible. This is the "what I grew" mirror:
-    # the agent shapes its own root, and every such write surfaces here as a
-    # flagged headline (run_448a4f7f, D3) — report-after, not approve-before.
-    try:
-        from core.eval_service import get_eval_service, EvalService
-        # Use the cached singleton, NOT a bare EvalService() — bare construction
-        # re-runs _load() (parses every Eval/EvalHistory/*.json) on every briefing
-        # = ~516ms wasted per session-start (run_b0ca1196). SAFE because
-        # growth_report reads NO singleton-loaded state (_cases/_runs/_golden_set):
-        # its records come from a fresh CorrectionClassTracker(), proposals from a
-        # hardcoded global path, commits from git — only the workspace_root passed
-        # below matters. If growth_report ever starts reading self._runs/_cases,
-        # revisit this (the singleton is load-once until reload).
-        # Thread THIS briefing's working_directory as workspace_root so the git
-        # gather is scoped to the workspace being built for — not the singleton's
-        # globally-resolved one. Keeps _get_health_highlights honest when pointed
-        # at a different workspace (test isolation), and the git cache keys on this
-        # workspace_root so a tmp-dir caller never collides with prod.
-        gr = get_eval_service().growth_report(
-            since_days=7, workspace_root=Path(working_directory)
-        )
-        for gl in EvalService._growth_briefing_lines(gr):
-            lines.append(gl)
-    except Exception:
-        pass  # Non-blocking — growth report must never break briefing
-
-    # L4.4: Evolution governance proposals (L1) pending review
-    evolution_proposals_path = (
-        Path(working_directory) / ".context" / ".evolution_proposals.json"
-    )
-    if evolution_proposals_path.exists():
-        try:
-            evo_proposals = json.loads(
-                evolution_proposals_path.read_text(encoding="utf-8")
-            )
-            gov_proposals = [
-                p for p in evo_proposals if p.get("target") == "governance"
-            ]
-            if gov_proposals:
-                for gp in gov_proposals[:3]:  # Cap at 3 to avoid briefing bloat
-                    gc_id = gp.get("gc_id") or ""
-                    source = gp.get("source_class") or ""
-                    rule = _sanitize_prompt_field(gp.get("proposed_rule") or "", 80)
-                    count = gp.get("occurrence_count", 0)
-                    label = gc_id or source or "unknown"
-                    lines.append(
-                        f"  - [evolution/governance] {label}: "
-                        f"\"{rule}\" ({count}x evidence)"
-                    )
-        except (json.JSONDecodeError, OSError, TypeError, KeyError):
-            pass  # Graceful — malformed proposals must never break briefing
-
-    return lines
-
-
-def _get_ddd_drift_line(working_directory: str) -> list[str]:
-    """One LIVE briefing line for DDD semantic drift (latest ddd-self-audit report).
-
-    Deliberately SEPARATE from _get_health_highlights: that function reads
-    health_findings.json and returns [] when it is absent (its contract). Drift is an
-    INDEPENDENT source (self-audit reports) and must surface on its own, so it is a
-    standalone helper called directly by build_session_briefing — not folded into the
-    health-findings path (Gate-2: folding it there forced a fallthrough that leaked
-    unrelated global-state lines when health_findings.json was missing).
-
-    Read-only, computed live every call, NOTHING persisted (R30#4); a plain string
-    line, never a Radar-todo write. Full detail + at-risk cases live on the Eval ›
-    Context Health tab.
-    """
-    try:
-        from core.ddd_drift_signal import get_semantic_drift
-
-        drift = get_semantic_drift(Path(working_directory))
-        n = drift.get("drift_count", 0)
-        if n <= 0:
-            return []
-        projects = {f.get("project") for f in drift["findings"] if f.get("project")}
-        m = len(projects) or len(drift["findings"])
-        return [
-            f"  - [ddd-drift] DDD semantic drift: {n} finding(s) across "
-            f"{m} project(s) (see Eval › Context Health)"
-        ]
-    except Exception:
-        return []  # Non-blocking — drift signal must never break briefing
-
-
-def _create_health_todo(
-    message: str, severity: str = "warning", escalate: bool = False
-) -> None:
-    """Create a Radar todo for a health finding — the propose-action reflex.
-
-    Creates a todo when the finding is `critical`, OR when a caller explicitly
-    opts in with `escalate=True` (a recurring/high-priority warning that should
-    stop being passive display and become an action item). A plain `warning`
-    with escalate=False is a no-op — this preserves the existing
-    ddd_orchestrator.py caller's contract (it passes severity="warning" and must
-    not flood todos every refresh).
-
-    Writes via DIRECT sync sqlite3 into data.db `todos` (the proven
-    `_get_todo_highlights` pattern). The previous implementation called
-    ToDoManager.list_todos/create_todo — methods that DO NOT EXIST on the async
-    ToDoManager, so the path threw on every call and was swallowed (a silent
-    no-op masked by a mock in tests). Direct sqlite is sync-safe from this
-    briefing context (no event loop bridging) and matches the read path.
-
-    Deduplicates against existing active todos with the same finding prefix.
-    Best-effort — never raises (briefing assembly must not break).
-    """
-    if severity != "critical" and not escalate:
-        return
-
-    import sqlite3
-    import uuid
-    from datetime import datetime, timezone
-    from jobs.paths import DB_PATH as _db_path
-
-    if not _db_path.exists():
-        return
-
-    title = f"Health Alert: {message[:80]}"
-    dedup_key = message[:40]
-    # Cooldown for recently-HANDLED findings: a recurring source signal (e.g. a
-    # capability gap that persists until the underlying pattern stops) would
-    # otherwise recreate a todo the instant the user completes it (status=handled
-    # leaves the active-only dedup) — recreate-forever. So a finding handled within
-    # this window is NOT re-escalated; the user's action sticks. (adversarial HIGH)
-    _HANDLED_COOLDOWN_DAYS = 7
-    try:
-        from datetime import timedelta
-        conn = sqlite3.connect(str(_db_path), timeout=5)
-        try:
-            # Dedup: skip if an ACTIVE Health Alert todo already covers this finding.
-            existing = conn.execute(
-                "SELECT title FROM todos WHERE status IN ('pending','in_discussion') "
-                "AND title LIKE 'Health Alert:%'"
-            ).fetchall()
-            for (etitle,) in existing:
-                if dedup_key in (etitle or ""):
-                    return  # already tracked
-
-            # Cooldown: skip if the SAME finding was handled/cancelled recently.
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=_HANDLED_COOLDOWN_DAYS)).isoformat()
-            recently_closed = conn.execute(
-                "SELECT title FROM todos WHERE status IN ('handled','cancelled','deleted') "
-                "AND title LIKE 'Health Alert:%' AND updated_at >= ?",
-                (cutoff,),
-            ).fetchall()
-            for (etitle,) in recently_closed:
-                if dedup_key in (etitle or ""):
-                    return  # user acted recently — respect it, don't resurrect
-
-            now = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                "INSERT INTO todos (id, workspace_id, title, description, source, "
-                "source_type, status, priority, created_at, updated_at) "
-                "VALUES (?, 'swarmws', ?, ?, 'health-alert', 'ai_detected', "
-                "'pending', 'high', ?, ?)",
-                (
-                    str(uuid.uuid4()),
-                    title,
-                    f"Auto-created by health alerting system.\n\nFinding: {message}",
-                    now, now,
-                ),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.warning("Failed to create health todo: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Internal bridge functions (delegate to sub-modules with _DATE_REF_RE)
-# ---------------------------------------------------------------------------
-
-from core.proactive_scoring import estimate_thread_age as _raw_estimate_thread_age  # noqa: E402
-
-
-def _estimate_thread_age(thread: dict) -> int:
-    """Estimate thread age using module-level _DATE_REF_RE."""
-    return _raw_estimate_thread_age(thread, _DATE_REF_RE)
-
-
-def _build_suggestions(
-    threads: list[dict],
-    continue_hints: list[str],
-    signals: list[str],
-) -> list[ScoredItem]:
-    """Bridge: call scoring engine's build_suggestions with _DATE_REF_RE."""
-    return _build_suggestions_raw(threads, continue_hints, signals, _DATE_REF_RE)
-
-
-# M3b: Recurrence Radar — known hot-zone keywords mapped to a display label.
-# A "zone" is a recurring failure cluster; the radar fires only when the
-# CURRENT session touches one AND it has recurred >= threshold DISTINCT times.
-# Keywords are COMPOUND/specific (not bare English) so generic mentions of
-# "resume"/"streaming" in prose don't false-fire (adversarial run_123a6530).
-_RADAR_ZONES: dict[str, tuple[str, ...]] = {
-    "reconcile": ("reconcile", "truncated render", "tab-switch render"),
-    "session lifecycle": ("session_unit", "session_router", "self-heal session"),
-    "streaming render": ("streaming content loss", "stream state machine", "isstreaming"),
-    "deploy": ("prod.sh build", "daemon restart", "deploy scope"),
-}
-_RADAR_THRESHOLD = 3  # a zone must have recurred this many DISTINCT times to warn
-
-
-def _extract_what_failed_lines(improvement_text: str) -> list[str]:
-    """Return the bullet lines under '## What Failed' (one line = one incident)."""
-    lines: list[str] = []
-    in_section = False
-    for ln in improvement_text.splitlines():
-        if ln.startswith("## "):
-            in_section = ln.strip().lower().startswith("## what failed")
-            continue
-        if in_section and ln.lstrip().startswith("- "):
-            lines.append(ln.lower())
-    return lines
-
-
-def compute_recurrence_radar(
-    improvement_text: str,
-    session_context: str,
-    threshold: int = _RADAR_THRESHOLD,
-) -> list[str]:
-    """Zone-gated recurrence warnings (self-knowledge-loop M3b).
-
-    Fires ONLY when the CURRENT session touches a tracked hot zone that has
-    recurred >= `threshold` DISTINCT incidents in IMPROVEMENT.md "## What
-    Failed". Count = number of distinct What-Failed BULLET LINES mentioning a
-    zone keyword (NOT substring frequency across the whole doc — adversarial
-    found that inflated counts 50-200x and fired on every session). Returns []
-    when the session touches no recurring hot zone.
-    """
-    if not improvement_text or not session_context:
-        return []
-    ctx_lower = session_context.lower()
-    failed_lines = _extract_what_failed_lines(improvement_text)
-    if not failed_lines:
-        return []
-
-    out: list[str] = []
-    for label, keywords in _RADAR_ZONES.items():
-        # Does the CURRENT session touch this zone?
-        if not any(kw in ctx_lower for kw in keywords):
-            continue
-        # Distinct prior incidents = What-Failed lines mentioning any keyword.
-        count = sum(
-            1 for line in failed_lines if any(kw in line for kw in keywords)
-        )
-        if count < threshold:
-            continue
-        out.append(
-            f"⚠️ {label}-class: {count} prior incidents — treat a new {label} bug "
-            f"as STRUCTURAL; before patching, ask if the underlying MODEL is wrong."
-        )
-    return out
-
-
-def _detect_active_project(workspace: Path) -> str | None:
-    """Detect the active project from Projects/ directory.
-
-    Simple heuristic: if SwarmAI project has a code_intel.db, use it.
-    Future: detect from recent DailyActivity file mentions.
-    """
-    projects_dir = workspace / "Projects"
-    if not projects_dir.is_dir():
-        return None
-    # Check SwarmAI first (default project), then others
-    for name in ["SwarmAI"] + sorted(
-        d.name for d in projects_dir.iterdir()
-        if d.is_dir() and d.name != "SwarmAI"
-    ):
-        if (projects_dir / name / "code_intel.db").exists():
-            return name
-    return None
-
-
-# _detect_active_coding_project (+ _impl + TTL cache) DELETED (run_a16d61ad,
-# §4.2.1 #15): its sole caller was the Codebase-intelligence briefing section,
-# which is now CUT (PUSH→PULL). "Guess from a Projects/* + DailyActivity + git
-# traversal whether this session is coding" was the most expensive briefing
-# signal and the least load-bearing — at session start there is no query, so the
-# guess can't know what code context the turn needs. Code context now surfaces
-# only on a real coding query via recall's codeintel leg. (Note: _detect_active_project
-# — no "coding" — is a DIFFERENT, still-live helper used by DDD escalations.)
-
-
-# ---------------------------------------------------------------------------
-# Briefing builder — main entry point
-# ---------------------------------------------------------------------------
-
-def _render_self_eval_lines(
-    health: dict, tracker_red: bool, case_count: int, draft_skeletons: int = 0
-) -> list[str]:
-    """Render the briefing self-eval line(s) with divergence awareness (M4-3).
-
-    Pure (no I/O) so the rendering — especially the score↔reality divergence
-    OVERRIDE — is testable on synthetic state. Two independent red signals,
-    surfaced separately, NEVER conflated:
-
-      - cases_error > 0  → judge INFRA broke (score measured a subset). Existing
-        finding-1 red-light, preserved here.
-      - tracker_red      → the AGENT is still repeating a known correction CLASS
-        past its deployed gate (🔴) while the eval reads clean. This is the NEW
-        M4-3 divergence: a high score that does NOT prove the loop is closed.
-
-    Divergence takes the headline (it OVERRIDES the clean number) because a
-    green score next to a recurring failure class is the precise "100/100 on a
-    dead loop" lie the closed-loop design exists to expose.
-    """
-    try:
-        if health.get("overall_score") is None:
-            if case_count > 0:
-                return [f"**Self-Eval:** {case_count} cases (no runs yet)"]
-            return []
-
-        score = health["overall_score"]
-        last_run = health.get("last_run") or {}
-        last_date = (last_run.get("triggered_at") or "")[:10] or "never"
-        n_error = last_run.get("cases_error", 0) or 0
-
-        from core.eval_service import EvalService
-
-        div = EvalService.compute_score_divergence(health, tracker_red)
-
-        # Two ORTHOGONAL red signals — surfaced separately, NEVER conflated by
-        # suppression (adversarial #3): cases_error = judge INFRA broke (score
-        # measured a subset); divergence = the AGENT is still recurring a known
-        # class despite a clean score. When BOTH hold the user must see BOTH —
-        # an early-return on divergence would hide the infra-break the design
-        # promises to keep distinct. Divergence leads (it reframes the headline),
-        # the infra-break follows as a second line.
-        lines: list[str] = []
-        if div["diverged"]:
-            lines.append(
-                f"**Self-Eval:** 🔴 DIVERGENCE — {div['reason']}. "
-                f"{case_count} cases | Last: {last_date}"
-            )
-        if n_error:
-            lines.append(
-                f"**Self-Eval:** 🔴 {n_error} case(s) ERRORED (judge infra failed — "
-                f"score {score} excludes them, NOT a clean pass). "
-                f"{case_count} cases | Last: {last_date}"
-            )
-        if lines:
-            return lines
-
-        # COGNITION-ADMISSION (run_a16d61ad, §4.2.1 #13): the clean "Score: X"
-        # line is DROPPED from the system-prompt briefing. The score is near-
-        # constant (100/100/95.6) → zero discrimination → it occupies cognition
-        # without informing. ONLY the 🧬 red signals above (divergence / judge-
-        # infra error) earn the headline — a green score next to a recurring
-        # failure class is the "100/100 on a dead loop" lie the loop exists to
-        # expose. With no red signal, self-eval contributes nothing to the prompt.
-        #
-        # The draft-skeleton refine-me backlog is a to-do, not self-state
-        # cognition — surfaced via Radar todos / build_session_briefing_data, not
-        # here. (Kept computable for the data twin; simply not emitted to markdown.)
-        return []
-    except Exception:
-        # Briefing helpers must never raise.
-        return []
-
-
 def build_session_briefing(
     workspace_dir: str | Path,
 ) -> Optional[str]:
@@ -1886,168 +1356,33 @@ def build_session_briefing(
         if focus_section:
             sections.append(focus_section)
 
-        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
-        # The following feed/status-board sections were REMOVED from the
-        # system-prompt briefing: temporal Signals, background-suggestions
-        # ("Also in..."), External-signals, Job-results. They are dashboard
-        # data, not self-state cognition — they competed with the 11 context
-        # files for attention (F004) without changing first-response correctness.
-        # They remain in build_session_briefing_data() (the frontend Welcome
-        # Screen), which is the correct home for feed data. (background_section
-        # and the temporal-signals list are still computed by _format_suggestions
-        # for the data twin; they are simply no longer appended to the markdown.)
+        # ── SYSTEM-PROMPT PURITY (run_05b42b8b, SwarmAI TECH.md invariant) ───
+        # The system-prompt briefing keeps ONLY the Suggested-focus section above
+        # (pure fs: MEMORY.md + DailyActivity) PLUS the auto-resume DIRECTIVE below.
+        # The feed/status-board sections are REMOVED from this assembly path — they
+        # are dashboard data, not this-turn judgment, and they dragged a DB read
+        # (Radar todos, raw sqlite3), eval_service, and a health-findings scan onto
+        # every per-message build. Removed: Radar todos (DB), System health,
+        # Recurrence Radar, DDD escalations, Skill health, Self-Eval, + the earlier
+        # temporal-Signals/External/Job-results/Learning/Codebase cuts. Feed data
+        # lives in build_session_briefing_data() (Welcome Screen), UNCHANGED.
+        # HARD invariant: NO DB / eval / feed on this path.
 
-        # L4: Paused pipelines — auto-resume directives (max 3 attempts) or informational
+        # KEEP — Pipeline auto-resume (LIVE ENGINE, not display). _get_paused_
+        # pipeline_highlights is fs-only (globs+rewrites run.json under fcntl lock,
+        # increments resume_attempts) and is the ONLY trigger that auto-resumes a
+        # paused/crashed pipeline (verified live: 147 runs have resume_attempts>0).
+        # It does NOT violate the no-DB rule (run.json = filesystem, not app DB).
+        # ⚠️ TECH-DEBT (offline-root-cause run): this is a STATE-MUTATING glob on the
+        # per-message prompt path — assembling a prompt should not mutate pipeline
+        # state. The trigger belongs on a scheduler tick, not here. Tracked for the
+        # offline run; kept here until moved so recovery is never silently lost.
         pipeline_lines = _get_paused_pipeline_highlights(workspace)
         if pipeline_lines:
             sections.append(
                 "**Pipeline auto-resume (execute immediately before other work):**\n"
                 + "\n".join(pipeline_lines)
             )
-
-        # L4: Pending Radar todos — surface so agent proactively addresses them
-        todo_lines = _get_todo_highlights()
-        if todo_lines:
-            sections.append("**Pending Radar todos:**\n" + "\n".join(todo_lines))
-
-        # L4: System health alerts from health_findings.json
-        # + DDD semantic-drift line from an INDEPENDENT source (self-audit report),
-        # surfaced as its own helper so it fires even when health_findings.json is
-        # absent (Gate-2: it must not depend on the health-findings path's contract).
-        health_lines = _get_health_highlights(str(workspace)) + _get_ddd_drift_line(str(workspace))
-        if health_lines:
-            sections.append("**System health:**\n" + "\n".join(health_lines))
-
-        # M3b: Recurrence Radar — zone-gated structural warning. Fires only when
-        # the current session (recent DailyActivity) touches a hot zone that has
-        # recurred >= threshold times in IMPROVEMENT.md. Counts derived from doc.
-        try:
-            improvement_path = ddd_path(workspace / "Projects" / "SwarmAI", "IMPROVEMENT.md")
-            if improvement_path.exists():
-                # session_context = the MOST-RECENT activity block only (what
-                # THIS session is doing) — NOT 2 days of history (adversarial:
-                # the rolling log mentions every zone, defeating the gate).
-                recent_ctx = ""
-                if daily_dir.is_dir():
-                    files = sorted(daily_dir.glob("*.md"), reverse=True)
-                    if files:
-                        try:
-                            text = files[0].read_text(encoding="utf-8", errors="ignore")
-                            # last "## HH:MM |" block = the current session's slice
-                            blocks = re.split(r"\n## \d\d:\d\d \|", text)
-                            recent_ctx = blocks[-1][:3000] if blocks else text[:3000]
-                        except OSError:
-                            recent_ctx = ""
-                radar_lines = compute_recurrence_radar(
-                    improvement_path.read_text(encoding="utf-8", errors="ignore"),
-                    recent_ctx,
-                )
-                if radar_lines:
-                    sections.append("**Recurrence Radar:**\n" + "\n".join(radar_lines))
-        except Exception as exc:
-            logger.debug("Recurrence radar failed: %s", exc)
-
-        # L5: DDD escalations (risky changes needing human decision)
-        # Only show escalations from the last 7 days — older ones are stale
-        # (either user silently approved by not acting, or they're low priority)
-        try:
-            from core.ddd_cultivation import read_pending_proposals
-            active_proj = _detect_active_project(workspace) or "SwarmAI"
-            ddd_escalations = read_pending_proposals(workspace, active_proj)
-            if ddd_escalations:
-                import time as _t
-                now = _t.time()
-                # Keep items without created_at (can't judge staleness) + fresh items
-                to_show = [p for p in ddd_escalations
-                           if not hasattr(p, 'created_at')
-                           or p.created_at is None
-                           or (now - p.created_at) < 7 * 86400]
-                # Fall back to all if filter removed everything
-                if not to_show:
-                    to_show = ddd_escalations
-                if to_show:
-                    esc_lines = [f"  - [{p.target_doc}] {p.content[:100]}" for p in to_show[:5]]
-                    sections.append(
-                        f"**DDD escalations ({len(to_show)} awaiting decision):**\n" + "\n".join(esc_lines)
-                    )
-        except Exception as exc:
-            logger.debug("DDD escalations read failed: %s", exc)
-
-        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
-        # DDD low-trust + DDD auto-applies-review-window REMOVED. DDD-trust was
-        # falsified by live data (1273 `trust: high` : 2 `trust: low`, both empty
-        # doc placeholders → zero discrimination; #11). The "verify before relying"
-        # value is PULL: recall's ddd leg attaches trust metadata when a doc is
-        # actually queried. The 72h auto-apply countdown is a dashboard timer, not
-        # cognition. (_get_ddd_trust_summary is now deleted — 0 callers.)
-
-        # L4: Self-Eval awareness (golden set health — lightweight, ~1 line)
-        try:
-            golden_path = workspace / "Eval" / "golden_set.yaml"
-            if golden_path.exists():
-                from core.eval_service import get_eval_service
-                svc = get_eval_service()
-                health = svc.get_health()
-                # M4-3: compute the mechanical red signal — is any correction
-                # class recurring past its deployed gate? If so, a clean eval
-                # score is a LIE worth overriding. Kept out of the pure renderer
-                # (which must stay I/O-free + testable on synthetic state).
-                tracker_red = False
-                try:
-                    from core.evolution.correction_tracker import CorrectionClassTracker
-
-                    # GATE-FAILURE signal, not generic red (meta-review HIGH):
-                    # divergence headlines ONLY a deployed structural gate that
-                    # did not hold — the real "loop broken on a green score" event.
-                    # has_red() (which includes rule-only chronic recurrence like
-                    # the live OPERATIONAL class, 799x) would fire the banner EVERY
-                    # session forever → banner-blindness. Rule-only red stays in the
-                    # per-class tracker line; only gate-failure earns the headline.
-                    # Computed from state (format-independent), not by emoji-scan.
-                    tracker_red = CorrectionClassTracker().has_gate_failure()
-                except Exception:
-                    tracker_red = False  # tracker absence must never break briefing
-
-                # M5 Part 2: count auto-seeded draft skeletons (behavior drafts
-                # tagged auto_seed_skeleton) so the briefing surfaces the
-                # refine-me backlog. Best-effort — never break the section.
-                draft_skeletons = 0
-                try:
-                    draft_skeletons = sum(
-                        1 for c in svc._cases
-                        if c.get("tier") == "draft"
-                        and "auto_seed_skeleton" in (c.get("tags") or [])
-                    )
-                except Exception:
-                    draft_skeletons = 0
-                sections.extend(
-                    _render_self_eval_lines(
-                        health, tracker_red, svc.case_count, draft_skeletons
-                    )
-                )
-        except Exception as exc:
-            logger.debug("Self-eval briefing failed: %s", exc)
-
-        # L4: Skill health recommendations from evolution pipeline
-        ctx_dir = workspace / ".context"
-        skill_health_lines = _get_skill_health_highlights(ctx_dir)
-        if skill_health_lines:
-            sections.append("**Skill health:**\n" + "\n".join(f"  - {line}" for line in skill_health_lines))
-
-        # ── COGNITION-ADMISSION CUT (run_a16d61ad, §4.2.1) ───────────────────
-        # Codebase-intelligence MOVED from PUSH (session-start graph load) to
-        # PULL-only: it is no longer injected at session start (#15). Loading the
-        # AST graph for every coding session — guessed via a Projects/* traversal
-        # in _detect_active_coding_project — was the most expensive briefing
-        # section AND the least load-bearing (no query yet → can't know what code
-        # context the turn needs). Code context now surfaces only when a real
-        # coding query arrives, via recall's codeintel leg. (_detect_active_coding_project
-        # is now deleted — 0 callers.)
-        #
-        # Learning insight CUT (#16): a statistical self-portrait ("investigation
-        # work preferred 36%"), not cognition; the learning loop's follow_rate is
-        # 0 (uncovered). The portrait stays in learning_state / build_session_briefing_data,
-        # not the system prompt.
 
         if not sections:
             return None
