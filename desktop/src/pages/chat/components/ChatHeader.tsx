@@ -1,7 +1,9 @@
 import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
+import type { AttentionItem, ItemClickHandler } from './RightSidebar/types';
 import { SessionTabBar } from './SessionTabBar';
+import { AlertsPill } from './AlertsPill';
 import { useHealth } from '../../../contexts/HealthContext';
 
 interface ChatHeaderProps {
@@ -18,6 +20,14 @@ interface ChatHeaderProps {
   // Dynamic tab scaling — disabled "+" button when at limit
   /** True when open tab count >= dynamic max tabs (disables the "+" button). */
   isNewTabDisabled?: boolean;
+
+  // 🔔 Alerts pill — the attention queue (polled once at ChatPage, passed down).
+  /** The 🔔 "需要你" attention items. Empty → calm pill (no badge). */
+  attentionItems?: AttentionItem[];
+  /** Inject a message into the current chat input (paused / job alert items). */
+  onItemClick?: ItemClickHandler;
+  /** Switch to another tab (waiting alert items). */
+  onSelectTab?: (tabId: string) => void;
 }
 
 /**
@@ -25,11 +35,14 @@ interface ChatHeaderProps {
  *
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...←scroll→                          │  [+]      │
- * │ ◄─── SessionTabBar (flex-1) ───►                       │           │
+ * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │  [🔔 需要你 N]          │
+ * │ ◄─── SessionTabBar (flex-1, "+" at tail) ─►  │  ◄─ AlertsPill ─►    │
  * └─────────────────────────────────────────────────────────────────────┘
  *
- * Sidebar toggle buttons removed — the Radar sidebar is now always visible.
+ * The new-session "+" lives at the TAIL of the tab strip (inside SessionTabBar).
+ * The right cluster holds the health warning (when not connected) + the 🔔
+ * Alerts pill (the "需要你" attention queue). Sidebar toggle buttons removed —
+ * the Radar sidebar is now always visible.
  *
  * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 2.1
  */
@@ -41,19 +54,25 @@ export function ChatHeader({
   onNewSession,
   tabStatuses,
   isNewTabDisabled,
+  attentionItems = [],
+  onItemClick,
+  onSelectTab,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
 
   return (
     <div className="h-10 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)]">
-      {/* Left Section: Session Tab Bar */}
+      {/* Left Section: Session Tab Bar (the "+" new-session button lives at the
+          tail of the strip, inside SessionTabBar). */}
       <SessionTabBar
         tabs={openTabs}
         activeTabId={activeTabId}
         onTabSelect={onTabSelect}
         onTabClose={onTabClose}
         tabStatuses={tabStatuses}
+        onNewTab={onNewSession}
+        isNewTabDisabled={isNewTabDisabled}
       />
 
       {/* Right Section: Health Warning + Header Actions */}
@@ -91,26 +110,13 @@ export function ChatHeader({
             {t('health.degraded', 'Reconnecting…')}
           </div>
         )}
-        {/* New Session Button (+) - Validates: Requirement 2.1, 5.1, 5.2, 5.3 */}
-        <button
-          onClick={onNewSession}
-          disabled={isNewTabDisabled}
-          className={`p-2 rounded-lg transition-colors ${
-            isNewTabDisabled
-              ? 'text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
-              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-          }`}
-          title={isNewTabDisabled
-            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
-            : t('chat.newSession', 'New Session (⌘N)')
-          }
-          aria-label={isNewTabDisabled
-            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
-            : t('chat.newSession', 'New Session')
-          }
-        >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-        </button>
+        {/* 🔔 Alerts pill — the "需要你" attention queue. Replaces the old bare
+            "+" here; the new-session "+" now lives at the tab-strip tail. */}
+        <AlertsPill
+          items={attentionItems}
+          onItemClick={onItemClick}
+          onSelectTab={onSelectTab}
+        />
       </div>
     </div>
   );
