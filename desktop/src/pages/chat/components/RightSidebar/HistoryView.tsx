@@ -75,7 +75,11 @@ export function HistoryView({
   }, [groupedSessions, searchText, isControlled]);
 
   // Are we showing injected content-search results instead of the grouped list?
-  const showingResults = searchResults != null;
+  // Show the results pane when we have results (incl. empty []) OR when a query
+  // is active and its first fetch is still in flight — so the initial search
+  // shows a "Searching…" hint instead of briefly flashing the grouped fallback.
+  const queryActive = searchText.trim().length > 0;
+  const showingResults = searchResults != null || (isControlled && queryActive && isSearching);
 
   const agentName = (agentId: string): string => {
     const agent = agents.find((a) => a.id === agentId);
@@ -185,8 +189,10 @@ export function HistoryView({
       {/* Result list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-1">
         {showingResults ? (
-          /* Controlled content-search results (flat list) */
-          searchResults!.length === 0 ? (
+          /* Controlled content-search results (flat list). `searchResults` is
+             null while the first query is still in flight → treat as empty +
+             isSearching so the "Searching…" hint shows. */
+          (searchResults?.length ?? 0) === 0 ? (
             <p className="px-3 py-4 text-xs text-[var(--color-text-muted)] text-center">
               {isSearching ? 'Searching…' : 'No matching conversations'}
             </p>

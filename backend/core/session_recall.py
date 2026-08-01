@@ -260,6 +260,9 @@ class SessionRecall:
         _terms = [t for t in query.split() if t]
         if not _terms:
             return []
+        # Internal hard cap (defense-in-depth): the router clamps to 1..100, but a
+        # direct internal caller shouldn't be able to request an unbounded scan.
+        limit = max(1, min(limit, 100))
         # Reuse search()'s OR-join, injection-safe term quoting: each term is a
         # phrase-literal, so an FTS5 keyword (OR/NEAR/NOT) can never act as an
         # operator. Single term → OR-of-one → identical to a plain phrase search.

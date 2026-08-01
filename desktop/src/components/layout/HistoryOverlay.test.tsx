@@ -107,6 +107,24 @@ describe('HistoryOverlay', () => {
     expect(screen.getByText('Untitled')).toBeInTheDocument();
   });
 
+  it('shows a Searching… hint on the first in-flight query (no grouped flash)', async () => {
+    // A never-resolving search → results stay null while in flight.
+    searchSessions.mockReturnValue(new Promise(() => {}));
+    renderOverlay();
+    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
+    const input = screen.getByPlaceholderText('Search conversations…');
+
+    act(() => fireEvent.change(input, { target: { value: 'ingress' } }));
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    // The grouped fallback session must NOT be showing; the hint must be.
+    expect(screen.queryByText('Kubernetes chat')).toBeNull();
+    expect(screen.getByText('Searching…')).toBeInTheDocument();
+  });
+
   it('clearing the query falls back to the grouped list (AC5)', async () => {
     searchSessions.mockResolvedValue([mkSession('s9', 'Untitled')]);
     renderOverlay();
