@@ -277,8 +277,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       {/* Activity Feed — collapsible tool action summary */}
       {!isStreaming && <ActivityFeed blocks={message.content} />}
 
-      {/* Action buttons — appear on hover below content, hidden while streaming */}
-      {!isStreaming && extractMessageText().length > 0 && (
+      {/* Action buttons — appear on hover below content, hidden while streaming.
+          Hidden entirely in read-only (History preview) — Copy/Save/Compact/
+          Continue are all side-effecting controls that don't belong there. */}
+      {!readOnly && !isStreaming && extractMessageText().length > 0 && (
         <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity mt-1 flex items-center gap-2">
           {/* Copy button (unchanged) */}
           <button

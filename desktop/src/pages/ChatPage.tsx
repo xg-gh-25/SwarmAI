@@ -1097,10 +1097,23 @@ export default function ChatPage() {
     // reused tab's store showing the PREVIOUS session until the load resolves).
     initTabState(targetTabId, []);
     updateTabSessionId(targetTabId, session.id);
-    selectTab(targetTabId); // activeTabId change → sync effect loads the session
+
+    // If the target IS the currently-active tab (reuse can pick the active idle
+    // tab — the ordinary case when chatMax===1), selectTab(sameId) is a React
+    // no-op, so activeTabId never changes and the sync-active-tab effect
+    // early-returns → the session would never load (blank tab). Load directly.
+    if (targetTabId === activeTabIdRef.current) {
+      setSessionId(session.id);
+      setMessages([]);
+      setPendingQuestion(null);
+      void loadSessionMessages(session.id);
+    } else {
+      selectTab(targetTabId); // activeTabId change → sync effect loads the session
+    }
     return true;
   }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState,
-      selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion, selectedAgentId]);
+      selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion, selectedAgentId,
+      loadSessionMessages]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {

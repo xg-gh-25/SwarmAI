@@ -132,6 +132,21 @@ export function HistoryOverlay({
     }
   }, [open]);
 
+  // If the previewed session disappears (deleted while previewed), clear the
+  // pane so it doesn't show stale content with a dead Resume button.
+  useEffect(() => {
+    if (!previewSession) return;
+    const inGrouped = groupedSessions.some((g) => g.sessions.some((s) => s.id === previewSession.id));
+    const inResults = searchResults?.some((s) => s.id === previewSession.id) ?? false;
+    // When a search is active, existence is authoritative from results; else from the grouped list.
+    const stillExists = searchResults != null ? inResults : inGrouped;
+    if (!stillExists) {
+      setPreviewSession(null);
+      setPreviewMessages([]);
+      previewSeq.current++;
+    }
+  }, [groupedSessions, searchResults, previewSession]);
+
   const handleResume = () => {
     if (!previewSession) return;
     const landed = onResume(previewSession);
@@ -159,8 +174,9 @@ export function HistoryOverlay({
           />
         </div>
 
-        {/* RIGHT — read-only preview */}
-        <div className="flex-1 min-w-0 flex flex-col min-h-0" data-testid="history-preview">
+        {/* RIGHT — read-only preview. min-w floor so the pane can't collapse to
+            0 when the modal clamps narrow (list is a fixed 320px). */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-[280px]" data-testid="history-preview">
           {!previewSession ? (
             <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
               Select a conversation to preview
@@ -174,8 +190,10 @@ export function HistoryOverlay({
                 </div>
                 <button
                   onClick={handleResume}
+                  disabled={previewLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md
-                    bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors shrink-0"
+                    bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 transition-colors shrink-0
+                    disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="material-symbols-outlined text-sm">open_in_new</span>
                   Resume in tab
