@@ -514,6 +514,76 @@ fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
     }
 }
 
+/// Freshness window for the backend liveness heartbeat file. If the file's
+/// mtime is older than this, the writer thread has stopped → the process is
+/// gone (or the binary predates the heartbeat feature). 10s = 10 missed 1s
+/// ticks, comfortably past any GC/scheduling jitter on the writer thread.
+const HEARTBEAT_STALE_SECS: u64 = 10;
+/// loop_age at which the asyncio loop is considered genuinely WEDGED (permanent
+/// deadlock), not merely busy. Above this, a fresh heartbeat no longer protects
+/// the daemon from a terminated decision — a real wedge must still surface.
+/// 15s ≫ any legitimate synchronous burst (context assembly, SSE serialization)
+/// but well under a human's "is it dead?" patience.
+const HEARTBEAT_WEDGE_SECS: f64 = 15.0;
+
+/// Read the backend liveness heartbeat (`~/.swarm-ai/heartbeat`) written by the
+/// independent-thread writer in `core/heartbeat.py`. Returns
+/// `(heartbeat_fresh, loop_wedged)`:
+///
+/// - `heartbeat_fresh` — the file exists and its mtime is within
+///   `HEARTBEAT_STALE_SECS`. TRUE = the writer thread is ticking = the PROCESS
+///   is alive (the thread writes even when the asyncio loop is CPU/GIL-bound,
+///   because sleep + write release the GIL). A missing/stale file (old binary,
+///   or a dead process whose writer stopped) → FALSE → the caller falls back to
+///   the pre-existing pid+streak death logic (zero regression).
+/// - `loop_wedged` — only meaningful when fresh; TRUE when the file's `loop_age`
+///   (seconds since the event loop last ticked) ≥ `HEARTBEAT_WEDGE_SECS`. This
+///   distinguishes a *busy* loop (small loop_age → not wedged → protect from
+///   death) from a *genuinely deadlocked* loop (large loop_age → let it die).
+///
+/// Freshness uses FILE MTIME (filesystem truth, robust to in-file clock skew and
+/// naturally goes stale when the writing process dies); wedge uses the parsed
+/// `loop_age` field. Any read/parse failure → `(false, false)` = "can't prove
+/// alive" → safe fallback to the legacy path. Pure file I/O, compiles on all
+/// platforms (only consulted in daemon mode).
+fn read_heartbeat() -> (bool, bool) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = std::path::Path::new(&home).join(".swarm-ai").join("heartbeat");
+
+    let metadata = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(_) => return (false, false), // missing → not fresh → legacy fallback
+    };
+    let fresh = match metadata.modified() {
+        Ok(mtime) => match mtime.elapsed() {
+            // elapsed() Ok → mtime in the past; fresh if within the window.
+            Ok(age) => age.as_secs() < HEARTBEAT_STALE_SECS,
+            // Err → mtime is in the FUTURE (clock skew) → treat as fresh (the
+            // file was just written; a future mtime can't mean "stale").
+            Err(_) => true,
+        },
+        Err(_) => false,
+    };
+    if !fresh {
+        return (false, false);
+    }
+    // Fresh → parse loop_age to decide wedged-vs-busy. A parse failure leaves
+    // loop_wedged=false (busy, protected) — the conservative choice: a readable-
+    // but-unparseable fresh file still proves the process is writing.
+    let loop_wedged = match std::fs::read_to_string(&path) {
+        Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(json) => json
+                .get("loop_age")
+                .and_then(|v| v.as_f64())
+                .map(|age| age >= HEARTBEAT_WEDGE_SECS)
+                .unwrap_or(false),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
+    (fresh, loop_wedged)
+}
+
 /// Atomically install a file: copy `src` → `<dst>.<pid>.tmp-install`, chmod,
 /// then rename to `dst`. The rename is atomic on a POSIX same-filesystem, so a
 /// process already executing the old `dst` (e.g. a running guardian bash reading
@@ -770,16 +840,44 @@ enum WatchdogDownDecision {
 /// on the first miss). `escalate_threshold` is the miss count at which an alive-
 /// but-persistently-unreachable daemon is finally declared terminated (symmetry
 /// with the frontend 30s-poll failureThreshold=2).
+///
+/// ## Heartbeat override (run_5b0d6ec3 — the architectural root fix)
+///
+/// `pid_present` (launchctl-registered) proves the process EXISTS but NOT that
+/// it isn't wedged, and the miss-streak escalation still declares a *busy* (not
+/// dead) daemon Terminated at `escalate_threshold` misses (~6s) → the residual
+/// false-offline. The independent-thread heartbeat closes this:
+///   - `heartbeat_fresh` (file mtime < 10s) = the writer thread is ticking = the
+///     process is ALIVE even under a full CPU/GIL burst on the loop thread. When
+///     fresh, a busy loop (`loop_wedged=false`) is HARD-BLOCKED from Terminated —
+///     it stays Degraded no matter how high the miss streak climbs. This is what
+///     makes "busy misread as dead" structurally impossible.
+///   - `loop_wedged` (heartbeat's `loop_age` ≥ 15s) = the loop is GENUINELY
+///     deadlocked, not merely busy → the heartbeat no longer protects it; fall
+///     through to the normal streak/pid logic so a real wedge still surfaces.
+///   - heartbeat NOT fresh (missing / stale / old binary without the file) → the
+///     override is inert and the legacy pid+streak path runs UNCHANGED (zero
+///     regression: an old daemon binary produces no heartbeat file → same
+///     behavior as before this change).
 // Pure logic, no OS calls — compiled on all platforms (see enum note above).
 fn watchdog_down_decision(
     is_daemon: bool,
     pid_present: bool,
     consecutive_misses: u32,
     escalate_threshold: u32,
+    heartbeat_fresh: bool,
+    loop_wedged: bool,
 ) -> WatchdogDownDecision {
     if !is_daemon {
         // Subprocess fallback: no launchd pid signal — keep old behavior.
         return WatchdogDownDecision::Terminated;
+    }
+    // Heartbeat override: a fresh heartbeat + a loop that is NOT wedged proves
+    // the daemon is alive-but-busy. Never declare death — stay Degraded so the
+    // UI keeps inputs usable, regardless of the miss streak. A wedged loop or a
+    // stale/absent heartbeat skips this and uses the legacy logic below.
+    if heartbeat_fresh && !loop_wedged {
+        return WatchdogDownDecision::Degraded;
     }
     if pid_present && consecutive_misses < escalate_threshold {
         WatchdogDownDecision::Degraded
@@ -1781,6 +1879,13 @@ fn spawn_daemon_health_watchdog(
         let health_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
         let mut was_healthy = true;
         let mut recovery_attempts: u32 = 0;
+        // Whether we've already emitted a terminated signal for the CURRENT down
+        // episode (run_5b0d6ec3 HIGH-1 fix). The escalation re-checks the death
+        // decision on EVERY degraded iteration (so a heartbeat going stale flips
+        // busy→dead within one 3s poll instead of being masked for ~120s), but
+        // the terminated event must fire only ONCE per episode. Reset to false on
+        // any recovery (was_healthy back to true).
+        let mut terminated_emitted = false;
         let mut known_boot_id: Option<String> = None;
         // Resolve uid ONCE for the watchdog's lifetime (not per-miss) — the launchd
         // uid is stable, and the cold-start path resolves it once per session too.
@@ -1873,7 +1978,11 @@ fn spawn_daemon_health_watchdog(
                 };
                 #[cfg(not(target_os = "macos"))]
                 let pid_present = false;
-                match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES) {
+                // Heartbeat override (run_5b0d6ec3): a fresh heartbeat + non-wedged
+                // loop proves alive-but-busy → stay Degraded even at the streak
+                // ceiling. Read here (pure file I/O, fast) on every miss.
+                let (heartbeat_fresh, loop_wedged) = read_heartbeat();
+                match watchdog_down_decision(is_daemon, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged) {
                     WatchdogDownDecision::Degraded => {
                         // Alive but stalled: tell the UI to show a reconnecting
                         // banner WITHOUT disabling inputs. Escalation to terminated
@@ -1938,14 +2047,18 @@ fn spawn_daemon_health_watchdog(
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                 } else if is_daemon {
-                    // Degraded→Terminated escalation (run_13094a88): if we entered
-                    // this block while DEGRADED (a live-but-stalled daemon reported
-                    // via backend-degraded above), re-check liveness + the miss
-                    // streak. Once the streak reaches DOWN_ESCALATE_MISSES, or the
-                    // process is now GONE, promote DEGRADED → real death so the UI
-                    // finally disables inputs. Emitted at the escalation boundary
-                    // ONLY (recovery_attempts == threshold) so it fires once.
-                    if recovery_attempts == DOWN_ESCALATE_MISSES {
+                    // Degraded→Terminated escalation (run_13094a88 + run_5b0d6ec3
+                    // HIGH-1 fix): while DEGRADED (a live-but-stalled daemon), re-run
+                    // the death decision on EVERY iteration once the streak reaches
+                    // DOWN_ESCALATE_MISSES — NOT once at ==threshold. Why: a process
+                    // SIGKILL'd mid-episode leaves a <10s-fresh heartbeat file; a
+                    // once-only check at ==threshold could land inside that fresh
+                    // window and never re-evaluate, masking a real death for up to
+                    // MAX_RECOVERY_ATTEMPTS (~120s). Re-checking every poll means the
+                    // heartbeat going stale (>10s) flips busy→dead within one 3s
+                    // poll. `terminated_emitted` guards the EVENT so it still fires
+                    // exactly once per down-episode (reset on recovery).
+                    if recovery_attempts >= DOWN_ESCALATE_MISSES && !terminated_emitted {
                         // Unknown (launchctl hiccup) counts as alive — only a
                         // definitive Gone forces death before the streak elapses.
                         // Offloaded (spawn_blocking) like the first-miss check.
@@ -1961,13 +2074,20 @@ fn spawn_daemon_health_watchdog(
                         };
                         #[cfg(not(target_os = "macos"))]
                         let pid_present = false;
+                        // Heartbeat override (run_5b0d6ec3): re-read on EVERY escalation
+                        // poll — a still-fresh, non-wedged heartbeat blocks the
+                        // busy→terminated escalation (the residual false-offline);
+                        // a stale heartbeat (dead process) or a genuinely wedged loop
+                        // lets the streak escalate to a real death on the next poll.
+                        let (heartbeat_fresh, loop_wedged) = read_heartbeat();
                         if matches!(
-                            watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES),
+                            watchdog_down_decision(true, pid_present, recovery_attempts, DOWN_ESCALATE_MISSES, heartbeat_fresh, loop_wedged),
                             WatchdogDownDecision::Terminated
                         ) {
-                            println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}) — escalating to terminated",
-                                recovery_attempts, pid_present);
+                            println!("[Tauri] Watchdog: degraded daemon persisted {} misses (pid_present={}, hb_fresh={}, wedged={}) — escalating to terminated",
+                                recovery_attempts, pid_present, heartbeat_fresh, loop_wedged);
                             let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+                            terminated_emitted = true;
                         }
                     }
                     // Daemon mode: launchd will restart — wait up to MAX_DAEMON_WAIT.
@@ -2021,6 +2141,9 @@ fn spawn_daemon_health_watchdog(
                     None => known_boot_id,
                 };
                 recovery_attempts = 0;
+                // Recovered → allow a fresh terminated emit for any FUTURE episode
+                // (run_5b0d6ec3 HIGH-1: the once-guard is per down-episode).
+                terminated_emitted = false;
             }
 
             was_healthy = healthy;
@@ -2744,22 +2867,26 @@ mod adaptive_probe_tests {
     }
 
     // ── Runtime watchdog down-decision (run_13094a88, false-offline root-fix) ──
+    // These pass heartbeat_fresh=false (no heartbeat file — the legacy path), so
+    // they ALSO prove zero-regression: an old binary without a heartbeat file
+    // behaves EXACTLY as before the run_5b0d6ec3 heartbeat override was added.
     // AC1: a LIVE daemon on the FIRST miss is DEGRADED, never Terminated — the
     // single-3s-stall false-offline is structurally impossible now.
     #[test]
     fn down_first_miss_alive_daemon_is_degraded() {
         assert_eq!(
-            watchdog_down_decision(true, true, 1, 2),
+            watchdog_down_decision(true, true, 1, 2, false, false),
             WatchdogDownDecision::Degraded
         );
     }
 
     // AC3: a LIVE daemon still unreachable at the escalation threshold IS declared
-    // terminated (a genuine persistent outage, not a blip).
+    // terminated (a genuine persistent outage, not a blip) — WHEN there is no
+    // fresh heartbeat to prove it's merely busy (legacy path).
     #[test]
     fn down_streak_reaches_threshold_terminates() {
         assert_eq!(
-            watchdog_down_decision(true, true, 2, 2),
+            watchdog_down_decision(true, true, 2, 2, false, false),
             WatchdogDownDecision::Terminated
         );
     }
@@ -2769,22 +2896,96 @@ mod adaptive_probe_tests {
     #[test]
     fn down_pid_gone_terminates_immediately() {
         assert_eq!(
-            watchdog_down_decision(true, false, 1, 2),
+            watchdog_down_decision(true, false, 1, 2, false, false),
             WatchdogDownDecision::Terminated
         );
     }
 
     // AC5: subprocess-fallback mode (is_daemon=false) has no launchctl signal, so
-    // it preserves the pre-fix straight-to-terminated behavior regardless of pid.
+    // it preserves the pre-fix straight-to-terminated behavior regardless of pid
+    // (and regardless of any heartbeat — subprocess mode has no heartbeat file).
     #[test]
     fn down_subprocess_mode_always_terminates() {
         assert_eq!(
-            watchdog_down_decision(false, true, 1, 2),
+            watchdog_down_decision(false, true, 1, 2, false, false),
             WatchdogDownDecision::Terminated
         );
         assert_eq!(
-            watchdog_down_decision(false, false, 1, 2),
+            watchdog_down_decision(false, false, 1, 2, false, false),
             WatchdogDownDecision::Terminated
+        );
+        // Even a fresh heartbeat cannot flip subprocess mode — the is_daemon guard
+        // returns first (there is no launchd-managed process to protect).
+        assert_eq!(
+            watchdog_down_decision(false, true, 1, 2, true, false),
+            WatchdogDownDecision::Terminated
+        );
+    }
+
+    // ── Heartbeat override (run_5b0d6ec3 — the architectural root fix) ──
+    // CORE: a fresh heartbeat + non-wedged loop keeps a daemon Degraded EVEN AT
+    // the escalation threshold. This is the structural kill of the residual
+    // false-offline: "busy loop, 2+ missed probes" can no longer become death.
+    #[test]
+    fn hb_fresh_nonwedged_blocks_terminate_at_threshold() {
+        // Same inputs as down_streak_reaches_threshold_terminates (would be
+        // Terminated on the legacy path) — the fresh heartbeat flips it.
+        assert_eq!(
+            watchdog_down_decision(true, true, 2, 2, true, false),
+            WatchdogDownDecision::Degraded
+        );
+        // Even far past the threshold, a busy-but-alive daemon stays Degraded.
+        assert_eq!(
+            watchdog_down_decision(true, true, 99, 2, true, false),
+            WatchdogDownDecision::Degraded
+        );
+    }
+
+    // A fresh heartbeat protects even when launchctl says the pid is GONE: the
+    // heartbeat writer thread ticking is a STRONGER liveness proof than a
+    // transient launchctl miss (the whole reason it exists). Busy ≠ dead.
+    #[test]
+    fn hb_fresh_nonwedged_overrides_pid_gone() {
+        assert_eq!(
+            watchdog_down_decision(true, false, 1, 2, true, false),
+            WatchdogDownDecision::Degraded
+        );
+    }
+
+    // WEDGE: a fresh heartbeat but a WEDGED loop (loop_age ≥ 15s) is a genuine
+    // deadlock — the override does NOT protect it; it falls through to the legacy
+    // path. Below threshold → still Degraded; at threshold → real Terminated.
+    #[test]
+    fn hb_fresh_wedged_falls_through_to_legacy() {
+        // Wedged + below threshold + pid present → legacy says Degraded.
+        assert_eq!(
+            watchdog_down_decision(true, true, 1, 2, true, true),
+            WatchdogDownDecision::Degraded
+        );
+        // Wedged + at threshold → the genuine deadlock IS declared terminated.
+        assert_eq!(
+            watchdog_down_decision(true, true, 2, 2, true, true),
+            WatchdogDownDecision::Terminated
+        );
+        // Wedged + pid gone → terminated immediately (both signals say dead).
+        assert_eq!(
+            watchdog_down_decision(true, false, 1, 2, true, true),
+            WatchdogDownDecision::Terminated
+        );
+    }
+
+    // STALE heartbeat (missing file / old binary) is inert — the decision is
+    // identical to the legacy 4-arg behavior. This is the zero-regression proof.
+    #[test]
+    fn hb_stale_is_inert_legacy_behavior() {
+        // fresh=false → same as down_streak_reaches_threshold_terminates.
+        assert_eq!(
+            watchdog_down_decision(true, true, 2, 2, false, false),
+            WatchdogDownDecision::Terminated
+        );
+        assert_eq!(
+            watchdog_down_decision(true, true, 1, 2, false, false),
+            WatchdogDownDecision::Degraded
         );
     }
 

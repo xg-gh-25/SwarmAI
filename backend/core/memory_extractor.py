@@ -444,9 +444,12 @@ async def extract_and_save(
         today=today,
     )
 
-    # Run LLM call in thread to avoid blocking async event loop
+    # Run LLM call on the dedicated 'llm' pool (run_c8ad52f8), NOT the default
+    # ThreadPoolExecutor — a background memory-extraction burst must never
+    # saturate the default pool the readiness sampler shares (→ false offline).
     try:
-        raw_response = await asyncio.to_thread(_call_llm, prompt, config)
+        from core import executors
+        raw_response = await executors.run_in("llm", _call_llm, prompt, config)
     except Exception as exc:
         # Catch errors that bypass _call_llm's internal try/except
         # (e.g. zlib decompression errors from boto3/urllib3 response handling)

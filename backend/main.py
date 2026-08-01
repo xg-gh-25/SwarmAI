@@ -1234,6 +1234,18 @@ async def lifespan(app: FastAPI):
     from core.readiness_sampler import readiness_sampler_loop
     _readiness_task = asyncio.create_task(readiness_sampler_loop())
 
+    # Independent-thread liveness heartbeat (run_5b0d6ec3): decouples "process
+    # alive" from the asyncio loop/GIL so a *busy* backend (heavy CPU on the loop
+    # thread) can never be misread as *dead* by the Tauri watchdog → false
+    # offline. daemon/hive only — the subprocess (dev/Windows/Linux) path has no
+    # launchd-managed liveness contract and the Tauri watchdog reads the file
+    # only in daemon mode. See core/heartbeat.py.
+    _loop_tick_task = None
+    if backend_mode in ("daemon", "hive"):
+        from core import heartbeat
+        heartbeat.start_heartbeat()
+        _loop_tick_task = asyncio.create_task(heartbeat.loop_tick_loop())
+
     yield
     # Shutdown
     _startup_complete = False
@@ -1244,6 +1256,20 @@ async def lifespan(app: FastAPI):
             await _readiness_task
         except asyncio.CancelledError:
             pass
+    # Stop the liveness heartbeat (run_5b0d6ec3): cancel the loop-tick task +
+    # stop the independent writer thread (removes the heartbeat file so a
+    # restart doesn't read a stale one from this process).
+    if _loop_tick_task and not _loop_tick_task.done():
+        _loop_tick_task.cancel()
+        try:
+            await _loop_tick_task
+        except asyncio.CancelledError:
+            pass
+    try:
+        from core import heartbeat
+        heartbeat.stop_heartbeat()
+    except Exception:
+        logger.debug("heartbeat stop on shutdown skipped", exc_info=True)
     # Drain the SQLite connection pool (run_7e8a2030) — join aiosqlite worker
     # threads so shutdown is clean and no connection leaks.
     try:

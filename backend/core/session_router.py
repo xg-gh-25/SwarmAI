@@ -457,6 +457,11 @@ async def _maybe_inject_recall(
         unit._recall_injected = True
         return
 
+    # Dedicated pools for the recall/DDD hot-path (run_c8ad52f8) — keep this
+    # session-init blocking work OFF the shared default ThreadPoolExecutor so a
+    # multi-session burst cannot starve the readiness sampler → false offline.
+    from core import executors
+
     # ── DDD runtime injection (run_91bc0651 M2) — runs BEFORE the keyword gate ──
     # signal-1 (editor file path) is DETERMINISTIC and needs NO query keywords, so
     # it must NOT be gated behind the keyword-miss early-return below (Gate-2 HIGH:
@@ -466,7 +471,14 @@ async def _maybe_inject_recall(
     if not getattr(unit, "_ddd_injected", False):
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(
+                # Dedicated 'io' pool, NOT the default one (run_c8ad52f8): DDD
+                # injection is a fs-scan + FTS5 read on the session-init hot path
+                # — the SAME instant briefing runs. On the shared default pool a
+                # multi-session burst starves the readiness sampler's own default-
+                # pool needs; the dedicated pool insulates it. (The missed half of
+                # the July hot-path increment — briefing was migrated, this wasn't.)
+                executors.run_in(
+                    "io",
                     _inject_ddd_for_active_project,
                     options,
                     user_message,
@@ -528,14 +540,17 @@ async def _maybe_inject_recall(
         # active-project detection (blocking iterdir) runs INSIDE the thread
         # (_unified_recall_body), off the event loop (Gate-2 M1).
         recalled = await asyncio.wait_for(
-            asyncio.to_thread(_unified_recall_body, keywords, _editor_fp),
+            # 'io' pool, not the default one (run_c8ad52f8): FTS5/sqlite recall on
+            # the session-init hot path — must not compete for a default-pool worker
+            # with bulk work (which would starve the readiness sampler → false offline).
+            executors.run_in("io", _unified_recall_body, keywords, _editor_fp),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         if not recalled:
             # Fallback to legacy 3-leg path (strangler-fig safety net).
             _record_recall_degraded("unified_empty_fallback_legacy")
             recalled = await asyncio.wait_for(
-                asyncio.to_thread(_recall_for_query, keywords, _RECALL_MAX_TOKENS, False),
+                executors.run_in("io", _recall_for_query, keywords, _RECALL_MAX_TOKENS, False),
                 timeout=_RECALL_DISASTER_TIMEOUT_S,
             )
         _recall_ms = (time.perf_counter() - _t_recall_start) * 1000.0

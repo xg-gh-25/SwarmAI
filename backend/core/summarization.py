@@ -621,7 +621,12 @@ class SummarizationPipeline:
             files="; ".join(summary.files_modified[:10]) or "(none)",
         )
 
-        raw = await asyncio.to_thread(self._call_enrichment_llm, prompt)
+        # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:
+        # this enrichment fires in the post-session hook window — if the user sends
+        # a message during it, a default-pool LLM call would compete with the
+        # readiness sampler. The dedicated pool insulates it.
+        from core import executors
+        raw = await executors.run_in("llm", self._call_enrichment_llm, prompt)
         if not raw or raw == "{}":
             return summary
 
