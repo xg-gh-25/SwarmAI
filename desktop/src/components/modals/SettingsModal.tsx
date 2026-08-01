@@ -22,6 +22,7 @@ export default function SettingsModal({ isOpen, onClose, initialTab }: SettingsM
       onClose={onClose}
       title="Settings"
       size="fullscreen"
+      mode="SETTINGS"
     >
       <SettingsPage initialTab={initialTab} />
     </Modal>

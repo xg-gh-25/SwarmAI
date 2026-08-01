@@ -222,20 +222,20 @@ function LeftSidebar() {
         </button>
       </div>
 
-      {/* A10 domain cards — 3 groups (Cognitive / Work / System), each a titled
+      {/* A10 domain cards — 3 groups (Work / Cognitive / System), each a titled
           color-coded divider + row-cards. Y/R signal flags only where attention
           is needed (Memory=Y, Brain Hub=Y, OS Eval=R); no flag = all good. */}
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
-        <A10Group label="Cognitive" tint={A10_GROUP.cognitive}>
-          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-context'))} data-testid="nav-context" />
-          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))} data-testid="nav-brain-hub" />
-        </A10Group>
-
         <A10Group label="Work" tint={A10_GROUP.work}>
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'))} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pollinate'))} data-testid="nav-pollinate" />
           <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-swarmws'))} data-testid="nav-swarmws" />
+        </A10Group>
+
+        <A10Group label="Cognitive" tint={A10_GROUP.cognitive}>
+          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-context'))} data-testid="nav-context" />
+          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))} data-testid="nav-brain-hub" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system}>
@@ -246,17 +246,8 @@ function LeftSidebar() {
         </A10Group>
       </nav>
 
-      {/* Footer — ⌘K command palette + GitHub. Terminal stays in the BottomBar. */}
+      {/* Footer — GitHub (left) + Terminal (right). */}
       <div className="px-2.5 pt-1.5 pb-2 border-t border-[var(--color-border)] grid grid-cols-2 gap-1.5">
-        <button
-          className="a10-fcard flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-          title="Terminal (⌘`)"
-          onClick={toggleTerminal}
-          aria-pressed={terminalPanelOpen}
-          data-testid="nav-terminal"
-        >
-          <NavSvgIcon name="terminal" />
-        </button>
         <a
           href="https://github.com/xg-gh-25/SwarmAI.git"
           title="GitHub"
@@ -266,6 +257,15 @@ function LeftSidebar() {
         >
           <GitHubIcon className="w-4 h-4" />
         </a>
+        <button
+          className="a10-fcard flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          title="Terminal (⌘`)"
+          onClick={toggleTerminal}
+          aria-pressed={terminalPanelOpen}
+          data-testid="nav-terminal"
+        >
+          <NavSvgIcon name="terminal" />
+        </button>
       </div>
     </aside>
   );

@@ -4,8 +4,8 @@
  * Behavioral contract of the A10 nav (things a snapshot can't assert cheaply):
  *   1. CHAT HERO — a hero card at the top carrying the SwarmAI brand logo.
  *   2. HISTORY ROW — a History entry directly under the Chat hero.
- *   3. THREE GROUPS in order — Cognitive (Context/Memory/Brain Hub),
- *      Work (Pipeline/Pollinate/SwarmWS), System (Capabilities/OS Eval/
+ *   3. THREE GROUPS in order — Work (Pipeline/Pollinate/SwarmWS),
+ *      Cognitive (Context/Memory/Brain Hub), System (Capabilities/OS Eval/
  *      Settings/Community), each with a titled+colored group label.
  *   4. DOMAIN CARDS top-to-bottom in that exact order.
  *   5. Y/R SIGNAL FLAGS — Memory=Y, Brain Hub=Y, OS Eval=R, none elsewhere.
@@ -47,12 +47,12 @@ function renderSidebar() {
 afterEach(() => cleanup());
 
 const DOMAIN_ORDER = [
-  'nav-context',
-  'nav-memory',
-  'nav-brain-hub',
   'nav-pipeline',
   'nav-pollinate',
   'nav-swarmws',
+  'nav-context',
+  'nav-memory',
+  'nav-brain-hub',
   'nav-capabilities',
   'nav-eval',
   'nav-settings',
@@ -75,13 +75,13 @@ describe('LeftSidebar A10 — chat hero + history', () => {
 });
 
 describe('LeftSidebar A10 — three groups + domain order', () => {
-  it('renders the 3 group labels in order: Cognitive, Work, System', () => {
+  it('renders the 3 group labels in order: Work, Cognitive, System', () => {
     renderSidebar();
     const nav = screen.getByTestId('nav-icons');
     const labels = Array.from(nav.querySelectorAll('[data-testid="navgroup-label"]')).map(
       (el) => el.textContent?.trim(),
     );
-    expect(labels).toEqual(['Cognitive', 'Work', 'System']);
+    expect(labels).toEqual(['Work', 'Cognitive', 'System']);
   });
 
   it('renders the 10 domain cards top-to-bottom in group order', () => {

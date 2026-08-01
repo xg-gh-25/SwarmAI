@@ -1072,16 +1072,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // A10 domain cards in exact order: Cognitive (Context/Memory/Brain Hub) →
-    // Work (Pipeline/Pollinate/SwarmWS) → System (Capabilities/OS Eval/Settings/
+    // A10 domain cards in exact order: Work (Pipeline/Pollinate/SwarmWS) →
+    // Cognitive (Context/Memory/Brain Hub) → System (Capabilities/OS Eval/Settings/
     // Community). Terminal + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
-      { testId: 'nav-context', label: 'Context' },
-      { testId: 'nav-memory', label: 'Memory' },
-      { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-swarmws', label: 'SwarmWS' },
+      { testId: 'nav-context', label: 'Context' },
+      { testId: 'nav-memory', label: 'Memory' },
+      { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },

@@ -38,6 +38,7 @@ export default function EvalModal({ isOpen, onClose }: EvalModalProps) {
       onClose={onClose}
       title={title}
       size="fullscreen"
+      mode="EVAL"
     >
       <EvalDashboard />
     </Modal>

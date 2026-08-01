@@ -51,7 +51,7 @@ function StubOverlay({ def }: { def: StubDef }): ReactNode {
   const { open, close } = useExclusiveOverlay(def.event);
 
   return (
-    <Modal isOpen={open} onClose={close} title={def.title} size="fullscreen">
+    <Modal isOpen={open} onClose={close} title={def.title} size="fullscreen" mode={def.key.toUpperCase()}>
       <div
         className="flex-1 flex flex-col items-center justify-center gap-3 p-10 text-center"
         data-testid={`stub-overlay-${def.key}`}
