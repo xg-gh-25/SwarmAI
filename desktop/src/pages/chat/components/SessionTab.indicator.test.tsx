@@ -33,11 +33,13 @@ describe('SessionTab active-state underline', () => {
       />
     );
 
-  it('AC1: active tab has a blue bottom border (border-b-2 + border-blue-500)', () => {
+  it('AC1: active tab has an accent bottom border (border-b-2 + border-[var(--color-primary)])', () => {
+    // run_843962a5: active underline now uses the product accent var
+    // (--color-primary, theme-aware) instead of a hardcoded blue-500.
     renderTab(true);
     const tab = screen.getByRole('tab');
     expect(tab.className).toContain('border-b-2');
-    expect(tab.className).toContain('border-blue-500');
+    expect(tab.className).toContain('border-[var(--color-primary)]');
   });
 
   it('AC2: inactive tab has a transparent bottom border (border-b-2 + border-transparent)', () => {
@@ -47,9 +49,10 @@ describe('SessionTab active-state underline', () => {
     expect(tab.className).toContain('border-transparent');
   });
 
-  it('AC2 (layout-shift-free): inactive tab does NOT carry the blue color', () => {
+  it('AC2 (layout-shift-free): inactive tab does NOT carry the accent border color', () => {
     renderTab(false);
     const tab = screen.getByRole('tab');
+    expect(tab.className).not.toContain('border-[var(--color-primary)]');
     expect(tab.className).not.toContain('border-blue-500');
   });
 

@@ -86,21 +86,27 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       className={clsx(
         // border-b-2 on ALL tabs reserves the underline height → no layout shift
         // between active/inactive. Inactive uses a transparent placeholder.
-        'group/tab flex items-center gap-1.5 px-3 py-1 rounded cursor-pointer transition-colors',
+        'group/tab flex items-center gap-1.5 px-3 py-1 rounded-md cursor-pointer',
+        'transition-all duration-150 ease-out',
         'min-w-0 max-w-[200px] flex-shrink-0',
         // border-b-2 on ALL states (transparent when inactive) keeps the tab
         // height constant so the active underline appears without layout shift (GUI12).
         'border-b-2',
         isActive
-          ? 'border-blue-500 bg-[var(--color-card)] text-[var(--color-text)] font-medium'
+          // Active: accent underline + subtle accent-tinted fill + faint top ring
+          // for a "lifted" chip feel. Uses the product accent var
+          // (--color-primary, which follows the user's accent preset) so the
+          // active tab matches the app theme instead of a hardcoded blue (GUI12).
+          ? 'border-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] text-[var(--color-text)] font-medium shadow-[inset_0_1px_0_var(--color-border)]'
           : 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       )}
     >
-      {/* Unread dot — 6px blue pulsing dot with glow */}
+      {/* Unread dot — 6px accent pulsing dot with a soft glow. Uses the product
+          accent var so it matches the theme (not a hardcoded blue). */}
       {isUnread && (
         <span
-          className="w-1.5 h-1.5 rounded-full bg-blue-500 flex-shrink-0 animate-pulse"
-          style={{ boxShadow: '0 0 4px rgba(88, 166, 255, 0.4)' }}
+          className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-[var(--color-primary)]"
+          style={{ boxShadow: '0 0 5px color-mix(in srgb, var(--color-primary) 55%, transparent)' }}
           role="img"
           aria-label="Unread messages"
         />
@@ -126,13 +132,14 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         </span>
       )}
 
-      {/* Close button — hidden by default, visible on tab hover */}
+      {/* Close button — hidden by default, fades in on tab hover (also visible
+          when the tab is active so the current tab is always closable). */}
       <button
         onClick={handleClose}
         aria-label={`Close ${tab.title}`}
         className={clsx(
-          'p-0.5 rounded transition-all flex-shrink-0',
-          'opacity-0 group-hover/tab:opacity-100',
+          'p-0.5 rounded-md transition-all duration-150 flex-shrink-0',
+          isActive ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover/tab:opacity-100',
           'hover:bg-[var(--color-hover)]',
           'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
         )}
