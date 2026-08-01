@@ -1098,10 +1098,17 @@ export default function ChatPage() {
     initTabState(targetTabId, []);
     updateTabSessionId(targetTabId, session.id);
 
-    // If the target IS the currently-active tab (reuse can pick the active idle
-    // tab — the ordinary case when chatMax===1), selectTab(sameId) is a React
-    // no-op, so activeTabId never changes and the sync-active-tab effect
-    // early-returns → the session would never load (blank tab). Load directly.
+    // Load the target tab. When targetTabId is already the active tab,
+    // selectTab(sameId) is a React no-op → activeTabId never changes → the
+    // sync-active-tab effect early-returns (prevActiveTabIdRef===activeTabId) →
+    // the session would never load (blank tab). So load DIRECTLY in that case.
+    //
+    // This direct-load branch is hit by BOTH: (a) reuse into the active idle tab
+    // (the ordinary case when chatMax===1), AND (b) newtab — because addTab()
+    // sets activeTabIdRef SYNCHRONOUSLY, so a freshly-added tab is already the
+    // active tab by the time we get here. The selectTab() branch below is
+    // therefore reached ONLY by reuse into a NON-active idle tab (chatMax>1).
+    // Do NOT "simplify" this to always-selectTab: that reintroduces the no-op.
     if (targetTabId === activeTabIdRef.current) {
       setSessionId(session.id);
       setMessages([]);
