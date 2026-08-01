@@ -275,6 +275,44 @@ describe('aggregateAttention', () => {
     }
   });
 
+  it('perf-regression INVERSE (meta-review MED): a CHANGED poll (same id, different status) DOES produce a new reference — the bail-out never drops a real change', async () => {
+    // Guards the inverse of the churn fix: sameJson must NOT be over-eager. If a
+    // genuine change (run_x running→paused) serialized equal, the UI would go
+    // stale (silent dropped update). This proves a real status change flows
+    // through: poll 1 = running (→ FYI, 0 attention), poll 2 = paused (→ 1
+    // attention). Reference MUST change and attentionItems MUST update.
+    vi.useFakeTimers();
+    try {
+      let status: 'running' | 'paused' = 'running';
+      vi.spyOn(pipelinesService, 'fetchActivePipelines').mockImplementation(async () => [
+        { id: 'run_x', project: 'SwarmAI', requirement: 'r', status,
+          currentStage: 'build', checkpointReason: 'Gate-1 BLOCK', pauseKind: 'decision',
+          progress: '', updatedAt: '' } as PipelineRun,
+      ]);
+      vi.spyOn(jobsService, 'fetchJobs').mockImplementation(async () => []);
+      vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}));
+
+      const { result, unmount } = renderHook(() => useRadarAttention('sess-current', []));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      // poll 1: running → FYI only, zero attention items
+      expect(result.current.attentionItems).toHaveLength(0);
+      const firstRef = result.current;
+
+      status = 'paused'; // real backend change
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+
+      // The change MUST propagate: new reference + the paused item now in attention.
+      expect(result.current).not.toBe(firstRef);
+      expect(result.current.attentionItems).toHaveLength(1);
+      expect(result.current.attentionItems[0].id).toBe('run_x');
+
+      unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('AC3: a waiting session with no open tab is ignored (can not switch to a tab that is not open)', () => {
     const streamingState: Record<string, StreamingStateEntry> = {
       'sess-orphan': streaming({ waitingInput: true }),
