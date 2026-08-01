@@ -91,14 +91,26 @@ describe('CMBrainOverlay — open/close + tabs', () => {
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
   });
 
-  it('Memory and Guideline tabs are placeholders (not implemented in Run 1)', async () => {
+  it('Memory and Guideline tabs render a COMPACT roadmap teaser (not a full-height empty void)', async () => {
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-brain-overlay');
+
     act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    expect(await screen.findByTestId('cm-placeholder-memory')).toBeInTheDocument();
+    const mem = await screen.findByTestId('cm-placeholder-memory');
+    // §4: NOT a full-height centered void — no py-16, no justify-center/items-center
+    expect(mem.className).not.toContain('py-16');
+    expect(mem.className).not.toContain('justify-center');
+    expect(mem.className).not.toContain('items-center');
+    // teaser communicates value compactly — names the real stores it will surface
+    expect(mem.textContent).toMatch(/MEMORY\.md|EVOLUTION\.md/);
+
     act(() => { screen.getByTestId('cm-tab-guideline').click(); });
-    expect(await screen.findByTestId('cm-placeholder-guideline')).toBeInTheDocument();
+    const guide = await screen.findByTestId('cm-placeholder-guideline');
+    expect(guide.className).not.toContain('py-16');
+    expect(guide.className).not.toContain('justify-center');
+    expect(guide.className).not.toContain('items-center');
+    expect(guide.textContent).toMatch(/SOUL|AGENT|STEERING/);
   });
 });
 
@@ -114,6 +126,26 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     expect(screen.getByTestId('cm-file-row-KNOWLEDGE.md')).toBeInTheDocument();
     // exactly 4 rows — driven by the 4-entry payload
     expect(screen.getAllByTestId(/^cm-file-row-/)).toHaveLength(4);
+  });
+
+  it('row is width-capped and the filename keeps its truncation bound (no dead-space void)', async () => {
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    const row = await screen.findByTestId('cm-file-row-SWARMAI.md');
+    // §4 group+cap: the row content is bounded (max-w-*), so metadata sits next to
+    // the name instead of a screen away on a wide window.
+    expect(row.className).toMatch(/max-w-/);
+    // Gate-1 constraint: the name span MUST keep `flex-1 min-w-0 truncate` — that
+    // pairing IS the truncation bound; removing flex-1 breaks truncation for long
+    // filenames. The void is fixed by capping the ROW, not by dropping flex-1.
+    const nameSpan = Array.from(row.querySelectorAll('span')).find(
+      (s) => s.textContent === 'SWARMAI.md',
+    ) as HTMLElement;
+    expect(nameSpan).toBeTruthy();
+    expect(nameSpan.className).toContain('flex-1');
+    expect(nameSpan.className).toContain('min-w-0');
+    expect(nameSpan.className).toContain('truncate');
   });
 
   it('shows ownership + lock from the payload', async () => {

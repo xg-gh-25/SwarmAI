@@ -133,8 +133,22 @@ export function CMBrainOverlay() {
 
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
             {tab === 'context' && <ContextTab block={block} />}
-            {tab === 'memory' && <Placeholder testid="cm-placeholder-memory" title="Memory" />}
-            {tab === 'guideline' && <Placeholder testid="cm-placeholder-guideline" title="Guideline" />}
+            {tab === 'memory' && (
+              <TabTeaser
+                testid="cm-placeholder-memory"
+                title="Memory"
+                body="The agent's long-term memory — what it has learned and decided across sessions (MEMORY.md / EVOLUTION.md). A later run surfaces it here as the 7-type knowledge graph with drill-down; until then it's edited in the workspace."
+                planned="Run 2 · 7-type knowledge graph + drill-down"
+              />
+            )}
+            {tab === 'guideline' && (
+              <TabTeaser
+                testid="cm-placeholder-guideline"
+                title="Guideline"
+                body="The governance layer — the principles, rules, and gates that shape the agent's judgment (SOUL / AGENT / STEERING). A later run surfaces them here so you can see and steer what governs the agent."
+                planned="Later run · governance viewer"
+              />
+            )}
           </div>
         </div>
       </div>
@@ -160,7 +174,15 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           key={f.name}
           data-testid={`cm-file-row-${f.name}`}
           data-owner={f.owner}
-          className="flex items-center gap-3 rounded-md px-3 py-2 hover:bg-[var(--color-hover)]"
+          // §4 group+cap: cap the row width (max-w-3xl) so the metadata cluster sits
+          // adjacent to the filename instead of a screen away on a wide (xl) panel —
+          // kills the dead-space void. The name span KEEPS `flex-1 min-w-0 truncate`
+          // (Gate-1: that pairing IS the truncation bound — dropping flex-1 would let a
+          // long filename overflow instead of truncating); inside the cap the residual
+          // it absorbs is small, so no stretch-band. NOTE (out of scope, follow-up): at
+          // the 320px min panel width the fixed columns (~416px) already overflow — a
+          // CSS-grid rework is the correct long-term fix for that pre-existing edge.
+          className="flex items-center gap-3 rounded-md px-3 py-2 max-w-3xl hover:bg-[var(--color-hover)]"
         >
           <span className="w-8 shrink-0 font-mono text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
@@ -196,12 +218,21 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
   );
 }
 
-function Placeholder({ testid, title }: { testid: string; title: string }) {
+// Compact, top-aligned roadmap teaser for a not-yet-implemented tab. §4: NEVER a
+// full-height centered empty void (which reads as broken) — a small intentional
+// block that says what the tab will show + why it matters, sized to its content.
+function TabTeaser({
+  testid, title, body, planned,
+}: { testid: string; title: string; body: string; planned: string }) {
   return (
-    <div data-testid={testid} className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-      <div className="text-lg font-semibold text-[var(--color-text)]">{title}</div>
-      <p className="max-w-md text-sm text-[var(--color-text-muted)]">Coming in a later cycle.</p>
-      <span className="text-[11px] font-mono uppercase tracking-widest text-[var(--color-text-faint)]">placeholder</span>
+    <div data-testid={testid} className="flex flex-col gap-1.5 max-w-xl">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-[var(--color-text)]">{title}</span>
+        <span className="rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          {planned}
+        </span>
+      </div>
+      <p className="text-sm text-[var(--color-text-muted)]">{body}</p>
     </div>
   );
 }
