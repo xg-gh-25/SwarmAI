@@ -4,7 +4,6 @@ export {
   LeftSidebar,
   WorkspaceExplorer,
   MainChatPanel,
-  NavIconButton,
   GitHubIcon,
   LEFT_SIDEBAR_WIDTH,
 } from './ThreeColumnLayout';

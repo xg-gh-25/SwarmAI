@@ -322,46 +322,6 @@ body {
   backdrop-filter: blur(10px);
 }
 
-/* LeftSidebar nav button — B2 group-tint (2026-07-12).
-   Each button sets `--ac` inline to its group brand color (falls back to the
-   accent primary). Hover/active tint bg + ring + icon + active-bar from --ac via
-   color-mix — no Tailwind arbitrary-color class (JIT-safe). Layout-shift-free:
-   the active-bar is always present and only toggles opacity (GUI10). */
-.nav-btn {
-  --ac: var(--color-primary);
-  color: var(--color-sidebar-icon);
-  transition:
-    background-color 0.15s ease,
-    color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-/* Default-tint (B, 2026-07-12): accent-bearing nav-group icons show a toned
-   group color at rest (~72% --ac blended toward the neutral sidebar grey) so the
-   four groups read as colored without shouting; hover/active升到 full --ac below.
-   Footer buttons (no .nav-btn--tinted) keep the neutral grey resting color. */
-.nav-btn--tinted {
-  color: color-mix(in srgb, var(--ac) 72%, var(--color-sidebar-icon));
-}
-/* Light theme: dial the accent weight DOWN to 40% so more of the darker light-mode
-   grey (#5b6573) survives — keeps all 4 group colors ≥3:1 against the light chrome
-   (#eef1f5), the WCAG UI-component bar this file sets at line ~24. At 72% (dark's
-   value) teal/amber fall to ~2:1 on light. Dark theme keeps 72% (already 6–8:1). */
-:root:not(.dark) .nav-btn--tinted {
-  color: color-mix(in srgb, var(--ac) 40%, var(--color-sidebar-icon));
-}
-.nav-btn:hover {
-  background-color: color-mix(in srgb, var(--ac) 12%, transparent);
-  color: var(--ac);
-}
-.nav-btn[aria-pressed='true'] {
-  background-color: color-mix(in srgb, var(--ac) 15%, transparent);
-  color: var(--ac);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 32%, transparent);
-}
-.nav-btn .nav-active-bar {
-  background-color: var(--ac);
-}
-
 /* ── A10 left-nav row-cards (run_1aab916c) ───────────────────────────────────
    The nav is a 150px column of horizontal row-cards grouped by region. Domain
    cards are quiet at rest (semi-transparent, borderless), lift on hover, and

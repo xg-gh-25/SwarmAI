@@ -304,16 +304,6 @@ function SwarmAILogo() {
 }
 
 // Navigation icon button component
-interface NavIconButtonProps {
-  icon: string;
-  label: string;
-  isActive?: boolean;
-  onClick?: () => void;
-  /** Group brand color (B2 group-tint). Drives hover/active bg+ring+bar via the
-   *  inline `--ac` CSS custom property. Defaults to the accent primary. */
-  accent?: string;
-  'data-testid'?: string;
-}
 
 /** SVG stroke icon lookup — AC6: replace Material Symbols with inline SVGs. */
 function NavSvgIcon({ name }: { name: string }) {
@@ -493,37 +483,6 @@ function NavSvgIcon({ name }: { name: string }) {
       // Fallback to material-symbols for unknown icons
       return <span className="material-symbols-outlined text-[18px]">{name}</span>;
   }
-}
-
-function NavIconButton({ icon, label, isActive, onClick, accent, 'data-testid': testId }: NavIconButtonProps) {
-  // Group tint (B2): expose the group color as --ac; the .nav-btn CSS reads it
-  // for hover/active bg+ring+icon+bar. Omitted accent → CSS falls back to the
-  // accent primary (footer buttons: Settings, GitHub-as-button use no accent).
-  const style = accent ? ({ '--ac': accent } as CSSProperties) : undefined;
-  // Accent-bearing (nav-group) buttons are toned by DEFAULT via .nav-btn--tinted;
-  // footer buttons (no accent) stay neutral grey until hover.
-  const tinted = accent ? ' nav-btn--tinted' : '';
-  return (
-    <button
-      onClick={onClick}
-      title={label}
-      data-testid={testId}
-      aria-pressed={isActive}
-      style={style}
-      className={`nav-btn${tinted} relative flex items-center justify-center w-8 h-8 rounded-lg`}
-    >
-      {/* Active indicator bar — always present (layout-shift-free, GUI10):
-          visible only when active, transparent otherwise. Color from --ac. */}
-      <span
-        data-testid="active-bar"
-        aria-hidden="true"
-        className={`nav-active-bar pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full transition-opacity ${
-          isActive ? 'opacity-100' : 'opacity-0'
-        }`}
-      />
-      <NavSvgIcon name={icon} />
-    </button>
-  );
 }
 
 // ── A10 row-card nav (run_1aab916c) ──────────────────────────────────────────
@@ -1056,5 +1015,5 @@ export default function ThreeColumnLayout({ children }: ThreeColumnLayoutProps) 
 }
 
 // Export sub-components for potential reuse
-export { TopBar, LeftSidebar, WorkspaceExplorer, MainChatPanel, NavIconButton, GitHubIcon, SwarmAILogo };
+export { TopBar, LeftSidebar, WorkspaceExplorer, MainChatPanel, GitHubIcon, SwarmAILogo };
 export { LEFT_SIDEBAR_WIDTH, MIN_MAIN_CHAT_PANEL_WIDTH };
