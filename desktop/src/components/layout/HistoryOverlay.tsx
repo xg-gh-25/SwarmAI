@@ -54,6 +54,10 @@ export function HistoryOverlay({
   useEffect(() => {
     const q = searchText.trim();
     if (!q) {
+      // Bump the seq so any in-flight fetch for a PRIOR query is invalidated —
+      // otherwise clearing the box while a search is in flight lets that stale
+      // response commit and re-show results over the grouped fallback.
+      requestSeq.current++;
       setSearchResults(null);
       setIsSearching(false);
       return;

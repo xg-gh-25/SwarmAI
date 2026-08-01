@@ -257,7 +257,10 @@ class SessionRecall:
         Returns ``[]`` for a blank query (the frontend falls back to its grouped
         session list) and on any error (fail-safe, like ``search()``).
         """
-        _terms = [t for t in query.split() if t]
+        # Cap term count (defense-in-depth): each term adds an FTS OR-clause, so an
+        # enormous query would build a huge MATCH expression whose cost scales with
+        # terms × matching rows. 32 terms is far beyond any real search intent.
+        _terms = [t for t in query.split() if t][:32]
         if not _terms:
             return []
         # Internal hard cap (defense-in-depth): the router clamps to 1..100, but a

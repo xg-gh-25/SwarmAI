@@ -80,7 +80,7 @@ async def search_threads(
 
 @router.get("/sessions", response_model=List[ChatSessionResponse])
 async def search_sessions(
-    query: str = Query(..., min_length=1, description="Search query string"),
+    query: str = Query(..., min_length=1, max_length=512, description="Search query string"),
     workspace_id: Optional[str] = Query(
         None,
         description="Optional workspace scope. Omit for app-wide (matches the "

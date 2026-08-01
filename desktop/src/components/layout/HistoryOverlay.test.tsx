@@ -125,6 +125,30 @@ describe('HistoryOverlay', () => {
     expect(screen.getByText('Searching…')).toBeInTheDocument();
   });
 
+  it('clearing while a search is in flight does NOT commit stale results', async () => {
+    // Deferred search: we resolve it manually AFTER the query is cleared, to
+    // reproduce the clear-to-empty-while-in-flight race.
+    let resolveSearch: (v: ChatSession[]) => void = () => {};
+    searchSessions.mockReturnValue(new Promise<ChatSession[]>((r) => { resolveSearch = r; }));
+    renderOverlay();
+    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
+    const input = screen.getByPlaceholderText('Search conversations…');
+
+    // fire the debounced search (fetch now in flight, unresolved)
+    act(() => fireEvent.change(input, { target: { value: 'ingress' } }));
+    await act(async () => { vi.advanceTimersByTime(300); await Promise.resolve(); });
+
+    // clear the box BEFORE the fetch resolves → should fall back to grouped list
+    act(() => fireEvent.change(input, { target: { value: '' } }));
+    await act(async () => { vi.advanceTimersByTime(300); await Promise.resolve(); });
+
+    // now the stale fetch resolves — its result must be IGNORED (seq bumped on clear)
+    await act(async () => { resolveSearch([mkSession('s9', 'Untitled')]); await Promise.resolve(); });
+
+    expect(screen.queryByText('Untitled')).toBeNull();          // stale result NOT shown
+    expect(screen.getByText('Kubernetes chat')).toBeInTheDocument(); // grouped fallback stuck
+  });
+
   it('clearing the query falls back to the grouped list (AC5)', async () => {
     searchSessions.mockResolvedValue([mkSession('s9', 'Untitled')]);
     renderOverlay();
