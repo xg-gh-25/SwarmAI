@@ -157,7 +157,12 @@ class CredentialValidator:
 
         logger.debug("Credential cache miss — calling STS in region %s", region)
         try:
-            identity = await asyncio.to_thread(self._call_sts, region)
+            # Dedicated 'subprocess' pool, NOT the default one (run_b36c7880):
+            # this STS call is on the readiness-sampler path; running it on the
+            # shared default pool means a bulk-work saturation stalls the sampler
+            # → stale readiness → false offline. The dedicated pool insulates it.
+            from core import executors
+            identity = await executors.run_in("subprocess", self._call_sts, region)
             self._last_result = True
             self._last_identity = identity
             self._last_check = time.monotonic()
@@ -240,7 +245,11 @@ class CredentialValidator:
             return self._check_cache_status
 
         try:
-            await asyncio.to_thread(self._call_sts_typed, region)
+            # Dedicated 'subprocess' pool (run_b36c7880): check() is the readiness
+            # sampler's auth leg — must not compete for a default-pool worker with
+            # bulk blocking work, or a saturation burst stalls the sampler.
+            from core import executors
+            await executors.run_in("subprocess", self._call_sts_typed, region)
             self._check_cache_status = "valid"
             self._check_cache_time = time.monotonic()
             return "valid"
