@@ -5,9 +5,10 @@
  * BrainHubDemoOverlay) and renders a labeled skeleton. Cycle-3 scope: every
  * domain card opens SOMETHING; content精修 is a later cycle.
  *
- * NOTE: `history` is NOT a stub — it has a real surface (HistoryOverlay in
- * ChatPage handles swarm:show-history). It was removed from STUBS so both don't
- * open on the same event.
+ * NOTE: `history` and `context` are NOT stubs — they have real surfaces
+ * (HistoryOverlay handles swarm:show-history; CMBrainOverlay handles
+ * swarm:show-context, run_5f7d4fe1). Both were removed from STUBS so a real
+ * overlay and a stub never open on the same event.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
@@ -17,7 +18,6 @@ import { DomainStubOverlays } from './DomainStubOverlays';
 afterEach(() => cleanup());
 
 const CASES: Array<[string, string, string]> = [
-  ['swarm:show-context', 'stub-overlay-context', 'Context'],
   ['swarm:show-pipeline', 'stub-overlay-pipeline', 'Pipeline'],
   ['swarm:show-pollinate', 'stub-overlay-pollinate', 'Pollinate'],
 ];
@@ -47,7 +47,8 @@ describe('DomainStubOverlays', () => {
       window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
     });
     expect(screen.getByTestId('stub-overlay-pipeline')).toBeInTheDocument();
-    expect(screen.queryByTestId('stub-overlay-context')).toBeNull();
     expect(screen.queryByTestId('stub-overlay-pollinate')).toBeNull();
+    // context is no longer a stub at all (real CMBrainOverlay) — never present here
+    expect(screen.queryByTestId('stub-overlay-context')).toBeNull();
   });
 });

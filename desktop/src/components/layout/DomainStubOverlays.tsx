@@ -21,12 +21,10 @@ interface StubDef {
 }
 
 const STUBS: StubDef[] = [
-  {
-    key: 'context',
-    event: 'swarm:show-context',
-    title: 'Context',
-    blurb: 'What is loaded into the prompt right now — the 11 context files + live recall. Full view coming in a later cycle.',
-  },
+  // NOTE: `context` is NO LONGER a stub — swarm:show-context now opens the real
+  // CMBrainOverlay (C&M Global Brain, run_5f7d4fe1), rendered in ThreeColumnLayout.
+  // It must NOT also be a stub here, or both would open on the same event (double
+  // fullscreen overlay) — same contract as the `history` note below.
   {
     key: 'pipeline',
     event: 'swarm:show-pipeline',

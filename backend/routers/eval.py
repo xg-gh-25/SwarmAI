@@ -357,6 +357,18 @@ async def get_context_health():
         logger.debug("context-health: learning dashboard failed: %s", exc)
         result["learning_dashboard"] = None
 
+    # 5. Token block — read-only telemetry for the C&M Brain overlay UI (Context
+    # tab + overview rail): calibrated per-file token sizes + composition % +
+    # ownership/priority/lock. NOT consumed by Eval logic; OPTIONAL field, so
+    # existing consumers (EvalDashboard) that don't read it are unaffected.
+    try:
+        from core.context_brain import build_context_token_block
+
+        result["token_block"] = build_context_token_block(root / ".context")
+    except Exception as exc:
+        logger.debug("context-health: token block failed: %s", exc)
+        result["token_block"] = None
+
     return result
 
 

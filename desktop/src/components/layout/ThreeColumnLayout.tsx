@@ -13,6 +13,7 @@ import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import { SwarmWSOverlay } from './SwarmWSOverlay';
 import { DomainStubOverlays } from './DomainStubOverlays';
+import { CMBrainOverlay } from './CMBrainOverlay';
 import { setNavSource, clearNavSource } from './navSource';
 import { useActiveOverlayEvent, clearActiveOverlayEvent } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
@@ -1047,8 +1048,12 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       {/* Brain Hub demo overlay — self-contained, listens for swarm:show-brain-hub (nav-brain-hub) */}
       <BrainHubDemoOverlay />
 
-      {/* A10 domain stub overlays — Context / Pipeline / Pollinate / History open
-          labeled placeholders (real surfaces land in later per-card cycles). */}
+      {/* C&M Global Brain overlay — real surface for the Context nav card
+          (swarm:show-context). Replaces the former Context stub (run_5f7d4fe1). */}
+      <CMBrainOverlay />
+
+      {/* A10 domain stub overlays — Pipeline / Pollinate open labeled
+          placeholders (real surfaces land in later per-card cycles). */}
       <DomainStubOverlays />
     </div>
   );
