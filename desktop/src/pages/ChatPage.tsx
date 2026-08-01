@@ -1040,45 +1040,67 @@ export default function ChatPage() {
     }));
     const decision = resolveResumeTarget(session.id, tabs, maxTabsInfo.chatMax);
 
-    switch (decision.action) {
-      case 'busy':
-        addToast({
-          severity: 'warning',
-          message: `All ${maxTabsInfo.chatMax} tabs are busy — free one (or wait for it to finish), then Resume.`,
-          autoDismiss: true,
-        });
-        return false;
-      case 'focus':
-        // Already open — just switch to it (its messages are already loaded).
-        void handleTabSelect(decision.tabId);
-        return true;
-      case 'reuse': {
-        // Reuse a strictly-idle tab: seed its sessionId + agent, then let
-        // handleTabSelect run its "sessionId set + empty messages → load" path.
-        if (session.agentId) setSelectedAgentId(session.agentId);
-        updateTabSessionId(decision.tabId, session.id);
-        const reuseTab = tabMapRef.current.get(decision.tabId);
-        if (reuseTab) reuseTab.messages = [];
-        void handleTabSelect(decision.tabId);
-        return true;
-      }
-      case 'newtab': {
-        if (session.agentId) setSelectedAgentId(session.agentId);
-        const newTab = addTab(session.agentId || selectedAgentId || 'default');
-        if (!newTab) {
-          // Race: cap reached between decision and addTab → treat as busy.
-          addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
-          return false;
-        }
-        initTabState(newTab.id, []);
-        updateTabSessionId(newTab.id, session.id);
-        void handleTabSelect(newTab.id);
-        return true;
-      }
-      default:
-        return false;
+    if (decision.action === 'busy') {
+      addToast({
+        severity: 'warning',
+        message: `All ${maxTabsInfo.chatMax} tabs are busy — free one (or wait for it to finish), then Resume.`,
+        autoDismiss: true,
+      });
+      return false;
     }
-  }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState, selectedAgentId]);
+
+    // focus: the session is already open with its messages loaded — switching
+    // to it goes through handleTabSelect (it IS in the captured openTabs).
+    if (decision.action === 'focus') {
+      void handleTabSelect(decision.tabId);
+      return true;
+    }
+
+    // reuse / newtab: agent switch happens BEFORE we activate, but AFTER the
+    // decision — never leaving a streaming tab half-loaded (the old bug). We do
+    // NOT call handleTabSelect here: it reads a `useMemo(openTabs)` snapshot that
+    // does not yet contain a just-added tab (bump only schedules a re-render), so
+    // it would silently no-op. Instead we mirror handleNewSession: save the
+    // outgoing tab, seed the target's session + empty store via initTabState,
+    // selectTab (tabMapRef-based, not openTabs), and let the sync-active-tab
+    // effect load the session (it fires on activeTabId change for a tab with a
+    // sessionId + empty messages).
+    if (session.agentId) setSelectedAgentId(session.agentId);
+
+    // Save current React state into the outgoing active tab (skip messages for a
+    // streaming tab — tabMapRef is authoritative there).
+    const currentTabId = activeTabIdRef.current;
+    if (currentTabId && tabMapRef.current.has(currentTabId)) {
+      const currentTab = tabMapRef.current.get(currentTabId)!;
+      updateTabState(currentTabId, {
+        ...(!currentTab.isStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
+        pendingQuestion,
+        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
+      });
+    }
+
+    let targetTabId: string;
+    if (decision.action === 'reuse') {
+      targetTabId = decision.tabId;
+    } else {
+      const newTab = addTab(session.agentId || selectedAgentId || 'default');
+      if (!newTab) {
+        // Race: cap reached between decision and addTab → treat as busy.
+        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+        return false;
+      }
+      targetTabId = newTab.id;
+    }
+
+    // Seed the target tab: empty its messages via initTabState (which also
+    // clears the tab's MessageStore — a raw `tab.messages = []` would leave the
+    // reused tab's store showing the PREVIOUS session until the load resolves).
+    initTabState(targetTabId, []);
+    updateTabSessionId(targetTabId, session.id);
+    selectTab(targetTabId); // activeTabId change → sync effect loads the session
+    return true;
+  }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState,
+      selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion, selectedAgentId]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {
