@@ -145,4 +145,73 @@ describe('JobsRunsOverlay interactions', () => {
     expect(screen.queryByTestId('job-action-edit')).toBeNull();
     expect(screen.queryByTestId('job-action-delete')).toBeNull();
   });
+
+  it('AC5: Runs view merges pipeline + job runs newest-first (real assertion, not just claimed)', async () => {
+    // Job lastRun is UTC (Z); pipeline updatedAt carries a +08:00 offset. The
+    // job ran at 06:00Z = 14:00+08:00 (later instant) than the pipeline 09:00+08:00
+    // = 01:00Z — so newest-first the JOB row must come FIRST despite its "06:00"
+    // text sorting BEFORE "09:00" lexically (guards the Date.parse sort fix).
+    fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'stock', name: 'Stock', lastRun: '2026-07-31T06:00:00Z' })]);
+    fn(pipelinesService.fetchAllPipelines).mockResolvedValue([
+      { id: 'p1', project: 'SwarmAI', requirement: 'do a thing', status: 'completed', currentStage: 'reflect', checkpointReason: null, pauseKind: null, progress: '8/8', updatedAt: '2026-07-31T09:00:00+08:00' },
+    ]);
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    fireEvent.click(screen.getByTestId('jobs-view-runs'));
+
+    // Both the pipeline (fetchAllPipelines) and the job (roster) legs load
+    // asynchronously in refreshRuns — wait for BOTH rows to appear.
+    await waitFor(() => expect(screen.getAllByTestId('run-row').length).toBe(2));
+    const rows = screen.getAllByTestId('run-row');
+    // Newest instant first: the JOB (06:00Z = 14:00 local) before the PIPELINE (01:00Z).
+    expect(within(rows[0]).getByText('job')).toBeTruthy();
+    expect(within(rows[1]).getByText('pipeline')).toBeTruthy();
+  });
+
+  it('AC6: pause/resume label reflects enabled state; run-now disabled for a paused job', async () => {
+    fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'brain-push', name: 'Brain Push', enabled: false, lastStatus: 'never', source: 'user' })]);
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
+    await screen.findByTestId('job-detail-drawer');
+
+    // Disabled job → the toggle reads "Resume" (not "Pause"); run-now disabled.
+    expect(screen.getByTestId('job-action-resume')).toBeTruthy();
+    expect(screen.queryByTestId('job-action-pause')).toBeNull();
+    expect((screen.getByTestId('job-action-run-now') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('empty roster shows the guide empty-state, not a blank column', async () => {
+    fn(jobsService.fetchRoster).mockResolvedValue([]);
+    fn(jobsService.fetchOverview).mockResolvedValue({ total: 0, enabled: 0, healthy: 0, failing: 0, neverRun: 0, monthlySpendUsd: 0 });
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    expect(await screen.findByTestId('jobs-empty')).toBeTruthy();
+    expect(screen.queryByTestId('job-card')).toBeNull();
+  });
+
+  it('never-run drawer shows "No output captured", never crashes on empty runs', async () => {
+    fn(jobsService.fetchJobRuns).mockResolvedValue({ jobId: 'stock-analysis', lastOutput: null, lastOutputDate: null, recent: [] });
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
+    const drawer = await screen.findByTestId('job-detail-drawer');
+    await waitFor(() => expect(within(drawer).getByText(/No output captured/)).toBeTruthy());
+    expect(within(drawer).getByText(/No run history/)).toBeTruthy();
+  });
+
+  it('F3: run-now failure surfaces an error line (not silent)', async () => {
+    fn(jobsService.runJob).mockRejectedValue(new Error('boom'));
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
+    await screen.findByTestId('job-detail-drawer');
+    fireEvent.click(screen.getByTestId('job-action-run-now'));
+    expect(await screen.findByTestId('job-run-error')).toBeTruthy();
+  });
 });

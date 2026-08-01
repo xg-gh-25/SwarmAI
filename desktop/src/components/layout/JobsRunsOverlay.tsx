@@ -91,7 +91,12 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
   const refreshRuns = useCallback(async () => {
     setLoading(true);
     try {
-      setPipelines(await pipelinesService.fetchAllPipelines());
+      // Runs view merges pipeline runs + each job's latest run — so it needs the
+      // roster too, even when the user jumps straight to Runs without visiting
+      // Jobs first (otherwise job rows silently never appear).
+      const [pl, r] = await Promise.all([pipelinesService.fetchAllPipelines(), jobsService.fetchRoster()]);
+      setPipelines(pl);
+      setRoster(r);
     } catch {
       setPipelines([]);
     } finally {
@@ -115,10 +120,16 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
     if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
   }, [onDispatch, close]);
 
-  const handleRunNow = useCallback(async (job: JobRosterRow) => {
-    try { await jobsService.runJob(job.id); } catch { /* non-fatal; drawer refetches */ }
-    // Refresh roster so the last-run/status updates after a run-now.
-    void refreshJobs();
+  // Returns true on success, false on failure — the drawer surfaces the error
+  // (F3: a silent catch left the user with no feedback on a failed run-now).
+  const handleRunNow = useCallback(async (job: JobRosterRow): Promise<boolean> => {
+    try {
+      await jobsService.runJob(job.id);
+      void refreshJobs();  // reflect the new last-run/status
+      return true;
+    } catch {
+      return false;
+    }
   }, [refreshJobs]);
 
   const handleCreated = useCallback(() => { setCreating(false); }, []);
@@ -154,13 +165,14 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
         <GuideBanner />
 
         {view === 'jobs' ? (
-          <JobsView roster={roster} overview={overview} onSelect={setSelected} />
+          <JobsView roster={roster} overview={overview} onSelect={(j) => { setCreating(false); setSelected(j); }} />
         ) : (
           <RunsView pipelines={pipelines} roster={roster} />
         )}
 
-        {/* Detail drawer — absolute overlay, never a flex sibling */}
-        {selected && (
+        {/* Detail drawer — absolute overlay, never a flex sibling. Mutually
+            exclusive with the New Job form (F2): never stack z-10 under z-20. */}
+        {selected && !creating && (
           <JobDetailDrawer
             job={selected}
             onClose={() => setSelected(null)}
@@ -227,7 +239,7 @@ function OverviewStrip({ o }: { o: JobsOverview }) {
     { label: 'monthly spend', value: `$${o.monthlySpendUsd.toFixed(2)}` },
   ];
   return (
-    <div className="shrink-0 mx-4 mt-3 grid grid-cols-5 gap-2" data-testid="jobs-overview">
+    <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="jobs-overview">
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
           <span className={`text-[15px] font-bold ${c.danger ? 'text-red-400' : 'text-[var(--color-text)]'}`}>{c.value}</span>
@@ -270,7 +282,11 @@ function RunsView({ pipelines, roster }: { pipelines: PipelineRun[]; roster: Job
     ...roster.filter((j) => j.lastRun).map((j): Row => ({
       key: `j-${j.id}`, kind: 'job', name: j.name, status: j.lastStatus, detail: j.schedule, ts: j.lastRun ?? '',
     })),
-  ].sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+  // Sort on the parsed INSTANT, not the raw ISO string: pipeline updatedAt carries
+  // a local offset (+08:00) while job lastRun is UTC (Z), so a lexical compare would
+  // order by wall-clock text, not chronology (off by up to the offset). Date.parse
+  // handles both forms; invalid/empty stamps (→ NaN → 0) sort last.
+  ].sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="jobs-runs-view">
@@ -307,11 +323,12 @@ function StatusBadge({ status }: { status: string }) {
 function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
   job: JobRosterRow;
   onClose: () => void;
-  onRunNow: (j: JobRosterRow) => void;
+  onRunNow: (j: JobRosterRow) => Promise<boolean>;
   onDispatch: (prompt: string) => void;
 }) {
   const [runs, setRuns] = useState<JobRunsResult | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
+  const [runState, setRunState] = useState<'idle' | 'running' | 'error'>('idle');
 
   useEffect(() => {
     let alive = true;
@@ -372,8 +389,8 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
                 <li key={i} className="flex items-center gap-2 text-[11px] font-mono">
                   <span className="text-[var(--color-text-faint)] w-[80px]">{r.date}</span>
                   <StatusBadge status={r.status} />
-                  <span className="text-[var(--color-text-muted)]">{r.tokens} tok</span>
-                  <span className="text-[var(--color-text-faint)]">{r.duration.toFixed(1)}s</span>
+                  <span className="text-[var(--color-text-muted)]">{r.tokens ?? 0} tok</span>
+                  <span className="text-[var(--color-text-faint)]">{(r.duration ?? 0).toFixed(1)}s</span>
                 </li>
               ))}
             </ul>
@@ -384,9 +401,18 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
       </div>
 
       {/* Action row */}
+      {runState === 'error' && (
+        <div className="px-4 pt-2 text-[11px] text-red-400 shrink-0" data-testid="job-run-error">
+          Run-now failed — check the job's config or logs.
+        </div>
+      )}
       <div className="flex items-center gap-1.5 px-4 py-3 border-t border-[var(--color-border)] shrink-0 flex-wrap">
-        <DrawerBtn icon="play_arrow" label="Run now" primary disabled={!job.enabled}
-          onClick={() => onRunNow(job)} />
+        <DrawerBtn icon="play_arrow" label="Run now" primary disabled={!job.enabled || runState === 'running'}
+          onClick={async () => {
+            setRunState('running');
+            const ok = await onRunNow(job);
+            setRunState(ok ? 'idle' : 'error');
+          }} />
         {!isSystem && (
           <>
             <DrawerBtn icon={job.enabled ? 'pause' : 'play_circle'} label={job.enabled ? 'Pause' : 'Resume'}
