@@ -32,8 +32,8 @@ const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
 
 // A10 group tint (muted, Radar-like) — Cognitive violet / Work green / System grey.
 const A10_GROUP = {
-  cognitive: '#8b82c4',
-  work: '#5aa87e',
+  cognitive: '#5fc99a',  // 认知区专属薄荷绿 (run_b57266d2) — 认知区是核心差异化，绿标记它
+  work: '#4a8fb0',       // 青蓝 — 从森林绿改，消除与认知区绿的撞色
   system: '#7c8194',
 } as const;
 
@@ -215,7 +215,7 @@ function LeftSidebar() {
 
   return (
     <aside
-      className="bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col flex-shrink-0"
+      className="bg-[var(--color-bg-chrome)] border-r-2 border-[var(--color-border-strong,var(--color-border))] flex flex-col flex-shrink-0"
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
@@ -247,23 +247,37 @@ function LeftSidebar() {
         </button>
       </div>
 
-      {/* A10 domain cards — 3 groups (Work / Cognitive / System), each a titled
-          color-coded divider + row-cards. Y/R signal flags only where attention
-          is needed (Memory=Y, Brain Hub=Y, OS Eval=R); no flag = all good. */}
+      {/* A10 domain cards. Cognitive = a distinct "green panel" zone (核心差异化 —
+          你的大脑); Work/System = plain titled groups. Y/R signal flags only where
+          attention is needed (Memory=Y, Brain Hub=Y, OS Eval=R). System titles are
+          dimmed (low-frequency OS mechanics, don't compete for attention). */}
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
+        {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
+        <div className="a10-zone" data-testid="cognition-zone">
+          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
+          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
+          <button
+            className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"
+            style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
+            onClick={() => { clearNavSource(); showOverlay('swarm:show-brain-hub'); }}
+            title="New Brain — 建一个新大脑"
+            data-testid="nav-new-brain"
+          >
+            <span className="a10-plus flex-shrink-0 w-[22px] h-[22px] rounded-[7px] flex items-center justify-center">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            </span>
+            <span className="flex-1 text-left text-[12px] font-semibold whitespace-nowrap">New Brain</span>
+          </button>
+        </div>
+
         <A10Group label="Work" tint={A10_GROUP.work}>
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
           <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
         </A10Group>
 
-        <A10Group label="Cognitive" tint={A10_GROUP.cognitive}>
-          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
-          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
-        </A10Group>
-
-        <A10Group label="System" tint={A10_GROUP.system}>
+        <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
@@ -513,10 +527,12 @@ function NavSvgIcon({ name }: { name: string }) {
 // ── A10 row-card nav (run_1aab916c) ──────────────────────────────────────────
 
 /** Titled, color-coded group divider: ── Label ── + a muted accent spine.
- *  `tint` colors the label + the right-edge spine per region. */
-function A10Group({ label, tint, children }: { label: string; tint: string; children: ReactNode }) {
+ *  `tint` colors the label + the right-edge spine per region.
+ *  `dimCards` mutes the card titles/icons in this group (System — low-frequency OS
+ *  mechanics that shouldn't compete with Chat/Cognitive/Work for attention). */
+function A10Group({ label, tint, dimCards, children }: { label: string; tint: string; dimCards?: boolean; children: ReactNode }) {
   return (
-    <div className="a10-group relative pb-2" style={{ '--gc': tint } as CSSProperties}>
+    <div className={`a10-group relative pb-2${dimCards ? ' a10-group--dim' : ''}`} style={{ '--gc': tint } as CSSProperties}>
       <div
         className="flex items-center gap-2 px-1 pt-2.5 pb-1.5 text-[8.5px] font-bold font-mono uppercase tracking-[0.18em]"
         style={{ color: tint }}
@@ -537,13 +553,16 @@ interface A10CardProps {
   tint: string;
   flag?: 'y' | 'r';
   isActive?: boolean;
+  /** Highlight the card in its resting state (brighter than siblings) — marks a
+   *  primary entry like Brain Hub within the cognition zone. */
+  highlight?: boolean;
   onClick?: () => void;
   'data-testid'?: string;
 }
 
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). */
-function A10Card({ icon, label, tint, flag, isActive, onClick, 'data-testid': testId }: A10CardProps) {
+function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-testid': testId }: A10CardProps) {
   // Publish THIS card's on-screen position as the shared spit-out origin BEFORE
   // delegating — so both the window-event overlays and the activeModal modals
   // open from this card (single injection point, run_2e6d6029 / Gate-1).
@@ -558,7 +577,7 @@ function A10Card({ icon, label, tint, flag, isActive, onClick, 'data-testid': te
       data-testid={testId}
       aria-pressed={isActive}
       style={{ '--ac': tint } as CSSProperties}
-      className={`a10-card${isActive ? ' a10-card--active' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-2`}
+      className={`a10-card${isActive ? ' a10-card--active' : ''}${highlight ? ' a10-card--hilite' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-2`}
     >
       <span className="a10-chip flex-shrink-0 w-[29px] h-[29px] rounded-[9px] flex items-center justify-center">
         <NavSvgIcon name={icon} />

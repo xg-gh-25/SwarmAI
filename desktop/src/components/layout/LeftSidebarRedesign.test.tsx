@@ -47,13 +47,17 @@ function renderSidebar() {
 
 afterEach(() => cleanup());
 
+// Render order (run_b57266d2): Cognition zone first (Context/Memory/Brain Hub +
+// New Brain), then Work, then System. Cognition is a green PANEL (no group label),
+// so it is NOT a navgroup-label — only Work + System carry labels now.
 const DOMAIN_ORDER = [
-  'nav-pipeline',
-  'nav-pollinate',
-  'nav-swarmws',
   'nav-context',
   'nav-memory',
   'nav-brain-hub',
+  'nav-new-brain',
+  'nav-pipeline',
+  'nav-pollinate',
+  'nav-swarmws',
   'nav-capabilities',
   'nav-eval',
   'nav-settings',
@@ -75,17 +79,28 @@ describe('LeftSidebar A10 — chat hero + history', () => {
   });
 });
 
-describe('LeftSidebar A10 — three groups + domain order', () => {
-  it('renders the 3 group labels in order: Work, Cognitive, System', () => {
+describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
+  it('renders the cognition zone as a green panel (not a labelled group)', () => {
+    renderSidebar();
+    // Cognition is a distinct panel container, NOT a titled navgroup.
+    expect(screen.getByTestId('cognition-zone')).toBeInTheDocument();
+    // Context/Memory/Brain Hub live inside it.
+    const zone = screen.getByTestId('cognition-zone');
+    ['nav-context', 'nav-memory', 'nav-brain-hub', 'nav-new-brain'].forEach((id) =>
+      expect(within(zone).getByTestId(id)).toBeInTheDocument(),
+    );
+  });
+
+  it('renders only Work + System as labelled groups (Cognitive is now a panel)', () => {
     renderSidebar();
     const nav = screen.getByTestId('nav-icons');
     const labels = Array.from(nav.querySelectorAll('[data-testid="navgroup-label"]')).map(
       (el) => el.textContent?.trim(),
     );
-    expect(labels).toEqual(['Work', 'Cognitive', 'System']);
+    expect(labels).toEqual(['Work', 'System']);
   });
 
-  it('renders the 10 domain cards top-to-bottom in group order', () => {
+  it('renders the domain entries top-to-bottom in zone/group order', () => {
     renderSidebar();
     const nav = screen.getByTestId('nav-icons');
     const ids = Array.from(nav.querySelectorAll('[data-testid^="nav-"]'))

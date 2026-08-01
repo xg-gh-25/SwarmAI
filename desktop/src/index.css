@@ -420,6 +420,76 @@ body {
   background: var(--color-card);
 }
 
+/* ── Cognition zone (run_b57266d2) — the "your brain" green panel ──────────────
+   核心差异化：认知区套一个薄荷绿面板容器，明显区别于 Work/System 的裸分组。
+   --cz = 认知绿 (#5fc99a). No zone header / no scope labels — 靠视觉+highlight 分层. */
+.a10-zone {
+  --cz: #5fc99a;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 7px 0 5px;
+  padding: 9px 9px 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--cz) 16%, transparent),
+    color-mix(in srgb, var(--cz) 7%, transparent) 60%,
+    color-mix(in srgb, var(--cz) 3%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cz) 38%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cz) 6%, transparent) inset,
+    0 6px 22px color-mix(in srgb, var(--cz) 18%, transparent);
+}
+/* Brain Hub — highlight resting state (brighter than Context/Memory) */
+.a10-card--hilite {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--ac) 14%, transparent),
+    color-mix(in srgb, var(--ac) 5%, transparent));
+  border-color: color-mix(in srgb, var(--ac) 42%, transparent);
+}
+.a10-card--hilite .a10-chip { color: var(--ac); }
+.a10-card--hilite:hover {
+  border-color: var(--ac);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 30%, transparent),
+    0 6px 16px color-mix(in srgb, var(--ac) 22%, transparent);
+}
+/* When a highlighted card is ALSO active, active must win its own bg/border
+   (hilite is later in source order + equal specificity would otherwise mute the
+   active state on exactly the card most likely to be active — Gate-2 MEDIUM-1). */
+.a10-card--hilite.a10-card--active {
+  background: color-mix(in srgb, var(--ac) 18%, transparent);
+  border-color: color-mix(in srgb, var(--ac) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 40%, transparent),
+    0 4px 18px color-mix(in srgb, var(--ac) 20%, transparent);
+}
+/* New Brain — secondary action row: small solid + box + green text, no outer frame */
+.a10-newbrain {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ac);
+  cursor: pointer;
+}
+.a10-newbrain:hover {
+  background: color-mix(in srgb, var(--ac) 12%, transparent);
+  transform: translateX(3px);
+}
+.a10-newbrain .a10-plus {
+  color: #0c1f18;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--ac) 80%, white),
+    var(--ac));
+  box-shadow: 0 1px 5px color-mix(in srgb, var(--ac) 35%, transparent),
+    0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+
+/* System group — dimmed card titles/icons (low-frequency OS mechanics) */
+.a10-group--dim .a10-card:not(:hover):not(.a10-card--active) .a10-chip {
+  color: var(--color-text-faint, var(--color-text-muted));
+}
+.a10-group--dim .a10-card:not(:hover):not(.a10-card--active) span:not(.a10-chip):not(.a10-flag) {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
 :root:not(.dark) .glass-effect {
   background: rgba(255, 255, 255, 0.8);
 }
