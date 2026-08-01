@@ -141,14 +141,7 @@ export function CMBrainOverlay() {
                 planned="Run 2 · 7-type knowledge graph + drill-down"
               />
             )}
-            {tab === 'guideline' && (
-              <TabTeaser
-                testid="cm-placeholder-guideline"
-                title="Guideline"
-                body="The governance layer — the principles, rules, and gates that shape the agent's judgment (SOUL / AGENT / STEERING). A later run surfaces them here so you can see and steer what governs the agent."
-                planned="Later run · governance viewer"
-              />
-            )}
+            {tab === 'guideline' && <GuidelineTab />}
           </div>
         </div>
       </div>
@@ -214,6 +207,123 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Guideline tab: static teaching content — "how a powerful agent brain works".
+// R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). All
+// content is stable architecture fact, safe to hardcode.
+const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string }> = [
+  { key: 'assemble', icon: '📥', title: 'Assemble', desc: 'context files → prompt, by priority' },
+  { key: 'recall', icon: '🔍', title: 'Recall', desc: 'FTS5/BM25 pulls relevant memory' },
+  { key: 'judge', icon: '🧠', title: 'Judge', desc: 'the model reasons on that context' },
+  { key: 'sediment', icon: '💧', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
+  { key: 'decay', icon: '🍂', title: 'Decay', desc: 'idle sinks, value survives' },
+];
+const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
+  { icon: '🔍', name: 'Recall', desc: 'every message, keyword-matched injection', tag: 'hook' },
+  { icon: '💧', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
+  { icon: '🍂', name: 'Decay & archive', desc: 'dormant then archived by idle age', tag: 'job' },
+  { icon: '📋', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
+  { icon: '🧬', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
+];
+const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
+  { icon: '🧭', name: 'STEERING rules', desc: 'your standing directives (highest precedence)', tag: 'file' },
+  { icon: '👤', name: 'USER profile', desc: 'who you are, how you like to work', tag: 'file' },
+  { icon: '🧩', name: 'Skill allowlist', desc: 'which capabilities this agent may use', tag: 'config' },
+  { icon: '🔌', name: 'MCP tiers', desc: 'always-on vs on-demand tool servers', tag: 'config' },
+  { icon: '🗂', name: 'Create a DDD', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
+];
+const HOOK_CHIPS = ['context_health', 'memory_edit_guard', 'ddd_cultivation', 'knowledge_backflow', 'correction_capture', 'session_briefing', 'high_signal_capture'];
+const SKILL_CHIPS = ['s_persist', 's_memory-distill', 's_self-evolution', 's_project-manager', 's_ddd-*', 's_golden-case'];
+
+function GuidelineTab() {
+  return (
+    <div data-testid="cm-panel-guideline" className="flex flex-col gap-5 max-w-4xl">
+      <div className="text-sm text-[var(--color-text-muted)]">
+        How a powerful agent brain works — the lifecycle every message flows through, what runs
+        itself vs what you steer, and the machinery underneath.
+      </div>
+
+      {/* Lifecycle flow */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          Lifecycle — every message flows through this
+        </div>
+        <div data-testid="cm-guideline-lifecycle" className="flex items-stretch gap-2">
+          {LIFECYCLE.map((s, i) => (
+            <div key={s.key} className="flex items-center gap-2 flex-1 min-w-0">
+              <div
+                data-testid={`cm-lc-${s.key}`}
+                className="flex-1 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 text-center"
+              >
+                <div className="text-lg leading-none">{s.icon}</div>
+                <div className="mt-1 text-xs font-semibold text-[var(--color-text)]">{s.title}</div>
+                <div className="mt-0.5 text-[10px] leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
+              </div>
+              {i < LIFECYCLE.length - 1 && <span className="shrink-0 text-[var(--color-text-faint)]">→</span>}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Automatic vs Manual */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          Automatic vs Manual — what runs itself, what you steer
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <AmColumn testid="cm-guideline-automatic" head="🤖 Runs itself" badge="AUTOMATIC" items={AUTO_ITEMS} accent="#5fc99a" />
+          <AmColumn testid="cm-guideline-manual" head="🖐 You configure" badge="MANUAL" items={MANUAL_ITEMS} accent="#4a8fb0" />
+        </div>
+      </section>
+
+      {/* Reference chips */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          Under the hood — the machinery
+        </div>
+        <div data-testid="cm-guideline-chips" className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[11px] text-[var(--color-text-muted)]">Hooks (fire automatically):</span>
+            {HOOK_CHIPS.map((c) => (
+              <span key={c} className="rounded-md border border-[color-mix(in_srgb,#5fc99a_35%,var(--color-border))] px-1.5 py-[1px] font-mono text-[10px] text-[var(--color-text-muted)]">{c}</span>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[11px] text-[var(--color-text-muted)]">Skills (you invoke):</span>
+            {SKILL_CHIPS.map((c) => (
+              <span key={c} className="rounded-md border border-[color-mix(in_srgb,#4a8fb0_35%,var(--color-border))] px-1.5 py-[1px] font-mono text-[10px] text-[var(--color-text-muted)]">{c}</span>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AmColumn({
+  testid, head, badge, items, accent,
+}: { testid: string; head: string; badge: string; items: Array<{ icon: string; name: string; desc: string; tag: string }>; accent: string }) {
+  return (
+    <div data-testid={testid} className="rounded-lg border border-[var(--color-border)] p-3">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+        {head}
+        <span className="rounded-full px-2 py-[1px] font-mono text-[9px] tracking-wider" style={{ background: `color-mix(in srgb, ${accent} 16%, transparent)`, color: accent }}>{badge}</span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {items.map((it) => (
+          <div key={it.name} className="flex items-center gap-2">
+            <span className="shrink-0 text-sm">{it.icon}</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium text-[var(--color-text)]">{it.name}</div>
+              <div className="truncate text-[11px] text-[var(--color-text-muted)]">{it.desc}</div>
+            </div>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] font-mono text-[9px] text-[var(--color-text-faint)]">{it.tag}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

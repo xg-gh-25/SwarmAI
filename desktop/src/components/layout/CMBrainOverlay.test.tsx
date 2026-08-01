@@ -12,7 +12,7 @@
  * numbers (the whole point of the backend-primary design).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mock the api client BEFORE importing the component.
@@ -91,7 +91,7 @@ describe('CMBrainOverlay — open/close + tabs', () => {
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
   });
 
-  it('Memory and Guideline tabs render a COMPACT roadmap teaser (not a full-height empty void)', async () => {
+  it('Memory tab still renders a COMPACT roadmap teaser (not a full-height empty void)', async () => {
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-brain-overlay');
@@ -104,13 +104,52 @@ describe('CMBrainOverlay — open/close + tabs', () => {
     expect(mem.className).not.toContain('items-center');
     // teaser communicates value compactly — names the real stores it will surface
     expect(mem.textContent).toMatch(/MEMORY\.md|EVOLUTION\.md/);
+  });
+});
 
+describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () => {
+  async function openGuideline() {
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
     act(() => { screen.getByTestId('cm-tab-guideline').click(); });
-    const guide = await screen.findByTestId('cm-placeholder-guideline');
-    expect(guide.className).not.toContain('py-16');
-    expect(guide.className).not.toContain('justify-center');
-    expect(guide.className).not.toContain('items-center');
-    expect(guide.textContent).toMatch(/SOUL|AGENT|STEERING/);
+    return screen.findByTestId('cm-panel-guideline');
+  }
+
+  it('renders the 5 lifecycle cards in order (Assemble→Recall→Judge→Sediment→Decay)', async () => {
+    await openGuideline();
+    const flow = screen.getByTestId('cm-guideline-lifecycle');
+    const stages = within(flow).getAllByTestId(/^cm-lc-/);
+    expect(stages.map((s) => s.getAttribute('data-testid'))).toEqual([
+      'cm-lc-assemble', 'cm-lc-recall', 'cm-lc-judge', 'cm-lc-sediment', 'cm-lc-decay',
+    ]);
+  });
+
+  it('renders Automatic vs Manual as two columns with tagged items', async () => {
+    await openGuideline();
+    expect(screen.getByTestId('cm-guideline-automatic')).toBeInTheDocument();
+    expect(screen.getByTestId('cm-guideline-manual')).toBeInTheDocument();
+    // automatic column names real mechanisms (Recall/Cultivation/Decay) — not counts
+    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall|Cultivation|Decay/);
+    // manual column names user-steered surfaces (STEERING/USER/skill)
+    expect(screen.getByTestId('cm-guideline-manual').textContent).toMatch(/STEERING|USER|[Ss]kill/);
+  });
+
+  it('renders reference chips for the real hooks + skills that drive the brain', async () => {
+    await openGuideline();
+    const chips = screen.getByTestId('cm-guideline-chips');
+    expect(chips.textContent).toMatch(/context_health|ddd_cultivation|correction_capture/);
+    expect(chips.textContent).toMatch(/s_persist|s_self-evolution/);
+  });
+
+  it('R30: bakes NO drifty numeric counts into the static content', async () => {
+    const panel = await openGuideline();
+    // Static teaching content must describe MECHANISMS, not counts. Guard against a
+    // baked "214 entries" / "86 skills" style number sneaking in (R30 no-drift).
+    // Allow structural digits inside testids/hex; check only visible text tokens.
+    const visible = panel.textContent ?? '';
+    // no standalone integer >=3 digits (e.g. 214, 108) that would be a drifty count
+    expect(visible).not.toMatch(/\b\d{3,}\b/);
   });
 });
 
