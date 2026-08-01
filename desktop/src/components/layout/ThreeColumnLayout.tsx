@@ -159,16 +159,6 @@ function LeftSidebar() {
     }
   };
 
-  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens on document).
-  // This opens a PANEL, not a fullscreen Modal, so it must NOT leave a nav-source
-  // behind — else the next unrelated fullscreen open (e.g. credential-banner →
-  // Settings) would draw a spout mis-pointing at the Memory card (Gate-2 #3).
-  const handleMemoryClick = () => {
-    clearNavSource();
-    clearActiveOverlayEvent(); // a panel takes over — no window card should stay lit
-    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
-  };
-
   // Open the LATEST signal digest. The digest is written by a scheduled job, so
   // today's file often doesn't exist yet (esp. early in the day / weekends) —
   // hardcoding `<today>-digest.md` produced a file-not-found (run_a73566c4). We
@@ -255,8 +245,7 @@ function LeftSidebar() {
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
-          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
-          <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
+          <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
           <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
           <button
             className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"

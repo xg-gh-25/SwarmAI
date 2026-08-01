@@ -1078,8 +1078,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     // System. "Workspace" is the de-jargoned label for the SwarmWS card.
     // Terminal + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
-      { testId: 'nav-context', label: 'Context' },
-      { testId: 'nav-memory', label: 'Memory' },
+      { testId: 'nav-context', label: 'C&M' },
       { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-todo', label: 'ToDo' },
       { testId: 'nav-swarmws', label: 'Workspace' },

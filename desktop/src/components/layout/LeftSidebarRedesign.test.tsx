@@ -53,7 +53,6 @@ afterEach(() => cleanup());
 // so it is NOT a navgroup-label — only Work + System carry labels now.
 const DOMAIN_ORDER = [
   'nav-context',
-  'nav-memory',
   'nav-brain-hub',
   'nav-new-brain',
   'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
@@ -86,9 +85,9 @@ describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
     renderSidebar();
     // Cognition is a distinct panel container, NOT a titled navgroup.
     expect(screen.getByTestId('cognition-zone')).toBeInTheDocument();
-    // Context/Memory/Brain Hub live inside it.
+    // Context (C&M)/Brain Hub live inside it. (Memory folded into the C&M overlay as a tab — no standalone nav card.)
     const zone = screen.getByTestId('cognition-zone');
-    ['nav-context', 'nav-memory', 'nav-brain-hub', 'nav-new-brain'].forEach((id) =>
+    ['nav-context', 'nav-brain-hub', 'nav-new-brain'].forEach((id) =>
       expect(within(zone).getByTestId(id)).toBeInTheDocument(),
     );
   });
@@ -123,9 +122,8 @@ describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
 });
 
 describe('LeftSidebar A10 — Y/R signal flags', () => {
-  it('shows a Y flag on Memory and Brain Hub', () => {
+  it('shows a Y flag on Brain Hub', () => {
     renderSidebar();
-    expect(within(screen.getByTestId('nav-memory')).getByTestId('flag-y')).toBeInTheDocument();
     expect(within(screen.getByTestId('nav-brain-hub')).getByTestId('flag-y')).toBeInTheDocument();
   });
 
@@ -153,16 +151,5 @@ describe('LeftSidebar A10 — nav-source spit-out origin (spout wiring)', () => 
     fireEvent.click(screen.getByTestId('nav-swarmws'));
     // A10Card captured the card rect (jsdom rects are 0 but the object is set)
     expect(readNavSource()).not.toBeNull();
-  });
-
-  it('a PANEL-opening card (Memory) does NOT leave a stale nav source (Gate-2 #3)', () => {
-    renderSidebar();
-    // pre-seed a stale source as if a fullscreen card had been clicked before
-    fireEvent.click(screen.getByTestId('nav-swarmws'));
-    expect(readNavSource()).not.toBeNull();
-    // clicking Memory opens a file panel — its handler must clear the source so a
-    // later unrelated fullscreen open can't mis-point its spout at the Memory card
-    fireEvent.click(screen.getByTestId('nav-memory'));
-    expect(readNavSource()).toBeNull();
   });
 });
