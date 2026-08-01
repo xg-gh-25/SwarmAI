@@ -68,6 +68,11 @@ export interface ToDoCreateRequest {
   sourceType?: ToDoSourceType;
   priority?: Priority;
   dueDate?: string;
+  /** JSON-encoded work packet (next_step/files/design_docs/…). The manual
+   *  New-ToDo form encodes `{ next_step }` here; backend ToDoCreate accepts it
+   *  (schemas/todo.py). Without threading this, a form's next_step is a no-op
+   *  (Gate-1 A3 C1). */
+  linkedContext?: string;
 }
 
 export interface ToDoUpdateRequest {

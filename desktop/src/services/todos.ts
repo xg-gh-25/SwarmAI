@@ -61,6 +61,7 @@ export function toSnakeCase(
   if ('status' in data && data.status !== undefined) result.status = data.status;
   if (data.priority !== undefined) result.priority = data.priority;
   if ('dueDate' in data && data.dueDate !== undefined) result.due_date = data.dueDate;
+  if ('linkedContext' in data && data.linkedContext !== undefined) result.linked_context = data.linkedContext;
   return result;
 }
 

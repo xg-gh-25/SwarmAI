@@ -214,10 +214,17 @@ When user says "add a todo for X" during conversation:
 | `session_id` | **YES** | Current session ID for back-reference |
 | `user_intent` | **YES** | WHY — capture the user's intent and discussion context |
 | `next_step` | **YES** | What the user would do first if they started now |
-| `files` | Optional | Any files mentioned or being worked on |
-| `design_docs` | Optional | Related design documents |
+| `files` | **Recommended** | Any files mentioned or being worked on |
+| `design_docs` | **Recommended** | Related design docs / specs / material the todo depends on |
 | `commits` | Optional | Related git commits |
 | `acceptance` | Optional | What "done" looks like |
+
+> **Attach the material.** When a chat todo references a design doc, spec, report,
+> or any document the work depends on, put its workspace-relative path in
+> `--design-docs` (and source files in `--files`). The ToDo detail drawer renders
+> this material so the executing agent — and the user reviewing it — has everything
+> in the work packet. A chat todo about work-with-a-doc that omits `design_docs`
+> is an incomplete work packet.
 
 ### AI-detected todos (source_type=`ai_detected`)
 
