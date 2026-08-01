@@ -42,8 +42,13 @@ export function HistoryView({
   searchResults,
   isSearching = false,
   hideHeader = false,
+  onPreview,
+  selectedSessionId,
 }: HistoryViewProps) {
   const { t } = useTranslation();
+  // Row-click: preview-in-place (overlay) when onPreview is provided; else the
+  // legacy select-and-go behavior. Kept as one handler so keyboard + click agree.
+  const activateRow = onPreview ?? onSelectSession;
 
   // Controlled when the parent supplies BOTH the value and the change handler.
   const isControlled = controlledSearchText !== undefined && onSearchTextChange !== undefined;
@@ -93,16 +98,19 @@ export function HistoryView({
   const renderSessionRow = (session: ChatSession) => (
     <div
       key={session.id}
-      className="group flex items-center gap-2 px-3 py-2 rounded-lg
-        text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]
-        hover:text-[var(--color-text)] transition-colors cursor-pointer"
-      onClick={() => onSelectSession(session)}
+      className={`group flex items-center gap-2 px-3 py-2 rounded-lg
+        transition-colors cursor-pointer
+        ${session.id === selectedSessionId
+          ? 'bg-[var(--color-hover)] text-[var(--color-text)]'
+          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'}`}
+      onClick={() => activateRow(session)}
       role="button"
       tabIndex={0}
+      aria-selected={session.id === selectedSessionId}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onSelectSession(session);
+          activateRow(session);
         }
       }}
     >

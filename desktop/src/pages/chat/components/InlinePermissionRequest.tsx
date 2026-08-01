@@ -31,6 +31,10 @@ interface InlinePermissionRequestProps {
   /** Pre-existing decision (from content block update after user acts). */
   decision?: 'approve' | 'deny';
   onDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
+  /** Read-only render (History preview): a still-undecided historical request
+   *  must NOT show live-looking Deny/Approve buttons or a running countdown —
+   *  render a muted "awaiting decision" shell instead. */
+  readOnly?: boolean;
 }
 
 export function InlinePermissionRequest({
@@ -41,6 +45,7 @@ export function InlinePermissionRequest({
   isPending,
   decision,
   onDecision,
+  readOnly,
 }: InlinePermissionRequestProps) {
   const [remainingMs, setRemainingMs] = useState(TIMEOUT_MS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -113,6 +118,21 @@ export function InlinePermissionRequest({
         <span className={`ml-auto text-xs font-medium ${isApproved ? 'text-green-500' : 'text-red-500'}`}>
           {isApproved ? 'Approved' : 'Denied'}
         </span>
+      </div>
+    );
+  }
+
+  // Read-only (History preview) with no decision recorded: the request was
+  // still pending when the session ended. Render a muted, non-actionable shell
+  // — never live-looking Deny/Approve buttons or a running countdown.
+  if (readOnly) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md my-1 bg-[var(--color-hover)] border border-[var(--color-border)]">
+        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">shield</span>
+        <span className="text-sm text-[var(--color-text-muted)]">
+          <code className="text-xs bg-[var(--color-bg)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
+        </span>
+        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">Awaiting decision</span>
       </div>
     );
   }

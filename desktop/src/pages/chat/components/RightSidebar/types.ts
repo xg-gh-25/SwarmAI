@@ -174,6 +174,15 @@ export interface HistoryViewProps {
   isSearching?: boolean;
   /** Suppress the internal back-arrow header (the host Modal provides its own). */
   hideHeader?: boolean;
+  /**
+   * Row-click handler for the History overlay's read-only preview. When
+   * provided, clicking a row calls this (to preview the session in-place)
+   * INSTEAD of `onSelectSession`, and does NOT close the overlay. When absent,
+   * row-click falls back to `onSelectSession` (legacy behavior).
+   */
+  onPreview?: (session: ChatSession) => void;
+  /** The session id currently shown in the preview pane — highlights its row. */
+  selectedSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

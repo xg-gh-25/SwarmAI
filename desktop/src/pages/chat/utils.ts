@@ -3,6 +3,33 @@ import { MS_PER_DAY, type TimeGroup } from './constants';
 import type { PendingQuestion } from './types';
 
 /**
+ * Convert a DB-loaded message row into a display `Message`.
+ *
+ * Shared by ChatPage (session load / pagination / restore) AND the History
+ * overlay's read-only preview — extracted here so both use one mapping.
+ *
+ * Marks DB-loaded text/thinking blocks as `_confirmed`: they are authoritative
+ * history, and without the flag a subsequent streaming assistant event would
+ * treat them as provisional and WIPE them (structural reconciliation replaces
+ * unconfirmed blocks).
+ */
+export function toDisplayMessage(
+  msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string },
+): Message {
+  return {
+    id: msg.id,
+    role: msg.role as 'user' | 'assistant' | 'system',
+    content: (msg.content as ContentBlock[]).map((block) =>
+      (block.type === 'text' || block.type === 'thinking')
+        ? { ...block, _confirmed: true }
+        : block,
+    ),
+    timestamp: msg.createdAt,
+    model: msg.model,
+  };
+}
+
+/**
  * Concatenate a page of older messages in front of the current messages,
  * merging the page boundary when both sides are assistant messages.
  *

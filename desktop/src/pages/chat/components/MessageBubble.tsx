@@ -40,6 +40,10 @@ export interface MessageBubbleProps {
   onCancelQueued?: () => void;
   /** Called when user clicks Continue to request agent continuation */
   onContinue?: () => void;
+  /** Read-only render (History preview): force all interactive blocks
+   *  (AskUserQuestion / permission / escalation) to a non-actionable state,
+   *  regardless of their historical pending status. */
+  readOnly?: boolean;
 }
 
 function MessageBubbleImpl({
@@ -55,6 +59,7 @@ function MessageBubbleImpl({
   contextWarning,
   onCancelQueued,
   onContinue,
+  readOnly,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
     return (
@@ -78,6 +83,7 @@ function MessageBubbleImpl({
       isLastAssistant={isLastAssistant}
       contextWarning={contextWarning}
       onContinue={onContinue}
+      readOnly={readOnly}
     />
   );
 }

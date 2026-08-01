@@ -51,11 +51,12 @@ import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
+import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
 import { observeChatArea } from '../components/layout/chatAreaBounds';
 import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
-import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
+import { groupSessionsByTime, mergeOlderMessages, toDisplayMessage } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -73,23 +74,6 @@ export { MAX_OPEN_TABS, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '..
 const INITIAL_MESSAGE_LOAD_LIMIT = 200;
 
 /** Convert a backend ChatMessage to the frontend Message shape. */
-function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string }): Message {
-  return {
-    id: msg.id,
-    role: msg.role as 'user' | 'assistant' | 'system',
-    // Mark DB-loaded text/thinking as confirmed — they are authoritative history.
-    // Without this, a subsequent streaming assistant event would treat them as
-    // provisional and WIPE them (structural reconciliation replaces unconfirmed blocks).
-    content: (msg.content as ContentBlock[]).map((block) =>
-      (block.type === 'text' || block.type === 'thinking')
-        ? { ...block, _confirmed: true }
-        : block
-    ),
-    timestamp: msg.createdAt,
-    model: msg.model,
-  };
-}
-
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1042,14 +1026,59 @@ export default function ChatPage() {
     doCloseTab(pending.tabId, pending.sessionId, stillStreaming);
   }, [closeConfirmTab, doCloseTab, pendingStreamTabs, tabMapRef]);
 
-  // Handle session selection
-  const handleSelectSession = useCallback(async (session: ChatSession) => {
-    if (session.agentId && session.agentId !== selectedAgentId) {
-      setSelectedAgentId(session.agentId);
+  // Resume a session from the History overlay into a chat tab (方案 B).
+  // Pure decision (resolveResumeTarget) + real execution via handleTabSelect —
+  // agent switch + message load happen ONLY after we hold the target tab, so a
+  // streaming tab is never left in the old half-state. Returns whether it
+  // landed; the overlay closes only on true (all-busy → toast + stay open).
+  const handleResumeSession = useCallback((session: ChatSession): boolean => {
+    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
+      id: t.id,
+      sessionId: t.sessionId,
+      status: t.status,
+      isStreaming: t.isStreaming,
+    }));
+    const decision = resolveResumeTarget(session.id, tabs, maxTabsInfo.chatMax);
+
+    switch (decision.action) {
+      case 'busy':
+        addToast({
+          severity: 'warning',
+          message: `All ${maxTabsInfo.chatMax} tabs are busy — free one (or wait for it to finish), then Resume.`,
+          autoDismiss: true,
+        });
+        return false;
+      case 'focus':
+        // Already open — just switch to it (its messages are already loaded).
+        void handleTabSelect(decision.tabId);
+        return true;
+      case 'reuse': {
+        // Reuse a strictly-idle tab: seed its sessionId + agent, then let
+        // handleTabSelect run its "sessionId set + empty messages → load" path.
+        if (session.agentId) setSelectedAgentId(session.agentId);
+        updateTabSessionId(decision.tabId, session.id);
+        const reuseTab = tabMapRef.current.get(decision.tabId);
+        if (reuseTab) reuseTab.messages = [];
+        void handleTabSelect(decision.tabId);
+        return true;
+      }
+      case 'newtab': {
+        if (session.agentId) setSelectedAgentId(session.agentId);
+        const newTab = addTab(session.agentId || selectedAgentId || 'default');
+        if (!newTab) {
+          // Race: cap reached between decision and addTab → treat as busy.
+          addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+          return false;
+        }
+        initTabState(newTab.id, []);
+        updateTabSessionId(newTab.id, session.id);
+        void handleTabSelect(newTab.id);
+        return true;
+      }
+      default:
+        return false;
     }
-    await loadSessionMessages(session.id);
-    // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
-  }, [selectedAgentId, loadSessionMessages]);
+  }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState, selectedAgentId]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {
@@ -2936,7 +2965,7 @@ export default function ChatPage() {
         <HistoryOverlay
           groupedSessions={groupedSessions}
           agents={agents}
-          onSelectSession={handleSelectSession}
+          onResume={handleResumeSession}
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
         />
       </div>

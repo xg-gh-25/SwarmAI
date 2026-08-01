@@ -61,6 +61,8 @@ export interface AssistantMessageViewProps {
   contextWarning?: ContextWarning | null;
   /** Callback to send a continuation prompt when model stopped prematurely */
   onContinue?: () => void;
+  /** Read-only render (History preview) — forces interactive blocks inert. */
+  readOnly?: boolean;
 }
 
 /** Map of memory save status to Material Symbols icon names. */
@@ -84,6 +86,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   isLastAssistant,
   contextWarning,
   onContinue,
+  readOnly,
 }) => {
   const [copied, setCopied] = useState(false);
   const { addToast } = useToast();
@@ -225,6 +228,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         pendingPermissionRequestId={pendingPermissionRequestId}
         isStreaming={isStreaming}
         lastPendingToolUseId={lastPendingToolUseId}
+        readOnly={readOnly}
       />
     );
   });

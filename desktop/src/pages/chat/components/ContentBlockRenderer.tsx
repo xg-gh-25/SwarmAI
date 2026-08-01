@@ -97,6 +97,12 @@ interface ContentBlockRendererProps {
   isStreaming?: boolean;
   /** The ID of the last tool_use block without a result — only this one gets a spinner. */
   lastPendingToolUseId?: string | null;
+  /** Read-only render (History preview): interactive blocks (question /
+   *  permission / escalation) must be inert regardless of historical pending
+   *  status — interactivity is gated on the pending/status signals, NOT on
+   *  callback presence, so omitting callbacks alone would still render
+   *  live-looking controls. */
+  readOnly?: boolean;
 }
 
 export function ContentBlockRenderer({
@@ -110,6 +116,7 @@ export function ContentBlockRenderer({
   pendingPermissionRequestId,
   isStreaming,
   lastPendingToolUseId,
+  readOnly,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
     // Render markdown in BOTH states so formatting (headings/lists/code/math) is
@@ -182,7 +189,9 @@ export function ContentBlockRenderer({
     const hasAnswers = !!block.answers && Object.keys(block.answers).length > 0;
     // Disable the interactive form when it's not the live pending question or
     // while streaming — unchanged behavior for the still-unanswered case.
-    const disabled = !isPending || !!isStreaming;
+    // readOnly (History preview) always disables (answered blocks still render
+    // their read-only summary, which ignores `disabled`).
+    const disabled = !isPending || !!isStreaming || !!readOnly;
 
     return (
       <AskUserQuestion
@@ -202,9 +211,10 @@ export function ContentBlockRenderer({
         toolName={block.toolName}
         toolInput={block.toolInput}
         reason={block.reason}
-        isPending={pendingPermissionRequestId === block.requestId}
+        isPending={!readOnly && pendingPermissionRequestId === block.requestId}
         decision={block.decision}
-        onDecision={onPermissionDecision}
+        onDecision={readOnly ? undefined : onPermissionDecision}
+        readOnly={readOnly}
       />
     );
   }
@@ -219,7 +229,7 @@ export function ContentBlockRenderer({
         options={esc.options || []}
         status={esc.status}
         resolution={esc.resolution}
-        onSelectOption={esc.status === 'pending' ? onEscalationSelect : undefined}
+        onSelectOption={(!readOnly && esc.status === 'pending') ? onEscalationSelect : undefined}
       />
     );
   }
