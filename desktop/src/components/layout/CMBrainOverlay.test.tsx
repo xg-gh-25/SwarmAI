@@ -91,19 +91,94 @@ describe('CMBrainOverlay — open/close + tabs', () => {
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
   });
 
-  it('Memory tab still renders a COMPACT roadmap teaser (not a full-height empty void)', async () => {
+});
+
+describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
+  const GRAPH = {
+    nodes: [
+      { type: 'principle', count: 10, active: 10, dormant: 0 },
+      { type: 'correction', count: 5, active: 5, dormant: 0 },
+      { type: 'decision', count: 7, active: 7, dormant: 0 },
+      { type: 'guideline', count: 101, active: 90, dormant: 11 },
+      { type: 'pitfall', count: 69, active: 69, dormant: 0 },
+      { type: 'process', count: 1, active: 1, dormant: 0 },
+      { type: 'model', count: 4, active: 4, dormant: 0 },
+    ],
+    drill: {
+      guideline: [{ title: 'G-latest', status: 'active', ref_count: 0, meta: '2026-08-02' }],
+      principle: [], correction: [], decision: [], pitfall: [], process: [], model: [],
+    },
+    total: 197,
+  };
+
+  function mockGraph() {
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('brain-graph')) return Promise.resolve({ data: GRAPH });
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      // context-health (default)
+      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK } });
+    });
+  }
+
+  async function openMemory() {
+    mockGraph();
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-brain-overlay');
-
     act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    const mem = await screen.findByTestId('cm-placeholder-memory');
-    // §4: NOT a full-height centered void — no py-16, no justify-center/items-center
-    expect(mem.className).not.toContain('py-16');
-    expect(mem.className).not.toContain('justify-center');
-    expect(mem.className).not.toContain('items-center');
-    // teaser communicates value compactly — names the real stores it will surface
-    expect(mem.textContent).toMatch(/MEMORY\.md|EVOLUTION\.md/);
+    return screen.findByTestId('cm-panel-memory');
+  }
+
+  it('renders 7 graph nodes from the backend endpoint (backend-primary)', async () => {
+    await openMemory();
+    const nodes = await screen.findAllByTestId(/^cm-graph-node-/);
+    expect(nodes).toHaveLength(7);
+    // node count is served, not invented
+    expect(screen.getByTestId('cm-graph-node-guideline').textContent).toMatch(/101/);
+  });
+
+  it('clicking a node drills the latest entries of that type', async () => {
+    await openMemory();
+    const node = await screen.findByTestId('cm-graph-node-guideline'); // wait for the query
+    act(() => { node.click(); });
+    const drill = await screen.findByTestId('cm-drill-list');
+    expect(drill.textContent).toMatch(/G-latest/);
+  });
+
+  it('renders a by-type distribution bar per type', async () => {
+    await openMemory();
+    const bars = await screen.findAllByTestId(/^cm-bar-/);
+    expect(bars).toHaveLength(7);
+  });
+
+  it('shows a "collecting since launch" placeholder when the size-trend has <2 points', async () => {
+    const panel = await openMemory();
+    // trend endpoint returned 0 points → NEVER a fabricated line, an explicit placeholder
+    expect(panel.textContent).toMatch(/collecting/i);
+  });
+
+  it('renders an empty-but-valid graph when all node counts are zero', async () => {
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('brain-graph')) return Promise.resolve({ data: {
+        nodes: [
+          { type: 'principle', count: 0, active: 0, dormant: 0 },
+          { type: 'correction', count: 0, active: 0, dormant: 0 },
+          { type: 'decision', count: 0, active: 0, dormant: 0 },
+          { type: 'guideline', count: 0, active: 0, dormant: 0 },
+          { type: 'pitfall', count: 0, active: 0, dormant: 0 },
+          { type: 'process', count: 0, active: 0, dormant: 0 },
+          { type: 'model', count: 0, active: 0, dormant: 0 },
+        ], drill: {}, total: 0 } });
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK } });
+    });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-memory').click(); });
+    const panel = await screen.findByTestId('cm-panel-memory');
+    expect(panel).toBeInTheDocument();
+    expect((await screen.findAllByTestId(/^cm-graph-node-/))).toHaveLength(7);
   });
 });
 

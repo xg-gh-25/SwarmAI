@@ -496,6 +496,33 @@ async def get_brain_trend():
     }
 
 
+@router.get("/brain-graph")
+async def get_brain_graph():
+    """7-type knowledge graph + per-type drill-down for the C&M Memory tab.
+
+    Node counts + latest-10 drill come from parse_entries(MEMORY.md) by entry_type
+    (VALID_TYPES) — backend-served, frontend invents nothing (R30). Empty-but-valid
+    (all-zero 7 nodes) when MEMORY.md is absent, so the tab always renders a stable
+    graph shape.
+    """
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+    from core.brain_graph import build_brain_graph
+    from core.ddd_entry_lifecycle import VALID_TYPES
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return {"nodes": [{"type": t, "count": 0, "active": 0, "dormant": 0} for t in VALID_TYPES],
+                "drill": {t: [] for t in VALID_TYPES}, "total": 0}
+
+    memory_path = Path(ws_path) / ".context" / "MEMORY.md"
+    try:
+        content = memory_path.read_text(encoding="utf-8") if memory_path.is_file() else ""
+    except OSError:
+        content = ""
+    return build_brain_graph(content)
+
+
 # ─── Reports (HTML) ───────────────────────────────────────────────────────
 
 

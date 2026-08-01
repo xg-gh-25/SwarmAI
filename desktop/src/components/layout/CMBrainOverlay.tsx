@@ -144,14 +144,7 @@ export function CMBrainOverlay() {
 
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
             {tab === 'context' && <ContextTab block={block} />}
-            {tab === 'memory' && (
-              <TabTeaser
-                testid="cm-placeholder-memory"
-                title="Memory"
-                body="The agent's long-term memory — what it has learned and decided across sessions (MEMORY.md / EVOLUTION.md). A later run surfaces it here as the 7-type knowledge graph with drill-down; until then it's edited in the workspace."
-                planned="Run 2 · 7-type knowledge graph + drill-down"
-              />
-            )}
+            {tab === 'memory' && <MemoryTab enabled={open && tab === 'memory'} />}
             {tab === 'guideline' && <GuidelineTab />}
           </div>
         </div>
@@ -231,6 +224,171 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// ── Memory tab: the sedimented 7-type knowledge (DoD2) ──────────────────────
+interface GraphNode { type: string; count: number; active: number; dormant: number; }
+interface DrillEntry { title: string; status: string; ref_count: number; meta: string; }
+interface BrainGraph { nodes: GraphNode[]; drill: Record<string, DrillEntry[]>; total: number; }
+interface TrendPoint { date: string; prompt_tokens: number; memory_bytes: number; }
+interface BrainTrend { points: TrendPoint[]; count: number; launch_date: string | null; }
+
+// 7-type tint (aligns to the ontology; stable across renders).
+const TYPE_TINT: Record<string, string> = {
+  principle: '#5fc99a', correction: '#d0524a', decision: '#4a8fb0', guideline: '#b08fd0',
+  pitfall: '#d08a4a', process: '#7c8194', model: '#5f9ec9',
+};
+
+function MemoryTab({ enabled }: { enabled: boolean }) {
+  const { data: graph } = useQuery<BrainGraph>({
+    queryKey: ['cm-brain-graph'],
+    queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph')).data,
+    staleTime: 30_000, enabled,
+  });
+  const { data: trend } = useQuery<BrainTrend>({
+    queryKey: ['cm-brain-trend'],
+    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend')).data,
+    staleTime: 30_000, enabled,
+  });
+  const [selType, setSelType] = useState<string | null>(null);
+
+  const nodes = graph?.nodes ?? [];
+  const maxCount = Math.max(1, ...nodes.map((n) => n.count));
+  const drill = (selType && graph?.drill[selType]) || [];
+
+  return (
+    <div data-testid="cm-panel-memory" className="flex flex-col gap-5 max-w-4xl">
+      <div className="text-sm text-[var(--color-text-muted)]">
+        The judgment I've sedimented across all conversations — a 7-type ontology.
+        Value (not age) decides survival: idle entries dim, load-bearing ones persist.
+      </div>
+
+      {/* 7-type graph — nodes sized by entry count */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          Knowledge graph · 7 types as nodes (click to drill in)
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {nodes.map((n) => {
+            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            const size = 44 + Math.round((n.count / maxCount) * 40); // 44-84px by count
+            const sel = selType === n.type;
+            return (
+              <button
+                key={n.type}
+                data-testid={`cm-graph-node-${n.type}`}
+                onClick={() => setSelType(sel ? null : n.type)}
+                title={`${n.type}: ${n.count} (${n.active} active · ${n.dormant} dim)`}
+                className="flex flex-col items-center justify-center rounded-full border-2 transition-transform hover:scale-105 shrink-0"
+                style={{
+                  width: size, height: size,
+                  borderColor: tint,
+                  background: `color-mix(in srgb, ${tint} ${n.dormant > n.active ? 8 : 16}%, transparent)`,
+                  boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
+                }}
+              >
+                <span className="font-mono text-sm font-extrabold" style={{ color: tint }}>{n.count}</span>
+                <span className="font-mono text-[9px] font-bold" style={{ color: tint }}>{n.type.slice(0, 4)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-1.5 text-[10px] text-[var(--color-text-faint)]">
+          node size = entry count · bright = active · dim = dormant/archived
+        </div>
+      </section>
+
+      {/* by-type distribution bars (also drill) */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          By-type distribution
+        </div>
+        <div className="flex flex-col gap-1">
+          {nodes.map((n) => {
+            const tint = TYPE_TINT[n.type] ?? '#7c8194';
+            return (
+              <button
+                key={n.type}
+                data-testid={`cm-bar-${n.type}`}
+                onClick={() => setSelType(n.type)}
+                className="flex items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-[var(--color-hover)]"
+              >
+                <span className="w-16 shrink-0 font-mono text-[11px] text-[var(--color-text-muted)]">{n.type}</span>
+                <span className="flex-1 h-2 rounded-full bg-[var(--color-border)] max-w-md">
+                  <span className="block h-2 rounded-full" style={{ width: `${Math.max(3, (n.count / maxCount) * 100)}%`, background: tint }} />
+                </span>
+                <span className="w-8 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{n.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* drill-down list */}
+      <section>
+        <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
+          {!selType ? (
+            <div className="text-[11px] text-[var(--color-text-faint)]">👆 Click a graph node (or a bar) → latest entries of that type</div>
+          ) : drill.length === 0 ? (
+            <div className="text-[11px] text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
+          ) : (
+            <>
+              <div className="mb-1.5 text-[11px] font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
+              <div className="flex flex-col gap-1">
+                {drill.map((e, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className={'w-1.5 h-1.5 rounded-full shrink-0'} style={{ background: e.status === 'active' ? '#5fc99a' : '#7c8194' }} />
+                    <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-faint)]">{e.meta}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      {/* MEMORY.md size trend (from the daily snapshot series) */}
+      <section>
+        <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+          MEMORY.md size trend
+        </div>
+        <TrendChart trend={trend} field="memory_bytes" />
+      </section>
+
+      <div className="text-[11px] text-[var(--color-text-faint)]">
+        How it works: every message recalls relevant entries (FTS5/BM25); reflection sediments new ones (confident-only); idle entries decay while load-bearing judgment survives.
+      </div>
+    </div>
+  );
+}
+
+// Trend line chart from the daily size-snapshot series. R30: NEVER fabricates a
+// baseline — <2 real points shows an explicit "collecting since launch" state.
+function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'memory_bytes' | 'prompt_tokens' }) {
+  const pts = trend?.points ?? [];
+  if (pts.length < 2) {
+    const since = trend?.launch_date;
+    return (
+      <div data-testid="cm-trend-collecting" className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-center text-[11px] text-[var(--color-text-faint)]">
+        📈 Collecting since {since ?? 'launch'} — the trend appears after 2 daily snapshots.
+      </div>
+    );
+  }
+  const vals = pts.map((p) => p[field]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const W = 300, H = 60;
+  const path = pts.map((p, i) => {
+    const x = (i / (pts.length - 1)) * W;
+    const y = H - ((p[field] - min) / range) * H;
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg data-testid="cm-trend-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-14">
+      <path d={path} fill="none" stroke="#5fc99a" strokeWidth="1.5" />
+    </svg>
   );
 }
 
@@ -347,25 +505,6 @@ function AmColumn({
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-// Compact, top-aligned roadmap teaser for a not-yet-implemented tab. §4: NEVER a
-// full-height centered empty void (which reads as broken) — a small intentional
-// block that says what the tab will show + why it matters, sized to its content.
-function TabTeaser({
-  testid, title, body, planned,
-}: { testid: string; title: string; body: string; planned: string }) {
-  return (
-    <div data-testid={testid} className="flex flex-col gap-1.5 max-w-xl">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-[var(--color-text)]">{title}</span>
-        <span className="rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
-          {planned}
-        </span>
-      </div>
-      <p className="text-sm text-[var(--color-text-muted)]">{body}</p>
     </div>
   );
 }
