@@ -4,7 +4,7 @@ import { AlertsPill } from './AlertsPill';
 import type { AttentionItem } from './RightSidebar/types';
 
 /**
- * Tests for AlertsPill (🔔 需要你) — run_843962a5.
+ * Tests for AlertsPill (🔔 Needs You) — run_843962a5.
  * Verifies the calm/alert states, the popover open + rich content, and that
  * item clicks route to onItemClick / onSelectTab (reusing AttentionList).
  */
@@ -20,7 +20,7 @@ describe('AlertsPill', () => {
   it('CALM: 0 items → pill shows no count badge', () => {
     render(<AlertsPill items={[]} />);
     // The label is present…
-    expect(screen.getByText('需要你')).toBeTruthy();
+    expect(screen.getByText('Needs You')).toBeTruthy();
     // …but there is no numeric badge (calm state).
     expect(screen.queryByText(/^\d+$/)).toBeNull();
   });
@@ -65,6 +65,6 @@ describe('AlertsPill', () => {
   it('CALM popover shows the "nothing needs you" empty state', () => {
     render(<AlertsPill items={[]} />);
     fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    expect(screen.getByText(/没有需要你处理的事/)).toBeTruthy();
+    expect(screen.getByText(/Nothing needs you right now/)).toBeTruthy();
   });
 });

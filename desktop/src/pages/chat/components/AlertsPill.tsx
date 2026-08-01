@@ -1,8 +1,8 @@
 /**
- * AlertsPill — the 🔔 "需要你" (Needs You) pill in the chat tab row.
+ * AlertsPill — the 🔔 "Needs You" pill in the chat tab row.
  *
  * Replaces the bare bell: a LABELLED pill so the user knows what it is at a
- * glance (run_843962a5 — "不然用户根本不知道是个啥"). Sits in ChatHeader's right
+ * glance (run_843962a5 — a bare bell gave no hint what it was). Sits in ChatHeader's right
  * action cluster, next to (not inside) the tab strip. Clicking opens a rich
  * popover anchored to the pill that reuses the shared <AttentionList> — the same
  * cards the Radar sidebar renders (paused pipelines / failed jobs / waiting
@@ -57,7 +57,7 @@ export function AlertsPill({ items, onItemClick, onSelectTab }: AlertsPillProps)
         onClick={() => setOpen((v) => !v)}
         aria-label={calm ? 'Alerts — nothing needs you' : `Alerts — ${count} item(s) need you`}
         aria-expanded={open}
-        title={calm ? '没有需要处理的事' : `${count} 件事需要你处理 — 待确认 / Job 异常 / 外部消息`}
+        title={calm ? 'Nothing needs you' : `${count} item(s) need you — decisions / job failures / external requests`}
         className={[
           'flex items-center gap-1.5 h-7 px-2 rounded-lg text-xs font-semibold transition-colors',
           calm
@@ -66,7 +66,7 @@ export function AlertsPill({ items, onItemClick, onSelectTab }: AlertsPillProps)
         ].join(' ')}
       >
         <span className="material-symbols-outlined text-[15px] leading-none">notifications</span>
-        <span className="whitespace-nowrap">需要你</span>
+        <span className="whitespace-nowrap">Needs You</span>
         {!calm && (
           <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[9.5px] font-bold font-mono flex items-center justify-center animate-pulse">
             {count}
@@ -83,22 +83,22 @@ export function AlertsPill({ items, onItemClick, onSelectTab }: AlertsPillProps)
           {/* Header — self-explaining: says WHAT this surfaces */}
           <div className="px-3.5 py-3 border-b border-[var(--color-border)] bg-red-500/5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13px] font-semibold text-[var(--color-text)]">需要你处理</span>
+              <span className="text-[13px] font-semibold text-[var(--color-text)]">Needs You</span>
               {!calm && (
                 <span className="font-mono text-[10px] font-bold text-red-400 bg-red-500/15 rounded px-1.5 py-0.5 whitespace-nowrap">
-                  {count} 待办
+                  {count} pending
                 </span>
               )}
             </div>
             <div className="mt-0.5 text-[10.5px] leading-snug text-[var(--color-text-dim)]">
-              卡住的对话、异常的 Job、外部来的请求 — 都会浮到这里
+              Stuck conversations, failing jobs, and external requests surface here
             </div>
           </div>
 
           {calm ? (
             <div className="px-4 py-6 text-center text-[12px] text-[var(--color-text-muted)]">
               <div className="material-symbols-outlined text-[22px] opacity-40">check_circle</div>
-              <div className="mt-1">当前没有需要你处理的事</div>
+              <div className="mt-1">Nothing needs you right now</div>
             </div>
           ) : (
             <div className="max-h-[360px] overflow-y-auto py-1">

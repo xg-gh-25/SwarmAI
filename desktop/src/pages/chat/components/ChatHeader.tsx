@@ -22,7 +22,7 @@ interface ChatHeaderProps {
   isNewTabDisabled?: boolean;
 
   // 🔔 Alerts pill — the attention queue (polled once at ChatPage, passed down).
-  /** The 🔔 "需要你" attention items. Empty → calm pill (no badge). */
+  /** The 🔔 "Needs You" attention items. Empty → calm pill (no badge). */
   attentionItems?: AttentionItem[];
   /** Inject a message into the current chat input (paused / job alert items). */
   onItemClick?: ItemClickHandler;
@@ -35,13 +35,13 @@ interface ChatHeaderProps {
  *
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │  [🔔 需要你 N]          │
+ * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │  [🔔 Needs You N]       │
  * │ ◄─── SessionTabBar (flex-1, "+" at tail) ─►  │  ◄─ AlertsPill ─►    │
  * └─────────────────────────────────────────────────────────────────────┘
  *
  * The new-session "+" lives at the TAIL of the tab strip (inside SessionTabBar).
  * The right cluster holds the health warning (when not connected) + the 🔔
- * Alerts pill (the "需要你" attention queue). Sidebar toggle buttons removed —
+ * Alerts pill (the "Needs You" attention queue). Sidebar toggle buttons removed —
  * the Radar sidebar is now always visible.
  *
  * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 2.1
@@ -110,7 +110,7 @@ export function ChatHeader({
             {t('health.degraded', 'Reconnecting…')}
           </div>
         )}
-        {/* 🔔 Alerts pill — the "需要你" attention queue. Replaces the old bare
+        {/* 🔔 Alerts pill — the "Needs You" attention queue. Replaces the old bare
             "+" here; the new-session "+" now lives at the tab-strip tail. */}
         <AlertsPill
           items={attentionItems}
