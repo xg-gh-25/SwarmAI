@@ -15,9 +15,16 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from jobs.paths import JOB_RESULTS_DIR, JOB_RESULTS_JSONL
+
 logger = logging.getLogger("swarm.routers.jobs")
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+# Cap the full last-run output body so a runaway job report can't bloat the drawer.
+_MAX_OUTPUT_BYTES = 32 * 1024
+# Newest-N runs surfaced in the drawer's recent-runs list.
+_RECENT_LIMIT = 10
 
 
 class JobStatusResponse(BaseModel):
@@ -203,3 +210,120 @@ async def unified_status():
     }
 
     return result
+
+
+class JobRunEntry(BaseModel):
+    date: str
+    status: str
+    tokens: int = 0
+    duration: float = 0.0
+    has_output: bool = False
+
+
+class JobRunsResponse(BaseModel):
+    job_id: str
+    last_output: str | None = None
+    last_output_date: str | None = None
+    recent: list[JobRunEntry] = []
+
+
+def _slug(job_id: str) -> str:
+    """Mirror executor._write_job_result's filename slug (executor.py:2219)."""
+    return job_id.replace(" ", "-").lower()
+
+
+def _read_output_body(md_path) -> str | None:
+    """Read a JobResults .md, strip its YAML frontmatter, cap the body. None on any error."""
+    try:
+        text = md_path.read_text(errors="replace")[:_MAX_OUTPUT_BYTES]
+    except OSError:
+        return None
+    # Strip leading '---\n...\n---\n' frontmatter if present.
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            nl = text.find("\n", end + 1)
+            if nl != -1:
+                text = text[nl + 1:]
+    return text.lstrip("\n") or None
+
+
+@router.get("/{job_id}/runs", response_model=JobRunsResponse)
+async def job_runs(job_id: str):
+    """Per-job run history: real per-run status/tokens/duration from the JSONL index,
+    plus the FULL last-run output body from the latest run's markdown.
+
+    Pure read, fail-soft: a never-run job, a missing index, or a path-traversal
+    job_id all return an empty payload (never a 500, never a file outside
+    JOB_RESULTS_DIR). Paths are always derived inside JOB_RESULTS_DIR and
+    containment-checked with resolve()+is_relative_to — the raw param is never
+    concatenated into a path without that guard.
+    """
+    empty = JobRunsResponse(job_id=job_id, last_output=None, last_output_date=None, recent=[])
+    try:
+        if not JOB_RESULTS_JSONL.exists():
+            return empty
+        matches: list[dict] = []
+        for line in JOB_RESULTS_JSONL.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # EXACT match only — no prefix/substring (kills channel-monitor vs
+            # channel-monitor-fallback collision) and no path is built from job_id.
+            if rec.get("job_id") == job_id:
+                matches.append(rec)
+
+        if not matches:
+            return empty
+
+        # Newest first by run_at ISO string (sortable). Skip records lacking run_at.
+        matches.sort(key=lambda r: r.get("run_at") or "", reverse=True)
+
+        recent: list[JobRunEntry] = []
+        for rec in matches[:_RECENT_LIMIT]:
+            run_at = rec.get("run_at") or ""
+            date = run_at[:10]
+            md_name = f"{date}-{_slug(job_id)}.md" if date else ""
+            has_output = False
+            if md_name:
+                candidate = (JOB_RESULTS_DIR / md_name).resolve()
+                # Containment guard: candidate MUST live inside JOB_RESULTS_DIR.
+                if candidate.is_relative_to(JOB_RESULTS_DIR.resolve()) and candidate.is_file():
+                    has_output = True
+            recent.append(JobRunEntry(
+                date=date,
+                status=str(rec.get("status", "unknown")),
+                tokens=int(rec.get("tokens_used", 0) or 0),
+                duration=float(rec.get("duration_seconds", 0.0) or 0.0),
+                has_output=has_output,
+            ))
+
+        # Full last-output body: the newest run that actually has a readable .md.
+        last_output: str | None = None
+        last_output_date: str | None = None
+        for rec in matches:
+            date = (rec.get("run_at") or "")[:10]
+            if not date:
+                continue
+            candidate = (JOB_RESULTS_DIR / f"{date}-{_slug(job_id)}.md").resolve()
+            if not candidate.is_relative_to(JOB_RESULTS_DIR.resolve()) or not candidate.is_file():
+                continue
+            body = _read_output_body(candidate)
+            if body:
+                last_output = body
+                last_output_date = date
+                break
+
+        return JobRunsResponse(
+            job_id=job_id,
+            last_output=last_output,
+            last_output_date=last_output_date,
+            recent=recent,
+        )
+    except Exception as e:  # fail-soft: the drawer must never 500
+        logger.error("job_runs failed for '%s': %s", job_id, e)
+        return empty

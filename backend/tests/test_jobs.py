@@ -708,3 +708,106 @@ class TestJobsAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "dry_run"
+
+
+class TestJobRunsEndpoint:
+    """GET /api/jobs/{job_id}/runs — per-job run history (hybrid JSONL index + latest .md body).
+
+    The endpoint reads the .job-results.jsonl index (real per-run status/tokens/
+    duration, keyed by exact job_id) and reads ONLY the latest matched run's
+    <date>-<slug>.md for the full last_output body. Paths come from jobs.paths,
+    never from the raw param — a traversal job_id must NOT escape JOB_RESULTS_DIR.
+    """
+
+    @pytest.fixture
+    def job_results(self, tmp_path, monkeypatch):
+        """A tmp JobResults dir with a jsonl index + one .md, patched into routers.jobs."""
+        jr = tmp_path / "JobResults"
+        jr.mkdir()
+        jsonl = jr / ".job-results.jsonl"
+        # Two job_ids; 'alpha' has 2 runs (newest 2026-07-31), 'beta' has 1.
+        records = [
+            {"job_id": "beta", "job_name": "Beta", "run_at": "2026-07-29T05:00:00+00:00",
+             "status": "failed", "summary": "boom", "tokens_used": 10, "duration_seconds": 2.0},
+            {"job_id": "alpha", "job_name": "Alpha", "run_at": "2026-07-30T06:00:00+00:00",
+             "status": "success", "summary": "old", "tokens_used": 100, "duration_seconds": 5.0},
+            {"job_id": "alpha", "job_name": "Alpha", "run_at": "2026-07-31T06:00:00+00:00",
+             "status": "success", "summary": "new", "tokens_used": 200, "duration_seconds": 6.0},
+        ]
+        jsonl.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+        # Full last-output body for alpha's latest run (filename mirrors executor: <date>-<slug>.md)
+        (jr / "2026-07-31-alpha.md").write_text(
+            "---\njob_id: alpha\nstatus: success\n---\n\n## Alpha\n\nFULL ALPHA OUTPUT BODY line1\nline2\n"
+        )
+        import routers.jobs as jobs_mod
+        monkeypatch.setattr(jobs_mod, "JOB_RESULTS_DIR", jr, raising=False)
+        monkeypatch.setattr(jobs_mod, "JOB_RESULTS_JSONL", jsonl, raising=False)
+        return jr
+
+    @pytest.fixture
+    def client(self, job_results):
+        from fastapi.testclient import TestClient
+        from routers.jobs import router
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(router)
+        return TestClient(app)
+
+    def test_job_with_runs_returns_history_and_full_output(self, client):
+        r = client.get("/api/jobs/alpha/runs")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["job_id"] == "alpha"
+        # recent[] is newest-first, real per-run status/tokens/duration from the JSONL
+        assert len(d["recent"]) == 2
+        assert d["recent"][0]["date"] == "2026-07-31"
+        assert d["recent"][0]["status"] == "success"
+        assert d["recent"][0]["tokens"] == 200
+        assert d["recent"][0]["duration"] == 6.0
+        assert d["recent"][0]["has_output"] is True
+        # last_output = the FULL .md body, not the 300-char jsonl summary
+        assert "FULL ALPHA OUTPUT BODY" in d["last_output"]
+        assert d["last_output_date"] == "2026-07-31"
+
+    def test_job_without_md_still_returns_recent(self, client):
+        # beta has a jsonl record but no .md file → recent present, last_output null
+        r = client.get("/api/jobs/beta/runs")
+        assert r.status_code == 200
+        d = r.json()
+        assert len(d["recent"]) == 1
+        assert d["recent"][0]["status"] == "failed"
+        assert d["recent"][0]["has_output"] is False
+        assert d["last_output"] is None
+
+    def test_never_run_job_is_empty_not_500(self, client):
+        r = client.get("/api/jobs/ghost/runs")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["recent"] == []
+        assert d["last_output"] is None
+
+    def test_traversal_job_id_does_not_escape(self, client, job_results):
+        # A path-traversal job_id must NOT leak a file outside JOB_RESULTS_DIR and
+        # must NOT 500. Two safe outcomes are acceptable: FastAPI never routes a
+        # slash-containing path to /{job_id}/runs (404), OR the handler runs and
+        # returns empty (exact JSONL match fails + containment guard). Either way:
+        # no secret content, no server error.
+        secret = job_results.parent / "secret.md"
+        secret.write_text("TOP SECRET")
+        r = client.get("/api/jobs/..%2F..%2Fsecret/runs")
+        assert r.status_code in (200, 404)  # never 500
+        assert "TOP SECRET" not in r.text
+        if r.status_code == 200:
+            d = r.json()
+            assert d["recent"] == []
+            assert d["last_output"] is None
+
+    def test_traversal_single_segment_job_id_is_contained(self, client, job_results):
+        # A single-segment id that DOES route to the handler but isn't a real job:
+        # exercises the handler's own guard (exact JSONL match fails → empty), and
+        # even a crafted id can't build a path outside JOB_RESULTS_DIR.
+        secret = job_results.parent / "secret.md"
+        secret.write_text("TOP SECRET")
+        r = client.get("/api/jobs/..%2E/runs")  # single segment, no real match
+        assert r.status_code in (200, 404)
+        assert "TOP SECRET" not in r.text
