@@ -1086,6 +1086,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
+      { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-settings', label: 'Settings' },
       { testId: 'nav-community', label: 'Community' },
     ] as const;

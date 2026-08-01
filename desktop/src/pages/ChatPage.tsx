@@ -52,6 +52,7 @@ import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { ToDoOverlay } from '../components/layout/ToDoOverlay';
+import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
@@ -1114,6 +1115,47 @@ export default function ChatPage() {
     return true;
   }, [tabMapRef, maxTabsInfo.chatMax, activeTabIdRef, addToast, initTabState, updateTabState,
       setSessionId, setMessages, addTab, selectedAgentId]);
+
+  // Land an arbitrary prompt into a chat tab (Jobs & Runs overlay: create/pause/
+  // edit/delete → chat, since s_job-manager owns user-jobs.yaml integrity).
+  // Mirrors handleDispatchTodo's tab-landing (Gate-1 #7): a bare window
+  // swarm:inject-chat-input no-ops with no active chat tab — the ChatInput
+  // listener only sets the ACTIVE tab's input, it doesn't create/switch tabs.
+  // So we resolve+activate a tab FIRST, THEN inject. Returns true if it landed.
+  const handleDispatchJobPrompt = useCallback((prompt: string): boolean => {
+    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
+      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
+    }));
+    const decision = resolveResumeTarget(`__jobprompt__${prompt.slice(0, 24)}`, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
+    if (decision.action === 'needs-close') {
+      addToast({ severity: 'warning', message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close one, then try again.`, autoDismiss: true });
+      return false;
+    }
+    if (decision.action === 'reuse-current') {
+      const hasDraft = inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0;
+      if (hasDraft) {
+        addToast({ severity: 'warning', message: 'This tab has an unsent draft — send or clear it, or open a new tab.', autoDismiss: true });
+        return false;
+      }
+      initTabState(decision.tabId, []);
+      updateTabState(decision.tabId, { sessionId: undefined });
+      setSessionId(undefined);
+      setMessages([]);
+    } else { // newtab
+      const newTab = addTab(selectedAgentId || 'default');
+      if (!newTab) {
+        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
+        return false;
+      }
+      initTabState(newTab.id, []);
+    }
+    // Tab is now active — inject the prompt (not auto-sent; user reviews + sends).
+    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
+      detail: { text: prompt, focus: true, autoSend: false },
+    }));
+    return true;
+  }, [tabMapRef, maxTabsInfo.chatMax, activeTabIdRef, addToast, initTabState, updateTabState,
+      setSessionId, setMessages, addTab, selectedAgentId, inputValueRef, attachmentsRef]);
 
   // Resume a session from the History overlay into a chat tab (方案 B).
   // Pure decision (resolveResumeTarget) + real execution via handleTabSelect —
@@ -3117,6 +3159,7 @@ export default function ChatPage() {
         {/* ToDo flow-closure overlay (A2) — left-nav Work card. onDispatch owns
             tab landing + inject + snapshot; overlay auto-closes on landed. */}
         <ToDoOverlay onDispatch={handleDispatchTodo} />
+        <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
       </div>
 
       {/* Modals */}

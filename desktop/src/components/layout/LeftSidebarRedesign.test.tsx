@@ -61,6 +61,7 @@ const DOMAIN_ORDER = [
   'nav-pollinate',
   'nav-capabilities',
   'nav-eval',
+  'nav-jobs',      // System: Jobs & Runs overlay (after OS Eval, before Settings)
   'nav-settings',
   'nav-community',
 ];
