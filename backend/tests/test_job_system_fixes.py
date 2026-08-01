@@ -227,6 +227,80 @@ class TestBriefingEndpointPerf:
         assert hasattr(__import__("routers.system", fromlist=["_briefing_cache"]), "_briefing_cache"), \
             "_briefing_cache should be a module-level attribute"
 
+    def test_refresh_routes_to_dedicated_briefing_pool_not_default(self):
+        """run_b36c7880: the heavy briefing recompute must run on the dedicated
+        'briefing' pool, NEVER the default ThreadPoolExecutor — otherwise it can
+        starve the default pool the event loop uses to schedule /health."""
+        import asyncio
+        import routers.system as sysmod
+
+        seen = {}
+
+        def _fake_build(_ws):
+            import threading
+            seen["thread"] = threading.current_thread().name
+            return {"focus": [], "signals": [], "jobs": [], "todos": [],
+                    "learning": None, "generated_at": "x"}
+
+        # Reset cache to force a cold compute, and stub the heavy builder.
+        sysmod._briefing_cache["data"] = None
+        sysmod._briefing_cache["expires_at"] = 0.0
+        with patch("core.proactive_intelligence.build_session_briefing_data", _fake_build):
+            asyncio.run(sysmod._refresh_briefing_cache())
+
+        assert "briefing" in seen.get("thread", "").lower(), (
+            f"briefing recompute ran on {seen.get('thread')!r}, not the dedicated "
+            "'briefing' pool — /health-starvation fix is broken"
+        )
+
+    def test_stale_cache_served_without_blocking_on_recompute(self):
+        """Stale-while-revalidate: a stale-but-present cache is returned
+        immediately; the request must NOT block on the recompute."""
+        import asyncio
+        import time as _t
+        import routers.system as sysmod
+
+        # Seed a stale entry.
+        stale = {"focus": ["stale-marker"], "signals": [], "jobs": [], "todos": [],
+                 "learning": None, "generated_at": "old"}
+        sysmod._briefing_cache["data"] = stale
+        sysmod._briefing_cache["expires_at"] = _t.monotonic() - 1  # expired
+
+        async def _call():
+            # Should return the stale data synchronously (no await on recompute).
+            return await sysmod.get_session_briefing()
+
+        result = asyncio.run(_call())
+        assert result is stale or result.get("focus") == ["stale-marker"], (
+            "stale cache must be served immediately (stale-while-revalidate)"
+        )
+
+    def test_stale_path_debounces_short_not_full_ttl(self):
+        """A failing background refresh must NOT push expiry a full TTL (which
+        would strand the cache stale forever). The stale path advances expiry by
+        only the short debounce window, so it re-converges to a cold miss."""
+        import asyncio
+        import time as _t
+        import routers.system as sysmod
+
+        stale = {"focus": ["stale"], "signals": [], "jobs": [], "todos": [],
+                 "learning": None, "generated_at": "old"}
+        sysmod._briefing_cache["data"] = stale
+        sysmod._briefing_cache["expires_at"] = _t.monotonic() - 1
+
+        async def _call():
+            return await sysmod.get_session_briefing()
+
+        before = _t.monotonic()
+        asyncio.run(_call())
+        pushed = sysmod._briefing_cache["expires_at"] - before
+        # Must be ~debounce window, NOT a full TTL — proves a failing refresh
+        # can re-converge instead of masking forever.
+        assert pushed <= sysmod._BRIEFING_REFRESH_DEBOUNCE + 1, (
+            f"stale path pushed expiry {pushed:.1f}s (>~debounce) — a failing "
+            "refresh would strand the cache stale forever"
+        )
+
 
 # ── AC7: JSONL tail-read ────────────────────────────────────────────
 

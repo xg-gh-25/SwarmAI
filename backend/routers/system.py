@@ -988,30 +988,90 @@ async def get_max_tabs() -> MaxTabsResponse:
 # need to re-read 6 files on every tab open.
 _briefing_cache: dict = {"data": None, "expires_at": 0.0}
 _BRIEFING_CACHE_TTL = 60  # seconds
+# Debounce window for the stale path: how long to suppress duplicate background
+# refreshes WITHOUT masking a persistent failure. Deliberately short (≪ TTL) so a
+# FAILING refresh re-converges to a cold, error-surfacing miss instead of pushing
+# expiry a full TTL every request and staying stale forever (adversarial MEDIUM).
+_BRIEFING_REFRESH_DEBOUNCE = 5  # seconds
+_briefing_refresh_lock = asyncio.Lock()  # single-flight: one recompute at a time
+# Strong refs to in-flight background refresh tasks — the event loop keeps only a
+# WEAK ref, so without this a fire-and-forget task can be GC'd mid-flight and the
+# revalidate silently never happens (adversarial HIGH). Discard on completion.
+_briefing_bg_tasks: set = set()
+_EMPTY_BRIEFING = {"focus": [], "signals": [], "jobs": [], "todos": [], "learning": None, "generated_at": None}
+
+
+def _spawn_briefing_refresh() -> None:
+    """Launch a background briefing refresh, holding a strong ref so it can't be
+    GC'd, and logging (never swallowing) any failure so a persistently-failing
+    builder is visible rather than silently serving stale forever."""
+    async def _guarded() -> None:
+        try:
+            await _refresh_briefing_cache()
+        except Exception as exc:  # never crash the loop; surface for remediation
+            logger.warning("briefing background refresh failed: %s", exc)
+    t = asyncio.create_task(_guarded())
+    _briefing_bg_tasks.add(t)
+    t.add_done_callback(_briefing_bg_tasks.discard)
+
+
+async def _refresh_briefing_cache() -> dict:
+    """Recompute briefing_data on the DEDICATED 'briefing' pool (NOT the default
+    ThreadPoolExecutor) so the heavy glob+sqlite recompute can never starve the
+    default pool the event loop uses to schedule /health (run_b36c7880). Single-
+    flight: concurrent callers await the one in-flight recompute instead of each
+    spawning their own (that 60s-expiry stampede is exactly what saturated the
+    pool → 28.5s → offline)."""
+    from core import executors
+    from core.proactive_intelligence import build_session_briefing_data
+    ws_path = swarm_workspace_manager.get_workspace_path()
+    if not ws_path:
+        return _EMPTY_BRIEFING
+    async with _briefing_refresh_lock:
+        # Someone may have refreshed while we waited for the lock.
+        if _briefing_cache["data"] is not None and time.monotonic() < _briefing_cache["expires_at"]:
+            return _briefing_cache["data"]
+        result = await executors.run_in("briefing", build_session_briefing_data, ws_path)
+        _briefing_cache["data"] = result
+        _briefing_cache["expires_at"] = time.monotonic() + _BRIEFING_CACHE_TTL
+        return result
 
 
 @router.get("/briefing")
 async def get_session_briefing() -> dict:
     """Return structured session briefing data for the Welcome Screen.
 
-    Calls proactive_intelligence.build_session_briefing_data() which
-    reads MEMORY.md, signal_digest.json, and job results.  Offloaded
-    to a thread to avoid blocking the event loop.  Results cached for
-    60s.  Never fails — returns an empty structure on any error.
-    """
+    STALE-WHILE-REVALIDATE + dedicated-pool (run_b36c7880): a request NEVER
+    blocks on the recompute —
+      • fresh cache        → return it;
+      • stale-but-present  → return stale NOW, refresh in the background on the
+                             dedicated 'briefing' pool (single-flight);
+      • cold (no cache)    → first recompute on the 'briefing' pool (bounded),
+                             not the default pool.
+    Removes the failure mode where a 60s-expiry cache miss ran the ~28s recompute
+    on a default-pool request thread and starved /health. Never fails."""
     now = time.monotonic()
-    if _briefing_cache["data"] is not None and now < _briefing_cache["expires_at"]:
-        return _briefing_cache["data"]
+    data = _briefing_cache["data"]
+    if data is not None and now < _briefing_cache["expires_at"]:
+        return data  # fresh
 
-    from core.proactive_intelligence import build_session_briefing_data
-    ws_path = swarm_workspace_manager.get_workspace_path()
-    if not ws_path:
-        return {"focus": [], "signals": [], "jobs": [], "todos": [], "learning": None, "generated_at": None}
+    if data is not None:
+        # Serve stale immediately; refresh off the request path on the dedicated
+        # pool. Push expiry out only by a SHORT debounce window (not a full TTL):
+        # enough to suppress a per-request refresh stampede, but short enough that
+        # a FAILING refresh re-converges to a cold error-surfacing miss instead of
+        # staying stale forever (adversarial MEDIUM). A SUCCESSFUL refresh writes
+        # the real now+TTL expiry inside _refresh_briefing_cache.
+        _briefing_cache["expires_at"] = now + _BRIEFING_REFRESH_DEBOUNCE
+        _spawn_briefing_refresh()
+        return data
 
-    result = await asyncio.to_thread(build_session_briefing_data, ws_path)
-    _briefing_cache["data"] = result
-    _briefing_cache["expires_at"] = time.monotonic() + _BRIEFING_CACHE_TTL
-    return result
+    # Cold start: compute once on the dedicated 'briefing' pool (single-flight).
+    try:
+        return await _refresh_briefing_cache()
+    except Exception as exc:  # never fail the endpoint
+        logger.debug("briefing cold refresh failed: %s", exc)
+        return _EMPTY_BRIEFING
 
 
 @router.post("/briefing/dismiss")
