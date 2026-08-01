@@ -50,6 +50,7 @@ import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
+import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
 import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
@@ -2741,6 +2742,11 @@ export default function ChatPage() {
     }
   };
 
+  // 🔔 Attention queue — polled ONCE here (single 30s poll) and shared by the
+  // ChatHeader Alerts pill AND the Radar sidebar's AttentionSection, so there is
+  // no duplicate poll (run_843962a5). Lifted out of RadarSidebar for this reason.
+  const { attentionItems } = useRadarAttention(sessionId, openTabs);
+
   // Render
   return (
     <ChatDropZone addFiles={addFiles} addWorkspaceFiles={addWorkspaceFiles}>
@@ -2753,6 +2759,9 @@ export default function ChatPage() {
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
         isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
+        attentionItems={attentionItems}
+        onItemClick={handleItemClick}
+        onSelectTab={selectTab}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -2915,6 +2924,7 @@ export default function ChatPage() {
           onSendMessage={handleFocusClick}
           onSelectTab={selectTab}
           openTabs={openTabs}
+          attentionItems={attentionItems}
         />
       </div>
 

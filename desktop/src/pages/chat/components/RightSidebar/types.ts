@@ -131,6 +131,12 @@ export interface RadarSidebarProps {
    * tab id for onSelectTab, and exclude the currently-active session.
    */
   openTabs?: { id: string; sessionId?: string }[];
+  /**
+   * The 🔔 attention queue, polled ONCE at ChatPage (useRadarAttention) and
+   * passed down — shared with the ChatHeader Alerts pill so there is a single
+   * 30s poll (run_843962a5). Defaults to [] when absent.
+   */
+  attentionItems?: AttentionItem[];
 }
 
 /** Props for the shared collapsible section wrapper. */

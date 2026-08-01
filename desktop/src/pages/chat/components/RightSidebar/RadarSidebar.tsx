@@ -35,7 +35,6 @@ import { ChangesSection } from './ChangesSection';
 import { AttentionSection } from './AttentionSection';
 import { JobsRunsSection } from './JobsRunsSection';
 import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
-import { useRadarAttention } from '../../../../hooks/useRadarAttention';
 import { HistoryPopover } from './HistoryPopover';
 
 // ---------------------------------------------------------------------------
@@ -78,7 +77,7 @@ export function RadarSidebar({
   sessionId,
   onItemClick,
   onSelectTab,
-  openTabs = [],
+  attentionItems = [],
 }: RadarSidebarProps) {
   // Auto-hide when file editor panel is open
   const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
@@ -122,10 +121,11 @@ export function RadarSidebar({
   // Section counts
   const [todoCount, setTodoCount] = useState(0);
 
-  // Attention queue (3 pure-read sources, polled). The running-pipeline FYI list
-  // is no longer surfaced here — active (running/paused) runs now live in the
-  // Jobs & Runs section (Option B), the single run-status inventory.
-  const { attentionItems } = useRadarAttention(sessionId, openTabs);
+  // Attention queue (3 pure-read sources) is now polled ONCE at ChatPage via
+  // useRadarAttention and passed down as `attentionItems` — shared with the
+  // ChatHeader Alerts pill so there is a SINGLE 30s poll (run_843962a5). The
+  // running-pipeline FYI list is no longer surfaced here — active (running/
+  // paused) runs live in the Jobs & Runs section (the single run-status inventory).
 
   // Referenced Files tracking
   const { files: referencedFiles, totalCount: referencedCount } = useReferencedFiles(sessionId);
