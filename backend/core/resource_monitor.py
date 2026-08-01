@@ -132,12 +132,19 @@ class ResourceMonitor:
     """
 
     _CACHE_TTL: float = 5.0  # seconds
-    # Spawn cost: actual CLI tree RSS is 1400-1600MB (verified from
-    # lifecycle_manager logs 2026-04-12).  Old value of 500MB allowed 3
-    # concurrent chat sessions → 4.5GB → macOS jetsam SIGKILL cascade.
-    # No-data default (fresh boot): conservative because we have zero
-    # evidence.  Adaptive samples take over after first lifecycle tick.
-    # On 16GB machine: headroom ~2GB / 1200 = 1 → max_tabs=2 (safe).
+    # Spawn cost — no-data fallback (fresh boot, before any adaptive sample).
+    # The incremental cost of one more session is the CLI MAIN-process RSS
+    # (~300-500MB measured), NOT the full tree (tree adds ~1050MB of MCP
+    # children → inflates ~5×; see lifecycle_manager._sample_process_memory,
+    # which deliberately records main-process RSS for this reason). 1200 is a
+    # DELIBERATELY conservative fallback (~2-3× the measured main-RSS cost) so
+    # a zero-evidence fresh boot under-provisions rather than over-commits
+    # memory before the first lifecycle tick supplies real samples.
+    # (Historical note: earlier comments claiming a "verified 1400-1600MB"
+    # cost were wrong — that was worst-case tree/launch-spike guesswork; the
+    # real OOM cause was retry storms + kill/respawn churn, since fixed.)
+    # Adaptive samples take over after the first lifecycle tick.
+    # On 16GB: headroom ~2GB / 1200 = 1 → max_tabs=2.
     _DEFAULT_SPAWN_COST_MB: float = 1200.0
     _HEADROOM_MB: float = 512.0  # Always keep this much free
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
@@ -153,11 +160,12 @@ class ResourceMonitor:
     _MIN_SPAWN_COST_MB: float = 600.0
 
     # ── Dynamic tab limit constants ─────────────────────────────
-    # Ceiling: 4 = 3 chat + 1 channel.  On 36GB machines this is safe
+    # Ceiling: 6 = 5 chat + 1 channel.  On 36GB machines this is safe
     # as long as retry/proactive-restart bugs are fixed (the real OOM
-    # cause was retry storms + kill/respawn churn, not 3 sessions).
-    # On smaller machines the dynamic formula gates via cost_mb.
-    _MAX_TABS_CEILING: int = 4
+    # cause was retry storms + kill/respawn churn, not session count).
+    # On smaller machines the dynamic RAM formula (headroom / cost_mb)
+    # gates BELOW this ceiling — e.g. a 16GB machine caps at 2 regardless.
+    _MAX_TABS_CEILING: int = 6
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
     # Concurrent penalty: each alive session inflates the estimated spawn
     # cost to account for simultaneous peak memory spikes.  On a 16GB
@@ -388,7 +396,7 @@ class ResourceMonitor:
         available (75th percentile of actual tree RSS, floored at
         ``_MIN_SPAWN_COST_MB``), falls back to ``_DEFAULT_SPAWN_COST_MB``.
 
-        Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
+        Returns [2, 6]. Always allows at least 2 (1 chat + 1 channel).
         """
         mem = self.system_memory()
         total_mb = mem.total / (1024 * 1024)

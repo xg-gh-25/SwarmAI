@@ -3034,8 +3034,8 @@ describe('Fix 7: Tab limit enforcement', () => {
     resetTestState();
   });
   describe('MAX_OPEN_TABS constant', () => {
-    it('is 4 (hard ceiling, deprecated alias for MAX_TABS_HARD_CEILING)', () => {
-      expect(MAX_OPEN_TABS).toBe(4);
+    it('is 6 (hard ceiling, deprecated alias for MAX_TABS_HARD_CEILING)', () => {
+      expect(MAX_OPEN_TABS).toBe(6);
     });
   });
 

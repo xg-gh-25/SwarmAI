@@ -104,7 +104,7 @@ class TestC1bComputeMaxTabsAccuracy:
     that's ~29% used (active+wired).  But effective_used = total - available
     where available = free + speculative + inactive = ~9GB, so
     effective_used ≈ 27GB.  Headroom = 36864×0.9 - 27612 = 5566MB.
-    max_tabs = min(4, 5566/1200) = min(4, 4) = 4.
+    max_tabs = min(ceiling=6, 5566/1200) = min(6, 4) = 4 (RAM-dominated).
 
     Validates: Requirements 1.2, 2.2
     """
@@ -121,7 +121,7 @@ class TestC1bComputeMaxTabsAccuracy:
 
         # vm_stat: available = free+spec+inactive = ~9GB
         # effective_used = 36GB - 9GB = 27GB → headroom = 5.6GB
-        # raw = 5566/1200 = 4 → result = min(4, 4) = 4
+        # raw = 5566/1200 = 4 → result = min(6, 4) = 4 (RAM-dominated, below ceiling)
         assert max_tabs == 4, (
             f"compute_max_tabs() should return 4 with vm_stat fallback "
             f"(effective_used ≈ 27GB, headroom ≈ 5.6GB), got {max_tabs}"
@@ -333,7 +333,7 @@ class TestP2FallbackFailurePreservation:
 # ---------------------------------------------------------------------------
 
 class TestP3ComputeMaxTabsFormulaPreservation:
-    """P3: compute_max_tabs uses 85% rule: max(2, min(floor(headroom_to_85pct / 500), 4)).
+    """P3: compute_max_tabs uses 90% rule: max(2, min(floor(headroom_to_90pct / 1200), 6)).
 
     Min=2 guarantees 1 chat slot + 1 channel slot.
     Uses Hypothesis to verify the formula across random used_pct values.
@@ -352,9 +352,9 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        # 90% threshold, 1200MB cost, ceiling 4 (matches resource_monitor.py)
+        # 90% threshold, 1200MB cost, ceiling 6 (matches resource_monitor.py)
         headroom_mb = total_mb * 0.90 - used_mb
-        expected = max(2, min(int(headroom_mb / 1200), 4))
+        expected = max(2, min(int(headroom_mb / 1200), 6))
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(
@@ -371,6 +371,66 @@ class TestP3ComputeMaxTabsFormulaPreservation:
             f"headroom_to_90%={headroom_mb:.0f}MB, "
             f"expected {expected}, got {result}"
         )
+
+
+class TestCeilingAutoDegradeOnLowMemory:
+    """Raising _MAX_TABS_CEILING 4→6 must NOT let small machines open 6 tabs.
+
+    Safety on low-memory machines lives in the RAM formula
+    (headroom / cost_mb), NOT the ceiling: on a 16GB machine the headroom
+    is small enough that raw < 6, so ``min(raw, ceiling)`` is dominated by
+    ``raw`` and the machine auto-degrades well below the new ceiling.
+    This is the regression guard for the ceiling bump — if someone later
+    removes the RAM gate, a 16GB box would jump to 6 tabs and OOM.
+    """
+
+    def test_16gb_low_headroom_gates_below_new_ceiling(self):
+        from core.resource_monitor import ResourceMonitor, SystemMemory
+
+        total_bytes = 16 * 1024**3  # 16GB machine
+        # Moderate load: 60% used → effective_used = total - available.
+        # headroom_to_90% = 16384*0.9 - 16384*0.60 ≈ 4915MB.
+        # raw = floor(4915 / 1200) = 4 → min(4, ceiling=6) = 4 < 6.
+        used_pct = 60.0
+        total_mb = total_bytes / (1024 * 1024)
+        used_bytes = int(total_bytes * (used_pct / 100.0))
+        available_bytes = total_bytes - used_bytes
+
+        monitor = ResourceMonitor()
+        monitor._cached_memory = SystemMemory(
+            total=total_bytes,
+            available=available_bytes,
+            used=used_bytes,
+            percent_used=used_pct,
+        )
+        monitor._cache_time = __import__("time").time()
+
+        max_tabs = monitor.compute_max_tabs()
+        assert max_tabs < monitor._MAX_TABS_CEILING, (
+            f"16GB machine must auto-degrade below the ceiling "
+            f"({monitor._MAX_TABS_CEILING}), got {max_tabs}"
+        )
+        # Concretely: RAM formula caps at 4 here, never the new ceiling of 6.
+        assert max_tabs == 4, f"expected RAM-gated 4 on 16GB@60%, got {max_tabs}"
+
+    def test_severe_pressure_floors_at_two(self):
+        """Even at the ceiling bump, the min-2 floor still holds under pressure."""
+        from core.resource_monitor import ResourceMonitor, SystemMemory
+
+        total_bytes = 16 * 1024**3
+        used_pct = 89.0  # near-critical: headroom ≈ 160MB → raw 0 → floored to 2
+        used_bytes = int(total_bytes * (used_pct / 100.0))
+
+        monitor = ResourceMonitor()
+        monitor._cached_memory = SystemMemory(
+            total=total_bytes,
+            available=total_bytes - used_bytes,
+            used=used_bytes,
+            percent_used=used_pct,
+        )
+        monitor._cache_time = __import__("time").time()
+
+        assert monitor.compute_max_tabs() == 2
 
 
 # ---------------------------------------------------------------------------

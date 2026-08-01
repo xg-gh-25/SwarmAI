@@ -23,6 +23,7 @@ import * as fc from 'fast-check';
 import { renderHook, act } from '@testing-library/react';
 import {
   useUnifiedTabState,
+  MAX_TABS_HARD_CEILING,
 } from '../useUnifiedTabState';
 import type { OpenTab } from '../../pages/chat/types';
 
@@ -75,10 +76,10 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
   it('Property 6: tabs are never auto-closed by pressure transitions or budget shrinkage', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.integer({ min: 1, max: 4 }),
+        fc.integer({ min: 1, max: MAX_TABS_HARD_CEILING }),
         fc.array(
           fc.record({
-            maxTabs: fc.integer({ min: 1, max: 4 }),
+            maxTabs: fc.integer({ min: 1, max: MAX_TABS_HARD_CEILING }),
             memoryPressure: fc.constantFrom('ok', 'warning', 'critical') as fc.Arbitrary<'ok' | 'warning' | 'critical'>,
           }),
           { minLength: 1, maxLength: 10 },
@@ -137,7 +138,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
   /**
    * Feature: dynamic-tab-scaling, Property 5: Frontend addTab rejection at limit
    *
-   * For any tab_count in [0, 6] and max_tabs in [1, 4]:
+   * For any tab_count in [0, ceiling] and max_tabs in [1, ceiling]:
    * - chat_max = max(1, max_tabs - 1) — 1 slot reserved for channels
    * - If tab_count >= chat_max: addTab() returns undefined (rejected), tab count unchanged
    * - If tab_count < chat_max: addTab() returns a valid OpenTab (accepted), tab count = tab_count + 1
@@ -147,8 +148,8 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
   it('Property 5: addTab rejects when tab count >= dynamic max, accepts when below', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.integer({ min: 0, max: 6 }),
-        fc.integer({ min: 1, max: 4 }),
+        fc.integer({ min: 0, max: MAX_TABS_HARD_CEILING }),
+        fc.integer({ min: 1, max: MAX_TABS_HARD_CEILING }),
         async (tabCount, maxTabs) => {
           vi.clearAllMocks();
 
@@ -222,22 +223,23 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
   /**
    * Feature: dynamic-tab-scaling, Property 7: Restore loads all saved tabs regardless of dynamic limit
    *
-   * For any saved tab count S in [1, 4] and any dynamic max tabs value M in
-   * [1, 4], `restoreFromFile()` should restore ALL S tabs to the UI. The tab
-   * count after restore should equal S, not M. The `addTab()` function should
-   * still reject new tabs when open count ≥ M.
+   * For any saved tab count S up to the hard ceiling and any dynamic max
+   * tabs value M, `restoreFromFile()` should restore ALL S tabs to the UI.
+   * The tab count after restore should equal S, not M. The `addTab()`
+   * function should still reject new tabs when open count ≥ M.
    *
-   * Key invariant: `restoreFromFile()` uses `MAX_TABS_HARD_CEILING = 4` (not
-   * the dynamic limit). The dynamic limit only gates NEW tab creation via
-   * `addTab()`.
+   * Key invariant: `restoreFromFile()` uses `MAX_TABS_HARD_CEILING` (not the
+   * dynamic limit) as its restore cap. The dynamic limit only gates NEW tab
+   * creation via `addTab()`. Generators sample up to the ceiling so the full
+   * restore capacity (currently 6) is exercised, not just the old range.
    *
    * **Validates: Requirements 4a.1, 4a.2, 4a.5**
    */
   it('Property 7: restoreFromFile loads all saved tabs regardless of dynamic max, addTab respects dynamic limit', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.integer({ min: 1, max: 4 }),
-        fc.integer({ min: 1, max: 4 }),
+        fc.integer({ min: 1, max: MAX_TABS_HARD_CEILING }),
+        fc.integer({ min: 1, max: MAX_TABS_HARD_CEILING }),
         async (savedTabCount, maxTabs) => {
           vi.clearAllMocks();
 

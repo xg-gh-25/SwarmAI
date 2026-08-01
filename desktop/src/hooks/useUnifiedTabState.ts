@@ -44,7 +44,7 @@ import { messageStoreRegistry } from '../stores/MessageStore';
  * Hard ceiling for tab restore — all saved tabs up to this count are restored
  * from open_tabs.json regardless of current system resources.
  */
-export const MAX_TABS_HARD_CEILING = 4;
+export const MAX_TABS_HARD_CEILING = 6;
 
 /**
  * Fallback max tabs value used when the `GET /api/system/max-tabs` call fails.
