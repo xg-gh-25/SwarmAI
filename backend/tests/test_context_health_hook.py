@@ -1390,3 +1390,47 @@ class TestKnowledgeProjectsSectionClassification:
         int_line = next(ln for ln in content.splitlines() if "**IntProj**" in ln)
         for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
             assert doc in int_line
+
+
+class TestMaturityWritebackResolvesLayout:
+    """run_ff06972d: _set_verified_from_pipeline_runs must resolve canonical docs
+    via ddd_paths (migrated → 2-understanding/), not a raw project_root path.
+
+    The pre-fix code did `doc_path = project_path / doc_name`, so for a MIGRATED
+    DDD (docs under 2-understanding/) the root path did not exist → `continue` →
+    maturity verification was SILENTLY never written. This test creates a migrated
+    doc + a completed run with a deliver stage and asserts the migrated doc gets
+    verified_by_production=True (the raw-path version leaves it False → RED)."""
+
+    def test_writeback_reaches_migrated_2understanding_doc(self, hook, tmp_path):
+        proj = tmp_path / "Projects" / "MigratedProj"
+        und = proj / "2-understanding"
+        und.mkdir(parents=True)
+        # A migrated TECH.md with an UNVERIFIED maturity state.
+        (und / "TECH.md").write_text(
+            "# TECH\n\n## Architecture\n"
+            "<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | promoted: none -->\n"
+            "- [decision] seed\n"
+        )
+        # NO root TECH.md — this is the migrated shape that the raw path missed.
+
+        # A completed pipeline run with a completed deliver stage.
+        run_dir = proj / ".artifacts" / "runs" / "run_x"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "status": "completed",
+            "stages": [{"stage": "deliver", "status": "completed"}],
+        }))
+
+        hook._set_verified_from_pipeline_runs(proj)
+
+        # The migrated doc must now be verified (proves the resolver was used).
+        content = (und / "TECH.md").read_text()
+        assert "verified: true" in content, \
+            f"migrated 2-understanding/ doc should be marked verified, got:\n{content}"
+        # And the run marked processed.
+        run_data = json.loads((run_dir / "run.json").read_text())
+        assert run_data.get("maturity_updated") is True
+        # No stale lock stranded at project root (lock co-locates with resolved doc).
+        assert not (proj / ".TECH.md.lock").exists(), \
+            "lock must co-locate with the resolved doc, not strand at project root"

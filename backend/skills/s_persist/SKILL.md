@@ -69,17 +69,27 @@ not route.** Only content that passes Step 0 continues to Step 1.
 
 ### Step 2: Route by content type + project context
 
+> **⚠️ Canonical-doc LOCATION (read before writing a DDD doc — split-brain guard):**
+> the 4 canonical docs (PRODUCT/TECH/IMPROVEMENT/PROJECT) live under
+> **`Projects/<X>/2-understanding/<doc>`**, NOT the project root. The root path is the
+> PRE-migration location; the layout SSOT is `backend/core/ddd_paths.py` (`ddd_path()`
+> reads new-first, so recall only ever reads `2-understanding/`). Writing to the root
+> `Projects/<X>/TECH.md` creates an ORPHAN: git-tracked but never recalled (this is a
+> real bug that stranded a principle — run_ff06972d). If a `2-understanding/` subdir is
+> absent for an un-migrated project, fall back to root; when in doubt, resolve with
+> `python -c "from core.ddd_paths import ddd_path; print(ddd_path('Projects/<X>','TECH.md'))"`.
+
 | Content type | Project-scoped? | Target |
 |---|---|---|
-| **Failure/bug/regression lesson** | Yes → `Projects/<X>/IMPROVEMENT.md` § What Failed | No → skip (always project-scoped) |
-| **Success/ROI/caught lesson** | Yes → `Projects/<X>/IMPROVEMENT.md` § What Worked | No → skip |
-| **Risk/watch-for/pattern** | Yes → `Projects/<X>/IMPROVEMENT.md` § What to Watch For | No → skip |
-| **Technical convention/rule** | Yes → `Projects/<X>/TECH.md` § Conventions | No → `.context/MEMORY.md` § Guidelines |
-| **Runtime trap/env issue** | Yes → `Projects/<X>/TECH.md` § Runtime Traps | No → `.context/MEMORY.md` § Guidelines |
-| **Architecture decision** | Yes → `Projects/<X>/TECH.md` § Architecture | No → `.context/MEMORY.md` § Models |
-| **Strategic priority** | Yes → `Projects/<X>/PRODUCT.md` § Strategic Priorities | No → skip |
-| **Non-goal/defer** | Yes → `Projects/<X>/PRODUCT.md` § Non-Goals | No → skip |
-| **Project decision** | Yes → `Projects/<X>/PROJECT.md` § Recent Decisions | No → skip |
+| **Failure/bug/regression lesson** | Yes → `Projects/<X>/2-understanding/IMPROVEMENT.md` § What Failed | No → skip (always project-scoped) |
+| **Success/ROI/caught lesson** | Yes → `Projects/<X>/2-understanding/IMPROVEMENT.md` § What Worked | No → skip |
+| **Risk/watch-for/pattern** | Yes → `Projects/<X>/2-understanding/IMPROVEMENT.md` § What to Watch For | No → skip |
+| **Technical convention/rule** | Yes → `Projects/<X>/2-understanding/TECH.md` § Conventions | No → `.context/MEMORY.md` § Guidelines |
+| **Runtime trap/env issue** | Yes → `Projects/<X>/2-understanding/TECH.md` § Runtime Traps | No → `.context/MEMORY.md` § Guidelines |
+| **Architecture decision** | Yes → `Projects/<X>/2-understanding/TECH.md` § Architecture | No → `.context/MEMORY.md` § Models |
+| **Strategic priority** | Yes → `Projects/<X>/2-understanding/PRODUCT.md` § Strategic Priorities | No → skip |
+| **Non-goal/defer** | Yes → `Projects/<X>/2-understanding/PRODUCT.md` § Non-Goals | No → skip |
+| **Project decision** | Yes → `Projects/<X>/2-understanding/PROJECT.md` § Recent Decisions | No → skip |
 | **Cross-project principle** | — | `.context/MEMORY.md` § Principles |
 | **Self-correction/bias** | — | `.context/EVOLUTION.md` § Corrections Captured |
 | **Reference/fact/spec** | — | `Knowledge/Library/` (searchable store — recall can find it) |
@@ -116,7 +126,7 @@ python backend/scripts/artifact_cli.py ddd-retire \
   --file .context/MEMORY.md --title "Exact entry title" --section "Open Threads"
 # 2) APPLY:
 python backend/scripts/artifact_cli.py ddd-retire \
-  --file Projects/SwarmAI/IMPROVEMENT.md --title "..." --section "What Failed" --apply
+  --file Projects/SwarmAI/2-understanding/IMPROVEMENT.md --title "..." --section "What Failed" --apply
 # keep-class (decision/model/principle/correction/COE) is REFUSED unless you add --force
 ```
 
@@ -163,7 +173,7 @@ Where `[type]` is one of: `guideline`, `pitfall`, `decision`, `principle`, `corr
 ```
 **Persisted:**
 
-> **[type] Title** → `Projects/SwarmAI/IMPROVEMENT.md` § What Failed
+> **[type] Title** → `Projects/SwarmAI/2-understanding/IMPROVEMENT.md` § What Failed
 > _(Why: one-sentence reason this knowledge compounds)_
 ```
 

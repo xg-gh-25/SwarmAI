@@ -1673,12 +1673,26 @@ class SwarmWorkspaceManager:
                 # Read one-line vision from PRODUCT.md (cleaned)
                 vision = extract_clean_description(ddd_path(candidate, "PRODUCT.md"))
 
+                # Resolver-aware context dir: point readers at wherever the canonical
+                # docs ACTUALLY resolve (migrated → 2-understanding/, un-migrated → root).
+                # Hardcoding "2-understanding/" here would re-create the split-brain the
+                # ddd_paths resolver exists to prevent (a wrong path for un-migrated DDDs).
+                ctx_dir = ddd_path(candidate, "TECH.md").parent
+                try:
+                    ctx_rel = ctx_dir.relative_to(candidate).as_posix()
+                except ValueError:
+                    ctx_rel = ""
+                # "." = docs at project root (un-migrated) → no subdir suffix.
+                if ctx_rel == ".":
+                    ctx_rel = ""
+
                 entries.append({
                     "name": name,
                     "type": project_type,
                     "pipeline": pipeline_state,
                     "ddd": ddd_status,
                     "vision": vision,
+                    "ctx_rel": ctx_rel,
                     "large_docs_toc": large_docs_toc,
                 })
             return entries
@@ -1702,7 +1716,9 @@ class SwarmWorkspaceManager:
             "",
             "**AGENT DIRECTIVE:** When working on a task related to any project "
             "below, READ the project's DDD documents BEFORE starting work. "
-            "Use `Projects/<name>/TECH.md` for coding/testing, "
+            "Find them at each project's **Context** path shown below "
+            "(migrated DDDs keep the 4 canonical docs under `2-understanding/`): "
+            "use `TECH.md` for coding/testing, "
             "`PRODUCT.md` for design decisions, `IMPROVEMENT.md` for lessons, "
             "`PROJECT.md` for current context. Determine the active project "
             "from file paths being edited, user mentions, or chat thread "
@@ -1746,8 +1762,10 @@ class SwarmWorkspaceManager:
                     lines.append(f"_{e['vision']}_")
                 lines.append(f"- **Pipeline:** {e['pipeline']}")
                 lines.append(f"- **DDD:** {e['ddd']}")
+                ctx_rel = e.get("ctx_rel") or ""
+                ctx_suffix = f"{ctx_rel}/" if ctx_rel else ""
                 lines.append(
-                    f"- **Context:** `Projects/{e['name']}/` "
+                    f"- **Context:** `Projects/{e['name']}/{ctx_suffix}` "
                     f"-- read PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md"
                 )
 

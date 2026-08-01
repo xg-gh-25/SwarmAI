@@ -1527,6 +1527,42 @@ class TestProgressiveLoadingTOC:
             assert "on demand" in content.lower() or "on-demand" in content.lower()
 
     @pytest.mark.asyncio
+    async def test_projects_md_context_path_is_resolver_aware(self):
+        """PROJECTS.md § Context path must follow the ddd_paths resolver, not a
+        hardcoded '2-understanding/'. A migrated project (docs under
+        2-understanding/) points there; an un-migrated project (docs at root)
+        points at root. Hardcoding '2-understanding/' re-creates the split-brain
+        the resolver exists to prevent — this test guards run_ff06972d."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / ".context").mkdir(parents=True)
+
+            # Migrated project: canonical docs UNDER 2-understanding/
+            mig = ws / "Projects" / "MigratedProj" / "2-understanding"
+            mig.mkdir(parents=True)
+            for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+                (mig / doc).write_text(f"# {doc}\n\n## Architecture\n\nx\n")
+
+            # Un-migrated project: canonical docs at ROOT (no 2-understanding/)
+            unmig = ws / "Projects" / "LegacyProj"
+            unmig.mkdir(parents=True)
+            for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+                (unmig / doc).write_text(f"# {doc}\n\n## Architecture\n\ny\n")
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+
+            # Migrated → points into 2-understanding/
+            assert "`Projects/MigratedProj/2-understanding/`" in content, \
+                f"migrated project should point at 2-understanding/, got:\n{content}"
+            # Un-migrated → points at root (NOT a wrong 2-understanding/ that doesn't exist)
+            assert "`Projects/LegacyProj/`" in content, \
+                f"un-migrated project should point at root, got:\n{content}"
+            assert "`Projects/LegacyProj/2-understanding/`" not in content, \
+                "un-migrated project must NOT be sent to a non-existent 2-understanding/"
+
+    @pytest.mark.asyncio
     async def test_small_docs_no_toc(self):
         """Docs under 30K bytes don't get section-level TOC."""
         with tempfile.TemporaryDirectory() as tmpdir:

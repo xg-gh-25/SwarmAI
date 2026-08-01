@@ -1747,11 +1747,18 @@ class ContextHealthHook:
 
         any_doc_updated = False
         for doc_name in DDD_CANONICAL_DOCS:
-            doc_path = project_path / doc_name
+            # Resolve via the six-section layout resolver — migrated DDDs keep the
+            # canonical docs under 2-understanding/. A raw `project_path / doc_name`
+            # here silently missed every migrated doc (root .exists()=False → skip),
+            # so maturity verification (verified_by_production / used_in_decision)
+            # was NEVER written to migrated DDDs (split-brain, run_ff06972d).
+            doc_path = ddd_path(project_path, doc_name)
             if not doc_path.exists():
                 continue
 
-            lock_path = project_path / f".{doc_name}.lock"
+            # Co-locate the lock with the RESOLVED doc so it doesn't strand a stale
+            # .{doc}.lock at the project root (the old raw path left orphan locks).
+            lock_path = doc_path.parent / f".{doc_name}.lock"
             lock_fd = None
             try:
                 lock_fd = open(lock_path, "w")
