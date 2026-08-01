@@ -902,7 +902,9 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
     # (reused, not re-implemented; Gate-1 Item-3). Imported once at function entry,
     # not per-run-iteration (Gate-2 LOW style nit).
     from scripts.artifact_cli import (
+        _CRASH_ZOMBIE_REASON,
         _checkpoint_reason_has_true_trigger,
+        _run_tokens,
         is_terminal_run as _is_terminal_run,
     )
 
@@ -974,6 +976,76 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 # NOT supersede/abandon it. Stage-based, not status-based, because
                 # the status string is exactly what the false-positive corrupts.
                 if _is_terminal_run(run_data):
+                    continue
+
+                # EMPTY-SHELL GUARD (mirror of the terminal guard above;
+                # run_843962a5 follow-up root-cause fix). A run that crashed BEFORE
+                # recording a single stage — stages == [] AND zero tokens AND the
+                # crash auto-checkpoint reason — has NO recoverable state. Left alone
+                # it enters the auto-resume flow, exhausts its 3 attempts, and emits a
+                # "manual intervention needed" nag EVERY session; worse, each emit
+                # rewrites updated_at, which resets the age-gated crash-zombie cleaner
+                # (cleanup-orphans, >2h) so the shell is never reaped → a
+                # self-perpetuating false alarm. Terminal (all done) → skip;
+                # empty-shell (nothing recorded) → abandon NOW.
+                #
+                # Discriminant is provably safe against false-killing recoverable
+                # work: the trigger is a TRULY EMPTY stage list (stages == []), NOT
+                # merely "no completed stage". Any stage that made progress is
+                # persisted to run.json BEFORE completion — a stage that published an
+                # artifact is written status="recorded" (artifact_cli
+                # _append_stage_to_run), and THINK/PLAN land as "recorded", not
+                # "completed". So a run that reached ANY stage has a non-empty
+                # stages[] and is excluded here — it has resumable state even at
+                # token_cost 0. Only a run that never recorded a stage is an
+                # unrecoverable shell. (Adversarial BLOCK, run_843962a5 follow-up: the
+                # earlier "no COMPLETED stage" form would false-kill a run stopped
+                # mid-THINK/PLAN whose stages are "recorded"; tightened to stages==[].)
+                # A deliberate pause carries a true-trigger reason (not the crash
+                # marker) → excluded. Written under the same .resume.lock +
+                # re-read-under-lock pattern as the supersede branch (no TOCTOU race
+                # with a parallel session that may have just resumed it).
+                _shell_reason = (run_data.get("checkpoint", {}) or {}).get("reason") or ""
+                _no_stages = not (run_data.get("stages") or [])
+                if (
+                    _shell_reason == _CRASH_ZOMBIE_REASON
+                    and _no_stages
+                    and _run_tokens(run_data) == 0
+                ):
+                    lock_file = run_dir / ".resume.lock"
+                    fd = None
+                    try:
+                        fd = lock_file.open("w")
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fresh = json.loads(run_file.read_text(encoding="utf-8"))
+                        _fresh_reason = (fresh.get("checkpoint", {}) or {}).get("reason") or ""
+                        _fresh_no_stages = not (fresh.get("stages") or [])
+                        # Re-verify the whole shell predicate under lock — a parallel
+                        # session may have resumed it (→ running / recorded a stage /
+                        # spent tokens) since the scan.
+                        if (
+                            fresh.get("status") == "paused"
+                            and _fresh_reason == _CRASH_ZOMBIE_REASON
+                            and _fresh_no_stages
+                            and _run_tokens(fresh) == 0
+                        ):
+                            fresh["status"] = "abandoned"
+                            fresh["abandon_reason"] = "crash_residue_empty_shell"
+                            fresh["abandoned_at"] = datetime.now(timezone.utc).isoformat()
+                            run_file.write_text(
+                                json.dumps(fresh, indent=2), encoding="utf-8"
+                            )
+                    except (OSError, json.JSONDecodeError):
+                        # Lock held by another session / IO error / corrupt file —
+                        # skip surfacing regardless (an empty shell is never a real
+                        # resume candidate; another session owns the write).
+                        pass
+                    finally:
+                        if fd is not None:
+                            try:
+                                fd.close()
+                            except Exception:
+                                pass
                     continue
 
                 # Check freshness FIRST — skip old runs before any mutation

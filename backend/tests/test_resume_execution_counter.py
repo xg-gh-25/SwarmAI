@@ -147,3 +147,102 @@ def test_exhausted_line_pipeline_mode_when_executions_present(tmp_path):
     assert "exhausted" in blob or "manual" in blob
     assert ("executed" in blob or "pipeline" in blob), \
         f"nonzero-execution exhaustion must flag PIPELINE mode; got: {blob}"
+
+
+# ─── AC4: empty crash-shell runs are auto-abandoned, never nagged forever ──
+# Root cause (run_843962a5 follow-up): a run that crashed BEFORE completing any
+# stage (stages==[], 0 tokens, checkpoint.reason==session_crash_auto_detected)
+# has ZERO recoverable state, yet it entered the auto-resume flow, exhausted its
+# 3 attempts, and emitted a "manual intervention needed" nag EVERY session. Worse,
+# each emit rewrote updated_at, which reset the age-gated crash-zombie cleaner so
+# it could never reap the shell → a self-perpetuating false alarm. The fix is the
+# mirror of the existing terminal guard: terminal (all done) → skip; empty-shell
+# (nothing done + 0 tokens + crash) → abandon immediately.
+
+
+def test_empty_crash_shell_is_abandoned_not_surfaced(tmp_path):
+    """stages==[] + 0 tokens + crash reason → abandoned, and NOT surfaced/nagged."""
+    from core.proactive_intelligence import _get_paused_pipeline_highlights
+
+    run_file = _make_run(
+        tmp_path, "Proj", "run_shell", status="paused",
+        checkpoint={"reason": "session_crash_auto_detected"},
+        stages=[], resume_attempts=0,
+    )
+
+    lines = _get_paused_pipeline_highlights(tmp_path)
+    blob = "\n".join(lines).lower()
+
+    after = json.loads(run_file.read_text())
+    assert after["status"] == "abandoned", \
+        "an empty crash-shell must be abandoned, not left paused to nag forever"
+    assert "crash_residue" in (after.get("abandon_reason") or ""), \
+        f"abandon_reason must mark it a crash residue; got {after.get('abandon_reason')!r}"
+    # It must NOT appear as a resume candidate OR an exhausted-nag line.
+    assert "run_shell" not in blob, f"empty shell must not be surfaced; got: {blob}"
+    assert "manual intervention" not in blob, \
+        f"empty shell must not trigger the manual-intervention nag; got: {blob}"
+
+
+def test_empty_shell_guard_does_not_touch_run_with_completed_stage(tmp_path):
+    """A crash orphan that DID complete a stage is recoverable → NOT abandoned as a shell."""
+    from core.proactive_intelligence import _get_paused_pipeline_highlights
+
+    run_file = _make_run(
+        tmp_path, "Proj", "run_realwork", status="paused",
+        checkpoint={"reason": "session_crash_auto_detected"},
+        stages=[{"stage": "evaluate", "status": "completed", "token_cost": 11000}],
+        resume_attempts=0,
+    )
+
+    _get_paused_pipeline_highlights(tmp_path)
+
+    after = json.loads(run_file.read_text())
+    assert after["status"] != "abandoned", \
+        "a crash orphan with a completed stage has recoverable work — never a shell"
+
+
+def test_empty_shell_guard_spares_recorded_stage_with_zero_tokens(tmp_path):
+    """A crash orphan stopped mid-THINK/PLAN (stage 'recorded', token_cost 0) is
+    RECOVERABLE — it must NOT be false-killed as an empty shell.
+
+    Adversarial-BLOCK regression (run_843962a5 follow-up): the earlier predicate
+    keyed on 'no COMPLETED stage', which would abandon a run whose only stages are
+    'recorded' (THINK/PLAN publish artifacts as status='recorded', not 'completed')
+    even at token_cost 0 — destroying resumable state. The guard now triggers ONLY
+    on a truly empty stages==[]. A non-empty stages[] = progress = never a shell.
+    """
+    from core.proactive_intelligence import _get_paused_pipeline_highlights
+
+    run_file = _make_run(
+        tmp_path, "Proj", "run_recorded", status="paused",
+        checkpoint={"reason": "session_crash_auto_detected"},
+        stages=[
+            {"stage": "think", "status": "recorded", "artifact_id": "art_1"},
+            {"stage": "plan", "status": "recorded", "artifact_id": "art_2"},
+        ],
+        resume_attempts=0,
+    )
+
+    _get_paused_pipeline_highlights(tmp_path)
+
+    after = json.loads(run_file.read_text())
+    assert after["status"] != "abandoned", \
+        "a run with 'recorded' THINK/PLAN stages has resumable state — never a shell, even at 0 tokens"
+
+
+def test_empty_shell_guard_ignores_deliberate_pause(tmp_path):
+    """A deliberate pause (true-trigger reason) with no stages is NOT a crash shell → preserved."""
+    from core.proactive_intelligence import _get_paused_pipeline_highlights
+
+    run_file = _make_run(
+        tmp_path, "Proj", "run_decision", status="paused",
+        checkpoint={"reason": "Gate 1 BLOCK: decide X?"},
+        stages=[], resume_attempts=0,
+    )
+
+    _get_paused_pipeline_highlights(tmp_path)
+
+    after = json.loads(run_file.read_text())
+    assert after["status"] == "paused", \
+        "a deliberate Gate-BLOCK pause must never be reaped as a crash shell"
