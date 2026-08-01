@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
+import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 
 interface ModalProps {
   isOpen: boolean;
@@ -13,7 +14,33 @@ interface ModalProps {
    * Small modals ignore it. e.g. "WORKSPACE", "EVAL", "BRAIN".
    */
   mode?: string;
+  /**
+   * Content-adaptive WIDTH profile for the `fullscreen` card-detail panel
+   * (A11, run_a4ea7a83). Each consumer declares how wide its detail content
+   * prefers to be (height is governed separately by `fullscreenAutoHeight` —
+   * default full chat-area height). Ignored by non-fullscreen modals. Default 'l'.
+   *  s ≈ 380 · m ≈ 620 · l ≈ 880 · xl → clamped to the chat-area max.
+   */
+  fullscreenWidth?: 's' | 'm' | 'l' | 'xl';
+  /**
+   * Fullscreen HEIGHT mode. Default false = the panel fills the chat area height
+   * (definite height) — REQUIRED by consumers whose content is a full-height
+   * flex app (SwarmWS explorer/AutoSizer, Settings, Eval) that would collapse to
+   * 0px under a shrink-to-fit parent. Set true ONLY for content-flow panels
+   * (placeholders, doc-style detail) that should shrink to their content and
+   * scroll past the chat-area max. Ignored by non-fullscreen modals.
+   */
+  fullscreenAutoHeight?: boolean;
 }
+
+// Card-detail panel geometry (A11). The panel floats INSIDE the chat area:
+// left clears the leftNav, top clears the TopBar + tab bar, right/bottom keep a
+// gap so the chat shows through behind a light scrim. Sourced from the shared
+// LAYOUT_CONSTANTS so it never drifts from the real leftNav width / chat top.
+const PANEL_LEFT = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH; // 150
+const PANEL_TOP = LAYOUT_CONSTANTS.CHAT_CONTENT_TOP;    // 80
+const PANEL_GAP = 20;                                    // right/bottom breathing gap
+const FS_WIDTH = { s: 380, m: 620, l: 880, xl: '100%' } as const; // xl fills to max-width
 
 const sizeClasses = {
   sm: 'max-w-sm',
@@ -38,6 +65,8 @@ export default function Modal({
   children,
   size = 'md',
   mode,
+  fullscreenWidth = 'l',
+  fullscreenAutoHeight = false,
 }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,13 +151,20 @@ export default function Modal({
     <div
       ref={overlayRef}
       className={clsx(
-        'fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm',
+        'z-50 bg-black/50 backdrop-blur-sm',
         'transition-opacity duration-[220ms] ease-out',
         entered ? 'opacity-100' : 'opacity-0',
         isFullscreen
-          ? 'items-stretch'  // card is absolutely positioned via inset-6
-          : 'justify-center items-center p-4',
+          // A11 card-detail panel: the scrim covers ONLY the chat area (clears the
+          // leftNav + tab bar), so leftNav/tabs are never dimmed or covered.
+          ? 'fixed'
+          : 'fixed inset-0 flex justify-center items-center p-4',
       )}
+      style={
+        isFullscreen
+          ? { left: PANEL_LEFT, top: PANEL_TOP, right: 0, bottom: 0, background: 'rgba(0,0,0,0.35)' }
+          : undefined
+      }
       data-testid="modal-scrim"
       onMouseDown={(e) => {
         // Only close when clicking directly on the overlay background
@@ -140,16 +176,41 @@ export default function Modal({
       <div
         className={clsx(
           'flex flex-col bg-[var(--color-card)] border shadow-2xl',
-          'transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(.16,1,.3,1)]',
-          entered ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-[22px] scale-[0.96]',
+          'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
           isFullscreen
             ? [
-                // Four-edge 24px inset floating card (mockup .floater)
-                'absolute inset-6 rounded-[18px] border-[var(--color-border)]',
-                'shadow-[0_40px_120px_rgba(0,0,0,.65)] ring-1 ring-[rgba(110,168,254,.12)]',
+                // Floating card-detail panel, anchored top-left of the chat area,
+                // grows toward bottom-right. transform-origin toward the leftNav so
+                // it looks "spat out" from the card the user clicked.
+                'absolute origin-[left_center] rounded-[18px] border-[var(--color-border)]',
+                'shadow-[-8px_24px_80px_rgba(0,0,0,.6)] ring-1 ring-[rgba(110,168,254,.12)]',
+                entered ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 -translate-x-[26px] scale-[0.94]',
               ]
-            : ['w-full rounded-xl border-[var(--color-border)] max-h-[90vh]', sizeClasses[size]],
+            : [
+                'w-full rounded-xl border-[var(--color-border)] max-h-[90vh]',
+                entered ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-[22px] scale-[0.96]',
+                sizeClasses[size],
+              ],
         )}
+        style={
+          isFullscreen
+            ? {
+                left: 0,
+                top: 0,
+                width: FS_WIDTH[fullscreenWidth],
+                minWidth: 320,
+                // never past the right edge of the chat area (right gap) …
+                maxWidth: `calc(100vw - ${PANEL_LEFT + PANEL_GAP}px)`,
+                // HEIGHT: default = DEFINITE full chat-area height (bottom anchored),
+                // so full-height flex children (AutoSizer/explorer/dashboards) get a
+                // real height and don't collapse to 0. autoHeight = content-driven,
+                // clamped by max, for doc-flow panels.
+                ...(fullscreenAutoHeight
+                  ? { maxHeight: `calc(100vh - ${PANEL_TOP + PANEL_GAP}px)` }
+                  : { bottom: PANEL_GAP }),
+              }
+            : undefined
+        }
         // Stop event propagation to prevent overlay close when clicking inside modal
         onMouseDown={(e) => e.stopPropagation()}
       >

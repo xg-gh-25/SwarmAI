@@ -144,3 +144,59 @@ describe('Modal — fullscreen mode badge', () => {
     expect(screen.queryByTestId('modal-mode-badge')).toBeNull();
   });
 });
+
+describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
+  it('scrim clears the leftNav + tab bar (NOT inset-0) so it never covers them', () => {
+    render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+    const scrim = screen.getByTestId('modal-scrim');
+    // fullscreen scrim is offset from the top-left, not full-viewport
+    expect(scrim.style.left).toBe('150px'); // LEFT_SIDEBAR_WIDTH
+    expect(scrim.style.top).toBe('80px');   // CHAT_CONTENT_TOP
+    expect(scrim.className).not.toContain('inset-0');
+  });
+
+  it('a non-fullscreen modal keeps full-viewport inset-0 (unchanged)', () => {
+    render(<Modal isOpen onClose={noop} title="T" size="md"><div>b</div></Modal>);
+    const scrim = screen.getByTestId('modal-scrim');
+    expect(scrim.className).toContain('inset-0');
+    expect(scrim.style.left).toBe(''); // no positional override
+  });
+
+  it('applies the content-adaptive width for the declared fullscreenWidth profile', () => {
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X" fullscreenWidth="s"><div>b</div></Modal>,
+    );
+    // the card is the scrim's child div carrying the width style
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    expect(card.style.width).toBe('380px'); // FS_WIDTH.s
+    // maxWidth stops 170px short of the viewport (leftNav 150 + 20 gap)
+    expect(card.style.maxWidth).toBe('calc(100vw - 170px)');
+  });
+
+  it('DEFAULT fullscreen = definite full height (bottom anchored) so flex children do not collapse', () => {
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+    );
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    // definite height: bottom is anchored (Gate-2 CRITICAL fix — AutoSizer children need real height)
+    expect(card.style.bottom).toBe('20px');
+    expect(card.style.maxHeight).toBe(''); // NOT content-clamped in default mode
+  });
+
+  it('fullscreenAutoHeight = content-driven height clamped by maxHeight (no bottom anchor)', () => {
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X" fullscreenAutoHeight><div>b</div></Modal>,
+    );
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    expect(card.style.bottom).toBe('');
+    expect(card.style.maxHeight).toBe('calc(100vh - 100px)'); // top 80 + 20 gap
+  });
+
+  it('grows from the left (spat-out origin) — panel uses left-center transform-origin', () => {
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+    );
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    expect(card.className).toContain('origin-[left_center]');
+  });
+});

@@ -176,5 +176,11 @@ export const LAYOUT_CONSTANTS = {
   // A10 redesign (run_1aab916c): the left nav is a 150px row-card column
   // (was a 44px icon rail).
   LEFT_SIDEBAR_WIDTH: 150,
+  // Card-detail panel (A11, run_a4ea7a83): the fullscreen overlay floats INSIDE
+  // the chat area, so it must clear the chat content's top edge. That edge is a
+  // constant: TopBar (h-10 = 40px) + ChatHeader/SessionTabBar (h-10 = 40px) = 80.
+  // The tab bar is fixed-height (overflow-x-auto, never wraps), so this does NOT
+  // vary with tab count. If either bar's height changes, update this in lockstep.
+  CHAT_CONTENT_TOP: 80,
   STORAGE_KEYS,
 } as const;

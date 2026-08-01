@@ -41,7 +41,7 @@ export function SwarmWSOverlay({ onFileDoubleClick }: SwarmWSOverlayProps) {
   );
 
   return (
-    <Modal isOpen={open} onClose={close} title="SwarmWS — workspace explorer" size="fullscreen" mode="WORKSPACE">
+    <Modal isOpen={open} onClose={close} title="SwarmWS — workspace explorer" size="fullscreen" mode="WORKSPACE" fullscreenWidth="xl">
       <div className="flex-1 overflow-hidden" data-testid="swarmws-overlay">
         <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
       </div>
