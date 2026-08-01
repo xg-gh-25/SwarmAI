@@ -99,7 +99,33 @@ export function CMBrainOverlay() {
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
 
+  // Needs-you Approve/Action: real governance-pending queue (Gate-1: {proposals,total},
+  // a DIFFERENT queue from pending_proposals which drives Review). Approve = awaiting
+  // yes/no; Action shares the same queue count (both are decisions the user must take).
+  const { data: gov } = useQuery<{ proposals: unknown[]; total: number }>({
+    queryKey: ['cm-governance-pending'],
+    queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
+    staleTime: 30_000, enabled: open,
+  });
+  const approveCount = gov?.total ?? 0;
+
+  // Growth-trend series for the rail (same source as the Memory size-trend).
+  const { data: trend } = useQuery<BrainTrend>({
+    queryKey: ['cm-brain-trend'],
+    queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend')).data,
+    staleTime: 30_000, enabled: open,
+  });
+
+  // Which Needs-you list is filtered into the main area (null = show the tab).
+  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve' | 'action'>(null);
+
   if (!open) return null;
+
+  const needsMeta = {
+    review: { label: 'Review', count: reviewCount, items: data?.pending_proposals ?? [] },
+    approve: { label: 'Approve', count: approveCount, items: (gov?.proposals ?? []) as Array<Record<string, unknown>> },
+    action: { label: 'Action', count: approveCount, items: (gov?.proposals ?? []) as Array<Record<string, unknown>> },
+  };
 
   return (
     <Modal isOpen={open} onClose={close} title="C&M · Global Brain" size="fullscreen" mode="BRAIN" fullscreenWidth="xl">
@@ -124,32 +150,96 @@ export function CMBrainOverlay() {
             )}
           </div>
 
+          {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
+          <div>
+            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">30-day token growth</div>
+            <div className="mt-1.5">
+              <RailTrend trend={trend} />
+            </div>
+          </div>
+
           <div>
             <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
             <div className="mt-2 flex flex-col gap-1.5">
-              <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" />
-              <NeedsBtn testid="cm-needs-approve" label="Approve" count={0} tint="#d08a4a" />
-              <NeedsBtn testid="cm-needs-action" label="Action" count={0} tint="#4a8fb0" />
+              <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" onClick={() => setNeedsFilter('review')} />
+              <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" onClick={() => setNeedsFilter('approve')} />
+              <NeedsBtn testid="cm-needs-action" label="Action" count={approveCount} tint="#4a8fb0" onClick={() => setNeedsFilter('action')} />
             </div>
           </div>
         </aside>
 
-        {/* ── Main area: tabs + panel ── */}
+        {/* ── Main area: tabs + panel, OR the Needs-you filtered list ── */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
-            <TabBtn testid="cm-tab-context" label="Context" active={tab === 'context'} onClick={() => setTab('context')} badge={block?.per_file.length} />
-            <TabBtn testid="cm-tab-memory" label="Memory" active={tab === 'memory'} onClick={() => setTab('memory')} />
-            <TabBtn testid="cm-tab-guideline" label="Guideline" active={tab === 'guideline'} onClick={() => setTab('guideline')} />
-          </div>
+          {needsFilter ? (
+            <NeedsList meta={needsMeta[needsFilter]} onBack={() => setNeedsFilter(null)} />
+          ) : (
+            <>
+              <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
+                <TabBtn testid="cm-tab-context" label="Context" active={tab === 'context'} onClick={() => setTab('context')} badge={block?.per_file.length} />
+                <TabBtn testid="cm-tab-memory" label="Memory" active={tab === 'memory'} onClick={() => setTab('memory')} />
+                <TabBtn testid="cm-tab-guideline" label="Guideline" active={tab === 'guideline'} onClick={() => setTab('guideline')} />
+              </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
-            {tab === 'context' && <ContextTab block={block} />}
-            {tab === 'memory' && <MemoryTab enabled={open && tab === 'memory'} />}
-            {tab === 'guideline' && <GuidelineTab />}
-          </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-4">
+                {tab === 'context' && <ContextTab block={block} />}
+                {tab === 'memory' && <MemoryTab enabled={open && tab === 'memory'} />}
+                {tab === 'guideline' && <GuidelineTab />}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </Modal>
+  );
+}
+
+// The rail's compact growth-trend — prompt_tokens over time. R30: <2 points →
+// explicit "collecting" text, never a fabricated line.
+function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
+  const pts = trend?.points ?? [];
+  if (pts.length < 2) {
+    return (
+      <div className="text-[10px] text-[var(--color-text-faint)]">
+        📈 collecting since {trend?.launch_date ?? 'launch'}…
+      </div>
+    );
+  }
+  const vals = pts.map((p) => p.prompt_tokens);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const W = 232, H = 40;
+  const path = pts.map((p, i) => {
+    const x = (i / (pts.length - 1)) * W;
+    const y = H - ((p.prompt_tokens - min) / range) * H;
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return (
+    <svg data-testid="cm-rail-trend-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-10">
+      <path d={path} fill="none" stroke="#5fc99a" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// Needs-you filtered list — swaps into the main area; "← back to tab" returns.
+function NeedsList({ meta, onBack }: { meta: { label: string; count: number; items: Array<Record<string, unknown>> }; onBack: () => void }) {
+  return (
+    <>
+      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2.5">
+        <span className="text-sm font-semibold text-[var(--color-text)]">{meta.label} <span className="font-mono text-[var(--color-text-faint)]">({meta.count})</span></span>
+        <button data-testid="cm-needs-back" onClick={onBack} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">← back to tab</button>
+      </div>
+      <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-1.5">
+        {meta.items.length === 0 ? (
+          <div className="text-[11px] text-[var(--color-text-faint)]">Nothing in {meta.label.toLowerCase()} right now.</div>
+        ) : (
+          meta.items.map((it, i) => (
+            <div key={i} className="rounded-md border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text)]">
+              {String(it.title ?? it.id ?? it.summary ?? `item ${i + 1}`)}
+            </div>
+          ))
+        )}
+      </div>
+    </>
   );
 }
 
@@ -529,15 +619,16 @@ function TabBtn({
   );
 }
 
-function NeedsBtn({ testid, label, count, tint }: { testid: string; label: string; count: number; tint: string }) {
+function NeedsBtn({ testid, label, count, tint, onClick }: { testid: string; label: string; count: number; tint: string; onClick?: () => void }) {
   return (
-    <div
+    <button
       data-testid={testid}
-      className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-sm"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-sm text-left hover:bg-[var(--color-hover)] transition-colors"
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} aria-hidden />
       <span className="flex-1 text-[var(--color-text-muted)]">{label}</span>
       <span className="font-mono font-semibold text-[var(--color-text)]">{count}</span>
-    </div>
+    </button>
   );
 }

@@ -37,17 +37,29 @@ const TOKEN_BLOCK = {
   ],
 };
 
-function mockHealth(overrides: Record<string, unknown> = {}) {
-  (api.get as ReturnType<typeof vi.fn>).mockResolvedValue({
-    data: {
-      refresh_log: [],
-      staleness: [],
-      pending_proposals: [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }],
-      weeks_available: 0,
-      semantic_drift: { report_date: null, findings: [], drift_count: 0, at_risk_cases: [] },
-      token_block: TOKEN_BLOCK,
-      ...overrides,
-    },
+function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[] } = {}) {
+  const health = {
+    refresh_log: [],
+    staleness: [],
+    pending_proposals: [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }],
+    weeks_available: 0,
+    semantic_drift: { report_date: null, findings: [], drift_count: 0, at_risk_cases: [] },
+    token_block: TOKEN_BLOCK,
+    ...overrides,
+  };
+  const govN = opts.governancePending ?? 0;
+  const points = opts.trendPoints ?? [];
+  (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    if (url.includes('governance/pending')) {
+      return Promise.resolve({ data: { proposals: Array.from({ length: govN }, (_, i) => ({ id: `g${i}` })), total: govN } });
+    }
+    if (url.includes('brain-trend')) {
+      return Promise.resolve({ data: { points, count: points.length, launch_date: (points[0] as { date?: string } | undefined)?.date ?? null } });
+    }
+    if (url.includes('brain-graph')) {
+      return Promise.resolve({ data: { nodes: [], drill: {}, total: 0 } });
+    }
+    return Promise.resolve({ data: health }); // context-health
   });
 }
 
@@ -307,13 +319,52 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     await waitFor(() => expect(rail.textContent).toMatch(/100[,.]?0?K?/));
   });
 
-  it('Needs-you Review count = pending_proposals length; Approve/Action = 0 (never faked)', async () => {
+  it('Needs-you Review = pending_proposals; Approve/Action wired to governance/pending (DoD4)', async () => {
+    mockHealth({}, { governancePending: 2 }); // 2 governance proposals awaiting decision
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-overview-rail');
-    expect((await screen.findByTestId('cm-needs-review')).textContent).toContain('3');
-    expect(screen.getByTestId('cm-needs-approve').textContent).toContain('0');
-    expect(screen.getByTestId('cm-needs-action').textContent).toContain('0');
+    expect((await screen.findByTestId('cm-needs-review')).textContent).toContain('3'); // pending_proposals
+    // Approve reads governance/pending .total (real wiring, not hardcoded 0)
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+  });
+});
+
+describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4)', () => {
+  it('shows a "collecting since launch" growth-trend placeholder when <2 points', async () => {
+    mockHealth({}, { trendPoints: [] });
+    renderOverlay();
+    openOverlay();
+    const rail = await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(rail.textContent).toMatch(/collecting/i));
+  });
+
+  it('draws the growth-trend line when >=2 points exist (never fabricated)', async () => {
+    mockHealth({}, { trendPoints: [
+      { date: '2026-08-01', prompt_tokens: 90000, memory_bytes: 47000 },
+      { date: '2026-08-02', prompt_tokens: 91000, memory_bytes: 48000 },
+    ] });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    // a real 2-point series → an SVG trend path in the rail
+    expect(await screen.findByTestId('cm-rail-trend-svg')).toBeInTheDocument();
+  });
+
+  it('clicking a Needs-you button filters the main area to that list + back-to-tab returns', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    // click Review → main area swaps to the filtered list
+    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    const list = await screen.findByTestId('cm-needs-list');
+    expect(list).toBeInTheDocument();
+    expect(screen.queryByTestId('cm-panel-context')).toBeNull(); // tab content hidden
+    // back-to-tab returns to the Context tab
+    act(() => { screen.getByTestId('cm-needs-back').click(); });
+    expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
+    expect(screen.queryByTestId('cm-needs-list')).toBeNull();
   });
 });
 
