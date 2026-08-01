@@ -37,7 +37,7 @@ vi.mock('../../contexts/LayoutContext', () => {
     useLayout: vi.fn(),
     useSessionMeta: vi.fn(),
     LayoutProvider: ({ children }: { children: ReactNode }) => children,
-    LAYOUT_CONSTANTS: { LEFT_SIDEBAR_WIDTH: 44 },
+    LAYOUT_CONSTANTS: { LEFT_SIDEBAR_WIDTH: 150 },
   };
 });
 
@@ -83,16 +83,11 @@ function setupMocks(overrides: {
     activeModal: null,
     openModal: vi.fn(),
     closeModal: vi.fn(),
-    workspaceExplorerCollapsed: false,
-    setWorkspaceExplorerCollapsed: vi.fn(),
-    workspaceExplorerWidth: 280,
-    setWorkspaceExplorerWidth: vi.fn(),
     selectedWorkspaceScope: 'all',
     setSelectedWorkspaceScope: vi.fn(),
     validateWorkspaceScope: vi.fn(),
     workspaceSettingsId: '',
     setWorkspaceSettingsId: vi.fn(),
-    isNarrowViewport: false,
   });
 
   const meta = overrides.sessionMeta === undefined

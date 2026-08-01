@@ -16,14 +16,6 @@ import type { TreeNode } from '../../types';
 
 // ---------- Mocks ----------
 
-vi.mock('../../contexts/LayoutContext', () => ({
-  useLayout: vi.fn(),
-  LAYOUT_CONSTANTS: {
-    MIN_WORKSPACE_EXPLORER_WIDTH: 200,
-    MAX_WORKSPACE_EXPLORER_WIDTH: 500,
-  },
-}));
-
 vi.mock('../../contexts/ExplorerContext', () => ({
   useTreeData: vi.fn(),
 }));
@@ -45,25 +37,16 @@ vi.mock('./VirtualizedTree', () => ({
 
 // Mock ExplorerHeader
 vi.mock('./ExplorerHeader', () => ({
-  default: ({ onCollapseToggle }: { onCollapseToggle?: () => void }) => (
-    <div data-testid="explorer-header" onClick={onCollapseToggle}>ExplorerHeader</div>
-  ),
-}));
-
-// Mock ResizeHandle
-vi.mock('./ResizeHandle', () => ({
-  default: () => <div data-testid="resize-handle" />,
+  default: () => <div data-testid="explorer-header">ExplorerHeader</div>,
 }));
 
 // ---------- Imports (after mocks) ----------
 
 import WorkspaceExplorer from './WorkspaceExplorer';
-import { useLayout } from '../../contexts/LayoutContext';
 import { useTreeData } from '../../contexts/ExplorerContext';
 
 // ---------- Helpers ----------
 
-const mockUseLayout = useLayout as ReturnType<typeof vi.fn>;
 const mockUseTreeData = useTreeData as ReturnType<typeof vi.fn>;
 
 const SAMPLE_TREE: TreeNode[] = [
@@ -79,19 +62,10 @@ const SAMPLE_TREE: TreeNode[] = [
 ];
 
 function setupMocks(overrides: {
-  collapsed?: boolean;
   treeData?: TreeNode[];
   isLoading?: boolean;
   error?: string | null;
 } = {}) {
-  mockUseLayout.mockReturnValue({
-    workspaceExplorerCollapsed: overrides.collapsed ?? false,
-    workspaceExplorerWidth: 280,
-    setWorkspaceExplorerWidth: vi.fn(),
-    setWorkspaceExplorerCollapsed: vi.fn(),
-    isNarrowViewport: false,
-  });
-
   mockUseTreeData.mockReturnValue({
     treeData: overrides.treeData ?? SAMPLE_TREE,
     isLoading: overrides.isLoading ?? false,
@@ -142,13 +116,6 @@ describe('WorkspaceExplorer', () => {
     expect(screen.getByTestId('virtualized-tree')).toBeInTheDocument();
   });
 
-  it('renders collapsed state with 24px expand button', () => {
-    setupMocks({ collapsed: true });
-    render(<WorkspaceExplorer />);
-    expect(screen.getByTestId('workspace-explorer-collapsed')).toBeInTheDocument();
-    expect(screen.getByTestId('expand-button')).toBeInTheDocument();
-  });
-
   it('does NOT render old components (SectionNavigation, WorkspaceHeader, OverviewContextCard)', () => {
     render(<WorkspaceExplorer />);
     // Old components should be completely absent from the DOM
@@ -161,36 +128,18 @@ describe('WorkspaceExplorer', () => {
     expect(screen.queryByTestId('show-archived-toggle')).not.toBeInTheDocument();
   });
 
-  // ── embedded mode (rendered inside the SwarmWS fullscreen overlay) ──
-  describe('embedded mode', () => {
-    it('ignores the collapsed state and renders the tree even when collapsed=true', () => {
-      // In an overlay there is no column to collapse; embedded must bypass the rail.
-      setupMocks({ collapsed: true });
-      render(<WorkspaceExplorer embedded />);
-      expect(screen.queryByTestId('workspace-explorer-collapsed')).not.toBeInTheDocument();
-      expect(screen.getByTestId('workspace-explorer')).toBeInTheDocument();
-      expect(screen.getByTestId('virtualized-tree')).toBeInTheDocument();
-    });
-
-    it('does NOT render the ResizeHandle in embedded mode (overlay owns the width)', () => {
-      render(<WorkspaceExplorer embedded />);
-      expect(screen.queryByTestId('resize-handle')).not.toBeInTheDocument();
-    });
-
-    it('fills its parent (no fixed column width / border-r rail) in embedded mode', () => {
-      render(<WorkspaceExplorer embedded />);
-      const root = screen.getByTestId('workspace-explorer');
-      // embedded root fills parent instead of the fixed-width bordered column
-      expect(root.className).toContain('h-full');
-      expect(root.className).not.toContain('border-r');
-      expect(root.className).not.toContain('flex-shrink-0');
-      // no inline fixed width applied
-      expect(root.style.width).toBe('');
-    });
-
-    it('still renders the ExplorerHeader in embedded mode', () => {
-      render(<WorkspaceExplorer embedded />);
-      expect(screen.getByTestId('explorer-header')).toBeInTheDocument();
-    });
+  // ── overlay-only render (A10, run_1aab916c): the explorer always fills its
+  //    parent — no collapse rail, no ResizeHandle, no fixed column width. ──
+  it('fills its parent (no fixed column width / border-r rail / collapse)', () => {
+    render(<WorkspaceExplorer />);
+    const root = screen.getByTestId('workspace-explorer');
+    expect(root.className).toContain('h-full');
+    expect(root.className).not.toContain('border-r');
+    expect(root.className).not.toContain('flex-shrink-0');
+    // no inline fixed width applied (overlay owns the width)
+    expect(root.style.width).toBe('');
+    // the deleted column-mode collapse rail must never appear
+    expect(screen.queryByTestId('workspace-explorer-collapsed')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('resize-handle')).not.toBeInTheDocument();
   });
 });

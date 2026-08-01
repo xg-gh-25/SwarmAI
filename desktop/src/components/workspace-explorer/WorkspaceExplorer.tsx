@@ -1,19 +1,18 @@
 /**
- * WorkspaceExplorer — middle column of the three-column layout.
+ * WorkspaceExplorer — the SwarmWS semantic file tree.
  *
- * Redesigned for the single-workspace (SwarmWS) semantic explorer model.
- * Replaces the old multi-workspace file browser with a semantically-zoned,
- * virtualized tree view powered by ``ExplorerContext`` state management.
+ * Rendered ONLY inside the SwarmWS fullscreen overlay (A10, run_1aab916c) — the
+ * former always-on middle column was removed, so this always fills its parent.
+ * A semantically-zoned, virtualized tree view powered by ``ExplorerContext``.
  *
  * Key exports:
  * - ``WorkspaceExplorer``       — The main explorer component (default export)
  * - ``WorkspaceExplorerProps``  — Props interface
  *
  * Component structure:
- * - ``ExplorerHeader``   — Static "SwarmWS" title, focus mode toggle, refresh, collapse
+ * - ``ExplorerHeader``   — Static "SwarmWS" title, focus mode toggle, refresh
  * - ``AutoSizer``        — Dynamic sizing wrapper from react-virtualized-auto-sizer
  * - ``VirtualizedTree``  — react-window based virtualized tree rendering
- * - ``ResizeHandle``     — Drag-to-resize right edge
  *
  * Removed elements (from old explorer):
  * - WorkspaceHeader, SectionNavigation, FileTree, FileTreeNode
@@ -21,19 +20,16 @@
  * - Multi-workspace listing, archive/unarchive/delete logic
  * - showArchived toggle, workspace dropdown, @tanstack/react-query usage
  *
- * Data fetching is handled by ``ExplorerProvider`` (wraps this component in
- * ThreeColumnLayout). This component reads tree state from ``useTreeData()``
- * and renders accordingly.
+ * Data fetching is handled by ``ExplorerProvider`` (mounted in ThreeColumnLayout,
+ * so the 30s tree poll runs whether or not the SwarmWS overlay is open). This
+ * component reads tree state from ``useTreeData()`` and renders accordingly.
  *
  * Requirements: 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 10.1, 10.4, 11.1, 15.1
  */
 
-import { useCallback } from 'react';
-import { useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { useTreeData } from '../../contexts/ExplorerContext';
 import ExplorerHeader from './ExplorerHeader';
 import SectionedExplorer from './SectionedExplorer';
-import ResizeHandle from './ResizeHandle';
 import type { FileTreeItem } from './FileTreeNode';
 
 /**
@@ -88,94 +84,23 @@ export interface WorkspaceExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
   /** Callback when "Attach to Chat" is selected from the context menu. */
   onAttachToChat?: (item: FileTreeItem) => void;
-  /**
-   * Embedded mode — rendered inside the SwarmWS fullscreen overlay (Modal)
-   * rather than as an always-on sibling column. In this mode the explorer:
-   *  - IGNORES `workspaceExplorerCollapsed` (there is no column to collapse), and
-   *  - drops the column chrome (fixed width, `border-r`, `flex-shrink-0`,
-   *    ResizeHandle) to fill the overlay instead.
-   * The tree content + header are identical to the column render.
-   */
-  embedded?: boolean;
 }
 
-export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, embedded = false }: WorkspaceExplorerProps) {
-  const {
-    workspaceExplorerCollapsed,
-    workspaceExplorerWidth,
-    setWorkspaceExplorerWidth,
-    setWorkspaceExplorerCollapsed,
-    isNarrowViewport,
-  } = useLayout();
-
+// The explorer is rendered ONLY inside the SwarmWS fullscreen overlay (A10,
+// run_1aab916c) — the always-on sibling column was removed. So it always fills
+// its parent; there is no collapse rail, no ResizeHandle, no fixed column width
+// (the overlay owns the width). The former column-mode machinery
+// (workspaceExplorerCollapsed / width / narrow-viewport auto-collapse) was dead
+// and has been deleted (Gate-2 E-3).
+export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }: WorkspaceExplorerProps) {
   const { treeData, isLoading, error, refreshTree } = useTreeData();
 
-  const handleWidthChange = useCallback(
-    (newWidth: number) => {
-      setWorkspaceExplorerWidth(newWidth);
-    },
-    [setWorkspaceExplorerWidth],
-  );
-
-  const handleCollapseToggle = useCallback(() => {
-    setWorkspaceExplorerCollapsed(!workspaceExplorerCollapsed);
-  }, [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed]);
-
-  // Collapsed state — 24px wide expand button.
-  // Embedded (overlay) mode has no column to collapse — always render the tree.
-  if (workspaceExplorerCollapsed && !embedded) {
-    return (
-      <div
-        className="flex-shrink-0 bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
-        style={{ width: 24 }}
-        data-testid="workspace-explorer-collapsed"
-      >
-        <button
-          onClick={handleCollapseToggle}
-          className={`w-6 h-full flex items-center justify-center transition-all duration-200 ease-in-out ${
-            isNarrowViewport
-              ? 'text-[var(--color-text-muted)] cursor-not-allowed opacity-50'
-              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-          }`}
-          title={isNarrowViewport ? 'Expand disabled (window too narrow)' : 'Expand workspace explorer'}
-          disabled={isNarrowViewport}
-          aria-label="Expand workspace explorer"
-          aria-expanded="false"
-          data-testid="expand-button"
-        >
-          <span className="material-symbols-outlined text-sm">chevron_right</span>
-        </button>
-      </div>
-    );
-  }
-
-  // Expanded state.
-  // Embedded (overlay) mode: fill the parent, no fixed-width bordered column,
-  // no ResizeHandle (the overlay owns the width). Column mode: the original
-  // fixed-width `border-r` sibling column with resize + collapse.
   return (
     <div
-      className={
-        embedded
-          ? 'relative h-full w-full bg-[var(--color-bg-chrome)] flex flex-col'
-          : 'relative flex-shrink-0 h-full bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out'
-      }
-      style={
-        embedded
-          ? undefined
-          : {
-              width: workspaceExplorerWidth,
-              minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,
-              maxWidth: LAYOUT_CONSTANTS.MAX_WORKSPACE_EXPLORER_WIDTH,
-            }
-      }
+      className="relative h-full w-full bg-[var(--color-bg-chrome)] flex flex-col"
       data-testid="workspace-explorer"
     >
-      {!embedded && (
-        <ResizeHandle currentWidth={workspaceExplorerWidth} onWidthChange={handleWidthChange} />
-      )}
-
-      <ExplorerHeader onCollapseToggle={handleCollapseToggle} />
+      <ExplorerHeader />
 
       {/* Tree content area — fills remaining vertical space.
           min-h-0 is CRITICAL: without it, flex items default to min-height:auto

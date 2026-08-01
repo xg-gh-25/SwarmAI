@@ -5,8 +5,8 @@
  * The store owns PTY lifecycle + the tab registry (survives StrictMode). This
  * context exposes a React-friendly view: `tabs` (re-rendered via store
  * subscription), `activeTabId`, open/close/setActive, and the bottom-panel
- * open/collapsed state — which persists to localStorage exactly like
- * LayoutContext's `workspaceExplorerCollapsed`.
+ * open/collapsed state — which persists to localStorage (the terminal panel
+ * owns its own collapse state; the workspace explorer no longer has one).
  *
  * Design notes:
  *   - Only `panelOpen` is persisted, NOT the tab list (Gate-1 H5 rejected:

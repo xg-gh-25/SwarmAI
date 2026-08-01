@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 
 // Modal types that can be opened from the left sidebar
 // Skills and MCP modals removed — now integrated as Settings tabs (2026-03-26)
@@ -34,12 +34,6 @@ export function useSessionMeta(): SessionMetaContextValue {
 
 // Layout context value interface
 export interface LayoutContextValue {
-  // Workspace Explorer state
-  workspaceExplorerCollapsed: boolean;
-  setWorkspaceExplorerCollapsed: (collapsed: boolean) => void;
-  workspaceExplorerWidth: number;
-  setWorkspaceExplorerWidth: (width: number) => void;
-
   // Workspace scope
   selectedWorkspaceScope: WorkspaceScope;
   setSelectedWorkspaceScope: (scope: WorkspaceScope) => void;
@@ -60,47 +54,17 @@ export interface LayoutContextValue {
   // Settings tab deep-link (e.g., sidebar Skills icon → settings with skills tab)
   settingsTab: string | undefined;
   setSettingsTab: (tab: string | undefined) => void;
-
-  // Responsive state
-  isNarrowViewport: boolean;
 }
 
 // LocalStorage keys for persistence
 const STORAGE_KEYS = {
-  WORKSPACE_EXPLORER_COLLAPSED: 'workspaceExplorerCollapsed',
-  WORKSPACE_EXPLORER_WIDTH: 'workspaceExplorerWidth',
   LAST_WORKSPACE_SCOPE: 'lastWorkspaceScope',
 } as const;
-
-// Default values
-const DEFAULT_WORKSPACE_EXPLORER_WIDTH = 260;
-const MIN_WORKSPACE_EXPLORER_WIDTH = 200;
-const MAX_WORKSPACE_EXPLORER_WIDTH = 500;
 
 // Create the context
 const LayoutContext = createContext<LayoutContextValue | undefined>(undefined);
 
 // Helper functions for localStorage
-function getStoredBoolean(key: string, defaultValue: boolean): boolean {
-  if (typeof window === 'undefined') return defaultValue;
-  const stored = localStorage.getItem(key);
-  if (stored === null) return defaultValue;
-  return stored === 'true';
-}
-
-function getStoredNumber(key: string, defaultValue: number, min?: number, max?: number): number {
-  if (typeof window === 'undefined') return defaultValue;
-  const stored = localStorage.getItem(key);
-  if (stored === null) return defaultValue;
-  const parsed = parseInt(stored, 10);
-  if (isNaN(parsed)) return defaultValue;
-  // Apply constraints if provided
-  let value = parsed;
-  if (min !== undefined) value = Math.max(min, value);
-  if (max !== undefined) value = Math.min(max, value);
-  return value;
-}
-
 function getStoredString(key: string, defaultValue: string): string {
   if (typeof window === 'undefined') return defaultValue;
   const stored = localStorage.getItem(key);
@@ -113,25 +77,6 @@ interface LayoutProviderProps {
 }
 
 export function LayoutProvider({ children }: LayoutProviderProps) {
-  // Workspace Explorer collapsed state with localStorage persistence.
-  // Default = collapsed (true): the Explorer is an auxiliary panel; first launch
-  // (and any window with no stored preference) should focus on chat, not the file
-  // tree. A user who has explicitly expanded/collapsed it keeps that choice
-  // (persisted value wins — getStoredBoolean returns the stored value when present).
-  const [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsedState] = useState<boolean>(() =>
-    getStoredBoolean(STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED, true)
-  );
-
-  // Workspace Explorer width with localStorage persistence
-  const [workspaceExplorerWidth, setWorkspaceExplorerWidthState] = useState<number>(() =>
-    getStoredNumber(
-      STORAGE_KEYS.WORKSPACE_EXPLORER_WIDTH,
-      DEFAULT_WORKSPACE_EXPLORER_WIDTH,
-      MIN_WORKSPACE_EXPLORER_WIDTH,
-      MAX_WORKSPACE_EXPLORER_WIDTH
-    )
-  );
-
   // Workspace scope state
   const [selectedWorkspaceScope, setSelectedWorkspaceScopeState] = useState<WorkspaceScope>(() =>
     getStoredString(STORAGE_KEYS.LAST_WORKSPACE_SCOPE, 'all') as WorkspaceScope
@@ -155,23 +100,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     setActiveSessionMeta,
   }), [activeSessionMeta]);
 
-  // Persist collapsed state to localStorage
-  const setWorkspaceExplorerCollapsed = useCallback((collapsed: boolean) => {
-    setWorkspaceExplorerCollapsedState(collapsed);
-    localStorage.setItem(STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED, String(collapsed));
-  }, []);
-
-  // Persist width to localStorage with constraints
-  const setWorkspaceExplorerWidth = useCallback((width: number) => {
-    // Clamp width to min/max constraints
-    const clampedWidth = Math.max(
-      MIN_WORKSPACE_EXPLORER_WIDTH,
-      Math.min(MAX_WORKSPACE_EXPLORER_WIDTH, width)
-    );
-    setWorkspaceExplorerWidthState(clampedWidth);
-    localStorage.setItem(STORAGE_KEYS.WORKSPACE_EXPLORER_WIDTH, String(clampedWidth));
-  }, []);
-
   // Set workspace scope (not persisted by default, but we store last used)
   const setSelectedWorkspaceScope = useCallback((scope: WorkspaceScope) => {
     setSelectedWorkspaceScopeState(scope);
@@ -187,12 +115,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     setActiveModal(null);
   }, []);
 
-  // Track if we're in a narrow viewport (below 768px)
-  const [isNarrowViewport, setIsNarrowViewport] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.innerWidth < 768;
-  });
-
   // Validate workspace scope on initialization - Requirement 10.2
   // If stored scope is invalid (not 'all' and not a valid workspace ID), reset to 'all'
   const validateWorkspaceScope = useCallback((workspaceIds: string[]) => {
@@ -207,40 +129,7 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     }
   }, [selectedWorkspaceScope, setSelectedWorkspaceScope]);
 
-  // Handle responsive auto-collapse on window resize
-  useEffect(() => {
-    const handleResize = () => {
-      const isNarrow = window.innerWidth < 768;
-      setIsNarrowViewport(isNarrow);
-
-      // Auto-collapse when screen width falls below 768px (Requirement 1.8, 11.1)
-      if (isNarrow && !workspaceExplorerCollapsed) {
-        setWorkspaceExplorerCollapsed(true);
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    // Check on mount
-    handleResize();
-
-    return () => window.removeEventListener('resize', handleResize);
-  }, [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed]);
-
-  // Enhanced setWorkspaceExplorerCollapsed that respects narrow viewport
-  const setWorkspaceExplorerCollapsedWithViewportCheck = useCallback((collapsed: boolean) => {
-    // If trying to expand while in narrow viewport, prevent it (keep collapsed)
-    if (!collapsed && isNarrowViewport) {
-      // Don't allow expansion when viewport is narrow
-      return;
-    }
-    setWorkspaceExplorerCollapsed(collapsed);
-  }, [isNarrowViewport, setWorkspaceExplorerCollapsed]);
-
   const value: LayoutContextValue = useMemo(() => ({
-    workspaceExplorerCollapsed,
-    setWorkspaceExplorerCollapsed: setWorkspaceExplorerCollapsedWithViewportCheck,
-    workspaceExplorerWidth,
-    setWorkspaceExplorerWidth,
     selectedWorkspaceScope,
     setSelectedWorkspaceScope,
     validateWorkspaceScope,
@@ -251,12 +140,7 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     setWorkspaceSettingsId,
     settingsTab,
     setSettingsTab,
-    isNarrowViewport,
   }), [
-    workspaceExplorerCollapsed,
-    setWorkspaceExplorerCollapsedWithViewportCheck,
-    workspaceExplorerWidth,
-    setWorkspaceExplorerWidth,
     selectedWorkspaceScope,
     setSelectedWorkspaceScope,
     validateWorkspaceScope,
@@ -267,7 +151,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     setWorkspaceSettingsId,
     settingsTab,
     setSettingsTab,
-    isNarrowViewport,
   ]);
 
   return (
@@ -290,10 +173,6 @@ export function useLayout() {
 
 // Export constants for use in other components
 export const LAYOUT_CONSTANTS = {
-  DEFAULT_WORKSPACE_EXPLORER_WIDTH,
-  MIN_WORKSPACE_EXPLORER_WIDTH,
-  MAX_WORKSPACE_EXPLORER_WIDTH,
-  NARROW_VIEWPORT_BREAKPOINT: 768,
   // A10 redesign (run_1aab916c): the left nav is a 150px row-card column
   // (was a 44px icon rail).
   LEFT_SIDEBAR_WIDTH: 150,

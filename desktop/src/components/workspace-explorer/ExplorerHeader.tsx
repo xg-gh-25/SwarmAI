@@ -11,8 +11,7 @@
  * - Inline search bar
  *
  * Key exports:
- * - ``ExplorerHeader``        — The header component
- * - ``ExplorerHeaderProps``   — Props interface
+ * - ``ExplorerHeader``        — The header component (takes no props)
  *
  * Requirements: 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 12.4
  */
@@ -20,11 +19,7 @@
 import { useTreeData } from '../../contexts/ExplorerContext';
 import { OpenFileButton } from './OpenFileButton';
 
-export interface ExplorerHeaderProps {
-  onCollapseToggle?: () => void;
-}
-
-export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps) {
+export default function ExplorerHeader() {
   const { refreshTree } = useTreeData();
 
   return (
@@ -69,20 +64,6 @@ export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps
           >
             <span className="material-symbols-outlined text-sm">refresh</span>
           </button>
-
-          {/* Collapse toggle — same pattern as current explorer */}
-          {onCollapseToggle && (
-            <button
-              onClick={onCollapseToggle}
-              className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-              title="Collapse workspace explorer"
-              aria-label="Collapse workspace explorer"
-              aria-expanded="true"
-              data-testid="collapse-button"
-            >
-              <span className="material-symbols-outlined text-sm">chevron_left</span>
-            </button>
-          )}
         </div>
       </div>
     </div>

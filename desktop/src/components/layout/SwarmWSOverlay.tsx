@@ -6,7 +6,8 @@
  * when the SwarmWS domain card (or the logo button) fires `swarm:show-swarmws`.
  * Same overlay contract as BrainHubDemoOverlay / EvalModal / Settings: common
  * <Modal size="fullscreen"/> owns backdrop + Esc + body-scroll-lock; this shell
- * only wires open/close to the window event and renders <WorkspaceExplorer embedded/>.
+ * only wires open/close to the window event and renders <WorkspaceExplorer/>
+ * (which now fills its parent — the former column/collapse mode was deleted).
  *
  * Gate-1 fix (z-index): FileViewerPanel renders as a `relative` sibling in the
  * main flex row (no z-index) while Modal is `fixed z-50`. If a file were opened
@@ -42,7 +43,7 @@ export function SwarmWSOverlay({ onFileDoubleClick }: SwarmWSOverlayProps) {
   return (
     <Modal isOpen={open} onClose={close} title="SwarmWS — workspace explorer" size="fullscreen">
       <div className="flex-1 overflow-hidden" data-testid="swarmws-overlay">
-        <WorkspaceExplorer embedded onFileDoubleClick={handleFileDoubleClick} />
+        <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
       </div>
     </Modal>
   );
