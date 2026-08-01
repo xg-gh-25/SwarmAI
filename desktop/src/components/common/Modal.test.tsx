@@ -171,8 +171,10 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     // the card is the scrim's child div carrying the width style
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
     expect(card.style.width).toBe('380px'); // FS_WIDTH.s
-    // maxWidth stops 170px short of the viewport (leftNav 150 + 20 gap)
-    expect(card.style.maxWidth).toBe('calc(100vw - 170px)');
+    // maxWidth stops short by leftNav 150 + a LEFT gap (20) + a RIGHT gap (20) =
+    // 190px — the panel now clears the leftNav by a gap on the left too (spout gap),
+    // symmetric with the right/bottom breathing gap (run_5634980e).
+    expect(card.style.maxWidth).toBe('calc(100vw - 190px)');
   });
 
   it('DEFAULT fullscreen = definite full height (bottom anchored) so flex children do not collapse', () => {
@@ -218,6 +220,26 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
     // origin follows the source: left {spoutY + 7}px = 320px
     expect(card.style.transformOrigin).toBe('left 320px');
+  });
+
+  it('aligns the panel accent (--panel-accent) to the source card region tint', () => {
+    // A10Card publishes rect + its region tint; the panel border/ring/spout/header
+    // underline all read --panel-accent (run_5634980e).
+    setNavSource({ top: 380, height: 40 } as DOMRect, '#5fc99a'); // cognition green
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+    );
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    expect(card.style.getPropertyValue('--panel-accent')).toBe('#5fc99a');
+  });
+
+  it('falls back to the theme accent (--color-primary) when the source has no tint', () => {
+    setNavSource({ top: 380, height: 40 } as DOMRect); // no tint arg
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+    );
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    expect(card.style.getPropertyValue('--panel-accent')).toBe('var(--color-primary)');
   });
 
   it('consumes the source on open — a second (non-card) open draws no spout', () => {

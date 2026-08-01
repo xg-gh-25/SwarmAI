@@ -29,13 +29,19 @@
 export interface NavSource {
   /** viewport-space vertical center of the clicked card */
   centerY: number;
+  /** the source card's region tint (hex) — the panel border / ring / spout /
+   *  header underline align to this so the panel reads as "spat out from THIS
+   *  region" (cognition green / Work teal / System grey / Settings-Eval blue).
+   *  undefined = fall back to the neutral accent. */
+  tint?: string;
 }
 
 let current: NavSource | null = null;
 
-/** Called by A10Card BEFORE delegating to the card's real onClick. */
-export function setNavSource(rect: DOMRect): void {
-  current = { centerY: rect.top + rect.height / 2 };
+/** Called by A10Card BEFORE delegating to the card's real onClick.
+ *  `tint` = the card's region color (optional; drives the panel accent). */
+export function setNavSource(rect: DOMRect, tint?: string): void {
+  current = { centerY: rect.top + rect.height / 2, tint };
 }
 
 /** Read the current source (null if none / cleared). Does not consume. */

@@ -567,7 +567,7 @@ function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-
   // delegating — so both the window-event overlays and the activeModal modals
   // open from this card (single injection point, run_2e6d6029 / Gate-1).
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    setNavSource(e.currentTarget.getBoundingClientRect());
+    setNavSource(e.currentTarget.getBoundingClientRect(), tint);
     onClick?.();
   };
   return (

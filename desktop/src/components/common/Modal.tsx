@@ -79,6 +79,10 @@ export default function Modal({
   // Spit-out origin: the vertical position (within the chat area) of the nav card
   // that opened this panel. null = opened by a non-card path (no spout drawn).
   const [spoutY, setSpoutY] = useState<number | null>(null);
+  // The source card's region tint — drives the panel accent (border/ring/spout/
+  // header underline) so the panel reads as "spat out from THAT region".
+  // null = neutral fallback (--color-primary, the theme accent).
+  const [panelTint, setPanelTint] = useState<string | null>(null);
 
   const isFullscreen = size === 'fullscreen';
 
@@ -104,8 +108,10 @@ export default function Modal({
           const chatH = window.innerHeight - PANEL_TOP - PANEL_GAP;
           const y = src.centerY - PANEL_TOP - 7;
           setSpoutY(Math.max(12, Math.min(y, chatH - 26)));
+          setPanelTint(src.tint ?? null);
         } else {
           setSpoutY(null);
+          setPanelTint(null);
         }
         // Consume it: a subsequent open NOT triggered by a nav card (credential
         // banner, chat hero, deep-link) then finds null → draws no spout, instead
@@ -205,8 +211,10 @@ export default function Modal({
                 // Floating card-detail panel, anchored top-left of the chat area,
                 // grows toward bottom-right. transform-origin is set inline to the
                 // source card's y (spoutY) so it looks "spat out" from that card.
-                'absolute rounded-[18px] border-[var(--color-border)]',
-                'shadow-[-8px_24px_80px_rgba(0,0,0,.6)] ring-1 ring-[rgba(110,168,254,.12)]',
+                // Border + ring align to the source region's accent (--panel-accent).
+                'absolute rounded-[18px]',
+                'border-[color-mix(in_srgb,var(--panel-accent)_45%,var(--color-border))]',
+                'shadow-[-8px_24px_80px_rgba(0,0,0,.6)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_18%,transparent)]',
                 entered ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 -translate-x-[34px] scale-[0.9]',
               ]
             : [
@@ -218,14 +226,23 @@ export default function Modal({
         style={
           isFullscreen
             ? {
-                left: 0,
+                // LEFT gap: clear the leftNav by PANEL_GAP so the panel doesn't hug
+                // it (symmetric with the right/bottom gap) — the spout is drawn in
+                // this gap, connecting leftNav → panel.
+                left: PANEL_GAP,
                 top: 0,
                 width: FS_WIDTH[fullscreenWidth],
                 minWidth: 320,
                 // never past the right edge of the chat area (right gap) …
-                maxWidth: `calc(100vw - ${PANEL_LEFT + PANEL_GAP}px)`,
+                maxWidth: `calc(100vw - ${PANEL_LEFT + PANEL_GAP * 2}px)`,
                 // spit-out from the source card's y (falls back to left-center)
                 transformOrigin: spoutY != null ? `left ${spoutY + 7}px` : 'left center',
+                // region accent — border/ring/spout/underline align to this.
+                // Fallback = --color-primary (the theme accent). NOTE: the pre-
+                // existing header used var(--color-accent) which is UNDEFINED in
+                // index.css (only --color-primary exists) — that made the old
+                // header underline/badge silently colorless; fixed here (R7).
+                ['--panel-accent' as string]: panelTint ?? 'var(--color-primary)',
                 // HEIGHT: default = DEFINITE full chat-area height (bottom anchored),
                 // so full-height flex children (AutoSizer/explorer/dashboards) get a
                 // real height and don't collapse to 0. autoHeight = content-driven,
@@ -239,25 +256,28 @@ export default function Modal({
         // Stop event propagation to prevent overlay close when clicking inside modal
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Spout — a small nub on the panel's left edge pointing back at the nav
-            card that opened it (only when opened from a card). 14px square rotated
-            45°, showing just the left+bottom borders → a triangle emerging from
-            behind the leftNav's right border. */}
+        {/* Spout — a clear region-colored arrow drawn in the LEFT gap, pointing
+            back at the nav card that opened this panel. A 20px square rotated 45°
+            straddling the panel's left edge; only its left+bottom sides carry the
+            accent border → reads as a triangle emerging from the gap toward the
+            leftNav. Panel-colored fill hides the two inner sides. (run_5634980e) */}
         {isFullscreen && spoutY != null && (
           <div
             data-testid="modal-spout"
             aria-hidden
-            className="absolute w-[14px] h-[14px] rotate-45 rounded-bl-[3px] bg-[var(--color-card)] border-l border-b border-[var(--color-border)]"
-            style={{ left: -7, top: spoutY }}
+            className="absolute w-[20px] h-[20px] rotate-45 rounded-bl-[5px] bg-[var(--color-card)] z-[1]
+              border-l-[1.5px] border-b-[1.5px] border-[var(--panel-accent)]
+              shadow-[-3px_3px_8px_rgba(0,0,0,.35)]"
+            style={{ left: -11, top: spoutY }}
           />
         )}
         {isFullscreen ? (
           /* Fullscreen header — 50px, subtle gradient + accent underline, mode
              badge, ESC hint. Theme-variable driven (no hardcoded hex). */
-          <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--color-accent)] before:to-transparent before:opacity-40">
+          <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--panel-accent)] before:to-transparent before:opacity-50">
             {mode && (
               <span
-                className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)] bg-[rgba(110,168,254,.14)] ring-1 ring-[rgba(110,168,254,.25)] px-2 py-[3px] rounded-md"
+                className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--panel-accent)] bg-[color-mix(in_srgb,var(--panel-accent)_14%,transparent)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_25%,transparent)] px-2 py-[3px] rounded-md"
                 data-testid="modal-mode-badge"
               >
                 {mode}
