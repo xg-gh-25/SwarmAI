@@ -9,11 +9,15 @@
  * These tests drive the real function (no mock of the function under test) —
  * only the inputs are constructed inline.
  */
-import { describe, it, expect } from 'vitest';
-import { aggregateAttention } from '../useRadarAttention';
+import { describe, it, expect, vi } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { aggregateAttention, useRadarAttention } from '../useRadarAttention';
 import type { PipelineRun } from '../../services/pipelines';
 import type { JobStatus } from '../../services/jobs';
 import type { StreamingStateEntry } from '../../types';
+import { pipelinesService } from '../../services/pipelines';
+import { jobsService } from '../../services/jobs';
+import { chatService } from '../../services/chat';
 
 function pipe(over: Partial<PipelineRun> = {}): PipelineRun {
   return {
@@ -226,6 +230,49 @@ describe('aggregateAttention', () => {
       currentSessionId: undefined,
     });
     expect(attentionItems).toHaveLength(1);
+  });
+
+  it('perf-regression (run_843962a5 adversarial HIGH): a SECOND identical 30s poll yields a STABLE result reference — no re-render churn on the host', async () => {
+    // Root-cause guard for the hook-lift blast-radius finding. Before the fix,
+    // poll() unconditionally setState-d fresh fetch arrays every tick, so an
+    // idle 30s poll churned references → ChatPage (the lifted host) re-rendered
+    // every 30s. Fix: bail setState when the payload is unchanged + memoize the
+    // aggregate. This test drives the REAL hook, advances the REAL 30s interval
+    // with fake timers, and returns byte-identical-but-new-reference data on the
+    // 2nd poll. Reverting EITHER the setState bail-out OR the useMemo → RED
+    // (identity would change on the 2nd poll).
+    vi.useFakeTimers();
+    try {
+      // Each call returns a FRESH object with equal content (mimics a real fetch).
+      vi.spyOn(pipelinesService, 'fetchActivePipelines').mockImplementation(async () => [
+        { id: 'run_x', project: 'SwarmAI', requirement: 'r', status: 'paused',
+          currentStage: 'build', checkpointReason: 'Gate-1 BLOCK', pauseKind: 'decision',
+          progress: '', updatedAt: '' } as PipelineRun,
+      ]);
+      vi.spyOn(jobsService, 'fetchJobs').mockImplementation(async () => []);
+      vi.spyOn(chatService, 'getStreamingState').mockImplementation(async () => ({}));
+
+      const { result, unmount } = renderHook(() => useRadarAttention('sess-current', []));
+
+      // Flush the initial poll (mount effect).
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(result.current.attentionItems).toHaveLength(1);
+      const firstRef = result.current;
+      const firstItems = result.current.attentionItems;
+
+      // Advance one full 30s interval → the REAL poll fires again with identical data.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+
+      // Unchanged data must NOT produce a new result object (setState bail-out +
+      // memo hold the reference stable → host does not re-render).
+      expect(result.current).toBe(firstRef);
+      expect(result.current.attentionItems).toBe(firstItems);
+
+      unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 
   it('AC3: a waiting session with no open tab is ignored (can not switch to a tab that is not open)', () => {

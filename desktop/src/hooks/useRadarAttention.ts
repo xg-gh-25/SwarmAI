@@ -19,7 +19,7 @@
  * - aggregateAttention  — pure merge (tested directly)
  * - useRadarAttention   — React hook returning { attentionItems, runningPipelines }
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipelinesService, type PipelineRun } from '../services/pipelines';
 import { jobsService, type JobStatus } from '../services/jobs';
 import { chatService } from '../services/chat';
@@ -27,6 +27,21 @@ import type { StreamingStateEntry } from '../types';
 import type { AttentionItem, RunningPipeline } from '../pages/chat/components/RightSidebar/types';
 
 const POLL_MS = 30_000;
+
+/**
+ * Cheap structural equality for poll payloads. The three sources are small,
+ * JSON-serializable, and fetched fresh each tick — stable-key JSON compare is
+ * both correct and far cheaper than the re-renders it prevents. Used to skip
+ * setState when a poll returns data identical to the previous tick.
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
 
 export interface AggregateInput {
   pipelines: PipelineRun[];
@@ -149,9 +164,17 @@ export function useRadarAttention(
       jobsService.fetchJobs().catch(() => [] as JobStatus[]),
       chatService.getStreamingState().catch(() => ({} as Record<string, StreamingStateEntry>)),
     ]);
-    setPipelines(p);
-    setJobs(j);
-    setStreamingState(s);
+    // Bail out of state churn when a poll returns data identical to the last —
+    // the common IDLE case. Every 30s the fetch yields a fresh array/object
+    // (new reference) even when the payload is byte-identical; blindly
+    // setState-ing it re-renders this hook's host (ChatPage) every 30s for no
+    // reason. Deep-equal-guard each setter so an unchanged poll produces ZERO
+    // state updates → React bails the re-render at the source. (run_843962a5
+    // adversarial HIGH: hook lift widened the re-render blast radius to the
+    // whole ChatPage subtree.)
+    setPipelines((prev) => (sameJson(prev, p) ? prev : p));
+    setJobs((prev) => (sameJson(prev, j) ? prev : j));
+    setStreamingState((prev) => (sameJson(prev, s) ? prev : s));
   }, []);
 
   useEffect(() => {
@@ -160,11 +183,18 @@ export function useRadarAttention(
     return () => clearInterval(id);
   }, [poll]);
 
-  return aggregateAttention({
-    pipelines,
-    jobs,
-    streamingState,
-    openTabs: openTabsRef.current,
-    currentSessionId,
-  });
+  // Memoize the aggregate so the returned object identity is stable across
+  // renders when the source data is unchanged. Combined with the setState
+  // bail-out above, an idle 30s tick now causes no downstream re-render.
+  return useMemo(
+    () =>
+      aggregateAttention({
+        pipelines,
+        jobs,
+        streamingState,
+        openTabs: openTabsRef.current,
+        currentSessionId,
+      }),
+    [pipelines, jobs, streamingState, openTabs, currentSessionId],
+  );
 }
