@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { readNavSource, clearNavSource } from '../layout/navSource';
@@ -71,14 +71,19 @@ export default function Modal({
   fullscreenAutoHeight = false,
 }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // `isRendering` keeps the modal in the DOM through its exit transition.
   // `entered` drives the `.open` visual state (opacity/transform target).
   const [isRendering, setIsRendering] = useState(isOpen);
   const [entered, setEntered] = useState(false);
-  // Spit-out origin: the vertical position (within the chat area) of the nav card
-  // that opened this panel. null = opened by a non-card path (no spout drawn).
+  // Spit-out origin. `spoutCenterY` = the source card's VIEWPORT center-y (as
+  // captured by navSource); null = non-card open (no spout). `spoutY` = that point
+  // converted to PANEL-LOCAL coords, measured against the panel's REAL top after
+  // layout (not a hardcoded constant — that was the mis-alignment bug). null until
+  // measured.
+  const [spoutCenterY, setSpoutCenterY] = useState<number | null>(null);
   const [spoutY, setSpoutY] = useState<number | null>(null);
   // The source card's region tint — drives the panel accent (border/ring/spout/
   // header underline) so the panel reads as "spat out from THAT region".
@@ -109,16 +114,14 @@ export default function Modal({
       // the panel height so it never overflows. null source (non-card open) → no spout.
       if (isFullscreen) {
         const src = readNavSource();
-        const rect = readChatAreaRect();
-        setChatRect(rect);
-        // panel top = rect.top (viewport). Fall back to PANEL_TOP if unobserved.
-        const panelTop = rect?.top ?? PANEL_TOP;
-        const panelH = rect?.height ?? (window.innerHeight - PANEL_TOP - PANEL_GAP);
+        setChatRect(readChatAreaRect());
         if (src) {
-          const y = src.centerY - panelTop - 10;
-          setSpoutY(Math.max(12, Math.min(y, panelH - 32)));
+          // Store the card's viewport center-y; the panel-local spout position is
+          // measured against the panel's REAL top after layout (see layout effect).
+          setSpoutCenterY(src.centerY);
           setPanelTint(src.tint ?? null);
         } else {
+          setSpoutCenterY(null);
           setSpoutY(null);
           setPanelTint(null);
         }
@@ -191,6 +194,22 @@ export default function Modal({
     return subscribeChatArea(setChatRect);
   }, [isFullscreen, isOpen]);
 
+  // Position the spout by MEASURING the panel's real top after layout — the card's
+  // viewport center-y minus the panel's actual top = panel-local y. This avoids any
+  // hardcoded-constant assumption about where the chat area starts (the source of
+  // the mis-alignment). Re-runs when the panel mounts or the chat rect shifts.
+  useLayoutEffect(() => {
+    if (!isFullscreen || spoutCenterY == null || !panelRef.current) {
+      if (spoutCenterY == null) setSpoutY(null);
+      return;
+    }
+    const p = panelRef.current.getBoundingClientRect();
+    const NUB = 20; // spout square size
+    const local = spoutCenterY - p.top - NUB / 2;
+    // clamp so the nub stays fully inside the panel's height
+    setSpoutY(Math.max(8, Math.min(local, p.height - NUB - 8)));
+  }, [isFullscreen, isOpen, spoutCenterY, chatRect, entered]);
+
   if (!isRendering) return null;
 
   return (
@@ -226,6 +245,7 @@ export default function Modal({
       }}
     >
       <div
+        ref={panelRef}
         className={clsx(
           'flex flex-col bg-[var(--color-card)] border shadow-2xl',
           'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
