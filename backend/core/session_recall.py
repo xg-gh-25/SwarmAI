@@ -274,21 +274,37 @@ class SessionRecall:
         conn = self._open_conn()
         conn.row_factory = sqlite3.Row
         try:
+            # Bounded-scan shape (mirrors search()'s _SEARCH_ROW_LIMIT rationale,
+            # session_recall.py top-of-file): an INNER subquery takes the global
+            # BM25 top-N matching message rows via `ORDER BY fts.rank LIMIT`, which
+            # SQLite satisfies with a top-N heap WITHOUT materializing every match.
+            # We then GROUP BY session over that bounded set. This is required
+            # because a bare `GROUP BY s.id ... ORDER BY MIN(rank) LIMIT` applies the
+            # LIMIT only AFTER aggregation, forcing a full scan of every matching row
+            # to compute per-session MIN — ~8.6s worst case on a large corpus, run on
+            # every debounced keystroke. Quality-preserving for the SAME reason
+            # search() is rank-primary: the surfaced session owns a globally-best-rank
+            # message, which a top-N-by-rank cut is guaranteed to keep.
             sql = """
-                SELECT s.id, s.agent_id, s.title, s.created_at, s.last_accessed,
-                       MIN(fts.rank) AS best_rank
-                FROM messages_fts fts
-                JOIN messages m ON m.rowid = fts.rowid
-                JOIN sessions s ON s.id = m.session_id
-                WHERE messages_fts MATCH ?
-                  AND (m.sent IS NULL OR m.sent != 0)
+                SELECT sub.session_id AS id, s.agent_id, s.title,
+                       s.created_at, s.last_accessed, MIN(sub.rank) AS best_rank
+                FROM (
+                    SELECT m.session_id AS session_id, fts.rank AS rank
+                    FROM messages_fts fts
+                    JOIN messages m ON m.rowid = fts.rowid
+                    WHERE messages_fts MATCH ?
+                      AND (m.sent IS NULL OR m.sent != 0)
+                    ORDER BY fts.rank
+                    LIMIT ?
+                ) sub
+                JOIN sessions s ON s.id = sub.session_id
             """
-            params: list = [safe_query]
+            params: list = [safe_query, _SEARCH_ROW_LIMIT]
             if workspace_id is not None:
-                sql += " AND s.workspace_id = ?"
+                sql += " WHERE s.workspace_id = ?"
                 params.append(workspace_id)
             sql += """
-                GROUP BY s.id
+                GROUP BY sub.session_id
                 ORDER BY best_rank
                 LIMIT ?
             """
