@@ -58,13 +58,14 @@ def build_brain_graph(memory_content: str) -> dict:
         dormant = sum(1 for e in items if e.decay_state in ("dormant", "archived"))
         nodes.append({"type": t, "count": counts[t], "active": active, "dormant": dormant})
 
-    # Drill: latest N per type. parse_entries returns document order; MEMORY.md
-    # sections prepend newest-first in some places and append in others, but the
-    # last-N-by-document-position is the pragmatic "recent" slice the mockup shows.
-    # Take the last _DRILL_LIMIT (most recently positioned) and present newest-first.
+    # Drill: latest N per type. parse_entries returns DOCUMENT order (top→bottom),
+    # and MEMORY.md's auto-writer PREPENDS entries newest-at-TOP (context_health_hook
+    # "PREPEND keeps newest-at-TOP"; locked_write --prepend = "newest-first"). So
+    # by_type[t] is already NEWEST-FIRST → the newest N is the FIRST slice, not the
+    # last. (Gate-2 caught this: [-N:] returned the OLDEST N under a "Latest" label.)
     drill: dict[str, list[dict]] = {}
     for t in VALID_TYPES:
-        latest = by_type[t][-_DRILL_LIMIT:]
+        latest = by_type[t][:_DRILL_LIMIT]  # newest-first → first N = latest N
         drill[t] = [
             {
                 "title": e.title,
@@ -73,7 +74,7 @@ def build_brain_graph(memory_content: str) -> dict:
                 # meta: a short human hint (last-referenced date if known, else section)
                 "meta": (e.last_referenced.isoformat() if e.last_referenced else e.section or ""),
             }
-            for e in reversed(latest)  # newest-first for the list
+            for e in latest  # already newest-first (prepend convention)
         ]
 
     return {"nodes": nodes, "drill": drill, "total": sum(counts.values())}

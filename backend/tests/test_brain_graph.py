@@ -66,6 +66,25 @@ def test_drill_capped_at_ten_latest():
     assert len(g["drill"]["guideline"]) == 10
 
 
+def test_drill_is_newest_first_not_oldest(tmp_path=None):
+    """Gate-2 regression: MEMORY.md prepends newest-at-TOP, so parse_entries yields
+    newest-first. The drill must show the NEWEST entries under its 'Latest' label —
+    i.e. the FIRST N in document order, presented top-first. A [-N:] slice would
+    return the OLDEST N (the bug this pins)."""
+    # 12 guideline entries, document order = newest-first (G-new at top … G-old at bottom)
+    body = "## Guidelines\n" + "".join(
+        f"- [guideline] **G{i:02d}** — entry {i}\n  <!-- ref:0 | last:2026-08-01 | decay:active -->\n"
+        for i in range(12)  # G00 (newest, top) … G11 (oldest, bottom)
+    )
+    g = build_brain_graph(body)
+    drill = g["drill"]["guideline"]
+    assert len(drill) == 10
+    # newest (G00, top of doc) MUST be first; the two oldest (G10, G11) MUST be dropped
+    assert drill[0]["title"] == "G00", "drill[0] must be the newest (top-of-doc) entry"
+    titles = [d["title"] for d in drill]
+    assert "G11" not in titles and "G10" not in titles, "the 2 oldest (bottom) must be dropped, not the newest"
+
+
 def test_empty_content_safe():
     g = build_brain_graph("")
     assert {n["type"] for n in g["nodes"]} == set(VALID_TYPES)
