@@ -15,11 +15,12 @@
  * mocked (a render spawns nothing).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, within } from '@testing-library/react';
+import { render, screen, cleanup, within, fireEvent } from '@testing-library/react';
 import { LayoutProvider } from '../../contexts/LayoutContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
 import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
+import { readNavSource, clearNavSource } from './navSource';
 
 vi.mock('../../services/pty', () => ({
   spawn: vi.fn(() => ({
@@ -123,5 +124,28 @@ describe('LeftSidebar A10 — Y/R signal flags', () => {
       expect(within(card).queryByTestId('flag-y')).toBeNull();
       expect(within(card).queryByTestId('flag-r')).toBeNull();
     }
+  });
+});
+
+describe('LeftSidebar A10 — nav-source spit-out origin (spout wiring)', () => {
+  afterEach(() => clearNavSource());
+
+  it('a fullscreen-opening card (SwarmWS) publishes a nav source', () => {
+    clearNavSource();
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('nav-swarmws'));
+    // A10Card captured the card rect (jsdom rects are 0 but the object is set)
+    expect(readNavSource()).not.toBeNull();
+  });
+
+  it('a PANEL-opening card (Memory) does NOT leave a stale nav source (Gate-2 #3)', () => {
+    renderSidebar();
+    // pre-seed a stale source as if a fullscreen card had been clicked before
+    fireEvent.click(screen.getByTestId('nav-swarmws'));
+    expect(readNavSource()).not.toBeNull();
+    // clicking Memory opens a file panel — its handler must clear the source so a
+    // later unrelated fullscreen open can't mis-point its spout at the Memory card
+    fireEvent.click(screen.getByTestId('nav-memory'));
+    expect(readNavSource()).toBeNull();
   });
 });

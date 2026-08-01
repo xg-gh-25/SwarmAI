@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { readNavSource, clearNavSource } from '../layout/navSource';
 
 interface ModalProps {
   isOpen: boolean;
@@ -75,6 +76,9 @@ export default function Modal({
   // `entered` drives the `.open` visual state (opacity/transform target).
   const [isRendering, setIsRendering] = useState(isOpen);
   const [entered, setEntered] = useState(false);
+  // Spit-out origin: the vertical position (within the chat area) of the nav card
+  // that opened this panel. null = opened by a non-card path (no spout drawn).
+  const [spoutY, setSpoutY] = useState<number | null>(null);
 
   const isFullscreen = size === 'fullscreen';
 
@@ -89,6 +93,25 @@ export default function Modal({
 
     if (isOpen) {
       setIsRendering(true);
+      // Capture the spit-out origin at open (fullscreen only). Convert the card's
+      // viewport centerY to a position inside the panel: the panel's top edge is
+      // at viewport y = PANEL_TOP, so panel-local y = centerY - PANEL_TOP. Offset
+      // by half the spout size (7) to center the nub; clamp into the chat area so
+      // it never overflows top/bottom. null source (non-card open) → no spout.
+      if (isFullscreen) {
+        const src = readNavSource();
+        if (src) {
+          const chatH = window.innerHeight - PANEL_TOP - PANEL_GAP;
+          const y = src.centerY - PANEL_TOP - 7;
+          setSpoutY(Math.max(12, Math.min(y, chatH - 26)));
+        } else {
+          setSpoutY(null);
+        }
+        // Consume it: a subsequent open NOT triggered by a nav card (credential
+        // banner, chat hero, deep-link) then finds null → draws no spout, instead
+        // of mis-pointing at a stale card position (Gate-1 #6).
+        clearNavSource();
+      }
       // Mount at opacity:0, then add `.open` on a LATER frame so the browser
       // paints the initial state first and the enter transition actually plays.
       // Double-rAF: a single rAF can batch with the mount commit (Gate-1 #3).
@@ -180,11 +203,11 @@ export default function Modal({
           isFullscreen
             ? [
                 // Floating card-detail panel, anchored top-left of the chat area,
-                // grows toward bottom-right. transform-origin toward the leftNav so
-                // it looks "spat out" from the card the user clicked.
-                'absolute origin-[left_center] rounded-[18px] border-[var(--color-border)]',
+                // grows toward bottom-right. transform-origin is set inline to the
+                // source card's y (spoutY) so it looks "spat out" from that card.
+                'absolute rounded-[18px] border-[var(--color-border)]',
                 'shadow-[-8px_24px_80px_rgba(0,0,0,.6)] ring-1 ring-[rgba(110,168,254,.12)]',
-                entered ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 -translate-x-[26px] scale-[0.94]',
+                entered ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 -translate-x-[34px] scale-[0.9]',
               ]
             : [
                 'w-full rounded-xl border-[var(--color-border)] max-h-[90vh]',
@@ -201,6 +224,8 @@ export default function Modal({
                 minWidth: 320,
                 // never past the right edge of the chat area (right gap) …
                 maxWidth: `calc(100vw - ${PANEL_LEFT + PANEL_GAP}px)`,
+                // spit-out from the source card's y (falls back to left-center)
+                transformOrigin: spoutY != null ? `left ${spoutY + 7}px` : 'left center',
                 // HEIGHT: default = DEFINITE full chat-area height (bottom anchored),
                 // so full-height flex children (AutoSizer/explorer/dashboards) get a
                 // real height and don't collapse to 0. autoHeight = content-driven,
@@ -214,21 +239,34 @@ export default function Modal({
         // Stop event propagation to prevent overlay close when clicking inside modal
         onMouseDown={(e) => e.stopPropagation()}
       >
+        {/* Spout — a small nub on the panel's left edge pointing back at the nav
+            card that opened it (only when opened from a card). 14px square rotated
+            45°, showing just the left+bottom borders → a triangle emerging from
+            behind the leftNav's right border. */}
+        {isFullscreen && spoutY != null && (
+          <div
+            data-testid="modal-spout"
+            aria-hidden
+            className="absolute w-[14px] h-[14px] rotate-45 rounded-bl-[3px] bg-[var(--color-card)] border-l border-b border-[var(--color-border)]"
+            style={{ left: -7, top: spoutY }}
+          />
+        )}
         {isFullscreen ? (
-          /* Fullscreen header — mockup .fl-head: 50px, dark bg, mode badge, ESC hint */
-          <div className="flex items-center gap-3 h-[50px] px-5 border-b border-[var(--color-border)] shrink-0 bg-[#0c0d12] rounded-t-[18px]">
+          /* Fullscreen header — 50px, subtle gradient + accent underline, mode
+             badge, ESC hint. Theme-variable driven (no hardcoded hex). */
+          <div className="relative flex items-center gap-3 h-[50px] px-5 shrink-0 rounded-t-[18px] bg-gradient-to-b from-[var(--color-bg-chrome)] to-[var(--color-card)] border-b border-[var(--color-border)] before:absolute before:inset-x-0 before:bottom-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-[var(--color-accent)] before:to-transparent before:opacity-40">
             {mode && (
               <span
-                className="font-mono text-[10px] uppercase tracking-wide text-[var(--color-accent)] bg-[rgba(110,168,254,.12)] px-2 py-[3px] rounded-md"
+                className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-accent)] bg-[rgba(110,168,254,.14)] ring-1 ring-[rgba(110,168,254,.25)] px-2 py-[3px] rounded-md"
                 data-testid="modal-mode-badge"
               >
                 {mode}
               </span>
             )}
-            <h2 className="font-semibold text-[15px] text-[var(--color-text)]">{title}</h2>
+            <h2 className="font-semibold text-[15px] tracking-tight text-[var(--color-text)]">{title}</h2>
             <div className="ml-auto flex items-center gap-3">
               <span className="hidden sm:flex items-center gap-1.5 font-mono text-[11px] text-[var(--color-text-faint)]">
-                <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5">ESC</kbd>
+                <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5 bg-[var(--color-bg)]">ESC</kbd>
                 to close
               </span>
               <button

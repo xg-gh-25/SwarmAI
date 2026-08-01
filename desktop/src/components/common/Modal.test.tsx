@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup } from '@testing-library/react';
 import Modal from './Modal';
+import { setNavSource, clearNavSource } from '../layout/navSource';
 
 // Run rAF callbacks synchronously (double-rAF enter would otherwise never fire
 // under fake timers). Each call resolves on the next microtask-ish tick.
@@ -34,6 +35,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.body.style.overflow = '';
   (window as unknown as { __modalLockCount?: number }).__modalLockCount = 0;
+  clearNavSource(); // module-global — reset so spout tests don't cross-pollute
 });
 
 function noop() {}
@@ -192,11 +194,39 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     expect(card.style.maxHeight).toBe('calc(100vh - 100px)'); // top 80 + 20 gap
   });
 
-  it('grows from the left (spat-out origin) — panel uses left-center transform-origin', () => {
+  it('grows from the left (spat-out origin) — falls back to left center when no source card', () => {
+    // No nav card was clicked in this render path → navSource is null → the panel
+    // uses the left-center fallback transform-origin and draws NO spout.
     const { container } = render(
       <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
     );
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
-    expect(card.className).toContain('origin-[left_center]');
+    expect(card.style.transformOrigin).toBe('left center');
+    expect(container.querySelector('[data-testid="modal-spout"]')).toBeNull();
+  });
+
+  it('when opened FROM a nav card, draws a spout + anchors origin at the card y', () => {
+    // Simulate a nav card click publishing its position (A10Card does this).
+    setNavSource({ top: 380, height: 40 } as DOMRect); // centerY = 400
+    const { container } = render(
+      <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+    );
+    const spout = container.querySelector('[data-testid="modal-spout"]') as HTMLElement;
+    expect(spout).not.toBeNull();
+    // panel-local y = centerY(400) - PANEL_TOP(80) - 7 = 313 → spout top:313px
+    expect(spout.style.top).toBe('313px');
+    const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
+    // origin follows the source: left {spoutY + 7}px = 320px
+    expect(card.style.transformOrigin).toBe('left 320px');
+  });
+
+  it('consumes the source on open — a second (non-card) open draws no spout', () => {
+    setNavSource({ top: 380, height: 40 } as DOMRect);
+    const first = render(<Modal isOpen onClose={noop} title="A" size="fullscreen" mode="X"><div>b</div></Modal>);
+    expect(first.container.querySelector('[data-testid="modal-spout"]')).not.toBeNull();
+    first.unmount();
+    // second modal opens WITHOUT a fresh card click → source was consumed → no spout
+    const second = render(<Modal isOpen onClose={noop} title="B" size="fullscreen" mode="Y"><div>b</div></Modal>);
+    expect(second.container.querySelector('[data-testid="modal-spout"]')).toBeNull();
   });
 });
