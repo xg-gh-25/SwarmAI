@@ -9,8 +9,9 @@
  * navigation is coherent end-to-end. The real per-domain content is filled in by
  * later per-card cycles — this file is the seam that keeps those changes local.
  */
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import Modal from '../common/Modal';
+import { useExclusiveOverlay } from './useExclusiveOverlay';
 
 interface StubDef {
   key: string;
@@ -47,14 +48,7 @@ const STUBS: StubDef[] = [
 ];
 
 function StubOverlay({ def }: { def: StubDef }): ReactNode {
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
-
-  useEffect(() => {
-    const show = () => setOpen(true);
-    window.addEventListener(def.event, show);
-    return () => window.removeEventListener(def.event, show);
-  }, [def.event]);
+  const { open, close } = useExclusiveOverlay(def.event);
 
   return (
     <Modal isOpen={open} onClose={close} title={def.title} size="fullscreen">

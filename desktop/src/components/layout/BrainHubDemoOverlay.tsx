@@ -14,20 +14,12 @@
  * avoid churning the ThreeColumnLayout import.
  */
 
-import { useEffect, useState, useCallback } from 'react';
 import Modal from '../common/Modal';
 import { BrainHub } from './BrainHub';
+import { useExclusiveOverlay } from './useExclusiveOverlay';
 
 export function BrainHubDemoOverlay() {
-  const [open, setOpen] = useState(false);
-
-  const close = useCallback(() => setOpen(false), []);
-
-  useEffect(() => {
-    const show = () => setOpen(true);
-    window.addEventListener('swarm:show-brain-hub', show);
-    return () => window.removeEventListener('swarm:show-brain-hub', show);
-  }, []);
+  const { open, close } = useExclusiveOverlay('swarm:show-brain-hub');
 
   return (
     <Modal

@@ -15,10 +15,11 @@
  * the parent's handler — the file lands in the now-unobscured FileViewer panel.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import Modal from '../common/Modal';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
+import { useExclusiveOverlay } from './useExclusiveOverlay';
 
 export interface SwarmWSOverlayProps {
   /** Parent handler (ThreeColumnLayout) that opens a file in the FileViewer panel. */
@@ -26,24 +27,16 @@ export interface SwarmWSOverlayProps {
 }
 
 export function SwarmWSOverlay({ onFileDoubleClick }: SwarmWSOverlayProps) {
-  const [open, setOpen] = useState(false);
-
-  const close = useCallback(() => setOpen(false), []);
-
-  useEffect(() => {
-    const show = () => setOpen(true);
-    window.addEventListener('swarm:show-swarmws', show);
-    return () => window.removeEventListener('swarm:show-swarmws', show);
-  }, []);
+  const { open, close } = useExclusiveOverlay('swarm:show-swarmws');
 
   // Gate-1 z-index fix: close the overlay BEFORE opening the file, so the
   // FileViewer panel (relative, no z-index) is not rendered under this z-50 Modal.
   const handleFileDoubleClick = useCallback(
     (file: FileTreeItem) => {
-      setOpen(false);
+      close();
       onFileDoubleClick?.(file);
     },
-    [onFileDoubleClick],
+    [onFileDoubleClick, close],
   );
 
   return (
