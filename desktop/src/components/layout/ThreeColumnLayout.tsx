@@ -13,6 +13,8 @@ import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import { SwarmWSOverlay } from './SwarmWSOverlay';
 import { DomainStubOverlays } from './DomainStubOverlays';
+import { setNavSource, clearNavSource } from './navSource';
+import { useActiveOverlayEvent, clearActiveOverlayEvent } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -134,6 +136,9 @@ export function pickLatestDigest(children: Array<{ name?: string; path?: string 
 function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab } = useLayout();
   const { addToast } = useToast();
+  // Which window-event overlay is currently open (or null) — drives the
+  // active/selected highlight on the window-event cards (run_ad7b32f6).
+  const activeOverlay = useActiveOverlayEvent();
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
@@ -147,13 +152,19 @@ function LeftSidebar() {
     if (activeModal === 'settings' && settingsTab === targetTab) {
       closeModal();
     } else {
+      clearActiveOverlayEvent(); // a modal takes over — no window card stays lit
       setSettingsTab(targetTab);
       openModal('settings');
     }
   };
 
-  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens on document)
+  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens on document).
+  // This opens a PANEL, not a fullscreen Modal, so it must NOT leave a nav-source
+  // behind — else the next unrelated fullscreen open (e.g. credential-banner →
+  // Settings) would draw a spout mis-pointing at the Memory card (Gate-2 #3).
   const handleMemoryClick = () => {
+    clearNavSource();
+    clearActiveOverlayEvent(); // a panel takes over — no window card should stay lit
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
   };
 
@@ -163,6 +174,10 @@ function LeftSidebar() {
   // list Knowledge/Signals via the existing tree/expand endpoint and open the
   // newest *-digest.md. Graceful toast on empty/failure — never a dead click.
   const handleSignalsClick = async () => {
+    // Opens a file PANEL / toast, not a fullscreen Modal — clear the nav-source so
+    // it can't mis-point a later unrelated fullscreen spout (Gate-2 #3).
+    clearNavSource();
+    clearActiveOverlayEvent(); // a panel takes over — no window card should stay lit
     try {
       const resp = await api.get<Array<{ name?: string; path?: string }>>(
         '/workspace/tree/expand',
@@ -177,6 +192,16 @@ function LeftSidebar() {
     } catch {
       addToast({ severity: 'warning', message: 'Could not load signals.', autoDismiss: true });
     }
+  };
+
+  // Open a window-event domain overlay. Also closes any activeModal (Settings/Eval):
+  // since the redesigned overlay no longer covers the leftNav, the nav stays
+  // clickable while a modal is open, so without this a window overlay would stack
+  // on top of a still-open Settings/Eval modal (mirror of the Settings-clears-
+  // window-highlight fix; run_ad7b32f6 Gate-1 Finding 2).
+  const showOverlay = (event: string) => {
+    if (activeModal) closeModal();
+    window.dispatchEvent(new CustomEvent(event));
   };
 
   // Capabilities overlay folds Skills + MCP + jobs (A10). Opening it lands on the
@@ -212,7 +237,7 @@ function LeftSidebar() {
         {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
         <button
           className="a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-history'))}
+          onClick={() => showOverlay('swarm:show-history')}
           title="History"
           data-testid="history-row"
         >
@@ -227,21 +252,21 @@ function LeftSidebar() {
           is needed (Memory=Y, Brain Hub=Y, OS Eval=R); no flag = all good. */}
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         <A10Group label="Work" tint={A10_GROUP.work}>
-          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'))} data-testid="nav-pipeline" />
-          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-pollinate'))} data-testid="nav-pollinate" />
-          <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-swarmws'))} data-testid="nav-swarmws" />
+          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
+          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
+          <A10Card icon="folder" label="SwarmWS" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
         </A10Group>
 
         <A10Group label="Cognitive" tint={A10_GROUP.cognitive}>
-          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-context'))} data-testid="nav-context" />
+          <A10Card icon="layers" label="Context" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
           <A10Card icon="book" label="Memory" tint={A10_GROUP.cognitive} flag="y" onClick={handleMemoryClick} data-testid="nav-memory" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" onClick={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))} data-testid="nav-brain-hub" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system}>
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
-          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { closeModal(); } else { openModal('eval'); } }} data-testid="nav-eval" />
-          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { closeModal(); } else { setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
+          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
+          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>
       </nav>
@@ -519,9 +544,16 @@ interface A10CardProps {
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). */
 function A10Card({ icon, label, tint, flag, isActive, onClick, 'data-testid': testId }: A10CardProps) {
+  // Publish THIS card's on-screen position as the shared spit-out origin BEFORE
+  // delegating — so both the window-event overlays and the activeModal modals
+  // open from this card (single injection point, run_2e6d6029 / Gate-1).
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    setNavSource(e.currentTarget.getBoundingClientRect());
+    onClick?.();
+  };
   return (
     <button
-      onClick={onClick}
+      onClick={handleClick}
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
