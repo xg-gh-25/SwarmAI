@@ -31,7 +31,7 @@
  *
  * @exports JobsRunsOverlay
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../services/jobs';
@@ -71,36 +71,48 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
   const [overview, setOverview] = useState<JobsOverview | null>(null);
   const [pipelines, setPipelines] = useState<PipelineRun[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState<JobRosterRow | null>(null);
+  // Track the selected job by ID (not a snapshot) so the drawer re-derives fresh
+  // data after a refresh (F2: a captured row went stale after Run-now).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // Request-generation guard: a stale (slower) refresh must not overwrite a newer
+  // one's result (F3: rapid view toggles launch overlapping fetches).
+  const genRef = useRef(0);
+
+  const selected = selectedId ? roster.find((j) => j.id === selectedId) ?? null : null;
 
   const refreshJobs = useCallback(async () => {
+    const gen = ++genRef.current;
     setLoading(true);
     try {
-      const [r, o] = await Promise.all([jobsService.fetchRoster(), jobsService.fetchOverview()]);
-      setRoster(r);
-      setOverview(o);
-    } catch {
-      setRoster([]);
-      setOverview(null);
+      // Settle roster + overview INDEPENDENTLY (F1): a transient /jobs/status blip
+      // must not blank a successfully-fetched roster into a false "no jobs" screen.
+      const [rRes, oRes] = await Promise.allSettled([jobsService.fetchRoster(), jobsService.fetchOverview()]);
+      if (gen !== genRef.current) return;  // a newer refresh superseded this one
+      if (rRes.status === 'fulfilled') setRoster(rRes.value);
+      setOverview(oRes.status === 'fulfilled' ? oRes.value : null);
     } finally {
-      setLoading(false);
+      // Only the CURRENT (winning) generation clears the spinner — a superseded
+      // loser must not flip loading off while the winner is still in flight, and
+      // the finally guarantees the winner always clears it (meta-review MED: an
+      // early return before setLoading(false) could otherwise stick the spinner).
+      if (gen === genRef.current) setLoading(false);
     }
   }, []);
 
   const refreshRuns = useCallback(async () => {
+    const gen = ++genRef.current;
     setLoading(true);
     try {
       // Runs view merges pipeline runs + each job's latest run — so it needs the
       // roster too, even when the user jumps straight to Runs without visiting
-      // Jobs first (otherwise job rows silently never appear).
-      const [pl, r] = await Promise.all([pipelinesService.fetchAllPipelines(), jobsService.fetchRoster()]);
-      setPipelines(pl);
-      setRoster(r);
-    } catch {
-      setPipelines([]);
+      // Jobs first (otherwise job rows silently never appear). Settle independently.
+      const [plRes, rRes] = await Promise.allSettled([pipelinesService.fetchAllPipelines(), jobsService.fetchRoster()]);
+      if (gen !== genRef.current) return;
+      setPipelines(plRes.status === 'fulfilled' ? plRes.value : []);
+      if (rRes.status === 'fulfilled') setRoster(rRes.value);
     } finally {
-      setLoading(false);
+      if (gen === genRef.current) setLoading(false);
     }
   }, []);
 
@@ -111,7 +123,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
   }, [open, view, refreshJobs, refreshRuns]);
 
   useEffect(() => {
-    if (!open) { setView('jobs'); setSelected(null); setCreating(false); }
+    if (!open) { setView('jobs'); setSelectedId(null); setCreating(false); }
   }, [open]);
 
   // Route a chat prompt through the tab-landing dispatcher, then close on success.
@@ -154,7 +166,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
           {loading && <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
           <div className="flex-1" />
           <button
-            onClick={() => { setSelected(null); setCreating(true); }}
+            onClick={() => { setSelectedId(null); setCreating(true); }}
             data-testid="jobs-new-btn"
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
           >
@@ -165,7 +177,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
         <GuideBanner />
 
         {view === 'jobs' ? (
-          <JobsView roster={roster} overview={overview} onSelect={(j) => { setCreating(false); setSelected(j); }} />
+          <JobsView roster={roster} overview={overview} onSelect={(j) => { setCreating(false); setSelectedId(j.id); }} />
         ) : (
           <RunsView pipelines={pipelines} roster={roster} />
         )}
@@ -175,7 +187,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
         {selected && !creating && (
           <JobDetailDrawer
             job={selected}
-            onClose={() => setSelected(null)}
+            onClose={() => setSelectedId(null)}
             onRunNow={handleRunNow}
             onDispatch={dispatchToChat}
           />

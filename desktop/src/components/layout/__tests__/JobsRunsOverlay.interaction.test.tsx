@@ -204,6 +204,38 @@ describe('JobsRunsOverlay interactions', () => {
     expect(within(drawer).getByText(/No run history/)).toBeTruthy();
   });
 
+  it('F1: a failed overview fetch does NOT blank a successful roster (independent settle)', async () => {
+    // /jobs/status blips but /jobs/ succeeds — the roster must still render, not
+    // fall to the false "no jobs" empty state.
+    fn(jobsService.fetchOverview).mockRejectedValue(new Error('status 503'));
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    // Roster cards render despite the overview failure; no false empty-state.
+    expect((await screen.findAllByTestId('job-card')).length).toBe(2);
+    expect(screen.queryByTestId('jobs-empty')).toBeNull();
+    // Overview strip is absent (its fetch failed) but the page is not blanked.
+    expect(screen.queryByTestId('jobs-overview')).toBeNull();
+  });
+
+  it('F2: drawer reflects fresh data after Run now (re-derived by id, not a stale snapshot)', async () => {
+    // First roster: lastStatus success. After run-now, refreshJobs returns an
+    // updated row (lastStatus running) — the open drawer must show the NEW status.
+    const before = mkRoster({ id: 'stock-analysis', name: 'Stock Analysis', lastStatus: 'success', totalRuns: 42 });
+    const after = mkRoster({ id: 'stock-analysis', name: 'Stock Analysis', lastStatus: 'running', totalRuns: 43 });
+    fn(jobsService.fetchRoster).mockResolvedValueOnce([before]).mockResolvedValue([after]);
+    render(<JobsRunsOverlay onDispatch={() => true} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+    fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
+    const drawer = await screen.findByTestId('job-detail-drawer');
+    expect(within(drawer).getByText('42')).toBeTruthy();  // totalRuns before
+
+    fireEvent.click(screen.getByTestId('job-action-run-now'));
+    // After run-now → refreshJobs → roster replaced → drawer re-derives to the new row.
+    await waitFor(() => expect(within(screen.getByTestId('job-detail-drawer')).getByText('43')).toBeTruthy());
+  });
+
   it('F3: run-now failure surfaces an error line (not silent)', async () => {
     fn(jobsService.runJob).mockRejectedValue(new Error('boom'));
     render(<JobsRunsOverlay onDispatch={() => true} />);
