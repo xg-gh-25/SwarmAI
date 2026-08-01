@@ -30,10 +30,10 @@ const TOKEN_BLOCK = {
   emergency_threshold: 130000,
   over_budget: true,
   per_file: [
-    { name: 'SWARMAI.md', tokens: 2000, pct: 2.0, owner: 'system', priority: 0, locked: true },
-    { name: 'USER.md', tokens: 3000, pct: 3.0, owner: 'user', priority: 4, locked: false },
-    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false },
-    { name: 'KNOWLEDGE.md', tokens: 47000, pct: 47.0, owner: 'auto', priority: 9, locked: false },
+    { name: 'SWARMAI.md', tokens: 2000, pct: 2.0, owner: 'system', priority: 0, locked: true, health: 'fresh' },
+    { name: 'USER.md', tokens: 3000, pct: 3.0, owner: 'user', priority: 4, locked: false, health: 'idle' },
+    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized' },
+    { name: 'KNOWLEDGE.md', tokens: 47000, pct: 47.0, owner: 'auto', priority: 9, locked: false, health: 'growing' },
   ],
 };
 
@@ -198,6 +198,29 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     const memRow = screen.getByTestId('cm-file-row-MEMORY.md');
     expect(memRow.getAttribute('data-owner')).toBe('agent');
     expect(memRow.querySelector('[data-testid="cm-lock"]')).toBeNull(); // not locked
+  });
+
+  it('renders the per-file Health tag from the payload (DoD5, backend-derived)', async () => {
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
+    const memTag = memRow.querySelector('[data-testid="cm-health"]');
+    expect(memTag).not.toBeNull();
+    expect(memTag!.textContent).toBe('oversized'); // from payload, not invented
+    const userRow = screen.getByTestId('cm-file-row-USER.md');
+    expect(userRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('idle');
+    const swRow = screen.getByTestId('cm-file-row-SWARMAI.md');
+    expect(swRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('fresh');
+  });
+
+  it('shows the truncation legend explaining the health/lock contract', async () => {
+    renderOverlay();
+    openOverlay();
+    const panel = await screen.findByTestId('cm-panel-context');
+    // legend teaches the assembly/truncation contract + the health vocab
+    expect(panel.textContent).toMatch(/never truncated/i);
+    expect(panel.textContent).toMatch(/fresh.*idle.*growing.*oversized|Health/i);
   });
 
   it('overview rail shows the live total tokens from the payload', async () => {

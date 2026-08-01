@@ -23,6 +23,7 @@ filename. If a file is unknown to the map, it falls back to the `user_customized
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from core.context_directory_loader import CONTEXT_FILES, ContextDirectoryLoader
@@ -59,6 +60,25 @@ def _owner_for(filename: str, user_customized: bool) -> str:
     # Unknown context file (added after this map) — degrade to the dataclass's
     # own 2-way split rather than crash or mislabel.
     return "user" if user_customized else "system"
+
+
+def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
+    """Single per-file Health tag, severity-first (Gate-1 precedence, run_d0ba3f69).
+
+    oversized (>90% budget) > growing (>60% budget) > idle (>=14d) > fresh.
+    Size severity outranks age: a big+old file is 'growing'/'oversized' (the
+    actionable risk), not 'idle'. The 7-14d mtime band gets no time tag → falls
+    through to 'fresh' (neutral) unless a size tag fires. budget<=0 → size tags
+    can't fire (div-by-zero guard); age alone decides.
+    """
+    share = (tokens / budget) if budget > 0 else 0.0
+    if share > 0.90:
+        return "oversized"
+    if share > 0.60:
+        return "growing"
+    if mtime_days >= 14:
+        return "idle"
+    return "fresh"
 
 
 def build_context_token_block(context_dir: Path) -> dict:
@@ -98,16 +118,26 @@ def build_context_token_block(context_dir: Path) -> dict:
             continue
         tokens = ContextDirectoryLoader.estimate_tokens(content)
         total += tokens
+        # File age in days from mtime (for the Health tag). Read defensively —
+        # a stat failure must not crash the telemetry read (O030).
+        try:
+            mtime_days = max(0.0, (time.time() - path.stat().st_mtime) / 86400.0)
+        except OSError:
+            mtime_days = 0.0
         per_file.append(
             {
                 "name": spec.filename,
                 "tokens": tokens,
-                "pct": 0.0,  # filled after total is known
+                "pct": 0.0,  # filled after total is known (composition %)
                 "owner": _owner_for(spec.filename, spec.user_customized),
                 "priority": spec.priority,
                 # P0-P2 (+SELF) are non-truncatable → the lock. `truncatable` is
                 # the SoT for this exact property (context_directory_loader.py).
                 "locked": not spec.truncatable,
+                # Health tag: budget-relative size + mtime, severity-first
+                # (oversized>growing>idle>fresh). Backend-derived so the UI invents
+                # nothing (R30). budget is the same _WARNING_THRESHOLD used below.
+                "health": _health_tag(tokens, _WARNING_THRESHOLD, mtime_days),
             }
         )
 

@@ -25,6 +25,7 @@ import { useExclusiveOverlay } from './useExclusiveOverlay';
 import api from '../../services/api';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
+type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
 interface TokenFileRow {
   name: string;
   tokens: number;
@@ -32,7 +33,17 @@ interface TokenFileRow {
   owner: 'system' | 'user' | 'agent' | 'auto';
   priority: number;
   locked: boolean;
+  health?: HealthTag;
 }
+
+// Health tag → tint (backend decides the tag; UI only colors it). fresh=calm,
+// idle=muted, growing=amber-warn, oversized=red-risk.
+const HEALTH_TINT: Record<HealthTag, string> = {
+  fresh: '#5fc99a',
+  idle: '#7c8194',
+  growing: '#d08a4a',
+  oversized: '#d0524a',
+};
 interface TokenBlock {
   total_tokens: number;
   budget: number;
@@ -157,6 +168,9 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         The always-injected system prompt — {rows.length} files, priority-ordered. P0–P2 never truncated;
         over budget → cut from the bottom up.
       </div>
+      <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
+        🔒 P0–P2 never truncated · over budget → cut from P10 upward · Health: fresh / idle / growing / oversized
+      </div>
       {rows.length === 0 && (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">
           Context budget not available yet.
@@ -192,6 +206,15 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           </span>
           <span className="w-14 shrink-0 text-right font-mono text-xs text-[var(--color-text-muted)]">{fmtTokens(f.tokens)}</span>
           <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{f.pct}%</span>
+          {f.health && (
+            <span
+              data-testid="cm-health"
+              className="w-16 shrink-0 text-center text-[10px] font-medium rounded px-1 py-[1px]"
+              style={{ color: HEALTH_TINT[f.health], background: `color-mix(in srgb, ${HEALTH_TINT[f.health]} 12%, transparent)` }}
+            >
+              {f.health}
+            </span>
+          )}
           {f.locked ? (
             <span data-testid="cm-lock" className="w-6 shrink-0 text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated">🔒</span>
           ) : (
