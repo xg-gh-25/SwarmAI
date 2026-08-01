@@ -253,13 +253,30 @@ describe('SessionTabBar', () => {
       expect(onNewTab).toHaveBeenCalledTimes(1);
     });
 
-    it('disabled "+" does not fire onNewTab', () => {
+    it('disabled "+" does not fire onNewTab (click is a no-op)', () => {
       const onNewTab = vi.fn();
       render(<SessionTabBar {...defaultProps} onNewTab={onNewTab} isNewTabDisabled />);
       const plus = screen.getByRole('button', { name: /limit|new session/i });
-      expect(plus).toBeDisabled();
       fireEvent.click(plus);
       expect(onNewTab).not.toHaveBeenCalled();
+    });
+
+    it('disabled "+" stays hoverable so it can explain itself (aria-disabled, NOT the disabled attr)', () => {
+      // Regression: a native `disabled` button emits no pointer events, so the
+      // explanatory title/aria-label tooltip never renders and no hover fires.
+      // The fix uses aria-disabled + a click no-op so the control stays
+      // interactive and the "why can't I click" tooltip actually shows.
+      render(<SessionTabBar {...defaultProps} onNewTab={vi.fn()} isNewTabDisabled />);
+      const plus = screen.getByRole('button', { name: /limit|new session/i });
+      expect(plus).not.toBeDisabled();                       // NOT the native disabled attr
+      expect(plus).toHaveAttribute('aria-disabled', 'true'); // conveyed to AT instead
+      expect(plus.getAttribute('title')).toMatch(/limit|resources/i); // tooltip copy present
+    });
+
+    it('enabled "+" is not aria-disabled', () => {
+      render(<SessionTabBar {...defaultProps} onNewTab={vi.fn()} />);
+      const plus = screen.getByRole('button', { name: /new session/i });
+      expect(plus).toHaveAttribute('aria-disabled', 'false');
     });
 
     it('omits the "+" when onNewTab is not provided', () => {

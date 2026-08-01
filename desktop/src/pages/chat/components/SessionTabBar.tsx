@@ -132,24 +132,36 @@ export function SessionTabBar({
       </div>
 
       {onNewTab && (
-        <button
-          type="button"
-          onClick={onNewTab}
-          disabled={isNewTabDisabled}
-          aria-label={isNewTabDisabled
-            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
-            : t('chat.newSession', 'New Session')}
-          title={isNewTabDisabled
-            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
-            : t('chat.newSession', 'New Session (⌘N)')}
-          className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg transition-colors ${
-            isNewTabDisabled
-              ? 'text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
-              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-          }`}
-        >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-        </button>
+        <>
+          {/* Divider — visually detach the "+" from the tab strip so it reads
+              as a distinct action, not part of the tabs. */}
+          <span
+            aria-hidden="true"
+            className="flex-shrink-0 self-center w-px h-4 mx-1.5 bg-[var(--color-border)]"
+          />
+          <button
+            type="button"
+            // aria-disabled (NOT the native `disabled` attr): a disabled button
+            // emits no pointer events, so its explanatory title/hover never
+            // renders. aria-disabled keeps it hoverable + AT-announced; the
+            // onClick guard makes it a no-op when at the tab limit.
+            onClick={isNewTabDisabled ? undefined : onNewTab}
+            aria-disabled={!!isNewTabDisabled}
+            aria-label={isNewTabDisabled
+              ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+              : t('chat.newSession', 'New Session')}
+            title={isNewTabDisabled
+              ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+              : t('chat.newSession', 'New Session (⌘N)')}
+            className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-lg border transition-colors ${
+              isNewTabDisabled
+                ? 'border-transparent text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
+                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] hover:text-[var(--color-primary)]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">add</span>
+          </button>
+        </>
       )}
 
       <style>{`
