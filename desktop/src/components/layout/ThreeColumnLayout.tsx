@@ -1,7 +1,8 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { LayoutProvider, useLayout, useSessionMeta, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { useCanvasAutoSurface } from '../../hooks/useCanvasAutoSurface';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
@@ -715,6 +716,18 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     pendingFile: FileTreeItem | null;
   }>({ isOpen: false, pendingFile: null });
 
+  // Canvas gentle auto-surface (2026-08-02): when the agent writes an output
+  // file, open it in the Canvas panel — but ONLY when the user isn't already
+  // viewing something (the hook self-suppresses on the swarm:editor-panel-state
+  // event) and hasn't pinned/muted. Pin = keep-open (never auto-replace); mute
+  // = no auto-surface this session. sessionId comes from the reused
+  // SessionMetaContext (no new provider). The hook dispatches swarm:open-file,
+  // the same path a click uses, so it flows through the existing open handler.
+  const { activeSessionMeta } = useSessionMeta();
+  const [canvasPinned, setCanvasPinned] = useState(false);
+  const [canvasMuted, setCanvasMuted] = useState(false);
+  useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted });
+
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
   // handleFileDoubleClick which depends on external state.
@@ -997,6 +1010,11 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
               onClose={handleFileViewerClose}
               onSaveWithDiff={handleSaveWithDiff}
               onToggleMode={handleToggleEditorMode}
+              sessionId={activeSessionMeta?.sessionId}
+              pinned={canvasPinned}
+              onTogglePin={() => setCanvasPinned((p) => !p)}
+              muted={canvasMuted}
+              onToggleMute={() => setCanvasMuted((m) => !m)}
             />
           )}
         </div>

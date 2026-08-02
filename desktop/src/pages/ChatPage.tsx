@@ -1578,9 +1578,10 @@ export default function ChatPage() {
       contextPct,
       fileCount,
       agentName: agentName || 'SwarmAI',
+      sessionId,
     });
     return () => setActiveSessionMeta(null);
-  }, [activeTabTitle, contextPct, fileCount, agentName, setActiveSessionMeta]);
+  }, [activeTabTitle, contextPct, fileCount, agentName, sessionId, setActiveSessionMeta]);
 
   // Cmd+1-9 / Ctrl+1-9 keyboard shortcuts for tab switching.
   // Uses openTabsRef to avoid re-registering the listener on every tab change.

@@ -14,6 +14,11 @@ export interface ActiveSessionMeta {
   contextPct: number | null;
   fileCount: number;
   agentName: string;
+  /** Active-tab backend session id — undefined before a session exists.
+   *  Lets layout-level consumers (Canvas output surface) key on the current
+   *  session without prop-threading through ChatPage. Reuses this existing
+   *  context rather than adding a new provider (Canvas run M1, 2026-08-02). */
+  sessionId?: string;
 }
 
 // ── Session Meta Context (separate to avoid re-rendering layout consumers) ──
