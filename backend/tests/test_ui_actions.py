@@ -16,6 +16,8 @@ from core.ui_actions import (
     UI_COMMAND_ALLOWLIST,
     validate_ui_command,
     build_ui_command_event,
+    _expected_post_state,
+    build_ui_ack,
 )
 
 
@@ -94,6 +96,86 @@ def test_build_event_fail_closed_for_bad_cmd():
     # A non-allowlisted cmd MUST NOT produce an event (fail-closed at the source).
     assert build_ui_command_event("open-terminal-here") is None
     assert build_ui_command_event("open-file") is None
+
+
+# ── expected-post-state ack (proprioception feedback arc) ────────────────────
+# The ui_action SUCCESS ack must tell the agent WHAT to verify on its next turn,
+# referencing the SENSE-RENDERED signal (the "## Current UI State" prose lines
+# from prompt_builder._render_ui_context_section), NOT the raw schema fields the
+# agent never sees. It must NOT claim synchronous confirmation.
+
+def test_expected_post_state_canvas():
+    # open-canvas → point at the rendered "Canvas (output panel): ... open" line.
+    exp = _expected_post_state("open-canvas")
+    low = exp.lower()
+    assert "canvas" in low and "open" in low
+    # Must reference the SENSE surface the agent actually reads, not raw fields.
+    assert "canvas.open" not in exp, "must not name the raw schema field"
+
+
+def test_expected_post_state_show_overlay():
+    # show-* → point at the rendered "Open overlay:" line; echo the cmd, do NOT
+    # hardcode the _OVERLAY_LABELS value (drift + circular import).
+    exp = _expected_post_state("show-todo")
+    assert "overlay" in exp.lower()
+    assert "show-todo" in exp, "should echo the dispatched cmd so it's verifiable"
+    # Drift guard: must NOT duplicate the human label from _OVERLAY_LABELS.
+    assert "ToDo" not in exp, "must not hardcode the overlay label (drift/dup)"
+
+
+def test_expected_post_state_back_to_chat():
+    # back-to-chat → the "Open overlay:" line should be ABSENT (overlays closed).
+    exp = _expected_post_state("back-to-chat").lower()
+    assert "overlay" in exp and ("absent" in exp or "no " in exp or "closed" in exp)
+
+
+def test_success_ack_says_verify_not_confirmed():
+    # Honest: the ack is a pointer to the PASSIVE next-turn readback, never proof.
+    for cmd in ("open-canvas", "show-jobs", "back-to-chat"):
+        ack = build_ui_ack(cmd)
+        low = ack.lower()
+        assert "next turn" in low, f"{cmd}: ack must point at next-turn SENSE readback"
+        assert "verify" in low, f"{cmd}: ack must ask the agent to verify"
+        # Must NOT over-promise a synchronous confirmation.
+        assert "confirmed" not in low, f"{cmd}: ack must not claim confirmation"
+        assert cmd in ack, f"{cmd}: ack should name the dispatched cmd"
+
+
+def test_build_ui_ack_none_for_bad_cmd():
+    # Fail-closed: a non-allowlisted cmd has no success ack (the tool returns the
+    # rejection instead — verified via the tool body path unchanged).
+    assert build_ui_ack("open-terminal-here") is None
+    assert build_ui_ack("open-file") is None
+
+
+def test_ack_signals_match_real_sense_render():
+    """CRUX / anti-theater: the phrases the ack tells the agent to look for MUST
+    be exactly what prompt_builder._render_ui_context_section actually injects.
+    If the render renames those lines, the ack silently becomes unverifiable
+    theater — this test binds the two so that drift FAILS the build.
+
+    (This is the one-way direction the modules allow: prompt_builder imports
+    ui_actions, so ui_actions cannot import it — but the TEST can import both and
+    assert the contract holds.)
+    """
+    from core.prompt_builder import _render_ui_context_section
+
+    canvas_render = _render_ui_context_section(
+        {"canvas": {"open": True, "output_count": 2}}
+    )
+    overlay_render = _render_ui_context_section({"active_overlay": "swarm:show-todo"})
+
+    # open-canvas ack points at these — they must exist in the real render.
+    assert "Current UI State" in canvas_render
+    assert "Canvas (output panel):" in canvas_render
+    # show-* ack points at the "Open overlay:" line.
+    assert "Open overlay:" in overlay_render
+
+    # And prove the ack text itself only references phrases present in the render.
+    for phrase in ("Current UI State", "Canvas (output panel):"):
+        assert phrase in build_ui_ack("open-canvas")
+    assert "Open overlay:" in build_ui_ack("show-todo")
+    assert "Open overlay:" in build_ui_ack("back-to-chat")
 
 
 # ── binding to the LeftNav SSOT (ALL_SHOW_EVENTS) ────────────────────────────

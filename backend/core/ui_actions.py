@@ -25,11 +25,15 @@ Security model (the whole point of this module — Gate-1 hardened):
    name. So even a buggy/compromised backend can only pick from the enum.
 
 Mechanism: the agent calls the `ui_action` tool (a `create_sdk_mcp_server`
-in-process tool). The tool body is trivial — it just acknowledges. The
-streaming orchestrator observes the `ToolUseBlock` by name, validates `cmd`
-here, and yields an additive `{type: "ui_command", cmd, event, target}` SSE event
-(the SDK still delivers the tool's normal result to the agent). This mirrors the
-`file_changed` emit pattern.
+in-process tool). The tool body validates `cmd` and returns an ACK that points
+the agent at the passive next-turn SENSE readback (what to verify in the
+"## Current UI State" snapshot) — it is NOT synchronous confirmation, since the
+tool body cannot observe the frontend. The streaming orchestrator observes the
+`ToolUseBlock` by name, validates `cmd` again, and yields an additive
+`{type: "ui_command", cmd, event, target}` SSE event (the SDK still delivers the
+tool's normal result to the agent). This mirrors the `file_changed` emit pattern.
+This ACK closes the proprioception feedback arc: ACT (this emit) → next-turn
+SENSE snapshot → the agent verifies the effect took hold.
 """
 from __future__ import annotations
 
@@ -82,6 +86,62 @@ def validate_ui_command(cmd: object) -> Optional[UiCommandEntry]:
     if not isinstance(cmd, str) or not cmd:
         return None
     return UI_COMMAND_ALLOWLIST.get(cmd)
+
+
+def _expected_post_state(cmd: str) -> str:
+    """The observable post-state to verify AFTER dispatching *cmd*, phrased as the
+    SENSE-rendered signal the agent will actually see next turn.
+
+    The agent perceives its UI via the "## Current UI State" section that
+    prompt_builder._render_ui_context_section injects — which is PROSE, not the
+    raw schema fields. So this points at the RENDERED line, not `canvas.open` /
+    `active_overlay`:
+      - Canvas  → the "Canvas (output panel): … open …" line
+      - overlay → the "Open overlay: …" line (we echo the cmd id rather than the
+                  human label, so this never drifts from _OVERLAY_LABELS and needs
+                  no import of prompt_builder — which imports THIS module).
+      - back-to-chat → that "Open overlay:" line should be ABSENT (overlays closed).
+
+    Assumes *cmd* is already allowlist-validated (callers gate on validate_ui_command).
+    """
+    if cmd == "open-canvas":
+        return (
+            "the 'Current UI State' section should show a "
+            "'Canvas (output panel): … open …' line"
+        )
+    if cmd == "back-to-chat":
+        return (
+            "the 'Current UI State' section should have NO 'Open overlay:' line "
+            "(overlays closed, back to chat/Canvas)"
+        )
+    if cmd.startswith("show-"):
+        return (
+            "the 'Current UI State' section should show an 'Open overlay:' line "
+            f"for the '{cmd}' view"
+        )
+    # Any other allowlisted cmd (future-proofing) — generic pointer, still honest.
+    return (
+        f"the 'Current UI State' section should reflect the '{cmd}' action"
+    )
+
+
+def build_ui_ack(cmd: object) -> Optional[str]:
+    """Build the SUCCESS ack text for an allowlisted *cmd*, or None if not
+    allowlisted (fail-closed — the caller returns the rejection instead).
+
+    The ack is NOT a synchronous confirmation (the tool body cannot see the
+    frontend). It is a pointer to the PASSIVE next-turn SENSE readback: it names
+    what the agent should verify in the 'Current UI State' snapshot on its next
+    turn, and says the effect is unconfirmed until then.
+    """
+    if validate_ui_command(cmd) is None:
+        return None
+    expected = _expected_post_state(cmd)  # type: ignore[arg-type]  # validated str
+    return (
+        f"Dispatched '{cmd}' to the UI. This is NOT synchronous confirmation — "
+        f"the frontend applies it after this turn. On your NEXT turn, verify: "
+        f"{expected}. If it doesn't, the command did not reach the UI."
+    )
 
 
 def build_ui_command_event(cmd: object) -> Optional[dict]:
@@ -153,8 +213,9 @@ def get_ui_mcp_server():
                 }],
                 "is_error": True,
             }
-        # The orchestrator emits the ui_command SSE event on observing this call;
-        # here we just acknowledge back to the agent.
-        return {"content": [{"type": "text", "text": f"UI command dispatched: {cmd}"}]}
+        # The orchestrator emits the ui_command SSE event on observing this call.
+        # The ack points the agent at the passive next-turn SENSE readback (what to
+        # verify in "## Current UI State") — it is NOT synchronous confirmation.
+        return {"content": [{"type": "text", "text": build_ui_ack(cmd)}]}
 
     return create_sdk_mcp_server(name=UI_MCP_SERVER_NAME, tools=[ui_action])
