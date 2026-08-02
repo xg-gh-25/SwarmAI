@@ -353,7 +353,22 @@ def _run_metrics_cached(project: str, run_id: str, raw: dict) -> dict:
         mfile = _get_swarmws() / "Projects" / project / ".artifacts" / "runs" / run_id / "METRICS.json"
         if mfile.exists():
             return json.loads(mfile.read_text(encoding="utf-8"))
-        return _extract_run_metrics(project, run_id, raw)
+        metrics = _extract_run_metrics(project, run_id, raw)
+        # Cache to disk so a run's metrics are computed ONCE, not on every dashboard
+        # open (854-run scan was 4.9s, ~170 runs regenerated each time). Mirrors
+        # cmd_run_analytics's persist pattern. GUARD: only TERMINAL runs — a
+        # still-live run's metrics change, so caching them would freeze stale
+        # numbers (pre-mortem). Use the canonical is_terminal_run helper (imported
+        # above) — NOT a hand-rolled status tuple: it also catches a
+        # finished-but-status=paused run (the orphan-transition class, run_bf840159)
+        # that a status="paused" check would wrongly exclude, regenerating it on
+        # every open forever. A terminal run's metrics are immutable, so the cached
+        # file is a derived-once artifact keyed by run_id, NOT a drift-prone
+        # snapshot beside a live source (IMPROVEMENT:87). Gate-2 MED (run_258290ed).
+        if is_terminal_run(raw):
+            mfile.parent.mkdir(parents=True, exist_ok=True)
+            mfile.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        return metrics
     except Exception:  # noqa: BLE001 — dashboard read must be fault-tolerant
         return {}
 
@@ -484,11 +499,15 @@ async def pipeline_analytics(
         summaries.sort(key=lambda s: s.updated_at or s.created_at, reverse=True)
         groups.append(PipelineProjectGroup(
             project=project,
-            run_count=len(summaries),
+            run_count=len(summaries),  # TRUE total (health rollup), never the capped len
             completion_rate=round(completed / len(summaries), 3) if summaries else 0.0,
             avg_cycle_min=_avg([float(c) for c in cycles]),
             aborted_count=aborted,
-            runs=summaries,
+            # Cap the DETAIL list to the newest 20 (XG: 再多我们不用显示 — >20 has no
+            # value, and SwarmAI has 750 runs → an unbounded list was a 750-button
+            # wall + a 4.9s open). run_count above keeps the real total for the
+            # header. No show-more: 20 is the hard ceiling.
+            runs=summaries[:20],
         ))
     groups.sort(key=lambda g: g.run_count, reverse=True)
 

@@ -556,3 +556,59 @@ class TestPipelineRunDetail:
         assert d["status"] == "paused"
         assert d["cycle_time_min"] is None  # None-safe, no completed_at
         assert d["checkpoint_reason"] == "Gate 1 BLOCK: needs decision"
+
+
+class TestAnalyticsCapAndCache:
+    """run_258290ed: by-project run details capped at 20 (run_count keeps true
+    total), and on-read generated METRICS are persisted for terminal runs."""
+
+    def test_caps_run_details_at_20_but_run_count_is_true_total(self, client, workspace):
+        now = datetime.now(timezone.utc).isoformat()
+        for i in range(25):
+            _create_run_dir(
+                workspace, "BigProj", f"run_big{i:02d}", status="completed",
+                created_at=now, completed_at=now,
+                metrics={"total_tokens": 1000, "duration_minutes": 5.0,
+                         "stage_tokens": {}, "stages_completed": 7, "stages_total": 7, "status": "completed"},
+            )
+        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        g = next(x for x in d["by_project"] if x["project"] == "BigProj")
+        assert g["run_count"] == 25, "run_count must be the TRUE total"
+        assert len(g["runs"]) == 20, "detail list capped at 20"
+
+    def test_persists_metrics_for_terminal_run(self, client, workspace):
+        now = datetime.now(timezone.utc).isoformat()
+        _create_run_dir(workspace, "CacheProj", "run_c1", status="completed",
+                        created_at=now, completed_at=now)  # NO metrics file
+        mfile = workspace / "Projects/CacheProj/.artifacts/runs/run_c1/METRICS.json"
+        assert not mfile.exists()
+        client.get("/api/pipelines/analytics?window=ytd")
+        assert mfile.exists(), "on-read metrics for a terminal run must be persisted (cache)"
+
+    def test_does_not_persist_metrics_for_running_run(self, client, workspace):
+        now = datetime.now(timezone.utc).isoformat()
+        # running, no reflect/deliver stage → NOT terminal → must not cache
+        _create_run_dir(workspace, "LiveProj", "run_l1", status="running",
+                        created_at=now,
+                        stages=[{"stage": "build", "status": "completed"}])
+        mfile = workspace / "Projects/LiveProj/.artifacts/runs/run_l1/METRICS.json"
+        client.get("/api/pipelines/analytics?window=ytd")
+        assert not mfile.exists(), "a running run's metrics must NOT be cached (stale-freeze)"
+
+    def test_persists_metrics_for_finished_but_paused_run(self, client, workspace):
+        # Gate-2 MED (run_258290ed): the orphan-transition class — a run whose
+        # stages are all done (reflect completed) but status flipped to 'paused'
+        # by a session-refresh crash marker. is_terminal_run catches it; a naive
+        # status-tuple would regenerate its metrics on every open forever.
+        now = datetime.now(timezone.utc).isoformat()
+        _create_run_dir(
+            workspace, "OrphanProj", "run_o1", status="paused", created_at=now,
+            stages=[
+                {"stage": "deliver", "status": "completed"},
+                {"stage": "reflect", "status": "completed"},
+            ],
+            checkpoint={"reason": "session_crash_auto_detected", "stage": "reflect"},
+        )
+        mfile = workspace / "Projects/OrphanProj/.artifacts/runs/run_o1/METRICS.json"
+        client.get("/api/pipelines/analytics?window=ytd")
+        assert mfile.exists(), "a finished-but-paused (terminal) run's metrics must be cached"

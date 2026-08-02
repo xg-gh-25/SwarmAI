@@ -217,8 +217,8 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
               No pipeline runs in this window. Start one by asking Swarm in chat to run a pipeline.
             </div>
           )}
-          {analytics?.byProject.map((g) => (
-            <ProjectGroup key={g.project} group={g} onOpenRun={openRun} />
+          {analytics?.byProject.map((g, idx) => (
+            <ProjectGroup key={g.project} group={g} onOpenRun={openRun} defaultExpanded={idx === 0} />
           ))}
         </div>
 
@@ -248,8 +248,11 @@ function Stat({ label, value, sub, accent }: { label: string; value: string; sub
   );
 }
 
-function ProjectGroup({ group, onOpenRun }: { group: PipelineProjectGroup; onOpenRun: (id: string) => void }) {
-  const [expanded, setExpanded] = useState(true);
+function ProjectGroup({ group, onOpenRun, defaultExpanded = false }: { group: PipelineProjectGroup; onOpenRun: (id: string) => void; defaultExpanded?: boolean }) {
+  // Only the first (most-active) group opens by default — with 750 runs in one
+  // project, all-expanded was a wall of buttons on open. The header shows the
+  // rollup; click to drill in.
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <div className="rounded-md border border-[var(--color-border)]" data-testid={`pipeline-project-${group.project}`}>
       <button

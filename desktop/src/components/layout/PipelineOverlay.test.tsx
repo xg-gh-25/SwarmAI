@@ -104,6 +104,17 @@ describe('PipelineOverlay', () => {
     expect(fetchAnalytics).toHaveBeenCalledTimes(1);
   });
 
+  it('collapses all groups except the first (no 750-button wall on open)', async () => {
+    renderAndOpen();
+    // first group (SwarmAI) expanded → its run buttons render
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_done1')).toBeInTheDocument());
+    // second group (CMHK_SalesIntel) collapsed → its run button is NOT rendered until clicked
+    expect(screen.queryByTestId('pipeline-run-run_cmhk1')).toBeNull();
+    // expand it → now its run appears
+    fireEvent.click(screen.getByTestId('pipeline-project-CMHK_SalesIntel').querySelector('button')!);
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_cmhk1')).toBeInTheDocument());
+  });
+
   it('does not poll — analytics fetched once, not on an interval', async () => {
     vi.useFakeTimers();
     renderAndOpen();
