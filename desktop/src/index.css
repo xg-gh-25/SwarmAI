@@ -425,6 +425,7 @@ body {
    --cz = 认知绿 (#5fc99a). No zone header / no scope labels — 靠视觉+highlight 分层. */
 .a10-zone {
   --cz: #5fc99a;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -438,6 +439,19 @@ body {
   border: 1px solid color-mix(in srgb, var(--cz) 38%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--cz) 6%, transparent) inset,
     0 6px 22px color-mix(in srgb, var(--cz) 18%, transparent);
+}
+/* Right-edge accent spine — matches .a10-group::after geometry so cognition reads
+   as part of the same nav family, tinted in the cognition green (--cz). */
+.a10-zone::after {
+  content: '';
+  position: absolute;
+  top: 30px;
+  bottom: 8px;
+  right: -8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--cz);
+  opacity: 0.55;
 }
 /* Brain Hub — highlight resting state (brighter than Context/Memory) */
 .a10-card--hilite {
@@ -488,6 +502,21 @@ body {
 .a10-group--dim .a10-card:not(:hover):not(.a10-card--active) span:not(.a10-chip):not(.a10-flag) {
   color: var(--color-text-muted);
   font-weight: 500;
+}
+/* An EXPLICITLY highlighted card inside the dimmed System group must escape the
+   dimming. The dim chip/title selectors above are specificity (0,5,0); these
+   overrides are ALSO (0,5,0) (swapping .a10-card for the equal-weight
+   .a10-card--hilite), a tie broken by source order — placed AFTER dim, so hilite
+   wins. :hover/:active are excluded (same as dim) so those states keep their own
+   behavior. The chip escapes to --color-text (a clear bright lift), NOT --ac: on a
+   System card --ac IS the group's grey tint, so --ac would leave the icon nearly as
+   dim as before. Other System cards, lacking --hilite, stay dimmed. */
+.a10-group--dim .a10-card--hilite:not(:hover):not(.a10-card--active) .a10-chip {
+  color: var(--color-text);
+}
+.a10-group--dim .a10-card--hilite:not(:hover):not(.a10-card--active) span:not(.a10-chip):not(.a10-flag) {
+  color: var(--color-text);
+  font-weight: 600;
 }
 
 :root:not(.dark) .glass-effect {

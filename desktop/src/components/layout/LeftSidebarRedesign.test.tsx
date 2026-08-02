@@ -146,6 +146,28 @@ describe('LeftSidebar A10 — Y/R signal flags', () => {
   });
 });
 
+describe('LeftSidebar A10 — highlight tiers (run_edb48c31)', () => {
+  it('highlights the Jobs & Runs card (high-frequency System entry)', () => {
+    renderSidebar();
+    // highlight prop → a10-card--hilite resting class
+    expect(screen.getByTestId('nav-jobs').className).toContain('a10-card--hilite');
+  });
+
+  it('keeps the other System cards NON-highlighted (dim stays the default there)', () => {
+    renderSidebar();
+    for (const id of ['nav-capabilities', 'nav-settings', 'nav-community']) {
+      expect(screen.getByTestId(id).className).not.toContain('a10-card--hilite');
+    }
+  });
+
+  it('cognition zone carries the a10-zone container (accent-divider anchor)', () => {
+    renderSidebar();
+    // The right-edge accent spine is a ::after (untestable in jsdom cascade); the
+    // class that carries it IS assertable — the zone container must render.
+    expect(screen.getByTestId('cognition-zone').className).toContain('a10-zone');
+  });
+});
+
 describe('LeftSidebar A10 — nav-source spit-out origin (spout wiring)', () => {
   afterEach(() => clearNavSource());
 

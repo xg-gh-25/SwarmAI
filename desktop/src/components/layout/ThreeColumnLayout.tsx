@@ -280,7 +280,7 @@ function LeftSidebar() {
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
-          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
+          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
