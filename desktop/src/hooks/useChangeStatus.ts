@@ -31,12 +31,15 @@
  * @exports classifyCommitted — pure in_head→status (unit-tested)
  * @exports ChangeStatus
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
 
 export type ChangeStatus = 'new' | 'upd';
 
-const DEBOUNCE_MS = 300;
+// Small debounce: coalesce the burst of path-set changes while tools run, but
+// short enough that the badges feel near-instant (was 300ms — too slow for the
+// Canvas outputs rail, run_aee19d4f).
+const DEBOUNCE_MS = 60;
 
 /** Pure classification from the committed endpoint's `in_head` discriminator:
  *  not-in-HEAD → NEW (untracked); in-HEAD → UPD (modified, even if the tracked
@@ -70,41 +73,116 @@ async function statusForPath(path: string): Promise<ChangeStatus | null> {
 
 /**
  * Given the written-file paths, return a Map<path, 'new'|'upd'>. Paths that
- * can't be classified are absent from the map. Debounced + batched.
+ * can't be classified are absent from the map.
+ *
+ * PERF (run_aee19d4f): the Canvas outputs rail felt slow — slower than file-open
+ * — because the old version re-fetched (resolve+committed = 2 HTTP) for EVERY
+ * path on EVERY path-set change. As the agent writes file N, files 1..N-1 (already
+ * resolved) were re-queried, an N² round-trip pile-up behind a 300ms debounce.
+ * Two fixes: (1) a per-path result CACHE (`resolvedRef`) — a path is fetched at
+ * most once, so a growing output list only ever queries the NEW file; (2)
+ * PROGRESSIVE application — each fetch that resolves updates the map immediately
+ * (functional setState), so a badge appears as soon as ITS file is classified
+ * instead of the whole batch waiting on the slowest file. The rail already renders
+ * names with no badge (badge=undefined), so the list is visible instantly and
+ * badges fill in behind it — the list never waits on git.
  */
 export function useChangeStatus(paths: string[]): Map<string, ChangeStatus> {
   const [statusMap, setStatusMap] = useState<Map<string, ChangeStatus>>(new Map());
+  // Per-path memo: path → resolved status (or null = classified-as-no-badge).
+  // A path present here (even with null) is NEVER re-fetched — UNLESS invalidated
+  // by a fresh write to that same path (below). Ref, not state: it's a cache, not
+  // render input (the render input is statusMap).
+  const resolvedRef = useRef<Map<string, ChangeStatus | null>>(new Map());
   // Join the paths into a stable key so the effect only re-runs when the SET of
   // paths changes (not on every parent re-render passing a new array identity).
   const key = paths.join('\n');
+  // Bumped on cache invalidation so the resolve effect re-runs even when the
+  // path SET is unchanged (a re-write of an already-listed file).
+  const [healTick, setHealTick] = useState(0);
+
+  // Cache self-healing (Gate-2 MEDIUM, run_aee19d4f): the per-path cache would
+  // otherwise pin a path's FIRST-observed status forever, so a file that goes
+  // new→committed (or upd→reverted) WITHIN the session keeps a stale badge — and
+  // the outputs rail couples click-to-diff to badge==='upd', so a stale badge
+  // mis-routes the open. Fix: when the SAME path is written again (the exact
+  // signal that its git status may have changed), drop its cache entry + its
+  // current badge so the next resolve re-fetches fresh. Listens to the same
+  // 'swarm:file-referenced' event that feeds the written list.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ path?: string; operation?: string }>).detail;
+      const p = detail?.path;
+      if (!p || detail?.operation !== 'written') return;
+      if (!resolvedRef.current.has(p)) return; // not cached → nothing to heal
+      resolvedRef.current.delete(p);
+      // Also drop the stale badge from the visible map; the resolve effect below
+      // re-fetches it. Functional update to avoid a stale close.
+      setStatusMap((prev) => {
+        if (!prev.has(p)) return prev;
+        const next = new Map(prev);
+        next.delete(p);
+        return next;
+      });
+      // Bump the tick so the resolve effect re-runs even if the path SET is
+      // unchanged (this same file was already listed) → the now-uncached path
+      // lands back in `unresolved` and gets re-fetched.
+      setHealTick((t) => t + 1);
+    };
+    document.addEventListener('swarm:file-referenced', handler);
+    return () => document.removeEventListener('swarm:file-referenced', handler);
+  }, []);
 
   useEffect(() => {
     if (paths.length === 0) {
-      setStatusMap(new Map());
+      // Prune the render map to empty, but KEEP the resolve cache — the same
+      // files often reappear (tab switch) and shouldn't re-hit the network.
+      setStatusMap((prev) => (prev.size === 0 ? prev : new Map()));
       return;
     }
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      const entries = await Promise.all(
-        paths.map(async (p) => [p, await statusForPath(p)] as const),
-      );
-      if (cancelled) return;
-      const next = new Map<string, ChangeStatus>();
-      for (const [p, s] of entries) {
-        if (s) next.set(p, s);
+
+    // Rebuild the visible map from cache HITS synchronously (no network, no
+    // debounce) so known badges show instantly on any path-set change.
+    setStatusMap(() => {
+      const m = new Map<string, ChangeStatus>();
+      for (const p of paths) {
+        const cached = resolvedRef.current.get(p);
+        if (cached) m.set(p, cached);
       }
-      setStatusMap(next);
+      return m;
+    });
+
+    // Only the paths we've never resolved need a fetch.
+    const unresolved = paths.filter((p) => !resolvedRef.current.has(p));
+    if (unresolved.length === 0) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      // Fetch each unresolved path independently; apply its result the moment it
+      // lands (progressive) rather than awaiting the whole batch.
+      for (const p of unresolved) {
+        statusForPath(p).then((s) => {
+          if (cancelled) return;
+          resolvedRef.current.set(p, s);
+          if (!s) return; // classified as no-badge: cached, nothing to show
+          setStatusMap((prev) => {
+            const next = new Map(prev);
+            next.set(p, s);
+            return next;
+          });
+        });
+      }
     }, DEBOUNCE_MS);
 
     return () => {
-      // A newer path-set (or unmount) cancels this batch: the `cancelled` flag
-      // makes an in-flight batch's result a no-op, so a stale batch can never
-      // overwrite a newer one; clearTimeout drops a not-yet-fired debounce.
+      // A newer path-set (or unmount) cancels these fetches: the `cancelled` flag
+      // makes in-flight results no-ops; clearTimeout drops a not-yet-fired debounce.
+      // The resolve cache persists (results already applied stay valid).
       cancelled = true;
       clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` captures the path SET; `paths` array identity is unstable
-  }, [key]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` captures the path SET; `paths` array identity is unstable; healTick forces a re-resolve after a cache invalidation
+  }, [key, healTick]);
 
   return statusMap;
 }

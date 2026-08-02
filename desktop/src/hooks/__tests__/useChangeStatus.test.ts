@@ -86,6 +86,53 @@ describe('useChangeStatus', () => {
     expect(result.current.has('repo/rel/unresolvable.py')).toBe(false);
   });
 
+  it('PERF (run_aee19d4f): a known path is NOT re-fetched when a new path is appended', async () => {
+    wire({
+      '/abs/a.py': { content: 'x', in_head: true },
+      '/abs/b.py': { content: '', in_head: false },
+    });
+    const { result, rerender } = renderHook(
+      ({ paths }) => useChangeStatus(paths),
+      { initialProps: { paths: ['/abs/a.py'] } },
+    );
+    await waitFor(() => expect(result.current.get('/abs/a.py')).toBe('upd'), { timeout: 2000 });
+    // committed calls so far are for a.py only. Count them.
+    const committedCallsForA = mockGet.mock.calls.filter(
+      (c) => c[0] === '/workspace/file/committed' && c[1]?.params?.path === '/abs/a.py',
+    ).length;
+    expect(committedCallsForA).toBe(1);
+
+    // Append b.py — a.py is already resolved and must NOT be queried again.
+    rerender({ paths: ['/abs/a.py', '/abs/b.py'] });
+    await waitFor(() => expect(result.current.get('/abs/b.py')).toBe('new'), { timeout: 2000 });
+    expect(result.current.get('/abs/a.py')).toBe('upd'); // still there (from cache)
+    const committedCallsForAAfter = mockGet.mock.calls.filter(
+      (c) => c[0] === '/workspace/file/committed' && c[1]?.params?.path === '/abs/a.py',
+    ).length;
+    expect(committedCallsForAAfter).toBe(1); // NOT re-fetched — cache hit
+  });
+
+  it('cache self-heals: re-writing a listed path re-fetches its badge (Gate-2 MEDIUM)', async () => {
+    // a.py starts untracked (new). Later it gets committed → in_head flips true.
+    let inHead = false;
+    mockGet.mockImplementation((url: string, cfg?: { params?: { path?: string } }) => {
+      const p = cfg?.params?.path ?? '';
+      if (url === '/workspace/file/resolve') return Promise.resolve({ data: { resolved_path: p } });
+      if (url === '/workspace/file/committed') return Promise.resolve({ data: { content: 'x', in_head: inHead } });
+      return Promise.reject(new Error('unexpected ' + url));
+    });
+    const { result } = renderHook(() => useChangeStatus(['/abs/a.py']));
+    await waitFor(() => expect(result.current.get('/abs/a.py')).toBe('new'), { timeout: 2000 });
+
+    // File gets committed, then written again → the write event must invalidate
+    // the cached 'new' and re-resolve to 'upd'.
+    inHead = true;
+    document.dispatchEvent(new CustomEvent('swarm:file-referenced', {
+      detail: { path: '/abs/a.py', operation: 'written' },
+    }));
+    await waitFor(() => expect(result.current.get('/abs/a.py')).toBe('upd'), { timeout: 2000 });
+  });
+
   it('empty paths → empty map, no committed/resolve fetch', async () => {
     wire({});
     const { result } = renderHook(() => useChangeStatus([]));
