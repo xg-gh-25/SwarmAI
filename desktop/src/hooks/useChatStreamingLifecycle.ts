@@ -52,6 +52,7 @@ import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurf
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { isOt01DiagEnabled } from '../utils/diagFlags';
+import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { useToast } from '../contexts/ToastContext';
@@ -2549,6 +2550,18 @@ export function useChatStreamingLifecycle(
           if (path) {
             window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path } }));
           }
+        }
+
+        // ── UI command (ACT / proprioception Run 2) — the agent navigates its
+        // own UI. dispatchUiCommand keys ONLY on `cmd` against the frontend's own
+        // allowlist table; it IGNORES any event/target on the wire (crux: a buggy
+        // backend can't name an arbitrary swarm:* event). Fail-closed on unknown. ──
+        if (event.type === 'ui_command') {
+          const cmd = (event as unknown as Record<string, unknown>).cmd;
+          const detail = (event as unknown as Record<string, unknown>).detail as
+            | Record<string, unknown>
+            | undefined;
+          dispatchUiCommand(cmd, detail);
         }
 
         if (event.type === 'session_start' && event.sessionId) {
