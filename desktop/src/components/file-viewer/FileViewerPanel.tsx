@@ -97,6 +97,22 @@ export default function FileViewerPanel({
     setWidth(preCollapseWidthRef.current);
   }, []);
 
+  // BUG-1 fix (E2E): a NEW file arriving while collapsed must not open behind the
+  // dock (the collapsed branch hides the file surface → the output would be set
+  // but invisible = silent loss). When initialFile's path changes while
+  // collapsed, auto-uncollapse so the product actually shows — the "product flies
+  // out to you" intent. (auto-surface already respects mute/pin upstream, so if
+  // we got a new initialFile at all, it's meant to be shown.)
+  const initialFilePath = props.initialFile?.filePath;
+  const prevInitialPathRef = useRef(initialFilePath);
+  useEffect(() => {
+    if (initialFilePath && initialFilePath !== prevInitialPathRef.current && collapsed) {
+      setCollapsed(false);
+      setWidth(preCollapseWidthRef.current);
+    }
+    prevInitialPathRef.current = initialFilePath;
+  }, [initialFilePath, collapsed]);
+
   // Output counts published by the rail — drives the header summary.
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
@@ -155,15 +171,28 @@ export default function FileViewerPanel({
         style={{ width: COLLAPSED_WIDTH }}
         data-testid="file-viewer-panel-collapsed"
       >
-        <button
-          onClick={uncollapse}
-          className="flex items-center justify-between gap-1 px-2 h-7 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] border-b border-[var(--color-border)]"
-          title="Expand Canvas"
-          aria-label="Expand Canvas"
-        >
-          <span className="material-symbols-outlined text-[15px]">chevron_left</span>
-          <span className="truncate">{counts.total > 0 ? counts.total : ''}</span>
-        </button>
+        {/* Dock header: expand (chevron + count) on the left, close (X) on the
+            right — so the user can dismiss Canvas directly from collapsed mode
+            (BUG-2 fix: previously the only exit was expand-then-close). */}
+        <div className="flex items-center h-7 border-b border-[var(--color-border)]">
+          <button
+            onClick={uncollapse}
+            className="flex items-center gap-1 flex-1 min-w-0 px-2 h-full text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]"
+            title="Expand Canvas"
+            aria-label="Expand Canvas"
+          >
+            <span className="material-symbols-outlined text-[15px] shrink-0">chevron_left</span>
+            <span className="truncate">{counts.total > 0 ? counts.total : 'Outputs'}</span>
+          </button>
+          <button
+            onClick={props.onClose}
+            className="shrink-0 px-1.5 h-full flex items-center text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]"
+            title="Close Canvas"
+            aria-label="Close Canvas"
+          >
+            <span className="material-symbols-outlined text-[15px]">close</span>
+          </button>
+        </div>
         <div className="flex-1 overflow-y-auto" onClickCapture={uncollapse}>
           <CanvasOutputRail sessionId={sessionId} onCounts={setCounts} />
         </div>
