@@ -329,6 +329,10 @@ async def pollinate_assets() -> PollinateAssetsResponse:
     run_dirs.sort(key=_sort_key, reverse=True)
 
     overall = PollinateOverall()
+    # The known-channel universe (SSOT = _KNOWN_PLATFORMS) so the Insights by-channel
+    # view can grey out a FULLY-neglected channel (0 assets anywhere) — which
+    # platform_dist (only channels that HAVE assets) structurally cannot reveal.
+    overall.known_channels = sorted(_KNOWN_PLATFORMS)
     cards: list[PollinateContentCard] = []
 
     # Every card is fully materialized (walked) so the OVERALL rollup is HONEST —

@@ -11,6 +11,7 @@ import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-libra
 
 const fetchAssets = vi.fn();
 const fetchTopicDetail = vi.fn();
+const fetchAssetBody = vi.fn();
 vi.mock('../../services/pollinate', async () => {
   const actual = await vi.importActual<typeof import('../../services/pollinate')>('../../services/pollinate');
   return {
@@ -18,6 +19,7 @@ vi.mock('../../services/pollinate', async () => {
     pollinateService: {
       fetchAssets: () => fetchAssets(),
       fetchTopicDetail: (r: string) => fetchTopicDetail(r),
+      fetchAssetBody: (p: string) => fetchAssetBody(p),
     },
     assetThumbUrl: (p: string) => `http://x/api/workspace/file/raw?path=${p}`,
   };
@@ -31,16 +33,20 @@ const ASSETS = {
     platformDist: { xiaohongshu: 2, bilibili: 1 },
     formatDist: { poster: 3, narrative: 1 },
     domainDist: { ai_architecture: 1, swarm: 1 },
+    knownChannels: ['bilibili', 'github', 'gongzhonghao', 'linkedin', 'twitter', 'xiaohongshu', 'youtube'],
   },
   cards: [
     {
       run: '2026-05-03-memory-is-the-moat', topic: 'AI 记忆 > AI 模型', domain: 'ai_architecture',
       status: 'completed', createdAt: '2026-05-03T18:30:00+08:00', hasRunJson: true,
-      assetCount: 3, platforms: ['xiaohongshu', 'bilibili'], formats: ['poster', 'narrative'],
+      assetCount: 4, platforms: ['xiaohongshu', 'bilibili'], formats: ['poster', 'caption', 'narrative'],
       publishedCount: 1, readyCount: 2,
       assets: [
         { platform: 'xiaohongshu', format: 'poster', filePath: 'Knowledge/Pollinate/m/poster.png',
           fileName: 'poster.png', isImage: true, publishStatus: 'ready-to-publish' },
+        // sibling caption for the xhs poster — the drawer should lazily fetch THIS body
+        { platform: 'xiaohongshu', format: 'caption', filePath: 'Knowledge/Pollinate/m/caption.txt',
+          fileName: 'caption.txt', isImage: false, publishStatus: 'ready-to-publish' },
         { platform: 'bilibili', format: 'poster', filePath: 'Knowledge/Pollinate/m/b.png',
           fileName: 'b.png', isImage: true, publishStatus: 'published' },
         { platform: 'gongzhonghao', format: 'narrative', filePath: 'Knowledge/Pollinate/m/n.md',
@@ -57,6 +63,18 @@ const ASSETS = {
           fileName: 'p.png', isImage: true, publishStatus: 'ready' },
       ],
     },
+    {
+      // ALL-PUBLISHED card — the to-publish chip must EXCLUDE this one (Gate-2 MED: the
+      // old fixture had no such card, so the filter test couldn't prove exclusion).
+      run: '2026-03-01-all-published', topic: 'Fully Published Topic', domain: 'swarm',
+      status: 'completed', createdAt: '2026-03-01T10:00:00+08:00', hasRunJson: true,
+      assetCount: 1, platforms: ['bilibili'], formats: ['poster'],
+      publishedCount: 1, readyCount: 0,
+      assets: [
+        { platform: 'bilibili', format: 'poster', filePath: 'Knowledge/Pollinate/ap/p.png',
+          fileName: 'p.png', isImage: true, publishStatus: 'published' },
+      ],
+    },
   ],
 };
 
@@ -64,6 +82,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 beforeEach(() => {
   fetchAssets.mockResolvedValue(ASSETS);
   fetchTopicDetail.mockResolvedValue(null);
+  fetchAssetBody.mockResolvedValue('小红书文案正文 — 复制我去发布 #AI');
 });
 
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
@@ -121,5 +140,97 @@ describe('PollinateOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pollinate-asset-drawer')).toBeInTheDocument());
     expect(screen.getByTestId('pollinate-copy-btn')).toBeInTheDocument();
     expect(screen.getByTestId('pollinate-open-account-btn')).toBeInTheDocument();
+  });
+
+  // ── Gap 1: caption body lazily fetched + rendered + copied (design moment ②) ──
+  it('lazily fetches + renders the sibling caption body for an image asset', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')); // the xhs poster
+    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
+    // fetched the SIBLING caption.txt (same platform), NOT the poster png
+    expect(fetchAssetBody).toHaveBeenCalledWith('Knowledge/Pollinate/m/caption.txt');
+    expect(screen.getByTestId('pollinate-caption-body').textContent).toContain('复制我去发布');
+  });
+
+  it('copies the caption BODY text, not the path', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
+    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-copy-btn'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('小红书文案正文 — 复制我去发布 #AI'));
+  });
+
+  it('prefers a real caption sibling over a publish-kit (Gate-2 HIGH)', async () => {
+    // card whose xhs poster has BOTH a caption.txt and a publish-kit.md sibling
+    fetchAssets.mockResolvedValue({
+      overall: { ...ASSETS.overall },
+      cards: [{
+        run: 'r-kit', topic: 'Kit topic', domain: 'swarm', status: 'completed',
+        createdAt: '2026-05-01T00:00:00+08:00', hasRunJson: true, assetCount: 3,
+        platforms: ['xiaohongshu'], formats: ['poster', 'caption'], publishedCount: 0, readyCount: 3,
+        assets: [
+          { platform: 'xiaohongshu', format: 'poster', filePath: 'K/r-kit/poster.png',
+            fileName: 'poster.png', isImage: true, publishStatus: 'ready' },
+          { platform: 'xiaohongshu', format: 'caption', filePath: 'K/r-kit/publish-kit.md',
+            fileName: 'publish-kit.md', isImage: false, publishStatus: 'ready' },
+          { platform: 'xiaohongshu', format: 'caption', filePath: 'K/r-kit/caption.txt',
+            fileName: 'caption.txt', isImage: false, publishStatus: 'ready' },
+        ],
+      }],
+    });
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-r-kit-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-r-kit-0')); // the poster
+    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
+    // resolved the clean caption.txt, NOT publish-kit.md
+    expect(fetchAssetBody).toHaveBeenCalledWith('K/r-kit/caption.txt');
+    expect(fetchAssetBody).not.toHaveBeenCalledWith('K/r-kit/publish-kit.md');
+  });
+
+  // ── Gap 2: missing-platform produce buttons in the drawer ──
+  it('offers Produce buttons for platforms not yet produced on this topic', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
+    await waitFor(() => expect(screen.getByTestId('pollinate-missing-platforms')).toBeInTheDocument());
+    // card has xhs+bili → youtube/github/etc should be offered, xhs should NOT
+    expect(screen.getByTestId('pollinate-produce-platform-youtube')).toBeInTheDocument();
+    expect(screen.queryByTestId('pollinate-produce-platform-xiaohongshu')).toBeNull();
+  });
+
+  // ── Gap 3: domain chips + to-publish state filter ──
+  it('domain chip filters the card list', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-domain-chip-ai-agents')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-domain-chip-ai-agents'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pollinate-card-2026-04-26-agent-harness')).toBeInTheDocument();
+      expect(screen.queryByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeNull();
+    });
+  });
+
+  it('to-publish chip EXCLUDES a fully-published card', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-card-2026-03-01-all-published')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-chip-to-publish'));
+    await waitFor(() => {
+      // the all-published card disappears; a card with unpublished assets stays
+      expect(screen.queryByTestId('pollinate-card-2026-03-01-all-published')).toBeNull();
+      expect(screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeInTheDocument();
+    });
+  });
+
+  // ── Gap 4: neglected channel (0 assets) visible in Insights ──
+  it('Insights by-channel surfaces a fully-neglected channel (0 assets)', async () => {
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pollinate-view-insights')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pollinate-view-insights'));
+    await waitFor(() => expect(screen.getByTestId('pollinate-insights')).toBeInTheDocument());
+    // youtube has 0 assets in the fixture but IS a known channel → must appear
+    expect(screen.getByTestId('pollinate-insights').textContent).toContain('youtube');
   });
 });

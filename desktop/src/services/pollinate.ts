@@ -51,6 +51,8 @@ export interface PollinateOverall {
   published: number;
   ready: number;
   inProgress: number;
+  /** Known-channel universe (server SSOT) — lets Insights grey out fully-neglected channels. */
+  knownChannels: string[];
 }
 
 export interface PollinateAssetsResponse {
@@ -106,6 +108,7 @@ function overallToCamel(o: Record<string, unknown>): PollinateOverall {
     published: (o.published as number) ?? 0,
     ready: (o.ready as number) ?? 0,
     inProgress: (o.in_progress as number) ?? 0,
+    knownChannels: (o.known_channels as string[]) ?? [],
   };
 }
 
@@ -123,6 +126,20 @@ export const pollinateService = {
       overall: overallToCamel((d.overall as Record<string, unknown>) ?? {}),
       cards: Array.isArray(d.cards) ? (d.cards as Record<string, unknown>[]).map(cardToCamel) : [],
     };
+  },
+
+  /** Lazily read ONE text asset's body (caption/narrative) on drawer-open — via the
+   *  existing workspace file endpoint (returns {content, encoding}). Kept OUT of
+   *  fetchAssets so the gallery load stays fast (the 87ms baseline is untouched). */
+  async fetchAssetBody(path: string): Promise<string | null> {
+    try {
+      const { data } = await api.get('/workspace/file', { params: { path } });
+      const d = data as Record<string, unknown>;
+      if (d.encoding === 'utf-8' && typeof d.content === 'string') return d.content;
+      return null; // binary/other → not renderable as caption text
+    } catch {
+      return null;
+    }
   },
 
   async fetchTopicDetail(run: string): Promise<PollinateTopicDetail | null> {

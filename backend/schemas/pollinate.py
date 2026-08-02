@@ -58,6 +58,13 @@ class PollinateOverall(BaseModel):
     published: int = 0
     ready: int = 0
     in_progress: int = Field(default=0, description="cards whose run status is running/review")
+    known_channels: list[str] = Field(
+        default_factory=list,
+        description="The known-channel UNIVERSE (from the server's _KNOWN_PLATFORMS SSOT). "
+        "Lets the Insights by-channel view surface a FULLY-neglected channel (0 assets "
+        "anywhere) that platform_dist alone can never reveal — without the frontend "
+        "hardcoding a drift-prone duplicate list.",
+    )
 
 
 class PollinateAssetsResponse(BaseModel):

@@ -22,7 +22,7 @@
  *
  * @exports PollinateOverlay
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import {
@@ -86,8 +86,14 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatform] = useState<string>('');
   const [formatFilter, setFormat] = useState<string>('');
+  const [domainFilter, setDomain] = useState<string>('');
+  const [toPublishOnly, setToPublishOnly] = useState(false);
   const [sort, setSort] = useState<Sort>('newest');
   const [selected, setSelected] = useState<{ card: PollinateContentCard; asset: PollinateAsset } | null>(null);
+  // Caption-body cache lifted to the PARENT (Gate-1 MED): AssetDrawer unmounts on every
+  // close, so a cache inside it would be destroyed each time. Keyed by workspace path,
+  // it survives open/close while the overlay is open → re-opening an asset is instant.
+  const captionCache = useRef<Map<string, string | null>>(new Map());
 
   useEffect(() => {
     if (!open) return;
@@ -102,7 +108,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   useEffect(() => {
     if (!open) {
       setView('gallery'); setQuery(''); setPlatform(''); setFormat('');
-      setSort('newest'); setSelected(null);
+      setDomain(''); setToPublishOnly(false); setSort('newest'); setSelected(null);
     }
   }, [open]);
 
@@ -120,6 +126,9 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
     let out = cards.filter((c) => {
       if (platformFilter && !c.platforms.includes(platformFilter)) return false;
       if (formatFilter && !c.formats.includes(formatFilter)) return false;
+      if (domainFilter && c.domain !== domainFilter) return false;
+      // to-publish = has at least one asset still awaiting posting (ready / ready-to-publish).
+      if (toPublishOnly && !c.assets.some((a) => a.publishStatus !== 'published')) return false;
       if (!q) return true;
       const hay = [
         c.topic, c.domain ?? '', c.run,
@@ -134,7 +143,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
     }
     // 'newest' preserves the backend's newest-first order.
     return out;
-  }, [cards, query, platformFilter, formatFilter, sort]);
+  }, [cards, query, platformFilter, formatFilter, domainFilter, toPublishOnly, sort]);
 
   const allPlatforms = useMemo(
     () => Array.from(new Set(cards.flatMap((c) => c.platforms))).sort(),
@@ -142,6 +151,12 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   );
   const allFormats = useMemo(
     () => Array.from(new Set(cards.flatMap((c) => c.formats))).sort(),
+    [cards],
+  );
+  // Domain chips — from NON-NULL card.domain only (many cards have domain=null; a null
+  // chip would filter to nothing and confuse). Gate-1 MED.
+  const allDomains = useMemo(
+    () => Array.from(new Set(cards.map((c) => c.domain).filter((d): d is string => !!d))).sort(),
     [cards],
   );
 
@@ -194,6 +209,18 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
               />
               <Select value={platformFilter} onChange={setPlatform} options={allPlatforms} placeholder="platform" testid="pollinate-filter-platform" />
               <Select value={formatFilter} onChange={setFormat} options={allFormats} placeholder="format" testid="pollinate-filter-format" />
+              {/* ⚪ to-publish state chip — surface what still needs posting (design §1.3). */}
+              <button
+                onClick={() => setToPublishOnly((v) => !v)}
+                data-testid="pollinate-chip-to-publish"
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-full border transition-colors whitespace-nowrap ${
+                  toPublishOnly
+                    ? 'bg-primary/15 text-primary border-primary'
+                    : 'text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-hover)]'
+                }`}
+              >
+                ⚪ to publish
+              </button>
               <Select
                 value={sort}
                 onChange={(v) => setSort(v as Sort)}
@@ -202,6 +229,25 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
                 testid="pollinate-sort"
               />
             </div>
+            {/* Domain filter chips — click to AND-filter (design §1.3; mockup toolbar). */}
+            {allDomains.length > 0 && (
+              <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-[var(--color-border)] flex-wrap" data-testid="pollinate-domain-chips">
+                {allDomains.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDomain((cur) => (cur === d ? '' : d))}
+                    data-testid={`pollinate-domain-chip-${d}`}
+                    className={`px-2.5 py-0.5 text-[11px] font-medium rounded-full border transition-colors whitespace-nowrap ${
+                      domainFilter === d
+                        ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/60'
+                        : 'text-emerald-500/80 border-emerald-500/30 hover:bg-emerald-500/10'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Body: content cards (newest-first, newest expanded) */}
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
@@ -233,9 +279,13 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
           <AssetDrawer
             card={selected.card}
             asset={selected.asset}
+            knownChannels={o?.knownChannels ?? []}
+            captionCache={captionCache.current}
             onClose={() => setSelected(null)}
             onOpenAccount={(platform) =>
               dispatchToChat(`Open my ${platform} account so I can publish "${selected.card.topic}".`)}
+            onProduce={(platform) =>
+              dispatchToChat(`Resume pollinate for "${selected.card.topic}" and produce the ${platform} asset (run dir ${selected.card.run}).`)}
           />
         )}
       </div>
@@ -345,23 +395,78 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
   );
 }
 
-function AssetDrawer({ card, asset, onClose, onOpenAccount }: {
+/** True when a text asset is a publish-KIT (structured metadata + frontmatter), not a
+ *  clean caption body. The backend classifies publish-kit.md as format='caption', so we
+ *  disambiguate by filename — a publish-kit's body would paste YAML+markdown scaffold
+ *  into a post, so it's the LAST-resort caption source and gets an honest label. */
+function isPublishKit(a: PollinateAsset): boolean {
+  return /publish-kit/i.test(a.fileName);
+}
+
+/** The caption/narrative body an asset carries or points at. For a TEXT asset it's the
+ *  asset's own file; for an IMAGE asset it's the sibling caption/narrative in the SAME
+ *  card AND same TRUTHY platform (Gate-1 BLOCK: platform='' must NOT match across
+ *  unrelated bare/tracks assets → return null, image-only). Gate-2 HIGH: prefer a REAL
+ *  caption/narrative sibling over a publish-kit (whose body is metadata scaffold, not
+ *  post text) — only fall back to the publish-kit when nothing cleaner exists. */
+function resolveCaptionAsset(card: PollinateContentCard, asset: PollinateAsset): PollinateAsset | null {
+  if (!asset.isImage) return asset; // a text asset IS its own body
+  if (!asset.platform) return null;  // bare/tracks image → no reliable sibling key
+  const siblings = card.assets.filter(
+    (a) => a.platform === asset.platform && !a.isImage &&
+      (a.format === 'caption' || a.format === 'narrative'),
+  );
+  // Prefer a clean caption/narrative; publish-kit is the last resort.
+  return siblings.find((a) => !isPublishKit(a)) ?? siblings[0] ?? null;
+}
+
+function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpenAccount, onProduce }: {
   card: PollinateContentCard;
   asset: PollinateAsset;
+  knownChannels: string[];
+  captionCache: Map<string, string | null>;
   onClose: () => void;
   onOpenAccount: (platform: string) => void;
+  onProduce: (platform: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const isText = !asset.isImage;
+  const [body, setBody] = useState<string | null>(null);
+  const [bodyLoading, setBodyLoading] = useState(false);
+
+  const captionAsset = resolveCaptionAsset(card, asset);
+  const captionPath = captionAsset?.filePath ?? null;
+
+  // Lazily fetch the caption/narrative BODY on open — ONE /workspace/file call, cached
+  // in the parent-owned Map so re-opening is instant. Keyed on the primitive path
+  // (stable string) → loop-safe. /pollinate/assets is never touched (87ms baseline).
+  useEffect(() => {
+    if (!captionPath) { setBody(null); return; }
+    if (captionCache.has(captionPath)) { setBody(captionCache.get(captionPath) ?? null); return; }
+    let cancelled = false;
+    setBodyLoading(true);
+    void pollinateService.fetchAssetBody(captionPath).then((txt) => {
+      if (cancelled) return;
+      // Cache only a SUCCESSFUL body (Gate-2 MED): caching null would make a transient
+      // fetch failure permanent for the session — a null naturally re-fetches next open.
+      if (txt !== null) captionCache.set(captionPath, txt);
+      setBody(txt);
+      setBodyLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [captionPath, captionCache]);
+
+  // Copy the real BODY text (the whole point — grab the caption to go publish);
+  // fall back to the path only if the body couldn't be fetched.
   const doCopy = useCallback(async () => {
     try {
-      // For a text asset, copy its path so the user can grab the caption in-app;
-      // the real body is served by the file endpoint (manual-publish assist).
-      await navigator.clipboard.writeText(asset.filePath);
+      await navigator.clipboard.writeText(body ?? asset.filePath);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch { /* clipboard blocked — no-op */ }
-  }, [asset.filePath]);
+  }, [body, asset.filePath]);
+
+  // Platforms this topic has NOT produced yet (known universe − produced) → offer to make.
+  const missingPlatforms = knownChannels.filter((p) => !card.platforms.includes(p));
 
   return (
     <div
@@ -391,6 +496,28 @@ function AssetDrawer({ card, asset, onClose, onOpenAccount }: {
           </div>
         )}
 
+        {/* Caption / narrative BODY — the text you grab to go publish (design §4, moment ②) */}
+        {(captionPath || bodyLoading) && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
+              {captionAsset && isPublishKit(captionAsset) ? 'Publish kit'
+                : captionAsset?.format === 'narrative' ? 'Narrative' : 'Caption'}
+            </div>
+            {bodyLoading ? (
+              <div className="text-[11px] text-[var(--color-text-faint)]">Loading…</div>
+            ) : body ? (
+              <div
+                data-testid="pollinate-caption-body"
+                className="max-h-56 overflow-y-auto rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 text-[12px] text-[var(--color-text-muted)] whitespace-pre-wrap leading-relaxed"
+              >
+                {body}
+              </div>
+            ) : (
+              <div className="text-[11px] text-[var(--color-text-faint)]">Caption body unavailable.</div>
+            )}
+          </div>
+        )}
+
         {/* Publish state + manual-assist actions */}
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${stateDot(asset.publishStatus)}`} />
@@ -407,7 +534,7 @@ function AssetDrawer({ card, asset, onClose, onOpenAccount }: {
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
           >
             <span className="material-symbols-outlined text-[15px]">{copied ? 'check' : 'content_copy'}</span>
-            {copied ? 'Copied path' : (isText ? 'Copy caption path' : 'Copy path')}
+            {copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
           </button>
           {asset.platform && (
             <button
@@ -419,6 +546,25 @@ function AssetDrawer({ card, asset, onClose, onOpenAccount }: {
             </button>
           )}
         </div>
+
+        {/* Same topic — platforms not yet produced → offer to make (design §4). */}
+        {missingPlatforms.length > 0 && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
+            <div className="flex gap-1.5 flex-wrap" data-testid="pollinate-missing-platforms">
+              {missingPlatforms.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => onProduce(p)}
+                  data-testid={`pollinate-produce-platform-${p}`}
+                  className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md text-[var(--color-text-muted)] border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[13px]">add</span>{p}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -429,7 +575,11 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
     if (!data) return null;
     const cards = data.cards;
     const byType = data.overall.formatDist;
+    // Seed with the KNOWN-CHANNEL universe (server SSOT) so a FULLY-neglected channel
+    // (0 assets anywhere) still renders — that's the whole point of this coverage view
+    // (design §4b). platform_dist alone can never reveal a channel with zero assets.
     const byChannel: Record<string, { total: number; published: number }> = {};
+    for (const ch of data.overall.knownChannels) byChannel[ch] = { total: 0, published: 0 };
     for (const c of cards) {
       for (const a of c.assets) {
         if (!a.platform) continue;

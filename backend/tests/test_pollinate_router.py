@@ -267,6 +267,16 @@ def test_overall_rollup_counts(client, workspace):
 
 # ---------- detail endpoint + route ordering ----------
 
+def test_overall_exposes_known_channels(client, workspace):
+    """overall.known_channels carries the server SSOT channel universe so the frontend
+    can grey out fully-neglected channels without hardcoding a drift-prone list."""
+    _mk_run(workspace, "2026-06-10-kc", deliver={"xiaohongshu": ["p.png"]})
+    r = client.get("/api/pollinate/assets")
+    kc = r.json()["overall"]["known_channels"]
+    assert "xiaohongshu" in kc and "youtube" in kc  # incl a channel with 0 assets
+    assert kc == sorted(kc)  # stable order
+
+
 def test_detail_endpoint_returns_topic(client, workspace):
     _mk_run(workspace, "2026-05-03-detail",
             run_json={"topic": "detail topic", "status": "completed", "domain": "ai_architecture"},
