@@ -118,6 +118,97 @@ def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -
     return f"{TRUNCATION_MARKER}\n\n{truncated}"
 
 
+# Human-readable labels for the fullscreen nav overlays (swarm:show-* event ids).
+# Keep in sync with desktop/src/components/layout/useExclusiveOverlay.ts ALL_SHOW_EVENTS.
+_OVERLAY_LABELS = {
+    "swarm:show-swarmws": "Workspace explorer",
+    "swarm:show-brain-hub": "Brain Hub",
+    "swarm:show-context": "Context / Memory (C&M)",
+    "swarm:show-pipeline": "Pipeline",
+    "swarm:show-pollinate": "Pollinate",
+    "swarm:show-history": "History",
+    "swarm:show-todo": "ToDo",
+    "swarm:show-jobs": "Jobs & Runs",
+    "swarm:show-library": "Library",
+}
+
+
+def _overlay_label(event_id: str) -> str:
+    """Map a swarm:show-* event id to a human label (falls back to the raw id)."""
+    return _OVERLAY_LABELS.get(event_id, event_id)
+
+
+def _render_ui_context_section(editor_context: Optional[dict]) -> str:
+    """Render the agent's UI-state proprioception block (SENSE, request-time).
+
+    Superset of the legacy "## Currently Open File" injection. Given the
+    request-time UI snapshot (open file + Canvas state + which nav overlay is
+    open), produce the system-prompt section that lets the agent perceive what
+    it is currently showing the user.
+
+    Backward-compat (AC2): a legacy file-only payload ({file_path, file_name}
+    with no canvas/active_overlay) degrades to the EXACT original
+    "## Currently Open File" wording — no behavior change for old clients.
+
+    Returns "" when there is nothing to report (no file, no canvas, no overlay).
+    """
+    if not editor_context:
+        return ""
+
+    file_path = editor_context.get("file_path", "") or ""
+    file_name = editor_context.get("file_name", "") or ""
+    canvas = editor_context.get("canvas") or None
+    active_overlay = editor_context.get("active_overlay") or None
+
+    has_file = bool(file_path)
+    has_canvas = bool(canvas) and (
+        canvas.get("open")
+        or canvas.get("output_count")
+        or canvas.get("collapsed")
+        or canvas.get("pinned")
+        or canvas.get("muted")
+    )
+    has_overlay = bool(active_overlay)
+
+    # Nothing to report.
+    if not (has_file or has_canvas or has_overlay):
+        return ""
+
+    # Legacy path: file only, no richer UI state → keep the original wording
+    # verbatim (backward-compat).
+    if has_file and not has_canvas and not has_overlay:
+        return (
+            f"\n\n## Currently Open File\n"
+            f"The user has `{file_name}` open in the editor "
+            f"(`{file_path}`). Consider this file as relevant "
+            f"context when responding."
+        )
+
+    # Superset path: report the full UI state the agent is currently presenting.
+    lines = [
+        "\n\n## Current UI State",
+        "This is what you are currently showing the user in the app "
+        "(a request-time snapshot — it may change as they interact):",
+    ]
+    if has_file:
+        lines.append(f"- Open file: `{file_name}` (`{file_path}`)")
+    if has_canvas:
+        state_bits = []
+        state_bits.append("open" if canvas.get("open") else "closed")
+        count = int(canvas.get("output_count") or 0)
+        state_bits.append(f"{count} output{'s' if count != 1 else ''} listed")
+        if canvas.get("pinned"):
+            state_bits.append("pinned")
+        if canvas.get("muted"):
+            state_bits.append("muted")
+        if canvas.get("collapsed"):
+            state_bits.append("collapsed")
+        lines.append(f"- Canvas (output panel): {', '.join(state_bits)}")
+    if has_overlay:
+        lines.append(f"- Open overlay: {_overlay_label(active_overlay)}")
+    return "\n".join(lines)
+
+
 class PromptBuilder:
     """System prompt and SDK option construction.
 
@@ -880,17 +971,12 @@ class PromptBuilder:
             # (after the except) so it runs even when ContextDirectoryLoader
             # fails.  See "Resume context injection" section below.
 
-            # ── Editor context injection (ephemeral, per-request) ──
-            if editor_context:
-                file_path = editor_context.get("file_path", "")
-                file_name = editor_context.get("file_name", "")
-                if file_path:
-                    context_text += (
-                        f"\n\n## Currently Open File\n"
-                        f"The user has `{file_name}` open in the editor "
-                        f"(`{file_path}`). Consider this file as relevant "
-                        f"context when responding."
-                    )
+            # ── UI-state context injection (ephemeral, per-request) ──
+            # Agent proprioception (SENSE): the request-time snapshot of the
+            # agent's own UI — open file + Canvas state + which nav overlay is
+            # open. Superset of the legacy "## Currently Open File" (which a
+            # file-only payload still degrades to). See _render_ui_context_section.
+            context_text += _render_ui_context_section(editor_context)
 
             # ── Terminal context injection (P2 — observable terminal) ──
             # When the user explicitly attaches a terminal's output (a human

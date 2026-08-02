@@ -31,11 +31,37 @@ class DocumentContent(BaseModel):
     source: DocumentSourceBase64
 
 
-class EditorContext(BaseModel):
-    """Describes the file currently open in the editor panel."""
+class CanvasState(BaseModel):
+    """Snapshot of the Canvas (output panel) UI state at request time.
 
-    file_path: str = Field(..., max_length=1024)
-    file_name: str = Field(..., max_length=256)
+    All fields default-valued so a partial/legacy payload never fails validation.
+    `open` = Canvas panel is showing; `output_count` = number of session output
+    files listed; pin/mute/collapsed = the user's Canvas controls.
+    """
+
+    open: bool = False
+    output_count: int = 0
+    pinned: bool = False
+    muted: bool = False
+    collapsed: bool = False
+
+
+class EditorContext(BaseModel):
+    """Request-time snapshot of the agent's own UI state (proprioception, SENSE).
+
+    Superset of the original "currently open file" descriptor — kept the class
+    name + `editor_context` wire field for backward-compat. A legacy client that
+    sends only {file_path, file_name} still validates unchanged; a newer client
+    adds `canvas` + `active_overlay`. `file_path`/`file_name` default to "" so a
+    canvas/overlay-only payload (Canvas open with no file) also validates.
+    `active_overlay` is the `swarm:show-*` event id of the fullscreen nav overlay
+    currently open (None = no overlay open, i.e. chat/Canvas view).
+    """
+
+    file_path: str = Field("", max_length=1024)
+    file_name: str = Field("", max_length=256)
+    canvas: CanvasState | None = None
+    active_overlay: str | None = Field(None, max_length=128)
 
 
 class TerminalContext(BaseModel):
