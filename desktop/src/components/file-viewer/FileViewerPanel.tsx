@@ -55,6 +55,20 @@ export default function FileViewerPanel({
   onCanvasMeta,
   ...props
 }: FileViewerPanelProps) {
+  // Stable session id for the Outputs rail (BUG1, run_26981f66). The `sessionId`
+  // prop briefly flips to undefined during tab-switch / canvas-open (ChatPage
+  // sets it undefined transiently). Gating the rail on the raw prop made the
+  // whole Outputs block unmount+remount across that flicker — the visible half
+  // of the "outputs slower than file-open" bug (the data half is fixed in
+  // useReferencedFiles). Remember the last DEFINED id and drive the rail from it,
+  // so a transient undefined keeps the rail mounted showing the same session's
+  // outputs. Cross-session safety: a real switch delivers a NEW defined id, which
+  // overwrites this ref and reloads (per-tab canvas.isOpen already prevents a
+  // fresh tab from mounting the rail at all — Gate-2 Attack 1).
+  const lastDefinedSessionIdRef = useRef<string | undefined>(sessionId);
+  if (sessionId !== undefined) lastDefinedSessionIdRef.current = sessionId;
+  const stableSessionId = sessionId ?? lastDefinedSessionIdRef.current;
+
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
   // Width-reveal (bug5): mount at MIN_WIDTH, then flip to the real width on the
@@ -206,7 +220,7 @@ export default function FileViewerPanel({
             Layout: a min-w-0 truncating title/summary on the left + a
             flex-shrink-0 action cluster on the right, so buttons never get
             occluded on narrow widths (item 3). */}
-        {sessionId !== undefined && (
+        {stableSessionId !== undefined && (
           <div className="flex-shrink-0 border-b border-[var(--color-border)]">
             <div className="flex items-center gap-2 px-2 h-7 text-[11px] text-[var(--color-text-muted)]">
               {/* Count summary (item 2): "Outputs · N" + new/modified breakdown. */}
@@ -280,7 +294,7 @@ export default function FileViewerPanel({
               </div>
             </div>
             <div className="max-h-32 overflow-y-auto">
-              <CanvasOutputRail sessionId={sessionId} onCounts={setCounts} />
+              <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} />
             </div>
           </div>
         )}

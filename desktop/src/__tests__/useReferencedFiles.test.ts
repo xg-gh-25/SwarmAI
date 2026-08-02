@@ -44,6 +44,43 @@ describe('useReferencedFiles', () => {
     expect(result.current.files.read[0].fileName).toBe('file.py');
   });
 
+  it('does NOT clear the list on a transient sessionId=undefined (tab-switch flicker)', () => {
+    // BUG1 (run_26981f66): ChatPage.sessionId briefly flips to undefined during
+    // tab-switch/canvas-open. The old code wiped the map on !sessionId → the
+    // Canvas outputs rail flashed empty and had to rebuild. Fix: undefined is
+    // treated as transient — retain the current list until a NEW defined session
+    // arrives.
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | undefined }) => useReferencedFiles(sid),
+      { initialProps: { sid: SESSION_ID as string | undefined } },
+    );
+    act(() => dispatchFileRef('/a.py', 'written'));
+    expect(result.current.totalCount).toBe(1);
+
+    // Transient undefined — MUST retain the list, not clear it.
+    rerender({ sid: undefined });
+    expect(result.current.totalCount).toBe(1);
+
+    // Same session returns — still there.
+    rerender({ sid: SESSION_ID });
+    expect(result.current.totalCount).toBe(1);
+  });
+
+  it('reloads (does not leak) when a genuinely DIFFERENT session arrives', () => {
+    // Cross-session safety: switching to a real different session must NOT show
+    // the previous session's outputs.
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | undefined }) => useReferencedFiles(sid),
+      { initialProps: { sid: SESSION_ID as string | undefined } },
+    );
+    act(() => dispatchFileRef('/a.py', 'written'));
+    expect(result.current.totalCount).toBe(1);
+
+    // A different, defined session → must reload (empty storage for it).
+    rerender({ sid: 'other-session-999' });
+    expect(result.current.totalCount).toBe(0);
+  });
+
   it('deduplicates same path — increments count', () => {
     const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
     act(() => {

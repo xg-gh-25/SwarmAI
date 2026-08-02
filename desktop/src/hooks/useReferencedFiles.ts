@@ -77,12 +77,17 @@ export function useReferencedFiles(sessionId: string | undefined) {
   const filesRef = useRef<Map<string, ReferencedFile>>(files);
   filesRef.current = files;
 
-  // Load from sessionStorage on mount / session change
+  // Load from sessionStorage on mount / session change.
+  //
+  // BUG1 (run_26981f66): a transient sessionId=undefined during tab-switch /
+  // canvas-open used to WIPE the map, so the Canvas outputs rail flashed empty
+  // and had to rebuild (slower than file-open). Fix: treat undefined as
+  // TRANSIENT — retain the current list and do NOT reload. Only a NEW, DEFINED
+  // sessionId (different from the last one we loaded) triggers a reload. This
+  // keeps the list stable across the flicker while still preventing cross-session
+  // leakage: a genuinely different session id reloads from ITS OWN storage key.
   useEffect(() => {
-    if (!sessionId) {
-      setFiles(new Map());
-      return;
-    }
+    if (!sessionId) return; // transient undefined → keep showing current list
     const loaded = loadFromStorage(sessionId);
     setFiles(loaded);
   }, [sessionId]);
