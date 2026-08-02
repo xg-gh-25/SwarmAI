@@ -248,8 +248,8 @@ function LeftSidebar() {
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
           <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
           <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-library'} onClick={() => showOverlay('swarm:show-library')} data-testid="nav-library" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
           <button
             className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
@@ -282,9 +282,9 @@ function LeftSidebar() {
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
+          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
-          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>

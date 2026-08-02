@@ -1079,16 +1079,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     // Terminal + GitHub live in the footer, OUTSIDE the nav container.
     const expectedNavOrder = [
       { testId: 'nav-context', label: 'C&M' },
-      { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-library', label: 'Library' },
+      { testId: 'nav-brain-hub', label: 'Brain Hub' },
       { testId: 'nav-todo', label: 'ToDo' },
       { testId: 'nav-swarmws', label: 'Workspace' },
       { testId: 'nav-canvas', label: 'Canvas' },
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
+      { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
-      { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-settings', label: 'Settings' },
       { testId: 'nav-community', label: 'Community' },
     ] as const;

@@ -53,17 +53,17 @@ afterEach(() => cleanup());
 // so it is NOT a navgroup-label — only Work + System carry labels now.
 const DOMAIN_ORDER = [
   'nav-context',
+  'nav-library',   // cognition zone: the bookshelf, above Brain Hub (XG 2026-08-02)
   'nav-brain-hub',
-  'nav-library',   // cognition zone: the bookshelf (Native Knowledge/ + mounts)
   'nav-new-brain',
   'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
   'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
   'nav-canvas',   // Work: Canvas — the session output surface (swarm:open-canvas)
   'nav-pipeline',
   'nav-pollinate',
+  'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-capabilities',
   'nav-eval',
-  'nav-jobs',      // System: Jobs & Runs overlay (after OS Eval, before Settings)
   'nav-settings',
   'nav-community',
 ];
