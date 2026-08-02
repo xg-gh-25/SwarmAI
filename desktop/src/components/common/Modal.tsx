@@ -222,6 +222,14 @@ export default function Modal({
         isFullscreen
           // A11 card-detail panel: the scrim covers ONLY the chat area (clears the
           // leftNav + tab bar), so leftNav/tabs are never dimmed or covered.
+          // NOTE: no overflow-hidden here — the scrim is now window-bounded (its
+          // rect is clamped in chatAreaBounds.measure + the fallback is
+          // viewport-sized), and the panel is bounded INSIDE the scrim by
+          // construction (left:20 + maxWidth:calc(100%-40) + bottom:20), so it
+          // cannot overflow. overflow-hidden would clip the panel's soft drop
+          // shadow/glow (80px blur extends past the scrim gap) — a visual
+          // regression — for a clip that the clamp already makes unnecessary
+          // (Gate-2 run_0ce60215).
           ? 'fixed'
           : 'fixed inset-0 flex justify-center items-center p-4',
       )}
@@ -229,11 +237,20 @@ export default function Modal({
         isFullscreen
           // Scrim covers ONLY the live chat-message area (not the viewport), so it
           // never dims/covers the Radar sidebar or the leftNav (run_a95e266a).
-          // Falls back to the old viewport-anchored box if the rect isn't observed
-          // yet (e.g. first paint before ChatPage registers).
+          // Falls back to a WINDOW-BOUNDED box if the rect isn't observed yet (first
+          // paint before ChatPage registers): width/height from the viewport, NOT
+          // right:0/bottom:0 — an unbounded fallback let the panel overflow the
+          // window right+bottom (2026-08-02). Both the observed rect (clamped in
+          // chatAreaBounds.measure) and this fallback stay within the viewport.
           ? (chatRect
               ? { left: chatRect.left, top: chatRect.top, width: chatRect.width, height: chatRect.height, background: 'rgba(0,0,0,0.35)' }
-              : { left: PANEL_LEFT, top: PANEL_TOP, right: 0, bottom: 0, background: 'rgba(0,0,0,0.35)' })
+              : {
+                  left: PANEL_LEFT,
+                  top: PANEL_TOP,
+                  width: Math.max(0, window.innerWidth - PANEL_LEFT),
+                  height: Math.max(0, window.innerHeight - PANEL_TOP),
+                  background: 'rgba(0,0,0,0.35)',
+                })
           : undefined
       }
       data-testid="modal-scrim"

@@ -158,6 +158,29 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     expect(scrim.className).not.toContain('inset-0');
   });
 
+  it('fullscreen scrim is NOT overflow-hidden — the window-bounded scrim + panel geometry bound it; clipping would eat the panel shadow', () => {
+    render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+    const scrim = screen.getByTestId('modal-scrim');
+    // Overflow is prevented structurally by the clamped/window-bounded scrim rect
+    // (not by clipping) so the panel's soft drop-shadow/glow stays visible
+    // (Gate-2 run_0ce60215). The scrim must NOT clip.
+    expect(scrim.className).not.toContain('overflow-hidden');
+  });
+
+  it('null-rect FALLBACK is window-bounded (width/height from viewport), never right:0/bottom:0 unbounded', () => {
+    // No chat-area observed → Modal uses the fallback box. It must be bounded by
+    // the viewport (width = innerWidth - left, height = innerHeight - top), so the
+    // panel inside it can never overflow the window (the 2026-08-02 bug).
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true, writable: true });
+    render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+    const scrim = screen.getByTestId('modal-scrim');
+    expect(scrim.style.width).toBe('1050px');  // 1200 - 150 (PANEL_LEFT)
+    expect(scrim.style.height).toBe('720px');  // 800 - 80 (PANEL_TOP)
+    expect(scrim.style.right).toBe('');        // NOT viewport-anchored
+    expect(scrim.style.bottom).toBe('');
+  });
+
   it('a non-fullscreen modal keeps full-viewport inset-0 (unchanged)', () => {
     render(<Modal isOpen onClose={noop} title="T" size="md"><div>b</div></Modal>);
     const scrim = screen.getByTestId('modal-scrim');

@@ -37,15 +37,17 @@ function publish(r: ChatAreaRect | null): void {
 
 function measure(el: HTMLElement): ChatAreaRect {
   const b = el.getBoundingClientRect();
-  // Clamp the rect's BOTTOM to the viewport. The observed chat-area element can
-  // report a bottom below the fold (its flex/overflow chain lets it extend past
-  // window.innerHeight); a fullscreen Modal binds its scrim to this rect and
-  // anchors the panel bottom to rect.height, so an un-clamped height pushes the
-  // panel below the visible window. The VISIBLE chat area ends at the viewport
-  // bottom — so the published height must too. (Width unaffected — the radar
-  // already bounds it horizontally.)
+  // Clamp the rect's RIGHT and BOTTOM to the viewport. The observed chat-area
+  // element can report a right/bottom past the fold (its flex/overflow chain lets
+  // it extend beyond window.innerWidth/innerHeight); a fullscreen Modal binds its
+  // scrim to this rect, so an un-clamped rect pushes the panel past the visible
+  // window (the "modal right+bottom overflows the window" bug, 2026-08-02). The
+  // VISIBLE chat area ends at the viewport edges — so the published width/height
+  // must too. Both dims are clamped symmetrically and floored at 0 (a top/left
+  // already past the fold yields 0, never negative).
+  const width = Math.max(0, Math.min(b.width, window.innerWidth - b.left));
   const height = Math.max(0, Math.min(b.height, window.innerHeight - b.top));
-  return { left: b.left, top: b.top, width: b.width, height };
+  return { left: b.left, top: b.top, width, height };
 }
 
 /** ChatPage registers its message-area container here. Returns a cleanup fn.
