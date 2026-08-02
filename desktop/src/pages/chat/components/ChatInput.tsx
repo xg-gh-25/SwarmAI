@@ -138,6 +138,9 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const maxHeightRef = useRef<number>(400); // fallback: 20 * 20px
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // rAF handle for the deferred height recalc — batches/coalesces the layout
+  // read-write so keystrokes never force a synchronous reflow (input-lag fix).
+  const heightFrameRef = useRef<number | null>(null);
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
@@ -196,32 +199,60 @@ export function ChatInput({
     }, 160); // slightly longer than transition duration
   }, []);
 
-  // Cleanup transition timer and inline style on unmount
+  // Cleanup transition timer, inline style, and any pending height frame on unmount
   useEffect(() => {
     const el = textareaRef.current;
     return () => {
       if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+      if (heightFrameRef.current !== null) {
+        cancelAnimationFrame(heightFrameRef.current);
+        heightFrameRef.current = null;
+      }
       if (el) el.style.transition = '';
     };
   }, []);
 
-  const adjustHeight = useCallback(() => {
+  // Synchronous core: the actual DOM read-write. Reads scrollHeight ONCE and
+  // reuses it (the second read the old code did — after writing style.height —
+  // forced a needless second reflow).
+  const applyHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     const maxHeight = isExpanded ? window.innerHeight * 0.6 : maxHeightRef.current;
     el.style.height = 'auto';
-    const next = Math.min(el.scrollHeight, maxHeight);
-    el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    const scrollH = el.scrollHeight;
+    el.style.height = `${Math.min(scrollH, maxHeight)}px`;
+    el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
     // Update line count — only trigger re-render when the value actually changes
     const lines = el.value.split('\n').length;
     setLineCount(prev => prev !== lines ? lines : prev);
   }, [isExpanded]);
 
-  // Call adjustHeight whenever inputValue changes (handles programmatic clears after send)
+  // Deferred variant: coalesce into a single animation frame so a burst of
+  // keystrokes triggers at most one layout op, and never on the synchronous
+  // input/render path (which is what caused per-keystroke reflow lag).
+  const scheduleAdjustHeight = useCallback(() => {
+    if (heightFrameRef.current !== null) {
+      cancelAnimationFrame(heightFrameRef.current);
+    }
+    heightFrameRef.current = requestAnimationFrame(() => {
+      heightFrameRef.current = null;
+      applyHeight();
+    });
+  }, [applyHeight]);
+
+  // Keystroke path: defer height recalc to rAF (handles programmatic clears
+  // after send too). This is the hot path — never do a synchronous reflow here.
   useEffect(() => {
-    adjustHeight();
-  }, [inputValue, isExpanded, adjustHeight]);
+    scheduleAdjustHeight();
+  }, [inputValue, scheduleAdjustHeight]);
+
+  // Expand/collapse path: run height recalc SYNCHRONOUSLY. toggleExpanded's
+  // cursor-restore rAF reads clientHeight/scrollTop and must see the settled
+  // height — deferring this by a frame would race that measurement.
+  useEffect(() => {
+    applyHeight();
+  }, [isExpanded, applyHeight]);
 
   // Re-clamp textarea height on window resize when expanded (60vh is viewport-relative)
   useEffect(() => {
@@ -229,14 +260,14 @@ export function ChatInput({
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const handleResize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => adjustHeight(), 100);
+      resizeTimer = setTimeout(() => scheduleAdjustHeight(), 100);
     };
     window.addEventListener('resize', handleResize);
     return () => {
       window.removeEventListener('resize', handleResize);
       if (resizeTimer) clearTimeout(resizeTimer);
     };
-  }, [isExpanded, adjustHeight]);
+  }, [isExpanded, scheduleAdjustHeight]);
 
   // Toggle between compact and expanded modes, preserving cursor position
   const toggleExpanded = useCallback(() => {

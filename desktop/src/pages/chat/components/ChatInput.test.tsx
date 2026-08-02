@@ -154,4 +154,54 @@ describe('ChatInput with Unified Attachments', () => {
       expect(onSend).toHaveBeenCalled();
     });
   });
+
+  // Regression: input-lag fix (run_90a033c4). The per-keystroke height
+  // recalculation (adjustHeight) must be DEFERRED into a requestAnimationFrame,
+  // not run synchronously on the render path — a synchronous style.height='auto'
+  // + scrollHeight read forces a layout reflow on every keypress, which is the
+  // observed input lag. These tests control rAF so they assert the SCHEDULING
+  // contract (deferred + cancel-on-unmount) rather than jsdom layout (jsdom does
+  // not lay out, so scrollHeight is always 0 — asserting height values would be
+  // theater). Mutation check: reverting adjustHeight to a synchronous call makes
+  // the first test RED (0 frames scheduled on an inputValue-only change).
+  describe('Input auto-grow scheduling (reflow-lag fix)', () => {
+    it('defers height recalc to requestAnimationFrame on inputValue change (no sync reflow)', () => {
+      const rafSpy = vi.spyOn(window, 'requestAnimationFrame');
+      const { rerender } = renderWithProviders(
+        <ChatInput {...createDefaultChatInputProps({ inputValue: 'a' })} />
+      );
+      rafSpy.mockClear(); // ignore mount-time frames (focus/etc.)
+
+      // A pure keystroke: only inputValue changes (not isExpanded, no inject event).
+      rerender(
+        <QueryClientProvider client={createTestQueryClient()}>
+          <ChatInput {...createDefaultChatInputProps({ inputValue: 'ab' })} />
+        </QueryClientProvider>
+      );
+
+      // The height adjustment for this keystroke must be scheduled via rAF,
+      // NOT executed synchronously during the effect.
+      expect(rafSpy).toHaveBeenCalled();
+      rafSpy.mockRestore();
+    });
+
+    it('cancels a pending height frame on unmount (no leak / post-unmount callback)', () => {
+      const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame');
+      const { rerender, unmount } = renderWithProviders(
+        <ChatInput {...createDefaultChatInputProps({ inputValue: 'a' })} />
+      );
+
+      // Trigger a keystroke so a height frame is pending, then unmount before it flushes.
+      rerender(
+        <QueryClientProvider client={createTestQueryClient()}>
+          <ChatInput {...createDefaultChatInputProps({ inputValue: 'ab' })} />
+        </QueryClientProvider>
+      );
+      cancelSpy.mockClear();
+      unmount();
+
+      expect(cancelSpy).toHaveBeenCalled();
+      cancelSpy.mockRestore();
+    });
+  });
 });
