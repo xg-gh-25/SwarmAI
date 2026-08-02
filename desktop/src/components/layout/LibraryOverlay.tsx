@@ -71,12 +71,16 @@ export function LibraryOverlay() {
   const { open, close } = useExclusiveOverlay('swarm:show-library');
   const [tab, setTab] = useState<TabKey>('browse');
 
-  const { data: native } = useQuery<NativeStore>({
+  const {
+    data: native, isLoading: nativeLoading, isError: nativeError, refetch: refetchNative,
+  } = useQuery<NativeStore>({
     queryKey: ['library-native'],
     queryFn: async () => (await api.get<NativeStore>('/api/library/native')).data,
     staleTime: 30_000, enabled: open,
   });
-  const { data: recent } = useQuery<RecentFeed>({
+  const {
+    data: recent, isLoading: recentLoading, isError: recentError, refetch: refetchRecent,
+  } = useQuery<RecentFeed>({
     queryKey: ['library-recent'],
     queryFn: async () => (await api.get<RecentFeed>('/api/library/recent')).data,
     staleTime: 30_000, enabled: open,
@@ -140,8 +144,19 @@ export function LibraryOverlay() {
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
-            {tab === 'browse' && <BrowseTab native={native} mounts={mounts} />}
-            {tab === 'recent' && <RecentTab recent={recent} />}
+            {tab === 'browse' && (
+              <BrowseTab
+                native={native} mounts={mounts}
+                nativeLoading={nativeLoading} nativeError={nativeError}
+                onRetryNative={() => { void refetchNative(); }}
+              />
+            )}
+            {tab === 'recent' && (
+              <RecentTab
+                recent={recent} loading={recentLoading} error={recentError}
+                onRetry={() => { void refetchRecent(); }}
+              />
+            )}
             {tab === 'guide' && <GuideTab />}
           </div>
         </div>
@@ -153,8 +168,34 @@ export function LibraryOverlay() {
 interface SearchHit { domain: string; title: string; source: string; content?: string; mount_id?: string | null; }
 interface SearchResult { query: string; count: number; hits: SearchHit[]; }
 
+// A fetch-error surface with a Retry (refetch). Distinct from pending/empty so a
+// failed backend call is never rendered as a permanent "Loading…" spinner.
+function FetchError({ testid, retryTestid, message, onRetry }: { testid: string; retryTestid: string; message: string; onRetry: () => void }) {
+  return (
+    <div
+      data-testid={testid}
+      className="rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
+    >
+      <div className="text-sm text-[var(--color-text)]">{message}</div>
+      <button
+        data-testid={retryTestid}
+        onClick={onRetry}
+        className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
+        style={{ background: '#d0524a' }}
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 // ── Browse: Native categories (green) + Mounted sources (blue), never merged ──
-function BrowseTab({ native, mounts }: { native: NativeStore | undefined; mounts: MountsList | undefined }) {
+function BrowseTab({
+  native, mounts, nativeLoading, nativeError, onRetryNative,
+}: {
+  native: NativeStore | undefined; mounts: MountsList | undefined;
+  nativeLoading: boolean; nativeError: boolean; onRetryNative: () => void;
+}) {
   const cats = native?.categories ?? [];
   const mountRows = mounts?.mounts ?? [];
   const [query, setQuery] = useState('');
@@ -232,8 +273,19 @@ function BrowseTab({ native, mounts }: { native: NativeStore | undefined; mounts
         <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider" style={{ color: '#5fc99a' }}>
           📗 Native · Knowledge/
         </div>
-        {cats.length === 0 ? (
+        {nativeError ? (
+          <FetchError
+            testid="library-native-error"
+            retryTestid="library-native-retry"
+            message="Couldn't load categories — the workspace or Knowledge/ may be unavailable."
+            onRetry={onRetryNative}
+          />
+        ) : nativeLoading ? (
           <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">Loading categories…</div>
+        ) : cats.length === 0 ? (
+          <div data-testid="library-native-empty" className="py-6 text-center text-sm text-[var(--color-text-faint)]">
+            No categories yet — Knowledge/ is empty.
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
             {cats.map((c) => (
@@ -355,7 +407,11 @@ function AddFolderButton() {
 }
 
 // ── Recent: last-7-days add/edit feed (no fabricated review queue) ──
-function RecentTab({ recent }: { recent: RecentFeed | undefined }) {
+function RecentTab({
+  recent, loading, error, onRetry,
+}: {
+  recent: RecentFeed | undefined; loading: boolean; error: boolean; onRetry: () => void;
+}) {
   const items = recent?.items ?? [];
   return (
     <div data-testid="library-panel-recent" className="flex flex-col gap-3 max-w-3xl">
@@ -363,7 +419,16 @@ function RecentTab({ recent }: { recent: RecentFeed | undefined }) {
         Added or edited in the last {recent?.window_days ?? 7} days — session backflow (🤖),
         your saves (⬆), and job output (⏱). Nothing to "process"; read what you want.
       </div>
-      {items.length === 0 ? (
+      {error ? (
+        <FetchError
+          testid="library-recent-error"
+          retryTestid="library-recent-retry"
+          message="Couldn't load the recent feed."
+          onRetry={onRetry}
+        />
+      ) : loading ? (
+        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Loading…</div>
+      ) : items.length === 0 ? (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Nothing new in the last week.</div>
       ) : (
         <div className="flex flex-col gap-1">
