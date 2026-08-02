@@ -1987,6 +1987,11 @@ Two-layer strategy for recovering conversation context after session interruptio
 
 **Key invariant:** User message is stored to DB **before** slot acquisition. If the queue times out, the message is never lost — cold resume picks it up.
 
+### Canvas — the session's live output surface (2026-08-02)
+
+- [model] **Canvas = FileViewerPanel + CanvasOutputRail, output-triggered & fully tab-scoped** — replaced SwarmRadar. **Signal chain:** agent Write/Edit → `streaming_orchestrator.get_tool_category`→`write` → `MergedToolBlock` dispatches `swarm:file-referenced {path, operation:'written', sessionId}` → `useCanvasAutoSurface` (debounce-coalesce + gentle suppression) → `swarm:open-file` → `ThreeColumnLayout` handler → `setFileViewerFile` → content-adaptive view (renderable→Preview via `HtmlRenderer` `<iframe sandbox="allow-scripts allow-popups">`; modified→Diff; new→Source). **Output list** = `useReferencedFiles(sessionId).grouped.written` MINUS bookkeeping (`isBookkeepingPath`: denylist `.artifacts`/`.git`/`.context` + dotfile-basename + temp) + `useChangeStatus` NEW/UPD git badge (both hooks in `hooks/`, NOT Radar-owned). **Tab-scoping is the key invariant:** all Canvas state is per-active-tab; the switch signal is `activeTabId` (published into `ActiveSessionMeta`/`SessionMetaContext` by ChatPage), NEVER `sessionId` (which flips undefined→resolved on a new tab's first message → would false-clear mid-turn). `shouldResetCanvasOnTabChange(prev,next) = prev!==undefined && next!==prev` (pure, unit-tested); on real switch → clear file+pin/mute/collapsed. `file-referenced` events carry `sessionId` so background keep-mounted tabs don't leak into the active tab (both auto-surface AND `useReferencedFiles` filter, fail-open when unstamped). **Controls:** pin (file-scoped) / mute (session-scoped) / expand / collapse-to-narrow-dock; LeftSidebar `Canvas` card → `swarm:open-canvas` for file-less open. **SwarmRadar removed:** 3 sections replaced (Changes→Canvas, Attention→ChatHeader `AlertsPill` via shared `useRadarAttention`, Jobs&Runs→left-nav overlay); KEPT `AttentionList`(AlertsPill)/`HistoryView`/`useRadarAttention`/`types.ts`. (2026-08-02)
+  <!-- ref:0 | last:none | decay:active | source:manual -->
+
 ### Frontend Architecture
 
 React 19 + Vite 6 + TanStack Query. Component hierarchy anchored by `ThreeColumnLayout` (sidebar + chat + panel).

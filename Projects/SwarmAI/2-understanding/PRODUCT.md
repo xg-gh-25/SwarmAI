@@ -108,6 +108,9 @@ Session → Memory captures → Evolution detects patterns
 
 > 哲学不是"相信什么"。是"用什么机制 enforce 什么不变量"。
 
+- [principle] **Canvas mental model — "the current chat tab spouts out its outputs; hands never leave chat"** — the product belief behind Canvas (2026-08-02, replaced SwarmRadar). You talk to the session, products **fly out to you** — inverts SwarmRadar's "go look right" model. Enforced by three rules: (1) **output-triggered, not user-fetched** — a written file auto-surfaces; (2) **gentle by default** — idle → newest output auto-opens; actively viewing your OWN file → new output only highlights in the list, never steals your view (provenance-aware suppression); (3) **tab-bound** — Canvas is an *extension of the active tab*, so it fully resets on tab switch (spout triangle points chat→canvas, encoding the extension direction). The invariant: **rail + open-file are always consistent for the tab you're looking at.** (2026-08-02)
+  <!-- ref:0 | last:none | decay:active | source:manual -->
+
 ### Meta-Principle: Prevention > Recovery
 
 让正确行为成为唯一可能的行为。如果需要 watchdog，设计已经失败了。如果需要"记住不要做 X"，说明 X 还是可能的。约束不是限制 — 是品质的来源。
