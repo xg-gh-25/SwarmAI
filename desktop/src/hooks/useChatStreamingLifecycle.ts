@@ -2557,11 +2557,10 @@ export function useChatStreamingLifecycle(
         // allowlist table; it IGNORES any event/target on the wire (crux: a buggy
         // backend can't name an arbitrary swarm:* event). Fail-closed on unknown. ──
         if (event.type === 'ui_command') {
-          const cmd = (event as unknown as Record<string, unknown>).cmd;
-          const detail = (event as unknown as Record<string, unknown>).detail as
-            | Record<string, unknown>
-            | undefined;
-          dispatchUiCommand(cmd, detail);
+          // Pass ONLY the cmd — dispatchUiCommand derives event+target from its own
+          // table and dispatches payload-less (Run 2 cmds carry no data; forwarding
+          // wire `detail` would be an untrusted-input sink — Gate-2 LOW).
+          dispatchUiCommand((event as unknown as Record<string, unknown>).cmd);
         }
 
         if (event.type === 'session_start' && event.sessionId) {

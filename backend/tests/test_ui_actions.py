@@ -94,3 +94,38 @@ def test_build_event_fail_closed_for_bad_cmd():
     # A non-allowlisted cmd MUST NOT produce an event (fail-closed at the source).
     assert build_ui_command_event("open-terminal-here") is None
     assert build_ui_command_event("open-file") is None
+
+
+# ── cross-language table parity (Gate-2 LOW: drift guard) ────────────────────
+
+def test_backend_allowlist_matches_frontend_table():
+    """The backend allowlist and the frontend UI_COMMAND_TABLE are hand-maintained
+    in two languages; drift would silently expand the compromised-backend attack
+    surface. This test parses the TS table and asserts the cmd→{event,target} maps
+    are byte-identical, so any divergence FAILS the build instead of shipping.
+    """
+    import re
+    from pathlib import Path
+
+    ts_path = (
+        Path(__file__).resolve().parents[2]
+        / "desktop" / "src" / "utils" / "uiCommands.ts"
+    )
+    text = ts_path.read_text()
+    # Extract the UI_COMMAND_TABLE literal body.
+    body = text.split("UI_COMMAND_TABLE", 1)[1]
+    body = body.split("{", 1)[1].split("};", 1)[0]
+    # Parse rows like:  'open-canvas': { event: 'swarm:open-canvas', target: 'window' },
+    row = re.compile(
+        r"'([^']+)'\s*:\s*\{\s*event:\s*'([^']+)'\s*,\s*target:\s*'([^']+)'\s*\}"
+    )
+    frontend = {
+        m.group(1): {"event": m.group(2), "target": m.group(3)}
+        for m in row.finditer(body)
+    }
+    assert frontend, "failed to parse UI_COMMAND_TABLE from uiCommands.ts"
+    assert frontend == UI_COMMAND_ALLOWLIST, (
+        "backend UI_COMMAND_ALLOWLIST and frontend UI_COMMAND_TABLE diverged — "
+        f"backend-only={set(UI_COMMAND_ALLOWLIST) - set(frontend)}, "
+        f"frontend-only={set(frontend) - set(UI_COMMAND_ALLOWLIST)}"
+    )

@@ -67,19 +67,17 @@ describe('dispatchUiCommand', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('IGNORES backend-supplied event/target — derives from its OWN table (crux)', () => {
+  it('derives event+target from its OWN table — signature accepts ONLY cmd (crux)', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
-    // A malicious/buggy backend tries to smuggle a destructive event name +
-    // a document target through the wire fields. dispatchUiCommand keys on cmd
-    // ONLY, so the wire fields are ignored: it dispatches swarm:open-canvas on
-    // window, never swarm:open-terminal-here.
-    dispatchUiCommand('open-canvas', {
-      event: 'swarm:open-terminal-here',
-      target: 'document',
-    } as unknown as Record<string, unknown>);
+    // dispatchUiCommand takes cmd ONLY — there is no parameter through which a
+    // backend could supply an event name or target. It dispatches swarm:open-canvas
+    // on window, derived purely from UI_COMMAND_TABLE['open-canvas'].
+    dispatchUiCommand('open-canvas');
     expect(spy).toHaveBeenCalledTimes(1);
     const ev = spy.mock.calls[0][0] as CustomEvent;
-    expect(ev.type).toBe('swarm:open-canvas'); // NOT open-terminal-here
+    expect(ev.type).toBe('swarm:open-canvas');
+    // payload-less by design — no detail forwarded (Gate-2 LOW).
+    expect(ev.detail).toBeNull();
   });
 
   it('FAIL-CLOSED on a raw swarm:* string passed as cmd', () => {

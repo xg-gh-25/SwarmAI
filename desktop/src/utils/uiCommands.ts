@@ -43,18 +43,18 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
 /**
  * Dispatch an agent-requested UI command by re-emitting the mapped swarm:* event.
  *
- * @param cmd    the bare command id (from the ui_command SSE event's `cmd` field)
- * @param detail optional CustomEvent detail forwarded to the handler. NOTE: any
- *               `event`/`target` keys here are IGNORED — the event name + target
- *               come ONLY from UI_COMMAND_TABLE (the crux invariant). Run 2's
- *               allowlisted commands take no data payload, so detail is normally
- *               undefined; it is forwarded (minus nothing) for forward-compat.
+ * @param cmd the bare command id (from the ui_command SSE event's `cmd` field)
  * @returns true if dispatched, false if the cmd was not allowlisted (fail-closed).
+ *
+ * PAYLOAD-LESS BY DESIGN (Gate-2 LOW): Run 2's allowlisted commands are pure
+ * navigation/display — none take a data argument. We deliberately do NOT forward
+ * any wire `detail` to the CustomEvent: `detail` would originate only from the
+ * SSE wire (i.e. a rogue/compromised backend), and forwarding it to a handler
+ * that might one day read `event.detail` is an untrusted-input sink for zero
+ * current benefit. Re-introduce a payload ONLY per-cmd, gated in the table, when
+ * a specific command genuinely needs one.
  */
-export function dispatchUiCommand(
-  cmd: unknown,
-  detail?: Record<string, unknown>,
-): boolean {
+export function dispatchUiCommand(cmd: unknown): boolean {
   if (typeof cmd !== 'string' || !cmd) {
     console.warn('[ui_command] rejected non-string cmd:', cmd);
     return false;
@@ -66,6 +66,6 @@ export function dispatchUiCommand(
     return false;
   }
   const targetObj = entry.target === 'document' ? document : window;
-  targetObj.dispatchEvent(new CustomEvent(entry.event, detail ? { detail } : undefined));
+  targetObj.dispatchEvent(new CustomEvent(entry.event));
   return true;
 }
