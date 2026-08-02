@@ -269,10 +269,12 @@ function LeftSidebar() {
         <A10Group label="Work" tint={A10_GROUP.work}>
           <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
           <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
-          {/* Canvas — the session's output surface. Opens the side panel showing
-              the Outputs list even with no file selected (decoupled from a file
-              open, so outputs are reachable when auto-surface is muted). */}
-          <A10Card icon="draft" label="Canvas" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:open-canvas'))} data-testid="nav-canvas" />
+          {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
+              OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
+              a chat file-chip click or the agent's swarm:open-canvas command; a
+              manual nav entry that opened an often-empty Outputs panel contradicted
+              that "products fly out to you" model. Mute-recovery lives in the Canvas
+              header unmute toggle (FileViewerPanel), not a global nav button. */}
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
         </A10Group>

@@ -58,7 +58,8 @@ const DOMAIN_ORDER = [
   'nav-new-brain',
   'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
   'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
-  'nav-canvas',   // Work: Canvas — the session output surface (swarm:open-canvas)
+  // NOTE: no 'nav-canvas' — Canvas is output-triggered (auto-surface / chat file-chip
+  // / agent command), not a nav card (run_990b0a03).
   'nav-pipeline',
   'nav-pollinate',
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
