@@ -203,12 +203,67 @@ def _codeintel_recall(query: str, project: Optional[str] = None,
                       limit: int = 8) -> list[dict]:
     """Bucket code-graph search hits for ``query`` in ``project``.
 
-    Wraps ``load_project_graph(project).search_symbols`` (FTS over symbol names)
-    and enriches the top hit with its direct callers. Returns a list of symbol
-    hit dicts ({name, id, file_path, rank, callers?}); EMPTY list when the
-    project has no code graph (load_project_graph → None) — never auto-creates
-    a DB, never crashes. Pure read over the existing graph index.
+    Combines TWO sources (Library Cycle 4): the project's own code graph
+    (``load_project_graph(project)``) AND any enabled code-dir MOUNTS registered
+    under ``project`` (``library_mounts.recall_mounts`` — an additive pass, so a
+    mount-only project with no code_intel.db still surfaces mount symbols). Each
+    hit is a symbol dict ({name, id, file_path, rank, callers?}); mount hits carry
+    ``mount_id``/``mount_path`` so the agent reads the LIVE external source.
+    Signature UNCHANGED (Gate-1 rev 3: the mount list is consulted internally, not
+    threaded through the call). Never auto-creates a DB, never crashes.
     """
+    project_hits = _project_codeintel_recall(query, project, limit)
+    mount_hits = _mount_codeintel_recall(query, project, limit)
+    if not mount_hits:
+        return project_hits
+    # Gate-2 #6a (MED): BM25 rank is normalized WITHIN each FTS corpus, so a raw
+    # cross-corpus sort+truncate could evict genuine project hits in favor of
+    # mount hits — violating the "additive, never regress project recall" charter.
+    # Protect project recall: keep ALL project hits (up to limit), let mounts fill
+    # only the remaining headroom (each source pre-sorted by its own rank). Mounts
+    # are ADDITIVE, never cannibalizing.
+    if len(project_hits) >= limit:
+        return project_hits[:limit]
+    headroom = limit - len(project_hits)
+    return project_hits + mount_hits[:headroom]
+
+
+def _mount_codeintel_recall(query: str, project: Optional[str], limit: int) -> list[dict]:
+    """Additive pass: enabled code-dir mounts registered under ``project``.
+    Best-effort + fully isolated — a mount/registry failure NEVER affects the
+    project-graph recall above (R7: don't regress the hot path).
+
+    Gate-2 #2 (HIGH): this is a READ path — open the app DB READ-ONLY and never
+    ensure_table() here (recall_multi's anti-scope: "READS existing indexes only,
+    never writes"). The table is created by the WRITE path (add_mount). If it does
+    not exist yet, list_mounts raises OperationalError → caught → [] (= "no mounts",
+    the correct outcome). Read-only + busy_timeout avoids write-lock contention on
+    the shared data.db from the recall hot path."""
+    if not project:
+        return []
+    try:
+        import sqlite3
+        from jobs.paths import DB_PATH
+        from core.library_mounts import LibraryMounts, recall_mounts
+        if not DB_PATH.exists():
+            return []
+        # Read-only URI connection — cannot take a write lock, cannot create tables.
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=2000")
+        try:
+            store = LibraryMounts(conn)  # NOTE: no ensure_table() — read-only path
+            return recall_mounts(query, scope=project, store=store, limit=limit)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — mounts are additive; never sink recall
+        logger.debug("codeintel recall: mount pass failed: %s", exc)
+        return []
+
+
+def _project_codeintel_recall(query: str, project: Optional[str] = None,
+                              limit: int = 8) -> list[dict]:
+    """The project's own code graph hits (the original _codeintel_recall body)."""
     if not project or load_project_graph is None:
         return []
     try:
