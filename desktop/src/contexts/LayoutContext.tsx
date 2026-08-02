@@ -19,6 +19,11 @@ export interface ActiveSessionMeta {
    *  session without prop-threading through ChatPage. Reuses this existing
    *  context rather than adding a new provider (Canvas run M1, 2026-08-02). */
   sessionId?: string;
+  /** Active-tab id — STABLE per tab (exists before the session resolves), unlike
+   *  sessionId which also changes undefined→resolved on a new tab's first message.
+   *  Canvas uses tabId (not sessionId) as the "tab switched" signal to reset its
+   *  state, so it can't falsely clear the open file mid-first-message. */
+  tabId?: string;
 }
 
 // ── Session Meta Context (separate to avoid re-rendering layout consumers) ──

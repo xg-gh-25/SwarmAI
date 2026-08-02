@@ -652,6 +652,21 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 }
 
 // Inner layout component that uses the context
+/**
+ * Pure decision for the Canvas tab-scope reset: should switching from `prev` to
+ * `next` active-tab id clear the Canvas? True only for a REAL switch between two
+ * defined tabs — NOT the first set (undefined→value at mount, which must not nuke
+ * a just-opened file) and NOT a same-tab republish (value→same value, e.g. when
+ * sessionId resolves mid-first-message). Extracted + exported so the subtle
+ * guard is unit-tested independent of React render/effect ordering.
+ */
+export function shouldResetCanvasOnTabChange(
+  prev: string | undefined,
+  next: string | undefined,
+): boolean {
+  return prev !== undefined && next !== prev;
+}
+
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, settingsTab, openModal, setSettingsTab } = useLayout();
   const { addToast } = useToast();
@@ -740,6 +755,27 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
   }, []);
+
+  // Full tab-scoping: Canvas is an extension of the CURRENT chat tab, so switching
+  // tabs must reset the whole Canvas — otherwise the rail (session-scoped) shows
+  // the new tab's outputs while the main area still shows the old tab's file, and
+  // pin/mute bleed across tabs. Signal = activeSessionMeta.tabId (STABLE per tab;
+  // NOT sessionId, which also flips undefined→resolved on a new tab's first
+  // message and would falsely clear the file mid-turn). Guard against the first
+  // set (undefined→first tab) so opening the app doesn't nuke a just-opened file.
+  const activeTabId = activeSessionMeta?.tabId;
+  const prevTabIdRef = useRef<string | undefined>(activeTabId);
+  useEffect(() => {
+    if (shouldResetCanvasOnTabChange(prevTabIdRef.current, activeTabId)) {
+      // Real tab switch → clear the whole Canvas so rail + file stay consistent.
+      setFileViewerFile(null);
+      setCanvasManuallyOpen(false);
+      setCanvasPinned(false);
+      setCanvasMuted(false);
+      setEditorMode('panel');
+    }
+    prevTabIdRef.current = activeTabId;
+  }, [activeTabId]);
 
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
