@@ -116,6 +116,43 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(snap!.open).toBe(true);
   });
 
+  it('outputCount is PER-TAB — a count on tab A does not bleed into tab B', () => {
+    let tabId = 'A';
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: tabId } },
+    );
+    // Tab A: open + 5 outputs
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
+    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 5 }));
+    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
+
+    // Switch to tab B: fresh Canvas → its count must NOT be A's 5
+    tabId = 'B';
+    rerender({ t: tabId });
+    act(() => result.current.setFile({ filePath: 'b.md', fileName: 'b.md' }));
+    const snapB = result.current.getCanvasSnapshot();
+    expect(snapB!.outputCount).toBe(0); // B has its own count, not A's stale 5
+
+    // Switch back to A: its 5 is restored
+    tabId = 'A';
+    rerender({ t: tabId });
+    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
+  });
+
+  it('close() resets outputCount to 0 (no stale count on reopen)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
+    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 7 }));
+    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7);
+    act(() => result.current.close());
+    // Reopen manually — count must have been cleared, not linger at 7
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); });
+    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(0);
+  });
+
   it('getCanvasSnapshot() returns null after close (no stale open)', () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),

@@ -108,8 +108,10 @@ export default function FileViewerPanel({
   // the swarm:canvas-state proprioception event. `collapsed` is always false now
   // (kept in the payload for a stable contract with the parent + proprioception
   // schema; the dock that set it true is gone). Fires on change; the parent
-  // equality-guards the actual DOM dispatch. On unmount the parent resets to
-  // neutral — no stale leak.
+  // equality-guards the actual DOM dispatch. Stale-count safety does NOT rely on
+  // an unmount reset here (this effect has no cleanup): the parent's close()
+  // clears outputCount and the count is per-tab slice state, so switching/closing
+  // a tab restores/zeroes it at the source.
   useEffect(() => {
     onCanvasMeta?.({ collapsed: false, outputCount: counts.total });
     // Deps: only counts.total. onCanvasMeta is called SYNCHRONOUSLY (not a

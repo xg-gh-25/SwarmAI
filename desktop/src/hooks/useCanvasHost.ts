@@ -46,6 +46,9 @@ interface CanvasTabState {
   pinned: boolean;
   muted: boolean;
   manuallyOpen: boolean;
+  /** Panel-internal output count, PER TAB (like the rest of the slice) — so it
+   *  restores on tab-switch and clears on close, never bleeding across tabs. */
+  outputCount: number;
 }
 
 const EMPTY: CanvasTabState = {
@@ -53,6 +56,7 @@ const EMPTY: CanvasTabState = {
   pinned: false,
   muted: false,
   manuallyOpen: false,
+  outputCount: 0,
 };
 
 export interface UseCanvasHostArgs {
@@ -93,17 +97,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // inputValueMapRef): mutated directly, NEVER enters MessageStore/reconcile.
   const mapRef = useRef<Map<string, CanvasTabState>>(new Map());
   // The active tab's slice, mirrored into React state so the panel re-renders.
+  // outputCount now lives INSIDE the slice (per-tab) — no separate state/ref, so
+  // it restores on tab-switch, clears on close, and getCanvasSnapshot reads it
+  // straight from mapRef (the synchronous source of truth) with no stale-closure
+  // mirror to keep in sync.
   const [slice, setSlice] = useState<CanvasTabState>(EMPTY);
-  // Panel-internal output count for the proprioception emit. STATE (not a ref):
-  // the canvas-state emit effect below depends on it, so a ref would freeze the
-  // count at its first value (the emit would never re-fire on new outputs — a
-  // real staleness regression vs the old ThreeColumnLayout code, Gate-2 MED).
-  const [outputCount, setOutputCount] = useState(0);
-  // Live mirror of outputCount for the synchronous send-time snapshot read
-  // (getCanvasSnapshot). A ref, NOT the state closure: patch()/getCanvasSnapshot
-  // are memoized on [activeTabId] and would otherwise freeze outputCount at its
-  // closure value (Gate-1 BLOCK1). Kept in sync wherever setOutputCount is called.
-  const outputCountRef = useRef(0);
 
   const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
@@ -127,15 +125,15 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
   const togglePin = useCallback(() => patch({ pinned: !(mapRef.current.get(keyFor(activeTabId))?.pinned) }), [patch, activeTabId]);
   const toggleMute = useCallback(() => patch({ muted: !(mapRef.current.get(keyFor(activeTabId))?.muted) }), [patch, activeTabId]);
-  const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
+  // close clears the tab's Canvas INCLUDING its output count (no stale count on
+  // reopen — the count is now per-tab slice state).
+  const close = useCallback(() => patch({ file: null, manuallyOpen: false, outputCount: 0 }), [patch]);
   const onCanvasMeta = useCallback((meta: { collapsed: boolean; outputCount: number }) => {
-    // State setter (not a ref write) so the canvas-state emit effect re-fires
-    // when the output count changes. Setter is identity-stable → no loop.
-    setOutputCount(meta.outputCount);
-    // ALSO mirror into the ref so the synchronous send-time snapshot read
-    // (getCanvasSnapshot) sees the fresh count without a render (Gate-1 BLOCK1).
-    outputCountRef.current = meta.outputCount;
-  }, []);
+    // Write the count into the per-tab slice via patch → mapRef (synchronous
+    // source of truth) + setSlice (re-fires the canvas-state emit effect below).
+    // No separate state/ref: getCanvasSnapshot reads cur.outputCount from mapRef.
+    patch({ outputCount: meta.outputCount });
+  }, [patch]);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
 
@@ -143,10 +141,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // The agent's SENSE snapshot reads canvas.open at chat-SEND time. The async
   // swarm:canvas-state emit (effect below) could lag a fast send, leaving the
   // snapshot stale (the observed race). getCanvasSnapshot() reads the LIVE
-  // sources instead — mapRef (the synchronous source of truth, written in patch()
-  // BEFORE React commits) + outputCountRef — so a send immediately after
+  // source instead — mapRef (the synchronous source of truth, written in patch()
+  // BEFORE React commits; outputCount now lives in the slice too) — so a send after
   // swarm:open-canvas reports the true state. Mirrors the CanvasSnapshot shape
-  // exactly (uiContext.ts); collapsed stays false to match the emit effect (:196)
+  // exactly (uiContext.ts); collapsed stays false to match the emit effect
   // — onCanvasMeta's real collapsed is not persisted (pre-existing, unchanged).
   // Returns null when there is nothing reportable (parity with the effect's null).
   const getCanvasSnapshot = useCallback((): CanvasSnapshot | null => {
@@ -155,7 +153,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     if (!openNow) return null;
     return {
       open: true,
-      outputCount: outputCountRef.current,
+      outputCount: cur.outputCount,
       pinned: cur.pinned,
       muted: cur.muted,
       collapsed: false,
@@ -228,13 +226,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const lastCanvasEmit = useRef<string>('');
   useEffect(() => {
     const detail = isOpen
-      ? { open: true, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
+      ? { open: true, outputCount: slice.outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
       : null;
     const sig = JSON.stringify(detail);
     if (sig === lastCanvasEmit.current) return;
     lastCanvasEmit.current = sig;
     window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail }));
-  }, [isOpen, outputCount, slice.pinned, slice.muted]);
+  }, [isOpen, slice.outputCount, slice.pinned, slice.muted]);
 
   return {
     file: slice.file,
