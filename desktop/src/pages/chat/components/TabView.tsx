@@ -282,6 +282,29 @@ function TabViewImpl({
     }
   }, [messages, isActive]);
 
+  // Re-pin to bottom when the scroll container RESIZES (bugfix run_75691aa8).
+  // Opening Canvas shrinks the chat width → content reflows TALLER, and the
+  // 220ms width-reveal animation lands that taller layout AFTER the one-shot
+  // message-scroll already ran — stranding the view above the newest message.
+  // Tab activation (display:none→visible) and window resize are the same class.
+  // A ResizeObserver catches ALL of these (incl. every animation frame) and
+  // re-pins to bottom — but ONLY when the user hasn't scrolled up to read
+  // history (userScrolledUpRef), and only while active (scrollIntoView no-ops on
+  // a hidden container anyway). behavior:'auto' = instant, so the per-frame
+  // re-pin during the reveal doesn't stack smooth-scroll jank.
+  useEffect(() => {
+    if (!isActive) return;
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!userScrolledUpRef.current) {
+        endRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isActive]);
+
   // Preserve scroll position when OLDER messages are prepended (load-earlier),
   // so the viewport doesn't jump. Runs before paint; compares scrollHeight
   // across the prepend and offsets scrollTop by the added height. Only fires on
