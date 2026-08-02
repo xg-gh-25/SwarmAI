@@ -5,7 +5,6 @@ export { MessageBubble } from './MessageBubble';
 export { SessionTab } from './SessionTab';
 export { SessionTabBar } from './SessionTabBar';
 export { AlertsPill } from './AlertsPill';
-export { RadarSidebar } from './RightSidebar';
 export { TabStatusIndicator } from './TabStatusIndicator';
 export { ToolUseBlock } from './ToolUseBlock';
 export { ToolResultBlock } from './ToolResultBlock';
