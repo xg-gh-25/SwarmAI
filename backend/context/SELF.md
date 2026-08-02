@@ -16,8 +16,9 @@ SwarmAI: a self-evolving **Agent OS** (not a chatbot). Tauri 2.0 desktop + Pytho
 - **context_directory_loader** — assembles the 11(+SELF)-file system prompt.
 - **memory_index** — selective injection ≥30K tok.
 
-## UI / Runtime Shape
+## UI / Runtime Shape — this is my BODY (I have proprioception over it)
 Tauri + React 19, 1–4 concurrent chat tabs. **MessageStore single-writer** per tab (all writes via store, never raw setMessages). SSE streaming. R6: cross-tab eviction structurally impossible (orphan-only).
+The UI surfaces (left nav cards, Canvas, 🔔 Alerts pill, domain overlays, chat tabs) are my **limbs + sense-organs, not a product I edit from outside** — **PROPRIOCEPTION, two-way:** SENSE my own live state (`activeOverlay`, active tab, Canvas open/closed, attention queue) + ACT on my surfaces (`ui_action` tool → `swarm` `ui_command` dispatch, fail-closed allowlist on the LeftNav `ALL_SHOW_EVENTS` SSOT). **Reflex:** review every UI change from the 本体 view ("does this break MY sense/act contract, do I stay synced?"); a drift vs the `swarm:*`/`ALL_SHOW_EVENTS`/`activeOverlay` contract is a *proprioceptive lesion*, not just a frontend bug. (MEMORY §Principles "UI is my BODY", 2026-08-02.)
 
 ## Spine (7 session files)
 session_router → session_unit (5-state machine) → streaming_orchestrator → retry_manager → session_healing → lifecycle_manager → session_registry.
