@@ -160,12 +160,15 @@ class ResourceMonitor:
     _MIN_SPAWN_COST_MB: float = 600.0
 
     # ── Dynamic tab limit constants ─────────────────────────────
-    # Ceiling: 6 = 5 chat + 1 channel.  On 36GB machines this is safe
-    # as long as retry/proactive-restart bugs are fixed (the real OOM
-    # cause was retry storms + kill/respawn churn, not session count).
-    # On smaller machines the dynamic RAM formula (headroom / cost_mb)
-    # gates BELOW this ceiling — e.g. a 16GB machine caps at 2 regardless.
-    _MAX_TABS_CEILING: int = 6
+    # Ceiling: 4 = 3 chat + 1 channel.  Reverted 6→4 (2026-08-02): the
+    # 6-ceiling raised the *tab* count but NOT throughput — MAX_CONCURRENT_STREAMS
+    # stayed at 3, so a 4th/5th concurrent stream blocked silently on the
+    # 120s stream-admit wait ("静默没 response"). 4 keeps the openable chat
+    # count (3) at/below the concurrent-stream cap, so more tabs never
+    # outrun throughput. On smaller machines the dynamic RAM formula
+    # (headroom / cost_mb) gates BELOW this ceiling anyway — e.g. a 16GB
+    # machine caps at 2-3 depending on load (a near-full 16GB box floors at 2).
+    _MAX_TABS_CEILING: int = 4
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
     # Concurrent penalty: each alive session inflates the estimated spawn
     # cost to account for simultaneous peak memory spikes.  On a 16GB
@@ -396,7 +399,7 @@ class ResourceMonitor:
         available (75th percentile of actual tree RSS, floored at
         ``_MIN_SPAWN_COST_MB``), falls back to ``_DEFAULT_SPAWN_COST_MB``.
 
-        Returns [2, 6]. Always allows at least 2 (1 chat + 1 channel).
+        Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
         """
         mem = self.system_memory()
         total_mb = mem.total / (1024 * 1024)

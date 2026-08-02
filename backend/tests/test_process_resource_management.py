@@ -104,7 +104,7 @@ class TestC1bComputeMaxTabsAccuracy:
     that's ~29% used (active+wired).  But effective_used = total - available
     where available = free + speculative + inactive = ~9GB, so
     effective_used ≈ 27GB.  Headroom = 36864×0.9 - 27612 = 5566MB.
-    max_tabs = min(ceiling=6, 5566/1200) = min(6, 4) = 4 (RAM-dominated).
+    max_tabs = min(ceiling=4, 5566/1200) = min(4, 4) = 4.
 
     Validates: Requirements 1.2, 2.2
     """
@@ -121,7 +121,7 @@ class TestC1bComputeMaxTabsAccuracy:
 
         # vm_stat: available = free+spec+inactive = ~9GB
         # effective_used = 36GB - 9GB = 27GB → headroom = 5.6GB
-        # raw = 5566/1200 = 4 → result = min(6, 4) = 4 (RAM-dominated, below ceiling)
+        # raw = 5566/1200 = 4 → result = min(4, 4) = 4
         assert max_tabs == 4, (
             f"compute_max_tabs() should return 4 with vm_stat fallback "
             f"(effective_used ≈ 27GB, headroom ≈ 5.6GB), got {max_tabs}"
@@ -333,7 +333,7 @@ class TestP2FallbackFailurePreservation:
 # ---------------------------------------------------------------------------
 
 class TestP3ComputeMaxTabsFormulaPreservation:
-    """P3: compute_max_tabs uses 90% rule: max(2, min(floor(headroom_to_90pct / 1200), 6)).
+    """P3: compute_max_tabs uses 90% rule: max(2, min(floor(headroom_to_90pct / 1200), 4)).
 
     Min=2 guarantees 1 chat slot + 1 channel slot.
     Uses Hypothesis to verify the formula across random used_pct values.
@@ -352,9 +352,9 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        # 90% threshold, 1200MB cost, ceiling 6 (matches resource_monitor.py)
+        # 90% threshold, 1200MB cost, ceiling 4 (matches resource_monitor.py)
         headroom_mb = total_mb * 0.90 - used_mb
-        expected = max(2, min(int(headroom_mb / 1200), 6))
+        expected = max(2, min(int(headroom_mb / 1200), 4))
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(
@@ -374,27 +374,29 @@ class TestP3ComputeMaxTabsFormulaPreservation:
 
 
 class TestCeilingAutoDegradeOnLowMemory:
-    """Raising _MAX_TABS_CEILING 4→6 must NOT let small machines open 6 tabs.
+    """The _MAX_TABS_CEILING (4) must NOT be the thing that protects small machines.
 
     Safety on low-memory machines lives in the RAM formula
-    (headroom / cost_mb), NOT the ceiling: on a 16GB machine the headroom
-    is small enough that raw < 6, so ``min(raw, ceiling)`` is dominated by
-    ``raw`` and the machine auto-degrades well below the new ceiling.
-    This is the regression guard for the ceiling bump — if someone later
-    removes the RAM gate, a 16GB box would jump to 6 tabs and OOM.
+    (headroom / cost_mb), NOT the ceiling: on a memory-tight 16GB machine
+    the headroom is small enough that raw < ceiling, so ``min(raw, ceiling)``
+    is dominated by ``raw`` and the machine auto-degrades below the ceiling.
+    This is the regression guard — if someone later removes the RAM gate,
+    a tight box would jump straight to the ceiling and OOM.
     """
 
-    def test_16gb_low_headroom_gates_below_new_ceiling(self):
+    def test_16gb_low_headroom_gates_below_ceiling(self):
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
         total_bytes = 16 * 1024**3  # 16GB machine
-        # Moderate load: 60% used → effective_used = total - available.
-        # headroom_to_90% = 16384*0.9 - 16384*0.60 ≈ 4915MB.
-        # raw = floor(4915 / 1200) = 4 → min(4, ceiling=6) = 4 < 6.
-        used_pct = 60.0
+        # Memory-tight: available ≈ 6000MB → effective_used = total - available
+        # ≈ 10384MB. headroom_to_90% = 16384*0.9 - 10384 ≈ 4361MB.
+        # raw = floor(4361 / 1200) = 3 → min(3, ceiling=4) = 3 < 4.
+        # (effective_used = total - available drives the formula, not
+        # percent_used — see SystemMemory.effective_used.)
         total_mb = total_bytes / (1024 * 1024)
-        used_bytes = int(total_bytes * (used_pct / 100.0))
-        available_bytes = total_bytes - used_bytes
+        available_bytes = int(6000 * 1024 * 1024)
+        used_bytes = total_bytes - available_bytes
+        used_pct = used_bytes / total_bytes * 100.0
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(
@@ -407,14 +409,14 @@ class TestCeilingAutoDegradeOnLowMemory:
 
         max_tabs = monitor.compute_max_tabs()
         assert max_tabs < monitor._MAX_TABS_CEILING, (
-            f"16GB machine must auto-degrade below the ceiling "
+            f"tight 16GB machine must auto-degrade below the ceiling "
             f"({monitor._MAX_TABS_CEILING}), got {max_tabs}"
         )
-        # Concretely: RAM formula caps at 4 here, never the new ceiling of 6.
-        assert max_tabs == 4, f"expected RAM-gated 4 on 16GB@60%, got {max_tabs}"
+        # Concretely: RAM formula caps at 3 here, never the ceiling of 4.
+        assert max_tabs == 3, f"expected RAM-gated 3 on tight 16GB, got {max_tabs}"
 
     def test_severe_pressure_floors_at_two(self):
-        """Even at the ceiling bump, the min-2 floor still holds under pressure."""
+        """The min-2 floor still holds under near-critical pressure."""
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
         total_bytes = 16 * 1024**3
@@ -733,15 +735,17 @@ class TestP10ExistingReaperPatterns:
 # `_CONCURRENT_PENALTY_FACTOR` is the COE05 "simultaneous-peak floor". Its whole
 # job is to deny the Nth concurrent spawn BEFORE N sessions all peak at once and
 # trip macOS jetsam. Before this class, that guard path had ZERO coverage — the
-# ceiling 4→6 bump (run_a7252400) raised the max in-flight spawns from ~3 to ~5,
-# widening the exact aggregate-spike window the penalty is meant to close, so the
-# guard needed a test that actually drives it.
+# aggregate-spike window (multiple in-flight spawns peaking together) is exactly
+# what the penalty is meant to close, so the guard needed a test that actually
+# drives it. (The ceiling was briefly bumped 4→6 in run_a7252400 then reverted
+# 6→4 on 2026-08-02 — see resource_monitor._MAX_TABS_CEILING — but this guard is
+# ceiling-independent: it prices concurrent peaks, not the UX tab count.)
 #
 # It ALSO documents an honest limitation surfaced while writing it (a fail-loud
 # guard, not a green rubber-stamp): with the DEFAULT spawn cost (1200MB, used when
 # no adaptive sample exists), the penalty only bites on SMALL (≈16GB) machines
 # where 1200MB is a large fraction of RAM. On 36-64GB machines 1200×(1+n·0.5) stays
-# a small fraction of total, so the penalty NEVER denies within the 0..6 range —
+# a small fraction of total, so the penalty NEVER denies within the tested range —
 # the real streaming peak (~2.5-4.5GB full tree) is ~3-5× the main-process cost the
 # budget prices in. test_large_machine_penalty_is_structurally_weak pins this fact
 # so a future cost-model change can't silently alter large-machine behavior.
@@ -811,7 +815,7 @@ class TestSpawnBudgetAggregateSpike:
         """The ceiling (UX cap, compute_max_tabs) and spawn_budget (RAM gate) are
         DISTINCT gates with distinct jobs — verified by their divergent outputs on
         the SAME machine at a HEALTHY profile:
-          - compute_max_tabs CAPS the offer at exactly _MAX_TABS_CEILING (6) — it
+          - compute_max_tabs CAPS the offer at exactly _MAX_TABS_CEILING — it
             never exceeds the ceiling even with abundant RAM (that's its whole job:
             bound the UI offer);
           - spawn_budget PERMITS the spawn (RAM is healthy) — a separate answer to
@@ -825,8 +829,8 @@ class TestSpawnBudgetAggregateSpike:
             offered = m.compute_max_tabs()
             budget = m.spawn_budget(alive_count=0)
 
-        # The ceiling CAPS the offer: 64GB has room for far more than 6 by the raw
-        # RAM formula, yet compute_max_tabs never exceeds the ceiling.
+        # The ceiling CAPS the offer: 64GB has room for far more than the ceiling
+        # by the raw RAM formula, yet compute_max_tabs never exceeds the ceiling.
         assert offered == m._MAX_TABS_CEILING, (
             f"compute_max_tabs must cap the offer at the ceiling "
             f"({m._MAX_TABS_CEILING}) even with abundant RAM, got {offered}"
@@ -848,8 +852,8 @@ class TestSpawnBudgetAggregateSpike:
         assert budget.can_spawn is False, (
             f"spawn_budget must deny on a near-full machine, got {budget}"
         )
-        # And the UX ceiling itself RAM-degrades below 6 here — neither gate
-        # authorizes a spawn when RAM is full.
+        # And the UX ceiling itself RAM-degrades below the ceiling here — neither
+        # gate authorizes a spawn when RAM is full.
         assert offered < m._MAX_TABS_CEILING, (
             f"on a near-full machine compute_max_tabs should RAM-degrade below the "
             f"ceiling ({m._MAX_TABS_CEILING}), got {offered}"
