@@ -448,3 +448,69 @@ class TestDispatchRetreat:
     def test_dispatch_404(self, client: TestClient):
         resp = client.post("/api/todos/nonexistent/dispatch", json={"tab_label": "Tab 1"})
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# linked_context str/dict contract (run_61f1b635)
+# ---------------------------------------------------------------------------
+
+class TestLinkedContextStringContract:
+    """A JSON-object linked_context must round-trip as a STRING through every read
+    path. Regression: the SQLite adapter _row_to_dict auto-json.loads any '{'/'['
+    string, turning linked_context into a dict, which violated ToDoResponse's
+    Optional[str] and 400'd the whole list. Fix: SQLiteToDosTable._row_to_dict
+    re-serializes it back to a string at the DB-read boundary (covers list, get,
+    update, list_history in one place)."""
+
+    _WORK_PACKET = '{"next_step": "do the thing", "files": ["a.py"], "notes": "ctx"}'
+    _CJK_PACKET = '{"next_step": "做事情", "notes": "你好"}'
+
+    def test_list_returns_object_linked_context_as_string(self, client: TestClient, workspace_id: str):
+        """AC1/AC2: GET /api/todos is 200 and linked_context is a JSON string, not a dict."""
+        created = _create_todo(
+            client, workspace_id, title="obj ctx list",
+            source_type="manual", linked_context=self._WORK_PACKET,
+        )
+        resp = client.get(f"/api/todos?workspace_id={workspace_id}")
+        assert resp.status_code == 200, resp.text
+        row = next(t for t in resp.json() if t["id"] == created["id"])
+        assert isinstance(row["linked_context"], str), \
+            f"expected str, got {type(row['linked_context']).__name__}"
+        import json as _json
+        assert _json.loads(row["linked_context"])["next_step"] == "do the thing"
+
+    def test_get_returns_object_linked_context_as_string(self, client: TestClient, workspace_id: str):
+        """AC2: single GET path also coerces dict -> str."""
+        created = _create_todo(
+            client, workspace_id, title="obj ctx get",
+            source_type="manual", linked_context=self._WORK_PACKET,
+        )
+        resp = client.get(f"/api/todos/{created['id']}")
+        assert resp.status_code == 200, resp.text
+        assert isinstance(resp.json()["linked_context"], str)
+
+    def test_history_returns_object_linked_context_as_string(self, client: TestClient, workspace_id: str):
+        """AC1: the /history path (bypasses _dict_to_response, uses list_history)
+        must ALSO emit linked_context as a string — the Gate-1 hole."""
+        _create_todo(
+            client, workspace_id, title="obj ctx history",
+            source_type="manual", linked_context=self._WORK_PACKET,
+        )
+        resp = client.get("/api/todos/history")
+        assert resp.status_code == 200, resp.text
+        row = next(t for t in resp.json()["todos"] if t["title"] == "obj ctx history")
+        assert isinstance(row["linked_context"], str)
+
+    def test_cjk_linked_context_round_trips_without_escaping(self, client: TestClient, workspace_id: str):
+        """CJK work packets (the real case — Library packet is Chinese) must round-trip
+        as raw UTF-8, matching what the writer (JS JSON.stringify / skill json.dumps)
+        stored — no \\uXXXX escaping drift on the read path (ensure_ascii=False)."""
+        created = _create_todo(
+            client, workspace_id, title="cjk ctx",
+            source_type="manual", linked_context=self._CJK_PACKET,
+        )
+        row = client.get(f"/api/todos/{created['id']}").json()
+        assert isinstance(row["linked_context"], str)
+        assert "你好" in row["linked_context"], "CJK must be raw, not \\uXXXX-escaped"
+        import json as _json
+        assert _json.loads(row["linked_context"])["notes"] == "你好"

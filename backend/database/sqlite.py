@@ -1210,9 +1210,31 @@ class WorkspaceScopedTable(SQLiteTable[T], Generic[T]):
 
 class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
     """Specialized SQLite table for ToDos with workspace and status filtering."""
-    
+
     filter_field: ClassVar[str] = "status"
     order_by: ClassVar[str] = "created_at DESC"
+
+    def _row_to_dict(self, row: aiosqlite.Row) -> dict:
+        """Same as the base, but keep ``linked_context`` a STRING.
+
+        The base ``_row_to_dict`` auto-``json.loads`` any field whose value
+        starts with ``{``/``[`` — great for genuine JSON columns, wrong for
+        ``linked_context``, which is a JSON-object *string* by contract
+        (``ToDoResponse.linked_context: Optional[str]``; the frontend does
+        ``JSON.parse`` on it, the skill ``json.dumps`` it). Left as a dict it
+        400s every read path (list/get/update/list_history). Re-serialize it
+        back to a string here — the single DB-read boundary all those paths
+        share — instead of touching the base method (33 other tables rely on
+        its auto-parse). run_61f1b635."""
+        result = super()._row_to_dict(row)
+        if result is not None:
+            lc = result.get("linked_context")
+            if isinstance(lc, (dict, list)):
+                # ensure_ascii=False so CJK round-trips byte-identically to what
+                # the writer stored (JS JSON.stringify + the skill's json.dumps
+                # both emit raw UTF-8) — no \uXXXX drift between create and read.
+                result["linked_context"] = json.dumps(lc, ensure_ascii=False)
+        return result
 
     async def list_by_status(self, status: str) -> list[T]:
         """List all ToDos with a specific status (across all workspaces)."""
