@@ -19,6 +19,18 @@ import Modal from './Modal';
 import { setNavSource, clearNavSource } from '../layout/navSource';
 import { observeChatArea } from '../layout/chatAreaBounds';
 
+// Pristine window size captured before any test mutates it. Several tests set
+// window.innerWidth/innerHeight to exercise the viewport clamp / fallback; the
+// afterEach restore below prevents that from leaking into later innerWidth-
+// sensitive tests (a real pollution bug caught 2026-08-02).
+const ORIG_INNER_WIDTH = window.innerWidth;
+const ORIG_INNER_HEIGHT = window.innerHeight;
+
+function setWindowSize(w: number, h: number): void {
+  Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
+  Object.defineProperty(window, 'innerHeight', { value: h, configurable: true, writable: true });
+}
+
 // Run rAF callbacks synchronously (double-rAF enter would otherwise never fire
 // under fake timers). Each call resolves on the next microtask-ish tick.
 beforeEach(() => {
@@ -37,6 +49,7 @@ afterEach(() => {
   document.body.style.overflow = '';
   (window as unknown as { __modalLockCount?: number }).__modalLockCount = 0;
   clearNavSource(); // module-global — reset so spout tests don't cross-pollute
+  setWindowSize(ORIG_INNER_WIDTH, ORIG_INNER_HEIGHT); // no test leaks window size
 });
 
 function noop() {}
@@ -171,8 +184,7 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     // No chat-area observed → Modal uses the fallback box. It must be bounded by
     // the viewport (width = innerWidth - left, height = innerHeight - top), so the
     // panel inside it can never overflow the window (the 2026-08-02 bug).
-    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true, writable: true });
-    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true, writable: true });
+    setWindowSize(1200, 800);
     render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
     const scrim = screen.getByTestId('modal-scrim');
     expect(scrim.style.width).toBe('1050px');  // 1200 - 150 (PANEL_LEFT)
@@ -184,29 +196,19 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
   it('null-rect FALLBACK re-bounds on window resize (stays viewport-bounded)', () => {
     // The fallback reads window size from resize-reactive state, so a resize while
     // the rect is still unobserved must re-size the scrim (not stay a stale
-    // render-time snapshot). Save/restore window size so this test can't pollute
-    // the innerWidth-sensitive clamp tests that follow.
-    const origW = window.innerWidth;
-    const origH = window.innerHeight;
-    try {
-      Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true, writable: true });
-      Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true, writable: true });
-      render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
-      const scrim = screen.getByTestId('modal-scrim');
-      expect(scrim.style.width).toBe('1050px');  // 1200 - 150 (PANEL_LEFT)
+    // render-time snapshot). afterEach restores window size — no manual cleanup.
+    setWindowSize(1200, 800);
+    render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+    const scrim = screen.getByTestId('modal-scrim');
+    expect(scrim.style.width).toBe('1050px');  // 1200 - 150 (PANEL_LEFT)
 
-      act(() => {
-        Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true, writable: true });
-        Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true, writable: true });
-        window.dispatchEvent(new Event('resize'));
-      });
+    act(() => {
+      setWindowSize(900, 600);
+      window.dispatchEvent(new Event('resize'));
+    });
 
-      expect(scrim.style.width).toBe('750px');   // 900 - 150 → re-bounded, not stale
-      expect(scrim.style.height).toBe('520px');  // 600 - 80
-    } finally {
-      Object.defineProperty(window, 'innerWidth', { value: origW, configurable: true, writable: true });
-      Object.defineProperty(window, 'innerHeight', { value: origH, configurable: true, writable: true });
-    }
+    expect(scrim.style.width).toBe('750px');   // 900 - 150 → re-bounded, not stale
+    expect(scrim.style.height).toBe('520px');  // 600 - 80
   });
 
   it('a non-fullscreen modal keeps full-viewport inset-0 (unchanged)', () => {
@@ -258,10 +260,12 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     };
     // Drive chatAreaBounds with a known rect (the message column between leftNav
     // and the dynamic-width radar). observeChatArea publishes synchronously.
-    // Fixture fits within the viewport (bottom 680 < innerHeight) so the
-    // viewport-clamp in measure() is a no-op here — this test isolates the
-    // "scrim = rect, not viewport" contract. The below-fold clamp itself is
-    // covered by chatAreaBounds.test.ts.
+    // Viewport larger than the fixture (right 1050, bottom 680) so the
+    // width+height clamp in measure() is a no-op here — this test isolates the
+    // "scrim = rect, not viewport" contract. The clamps themselves are covered by
+    // chatAreaBounds.test.ts. Set explicitly (not leaked from a prior test) so it
+    // holds under the afterEach window-size restore.
+    setWindowSize(2000, 2000);
     const stub = document.createElement('div');
     stub.getBoundingClientRect = () =>
       ({ left: 150, top: 80, width: 900, height: 600, right: 1050, bottom: 680, x: 150, y: 80, toJSON: () => {} } as DOMRect);
