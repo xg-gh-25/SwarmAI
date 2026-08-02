@@ -8,14 +8,13 @@
  *        onDispatch (chat) — the overlay never writes yaml directly (Gate-1 #7)
  *
  * The overlay renders inside a Modal gated on `swarm:show-jobs`; we fire that
- * event to open it. jobsService + pipelinesService are mocked so we assert on
+ * event to open it. jobsService is mocked so we assert on
  * rendered data and the dispatched prompt.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { JobsRunsOverlay } from '../JobsRunsOverlay';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../../services/jobs';
-import { pipelinesService } from '../../../services/pipelines';
 
 vi.mock('../../../services/jobs', () => ({
   jobsService: {
@@ -24,9 +23,6 @@ vi.mock('../../../services/jobs', () => ({
     runJob: vi.fn(),
     fetchJobRuns: vi.fn(),
   },
-}));
-vi.mock('../../../services/pipelines', () => ({
-  pipelinesService: { fetchAllPipelines: vi.fn() },
 }));
 
 const fn = (f: unknown) => f as ReturnType<typeof vi.fn>;
@@ -62,7 +58,6 @@ describe('JobsRunsOverlay interactions', () => {
     fn(jobsService.fetchOverview).mockResolvedValue(OVERVIEW);
     fn(jobsService.fetchJobRuns).mockResolvedValue(RUNS);
     fn(jobsService.runJob).mockResolvedValue({ status: 'success', summary: 'ran' });
-    fn(pipelinesService.fetchAllPipelines).mockResolvedValue([]);
   });
 
   it('AC2: renders roster cards with health dots + real overview stats', async () => {
@@ -196,27 +191,30 @@ describe('JobsRunsOverlay interactions', () => {
     expect(screen.queryByTestId('job-action-delete')).toBeNull();
   });
 
-  it('AC5: Runs view merges pipeline + job runs newest-first (real assertion, not just claimed)', async () => {
-    // Job lastRun is UTC (Z); pipeline updatedAt carries a +08:00 offset. The
-    // job ran at 06:00Z = 14:00+08:00 (later instant) than the pipeline 09:00+08:00
-    // = 01:00Z — so newest-first the JOB row must come FIRST despite its "06:00"
-    // text sorting BEFORE "09:00" lexically (guards the Date.parse sort fix).
-    fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'stock', name: 'Stock', lastRun: '2026-07-31T06:00:00Z' })]);
-    fn(pipelinesService.fetchAllPipelines).mockResolvedValue([
-      { id: 'p1', project: 'SwarmAI', requirement: 'do a thing', status: 'completed', currentStage: 'reflect', checkpointReason: null, pauseKind: null, progress: '8/8', updatedAt: '2026-07-31T09:00:00+08:00' },
+  it('AC5: Runs view is PURE job-runs — no pipeline rows, newest-first', async () => {
+    // Two scheduled-job runs; the newer instant must render first. The Runs view
+    // must NOT contain any pipeline row (XG: pipeline 别揉进来) — it no longer
+    // fetches or merges pipeline runs at all.
+    fn(jobsService.fetchRoster).mockResolvedValue([
+      mkRoster({ id: 'older', name: 'Older Job', lastRun: '2026-07-30T06:00:00Z', lastStatus: 'success' }),
+      mkRoster({ id: 'newer', name: 'Newer Job', lastRun: '2026-07-31T06:00:00Z', lastStatus: 'failed' }),
     ]);
     render(<JobsRunsOverlay onDispatch={() => true} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click(screen.getByTestId('jobs-view-runs'));
 
-    // Both the pipeline (fetchAllPipelines) and the job (roster) legs load
-    // asynchronously in refreshRuns — wait for BOTH rows to appear.
     await waitFor(() => expect(screen.getAllByTestId('run-row').length).toBe(2));
     const rows = screen.getAllByTestId('run-row');
-    // Newest instant first: the JOB (06:00Z = 14:00 local) before the PIPELINE (01:00Z).
-    expect(within(rows[0]).getByText('job')).toBeTruthy();
-    expect(within(rows[1]).getByText('pipeline')).toBeTruthy();
+    // Newest job first; both rows are job runs.
+    expect(within(rows[0]).getByText('Newer Job')).toBeTruthy();
+    expect(within(rows[1]).getByText('Older Job')).toBeTruthy();
+    // Load-bearing proof of "no pipeline": the row count equals EXACTLY the number
+    // of jobs with a lastRun (2). A leaked pipeline row would push the count to 3
+    // and fail here — this is what would go RED if the pipeline leg were restored,
+    // unlike a text-match on a badge that no longer exists (adversarial LOW).
+    const jobsWithRuns = 2;
+    expect(rows.length).toBe(jobsWithRuns);
   });
 
   it('AC6: pause/resume label reflects enabled state; run-now disabled for a paused job', async () => {

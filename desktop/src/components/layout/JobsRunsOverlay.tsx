@@ -7,8 +7,9 @@
  * back-to-chat). Two views inside the fullscreen Modal (Jobs | Runs):
  *   • JOBS — overview stats strip + a roster of scheduled jobs (health dot,
  *            schedule, last-run, category). Click a card → detail drawer.
- *   • RUNS — a reverse-chron timeline merging pipeline runs (real per-run status)
- *            with the selected/loaded job runs. Absolute YYYY-MM-DD HH:MM stamps.
+ *   • RUNS — a reverse-chron timeline of scheduled-job runs ONLY (each job's
+ *            latest run). Pure jobs — no pipeline runs (XG: pipeline 别揉进来).
+ *            Absolute YYYY-MM-DD HH:MM stamps.
  *
  * DETAIL DRAWER: absolute right-side overlay (z-10, NOT a flex sibling, so the
  * roster never compresses). Fetches GET /api/jobs/{id}/runs → shows schedule/type/
@@ -35,7 +36,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../services/jobs';
-import { pipelinesService, type PipelineRun } from '../../services/pipelines';
 
 export interface JobsRunsOverlayProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
@@ -69,7 +69,6 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
   const [view, setView] = useState<ViewMode>('jobs');
   const [roster, setRoster] = useState<JobRosterRow[]>([]);
   const [overview, setOverview] = useState<JobsOverview | null>(null);
-  const [pipelines, setPipelines] = useState<PipelineRun[]>([]);
   const [loading, setLoading] = useState(false);
   // Track the selected job by ID (not a snapshot) so the drawer re-derives fresh
   // data after a refresh (F2: a captured row went stale after Run-now).
@@ -104,12 +103,14 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
     const gen = ++genRef.current;
     setLoading(true);
     try {
-      // Runs view merges pipeline runs + each job's latest run — so it needs the
-      // roster too, even when the user jumps straight to Runs without visiting
-      // Jobs first (otherwise job rows silently never appear). Settle independently.
-      const [plRes, rRes] = await Promise.allSettled([pipelinesService.fetchAllPipelines(), jobsService.fetchRoster()]);
+      // Runs view is PURE job-runs (XG: pipeline 别揉进来) — it shows each job's
+      // latest run from the roster, so it only needs the roster, even when the
+      // user jumps straight to Runs without visiting Jobs first.
+      const rRes = await jobsService.fetchRoster().then(
+        (v) => ({ status: 'fulfilled' as const, value: v }),
+        () => ({ status: 'rejected' as const }),
+      );
       if (gen !== genRef.current) return;
-      setPipelines(plRes.status === 'fulfilled' ? plRes.value : []);
       if (rRes.status === 'fulfilled') setRoster(rRes.value);
     } finally {
       if (gen === genRef.current) setLoading(false);
@@ -179,7 +180,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
         {view === 'jobs' ? (
           <JobsView roster={roster} overview={overview} onSelect={(j) => { setCreating(false); setSelectedId(j.id); }} />
         ) : (
-          <RunsView pipelines={pipelines} roster={roster} />
+          <RunsView roster={roster} />
         )}
 
         {/* Detail drawer — absolute overlay, never a flex sibling. Mutually
@@ -280,25 +281,19 @@ function JobCard({ job, onSelect }: { job: JobRosterRow; onSelect: (j: JobRoster
   );
 }
 
-// ── Runs view: merged pipeline + job-run timeline ───────────────────
+// ── Runs view: PURE job-run timeline (no pipeline — XG: pipeline 别揉进来) ──
 
-function RunsView({ pipelines, roster }: { pipelines: PipelineRun[]; roster: JobRosterRow[] }) {
-  // Merge pipeline runs (real per-run status + updatedAt) with the latest run of
-  // each scheduled job (from roster lastRun). Sorted newest-first by timestamp.
-  type Row = { key: string; kind: 'pipeline' | 'job'; name: string; status: string; detail: string; ts: string };
-  const rows: Row[] = [
-    ...pipelines.map((p): Row => ({
-      key: `p-${p.id}`, kind: 'pipeline', name: `${p.project}: ${p.requirement}`.slice(0, 80),
-      status: p.status, detail: p.progress || p.currentStage, ts: p.updatedAt,
-    })),
-    ...roster.filter((j) => j.lastRun).map((j): Row => ({
-      key: `j-${j.id}`, kind: 'job', name: j.name, status: j.lastStatus, detail: j.schedule, ts: j.lastRun ?? '',
-    })),
-  // Sort on the parsed INSTANT, not the raw ISO string: pipeline updatedAt carries
-  // a local offset (+08:00) while job lastRun is UTC (Z), so a lexical compare would
-  // order by wall-clock text, not chronology (off by up to the offset). Date.parse
-  // handles both forms; invalid/empty stamps (→ NaN → 0) sort last.
-  ].sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
+function RunsView({ roster }: { roster: JobRosterRow[] }) {
+  // Each scheduled job's latest run (from roster lastRun), newest-first. Jobs only.
+  type Row = { key: string; name: string; status: string; detail: string; ts: string };
+  const rows: Row[] = roster
+    .filter((j) => j.lastRun)
+    .map((j): Row => ({
+      key: `j-${j.id}`, name: j.name, status: j.lastStatus, detail: j.schedule, ts: j.lastRun ?? '',
+    }))
+    // Sort on the parsed INSTANT, not the raw ISO string (job lastRun is UTC/Z;
+    // Date.parse normalizes; invalid/empty stamps → NaN → 0 sort last).
+    .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="jobs-runs-view">
@@ -308,9 +303,6 @@ function RunsView({ pipelines, roster }: { pipelines: PipelineRun[]; roster: Job
         <div className="flex flex-col gap-1">
           {rows.map((r) => (
             <div key={r.key} className="flex items-center gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5" data-testid="run-row">
-              <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded shrink-0 ${
-                r.kind === 'pipeline' ? 'text-violet-400 bg-violet-500/10' : 'text-sky-400 bg-sky-500/10'
-              }`}>{r.kind}</span>
               <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{r.name}</span>
               <span className="text-[10px] font-mono text-[var(--color-text-muted)] shrink-0">{r.detail}</span>
               <StatusBadge status={r.status} />
