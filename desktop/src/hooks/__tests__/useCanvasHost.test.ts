@@ -70,6 +70,20 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.isOpen).toBe(false);
   });
 
+  it('canvas-state emit re-fires when outputCount changes (Gate-2 MED: no stale count)', () => {
+    const events: Array<{ outputCount?: number } | null> = [];
+    const onState = (e: Event) => events.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:canvas-state', onState);
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' })); // isOpen → emit
+    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 3 })); // count → must re-emit
+    window.removeEventListener('swarm:canvas-state', onState);
+    const counts = events.filter(Boolean).map((d) => d!.outputCount);
+    expect(counts).toContain(3); // the updated count reached a fresh emit (not frozen)
+  });
+
   it('close clears the active tab Canvas (file + manuallyOpen) without touching other tabs', () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),

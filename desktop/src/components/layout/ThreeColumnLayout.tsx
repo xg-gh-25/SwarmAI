@@ -738,7 +738,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       return;
     }
     document.dispatchEvent(new CustomEvent('swarm:open-file', {
-      detail: { path: file.path, autoDiff: autoDiff || undefined },
+      detail: { path: file.path, autoDiff: autoDiff || undefined, gitStatus: file.gitStatus, workspaceId: file.workspaceId },
     }));
   }, []);
 
@@ -765,7 +765,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
       document.dispatchEvent(new CustomEvent('swarm:open-file', {
-        detail: { path: swarmWarning.pendingFile.path },
+        detail: { path: swarmWarning.pendingFile.path, gitStatus: swarmWarning.pendingFile.gitStatus, workspaceId: swarmWarning.pendingFile.workspaceId },
       }));
     }
     setSwarmWarning({ isOpen: false, pendingFile: null });

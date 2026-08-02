@@ -3184,9 +3184,15 @@ export default function ChatPage() {
             Canvas was manually opened. */}
         {canvas.isOpen && (
           <FileViewerPanel
+            // key per tab: FileViewer keeps its OWN internal tab list
+            // (useFileViewerTabs) that only appends/dedups by path and never
+            // clears on chat-tab switch — without a key it would leak tab A's
+            // open file into tab B as a lingering internal tab (Gate-2 HIGH).
+            // Remounting per activeTabId gives each chat tab a clean FileViewer.
+            key={activeTabId ?? '__no_tab__'}
             initialFile={canvas.file ?? undefined}
             onClose={canvas.close}
-            sessionId={sessionId}
+            sessionId={sessionId ?? undefined}
             pinned={canvas.pinned}
             onTogglePin={canvas.togglePin}
             muted={canvas.muted}

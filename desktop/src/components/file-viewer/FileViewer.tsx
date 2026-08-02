@@ -120,6 +120,7 @@ export default function FileViewer({
     activeTab,
     openTab,
     closeTab,
+    closeAllTabs,
     switchTab,
     markDirty,
   } = useFileViewerTabs();
@@ -161,7 +162,17 @@ export default function FileViewer({
 
   const prevInitialFileRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!initialFile) return;
+    if (!initialFile) {
+      // initialFile cleared (e.g. Canvas file nulled while the panel stays open
+      // because it was manually opened) → close the stale surface instead of
+      // leaving the last file rendered (Gate-2 HIGH). Guard on prev so we only
+      // clear on the null TRANSITION, not on every render while already empty.
+      if (prevInitialFileRef.current !== undefined) {
+        prevInitialFileRef.current = undefined;
+        closeAllTabs();
+      }
+      return;
+    }
     if (prevInitialFileRef.current === initialFile.filePath) return;
     prevInitialFileRef.current = initialFile.filePath;
     // Capture workspaceId for FileEditorCore's attach-to-chat
@@ -169,7 +180,7 @@ export default function FileViewer({
       workspaceIdRef.current = initialFile.workspaceId;
     }
     openTab(initialFile.filePath, initialFile.fileName, initialFile.gitStatus);
-  }, [initialFile, openTab]);
+  }, [initialFile, openTab, closeAllTabs]);
 
   /* -------------------------------------------------------------- */
   /*  Fetch content for active tab                                   */

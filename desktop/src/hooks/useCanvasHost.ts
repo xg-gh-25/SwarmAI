@@ -7,9 +7,10 @@
  * a full-height sibling of the chat column — so it sat beside the tab bar and
  * lost its state every switch. This hook moves Canvas ownership to ChatPage (the
  * owner of tabs), keyed PER TAB, so:
- *   - each tab remembers its own open file + pin/mute/expanded/manuallyOpen
- *     (mirrors the existing per-tab `inputValueMapRef` pattern — a plain useRef
- *     Map that NEVER flows into MessageStore/reconcile, so zero OT01 risk);
+ *   - each tab remembers its own open file + pin/mute/manuallyOpen (mirrors the
+ *     existing per-tab `inputValueMapRef` pattern — a plain useRef Map that NEVER
+ *     flows into MessageStore/reconcile, so zero OT01 risk). (Expanded is a
+ *     transient panel-local UI state, deliberately NOT per-tab.)
  *   - ChatPage renders <FileViewerPanel> BELOW ChatHeader, so Canvas visibly
  *     belongs to the current tab.
  *
@@ -43,7 +44,6 @@ interface CanvasTabState {
   file: CanvasFile | null;
   pinned: boolean;
   muted: boolean;
-  expanded: boolean;
   manuallyOpen: boolean;
 }
 
@@ -51,7 +51,6 @@ const EMPTY: CanvasTabState = {
   file: null,
   pinned: false,
   muted: false,
-  expanded: false,
   manuallyOpen: false,
 };
 
@@ -91,8 +90,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const mapRef = useRef<Map<string, CanvasTabState>>(new Map());
   // The active tab's slice, mirrored into React state so the panel re-renders.
   const [slice, setSlice] = useState<CanvasTabState>(EMPTY);
-  // Panel-internal meta (outputCount) for the proprioception emit.
-  const metaRef = useRef<{ collapsed: boolean; outputCount: number }>({ collapsed: false, outputCount: 0 });
+  // Panel-internal output count for the proprioception emit. STATE (not a ref):
+  // the canvas-state emit effect below depends on it, so a ref would freeze the
+  // count at its first value (the emit would never re-fire on new outputs — a
+  // real staleness regression vs the old ThreeColumnLayout code, Gate-2 MED).
+  const [outputCount, setOutputCount] = useState(0);
 
   const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
@@ -116,9 +118,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
   const togglePin = useCallback(() => patch({ pinned: !(mapRef.current.get(keyFor(activeTabId))?.pinned) }), [patch, activeTabId]);
   const toggleMute = useCallback(() => patch({ muted: !(mapRef.current.get(keyFor(activeTabId))?.muted) }), [patch, activeTabId]);
-  const close = useCallback(() => patch({ file: null, manuallyOpen: false, expanded: false }), [patch]);
+  const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
   const onCanvasMeta = useCallback((meta: { collapsed: boolean; outputCount: number }) => {
-    metaRef.current = meta;
+    // State setter (not a ref write) so the canvas-state emit effect re-fires
+    // when the output count changes. Setter is identity-stable → no loop.
+    setOutputCount(meta.outputCount);
   }, []);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
@@ -138,7 +142,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff } = (e as CustomEvent<{ path: string; autoDiff?: boolean }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string }>).detail ?? {};
       if (!filePath) return;
       let resolvedPath = filePath;
       try {
@@ -158,7 +162,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const landingTab = activeTabIdRef.current;
       const k = keyFor(landingTab);
       const cur = mapRef.current.get(k) ?? EMPTY;
-      const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined } };
+      const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId } };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
     };
@@ -189,13 +193,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const lastCanvasEmit = useRef<string>('');
   useEffect(() => {
     const detail = isOpen
-      ? { open: true, outputCount: metaRef.current.outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
+      ? { open: true, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
       : null;
     const sig = JSON.stringify(detail);
     if (sig === lastCanvasEmit.current) return;
     lastCanvasEmit.current = sig;
     window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail }));
-  }, [isOpen, slice.pinned, slice.muted]);
+  }, [isOpen, outputCount, slice.pinned, slice.muted]);
 
   return {
     file: slice.file,
