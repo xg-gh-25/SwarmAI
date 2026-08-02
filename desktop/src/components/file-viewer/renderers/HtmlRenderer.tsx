@@ -1,22 +1,19 @@
 /**
- * HtmlRenderer -- HTML viewer: open-in-browser (rendered) + in-app source view.
- *
- * ⚠️ Why NOT an in-app iframe preview: srcDoc rendering in the Tauri WebKit
- * (WKWebView) webview is unreliable — it renders a blank frame in the production
- * .app even for a valid static single-file document (Chrome/dev renders it fine,
- * so the bug is invisible until packaged). This is the SAME conclusion the Eval
- * report viewer already reached (see EvalDashboard ReportsTab: "srcDoc rendering
- * in the Tauri WebKit webview proved unreliable" → open in system browser). So
- * this renderer follows that established pattern instead of repeating the bug.
+ * HtmlRenderer -- HTML viewer: inline sandboxed iframe (rendered) + source view.
  *
  * Modes:
- *   - Rendered  (default): a card that opens the file in the system browser via
- *     the /workspace/file/raw endpoint (served as text/html — the browser renders
- *     it natively, fully process-isolated). This is the "real" rendered view.
- *   - Source: raw HTML in a syntax-highlighted <pre><code> block (in-app; works
- *     fine because it's plain <pre>, not an iframe).
- *   - Toggle button top-right switches [Source] / [Rendered].
- *   - Reports file size via onStatusInfo.
+ *   - Rendered (default): inline via <iframe sandbox="allow-scripts allow-popups"
+ *     srcDoc={content}> — scripts RUN (charts/tabs work) but the frame is a
+ *     null/opaque origin that cannot reach the parent (never combine allow-scripts
+ *     WITH allow-same-origin). FilePreviewModal renders html-preview inline too
+ *     (though script-inert), so inline render is a proven pattern here. A
+ *     bottom-right "Open in browser" FALLBACK (opens /workspace/file/raw in the
+ *     system browser) covers two residual risks the inline frame can't: (a) the
+ *     packaged WebKit rendering a blank srcDoc frame — historically worried about,
+ *     NOT yet verified in a packaged .app, so QA the build; (b) reports needing
+ *     real same-origin network/fetch (blocked by the opaque-origin sandbox).
+ *   - Source: raw HTML in a syntax-highlighted <pre><code> block.
+ *   - Toggle button top-right switches [Source] / [Rendered]. Size via onStatusInfo.
  */
 import { useState, useEffect } from 'react';
 import { openExternal } from '../../../utils/openExternal';
@@ -121,21 +118,34 @@ export default function HtmlRenderer({
 
       {/* Content area */}
       {mode === 'rendered' ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
-          <span className="material-symbols-outlined text-5xl text-[var(--color-text-muted)]">language</span>
-          <div>
-            <p className="text-sm font-medium text-[var(--color-text)] mb-1">{fileName}</p>
-            <p className="text-xs text-[var(--color-text-muted)] max-w-sm">
-              HTML renders in your system browser — the in-app webview can't display it reliably.
-              Click below to open the fully-rendered page, or switch to <strong>Source</strong> to read the markup here.
-            </p>
-          </div>
+        /* Inline render via a sandboxed iframe — same pattern FilePreviewModal
+           already ships for html-preview (sandbox='allow-same-origin', srcDoc).
+           An 'Open in browser' fallback sits bottom-right in case the packaged
+           WebKit ever renders a blank frame (the historical worry) — the user
+           always has an escape hatch to the fully-isolated system browser. */
+        <div className="flex-1 relative min-h-0">
+          {/* sandbox="allow-scripts" WITHOUT allow-same-origin: agent HTML
+              reports rely on inline <script> (Chart.js/Plotly/D3, tabs) — scripts
+              must run or the report renders dead. Omitting allow-same-origin puts
+              the frame in a null/opaque origin so it CANNOT reach the parent
+              (the dangerous combo is allow-scripts + allow-same-origin together).
+              Same-origin fetch/XHR inside the report is blocked — the
+              "Open in browser" fallback covers anything needing real network. */}
+          <iframe
+            sandbox="allow-scripts allow-popups"
+            srcDoc={content}
+            className="w-full h-full border-0 bg-white"
+            title={fileName}
+            data-testid="html-preview-iframe"
+          />
           <button
             onClick={openInBrowser}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium
-              text-white bg-[var(--color-accent)] hover:opacity-90 transition-opacity shadow-sm"
+            className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+              text-[var(--color-text)] bg-[var(--color-card)] border border-[var(--color-border)]
+              hover:bg-[var(--color-hover)] transition-colors shadow-sm"
+            title="Open the fully-rendered page in your system browser"
           >
-            <span className="material-symbols-outlined text-base">open_in_new</span>
+            <span className="material-symbols-outlined text-sm">open_in_new</span>
             Open in browser
           </button>
         </div>

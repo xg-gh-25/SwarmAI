@@ -20,7 +20,7 @@
  * @exports CanvasOutputRail
  * @exports isBookkeepingPath — pure predicate (unit-tested)
  */
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useEffect } from 'react';
 import { useReferencedFiles, type ReferencedFile } from '../../hooks/useReferencedFiles';
 import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
@@ -117,12 +117,20 @@ const OutputRow = memo(function OutputRow({
   );
 });
 
+export interface OutputCounts {
+  total: number;
+  neu: number; // NEW-badged ('new' is a reserved word)
+  upd: number;
+}
+
 export interface CanvasOutputRailProps {
   /** Active-tab session id (from useSessionMeta) — undefined before a session exists. */
   sessionId: string | undefined;
+  /** Reports the current counts up to the header (for the summary line). */
+  onCounts?: (counts: OutputCounts) => void;
 }
 
-export function CanvasOutputRail({ sessionId }: CanvasOutputRailProps) {
+export function CanvasOutputRail({ sessionId, onCounts }: CanvasOutputRailProps) {
   const { files: grouped } = useReferencedFiles(sessionId ?? '');
 
   // Real deliverables only: written group minus bookkeeping noise.
@@ -142,10 +150,35 @@ export function CanvasOutputRail({ sessionId }: CanvasOutputRailProps) {
     });
   }, [outputs, statusMap]);
 
+  // Publish counts to the header. Effect (not render-time call) so we never
+  // setState-in-render a parent. neu/upd from the git badge map.
+  useEffect(() => {
+    if (!onCounts) return;
+    let neu = 0, upd = 0;
+    for (const f of outputs) {
+      const b = statusMap.get(f.path);
+      if (b === 'new') neu++;
+      else if (b === 'upd') upd++;
+    }
+    onCounts({ total: outputs.length, neu, upd });
+  }, [outputs, statusMap, onCounts]);
+
   if (ordered.length === 0) {
+    // Empty state: a friendly reminder + a pure-CSS bee (🐝 Swarm identity)
+    // flying a gentle loop. When the first output lands it flies out (the rail
+    // re-renders into the list). Zero-dependency — see index.css .canvas-bee*.
     return (
-      <div className="px-2 py-3 text-[11px] text-[var(--color-text-muted)]">
-        No outputs yet — files the agent creates or edits will appear here.
+      <div
+        className="flex flex-col items-center justify-center gap-2 px-3 py-6 text-center"
+        data-testid="canvas-output-rail-empty"
+      >
+        <div className="canvas-bee-field" aria-hidden="true">
+          <span className="canvas-bee">🐝</span>
+        </div>
+        <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed max-w-full">
+          No outputs yet — keep chatting; whatever I create or edit lands here and
+          flies out to you.
+        </p>
       </div>
     );
   }

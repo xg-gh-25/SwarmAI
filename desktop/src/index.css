@@ -771,6 +771,34 @@ body {
   opacity: 0.55;
 }
 
+/* Canvas empty-state bee (🐝 Swarm identity) — a pure-CSS gentle flight loop:
+   the bee traces a soft figure-ish path while bobbing + a subtle wing-buzz wobble.
+   Zero deps. `prefers-reduced-motion` stops the flight (accessibility). */
+.canvas-bee-field {
+  position: relative;
+  width: 96px;
+  height: 56px;
+}
+.canvas-bee {
+  position: absolute;
+  left: 0;
+  top: 18px;
+  font-size: 20px;
+  line-height: 1;
+  animation: canvas-bee-fly 4.2s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes canvas-bee-fly {
+  0%   { transform: translate(2px, 6px)  rotate(-8deg); }
+  25%  { transform: translate(34px, -6px) rotate(6deg); }
+  50%  { transform: translate(66px, 4px)  rotate(-4deg); }
+  75%  { transform: translate(34px, 12px) rotate(8deg); }
+  100% { transform: translate(2px, 6px)  rotate(-8deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-bee { animation: none; }
+}
+
 /* TreeNodeRow — hover and interaction styles */
 
 /* Hover background — only visible when no inline backgroundColor is set

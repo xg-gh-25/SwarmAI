@@ -22,6 +22,9 @@ export const PANEL_CONSTANTS = {
   STORAGE_KEY: 'fileViewerPanelWidth',
 } as const;
 
+/** Width of the collapsed narrow outputs dock (item 4). */
+const COLLAPSED_WIDTH = 200;
+
 function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
@@ -75,6 +78,28 @@ export default function FileViewerPanel({
     }
   }, [expanded, width]);
 
+  // Collapse → a NARROW right-edge dock showing ONLY the outputs list (the file
+  // surface is hidden; the panel stays mounted at a slim fixed width). Clicking
+  // a file in the dock re-expands to the full panel. This replaces the old
+  // "collapse = disappear" so outputs stay glanceable. Separate from `expanded`
+  // (full-width) — collapse is the opposite end.
+  const [collapsed, setCollapsed] = useState(false);
+  const preCollapseWidthRef = useRef(width);
+  const collapse = useCallback(() => {
+    // If currently expanded (width=MAX), remember the user's REAL pre-expand
+    // width so uncollapse restores that, not MAX (Gate-2 #4 de-sync fix).
+    preCollapseWidthRef.current = expanded ? preExpandWidthRef.current : width;
+    setCollapsed(true);
+    setExpanded(false);
+  }, [expanded, width]);
+  const uncollapse = useCallback(() => {
+    setCollapsed(false);
+    setWidth(preCollapseWidthRef.current);
+  }, []);
+
+  // Output counts published by the rail — drives the header summary.
+  const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
+
   // Persist width changes
   const updateWidth = useCallback((newWidth: number) => {
     const clamped = Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, newWidth));
@@ -120,6 +145,32 @@ export default function FileViewerPanel({
     };
   }, [isDragging, updateWidth]);
 
+  // ── Collapsed: a narrow right-edge dock showing ONLY the outputs list ──────
+  // The file surface is hidden; a slim rail stays glanceable. Clicking a file
+  // (swarm:open-file) re-expands. A small chevron re-opens the full panel too.
+  if (collapsed && sessionId !== undefined) {
+    return (
+      <div
+        className="relative flex-shrink-0 flex flex-col border-l-2 border-[var(--color-primary)]/40 bg-[var(--color-card)]"
+        style={{ width: COLLAPSED_WIDTH }}
+        data-testid="file-viewer-panel-collapsed"
+      >
+        <button
+          onClick={uncollapse}
+          className="flex items-center justify-between gap-1 px-2 h-7 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] border-b border-[var(--color-border)]"
+          title="Expand Canvas"
+          aria-label="Expand Canvas"
+        >
+          <span className="material-symbols-outlined text-[15px]">chevron_left</span>
+          <span className="truncate">{counts.total > 0 ? counts.total : ''}</span>
+        </button>
+        <div className="flex-1 overflow-y-auto" onClickCapture={uncollapse}>
+          <CanvasOutputRail sessionId={sessionId} onCounts={setCounts} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="relative flex-shrink-0 flex animate-canvas-slide-in"
@@ -152,12 +203,35 @@ export default function FileViewerPanel({
       {/* Canvas column: output rail (session deliverables) + the file surface. */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* Canvas header — output stream + gentle auto-surface controls.
-            Rendered only when Canvas props are wired (sessionId provided). */}
+            Rendered only when Canvas props are wired (sessionId provided).
+            Layout: a min-w-0 truncating title/summary on the left + a
+            flex-shrink-0 action cluster on the right, so buttons never get
+            occluded on narrow widths (item 3). */}
         {sessionId !== undefined && (
           <div className="flex-shrink-0 border-b border-[var(--color-border)]">
-            <div className="flex items-center justify-between px-2 h-7 text-[11px] text-[var(--color-text-muted)]">
-              <span className="font-semibold tracking-wide uppercase">Outputs</span>
-              <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-2 px-2 h-7 text-[11px] text-[var(--color-text-muted)]">
+              {/* Count summary (item 2): "Outputs · N" + new/modified breakdown. */}
+              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                <span className="font-semibold tracking-wide uppercase shrink-0">Outputs</span>
+                {counts.total > 0 && (
+                  <span className="shrink-0 text-[var(--color-text-faint,var(--color-text-muted))]">·</span>
+                )}
+                {counts.total > 0 && (
+                  <span className="truncate">
+                    {counts.total}
+                    {(counts.neu > 0 || counts.upd > 0) && (
+                      <span className="text-[var(--color-text-faint,var(--color-text-muted))]">
+                        {' ('}
+                        {counts.neu > 0 && <span className="text-green-400">{counts.neu} new</span>}
+                        {counts.neu > 0 && counts.upd > 0 && ', '}
+                        {counts.upd > 0 && <span className="text-yellow-500">{counts.upd} mod</span>}
+                        {')'}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-0.5 shrink-0">
                 {/* Pin = THIS file (keep it open, don't let a new output replace
                     the view; auto-surface resumes when unpinned). Mute = THIS
                     SESSION (stop auto-surfacing new outputs entirely). Distinct
@@ -183,16 +257,24 @@ export default function FileViewerPanel({
                 <button
                   onClick={toggleExpand}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
-                  title={expanded ? 'Collapse — restore previous width' : 'Expand — widen the Canvas for review'}
+                  title={expanded ? 'Restore width' : 'Expand — widen the Canvas for review'}
                   aria-label="Toggle Canvas expand"
                   aria-pressed={expanded}
                 >
                   <span className="material-symbols-outlined text-[14px]">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
                 </button>
+                <button
+                  onClick={collapse}
+                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
+                  title="Collapse to a narrow outputs dock"
+                  aria-label="Collapse Canvas to outputs dock"
+                >
+                  <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+                </button>
               </div>
             </div>
             <div className="max-h-32 overflow-y-auto">
-              <CanvasOutputRail sessionId={sessionId} />
+              <CanvasOutputRail sessionId={sessionId} onCounts={setCounts} />
             </div>
           </div>
         )}
