@@ -22,9 +22,6 @@ export const PANEL_CONSTANTS = {
   STORAGE_KEY: 'fileViewerPanelWidth',
 } as const;
 
-/** Width of the collapsed narrow outputs dock (item 4). */
-const COLLAPSED_WIDTH = 200;
-
 function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
@@ -93,51 +90,24 @@ export default function FileViewerPanel({
     }
   }, [expanded, width]);
 
-  // Collapse → a NARROW right-edge dock showing ONLY the outputs list (the file
-  // surface is hidden; the panel stays mounted at a slim fixed width). Clicking
-  // a file in the dock re-expands to the full panel. This replaces the old
-  // "collapse = disappear" so outputs stay glanceable. Separate from `expanded`
-  // (full-width) — collapse is the opposite end.
-  const [collapsed, setCollapsed] = useState(false);
-  const preCollapseWidthRef = useRef(width);
-  const collapse = useCallback(() => {
-    // If currently expanded (width=MAX), remember the user's REAL pre-expand
-    // width so uncollapse restores that, not MAX (Gate-2 #4 de-sync fix).
-    preCollapseWidthRef.current = expanded ? preExpandWidthRef.current : width;
-    setCollapsed(true);
-    setExpanded(false);
-  }, [expanded, width]);
-  const uncollapse = useCallback(() => {
-    setCollapsed(false);
-    setWidth(preCollapseWidthRef.current);
-  }, []);
-
-  // BUG-1 fix (E2E): a NEW file arriving while collapsed must not open behind the
-  // dock (the collapsed branch hides the file surface → the output would be set
-  // but invisible = silent loss). When initialFile's path changes while
-  // collapsed, auto-uncollapse so the product actually shows — the "product flies
-  // out to you" intent. (auto-surface already respects mute/pin upstream, so if
-  // we got a new initialFile at all, it's meant to be shown.)
-  const initialFilePath = props.initialFile?.filePath;
-  const prevInitialPathRef = useRef(initialFilePath);
-  useEffect(() => {
-    if (initialFilePath && initialFilePath !== prevInitialPathRef.current && collapsed) {
-      setCollapsed(false);
-      setWidth(preCollapseWidthRef.current);
-    }
-    prevInitialPathRef.current = initialFilePath;
-  }, [initialFilePath, collapsed]);
+  // Window model is now TWO states + close (bug6): Panel (default, resizable) and
+  // Expanded (wide review) via `expanded`, plus Close (unmount). The old 200px
+  // narrow "outputs dock" (COLLAPSED_WIDTH) is REMOVED — it was the "傻傻分不出"
+  // culprit (a half-panel that read as broken). Outputs stay reachable via the
+  // Canvas nav card re-open, not a stunted dock.
 
   // Output counts published by the rail — drives the header summary.
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
-  // Report panel-internal state (collapsed + output count) UP so the parent can
-  // fold it into the swarm:canvas-state proprioception event. Fires on change;
-  // the parent equality-guards the actual DOM dispatch. (pin/mute/open are parent
-  // state already.) On unmount the parent resets these to neutral — no stale leak.
+  // Report panel-internal state (outputCount) UP so the parent can fold it into
+  // the swarm:canvas-state proprioception event. `collapsed` is always false now
+  // (kept in the payload for a stable contract with the parent + proprioception
+  // schema; the dock that set it true is gone). Fires on change; the parent
+  // equality-guards the actual DOM dispatch. On unmount the parent resets to
+  // neutral — no stale leak.
   useEffect(() => {
-    onCanvasMeta?.({ collapsed, outputCount: counts.total });
-  }, [collapsed, counts.total, onCanvasMeta]);
+    onCanvasMeta?.({ collapsed: false, outputCount: counts.total });
+  }, [counts.total, onCanvasMeta]);
 
   // Persist width changes
   const updateWidth = useCallback((newWidth: number) => {
@@ -183,45 +153,6 @@ export default function FileViewerPanel({
       document.body.style.cursor = '';
     };
   }, [isDragging, updateWidth]);
-
-  // ── Collapsed: a narrow right-edge dock showing ONLY the outputs list ──────
-  // The file surface is hidden; a slim rail stays glanceable. Clicking a file
-  // (swarm:open-file) re-expands. A small chevron re-opens the full panel too.
-  if (collapsed && sessionId !== undefined) {
-    return (
-      <div
-        className="relative flex-shrink-0 flex flex-col border-l-2 border-[var(--color-primary)]/40 bg-[var(--color-card)]"
-        style={{ width: COLLAPSED_WIDTH }}
-        data-testid="file-viewer-panel-collapsed"
-      >
-        {/* Dock header: expand (chevron + count) on the left, close (X) on the
-            right — so the user can dismiss Canvas directly from collapsed mode
-            (BUG-2 fix: previously the only exit was expand-then-close). */}
-        <div className="flex items-center h-7 border-b border-[var(--color-border)]">
-          <button
-            onClick={uncollapse}
-            className="flex items-center gap-1 flex-1 min-w-0 px-2 h-full text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]"
-            title="Expand Canvas"
-            aria-label="Expand Canvas"
-          >
-            <span className="material-symbols-outlined text-[15px] shrink-0">chevron_left</span>
-            <span className="truncate">{counts.total > 0 ? counts.total : 'Outputs'}</span>
-          </button>
-          <button
-            onClick={props.onClose}
-            className="shrink-0 px-1.5 h-full flex items-center text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]"
-            title="Close Canvas"
-            aria-label="Close Canvas"
-          >
-            <span className="material-symbols-outlined text-[15px]">close</span>
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto" onClickCapture={uncollapse}>
-          <CanvasOutputRail sessionId={sessionId} onCounts={setCounts} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -285,11 +216,11 @@ export default function FileViewerPanel({
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-0.5 shrink-0">
-                {/* Pin = THIS file (keep it open, don't let a new output replace
-                    the view; auto-surface resumes when unpinned). Mute = THIS
-                    SESSION (stop auto-surfacing new outputs entirely). Distinct
-                    scopes — kept as two controls on purpose. */}
+              {/* CONTENT controls (pin + mute) — act on WHAT is shown, grouped
+                  left beside "Outputs". Pin = THIS file (keep it open, don't let
+                  a new output replace the view). Mute = THIS SESSION (stop
+                  auto-surfacing new outputs). Distinct scopes → two controls. */}
+              <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-content-controls">
                 <button
                   onClick={onTogglePin}
                   className={`p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : ''}`}
@@ -308,22 +239,29 @@ export default function FileViewerPanel({
                 >
                   <span className="material-symbols-outlined text-[14px]">{muted ? 'notifications_off' : 'notifications'}</span>
                 </button>
+              </div>
+              {/* Divider between the two semantic groups (content | window). */}
+              <div className="w-px h-4 bg-[var(--color-border)] shrink-0" data-testid="canvas-controls-divider" aria-hidden="true" />
+              {/* WINDOW controls (expand + close) — act on the PANEL itself,
+                  grouped right. Two-state window model: Panel ⇄ Expanded (one
+                  toggle) + Close. No collapse-to-dock (removed, bug6). */}
+              <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-window-controls">
                 <button
                   onClick={toggleExpand}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
                   title={expanded ? 'Restore width' : 'Expand — widen the Canvas for review'}
-                  aria-label="Toggle Canvas expand"
+                  aria-label={expanded ? 'Restore Canvas width' : 'Expand Canvas for review'}
                   aria-pressed={expanded}
                 >
                   <span className="material-symbols-outlined text-[14px]">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
                 </button>
                 <button
-                  onClick={collapse}
+                  onClick={props.onClose}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
-                  title="Collapse to a narrow outputs dock"
-                  aria-label="Collapse Canvas to outputs dock"
+                  title="Close Canvas"
+                  aria-label="Close Canvas"
                 >
-                  <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+                  <span className="material-symbols-outlined text-[14px]">close</span>
                 </button>
               </div>
             </div>
