@@ -348,7 +348,7 @@ body {
 .a10-group::after {
   content: '';
   position: absolute;
-  top: 30px;
+  top: 26px;
   bottom: 8px;
   right: -8px;
   width: 2px;
@@ -428,9 +428,9 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 7px 0 5px;
-  padding: 9px 9px 10px;
+  gap: 5px;
+  margin: 5px 0 4px;
+  padding: 8px 9px 8px;
   border-radius: 14px;
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--cz) 16%, transparent),
@@ -445,7 +445,7 @@ body {
 .a10-zone::after {
   content: '';
   position: absolute;
-  top: 30px;
+  top: 26px;
   bottom: 8px;
   right: -8px;
   width: 2px;

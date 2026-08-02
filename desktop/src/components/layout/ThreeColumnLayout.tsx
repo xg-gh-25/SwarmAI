@@ -581,9 +581,9 @@ function NavSvgIcon({ name }: { name: string }) {
  *  mechanics that shouldn't compete with Chat/Cognitive/Work for attention). */
 function A10Group({ label, tint, dimCards, children }: { label: string; tint: string; dimCards?: boolean; children: ReactNode }) {
   return (
-    <div className={`a10-group relative pb-2${dimCards ? ' a10-group--dim' : ''}`} style={{ '--gc': tint } as CSSProperties}>
+    <div className={`a10-group relative pb-1.5${dimCards ? ' a10-group--dim' : ''}`} style={{ '--gc': tint } as CSSProperties}>
       <div
-        className="flex items-center gap-2 px-1 pt-2.5 pb-1.5 text-[8.5px] font-bold font-mono uppercase tracking-[0.18em]"
+        className="flex items-center gap-2 px-1 pt-2 pb-1 text-[8.5px] font-bold font-mono uppercase tracking-[0.18em]"
         style={{ color: tint }}
         data-testid="navgroup-label"
       >
@@ -591,7 +591,7 @@ function A10Group({ label, tint, dimCards, children }: { label: string; tint: st
         {label}
         <span className="flex-1 h-px" style={{ background: `linear-gradient(90deg,transparent,${tint},transparent)`, opacity: 0.4 }} />
       </div>
-      <div className="space-y-1.5">{children}</div>
+      <div className="space-y-1">{children}</div>
     </div>
   );
 }
@@ -626,9 +626,9 @@ function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-
       data-testid={testId}
       aria-pressed={isActive}
       style={{ '--ac': tint } as CSSProperties}
-      className={`a10-card${isActive ? ' a10-card--active' : ''}${highlight ? ' a10-card--hilite' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-2`}
+      className={`a10-card${isActive ? ' a10-card--active' : ''}${highlight ? ' a10-card--hilite' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-1.5`}
     >
-      <span className="a10-chip flex-shrink-0 w-[29px] h-[29px] rounded-[9px] flex items-center justify-center">
+      <span className="a10-chip flex-shrink-0 w-[27px] h-[27px] rounded-[8px] flex items-center justify-center">
         <NavSvgIcon name={icon} />
       </span>
       <span className="flex-1 text-left text-[12.5px] font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
