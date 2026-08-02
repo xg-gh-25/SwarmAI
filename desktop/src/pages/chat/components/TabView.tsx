@@ -41,6 +41,39 @@ import { resolvePendingToolUseId } from '../utils';
 import { MessageBubble } from './MessageBubble';
 import { WelcomeScreen } from './WelcomeScreen';
 
+/** Bottom-proximity threshold (px): within this of the bottom counts as "at
+ *  bottom" for both auto-scroll and the resize re-pin. */
+export const BOTTOM_THRESHOLD = 100;
+
+/** Pure: is the scroll container within BOTTOM_THRESHOLD of its bottom?
+ *  Exported so the scroll-intent decision is unit-testable without a live DOM
+ *  (jsdom has no layout). */
+export function isAtBottom(scrollTop: number, clientHeight: number, scrollHeight: number): boolean {
+  return scrollTop + clientHeight >= scrollHeight - BOTTOM_THRESHOLD;
+}
+
+/** Pure: given the prior re-pin INTENT and a scroll event's metrics, compute the
+ *  next intent. The key rule (Gate-2 HIGH fix): the re-pin intent (`wasAtBottom`)
+ *  changes ONLY when scrollTop actually MOVED — a reflow that grows scrollHeight
+ *  with an unchanged scrollTop must NOT be read as "user scrolled up" (that would
+ *  self-suppress the re-pin when Canvas opens). Prod's handleScroll delegates
+ *  here so the tested rule IS the shipped rule (no re-derivation / test-theater).
+ *  Returns the next {wasAtBottom, lastScrollTop, userScrolledUp}. */
+export function nextScrollIntent(
+  prev: { wasAtBottom: boolean; lastScrollTop: number },
+  scrollTop: number,
+  clientHeight: number,
+  scrollHeight: number,
+): { wasAtBottom: boolean; lastScrollTop: number; userScrolledUp: boolean } {
+  const atBottom = isAtBottom(scrollTop, clientHeight, scrollHeight);
+  const moved = scrollTop !== prev.lastScrollTop;
+  return {
+    userScrolledUp: !atBottom,
+    wasAtBottom: moved ? atBottom : prev.wasAtBottom,
+    lastScrollTop: moved ? scrollTop : prev.lastScrollTop,
+  };
+}
+
 export interface TabViewProps {
   /** Registry key for this tab — used to scope the cancel-queued callback. */
   tabId: string;
@@ -250,6 +283,12 @@ function TabViewImpl({
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  // "Was the view at bottom by the user's INTENT" — the signal the resize re-pin
+  // trusts. Distinct from userScrolledUpRef because it is updated ONLY on a
+  // genuine scroll (scrollTop actually moved), so a reflow that grows the content
+  // height (scrollTop unchanged) cannot flip it to false and defeat the re-pin.
+  const wasAtBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
 
   // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
   // A tab that has never been visible renders a lightweight placeholder — no
@@ -266,9 +305,14 @@ function TabViewImpl({
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const threshold = 100;
-    userScrolledUpRef.current =
-      !(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
+    // Delegate the intent decision to the pure, tested helper (no re-derivation).
+    const next = nextScrollIntent(
+      { wasAtBottom: wasAtBottomRef.current, lastScrollTop: lastScrollTopRef.current },
+      el.scrollTop, el.clientHeight, el.scrollHeight,
+    );
+    userScrolledUpRef.current = next.userScrolledUp;
+    wasAtBottomRef.current = next.wasAtBottom;
+    lastScrollTopRef.current = next.lastScrollTop;
     if (el.scrollTop === 0) onLoadOlder();
   }, [onLoadOlder]);
 
@@ -287,17 +331,24 @@ function TabViewImpl({
   // 220ms width-reveal animation lands that taller layout AFTER the one-shot
   // message-scroll already ran — stranding the view above the newest message.
   // Tab activation (display:none→visible) and window resize are the same class.
-  // A ResizeObserver catches ALL of these (incl. every animation frame) and
-  // re-pins to bottom — but ONLY when the user hasn't scrolled up to read
-  // history (userScrolledUpRef), and only while active (scrollIntoView no-ops on
-  // a hidden container anyway). behavior:'auto' = instant, so the per-frame
-  // re-pin during the reveal doesn't stack smooth-scroll jank.
+  //
+  // The guard is SUBTLE (Gate-2 HIGH): we must NOT trust `userScrolledUpRef` at
+  // RO-fire time, because the reflow that GREW the content also fires a scroll
+  // event (scrollTop stays, scrollHeight grows → handleScroll reads "scrolled
+  // up" and sets the ref true), which would suppress the very re-pin we need.
+  // Instead we capture "was the view at bottom BEFORE this resize" from the
+  // PREVIOUS frame's metrics (wasAtBottomRef, updated only by genuine user
+  // scrolls via handleScroll) and re-pin on that. behavior:'auto' = instant, so
+  // per-frame re-pin during the reveal doesn't stack smooth-scroll jank.
   useEffect(() => {
     if (!isActive) return;
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      if (!userScrolledUpRef.current) {
+      // wasAtBottomRef reflects the user's INTENT before the resize (only genuine
+      // scrolls update it). A reflow-induced scroll event can't corrupt this
+      // decision because we read the pre-resize intent, not the post-grow metric.
+      if (wasAtBottomRef.current) {
         endRef.current?.scrollIntoView({ behavior: 'auto' });
       }
     });
