@@ -154,3 +154,69 @@ class LibraryMounts:
             return "fresh" if Path(path).expanduser().exists() else "missing"
         except OSError:
             return "missing"
+
+    def is_registered(self, scope: str, path: str) -> bool:
+        """True iff `path` is an ENABLED mount registered under `scope`.
+
+        Per-scope + enabled-only by design: a disabled mount (toggle off) or a
+        mount registered under a DIFFERENT scope does NOT authorize indexing —
+        anything looser is a global allowlist, which reopens run_1950e67e.
+        Path match is normalization-tolerant (expanduser + rstrip + resolve) so a
+        trailing-slash / ~ difference doesn't silently fail a legit mount, but it
+        never widens to a prefix/substring match (that would authorize siblings).
+        """
+        want = _norm_path(path)
+        for row in self.list_mounts(scope=scope):
+            if not row["enabled"]:
+                continue
+            if _norm_path(row["path"]) == want:
+                return True
+        return False
+
+
+def _norm_path(path: str) -> str:
+    """Canonical path form for registry equality (never a prefix match)."""
+    try:
+        return str(Path(path.rstrip("/")).expanduser().resolve())
+    except OSError:
+        return path.rstrip("/")
+
+
+# ── Ownership plan A — parallel predicate + composed oracle ──────────────────
+#
+# The contamination guard `repo_root_is_owned` (run_1950e67e) stays UNTOUCHED and
+# strict at its 3 project-loop sites. Mount indexing (Cycle 4) uses the composed
+# oracle below instead — owned OR explicitly-registered — so an external dir the
+# user opted in via the registry is indexable WITHOUT loosening the project guard.
+
+
+def mount_path_is_registered(store: "LibraryMounts", scope: str, path: str) -> bool:
+    """Free-function form of LibraryMounts.is_registered (the parallel predicate).
+
+    Kept as a module function (not only a method) so the mount-index call site can
+    compose it with repo_root_is_owned without holding a store method reference."""
+    return store.is_registered(scope, path)
+
+
+def is_mount_indexable(
+    project_dir,
+    path: str,
+    scope: str,
+    store: "LibraryMounts",
+) -> bool:
+    """The composed ownership oracle for the MOUNT-index path: owned OR registered.
+
+    `owned` = the project's TECH.md declares `path` as its repo (the existing
+    guard); `registered` = `path` is an enabled mount in THIS scope. Either branch
+    authorizes indexing; neither → reject (the invariant that keeps a random
+    external path out). This is ONLY for the new mount-index path — the 3
+    project-loop sites keep calling repo_root_is_owned directly (a project reindex
+    must never pick up a mount).
+    """
+    try:
+        from core.code_intel import repo_root_is_owned
+        if repo_root_is_owned(project_dir, path):
+            return True
+    except Exception:  # noqa: BLE001 — ownership check must never raise into the gate
+        pass
+    return mount_path_is_registered(store, scope, path)
