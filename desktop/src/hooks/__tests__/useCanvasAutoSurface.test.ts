@@ -132,6 +132,34 @@ describe('useCanvasAutoSurface', () => {
     expect(opened).toEqual([]);
   });
 
+  // ── Streaming gate + fail-closed (bug1: restart must not auto-open history) ──
+  // The gate activates ONLY when `isStreaming` is explicitly provided (production
+  // always passes it). When absent, legacy behavior is preserved (the 11 tests above).
+  it('streaming-gate: SUPPRESSES a write that arrives while NOT streaming (historical remount)', () => {
+    // On restart, keep-mounted MergedToolBlocks re-dispatch swarm:file-referenced
+    // with the tab NOT streaming — this must NOT auto-open a past-session file.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', isStreaming: false, debounceMs: DEBOUNCE }));
+    writeFile('Projects/SwarmAI/2-understanding/TECH.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]); // no historical auto-open on restart
+  });
+
+  it('streaming-gate: FIRES a write that arrives while streaming (live output)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', isStreaming: true, debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/live.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/live.md']);
+  });
+
+  it('fail-closed: SUPPRESSES when gated but activeSessionId is absent (tab unresolved on restart)', () => {
+    // isStreaming provided (gate active) but the active tab has no resolved session
+    // yet → fail CLOSED (opposite of the legacy unstamped-event fail-open).
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: undefined, isStreaming: true, debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/x.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]); // no session baseline → don't surface
+  });
+
   it('re-fires after the user closes their file (suppression is live, not latched)', () => {
     renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
     setPanelOpen(true);

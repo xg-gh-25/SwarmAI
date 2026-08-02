@@ -40,11 +40,23 @@ export interface CanvasAutoSurfaceOptions {
    *  writes don't surface in the tab you're looking at. Absent stamp → fail
    *  open (surface anyway; no regression for un-updated dispatchers). */
   activeSessionId?: string;
+  /** Whether the active tab is CURRENTLY streaming a response. This is the
+   *  discriminator between a LIVE agent write (surface it) and a HISTORICAL
+   *  MergedToolBlock re-dispatch on restart/remount (must NOT surface — bug1).
+   *  The gate activates ONLY when this is explicitly provided (a boolean):
+   *   - `isStreaming === false` → the write arrived while idle → SUPPRESS.
+   *   - `isStreaming === true`  → live output → surface (subject to other guards).
+   *   - `isStreaming === undefined` → gate OFF (legacy behavior preserved).
+   *  When the gate is active, an ABSENT `activeSessionId` fails CLOSED (a tab
+   *  whose session hasn't resolved yet — e.g. on restart — has no baseline, so
+   *  we do not surface). Deliberate inverse of the legacy unstamped fail-OPEN,
+   *  which only applies when the gate is off. */
+  isStreaming?: boolean;
   /** Debounce window to coalesce a write-burst (default 600ms). */
   debounceMs?: number;
 }
 
-export function useCanvasAutoSurface({ pinned, muted, activeSessionId, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
+export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreaming, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
   // Keep suppression flags in a ref so the long-lived listener reads live
   // values without re-subscribing on every flag change.
   const pinnedRef = useRef(pinned);
@@ -53,6 +65,8 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, debounceM
   mutedRef.current = muted;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  const isStreamingRef = useRef(isStreaming);
+  isStreamingRef.current = isStreaming;
 
   // "User is actively viewing THEIR OWN file" — the suppression signal. The
   // subtlety (Gate-2 HIGH, 2026-08-02): a panel that AUTO-SURFACE opened must
@@ -95,9 +109,21 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, debounceM
     const onWritten = (e: Event) => {
       const { path, operation, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; sessionId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
+      // Streaming gate (bug1) — checked at WRITE-ARRIVAL, not debounce-fire,
+      // because a historical MergedToolBlock re-dispatch arrives while the tab
+      // is idle. Active ONLY when isStreaming was explicitly provided:
+      //   - not streaming → the write is not live output → SUPPRESS.
+      //   - gate active + no resolved activeSessionId → fail CLOSED (restart:
+      //     the tab has no session baseline yet, so don't surface history).
+      // When isStreaming is undefined the gate is off (legacy behavior).
+      const streamingGate = isStreamingRef.current;
+      if (streamingGate !== undefined) {
+        if (streamingGate === false) return;               // idle write → historical/non-live
+        if (!activeSessionIdRef.current) return;            // gated + unresolved session → fail closed
+      }
       // Tab-scope: ignore a background (keep-mounted) tab's write. Fail open
       // when the event is unstamped (evtSessionId absent) or we have no active
-      // id yet — surface anyway rather than regress.
+      // id yet — surface anyway rather than regress (legacy path, gate off).
       const activeId = activeSessionIdRef.current;
       if (evtSessionId && activeId && evtSessionId !== activeId) return;
       if (isBookkeepingPath(path)) return;
