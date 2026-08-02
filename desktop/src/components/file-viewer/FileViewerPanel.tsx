@@ -60,6 +60,15 @@ export default function FileViewerPanel({
 }: FileViewerPanelProps) {
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
+  // Width-reveal (bug5): mount at width 0, then flip to the real width on the
+  // next frame so the CSS `transition: width` eases the panel open — and, as a
+  // flex sibling, eases the chat pane narrower in lockstep (no instant "pop").
+  // While dragging we must NOT keep the transition (it would lag the cursor).
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   // Accent tint for the spout + divider = the primary accent. (Earlier this read
@@ -216,8 +225,8 @@ export default function FileViewerPanel({
 
   return (
     <div
-      className="relative flex-shrink-0 flex animate-canvas-slide-in"
-      style={{ width, '--spout-tint': canvasTint } as CSSProperties}
+      className={`relative flex-shrink-0 flex ${isDragging ? '' : 'canvas-width-reveal'}`}
+      style={{ width: entered ? width : 0, '--spout-tint': canvasTint } as CSSProperties}
       data-testid="file-viewer-panel"
     >
       {/* Spout — a small triangle sitting IN the panel's left edge (inside the
@@ -243,8 +252,10 @@ export default function FileViewerPanel({
         <div className="absolute top-0 -left-1 w-3 h-full" aria-hidden="true" />
       </div>
 
-      {/* Canvas column: output rail (session deliverables) + the file surface. */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+      {/* Canvas column: output rail (session deliverables) + the file surface.
+          `canvas-content-fade` eases content opacity in behind the width grow so
+          text doesn't smear while the panel is still widening (bug5). */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade">
         {/* Canvas header — output stream + gentle auto-surface controls.
             Rendered only when Canvas props are wired (sessionId provided).
             Layout: a min-w-0 truncating title/summary on the left + a

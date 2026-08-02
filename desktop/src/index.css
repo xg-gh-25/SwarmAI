@@ -721,32 +721,33 @@ body {
   animation: fade-in 0.15s ease-out forwards;
 }
 
-/* Canvas panel: slides in from the right (mirror of slide-in-left). The Canvas
-   is conceptually an extension the current chat "spouts out" — the panel eases
-   in from the chat's right edge. */
-@keyframes slide-in-right {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
+/* Canvas panel reveal: the panel animates its WIDTH from 0 → target on mount
+   (driven by the `entered` flag in FileViewerPanel). As a flex sibling, this
+   makes the chat pane ease narrower IN LOCKSTEP with the panel growing — one
+   shared 0.22s curve, no instant "pop" (bug5). A translateX slide was wrong: it
+   left the panel at full layout width immediately, so the chat SNAPPED narrow
+   while the panel merely slid 24px. Width-reveal couples both panes to one
+   transition. Content fades in slightly behind the width so text doesn't smear. */
+.canvas-width-reveal {
+  transition: width 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
-
-.animate-canvas-slide-in {
-  animation: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+@keyframes canvas-content-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.canvas-content-fade {
+  animation: canvas-content-fade 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 /* Canvas ← chat spout: a small triangle INSIDE the Canvas's left edge (does not
    overhang the chat pane), pointing left toward the chat — reads as "this Canvas
    spouted out of the conversation." Tinted with the session accent (--spout-tint).
-   Sits on the header row (fixed offset). */
+   Vertically CENTERED on the chat window (bug4) — no longer pinned to the header. */
 .canvas-spout {
   position: absolute;
   left: 2px;
-  top: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 0;
   height: 0;
   border-top: 6px solid transparent;
