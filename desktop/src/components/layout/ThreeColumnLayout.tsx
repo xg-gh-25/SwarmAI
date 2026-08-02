@@ -850,7 +850,15 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       : { open: false, outputCount: 0, pinned: false, muted: false, collapsed: false },
     [isCanvasOpen, canvasMeta.outputCount, canvasMeta.collapsed, canvasPinned, canvasMuted],
   );
+  // VALUE-guard (not just identity): the useMemo returns a fresh object on the
+  // closed branch, and the reset effect below re-triggers a recompute — so an
+  // identity-only guard would emit a redundant (idempotent) neutral event. Skip
+  // the dispatch when the serialized value is unchanged (meta-review LOW).
+  const lastCanvasStateRef = useRef<string>('');
   useEffect(() => {
+    const serialized = JSON.stringify(canvasStateDetail);
+    if (serialized === lastCanvasStateRef.current) return;
+    lastCanvasStateRef.current = serialized;
     window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail: canvasStateDetail }));
   }, [canvasStateDetail]);
   // When Canvas closes, reset the lifted meta so a re-open never briefly shows a

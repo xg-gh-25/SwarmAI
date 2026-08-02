@@ -138,8 +138,20 @@ _OVERLAY_LABELS = {
 
 
 def _overlay_label(event_id: str) -> str:
-    """Map a swarm:show-* event id to a human label (falls back to the raw id)."""
-    return _OVERLAY_LABELS.get(event_id, event_id)
+    """Map a swarm:show-* event id to a human label.
+
+    Known ids map to a curated label. For an UNKNOWN id we fall back to the raw
+    value but SANITIZE it first — strip newlines and any leading markdown-header
+    `#`/whitespace — so a hand-crafted request body (the frontend only ever emits
+    the hardcoded ALL_SHOW_EVENTS ids) cannot inject a fake `## header` /
+    instruction line into the "## Current UI State" section via active_overlay.
+    Bounded further by the schema's max_length=128 on active_overlay.
+    """
+    label = _OVERLAY_LABELS.get(event_id)
+    if label is not None:
+        return label
+    # Unknown id → sanitize the raw fallback (single line, no leading markdown).
+    return event_id.replace("\n", " ").replace("\r", " ").lstrip("# \t")
 
 
 def _render_ui_context_section(editor_context: Optional[dict]) -> str:
@@ -210,6 +222,14 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
         lines.append(f"- Canvas (output panel): {', '.join(state_bits)}")
     if has_overlay:
         lines.append(f"- Open overlay: {_overlay_label(active_overlay)}")
+        # A fullscreen nav overlay OCCLUDES the file/Canvas surfaces — they are
+        # still "open" underneath but not visible right now. Note it so the agent
+        # doesn't assume the user is looking at the file (red-team coherence nit).
+        if has_file or has_canvas:
+            lines.append(
+                "  (this overlay is fullscreen and currently covers the "
+                "file/Canvas above — those are open but not visible right now)"
+            )
     return "\n".join(lines)
 
 
