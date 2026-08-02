@@ -234,6 +234,19 @@ function LeftSidebar() {
           <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide">History</span>
           <span className="text-[13px] text-[var(--color-text-faint)]">›</span>
         </button>
+
+        {/* 🔔 Alerts "Needs You" slot — a stable, fixed-width portal target
+            (run_2bdc68ad). The AlertsPill itself is owned + rendered by ChatPage
+            (which holds the useRadarAttention poll + the tab callbacks) and
+            createPortal'd INTO this node — so the global attention signal lives
+            on the fixed-width left chrome, not on the Canvas-shifting tab row.
+            Empty until ChatPage resolves it; `relative` anchors the pill's
+            right-flyout popover. */}
+        <div
+          id="sidebar-alerts-slot"
+          data-testid="sidebar-alerts-slot"
+          className="relative mt-0.5"
+        />
       </div>
 
       {/* A10 domain cards. Cognitive = a distinct "green panel" zone (核心差异化 —

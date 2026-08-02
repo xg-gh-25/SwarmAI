@@ -22,6 +22,7 @@
  * @module ChatPage
  */
 import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -38,7 +39,7 @@ import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../compon
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
 import { useSessionMeta } from '../contexts/LayoutContext';
-import { useActiveOverlayEvent } from '../components/layout/useExclusiveOverlay';
+import { useActiveOverlayEvent, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 import type { UiContextSnapshot, CanvasSnapshot } from '../utils/uiContext';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
@@ -51,7 +52,7 @@ import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
-import { ChatHeader, ChatInput, TabView } from './chat/components';
+import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { ToDoOverlay } from '../components/layout/ToDoOverlay';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
@@ -3007,10 +3008,41 @@ export default function ChatPage() {
     }
   };
 
-  // 🔔 Attention queue — polled ONCE here (single 30s poll) and shared by the
-  // ChatHeader Alerts pill AND the Radar sidebar's AttentionSection, so there is
-  // no duplicate poll (run_843962a5). Lifted out of RadarSidebar for this reason.
+  // 🔔 Attention queue — polled ONCE here (single 30s poll). Feeds the Alerts
+  // "Needs You" pill, which is portaled into the left-sidebar slot (run_2bdc68ad;
+  // was the ChatHeader pill in run_843962a5). One poll, one consumer — no duplicate.
   const { attentionItems } = useRadarAttention(sessionId, openTabs);
+
+  // 🔔 Alerts pill lives in the LEFT SIDEBAR (run_2bdc68ad), not the tab row —
+  // the attention signal is GLOBAL (cross-tab / paused runs / failing jobs), so
+  // it belongs on the fixed-width left chrome, unaffected by Canvas open/close.
+  // But useRadarAttention (+ its openTabs/currentSessionId dependency) and the
+  // action callbacks (handleItemClick / selectTab) are OWNED here by ChatPage;
+  // the sidebar (ThreeColumnLayout's LeftSidebar) is a SIBLING tree with no
+  // access to them. So we keep the hook + callbacks here and createPortal the
+  // pill INTO the sidebar's #sidebar-alerts-slot node. This keeps a SINGLE poll,
+  // uses the LIVE callbacks (no closure-snapshot / stale-tab OT01 trap), and adds
+  // zero new cross-tree event (Gate-1 verified: lifting the hook up would instead
+  // require bridging tab-state INTO the sidebar — net more mechanism).
+  const [alertsSlot, setAlertsSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    // The slot is rendered by LeftSidebar, which renders BEFORE ChatPage in the
+    // same ThreeColumnLayout pass, so this effect (post-commit) normally finds it
+    // on the first synchronous try. The bounded rAF retries are belt-and-suspenders
+    // for a ChatPage remount where the sidebar hasn't repainted yet — they close
+    // the "portal silently renders nothing" tail (Gate-1 #2 + REVIEW Finding 2)
+    // without an unbounded poll.
+    let raf = 0;
+    let tries = 0;
+    const MAX_TRIES = 5;
+    const resolve = () => {
+      const el = document.getElementById('sidebar-alerts-slot');
+      if (el) { setAlertsSlot(el); return; }
+      if (tries++ < MAX_TRIES) raf = requestAnimationFrame(resolve);
+    };
+    resolve();
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, []);
 
   // Render
   return (
@@ -3024,10 +3056,33 @@ export default function ChatPage() {
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
         isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
-        attentionItems={attentionItems}
-        onItemClick={handleItemClick}
-        onSelectTab={selectTab}
       />
+
+      {/* 🔔 Alerts pill — portaled into the left-sidebar slot (run_2bdc68ad).
+          Rendered here (not in the sidebar) so it uses ChatPage's live poll +
+          callbacks directly; createPortal only relocates the DOM node, the pill
+          stays a ChatPage child in the React tree (fresh props every render).
+          Overlay-aware wrappers (meta-review): the sidebar (and thus this pill)
+          stays clickable UNDER an open fullscreen domain overlay, whose scrim
+          covers the chat area. So acting on an alert — injecting a prompt or
+          switching tabs — must first return to chat (dispatch back-to-chat, which
+          every overlay closes on), else the user acts but keeps seeing the overlay,
+          not the result. Fires only when an overlay is actually open. */}
+      {alertsSlot && createPortal(
+        <AlertsPill
+          items={attentionItems}
+          onItemClick={(message, context) => {
+            if (activeOverlay) window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
+            handleItemClick(message, context);
+          }}
+          onSelectTab={(tabId) => {
+            if (activeOverlay) window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
+            selectTab(tabId);
+          }}
+          placement="left-flyout"
+        />,
+        alertsSlot,
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {/* Delete Confirmation Dialog */}
@@ -3184,12 +3239,13 @@ export default function ChatPage() {
             Canvas was manually opened. */}
         {canvas.isOpen && (
           <FileViewerPanel
-            // key per tab: FileViewer keeps its OWN internal tab list
-            // (useFileViewerTabs) that only appends/dedups by path and never
-            // clears on chat-tab switch — without a key it would leak tab A's
-            // open file into tab B as a lingering internal tab (Gate-2 HIGH).
-            // Remounting per activeTabId gives each chat tab a clean FileViewer.
-            key={activeTabId ?? '__no_tab__'}
+            // tabScopeKey (NOT a React `key`): FileViewer keeps its OWN internal
+            // tab list (useFileViewerTabs, append-only) that must clear on chat-tab
+            // switch so tab A's files don't bleed into tab B. Passing activeTabId
+            // as tabScopeKey clears that list WITHOUT remounting — a `key` remount
+            // (the first cut) replayed the 220ms width-reveal AND dropped the
+            // content cache on every switch (E2E finding, run_0fb40bbc).
+            tabScopeKey={activeTabId ?? undefined}
             initialFile={canvas.file ?? undefined}
             onClose={canvas.close}
             sessionId={sessionId ?? undefined}

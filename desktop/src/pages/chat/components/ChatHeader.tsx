@@ -1,9 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
-import type { AttentionItem, ItemClickHandler } from './RightSidebar/types';
 import { SessionTabBar } from './SessionTabBar';
-import { AlertsPill } from './AlertsPill';
 import { useHealth } from '../../../contexts/HealthContext';
 
 interface ChatHeaderProps {
@@ -20,14 +18,6 @@ interface ChatHeaderProps {
   // Dynamic tab scaling — disabled "+" button when at limit
   /** True when open tab count >= dynamic max tabs (disables the "+" button). */
   isNewTabDisabled?: boolean;
-
-  // 🔔 Alerts pill — the attention queue (polled once at ChatPage, passed down).
-  /** The 🔔 "Needs You" attention items. Empty → calm pill (no badge). */
-  attentionItems?: AttentionItem[];
-  /** Inject a message into the current chat input (paused / job alert items). */
-  onItemClick?: ItemClickHandler;
-  /** Switch to another tab (waiting alert items). */
-  onSelectTab?: (tabId: string) => void;
 }
 
 /**
@@ -35,14 +25,15 @@ interface ChatHeaderProps {
  *
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │  [🔔 Needs You N]       │
- * │ ◄─── SessionTabBar (flex-1, "+" at tail) ─►  │  ◄─ AlertsPill ─►    │
- * └─────────────────────────────────────────────────────────────────────┘
+ * │ [Tab1][Tab2][Tab3]...[+]←scroll→                    │ [health warn]  │
+ * │ ◄─── SessionTabBar (flex-1, "+" at tail) ──────────►  ◄─ (only if ─► │
+ * └──────────────────────────────────────────────────────  disconnected)┘
  *
  * The new-session "+" lives at the TAIL of the tab strip (inside SessionTabBar).
- * The right cluster holds the health warning (when not connected) + the 🔔
- * Alerts pill (the "Needs You" attention queue). Sidebar toggle buttons removed —
- * the Radar sidebar is now always visible.
+ * The right cluster holds ONLY the health warning (shown when not connected).
+ * The 🔔 Alerts "Needs You" pill was MOVED to the left-sidebar top slot
+ * (run_2bdc68ad) — a global attention signal belongs on the fixed-width left
+ * chrome, not on the Canvas-shifting tab row; ChatPage portals it there.
  *
  * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 2.1
  */
@@ -54,9 +45,6 @@ export function ChatHeader({
   onNewSession,
   tabStatuses,
   isNewTabDisabled,
-  attentionItems = [],
-  onItemClick,
-  onSelectTab,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
@@ -110,13 +98,6 @@ export function ChatHeader({
             {t('health.degraded', 'Reconnecting…')}
           </div>
         )}
-        {/* 🔔 Alerts pill — the "Needs You" attention queue. Replaces the old bare
-            "+" here; the new-session "+" now lives at the tab-strip tail. */}
-        <AlertsPill
-          items={attentionItems}
-          onItemClick={onItemClick}
-          onSelectTab={onSelectTab}
-        />
       </div>
     </div>
   );

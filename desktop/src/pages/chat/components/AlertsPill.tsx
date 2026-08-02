@@ -25,9 +25,17 @@ interface AlertsPillProps {
   onItemClick?: ItemClickHandler;
   /** Switch to another tab (waiting items). */
   onSelectTab?: (tabId: string) => void;
+  /**
+   * Popover anchor direction.
+   * - `left-flyout` (default): opens to the RIGHT of the pill, top-aligned —
+   *   used by the left-sidebar top slot (run_2bdc68ad). z-[60] so the flyout
+   *   sits ABOVE the fullscreen overlay scrim (Modal z-50).
+   * - `right`: opens BELOW-right (the legacy ChatHeader position).
+   */
+  placement?: 'left-flyout' | 'right';
 }
 
-export function AlertsPill({ items, onItemClick, onSelectTab }: AlertsPillProps) {
+export function AlertsPill({ items, onItemClick, onSelectTab, placement = 'left-flyout' }: AlertsPillProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const count = items.length;
@@ -78,7 +86,15 @@ export function AlertsPill({ items, onItemClick, onSelectTab }: AlertsPillProps)
         <div
           role="dialog"
           aria-label="Alerts"
-          className="absolute right-0 top-[calc(100%+8px)] z-50 w-[340px] rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] shadow-2xl overflow-hidden"
+          className={[
+            'absolute w-[340px] rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] shadow-2xl overflow-hidden',
+            placement === 'left-flyout'
+              // sidebar flyout: to the RIGHT of the pill, top-aligned. z-[60]
+              // clears the fullscreen overlay scrim (Modal z-50) so the flyout
+              // is reachable even with a domain overlay open.
+              ? 'left-[calc(100%+8px)] top-0 z-[60]'
+              : 'right-0 top-[calc(100%+8px)] z-50',
+          ].join(' ')}
         >
           {/* Header — self-explaining: says WHAT this surfaces */}
           <div className="px-3.5 py-3 border-b border-[var(--color-border)] bg-red-500/5">

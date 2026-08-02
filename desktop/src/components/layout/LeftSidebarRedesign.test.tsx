@@ -82,6 +82,19 @@ describe('LeftSidebar A10 — chat hero + history', () => {
     renderSidebar();
     expect(screen.getByTestId('history-row')).toBeInTheDocument();
   });
+
+  // run_2bdc68ad — the 🔔 Alerts "Needs You" pill lives in a fixed left-chrome
+  // slot (ChatPage portals the pill into this node), not on the tab row.
+  it('renders the Alerts "Needs You" portal slot in the sidebar header, above the nav zone', () => {
+    renderSidebar();
+    const slot = screen.getByTestId('sidebar-alerts-slot');
+    expect(slot).toBeInTheDocument();
+    // It sits inside the fixed-width left-sidebar chrome (not the tab row).
+    expect(screen.getByTestId('left-sidebar').contains(slot)).toBe(true);
+    // …and before the domain nav zone (order: hero → history → alerts → nav).
+    const nav = screen.getByTestId('nav-icons');
+    expect(slot.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {

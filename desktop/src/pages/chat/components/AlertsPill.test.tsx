@@ -67,4 +67,23 @@ describe('AlertsPill', () => {
     fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
     expect(screen.getByText(/Nothing needs you right now/)).toBeTruthy();
   });
+
+  // placement — the sidebar relocation (run_2bdc68ad) opens the popover to the
+  // RIGHT of the pill (left-flyout) instead of below-right (the old ChatHeader
+  // position). z-[60] keeps the flyout above the fullscreen overlay scrim (z-50).
+  it('placement="left-flyout" opens the popover to the RIGHT of the pill, above overlays', () => {
+    render(<AlertsPill items={[paused]} placement="left-flyout" />);
+    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('left-[calc(100%+8px)]');
+    expect(dialog.className).toContain('z-[60]');
+    expect(dialog.className).not.toContain('right-0');
+  });
+
+  it('placement defaults to left-flyout (sidebar is the sole consumer)', () => {
+    render(<AlertsPill items={[paused]} />);
+    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toContain('left-[calc(100%+8px)]');
+  });
 });
