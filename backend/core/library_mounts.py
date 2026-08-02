@@ -341,6 +341,67 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
     return {"status": "indexed", "symbols": total}
 
 
+def _card_slug(rel_name: str) -> str:
+    """Stable, filesystem-safe card filename for a source file (idempotent key).
+    A subdir separator / dot becomes '-', so rewriting the SAME source file always
+    targets the SAME card (delta, never a dup)."""
+    safe = "".join(c if (c.isalnum() or c in "-_") else "-" for c in rel_name.strip("/"))
+    return f"card-{safe}.md"
+
+
+def write_docs_cards(
+    store: "LibraryMounts",
+    mount_id: str,
+    *,
+    briefings: dict,
+    overview: str,
+) -> dict:
+    """Persist file-level briefing cards for a docs-kind mount (Cycle 5).
+
+    `briefings` maps a source-relative filename → the agent's briefing text (the
+    agent, chat-native, judges which files are worth a card and writes the text —
+    this function is the mechanical writer). Each card is a plain .md POINTER:
+    it carries the LIVE source path + the briefing, NEVER a copy of the source
+    bytes (index-not-warehouse). Cards land in Knowledge/Library/mounts/<id>/ and
+    are auto-indexed by the existing sync_knowledge_index rglob('*.md') → surface
+    on the library FTS5 recall leg with zero new recall code. Idempotent: the same
+    source file always rewrites the same card. Returns {status, cards?}.
+    """
+    row = store.get_mount(mount_id)
+    if row is None:
+        return {"status": "unknown"}
+    if row["kind"] != "docs":
+        return {"status": "skipped_non_docs"}
+    src_root = Path(row["path"]).expanduser()
+    card_dir = _mounts_dir() / mount_id
+    card_dir.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for rel_name, briefing in briefings.items():
+        source_path = src_root / rel_name
+        card_path = card_dir / _card_slug(rel_name)
+        body = (
+            f"# {rel_name}\n\n"
+            f"> Mounted docs briefing — recall lands here, then Read the LIVE source.\n\n"
+            f"- **source:** `{source_path}`\n"
+            f"- **mount:** `{mount_id}` (scope `{row['scope']}`)\n\n"
+            f"## Briefing\n\n{briefing}\n"
+        )
+        card_path.write_text(body, encoding="utf-8")  # rewrite-in-place = idempotent
+        written += 1
+
+    # Directory-overview card (recall landing spot for a whole-corpus query).
+    (card_dir / "_overview.md").write_text(
+        f"# Mounted docs: {src_root.name}\n\n"
+        f"- **source dir:** `{src_root}`\n"
+        f"- **mount:** `{mount_id}` (scope `{row['scope']}`)\n\n"
+        f"## Overview\n\n{overview}\n",
+        encoding="utf-8",
+    )
+    store.mark_synced(mount_id, index_ref=str(card_dir))
+    return {"status": "written", "cards": written}
+
+
 def recall_mounts(query: str, *, scope: str, store: "LibraryMounts", limit: int = 8) -> list[dict]:
     """Search all ENABLED code mounts in `scope`, newest hits first.
 
