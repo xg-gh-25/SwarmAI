@@ -155,13 +155,20 @@ class LibraryMounts:
     def check_health(self, mount_id: str) -> Optional[str]:
         """Re-probe the source and persist+return the health. None if unknown id.
 
-        A dangling mount (source deleted/moved) flips to 'missing' — the agent
-        then reports "source no longer at <path>" rather than failing silently.
+        Precedence (Cycle 7): missing > stale > fresh.
+        - 'missing': source deleted/moved — the agent reports "source no longer at
+          <path>" rather than failing silently.
+        - 'stale': source still exists but was edited AFTER last_synced (its
+          briefing/graph is an older snapshot). Recall still lands on the pointer
+          (agent reads the LIVE source), so stale only lowers HIT probability, never
+          returns wrong content.
+        - 'fresh': source exists and is not newer than the last index (or never
+          synced yet — nothing to be stale against).
         """
         row = self.get_mount(mount_id)
         if row is None:
             return None
-        health = self._probe_health(row["path"])
+        health = self._probe_health(row["path"], row["last_synced"])
         self._conn.execute(
             "UPDATE library_mounts SET health = ? WHERE id = ?", (health, mount_id)
         )
@@ -169,13 +176,32 @@ class LibraryMounts:
         return health
 
     @staticmethod
-    def _probe_health(path: str) -> str:
-        """Source-exists probe: 'fresh' if the pointer resolves, else 'missing'.
-        ('stale' is a freshness-job concern — mtime vs index — not source-exists.)"""
+    def _probe_health(path: str, last_synced: Optional[str] = None) -> str:
+        """Health probe: missing (gone) > stale (edited after index) > fresh.
+
+        `last_synced` is the SQLite ``datetime('now')`` UTC text stamped by
+        mark_synced. When absent (never indexed), a present source is 'fresh' —
+        there is no index to be stale against yet."""
         try:
-            return "fresh" if Path(path).expanduser().exists() else "missing"
+            p = Path(path).expanduser()
+            if not p.exists():
+                return "missing"
+            if last_synced:
+                synced_ts = _parse_sqlite_utc(last_synced)
+                # SQLite datetime('now') is SECOND-granularity; file mtimes are
+                # sub-second. Floor the source mtime to whole seconds before the
+                # compare so a file written at 12:00:00.7 then synced at "12:00:00"
+                # is NOT falsely stale (the .7 fraction the stamp can't represent).
+                # A real edit lands a full second later → correctly stale.
+                if synced_ts is not None and int(_source_max_mtime(p)) > synced_ts:
+                    return "stale"
+            return "fresh"
         except OSError:
             return "missing"
+
+    def refresh(self, mount_id: str) -> Optional[str]:
+        """Alias for check_health — re-probe + persist one mount's health."""
+        return self.check_health(mount_id)
 
     def is_registered(self, scope: str, path: str) -> bool:
         """True iff `path` is an ENABLED mount registered under `scope`.
@@ -202,6 +228,60 @@ def _norm_path(path: str) -> str:
         return str(Path(path.rstrip("/")).expanduser().resolve())
     except OSError:
         return path.rstrip("/")
+
+
+def _parse_sqlite_utc(text: str) -> Optional[float]:
+    """Parse SQLite ``datetime('now')`` text ('YYYY-MM-DD HH:MM:SS', UTC) → epoch
+    seconds. Returns None if unparseable (→ caller treats the mount as fresh, never
+    a false-stale from a parse error)."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, AttributeError):
+        return None
+
+
+def _source_max_mtime(root: Path) -> float:
+    """Newest mtime across the source (a file → its mtime; a dir → the max over
+    its tree). Bounded scan; a walk error falls back to the root's own mtime so a
+    permission hiccup never crashes the freshness probe."""
+    try:
+        if root.is_file():
+            return root.stat().st_mtime
+        newest = root.stat().st_mtime
+        for p in root.rglob("*"):
+            try:
+                m = p.stat().st_mtime
+                if m > newest:
+                    newest = m
+            except OSError:
+                continue
+        return newest
+    except OSError:
+        return 0.0
+
+
+def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None) -> dict:
+    """Light periodic freshness job: re-probe every mount's health, persist it,
+    and return a {scanned, fresh, stale, missing} summary. Never raises on one bad
+    mount (best-effort — a broken mount is counted, not fatal)."""
+    summary = {"scanned": 0, "fresh": 0, "stale": 0, "missing": 0}
+    try:
+        rows = store.list_mounts(scope=scope)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("refresh_all_mounts: list failed: %s", exc)
+        return summary
+    for row in rows:
+        summary["scanned"] += 1
+        try:
+            health = store.check_health(row["id"])
+        except Exception as exc:  # noqa: BLE001 — one bad mount must not sink the sweep
+            logger.debug("refresh_all_mounts: %s probe failed: %s", row["id"], exc)
+            continue
+        if health in summary:
+            summary[health] += 1
+    return summary
 
 
 # ── Ownership plan A — parallel predicate + composed oracle ──────────────────

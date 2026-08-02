@@ -126,15 +126,47 @@ async def recent_feed(days: int = Query(default=7, ge=1, le=30)) -> dict:
 
 
 @router.get("/mounts")
-async def list_mounts() -> dict:
-    """Registered mount points + health.
+async def list_mounts(scope: str = Query(default="SwarmAI")) -> dict:
+    """Registered mount points + live health for `scope` (real registry read)."""
+    try:
+        import sqlite3
+        from jobs.paths import DB_PATH
+        from core.library_mounts import LibraryMounts
+        if not DB_PATH.exists():
+            return {"count": 0, "mounts": [], "registry_ready": False}
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            store = LibraryMounts(conn)
+            store.ensure_table()
+            rows = store.list_mounts(scope=scope)
+            mounts = [
+                {
+                    "id": r["id"], "path": r["path"], "kind": r["kind"],
+                    "health": r["health"], "enabled": bool(r["enabled"]),
+                    "last_synced": r["last_synced"], "briefing": r["briefing"],
+                }
+                for r in rows
+            ]
+            return {"count": len(mounts), "mounts": mounts, "registry_ready": True}
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — overlay tolerates an empty list
+        logger.warning("library mounts list failed: %s", exc)
+        return {"count": 0, "mounts": [], "registry_ready": False}
 
-    Run 5: the mount registry does not exist yet, so this returns an empty list.
-    The later mount-registry cycle replaces this stub with a real read over the
-    `library_mounts` store. Kept as a live endpoint so the overlay's Mounted
-    section renders a real (empty) state, not a hardcoded placeholder.
-    """
-    return {"count": 0, "mounts": [], "registry_ready": False}
+
+@router.post("/inbox")
+async def drop_to_inbox(source_path: str = Query(...)) -> dict:
+    """Copy a SINGLE existing file into Knowledge/Inbox/ (the one copy-in exception;
+    directories are mounted, never copied). Returns the landed relative path."""
+    from core.library_inbox import copy_to_inbox
+    kdir = _knowledge_dir()
+    try:
+        landed = copy_to_inbox(kdir, Path(source_path))
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "landed", "path": f"Knowledge/{landed.relative_to(kdir).as_posix()}"}
 
 
 def _safe_size(p: Path) -> int:
