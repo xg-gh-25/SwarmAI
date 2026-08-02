@@ -8,9 +8,16 @@
  *
  * Zone predicates (mirror the design doc's zone table):
  *   ① To Do        status in (pending,overdue) AND no dispatch AND review_state null
- *   ② In Progress  dispatched (session_id OR tab_label non-null) AND review_state null
+ *   ② In Progress  (dispatched session_id/tab_label non-null OR status==in_discussion) AND review_state null
  *   ③ Completed    review_state === 'completed'  (awaiting review)
  *   ④ Recent       review_state in (confirmed,rejected)
+ *
+ * Note: `in_discussion` is a separate "being worked on" signal from `dispatched_*`
+ * — drag-to-chat bind (todos.py bind-session) AND TodoLifecycleHook implicit-file-
+ * match both set status=in_discussion WITHOUT dispatched_*. Both mean In Progress;
+ * omitting in_discussion here dropped such todos from ALL zones (History-only) —
+ * run_8e29d63f. An in_discussion card renders null-safely (no tab pill) and carries
+ * the Retreat action, so it has a working escape back to To Do.
  */
 import type { ToDo } from '../../types/todo';
 
@@ -21,7 +28,9 @@ export function zoneOf(t: ToDo): ToDoZone | null {
   if (t.reviewState === 'confirmed' || t.reviewState === 'rejected') return 'recent';
   // review_state is null below here
   const dispatched = !!(t.dispatchedSessionId || t.dispatchedTabLabel);
-  if (dispatched) return 'in_progress';
+  // in_discussion is the drag-to-chat / implicit-match "being worked on" signal
+  // (never sets dispatched_*); it means In Progress just like an explicit dispatch.
+  if (dispatched || t.status === 'in_discussion') return 'in_progress';
   if (t.status === 'pending' || t.status === 'overdue') return 'todo';
   // handled/cancelled/deleted with no review_state → not shown on the flow board
   return null;
