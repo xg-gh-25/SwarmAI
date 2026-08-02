@@ -734,7 +734,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // selected — so the output list is reachable even when auto-surface is muted
   // or nothing is open yet. Decouples "see my outputs" from "have a file open".
   const [canvasManuallyOpen, setCanvasManuallyOpen] = useState(false);
-  useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted });
+  useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted, activeSessionId: activeSessionMeta?.sessionId });
   useEffect(() => {
     const onOpenCanvas = () => setCanvasManuallyOpen(true);
     window.addEventListener('swarm:open-canvas', onOpenCanvas);

@@ -366,15 +366,28 @@ function DiffView({
             role={isInteractive ? 'button' : undefined}
             aria-label={isInteractive ? `Comment on diff line ${i + 1}` : undefined}
           >
+            {/* Two distinct gutters — OLD (before) is faint, NEW (after) is
+                normal, separated by a 2px divider, so the columns read as
+                "before | after" instead of two duplicated line-number strips
+                (#6 clarity fix). Gutter tint is gated on line.type so an added
+                row doesn't carry a red old-gutter (and vice-versa). */}
             <span
-              className="shrink-0 text-right pr-1 text-[var(--color-text-muted)] select-none border-r border-[var(--color-border)]"
+              className={clsx(
+                'shrink-0 text-right pr-1 opacity-70 select-none text-[var(--color-text-faint,var(--color-text-muted))]',
+                line.type === 'removed' && 'bg-[var(--color-git-deleted)]/[0.08]',
+              )}
               style={{ width: gutterW }}
+              title="line before"
             >
               {line.oldLineNumber ?? ''}
             </span>
             <span
-              className="shrink-0 text-right pr-1 pl-1 text-[var(--color-text-muted)] select-none border-r border-[var(--color-border)]"
+              className={clsx(
+                'shrink-0 text-right pr-1 pl-1 select-none border-r-2 border-[var(--color-border-strong,var(--color-border))] text-[var(--color-text-muted)]',
+                line.type === 'added' && 'bg-[var(--color-git-added)]/[0.08]',
+              )}
               style={{ width: gutterW }}
+              title="line after"
             >
               {line.newLineNumber ?? ''}
             </span>

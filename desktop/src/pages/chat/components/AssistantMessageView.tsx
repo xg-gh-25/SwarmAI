@@ -229,6 +229,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         isStreaming={isStreaming}
         lastPendingToolUseId={lastPendingToolUseId}
         readOnly={readOnly}
+        sessionId={sessionId}
       />
     );
   });

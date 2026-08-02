@@ -35,17 +35,24 @@ export interface CanvasAutoSurfaceOptions {
   pinned: boolean;
   /** User muted auto-surface for this session. */
   muted: boolean;
+  /** The ACTIVE tab's session id. A file-referenced event stamped with a
+   *  DIFFERENT session (a background keep-mounted tab) is ignored, so its
+   *  writes don't surface in the tab you're looking at. Absent stamp → fail
+   *  open (surface anyway; no regression for un-updated dispatchers). */
+  activeSessionId?: string;
   /** Debounce window to coalesce a write-burst (default 600ms). */
   debounceMs?: number;
 }
 
-export function useCanvasAutoSurface({ pinned, muted, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
+export function useCanvasAutoSurface({ pinned, muted, activeSessionId, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
   // Keep suppression flags in a ref so the long-lived listener reads live
   // values without re-subscribing on every flag change.
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
   // "User is actively viewing THEIR OWN file" — the suppression signal. The
   // subtlety (Gate-2 HIGH, 2026-08-02): a panel that AUTO-SURFACE opened must
@@ -86,8 +93,13 @@ export function useCanvasAutoSurface({ pinned, muted, debounceMs = 600 }: Canvas
     let pendingPath: string | null = null;
 
     const onWritten = (e: Event) => {
-      const { path, operation } = (e as CustomEvent<{ path: string; operation: string }>).detail ?? {};
+      const { path, operation, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; sessionId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
+      // Tab-scope: ignore a background (keep-mounted) tab's write. Fail open
+      // when the event is unstamped (evtSessionId absent) or we have no active
+      // id yet — surface anyway rather than regress.
+      const activeId = activeSessionIdRef.current;
+      if (evtSessionId && activeId && evtSessionId !== activeId) return;
       if (isBookkeepingPath(path)) return;
       // Coalesce a burst → last written path wins.
       pendingPath = path;

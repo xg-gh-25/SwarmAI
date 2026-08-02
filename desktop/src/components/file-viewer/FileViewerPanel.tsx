@@ -10,7 +10,7 @@
  * - `PANEL_CONSTANTS`   — Min/max/default width values
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
@@ -53,6 +53,27 @@ export default function FileViewerPanel({
   const [isDragging, setIsDragging] = useState(false);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+  // Accent tint for the spout + divider = the primary accent. (Earlier this read
+  // navSource, but navSource is only set by nav-CARD clicks — the auto-surface
+  // path never sets it, so it would show a stale, unrelated region color. A
+  // fixed accent is honest; a session-specific tint would need a real prop.)
+  const canvasTint = 'var(--color-primary)';
+  // Expand/collapse: snap to a wide review width and back. Remembers the
+  // pre-expand width so collapse restores exactly what the user had.
+  const [expanded, setExpanded] = useState(false);
+  const preExpandWidthRef = useRef(width);
+  // Compute from current state, then set both independently (no setWidth inside
+  // a setExpanded updater — that fires twice under StrictMode).
+  const toggleExpand = useCallback(() => {
+    if (!expanded) {
+      preExpandWidthRef.current = width;
+      setWidth(PANEL_CONSTANTS.MAX_WIDTH);
+      setExpanded(true);
+    } else {
+      setWidth(preExpandWidthRef.current);
+      setExpanded(false);
+    }
+  }, [expanded, width]);
 
   // Persist width changes
   const updateWidth = useCallback((newWidth: number) => {
@@ -64,6 +85,10 @@ export default function FileViewerPanel({
   // Resize drag handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    // A manual resize exits expand mode (matches "maximize then drag = un-maximize"):
+    // otherwise the icon shows "collapse" while the width is hand-dragged, and a
+    // later collapse would discard the drag by restoring the pre-expand width.
+    setExpanded(false);
     setIsDragging(true);
     startXRef.current = e.clientX;
     startWidthRef.current = width;
@@ -97,16 +122,19 @@ export default function FileViewerPanel({
 
   return (
     <div
-      className="relative flex-shrink-0 flex"
-      style={{ width }}
+      className="relative flex-shrink-0 flex animate-canvas-slide-in"
+      style={{ width, '--spout-tint': canvasTint } as CSSProperties}
       data-testid="file-viewer-panel"
     >
-      {/* Resize handle — left edge */}
+      {/* Spout — a small triangle sitting IN the panel's left edge (inside the
+          panel box, not overhanging chat), pointing left toward the chat: reads
+          as "this Canvas spouted out of the conversation." Tinted with the
+          session accent. Vertically centered on the header row. */}
+      <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
+      {/* Resize handle — left edge, doubles as the colorful Canvas↔chat divider */}
       <div
-        className={`w-1 cursor-col-resize transition-colors flex-shrink-0 ${
-          isDragging
-            ? 'bg-[var(--color-primary)]'
-            : 'bg-[var(--color-border)] hover:bg-[var(--color-primary)]/50'
+        className={`canvas-divider w-1 cursor-col-resize transition-colors flex-shrink-0 ${
+          isDragging ? 'opacity-100' : 'hover:opacity-100'
         }`}
         onMouseDown={handleMouseDown}
         role="separator"
@@ -130,11 +158,15 @@ export default function FileViewerPanel({
             <div className="flex items-center justify-between px-2 h-7 text-[11px] text-[var(--color-text-muted)]">
               <span className="font-semibold tracking-wide uppercase">Outputs</span>
               <div className="flex items-center gap-0.5">
+                {/* Pin = THIS file (keep it open, don't let a new output replace
+                    the view; auto-surface resumes when unpinned). Mute = THIS
+                    SESSION (stop auto-surfacing new outputs entirely). Distinct
+                    scopes — kept as two controls on purpose. */}
                 <button
                   onClick={onTogglePin}
                   className={`p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : ''}`}
-                  title={pinned ? 'Unpin — allow auto-surface to replace' : 'Pin — keep this file open'}
-                  aria-label="Toggle pin"
+                  title={pinned ? 'Pinned — this file won’t be auto-replaced (click to unpin)' : 'Pin this file — keep it open; a new output won’t replace your view'}
+                  aria-label="Toggle pin — keep this file open"
                   aria-pressed={!!pinned}
                 >
                   <span className="material-symbols-outlined text-[14px]">keep</span>
@@ -142,11 +174,20 @@ export default function FileViewerPanel({
                 <button
                   onClick={onToggleMute}
                   className={`p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors ${muted ? 'text-[var(--color-primary)]' : ''}`}
-                  title={muted ? 'Unmute auto-surface' : 'Mute — stop auto-surfacing new outputs this session'}
-                  aria-label="Toggle auto-surface mute"
+                  title={muted ? 'Auto-surface muted for this session (click to unmute)' : 'Mute auto-surface — stop opening new outputs this session (they still list here)'}
+                  aria-label="Toggle auto-surface mute for this session"
                   aria-pressed={!!muted}
                 >
                   <span className="material-symbols-outlined text-[14px]">{muted ? 'notifications_off' : 'notifications'}</span>
+                </button>
+                <button
+                  onClick={toggleExpand}
+                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
+                  title={expanded ? 'Collapse — restore previous width' : 'Expand — widen the Canvas for review'}
+                  aria-label="Toggle Canvas expand"
+                  aria-pressed={expanded}
+                >
+                  <span className="material-symbols-outlined text-[14px]">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
                 </button>
               </div>
             </div>

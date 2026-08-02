@@ -721,6 +721,56 @@ body {
   animation: fade-in 0.15s ease-out forwards;
 }
 
+/* Canvas panel: slides in from the right (mirror of slide-in-left). The Canvas
+   is conceptually an extension the current chat "spouts out" — the panel eases
+   in from the chat's right edge. */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-canvas-slide-in {
+  animation: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Canvas ← chat spout: a small triangle INSIDE the Canvas's left edge (does not
+   overhang the chat pane), pointing left toward the chat — reads as "this Canvas
+   spouted out of the conversation." Tinted with the session accent (--spout-tint).
+   Sits on the header row (fixed offset). */
+.canvas-spout {
+  position: absolute;
+  left: 2px;
+  top: 10px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  /* border-right colored + left/top/bottom transparent = triangle pointing LEFT
+     (toward the chat pane). */
+  border-right: 7px solid var(--spout-tint, var(--color-primary));
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Canvas ↔ chat divider: a colorful tinted seam instead of the plain grey
+   border, so the boundary reads as an intentional review surface edge. */
+.canvas-divider {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--spout-tint, var(--color-primary)) 12%,
+    var(--spout-tint, var(--color-primary)) 88%,
+    transparent
+  );
+  opacity: 0.55;
+}
+
 /* TreeNodeRow — hover and interaction styles */
 
 /* Hover background — only visible when no inline backgroundColor is set

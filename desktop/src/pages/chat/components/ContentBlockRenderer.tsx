@@ -103,6 +103,10 @@ interface ContentBlockRendererProps {
    *  callback presence, so omitting callbacks alone would still render
    *  live-looking controls. */
   readOnly?: boolean;
+  /** Owning tab's session id — forwarded to MergedToolBlock so its
+   *  swarm:file-referenced dispatch is tab-scoped (keep-mounted background tabs
+   *  otherwise leak into the active tab's Canvas / Referenced-Files). */
+  sessionId?: string;
 }
 
 export function ContentBlockRenderer({
@@ -117,6 +121,7 @@ export function ContentBlockRenderer({
   isStreaming,
   lastPendingToolUseId,
   readOnly,
+  sessionId,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
     // Render markdown in BOTH states so formatting (headings/lists/code/math) is
@@ -147,6 +152,7 @@ export function ContentBlockRenderer({
         resultIsError={matchingResult?.isError}
         isPending={lastPendingToolUseId != null ? block.id === lastPendingToolUseId : (!matchingResult && !!isStreaming)}
         isStreaming={isStreaming}
+        sessionId={sessionId}
       />
     );
   }

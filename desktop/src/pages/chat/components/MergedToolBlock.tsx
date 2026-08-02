@@ -111,6 +111,11 @@ interface MergedToolBlockProps {
   isPending: boolean;
   /** @deprecated No longer used — kept for backward compatibility. */
   isStreaming?: boolean;
+  /** Owning tab's session id — stamped onto swarm:file-referenced so Canvas /
+   *  Referenced-Files consumers can filter out background-tab writes (all tabs
+   *  are keep-mounted, so a background tab's dispatch would otherwise leak into
+   *  the active tab). Absent → consumers fail open (no regression). */
+  sessionId?: string;
 }
 
 export function MergedToolBlock({
@@ -122,6 +127,7 @@ export function MergedToolBlock({
   resultTruncated,
   resultIsError,
   isPending,
+  sessionId,
 }: MergedToolBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -182,11 +188,11 @@ export function MergedToolBlock({
         : category === 'search' ? 'searched' : 'read';
       document.dispatchEvent(
         new CustomEvent('swarm:file-referenced', {
-          detail: { path: fileParts.path, operation },
+          detail: { path: fileParts.path, operation, sessionId },
         }),
       );
     }
-  }, [fileParts, isPending, category]);
+  }, [fileParts, isPending, category, sessionId]);
 
   const handlePathClick = (e: React.MouseEvent) => {
     e.preventDefault();

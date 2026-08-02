@@ -13,8 +13,8 @@ import { OPEN_FILE_EVENT } from '../../components/common/MarkdownRenderer';
 
 const DEBOUNCE = 20;
 
-function writeFile(path: string, operation = 'written') {
-  document.dispatchEvent(new CustomEvent('swarm:file-referenced', { detail: { path, operation } }));
+function writeFile(path: string, operation = 'written', sessionId?: string) {
+  document.dispatchEvent(new CustomEvent('swarm:file-referenced', { detail: { path, operation, sessionId } }));
 }
 function setPanelOpen(open: boolean) {
   window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', { detail: { open } }));
@@ -102,6 +102,27 @@ describe('useCanvasAutoSurface', () => {
     writeFile('b.md', 'searched');
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual([]);
+  });
+
+  it('tab-scope: IGNORES a write stamped with a foreign session (background tab)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/from-B.md', 'written', 'tab-B'); // a background tab's write
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]); // must not leak into the active tab
+  });
+
+  it('tab-scope: FIRES for a write stamped with the active session', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/from-A.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/from-A.md']);
+  });
+
+  it('tab-scope: FAILS OPEN when the event is unstamped (no sessionId)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/legacy.md'); // no sessionId stamp
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/legacy.md']); // no regression for un-updated dispatchers
   });
 
   it('skips bookkeeping paths (.artifacts/)', () => {

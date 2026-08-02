@@ -32,6 +32,9 @@ export interface ReferencedFile {
 export interface FileReferencedDetail {
   path: string;
   operation: FileOperation;
+  /** Owning tab's session id (stamped by MergedToolBlock). Consumers filter on
+   *  it to ignore background-tab writes; absent → treated as current (fail-open). */
+  sessionId?: string;
 }
 
 const MAX_FILES = 100;
@@ -89,8 +92,13 @@ export function useReferencedFiles(sessionId: string | undefined) {
     if (!sessionId) return;
 
     const handler = (e: Event) => {
-      const { path, operation } = (e as CustomEvent<FileReferencedDetail>).detail ?? {};
+      const { path, operation, sessionId: evtSessionId } = (e as CustomEvent<FileReferencedDetail>).detail ?? {};
       if (!path) return;
+      // Tab-scope: all tabs are keep-mounted, so a background tab's dispatch
+      // would otherwise be recorded into THIS (active) session's store. Ignore
+      // events stamped with a DIFFERENT session. Fail OPEN when unstamped
+      // (evtSessionId absent) — no regression for any un-updated dispatcher.
+      if (evtSessionId && evtSessionId !== sessionId) return;
 
       setFiles((prev) => {
         const next = new Map(prev);
