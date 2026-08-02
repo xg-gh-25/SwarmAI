@@ -119,7 +119,11 @@ def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -
 
 
 # Human-readable labels for the fullscreen nav overlays (swarm:show-* event ids).
-# Keep in sync with desktop/src/components/layout/useExclusiveOverlay.ts ALL_SHOW_EVENTS.
+# Superset of desktop/src/components/layout/useExclusiveOverlay.ts ALL_SHOW_EVENTS
+# by design: any overlay that sets the active-event singleton (incl. Library, which
+# uses useExclusiveOverlay('swarm:show-library') even though it's absent from
+# ALL_SHOW_EVENTS) can surface here, so the map may carry labels beyond that list.
+# Falls back to the raw event id for anything unlabeled.
 _OVERLAY_LABELS = {
     "swarm:show-swarmws": "Workspace explorer",
     "swarm:show-brain-hub": "Brain Hub",
@@ -1416,7 +1420,10 @@ class PromptBuilder:
             resume_session_id: Optional session ID to resume.
             session_context: Optional session context dict for hook tracking.
             channel_context: Optional channel context for channel-based execution.
-            editor_context: Optional editor context with file_path/file_name of the open file.
+            editor_context: Optional request-time UI snapshot (open file +
+                Canvas state + active nav overlay); rendered by
+                _render_ui_context_section. Wire field kept as `editor_context`
+                for backward-compat.
             terminal_context: Optional attached-terminal context (P2) with
                 buffer_tail/cwd — a read-only view of an integrated terminal the
                 user explicitly attached. Single direction: terminal → session.
