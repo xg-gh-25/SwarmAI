@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
+from .ui_actions import build_ui_command_event, UI_ACTION_FULL_TOOL_NAME
 
 if TYPE_CHECKING:
     from .session_unit import SessionState, SessionUnit
@@ -749,6 +750,20 @@ class StreamingOrchestrator:
                             _fp = block.input.get("file_path", "")
                             if _fp:
                                 _pending_file_changes[block.id] = _fp
+                        # ── UI-action (ACT): agent drives its own UI (Run 2) ──
+                        # The agent calls the ui_action tool; we observe it here,
+                        # validate cmd against the fail-closed allowlist, and yield
+                        # an ADDITIVE ui_command SSE event (the SDK still delivers the
+                        # tool's normal result to the agent — this does not replace
+                        # it). Mirrors the file_changed emit. The frontend derives its
+                        # own event+target from cmd; a non-allowlisted cmd yields None
+                        # here → nothing emitted (fail-closed at the source).
+                        if block.name == UI_ACTION_FULL_TOOL_NAME and isinstance(block.input, dict):
+                            _ui_ev = build_ui_command_event(block.input.get("cmd"))
+                            if _ui_ev is not None:
+                                yield _ui_ev
+                            # fall through: do NOT `continue` — the SDK runs the tool
+                            # and returns its ack result to the agent normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
                             # tool call BEFORE the CLI self-resolves it: it enqueues

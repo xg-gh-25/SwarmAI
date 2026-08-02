@@ -1545,6 +1545,20 @@ class PromptBuilder:
         if deferred_mcps:
             agent_config["_deferred_mcps"] = deferred_mcps
 
+        # 4b. UI-action (ACT) channel — the in-process tool that lets the agent
+        # navigate its OWN UI (proprioception Run 2). Always-on for the owner's
+        # desktop session; the fail-closed allowlist in ui_actions.py is the guard.
+        # Skipped for channel sessions (no desktop UI to drive).
+        if not channel_context:
+            try:
+                from .ui_actions import get_ui_mcp_server, UI_MCP_SERVER_NAME
+
+                ui_server = get_ui_mcp_server()
+                if ui_server is not None:
+                    mcp_servers = {**(mcp_servers or {}), UI_MCP_SERVER_NAME: ui_server}
+            except Exception as e:  # fail-open on the tool, never break the session
+                logger.warning("ui_action tool registration skipped: %s", e)
+
         # 5. Build sandbox configuration
         sandbox_settings = self.build_sandbox_config()
 
