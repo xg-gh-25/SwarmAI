@@ -1,16 +1,13 @@
-import { ReactNode, useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
+import { ReactNode, useState, useCallback, useRef, useEffect, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutProvider, useLayout, useSessionMeta, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
-import { useCanvasAutoSurface } from '../../hooks/useCanvasAutoSurface';
+import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
-import FileEditorModal from '../common/FileEditorModal';
-import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import { SwarmWSOverlay } from './SwarmWSOverlay';
 import { DomainStubOverlays } from './DomainStubOverlays';
@@ -25,7 +22,6 @@ import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import EvalModal from '../modals/EvalModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
-import type { GitStatus } from '../../types';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
 
@@ -671,24 +667,13 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 }
 
 // Inner layout component that uses the context
-/**
- * Pure decision for the Canvas tab-scope reset: should switching from `prev` to
- * `next` active-tab id clear the Canvas? True only for a REAL switch between two
- * defined tabs — NOT the first set (undefined→value at mount, which must not nuke
- * a just-opened file) and NOT a same-tab republish (value→same value, e.g. when
- * sessionId resolves mid-first-message). Extracted + exported so the subtle
- * guard is unit-tested independent of React render/effect ordering.
- */
-export function shouldResetCanvasOnTabChange(
-  prev: string | undefined,
-  next: string | undefined,
-): boolean {
-  return prev !== undefined && next !== prev;
-}
+// (Canvas tab-scoping moved to ChatPage's useCanvasHost — the former
+// `shouldResetCanvasOnTabChange` reset-on-switch guard is obsolete: Canvas state
+// is now PRESERVED per tab, not reset. Per-tab restore is unit-tested in
+// hooks/__tests__/useCanvasHost.test.ts.)
 
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, settingsTab, openModal, setSettingsTab } = useLayout();
-  const { addToast } = useToast();
 
   // CredentialBanner is mounted at the app root (outside LayoutProvider), so its
   // "Open Settings" deep-link can't call setSettingsTab directly — it dispatches
@@ -724,29 +709,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
 
-  // File viewer state — unified for all file types (Requirement 9.1)
-  // editorMode: 'panel' = side panel (default), 'modal' = fullscreen overlay (text files only)
-  const [editorMode, setEditorMode] = useState<'panel' | 'modal'>('panel');
-  const [fileViewerFile, setFileViewerFile] = useState<{
-    filePath: string;
-    fileName: string;
-    gitStatus?: GitStatus;
-    workspaceId?: string;
-    autoDiff?: boolean;
-  } | null>(null);
-
-  // Legacy file editor state — kept for modal mode (fullscreen text editing only)
-  const [fileEditorState, setFileEditorState] = useState<{
-    isOpen: boolean;
-    filePath: string;
-    fileName: string;
-    workspaceId: string;
-    content: string;
-    isSwarmWorkspace: boolean;
-    gitStatus?: GitStatus;
-    readonly?: boolean;
-    committedContent?: string;
-  } | null>(null);
+  // NOTE (Canvas moved to ChatPage, 2026-08-02, bugs 2+3): the Canvas
+  // (FileViewerPanel) + its per-tab state + auto-surface + the swarm:open-file
+  // listener + proprioception emits (editor-file-changed / canvas-state /
+  // editor-panel-state) now live in ChatPage via useCanvasHost — so Canvas
+  // renders BELOW the tab bar and remembers state per tab. ThreeColumnLayout no
+  // longer owns any Canvas panel state. The explorer's file double-click now
+  // dispatches `swarm:open-file` (handled by ChatPage's useCanvasHost), the same
+  // path chat clicks use — one open path, no duplicate listener (Gate-1 Risk 1).
 
   // Swarm workspace warning state - Requirement 4.3
   const [swarmWarning, setSwarmWarning] = useState<{
@@ -754,254 +724,49 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     pendingFile: FileTreeItem | null;
   }>({ isOpen: false, pendingFile: null });
 
-  // Canvas gentle auto-surface (2026-08-02): when the agent writes an output
-  // file, open it in the Canvas panel — but ONLY when the user isn't already
-  // viewing something (the hook self-suppresses on the swarm:editor-panel-state
-  // event) and hasn't pinned/muted. Pin = keep-open (never auto-replace); mute
-  // = no auto-surface this session. sessionId comes from the reused
-  // SessionMetaContext (no new provider). The hook dispatches swarm:open-file,
-  // the same path a click uses, so it flows through the existing open handler.
-  const { activeSessionMeta } = useSessionMeta();
-  const [canvasPinned, setCanvasPinned] = useState(false);
-  const [canvasMuted, setCanvasMuted] = useState(false);
-  // Canvas can be opened manually (LeftSidebar "Canvas" card) WITHOUT a file
-  // selected — so the output list is reachable even when auto-surface is muted
-  // or nothing is open yet. Decouples "see my outputs" from "have a file open".
-  const [canvasManuallyOpen, setCanvasManuallyOpen] = useState(false);
-  // Panel-internal Canvas state (collapsed + output count) lifted up from
-  // FileViewerPanel via onCanvasMeta, so the swarm:canvas-state proprioception
-  // event can include them. Reset to neutral when Canvas closes (panel unmounts)
-  // so a stale count never leaks to the agent (Gate-1 CRITICAL).
-  const [canvasMeta, setCanvasMeta] = useState<{ collapsed: boolean; outputCount: number }>(
-    { collapsed: false, outputCount: 0 },
-  );
-  useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted, activeSessionId: activeSessionMeta?.sessionId });
-  useEffect(() => {
-    const onOpenCanvas = () => setCanvasManuallyOpen(true);
-    window.addEventListener('swarm:open-canvas', onOpenCanvas);
-    return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
-  }, []);
-
-  // Full tab-scoping: Canvas is an extension of the CURRENT chat tab, so switching
-  // tabs must reset the whole Canvas — otherwise the rail (session-scoped) shows
-  // the new tab's outputs while the main area still shows the old tab's file, and
-  // pin/mute bleed across tabs. Signal = activeSessionMeta.tabId (STABLE per tab;
-  // NOT sessionId, which also flips undefined→resolved on a new tab's first
-  // message and would falsely clear the file mid-turn). Guard against the first
-  // set (undefined→first tab) so opening the app doesn't nuke a just-opened file.
-  const activeTabId = activeSessionMeta?.tabId;
-  const prevTabIdRef = useRef<string | undefined>(activeTabId);
-  useEffect(() => {
-    if (shouldResetCanvasOnTabChange(prevTabIdRef.current, activeTabId)) {
-      // Real tab switch → clear the whole Canvas so rail + file stay consistent.
-      setFileViewerFile(null);
-      setCanvasManuallyOpen(false);
-      setCanvasPinned(false);
-      setCanvasMuted(false);
-      setCanvasMeta({ collapsed: false, outputCount: 0 });
-      setEditorMode('panel');
-    }
-    prevTabIdRef.current = activeTabId;
-  }, [activeTabId]);
-
-  // Listen for swarm:open-file custom events dispatched by clickable file paths
-  // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
-  // handleFileDoubleClick which depends on external state.
-
-  // Notify RadarSidebar when file viewer panel is open/closed so it can auto-hide
-  const isEditorPanelOpen = !!(fileViewerFile && editorMode === 'panel');
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', {
-      detail: { open: isEditorPanelOpen },
-    }));
-  }, [isEditorPanelOpen]);
-
-  // Notify ChatPage which file is currently open so it can include in chat requests.
-  // Memoize the detail to avoid dispatching redundant null→null events.
-  const editorFileDetail = useMemo(
-    () => fileViewerFile
-      ? { filePath: fileViewerFile.filePath, fileName: fileViewerFile.fileName }
-      : null,
-    [fileViewerFile?.filePath, fileViewerFile?.fileName], // eslint-disable-line react-hooks/exhaustive-deps -- intentional subset deps
-  );
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', {
-      detail: editorFileDetail,
-    }));
-  }, [editorFileDetail]);
-
-  // Agent proprioception (SENSE): publish the Canvas panel's state so ChatPage can
-  // include it in the request-time UI snapshot. `isCanvasOpen` mirrors the mount
-  // condition exactly (FileViewerPanel unmounts when false) — when closed we emit
-  // NEUTRAL state (open:false, count 0, not collapsed) so a stale count from a
-  // prior open never leaks to the agent (Gate-1 CRITICAL). Equality-guarded via a
-  // memoized detail so an unchanged snapshot does not re-dispatch (Gate-1 MED:
-  // the count leg could otherwise fire per output-poll tick).
-  const isCanvasOpen = !!(fileViewerFile || canvasManuallyOpen) && editorMode === 'panel';
-  const canvasStateDetail = useMemo(
-    () => isCanvasOpen
-      ? {
-          open: true,
-          outputCount: canvasMeta.outputCount,
-          pinned: canvasPinned,
-          muted: canvasMuted,
-          collapsed: canvasMeta.collapsed,
-        }
-      : { open: false, outputCount: 0, pinned: false, muted: false, collapsed: false },
-    [isCanvasOpen, canvasMeta.outputCount, canvasMeta.collapsed, canvasPinned, canvasMuted],
-  );
-  // VALUE-guard (not just identity): the useMemo returns a fresh object on the
-  // closed branch, and the reset effect below re-triggers a recompute — so an
-  // identity-only guard would emit a redundant (idempotent) neutral event. Skip
-  // the dispatch when the serialized value is unchanged (meta-review LOW).
-  const lastCanvasStateRef = useRef<string>('');
-  useEffect(() => {
-    const serialized = JSON.stringify(canvasStateDetail);
-    if (serialized === lastCanvasStateRef.current) return;
-    lastCanvasStateRef.current = serialized;
-    window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail: canvasStateDetail }));
-  }, [canvasStateDetail]);
-  // When Canvas closes, reset the lifted meta so a re-open never briefly shows a
-  // stale count before FileViewerPanel remounts and republishes (belt-and-braces
-  // with the neutral emit above).
-  useEffect(() => {
-    if (!isCanvasOpen) setCanvasMeta({ collapsed: false, outputCount: 0 });
-  }, [isCanvasOpen]);
-
   // Ref for file open routing — assigned after handleFileDoubleClick is defined below
   const handleFileDoubleClickRef = useRef<(file: FileTreeItem, autoDiff?: boolean) => Promise<void>>(null!);
 
 
-  // Handle file double-click — unified routing through FileViewer (Requirement 9.1)
-  // `autoDiff` (optional) opens the file directly on its diff view — set here in
-  // the SAME setState as the rest of fileViewerFile so there is no post-await
-  // read-stale-`prev` race (handleFileDoubleClick is sync; a follow-up
-  // setFileViewerFile(prev=>…) would read the pre-flush prev and drop the flag).
+  // Handle file double-click (explorer) — now dispatches swarm:open-file, the
+  // SAME event chat file-clicks use, so ChatPage's useCanvasHost is the ONE
+  // open-file path (no duplicate listener — Gate-1 Risk 1). The resolve step
+  // moved into useCanvasHost. Swarm-workspace files still go through the warning.
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem, autoDiff?: boolean) => {
     if (file.isSwarmWorkspace) {
       setSwarmWarning({ isOpen: true, pendingFile: file });
       return;
     }
-
-    // All file types route through the unified FileViewer panel.
-    // FileViewer internally classifies and picks the right renderer.
-    setFileViewerFile({
-      filePath: file.path,
-      fileName: file.name,
-      gitStatus: file.gitStatus,
-      workspaceId: file.workspaceId,
-      autoDiff: autoDiff || undefined,
-    });
-    // Reset modal mode — FileViewer always starts in panel
-    setEditorMode('panel');
+    document.dispatchEvent(new CustomEvent('swarm:open-file', {
+      detail: { path: file.path, autoDiff: autoDiff || undefined },
+    }));
   }, []);
 
   // Assign ref now that handleFileDoubleClick is defined
   handleFileDoubleClickRef.current = handleFileDoubleClick;
 
-  // Listen for swarm:open-file events from clickable file paths in chat.
-  // Paths from chat may be relative to source repos, not the workspace root.
-  // We call /workspace/file/resolve first to find the actual workspace path.
-  useEffect(() => {
-    let mounted = true;
-
-    const handleOpenFileEvent = async (e: Event) => {
-      const { path: filePath, autoDiff } = (e as CustomEvent<{ path: string; autoDiff?: boolean }>).detail ?? {};
-      if (!filePath) return;
-
-      let resolvedPath = filePath;
-      try {
-        // Resolve partial/codebase-relative paths to workspace-relative paths
-        const resp = await api.get<{ resolved_path: string }>(
-          '/workspace/file/resolve',
-          { params: { path: filePath } },
-        );
-        if (!mounted) return;
-        resolvedPath = resp.data.resolved_path;
-      } catch (err: unknown) {
-        if (!mounted) return;
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        if (status === 400) {
-          // Path traversal or truly invalid — don't fall through
-          addToast({ severity: 'warning', message: `Cannot open file: ${filePath}`, autoDismiss: true });
-          return;
-        }
-        // 404 = not found in workspace, fall through to try the raw path.
-        // Non-404 errors (network timeout, 500) are logged for debugging.
-        if (status !== undefined && status !== 404) {
-          console.warn('[swarm:open-file] resolve failed:', status, err);
-        }
-      }
-
-      const fileName = resolvedPath.split('/').pop() || resolvedPath;
-      const fileItem: FileTreeItem = {
-        id: resolvedPath,
-        name: fileName,
-        type: 'file',
-        path: resolvedPath,
-        workspaceId: '',
-        workspaceName: '',
-      };
-
-      // Route through handleFileDoubleClick for proper file type handling
-      // (images preview inline, binary files show info modal, text opens editor).
-      // autoDiff (Radar ✍ Changes click) is threaded INTO the call so it lands
-      // in the single fileViewerFile setState — no post-await stale-prev race.
-      try {
-        await handleFileDoubleClickRef.current(fileItem, autoDiff);
-      } catch {
-        if (!mounted) return;
-        addToast({
-          severity: 'warning',
-          message: `Could not open file: ${filePath}`,
-          autoDismiss: true,
-        });
-      }
-    };
-
-    document.addEventListener('swarm:open-file', handleOpenFileEvent);
-    return () => {
-      mounted = false;
-      document.removeEventListener('swarm:open-file', handleOpenFileEvent);
-    };
-  }, [addToast]);
-
-  // Keyboard shortcuts: Cmd+O (open file), Cmd+Shift+C (copy active file path)
+  // Keyboard shortcut: Cmd+O (open file dialog). (Cmd+Shift+P copy-active-path
+  // was removed with the Canvas move — the active file now lives in ChatPage's
+  // useCanvasHost, not here; re-add via a canvas API if the shortcut is wanted.)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMeta = e.metaKey || e.ctrlKey;
-
-      // Cmd+O — Open File dialog
       if (isMeta && e.key === 'o' && !e.shiftKey) {
         e.preventDefault();
-        // Trigger OpenFileButton click via custom event (component handles dialog)
         document.dispatchEvent(new CustomEvent('swarm:open-file-dialog'));
       }
-
-      // Cmd+Shift+P — Copy active file path (avoids DevTools conflict with Cmd+Shift+C)
-      if (isMeta && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
-        e.preventDefault();
-        if (fileViewerFile?.filePath) {
-          import('../../utils/clipboard').then(({ copyToClipboard }) => {
-            copyToClipboard(fileViewerFile.filePath);
-          });
-        }
-      }
     };
-
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [fileViewerFile?.filePath]);
+  }, []);
 
-  // Handle Swarm workspace warning confirmation
+  // Handle Swarm workspace warning confirmation — dispatch swarm:open-file so the
+  // ChatPage Canvas opens it (same one path).
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
-      setFileViewerFile({
-        filePath: swarmWarning.pendingFile.path,
-        fileName: swarmWarning.pendingFile.name,
-        gitStatus: swarmWarning.pendingFile.gitStatus,
-        workspaceId: swarmWarning.pendingFile.workspaceId,
-      });
+      document.dispatchEvent(new CustomEvent('swarm:open-file', {
+        detail: { path: swarmWarning.pendingFile.path },
+      }));
     }
     setSwarmWarning({ isOpen: false, pendingFile: null });
   }, [swarmWarning.pendingFile]);
@@ -1009,98 +774,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const handleSwarmWarningCancel = useCallback(() => {
     setSwarmWarning({ isOpen: false, pendingFile: null });
   }, []);
-
-  // Handle file save - Requirement 9.6
-  const handleFileSave = useCallback(async (content: string) => {
-    if (!fileEditorState) return;
-
-    try {
-      await api.put('/workspace/file', { content }, {
-        params: { path: fileEditorState.filePath },
-      });
-      refreshTreeRef.current?.();
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      throw error;
-    }
-  }, [fileEditorState]);
-
-  // Handle file viewer close - Requirement 9.7
-  const handleFileViewerClose = useCallback(() => {
-    setFileViewerFile(null);
-    setFileEditorState(null); // Clear legacy state too
-    setCanvasManuallyOpen(false); // also dismiss a file-less Canvas open
-    setEditorMode('panel'); // Reset to panel for next open
-    liveContentRef.current = null;
-    refreshTreeRef.current?.();
-  }, []);
-
-  // Track live content in a ref (NOT state) so mode toggle preserves edits
-  // without triggering re-renders or resetting FileEditorCore's useEffect.
-  const liveContentRef = useRef<string | null>(null);
-
-  const handleContentChange = useCallback((newContent: string) => {
-    liveContentRef.current = newContent;
-  }, []);
-
-  // Toggle between panel and modal mode (preserves file state).
-  // Panel→modal: populate fileEditorState from fileViewerFile for FileEditorModal.
-  // Modal→panel: clear fileEditorState, let FileViewer take over.
-  const handleToggleEditorMode = useCallback(async () => {
-    if (editorMode === 'panel' && fileViewerFile) {
-      // Panel → Modal: need to populate legacy fileEditorState for FileEditorModal
-      try {
-        const response = await api.get<{ content: string; path: string; name: string; readonly?: boolean }>(
-          '/workspace/file',
-          { params: { path: fileViewerFile.filePath } },
-        );
-        let committedContent: string | undefined;
-        try {
-          const cResp = await api.get<{ content: string }>(
-            '/workspace/file/committed',
-            { params: { path: fileViewerFile.filePath } },
-          );
-          committedContent = cResp.data.content;
-        } catch { /* untracked file */ }
-
-        const content = liveContentRef.current ?? response.data.content;
-        setFileEditorState({
-          isOpen: true,
-          filePath: fileViewerFile.filePath,
-          fileName: fileViewerFile.fileName,
-          workspaceId: fileViewerFile.workspaceId ?? '',
-          content,
-          isSwarmWorkspace: false,
-          gitStatus: fileViewerFile.gitStatus,
-          readonly: response.data.readonly,
-          committedContent,
-        });
-      } catch (err) {
-        console.error('Failed to switch to modal mode:', err);
-        return;
-      }
-    } else if (editorMode === 'modal' && fileEditorState) {
-      // Modal → Panel: snapshot live content, clear legacy state
-      if (liveContentRef.current != null) {
-        // Content preserved via liveContentRef — FileViewer will re-fetch
-      }
-      setFileEditorState(null);
-    }
-    liveContentRef.current = null;
-    setEditorMode((prev) => (prev === 'panel' ? 'modal' : 'panel'));
-  }, [editorMode, fileViewerFile, fileEditorState]);
-
-  // L2: Auto-diff feedback — inject edit summary into chat input.
-  // Accepts fileName as a parameter to avoid stale-closure reads of
-  // fileEditorState (which may be nulled if the editor closes during
-  // the async diff fetch).
-  const handleSaveWithDiff = useCallback((diffSummary: string, savedFileName?: string) => {
-    const fileName = savedFileName ?? fileEditorState?.fileName ?? 'file';
-    const text = `I edited \`${fileName}\`:\n${diffSummary}\n\nPlease revise the doc to align with these changes.`;
-    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
-      detail: { text, focus: true },
-    }));
-  }, [fileEditorState?.fileName]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[var(--color-bg)]">
@@ -1117,25 +790,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           <LeftSidebar />
           {/* A10 redesign: the workspace explorer is no longer an always-on
               column — it opens on demand as SwarmWSOverlay (below). */}
+          {/* Canvas (FileViewerPanel) moved INTO ChatPage (below ChatHeader) so
+              it belongs to the current tab — see ChatPage's useCanvasHost. It is
+              NO LONGER a layout-level sibling here. */}
           <MainChatPanel>{children}</MainChatPanel>
-          {/* Unified File Viewer — resizable side panel for all file types.
-              Renders when a file is open OR Canvas was opened manually (so the
-              output list is reachable file-less; initialFile is optional and the
-              viewer shows an empty surface + the Outputs rail in that case). */}
-          {(fileViewerFile || canvasManuallyOpen) && editorMode === 'panel' && (
-            <FileViewerPanel
-              initialFile={fileViewerFile ?? undefined}
-              onClose={handleFileViewerClose}
-              onSaveWithDiff={handleSaveWithDiff}
-              onToggleMode={handleToggleEditorMode}
-              sessionId={activeSessionMeta?.sessionId}
-              pinned={canvasPinned}
-              onTogglePin={() => setCanvasPinned((p) => !p)}
-              muted={canvasMuted}
-              onToggleMute={() => setCanvasMuted((m) => !m)}
-              onCanvasMeta={setCanvasMeta}
-            />
-          )}
         </div>
 
         {/* Integrated terminal panel — flex sibling BELOW chat, ABOVE the status
@@ -1157,25 +815,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         {/* Bottom status bar */}
         <BottomBar />
       </ExplorerProvider>
-
-      {/* File Editor Modal — fullscreen overlay mode (text files only, via toggle) */}
-      {fileEditorState && editorMode === 'modal' && (
-        <FileEditorModal
-          isOpen={fileEditorState.isOpen}
-          filePath={fileEditorState.filePath}
-          fileName={fileEditorState.fileName}
-          workspaceId={fileEditorState.workspaceId}
-          initialContent={fileEditorState.content}
-          onSave={handleFileSave}
-          onClose={handleFileViewerClose}
-          gitStatus={fileEditorState.gitStatus}
-          readonly={fileEditorState.readonly}
-          committedContent={fileEditorState.committedContent}
-          onToggleMode={handleToggleEditorMode}
-          onSaveWithDiff={handleSaveWithDiff}
-          onContentChange={handleContentChange}
-        />
-      )}
 
       {/* Swarm Workspace Warning Dialog */}
       <SwarmWorkspaceWarningDialog

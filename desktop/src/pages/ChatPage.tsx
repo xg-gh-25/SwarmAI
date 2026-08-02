@@ -42,6 +42,8 @@ import { useActiveOverlayEvent } from '../components/layout/useExclusiveOverlay'
 import type { UiContextSnapshot, CanvasSnapshot } from '../utils/uiContext';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
+import FileViewerPanel from '../components/file-viewer/FileViewerPanel';
+import { useCanvasHost } from '../hooks/useCanvasHost';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
@@ -338,6 +340,14 @@ export default function ChatPage() {
   openTabsRef.current = openTabs;
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
+
+  // Canvas host (bugs 2+3): ChatPage owns the Canvas because it owns the tabs.
+  // Per-tab state (file/pin/mute/expand/manuallyOpen) + the swarm:open-file
+  // listener + streaming-gated auto-surface + proprioception emits all live in
+  // useCanvasHost, keyed by activeTabId. Rendered BELOW ChatHeader (JSX further
+  // down) so Canvas visibly belongs to the current tab. Replaces the former
+  // global Canvas state that lived in ThreeColumnLayout.
+  const canvas = useCanvasHost({ activeTabId, sessionId, isStreaming });
 
   // Agent UI proprioception (SENSE): assemble a request-time snapshot of the
   // agent's own UI state — open file + Canvas state + which nav overlay is open —
@@ -3166,6 +3176,24 @@ export default function ChatPage() {
           )}
           </ErrorBoundary>
         </div>
+
+        {/* Canvas — the session's output surface (bugs 2+3). Mounted HERE, inside
+            the flex row BELOW ChatHeader and to the RIGHT of the chat area, so it
+            visibly belongs to the CURRENT tab (the tab bar spans above it). State
+            is per-tab via useCanvasHost. Renders only when this tab has a file OR
+            Canvas was manually opened. */}
+        {canvas.isOpen && (
+          <FileViewerPanel
+            initialFile={canvas.file ?? undefined}
+            onClose={canvas.close}
+            sessionId={sessionId}
+            pinned={canvas.pinned}
+            onTogglePin={canvas.togglePin}
+            muted={canvas.muted}
+            onToggleMute={canvas.toggleMute}
+            onCanvasMeta={canvas.onCanvasMeta}
+          />
+        )}
 
         {/* SwarmRadar removed (2026-08-02): all 3 sections have live replacements —
             Changes → Canvas (CanvasOutputRail), Attention → ChatHeader AlertsPill
