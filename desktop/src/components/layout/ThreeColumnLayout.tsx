@@ -271,6 +271,10 @@ function LeftSidebar() {
         <A10Group label="Work" tint={A10_GROUP.work}>
           <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
           <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
+          {/* Canvas — the session's output surface. Opens the side panel showing
+              the Outputs list even with no file selected (decoupled from a file
+              open, so outputs are reachable when auto-surface is muted). */}
+          <A10Card icon="draft" label="Canvas" tint={A10_GROUP.work} onClick={() => window.dispatchEvent(new CustomEvent('swarm:open-canvas'))} data-testid="nav-canvas" />
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
         </A10Group>
@@ -726,7 +730,16 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeSessionMeta } = useSessionMeta();
   const [canvasPinned, setCanvasPinned] = useState(false);
   const [canvasMuted, setCanvasMuted] = useState(false);
+  // Canvas can be opened manually (LeftSidebar "Canvas" card) WITHOUT a file
+  // selected — so the output list is reachable even when auto-surface is muted
+  // or nothing is open yet. Decouples "see my outputs" from "have a file open".
+  const [canvasManuallyOpen, setCanvasManuallyOpen] = useState(false);
   useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted });
+  useEffect(() => {
+    const onOpenCanvas = () => setCanvasManuallyOpen(true);
+    window.addEventListener('swarm:open-canvas', onOpenCanvas);
+    return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
+  }, []);
 
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
@@ -915,6 +928,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const handleFileViewerClose = useCallback(() => {
     setFileViewerFile(null);
     setFileEditorState(null); // Clear legacy state too
+    setCanvasManuallyOpen(false); // also dismiss a file-less Canvas open
     setEditorMode('panel'); // Reset to panel for next open
     liveContentRef.current = null;
     refreshTreeRef.current?.();
@@ -1003,10 +1017,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           {/* A10 redesign: the workspace explorer is no longer an always-on
               column — it opens on demand as SwarmWSOverlay (below). */}
           <MainChatPanel>{children}</MainChatPanel>
-          {/* Unified File Viewer — resizable side panel for all file types */}
-          {fileViewerFile && editorMode === 'panel' && (
+          {/* Unified File Viewer — resizable side panel for all file types.
+              Renders when a file is open OR Canvas was opened manually (so the
+              output list is reachable file-less; initialFile is optional and the
+              viewer shows an empty surface + the Outputs rail in that case). */}
+          {(fileViewerFile || canvasManuallyOpen) && editorMode === 'panel' && (
             <FileViewerPanel
-              initialFile={fileViewerFile}
+              initialFile={fileViewerFile ?? undefined}
               onClose={handleFileViewerClose}
               onSaveWithDiff={handleSaveWithDiff}
               onToggleMode={handleToggleEditorMode}
