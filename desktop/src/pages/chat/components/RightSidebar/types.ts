@@ -1,16 +1,16 @@
 /**
- * Type definitions for the Radar sidebar and its sub-components.
+ * Shared types for the surviving RightSidebar bits after SwarmRadar was removed
+ * (2026-08-02). The Radar shell + its sections are gone; these types now back the
+ * ChatHeader AlertsPill (attention queue) and the History overlay.
  *
  * Key exports:
- * - ``DropPayload``              — Union type for drag-to-chat data transfer payloads
- * - ``RadarArtifact``            — Git-derived recently modified file entry
- * - ``RadarSidebarProps``        — Props for the top-level RadarSidebar shell
- * - ``CollapsibleSectionProps``  — Props for the shared expand/collapse section wrapper
- * - ``HistoryViewProps``         — Props for the History mode session browser
- * - localStorage key constants   — Canonical keys for sidebar persistence
+ * - ``DropPayload``       — Union type for drag-to-chat data transfer payloads
+ * - ``RadarArtifact``     — Git-derived recently modified file entry
+ * - ``AttentionItem`` / ``ItemClickHandler`` — the 🔔 attention queue (AlertsPill)
+ * - ``RunningPipeline``   — in-flight pipeline entry (attention queue)
+ * - ``HistoryViewProps``  — Props for the History mode session browser
  */
 
-import type { ReactNode } from 'react';
 import type { Agent, ChatSession } from '../../../../types';
 import type { GroupedSessions } from '../../utils';
 
@@ -106,48 +106,6 @@ export interface RunningPipeline {
  */
 export type ItemClickHandler = (message: string, context?: string) => void;
 
-/** Props for the top-level RadarSidebar shell component. */
-export interface RadarSidebarProps {
-  workspaceId: string | null;
-  /** Current active session ID — used for Referenced Files tracking */
-  sessionId?: string;
-  /** Unified callback: populate ChatInput with message + context */
-  onItemClick?: ItemClickHandler;
-  /** Auto-send a message to the active chat tab (injects + sends immediately). */
-  onSendMessage?: (text: string) => void;
-  /**
-   * Switch to another chat tab by id. Used by the 🔔 attention queue's
-   * "waiting tab" items — the pending question lives in that tab, so the
-   * correct action is to focus it, not to inject into the current input.
-   */
-  onSelectTab?: (tabId: string) => void;
-  /**
-   * Open tabs (id + sessionId) so the attention queue can map a
-   * waiting session (streaming-state is keyed by session_id) back to a
-   * tab id for onSelectTab, and exclude the currently-active session.
-   */
-  openTabs?: { id: string; sessionId?: string }[];
-  /**
-   * The 🔔 attention queue, polled ONCE at ChatPage (useRadarAttention) and
-   * passed down — shared with the ChatHeader Alerts pill so there is a single
-   * 30s poll (run_843962a5). Defaults to [] when absent.
-   */
-  attentionItems?: AttentionItem[];
-}
-
-/** Props for the shared collapsible section wrapper. */
-export interface CollapsibleSectionProps {
-  name: string;
-  icon: string;
-  label: string;
-  count: number;
-  statusHint?: string;
-  defaultExpanded?: boolean;
-  /** Left accent border color (CSS value). Omit for no accent. */
-  accent?: string;
-  children: ReactNode;
-}
-
 /** Props for the History mode session browser. */
 export interface HistoryViewProps {
   groupedSessions: GroupedSessions[];
@@ -185,15 +143,3 @@ export interface HistoryViewProps {
   selectedSessionId?: string;
 }
 
-// ---------------------------------------------------------------------------
-// localStorage key constants
-// ---------------------------------------------------------------------------
-
-/** Key for persisting the sidebar width (number, default 320). */
-export const RADAR_SIDEBAR_WIDTH_KEY = 'radar-sidebar-width';
-
-/** Prefix for per-section expand/collapse state (boolean). */
-export const RADAR_SECTION_KEY_PREFIX = 'radar-section-';
-
-/** Key for persisting the feature tip dismissal state (boolean). */
-export const RADAR_TIP_DISMISSED_KEY = 'radar-tip-dismissed';
