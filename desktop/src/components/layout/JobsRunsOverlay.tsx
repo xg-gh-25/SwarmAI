@@ -485,11 +485,21 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
     const s = schedule.trim();
     const p = prompt.trim();
     if (!n || !s || !p) { setErr('Name, schedule, and prompt/command are required.'); return; }
-    // Route to chat — s_job-manager writes user-jobs.yaml with cron/type/tool
-    // validation. The overlay never writes yaml directly (integrity stays in the skill).
+    // Hand inline Swarm the FULL context in one structured message + name the create
+    // path explicitly, so it creates the job via s_job-manager in one step rather
+    // than inferring intent (mirror of ToDo dispatch handing full context to chat).
+    // The overlay never writes yaml itself — s_job-manager owns cron/type/tool
+    // validation + user-jobs.yaml integrity, and the human confirms before send
+    // (dispatch is autoSend:false) and again at the skill's create gate (HITL).
+    const bodyLabel = type === 'agent_task' ? 'Prompt (what Swarm should do each run)' : 'Command (shell)';
     onDispatch(
-      `Schedule a new ${type} job named "${n}" with cron schedule "${s}". ` +
-      `${type === 'agent_task' ? 'Prompt' : 'Command'}: ${p}`,
+      [
+        `Create a new scheduled job for me using the s_job-manager skill. Confirm the details with me, then create it. Here's what I want:`,
+        `- Name: ${n}`,
+        `- Type: ${type}`,
+        `- Schedule (cron): ${s}`,
+        `- ${bodyLabel}: ${p}`,
+      ].join('\n'),
     );
     onCreated();
   }, [name, schedule, type, prompt, onDispatch, onCreated]);

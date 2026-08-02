@@ -128,8 +128,34 @@ describe('JobsRunsOverlay interactions', () => {
 
     expect(onDispatch).toHaveBeenCalledTimes(1);
     const prompt = onDispatch.mock.calls[0][0];
-    expect(prompt).toContain('Nightly audit');
-    expect(prompt).toContain('0 2 * * *');
+    // The dispatched prompt must hand inline Swarm the FULL context (all 4 fields)
+    // AND explicitly name the create path so the agent creates the job in one step
+    // rather than inferring intent (mirror of ToDo dispatch handing full context).
+    expect(prompt).toContain('Nightly audit');    // name
+    expect(prompt).toContain('0 2 * * *');         // schedule (cron)
+    expect(prompt).toMatch(/agent_task/);          // type present
+    expect(prompt).toContain('audit deps');        // prompt/command body
+    expect(prompt).toMatch(/s_job-manager/);       // names the create skill
+    expect(prompt.toLowerCase()).toMatch(/confirm/); // confirm-then-create (HITL)
+  });
+
+  it('New Job form: script type surfaces the command as the command body + names the skill', async () => {
+    const onDispatch = vi.fn(() => true);
+    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+
+    fireEvent.click(screen.getByTestId('jobs-new-btn'));
+    fireEvent.change(await screen.findByTestId('jobs-new-name'), { target: { value: 'Disk cleanup' } });
+    fireEvent.change(screen.getByTestId('jobs-new-schedule'), { target: { value: '0 3 * * 0' } });
+    fireEvent.click(screen.getByTestId('jobs-new-type-script'));
+    fireEvent.change(screen.getByTestId('jobs-new-prompt'), { target: { value: 'rm -rf /tmp/cache' } });
+    fireEvent.click(screen.getByTestId('jobs-new-submit'));
+
+    const prompt = onDispatch.mock.calls[0][0];
+    expect(prompt).toMatch(/script/);
+    expect(prompt).toContain('rm -rf /tmp/cache');
+    expect(prompt).toMatch(/s_job-manager/);
   });
 
   it('AC6: system jobs hide pause/edit/delete (yaml-read-only)', async () => {
