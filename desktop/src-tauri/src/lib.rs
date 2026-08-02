@@ -5,6 +5,9 @@ use std::env;
 /// Integrated-terminal PTY commands (app-level, not a plugin). See terminal.rs.
 mod terminal;
 use terminal::TerminalState;
+
+/// One-tap screen capture command (app-level, not a plugin). See screen_capture.rs.
+mod screen_capture;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
@@ -2693,6 +2696,8 @@ pub fn run() {
             terminal::pty_kill,
             terminal::pty_exitstatus,
             terminal::pty_get_all_pids,
+            // One-tap screen capture (app-level — see screen_capture.rs)
+            screen_capture::screen_capture_current_display,
         ])
         .setup(|app| {
             // Backend will be started by frontend via initializeBackend()

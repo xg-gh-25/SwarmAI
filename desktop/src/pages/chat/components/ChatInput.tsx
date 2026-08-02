@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { UnifiedAttachment, SystemPromptMetadata } from '../../../types';
-import { FileAttachmentButton, FileAttachmentPreview } from '../../../components/chat';
+import { FileAttachmentButton, FileAttachmentPreview, ScreenshotButton } from '../../../components/chat';
 import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { ContextUsageRing } from './ContextUsageRing';
 import { SYSTEM_COMMANDS } from '../constants';
@@ -57,6 +57,8 @@ interface ChatInputProps {
   onVoiceConversationToggle?: () => void;
   /** Interrupt TTS playback and return to listening */
   onVoiceConversationInterrupt?: () => void;
+  /** Called when one-tap screenshot capture fails (e.g. permission not granted) — surfaces a toast. */
+  onCaptureError?: (message: string) => void;
 }
 
 const MAX_ROWS = 20;
@@ -92,6 +94,7 @@ export function ChatInput({
   voiceConversationState = 'off',
   onVoiceConversationToggle,
   onVoiceConversationInterrupt,
+  onCaptureError,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -782,6 +785,12 @@ export function ChatInput({
             {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
+              <ScreenshotButton
+                onCaptured={onAddFiles}
+                onError={(msg) => onCaptureError?.(msg)}
+                disabled={isProcessingFiles || disabled}
+                canAddMore={canAddMore}
+              />
               {/* Voice mode toggle: conversation mode (if handler provided) or fallback to single-shot mic */}
               {voiceSupported && onVoiceConversationToggle && (
                 <button

@@ -23,6 +23,11 @@ tauri-plugin-notification = "2"
 # src/terminal.rs is vendored from Tnze/tauri-plugin-pty (MIT); portable-pty
 # itself is the real cross-platform PTY engine and is depended on directly.
 portable-pty = { version = "0.9", features = ["serde_support"] }
+# One-tap screen capture (macOS → ScreenCaptureKit under the hood). Powers the
+# `screen_capture_current_display` command: grabs the display the cursor is on
+# and writes a PNG under ~/.swarm-ai/tmp/screenshots/ for the chat attachment pipeline.
+xcap = "0.9"
+image = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }

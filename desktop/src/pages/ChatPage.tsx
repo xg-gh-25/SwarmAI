@@ -1353,10 +1353,17 @@ export default function ChatPage() {
     }
   }, [messages]);
 
-  // Tab-switch scroll restoration — fires synchronously after React commits
-  // the new messages to the DOM but BEFORE the browser paints. This eliminates
-  // the 2-3 frame flash where messages render at scrollTop=0 then jump to the
-  // correct position (the "big jump" bug on first tab switch).
+  // Tab-switch scroll landing — fires synchronously after React commits the new
+  // messages to the DOM but BEFORE the browser paints (eliminates the 2-3 frame
+  // flash where messages render at scrollTop=0 then jump).
+  //
+  // UX decision (2026-08-03, user choice A): EVERY tab switch lands at the BOTTOM
+  // (latest message), NOT the previously-saved scroll position. Restoring the old
+  // position forced the user to scroll down every time they returned to chat
+  // (e.g. after a Canvas detour) — a real friction point. Landing at bottom
+  // matches the chat mental model: coming back to a conversation shows the newest
+  // message. The saved scrollPosition is intentionally ignored here (kept in
+  // tabState only for potential future "resume where you were" affordance).
   useLayoutEffect(() => {
     const pending = pendingScrollRestoreRef.current;
     if (!pending) return;
@@ -1367,17 +1374,10 @@ export default function ChatPage() {
     const container = messagesContainerRef.current;
     if (!container) return;
 
-    if (pending.scrollPosition !== undefined) {
-      container.scrollTop = pending.scrollPosition;
-    } else {
-      // New tab or no saved position — scroll to bottom
-      container.scrollTop = container.scrollHeight;
-    }
-
-    // Recompute userScrolledUpRef based on restored position
-    const threshold = 100;
-    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
-    userScrolledUpRef.current = !isNearBottom;
+    // Always land at the bottom — newest message visible, no manual scroll needed.
+    container.scrollTop = container.scrollHeight;
+    // At bottom → not scrolled up, so auto-scroll on new messages stays enabled.
+    userScrolledUpRef.current = false;
   }, [messages]);
 
   // Time-to-interactive logging (dev only)
@@ -3218,6 +3218,7 @@ export default function ChatPage() {
                 selectedAgentId={selectedAgentId}
                 attachments={attachments}
                 onAddFiles={addFiles}
+                onCaptureError={(msg) => addToast({ severity: 'error', message: msg, autoDismiss: true })}
                 onRemoveFile={removeAttachment}
                 isProcessingFiles={isProcessingFiles}
                 fileError={fileError}

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { readFile } from '@tauri-apps/plugin-fs';
 
 export interface BackendStatus {
   running: boolean;
@@ -177,4 +178,27 @@ export async function initializeBackend(): Promise<number> {
   const port = await tauriService.startBackend();
   console.log(`[Backend Init] Backend started on port ${port}`);
   return port;
+}
+
+/**
+ * Capture the display the mouse cursor is currently on and return it as a PNG
+ * `File` ready for the chat attachment pipeline.
+ *
+ * The capture happens in the signed Tauri main process (via the app-level Rust
+ * command `screen_capture_current_display`), which is the process that holds
+ * macOS Screen-Recording (TCC) permission — the SDK child-process chain is
+ * denied because that permission does not inherit to children.
+ *
+ * The Rust command writes the PNG under `~/.swarm-ai/tmp/screenshots/` (inside
+ * the fs:allow-read capability scope) and returns its absolute path; we read
+ * the bytes via plugin-fs and wrap them in a `File`. A capture failure (e.g.
+ * permission not granted) rejects — the caller surfaces an actionable toast.
+ */
+export async function captureCurrentScreen(): Promise<File> {
+  const path = await invoke<string>('screen_capture_current_display');
+  const bytes = await readFile(path);
+  // Split on BOTH separators so a Windows path (backslashes) still yields just
+  // the filename, not the whole path.
+  const name = path.split(/[/\\]/).pop() || 'screenshot.png';
+  return new File([bytes], name, { type: 'image/png' });
 }
