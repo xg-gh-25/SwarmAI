@@ -31,6 +31,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
 import type { GitStatus } from '../types';
+import type { CanvasSnapshot } from '../utils/uiContext';
 
 export interface CanvasFile {
   filePath: string;
@@ -82,6 +83,9 @@ export interface CanvasHostApi {
   close: () => void;
   /** Report panel-internal meta (outputCount) up for proprioception. */
   onCanvasMeta: (meta: { collapsed: boolean; outputCount: number }) => void;
+  /** Live, synchronous snapshot of Canvas state for the send-time SENSE read
+   *  (beats the async canvas-state emit race). Null when nothing to report. */
+  getCanvasSnapshot: () => CanvasSnapshot | null;
 }
 
 export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvasHostArgs): CanvasHostApi {
@@ -95,6 +99,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // count at its first value (the emit would never re-fire on new outputs — a
   // real staleness regression vs the old ThreeColumnLayout code, Gate-2 MED).
   const [outputCount, setOutputCount] = useState(0);
+  // Live mirror of outputCount for the synchronous send-time snapshot read
+  // (getCanvasSnapshot). A ref, NOT the state closure: patch()/getCanvasSnapshot
+  // are memoized on [activeTabId] and would otherwise freeze outputCount at its
+  // closure value (Gate-1 BLOCK1). Kept in sync wherever setOutputCount is called.
+  const outputCountRef = useRef(0);
 
   const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
@@ -123,9 +132,35 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     // State setter (not a ref write) so the canvas-state emit effect re-fires
     // when the output count changes. Setter is identity-stable → no loop.
     setOutputCount(meta.outputCount);
+    // ALSO mirror into the ref so the synchronous send-time snapshot read
+    // (getCanvasSnapshot) sees the fresh count without a render (Gate-1 BLOCK1).
+    outputCountRef.current = meta.outputCount;
   }, []);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
+
+  // ── Synchronous, send-time proprioception read (race fix, run_e45a04d3) ──────
+  // The agent's SENSE snapshot reads canvas.open at chat-SEND time. The async
+  // swarm:canvas-state emit (effect below) could lag a fast send, leaving the
+  // snapshot stale (the observed race). getCanvasSnapshot() reads the LIVE
+  // sources instead — mapRef (the synchronous source of truth, written in patch()
+  // BEFORE React commits) + outputCountRef — so a send immediately after
+  // swarm:open-canvas reports the true state. Mirrors the CanvasSnapshot shape
+  // exactly (uiContext.ts); collapsed stays false to match the emit effect (:196)
+  // — onCanvasMeta's real collapsed is not persisted (pre-existing, unchanged).
+  // Returns null when there is nothing reportable (parity with the effect's null).
+  const getCanvasSnapshot = useCallback((): CanvasSnapshot | null => {
+    const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
+    const openNow = !!(cur.file || cur.manuallyOpen);
+    if (!openNow) return null;
+    return {
+      open: true,
+      outputCount: outputCountRef.current,
+      pinned: cur.pinned,
+      muted: cur.muted,
+      collapsed: false,
+    };
+  }, [activeTabId]);
 
   // ── swarm:open-canvas (window) — manual open on the ACTIVE tab ──────────────
   useEffect(() => {
@@ -213,5 +248,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     toggleMute,
     close,
     onCanvasMeta,
+    getCanvasSnapshot,
   };
 }

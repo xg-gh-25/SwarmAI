@@ -84,6 +84,48 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(counts).toContain(3); // the updated count reached a fresh emit (not frozen)
   });
 
+  it('getCanvasSnapshot() reflects open SYNCHRONOUSLY after swarm:open-canvas (race fix)', () => {
+    // The proprioception race (run_e45a04d3): the async swarm:canvas-state emit
+    // could lag behind a fast send, so the SENSE snapshot read canvas.open=stale.
+    // getCanvasSnapshot() must read the LIVE ref at call time — no waiting for a
+    // React commit + effect. Assert it WITHOUT act()-flushing effects: dispatch,
+    // then read synchronously in the same turn.
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    // Before any open: nothing to report.
+    expect(result.current.getCanvasSnapshot()).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('swarm:open-canvas'));
+    });
+    // Immediately (same call, no extra render wait) the snapshot must show open.
+    const snap = result.current.getCanvasSnapshot();
+    expect(snap).not.toBeNull();
+    expect(snap!.open).toBe(true);
+  });
+
+  it('getCanvasSnapshot() carries the latest outputCount (no stale-closure count)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
+    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 5 }));
+    const snap = result.current.getCanvasSnapshot();
+    expect(snap!.outputCount).toBe(5); // Gate-1 BLOCK1: not a frozen closure value
+    expect(snap!.open).toBe(true);
+  });
+
+  it('getCanvasSnapshot() returns null after close (no stale open)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
+    expect(result.current.getCanvasSnapshot()).not.toBeNull();
+    act(() => result.current.close());
+    expect(result.current.getCanvasSnapshot()).toBeNull();
+  });
+
   it('close clears the active tab Canvas (file + manuallyOpen) without touching other tabs', () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),

@@ -388,6 +388,15 @@ export default function ChatPage() {
   useEffect(() => {
     mergeUiState({ activeOverlay });
   }, [activeOverlay, mergeUiState]);
+  // (d) SEND-TIME canvas refresh (race fix, run_e45a04d3). The swarm:canvas-state
+  //     subscription (b) is async — it can lag a fast send, leaving canvas stale
+  //     in the snapshot. Call this SYNCHRONOUSLY right before each send to read
+  //     the LIVE canvas state (getCanvasSnapshot reads the ref source of truth),
+  //     so ACT → SENSE closes deterministically instead of racing. Subscription
+  //     (b) stays as the passive keep-fresh path (zero-regression).
+  const refreshCanvasForSend = useCallback(() => {
+    mergeUiState({ canvas: canvas.getCanvasSnapshot() });
+  }, [canvas, mergeUiState]);
 
   // P2: attached terminal output — set once when the user clicks "Attach to
   // chat" on a terminal, consumed on the NEXT send, then cleared (one-shot, so
@@ -2241,6 +2250,7 @@ export default function ChatPage() {
       ? tabMapRef.current.get(currentActiveTabId)?.sessionId
       : undefined;
 
+    refreshCanvasForSend(); // sync-read live Canvas state before send (race fix)
     const abort = chatService.streamChat(
       {
         agentId: selectedAgentId,
@@ -2411,6 +2421,7 @@ export default function ChatPage() {
       // session, Principle 4). No per-tab session yet → undefined (fresh session).
       const resolvedSessionId = tabState.sessionId;
 
+      refreshCanvasForSend(); // sync-read live Canvas state before send (race fix)
       const abort = chatService.streamChat(
         {
           agentId: selectedAgentId!,
