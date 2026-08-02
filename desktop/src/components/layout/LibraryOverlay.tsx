@@ -26,7 +26,7 @@
  * @exports LibraryOverlay
  */
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import api from '../../services/api';
@@ -150,12 +150,78 @@ export function LibraryOverlay() {
   );
 }
 
+interface SearchHit { domain: string; title: string; source: string; content?: string; mount_id?: string | null; }
+interface SearchResult { query: string; count: number; hits: SearchHit[]; }
+
 // ── Browse: Native categories (green) + Mounted sources (blue), never merged ──
 function BrowseTab({ native, mounts }: { native: NativeStore | undefined; mounts: MountsList | undefined }) {
   const cats = native?.categories ?? [];
   const mountRows = mounts?.mounts ?? [];
+  const [query, setQuery] = useState('');
+  const [submitted, setSubmitted] = useState('');
+
+  // Search runs the SAME recall path the Guide tab describes (library+codeintel).
+  const { data: search, isFetching } = useQuery<SearchResult>({
+    queryKey: ['library-search', submitted],
+    queryFn: async () => (await api.get<SearchResult>(`/api/library/search?q=${encodeURIComponent(submitted)}`)).data,
+    enabled: submitted.trim().length > 0,
+    staleTime: 30_000,
+  });
+
   return (
     <div data-testid="library-panel-browse" className="flex flex-col gap-5 max-w-4xl">
+      {/* Search box — searching Library = seeing what recall would retrieve. */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
+        className="flex items-center gap-2"
+      >
+        <input
+          data-testid="library-search-input"
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="🔍 Search the library (keyword / FTS5 — what recall would retrieve)…"
+          className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+        />
+        {submitted && (
+          <button type="button" data-testid="library-search-clear"
+            onClick={() => { setQuery(''); setSubmitted(''); }}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">clear</button>
+        )}
+      </form>
+
+      {submitted.trim() ? (
+        <section data-testid="library-search-results">
+          <div className="mb-2 text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+            {isFetching ? 'Searching…' : `${search?.count ?? 0} recall hits for “${submitted}”`}
+          </div>
+          {(search?.hits ?? []).length === 0 && !isFetching ? (
+            <div className="py-6 text-center text-sm text-[var(--color-text-faint)]">
+              No recall hits — try different keywords, or the knowledge may not be indexed yet.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {(search?.hits ?? []).map((h, i) => (
+                <button
+                  key={i}
+                  data-testid="library-search-hit"
+                  onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
+                  className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
+                >
+                  <span className="shrink-0 rounded px-1.5 py-[1px] text-[10px] font-mono"
+                    style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,#4a8fb0 16%,transparent)' : 'color-mix(in srgb,#5fc99a 16%,transparent)',
+                             color: h.domain === 'codeintel' ? '#4a8fb0' : '#5fc99a' }}>
+                    {h.domain === 'codeintel' ? 'code' : 'docs'}{h.mount_id ? '·mount' : ''}
+                  </span>
+                  <span className="flex-1 min-w-0 truncate text-sm text-[var(--color-text)]">{h.title || h.source}</span>
+                  <span className="shrink-0 text-[11px] text-[var(--color-text-faint)] font-mono truncate max-w-[280px]">{h.source}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : (
+      <>
       <div className="text-sm text-[var(--color-text-muted)]">
         Everything on the shelf — click a category to open it in the workspace explorer.
         Native (ours) and Mounted (pointers to your disk) stay visually distinct.
@@ -214,6 +280,8 @@ function BrowseTab({ native, mounts }: { native: NativeStore | undefined; mounts
           </div>
         )}
       </section>
+      </>
+      )}
     </div>
   );
 }
@@ -239,22 +307,32 @@ function MountRowView({ m }: { m: MountRow }) {
   );
 }
 
-// "+ Add Folder" — native folder picker via the Tauri dialog plugin (present:
-// tauri-plugin-dialog v2, dialog:default capability). Run 5 opens the picker and
-// hands the chosen path to the mount cycle's register endpoint (guarded until it
-// exists) — the picker itself is real so the affordance is not a dead button.
+// "+ Add Folder" — native folder picker (Tauri dialog plugin) → POST
+// /api/library/mounts, which judges kind + registers + indexes (code inline,
+// docs handed to chat). On success the mounts list refreshes so the new row shows.
 function AddFolderButton() {
   const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
   const onClick = async () => {
     setBusy(true);
     try {
       const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
       const picked = await openDialog({ directory: true, multiple: false, title: 'Add a folder to mount' });
       if (typeof picked === 'string') {
-        // Register the mount (background kind-judge + index lands in the mount cycle).
-        await api.post('/api/library/mounts', { path: picked }).catch(() => {
-          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: 'Mounting arrives in the next cycle — folder noted.' } }));
-        });
+        try {
+          const res = await api.post<{ kind: string; symbols?: number; next?: string }>(
+            `/api/library/mounts?path=${encodeURIComponent(picked)}`,
+          );
+          const d = res.data;
+          const msg = d.kind === 'code'
+            ? `Mounted (code) — indexed ${d.symbols ?? 0} symbols; recall now reaches it.`
+            : `Mounted (docs). ${d.next ?? 'Ask chat to brief the folder into cards.'}`;
+          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: msg } }));
+          qc.invalidateQueries({ queryKey: ['library-mounts'] });
+        } catch (err: unknown) {
+          const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: detail || 'Mount failed — see logs.' } }));
+        }
       }
     } catch {
       // dialog unavailable (non-Tauri/dev) — fall back to chat guidance.

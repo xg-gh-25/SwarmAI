@@ -36,6 +36,7 @@ class JobType(str, Enum):
     SESSION_HEALTH_PROBE = "session_health_probe"
     EVAL_SCHEDULED = "eval_scheduled"
     SESSION_QUALITY = "session_quality"
+    LIBRARY_FRESHNESS = "library_freshness"
 
 
 class FeedType(str, Enum):

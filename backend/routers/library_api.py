@@ -126,8 +126,12 @@ async def recent_feed(days: int = Query(default=7, ge=1, le=30)) -> dict:
 
 
 @router.get("/mounts")
-async def list_mounts(scope: str = Query(default="SwarmAI")) -> dict:
-    """Registered mount points + live health for `scope` (real registry read)."""
+async def list_mounts(scope: Optional[str] = Query(default=None)) -> dict:
+    """Registered mount points + live health (real registry read).
+
+    Default (scope=None) lists ALL mounts — the overlay shows the whole shelf
+    (GLOBAL + any per-project mounts) regardless of active project. Pass an
+    explicit scope to filter."""
     try:
         import sqlite3
         from jobs.paths import DB_PATH
@@ -154,6 +158,81 @@ async def list_mounts(scope: str = Query(default="SwarmAI")) -> dict:
     except Exception as exc:  # noqa: BLE001 — overlay tolerates an empty list
         logger.warning("library mounts list failed: %s", exc)
         return {"count": 0, "mounts": [], "registry_ready": False}
+
+
+@router.post("/mounts")
+async def register_mount(path: str = Query(...), scope: str = Query(default="GLOBAL")) -> dict:
+    """Register an external directory as a mount AND index it by kind.
+
+    The +Add Folder button lands here. Judges the kind from the dir's contents
+    (code if it has parseable source, else docs), registers it in library_mounts,
+    then dispatches indexing:
+      - code → index_code_mount inline (per-mount graph; returns symbol count)
+      - docs → return a chat-handoff (the agent must WALK + judge which files are
+        worth a briefing card — that's semantic, it belongs in chat via s_library,
+        not a mechanical endpoint).
+    Never copies the directory (index-not-warehouse). 400 if the path isn't a dir.
+    """
+    src = Path(path).expanduser()
+    if not src.is_dir():
+        raise HTTPException(status_code=400, detail=f"{path} is not a directory (a single file goes to the Inbox; only directories are mounted)")
+    try:
+        import sqlite3
+        from jobs.paths import DB_PATH
+        from core.library_mounts import LibraryMounts, judge_mount_kind, index_code_mount, is_protected_system_path
+        # SECURITY (Gate-2 #1): same guard as the Inbox endpoint — a caller-supplied
+        # path under a protected system root (/etc, ~/.ssh-adjacent, /var, ...) must
+        # NOT be indexed into a searchable graph (host-content exfiltration).
+        if is_protected_system_path(str(src)):
+            raise HTTPException(status_code=400, detail=f"{path} is under a protected system path — system directories cannot be mounted (exfiltration guard).")
+        kind = judge_mount_kind(str(src))
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        try:
+            store = LibraryMounts(conn)
+            store.ensure_table()
+            mid = store.add_mount(scope=scope, path=str(src), kind=kind)
+            if kind == "code":
+                result = index_code_mount(store, mid)
+                return {"id": mid, "kind": kind, "status": result.get("status"),
+                        "symbols": result.get("symbols", 0)}
+            # docs → hand to chat (semantic file-judging is not a mechanical job)
+            return {"id": mid, "kind": kind, "status": "registered",
+                    "next": f"In chat, say: brief the docs dir {src} — the agent will "
+                            f"walk it, judge which files matter, and write briefing cards."}
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("register_mount failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"mount failed: {exc}")
+
+
+@router.get("/search")
+async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL")) -> dict:
+    """Search the library the SAME way recall does (the Guide tab's promise made
+    real): recall_all over the library (Native Knowledge/ + docs-mount cards) +
+    codeintel (project graph + code mounts) domains. Empty q → empty hits."""
+    if not q.strip():
+        return {"query": q, "hits": []}
+    try:
+        from core.recall_multi import recall_all
+        result = recall_all(q, project=scope, domains=("library", "codeintel"))
+        hits: list[dict] = []
+        for domain in ("library", "codeintel"):
+            for h in (result.buckets.get(domain) or []):
+                hits.append({
+                    "domain": domain,
+                    "title": h.get("heading") or h.get("name") or h.get("source") or "",
+                    "source": h.get("source") or h.get("file_path") or h.get("mount_path") or "",
+                    "content": (h.get("content") or "")[:400],
+                    "mount_id": h.get("mount_id"),
+                })
+        return {"query": q, "scope": scope, "count": len(hits), "hits": hits}
+    except Exception as exc:  # noqa: BLE001 — search must degrade to empty, never 500 the overlay
+        logger.warning("library search failed: %s", exc)
+        return {"query": q, "hits": [], "error": "search unavailable"}
 
 
 @router.post("/inbox")

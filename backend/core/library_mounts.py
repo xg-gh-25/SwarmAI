@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 # silently stored — the registry is a contract, not a scratchpad.
 VALID_KINDS = ("code", "docs", "url")
 
+# Workspace-global mount scope (Gate-2 #2): a mount added without a project context
+# registers here and is reachable from recall in ANY active project. Per-project
+# scoping still works (register under a project name) for a mount that should ONLY
+# surface in that project — but the DEFAULT is global, matching the user's mental
+# model ("I added this folder to my library" = available everywhere), and avoiding
+# the register-scope('SwarmAI') vs recall-scope(active-project) divergence.
+GLOBAL_SCOPE = "GLOBAL"
+
 # Health is a source-exists signal, NOT a content-freshness claim: 'fresh' = the
 # pointer resolves to a live dir/file; 'missing' = the source is gone (dangling
 # reference). 'stale' (source mtime > index) is set by the freshness job cycle.
@@ -340,6 +348,55 @@ _mount_graph_cache: dict[str, object] = {}
 _mount_cache_lock = threading.Lock()
 
 
+# Dirs skipped by judge_mount_kind's scan (Gate-2 #3): never descend these — a
+# node_modules-only tree would otherwise be an unbounded walk on every mount.
+_JUDGE_SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__",
+                    "dist", "build", ".next", "target", ".cache", "vendor"}
+_JUDGE_SCAN_CAP = 5000  # entries scanned before defaulting to 'docs' (bounded)
+
+
+def judge_mount_kind(path: str) -> str:
+    """Judge a directory's mount kind from its contents: 'code' if it contains any
+    tree-sitter-parseable source file (code_intel LANGUAGE_MAP), else 'docs'.
+
+    Bounded scan (Gate-2 #3): stops at the first source file, skips heavy vendored
+    dirs, and caps total entries so a huge no-source dir can't hang the request.
+    Used by POST /mounts + s_library so a user/agent needn't specify kind. Defaults
+    to 'docs' for an empty/unreadable/huge dir (the lower-risk kind — no code index)."""
+    try:
+        from core.code_intel.parser import LANGUAGE_MAP
+        root = Path(path).expanduser()
+        if not root.is_dir():
+            return "docs"
+        scanned = 0
+        for p in root.rglob("*"):
+            # Prune heavy vendored subtrees (rglob can't prune, so skip by path part).
+            if any(part in _JUDGE_SKIP_DIRS for part in p.parts):
+                continue
+            scanned += 1
+            if scanned > _JUDGE_SCAN_CAP:
+                return "docs"  # too big to classify cheaply → safe default
+            try:
+                if p.is_file() and p.suffix in LANGUAGE_MAP:
+                    return "code"
+            except OSError:
+                continue
+        return "docs"
+    except Exception:  # noqa: BLE001 — judgement must never raise into the caller
+        return "docs"
+
+
+def is_protected_system_path(path: str) -> bool:
+    """True if `path` is at/under a protected system root (exfiltration guard).
+    Shared by the Inbox copy + the mount register endpoint so both agree on the
+    same threat model (Gate-2 #1: the two sibling endpoints must not diverge)."""
+    from core.library_inbox import _is_system_path
+    try:
+        return _is_system_path(Path(path).expanduser().resolve())
+    except OSError:
+        return True  # unresolvable → refuse (fail-closed)
+
+
 def _mounts_dir() -> Path:
     """Workspace dir that holds per-mount indexes: SwarmWS/Knowledge/Library/mounts/.
     Indirected through a function so tests can monkeypatch it to a tmp dir."""
@@ -483,16 +540,19 @@ def write_docs_cards(
 
 
 def recall_mounts(query: str, *, scope: str, store: "LibraryMounts", limit: int = 8) -> list[dict]:
-    """Search all ENABLED code mounts in `scope`, newest hits first.
+    """Search all ENABLED code mounts in `scope` OR the workspace-GLOBAL scope.
 
-    Each hit is a symbol dict stamped with `mount_id` + `mount_path` so the agent
-    knows to Read the LIVE external source. Never raises — a missing/broken mount
-    graph is skipped (a deleted-source mount just yields nothing). This is the
-    additive pass the codeintel recall leg composes in.
+    Gate-2 #2: recall runs per active-project, but a mount added "to my library"
+    registers GLOBAL and must surface in EVERY project — so we union the active
+    scope with GLOBAL. A mount explicitly scoped to a project still surfaces only
+    there. Each hit is a symbol dict stamped with `mount_id` + `mount_path` so the
+    agent Reads the LIVE external source. Never raises — a missing/broken mount
+    graph is skipped. This is the additive pass the codeintel recall leg composes in.
     """
     out: list[dict] = []
+    scopes = {scope, GLOBAL_SCOPE}
     try:
-        rows = store.list_mounts(scope=scope)
+        rows = [r for s in scopes for r in store.list_mounts(scope=s)]
     except Exception:  # noqa: BLE001
         return out
     for row in rows:

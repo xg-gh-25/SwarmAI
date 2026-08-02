@@ -324,6 +324,25 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "library_freshness":
+            from .handlers.library_freshness import run_library_freshness
+            fresh_result = run_library_freshness()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            f_status = fresh_result.get("status", "unknown")
+            summary = (
+                fresh_result.get("error")
+                if f_status == "error"
+                else f"mounts: {fresh_result.get('scanned', 0)} scanned "
+                     f"({fresh_result.get('fresh', 0)}🟢 {fresh_result.get('stale', 0)}🟡 "
+                     f"{fresh_result.get('missing', 0)}🔴)"
+            )
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=_monitor_result_status(f_status, ok={"success"}, benign=set()),
+                summary=summary,
+                duration_seconds=duration,
+            )
+
         elif job.type == "session_health_probe":
             from .handlers.session_health_probe import run_session_health_probe
             probe_result = run_session_health_probe(

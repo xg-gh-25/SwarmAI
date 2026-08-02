@@ -25,14 +25,23 @@ _SYSTEM_ROOTS = (
     "/System", "/Library", "/root", "/proc", "/sys", "/dev",
 )
 
+# Secret dirs UNDER the user's home — refused too. A home-dir carve-out (legit
+# files live under ~) must NOT expose credential/key stores. Matched as a home-
+# relative first segment (~/.ssh, ~/.aws, ...), so ~/Desktop/.ssh-notes is fine.
+_HOME_SECRET_DIRS = (
+    ".ssh", ".aws", ".gnupg", ".gpg", ".config/gcloud", ".kube", ".docker",
+    ".netrc", ".password-store", ".swarm-ai",  # .swarm-ai = our own creds/DB
+)
+
 
 def _is_system_path(resolved: Path) -> bool:
-    """True if `resolved` (already .resolve()'d) is at or under a protected root.
+    """True if `resolved` (already .resolve()'d) is at/under a protected root OR a
+    home-secret dir (~/.ssh, ~/.aws, ...).
 
     Carve-out: the OS temp dir is a LEGITIMATE staging location (exports, browser
     downloads-then-move, and — on macOS — it resolves under /private/var/folders/,
     which the /var root would otherwise catch). A file the user chose to drop from
-    temp is fine; the guard targets /etc, /usr, /System, /var/log, etc."""
+    temp is fine; the guard targets /etc, /usr, /System, /var/log, ~/.ssh, etc."""
     import tempfile
     s = str(resolved)
     tmp_root = str(Path(tempfile.gettempdir()).resolve())
@@ -41,6 +50,16 @@ def _is_system_path(resolved: Path) -> bool:
     for root in _SYSTEM_ROOTS:
         if s == root or s.startswith(root + "/"):
             return True
+    # Home-secret dirs (credential/key stores under ~).
+    try:
+        home = Path.home().resolve()
+        if resolved == home or home in resolved.parents:
+            rel = resolved.relative_to(home).as_posix()
+            for secret in _HOME_SECRET_DIRS:
+                if rel == secret or rel.startswith(secret + "/"):
+                    return True
+    except (OSError, ValueError):
+        pass
     return False
 
 

@@ -79,3 +79,21 @@ def test_system_path_source_refused(tmp_path: Path) -> None:
         pytest.skip("/etc/hosts not present")
     with pytest.raises(ValueError):
         copy_to_inbox(kdir, system_file)
+
+
+def test_home_secret_dir_refused(monkeypatch):
+    """SECURITY: a credential/key store under ~ (~/.ssh, ~/.aws) must be refused
+    even though it's inside the home carve-out (Gate-2: home-dir ≠ safe). Uses the
+    REAL home so Path.home() resolves it; only writes into a Knowledge tmp dest."""
+    import tempfile
+    real_home = Path.home()
+    ssh_dir = real_home / ".ssh"
+    if not ssh_dir.exists():  # pragma: no cover — most dev machines have ~/.ssh
+        pytest.skip("no ~/.ssh on this host")
+    # Any real file under ~/.ssh (config/known_hosts) — do NOT create/modify one.
+    victim = next((p for p in ssh_dir.iterdir() if p.is_file()), None)
+    if victim is None:  # pragma: no cover
+        pytest.skip("~/.ssh has no file to test against")
+    kdir = Path(tempfile.mkdtemp()) / "Knowledge"; kdir.mkdir(parents=True)
+    with pytest.raises(ValueError):
+        copy_to_inbox(kdir, victim)
