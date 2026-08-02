@@ -69,6 +69,12 @@ export interface FileViewerProps {
   variant: 'panel' | 'modal';
   /** Toggle between panel and modal mode. */
   onToggleMode?: () => void;
+  /** Chat-tab scope identity. When it CHANGES, FileViewer clears its internal
+   *  tab list so one chat tab's open files don't bleed into another — WITHOUT a
+   *  remount (a `key` remount would replay the panel's width-reveal animation and
+   *  discard the content cache on every tab switch, run_0fb40bbc). Undefined =
+   *  no scoping (single-instance callers). */
+  tabScopeKey?: string;
 }
 
 /** Status-bar info that renderers can publish via onStatusInfo callback. */
@@ -114,6 +120,7 @@ export default function FileViewer({
   onSaveWithDiff,
   variant,
   onToggleMode,
+  tabScopeKey,
 }: FileViewerProps) {
   const {
     tabs,
@@ -161,6 +168,23 @@ export default function FileViewer({
   /* -------------------------------------------------------------- */
 
   const prevInitialFileRef = useRef<string | undefined>(undefined);
+
+  // Chat-tab scope change → clear the internal tab list so tab A's open files
+  // don't linger as tabs in tab B (the bleed the old key={activeTabId} remount
+  // guarded). Done WITHOUT a remount, so the panel's width-reveal animation +
+  // the content cache survive a tab switch (run_0fb40bbc). Reset
+  // prevInitialFileRef too, so the incoming tab's initialFile re-opens even if
+  // its path matches what the previous tab last showed. Skip the very first
+  // render (prev undefined→first key) so a freshly-opened Canvas isn't wiped.
+  const prevScopeRef = useRef<string | undefined>(tabScopeKey);
+  useEffect(() => {
+    if (prevScopeRef.current !== undefined && tabScopeKey !== prevScopeRef.current) {
+      closeAllTabs();
+      prevInitialFileRef.current = undefined;
+    }
+    prevScopeRef.current = tabScopeKey;
+  }, [tabScopeKey, closeAllTabs]);
+
   useEffect(() => {
     if (!initialFile) {
       // initialFile cleared (e.g. Canvas file nulled while the panel stays open

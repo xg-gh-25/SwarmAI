@@ -174,7 +174,8 @@ export default function FileViewerPanel({
       {/* Spout — a small triangle sitting IN the panel's left edge (inside the
           panel box, not overhanging chat), pointing left toward the chat: reads
           as "this Canvas spouted out of the conversation." Tinted with the
-          session accent. Vertically centered on the header row. */}
+          session accent. Vertically centered on the chat window (CSS top:50%
+          translateY(-50%)), not pinned to the header row. */}
       <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
       {/* Resize handle — left edge, doubles as the colorful Canvas↔chat divider */}
       <div
