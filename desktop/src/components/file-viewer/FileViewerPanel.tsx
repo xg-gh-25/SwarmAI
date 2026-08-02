@@ -57,15 +57,20 @@ export default function FileViewerPanel({
 }: FileViewerPanelProps) {
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
-  // Width-reveal (bug5): mount at width 0, then flip to the real width on the
+  // Width-reveal (bug5): mount at MIN_WIDTH, then flip to the real width on the
   // next frame so the CSS `transition: width` eases the panel open — and, as a
   // flex sibling, eases the chat pane narrower in lockstep (no instant "pop").
-  // While dragging we must NOT keep the transition (it would lag the cursor).
+  // We reveal from MIN_WIDTH (not 0) on purpose: FileViewer's content (xterm /
+  // lazy renderers) measures its container at mount, and a literal 0-width first
+  // frame makes it cache a broken 0-layout (IMPROVEMENT.md xterm-cell-measure
+  // class). MIN_WIDTH is always measurable, and 320→target is still a visible
+  // ease. While dragging we must NOT keep the transition (it would lag cursor).
   const [entered, setEntered] = useState(false);
   useEffect(() => {
     const id = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(id);
   }, []);
+  const revealWidth = entered ? width : Math.min(PANEL_CONSTANTS.MIN_WIDTH, width);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   // Accent tint for the spout + divider = the primary accent. (Earlier this read
@@ -107,7 +112,13 @@ export default function FileViewerPanel({
   // neutral — no stale leak.
   useEffect(() => {
     onCanvasMeta?.({ collapsed: false, outputCount: counts.total });
-  }, [counts.total, onCanvasMeta]);
+    // Deps: only counts.total. onCanvasMeta is called SYNCHRONOUSLY (not a
+    // subscription that must re-bind), and the parent does not always memoize
+    // it — including it here re-fired the effect on every parent render, causing
+    // a redundant swarm:canvas-state emit (REVIEW F1). The parent value-guards
+    // the actual DOM dispatch, but we avoid the wasteful call at the source.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [counts.total]);
 
   // Persist width changes
   const updateWidth = useCallback((newWidth: number) => {
@@ -157,7 +168,7 @@ export default function FileViewerPanel({
   return (
     <div
       className={`relative flex-shrink-0 flex ${isDragging ? '' : 'canvas-width-reveal'}`}
-      style={{ width: entered ? width : 0, '--spout-tint': canvasTint } as CSSProperties}
+      style={{ width: revealWidth, '--spout-tint': canvasTint } as CSSProperties}
       data-testid="file-viewer-panel"
     >
       {/* Spout — a small triangle sitting IN the panel's left edge (inside the
