@@ -1,10 +1,12 @@
 /**
  * AlertsPill — the 🔔 "Needs You" pill in the chat tab row.
  *
- * Replaces the bare bell: a LABELLED pill so the user knows what it is at a
- * glance (run_843962a5 — a bare bell gave no hint what it was). Sits in ChatHeader's right
- * action cluster, next to (not inside) the tab strip. Clicking opens a rich
- * popover anchored to the pill that reuses the shared <AttentionList> — the same
+ * Replaces the bare bell: a LABELLED row so the user knows what it is at a
+ * glance (run_843962a5 — a bare bell gave no hint what it was). Rendered in the
+ * left-sidebar top slot, styled to match the History row (full-width, same
+ * padding/gap/font — NOT a content-width pill) so it aligns with the chat chrome;
+ * the red alert color scheme is its distinct attention identity. Clicking opens a
+ * rich popover (left-flyout) that reuses the shared <AttentionList> — the same
  * cards the Radar sidebar renders (paused pipelines / failed jobs / waiting
  * tabs), each actionable (inject-to-input / switch-tab).
  *
@@ -67,14 +69,23 @@ export function AlertsPill({ items, onItemClick, onSelectTab, placement = 'left-
         aria-expanded={open}
         title={calm ? 'Nothing needs you' : `${count} item(s) need you — decisions / job failures / external requests`}
         className={[
-          'flex items-center gap-1.5 h-7 px-2 rounded-lg text-xs font-semibold transition-colors',
+          // Match the History row's shape (w-full, same gap/px/py/rounded) so it
+          // aligns left-and-right with the chat chrome — NOT a pill. Red alert
+          // color scheme is retained as its distinct attention identity.
+          // border-transparent on calm keeps the box model identical to the
+          // alert state's 1px border → no edge shift when count toggles.
+          'mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 border transition-colors',
           calm
-            ? 'bg-[var(--color-card)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-            : 'bg-red-500/10 border border-red-500/35 text-red-300 hover:bg-red-500/20 hover:border-red-500/60',
+            ? 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+            : 'bg-red-500/10 border-red-500/35 text-red-300 hover:bg-red-500/20 hover:border-red-500/60',
         ].join(' ')}
       >
-        <span className="material-symbols-outlined text-[15px] leading-none">notifications</span>
-        <span className="whitespace-nowrap">Needs You</span>
+        {/* icon box mirrors History's `w-4` NavSvgIcon slot; 19px glyph matches
+            the 19px History SVG so both icons read the same size + start column */}
+        <span className="w-4 flex items-center justify-center">
+          <span className="material-symbols-outlined text-[19px] leading-none">notifications</span>
+        </span>
+        <span className="flex-1 text-left text-[11.5px] font-mono tracking-wide whitespace-nowrap">Needs You</span>
         {!calm && (
           <span className="min-w-[16px] h-4 px-1 rounded-lg bg-red-500 text-white text-[9.5px] font-bold font-mono flex items-center justify-center animate-pulse">
             {count}
