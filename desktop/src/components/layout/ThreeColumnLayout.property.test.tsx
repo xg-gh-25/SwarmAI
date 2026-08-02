@@ -1080,8 +1080,10 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     const expectedNavOrder = [
       { testId: 'nav-context', label: 'C&M' },
       { testId: 'nav-brain-hub', label: 'Brain Hub' },
+      { testId: 'nav-library', label: 'Library' },
       { testId: 'nav-todo', label: 'ToDo' },
       { testId: 'nav-swarmws', label: 'Workspace' },
+      { testId: 'nav-canvas', label: 'Canvas' },
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-capabilities', label: 'Capabilities' },

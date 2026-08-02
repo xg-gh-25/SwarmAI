@@ -54,9 +54,11 @@ afterEach(() => cleanup());
 const DOMAIN_ORDER = [
   'nav-context',
   'nav-brain-hub',
+  'nav-library',   // cognition zone: the bookshelf (Native Knowledge/ + mounts)
   'nav-new-brain',
   'nav-todo',     // A4: daily-common pair (ToDo + Workspace) first, `highlight`ed
   'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
+  'nav-canvas',   // Work: Canvas — the session output surface (swarm:open-canvas)
   'nav-pipeline',
   'nav-pollinate',
   'nav-capabilities',
@@ -88,7 +90,7 @@ describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
     expect(screen.getByTestId('cognition-zone')).toBeInTheDocument();
     // Context (C&M)/Brain Hub live inside it. (Memory folded into the C&M overlay as a tab — no standalone nav card.)
     const zone = screen.getByTestId('cognition-zone');
-    ['nav-context', 'nav-brain-hub', 'nav-new-brain'].forEach((id) =>
+    ['nav-context', 'nav-brain-hub', 'nav-library', 'nav-new-brain'].forEach((id) =>
       expect(within(zone).getByTestId(id)).toBeInTheDocument(),
     );
   });

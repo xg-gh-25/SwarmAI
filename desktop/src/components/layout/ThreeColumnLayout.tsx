@@ -15,6 +15,7 @@ import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 import { SwarmWSOverlay } from './SwarmWSOverlay';
 import { DomainStubOverlays } from './DomainStubOverlays';
 import { CMBrainOverlay } from './CMBrainOverlay';
+import { LibraryOverlay } from './LibraryOverlay';
 import { setNavSource, clearNavSource } from './navSource';
 import { useActiveOverlayEvent, clearActiveOverlayEvent } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
@@ -248,6 +249,7 @@ function LeftSidebar() {
         <div className="a10-zone" data-testid="cognition-zone">
           <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
           <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
+          <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-library'} onClick={() => showOverlay('swarm:show-library')} data-testid="nav-library" />
           <button
             className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
@@ -535,6 +537,23 @@ function NavSvgIcon({ name }: { name: string }) {
           <path d="M3 3v5h5" />
           <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
           <path d="M12 7v5l4 2" />
+        </svg>
+      );
+    case 'draft':
+      // Canvas — a document page with a folded corner (the session output surface).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 3 14 8 19 8" />
+        </svg>
+      );
+    case 'menu_book':
+      // Library — an open book (the agent's bookshelf: Native store + mounts).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M12 6.5C10.5 5 8 4.5 4 5v13c4-.5 6.5 0 8 1.5" />
+          <path d="M12 6.5C13.5 5 16 4.5 20 5v13c-4-.5-6.5 0-8 1.5" />
+          <line x1="12" y1="6.5" x2="12" y2="20" />
         </svg>
       );
     default:
@@ -1135,6 +1154,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       {/* C&M Global Brain overlay — real surface for the Context nav card
           (swarm:show-context). Replaces the former Context stub (run_5f7d4fe1). */}
       <CMBrainOverlay />
+
+      {/* Library overlay — real surface for the Library nav card
+          (swarm:show-library). The bookshelf: Native Knowledge/ + mounts. */}
+      <LibraryOverlay />
 
       {/* A10 domain stub overlays — Pipeline / Pollinate open labeled
           placeholders (real surfaces land in later per-card cycles). */}

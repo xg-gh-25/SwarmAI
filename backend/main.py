@@ -1411,6 +1411,9 @@ app.include_router(eval_router, prefix="/api/eval", tags=["eval"])
 from routers.ddd_brain import router as ddd_brain_router
 app.include_router(ddd_brain_router, prefix="/api/ddd", tags=["ddd-brain"])
 
+from routers.library_api import router as library_router
+app.include_router(library_router, tags=["library"])  # prefix set in router
+
 # Register development-only router when DEBUG=true
 if settings.debug:
     from routers.dev import router as dev_router
