@@ -96,13 +96,88 @@ def test_build_event_fail_closed_for_bad_cmd():
     assert build_ui_command_event("open-file") is None
 
 
-# ── cross-language table parity (Gate-2 LOW: drift guard) ────────────────────
+# ── binding to the LeftNav SSOT (ALL_SHOW_EVENTS) ────────────────────────────
+# The REAL source of truth for the swarm:show-* overlay events is
+# desktop/src/components/layout/useExclusiveOverlay.ts::ALL_SHOW_EVENTS. The
+# frontend UI_COMMAND_TABLE now DERIVES its show-* entries from that SSOT (see
+# uiCommands.ts), so frontend drift is structurally impossible. Python cannot
+# import a TS constant, so the backend UI_COMMAND_ALLOWLIST stays a hand-written
+# literal — and THIS test binds it to the SSOT: it parses ALL_SHOW_EVENTS and
+# asserts the backend allowlist == {every show-* event} + {open-canvas,
+# back-to-chat}. So a LeftNav card add/rename/remove that the backend didn't
+# follow FAILS THE BUILD instead of silently making an agent command a no-op.
 
-def test_backend_allowlist_matches_frontend_table():
-    """The backend allowlist and the frontend UI_COMMAND_TABLE are hand-maintained
-    in two languages; drift would silently expand the compromised-backend attack
-    surface. This test parses the TS table and asserts the cmd→{event,target} maps
-    are byte-identical, so any divergence FAILS the build instead of shipping.
+
+def _parse_all_show_events() -> list[str]:
+    """Parse the ALL_SHOW_EVENTS string-literal array from useExclusiveOverlay.ts.
+
+    This is the LeftNav SSOT. Kept as a source-parse (not a duplicated Python
+    list) on purpose: duplicating it here would just move the drift, not kill it.
+    """
+    import re
+    from pathlib import Path
+
+    ts_path = (
+        Path(__file__).resolve().parents[2]
+        / "desktop" / "src" / "components" / "layout" / "useExclusiveOverlay.ts"
+    )
+    text = ts_path.read_text()
+    # Anchor on the DECLARATION, not a bare name match — the name also appears in
+    # the file's docstring (line 13), and splitting on the first mention would grab
+    # the wrong bracket span if a '[' ever entered that prose. Anchor on the
+    # `export const ALL_SHOW_EVENTS = [` declaration so only the array body is read.
+    m = re.search(r"export\s+const\s+ALL_SHOW_EVENTS\s*=\s*\[(.*?)\]", text, re.DOTALL)
+    assert m, "could not locate the `export const ALL_SHOW_EVENTS = [...]` declaration"
+    events = re.findall(r"'([^']+)'", m.group(1))
+    return events
+
+
+def test_backend_allowlist_is_bound_to_leftnav_ssot():
+    """The backend allowlist must EXACTLY equal the LeftNav SSOT's show-* events
+    plus the two non-overlay commands (open-canvas, back-to-chat). This is the
+    drift guard the frontend can't be (Python can't import TS): a card added to
+    ALL_SHOW_EVENTS but not to UI_COMMAND_ALLOWLIST — or one removed/renamed there
+    but stale here — FAILS this test.
+    """
+    show_events = _parse_all_show_events()
+    assert len(show_events) >= 8, (
+        f"parsed too few ALL_SHOW_EVENTS ({len(show_events)}) — parser drift or "
+        "the SSOT shrank unexpectedly"
+    )
+    for ev in show_events:
+        assert ev.startswith("swarm:show-"), (
+            f"ALL_SHOW_EVENTS entry {ev!r} is not a swarm:show-* event — the "
+            "derivation assumption (strip 'swarm:' → cmd id) no longer holds"
+        )
+
+    # Expected backend allowlist = every SSOT show-* event, keyed by its bare cmd
+    # id (strip the 'swarm:' prefix), all window-target, PLUS the two commands that
+    # are deliberately NOT in ALL_SHOW_EVENTS.
+    expected = {
+        ev[len("swarm:"):]: {"event": ev, "target": "window"} for ev in show_events
+    }
+    expected["open-canvas"] = {"event": "swarm:open-canvas", "target": "window"}
+    expected["back-to-chat"] = {"event": "swarm:back-to-chat", "target": "window"}
+
+    assert UI_COMMAND_ALLOWLIST == expected, (
+        "backend UI_COMMAND_ALLOWLIST drifted from the LeftNav SSOT "
+        "(ALL_SHOW_EVENTS) — a nav card was added/renamed/removed without updating "
+        "the agent's allowlist.\n"
+        f"  allowlist-only (stale/no-op): {set(UI_COMMAND_ALLOWLIST) - set(expected)}\n"
+        f"  SSOT-only (unreachable by agent): {set(expected) - set(UI_COMMAND_ALLOWLIST)}"
+    )
+
+
+def test_frontend_table_derives_show_star_from_ssot():
+    """The frontend UI_COMMAND_TABLE must DERIVE its show-* entries from
+    ALL_SHOW_EVENTS (not hand-list them) — that is the structural drift-kill.
+
+    Verified by source shape: uiCommands.ts must (a) import ALL_SHOW_EVENTS from
+    useExclusiveOverlay, and (b) build the show-* rows by mapping over it — NOT
+    carry per-overlay `'show-xxx': { event: 'swarm:show-xxx', ... }` literals. If
+    someone re-hand-lists the overlays as literals, this test fails (the drift
+    door the whole change closes would be re-opened). open-canvas + back-to-chat
+    (the two non-overlay commands) MAY remain literals — they are excluded.
     """
     import re
     from pathlib import Path
@@ -112,20 +187,21 @@ def test_backend_allowlist_matches_frontend_table():
         / "desktop" / "src" / "utils" / "uiCommands.ts"
     )
     text = ts_path.read_text()
-    # Extract the UI_COMMAND_TABLE literal body.
-    body = text.split("UI_COMMAND_TABLE", 1)[1]
-    body = body.split("{", 1)[1].split("};", 1)[0]
-    # Parse rows like:  'open-canvas': { event: 'swarm:open-canvas', target: 'window' },
-    row = re.compile(
-        r"'([^']+)'\s*:\s*\{\s*event:\s*'([^']+)'\s*,\s*target:\s*'([^']+)'\s*\}"
+
+    assert "ALL_SHOW_EVENTS" in text and "from '../components/layout/useExclusiveOverlay'" in text, (
+        "uiCommands.ts must import ALL_SHOW_EVENTS from useExclusiveOverlay so the "
+        "show-* table is derived from the LeftNav SSOT (not hand-copied)"
     )
-    frontend = {
-        m.group(1): {"event": m.group(2), "target": m.group(3)}
-        for m in row.finditer(body)
-    }
-    assert frontend, "failed to parse UI_COMMAND_TABLE from uiCommands.ts"
-    assert frontend == UI_COMMAND_ALLOWLIST, (
-        "backend UI_COMMAND_ALLOWLIST and frontend UI_COMMAND_TABLE diverged — "
-        f"backend-only={set(UI_COMMAND_ALLOWLIST) - set(frontend)}, "
-        f"frontend-only={set(frontend) - set(UI_COMMAND_ALLOWLIST)}"
+    assert "ALL_SHOW_EVENTS.map(" in text, (
+        "uiCommands.ts must DERIVE the show-* table by mapping over ALL_SHOW_EVENTS "
+        "(Object.fromEntries(ALL_SHOW_EVENTS.map(...))) — not hand-list the overlays"
+    )
+    # Guard against re-introducing hand-listed overlay literals (the drift source).
+    hand_listed = re.findall(
+        r"'(show-[A-Za-z0-9-]+)'\s*:\s*\{\s*event:\s*'swarm:show-", text
+    )
+    assert not hand_listed, (
+        "uiCommands.ts re-introduced hand-listed show-* literals "
+        f"{hand_listed} — these must be DERIVED from ALL_SHOW_EVENTS, or they "
+        "silently drift from the LeftNav SSOT (the exact bug this change removed)"
     )

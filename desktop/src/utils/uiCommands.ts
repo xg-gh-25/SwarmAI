@@ -13,11 +13,22 @@
  * inject-chat-input) or flip the target. Fail-closed: an unknown cmd dispatches
  * nothing.
  *
- * Keep in sync with backend/core/ui_actions.py UI_COMMAND_ALLOWLIST. Run 2 scope =
- * non-destructive, window-target nav/display only. Deliberately EXCLUDED:
+ * Backend counterpart: backend/core/ui_actions.py UI_COMMAND_ALLOWLIST. Run 2
+ * scope = non-destructive, window-target nav/display only. Deliberately EXCLUDED:
  * open-file (its resolver allows arbitrary host paths → infoleak), toast /
  * nav-activate (no live listener), show-library (not in ALL_SHOW_EVENTS).
+ *
+ * DRIFT IS STRUCTURALLY IMPOSSIBLE ON THIS SIDE (the "shared list" fix): the
+ * show-* portion of the table is DERIVED from ALL_SHOW_EVENTS — the LeftNav's
+ * single source of truth for its overlay events. Add/rename/remove a nav card
+ * (edit ALL_SHOW_EVENTS) and this table auto-follows; there is no hand-copied
+ * list to fall out of sync. The backend (Python, can't import TS) is bound to
+ * the same SSOT by a test (test_ui_actions.py::test_backend_allowlist_is_bound_to_leftnav_ssot).
+ * open-canvas + back-to-chat are the ONLY hand-listed entries because they are
+ * NOT overlay show-events (open-canvas has no overlay; back-to-chat is the close
+ * event) — everything else rides the SSOT.
  */
+import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 
 type EventTarget_ = 'window' | 'document';
 
@@ -26,18 +37,22 @@ interface UiCommandEntry {
   target: EventTarget_;
 }
 
-/** The security SSOT on the frontend. Bare cmd id → {event, target}. */
+const SWARM_PREFIX = 'swarm:';
+
+/** The security SSOT on the frontend. Bare cmd id → {event, target}.
+ *  show-* entries are DERIVED from ALL_SHOW_EVENTS (strip the 'swarm:' prefix →
+ *  bare cmd id, always window-target); the two non-overlay commands are explicit. */
 export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
+  // Explicit non-overlay commands (NOT in ALL_SHOW_EVENTS):
   'open-canvas': { event: 'swarm:open-canvas', target: 'window' },
-  'back-to-chat': { event: 'swarm:back-to-chat', target: 'window' },
-  'show-swarmws': { event: 'swarm:show-swarmws', target: 'window' },
-  'show-brain-hub': { event: 'swarm:show-brain-hub', target: 'window' },
-  'show-context': { event: 'swarm:show-context', target: 'window' },
-  'show-pipeline': { event: 'swarm:show-pipeline', target: 'window' },
-  'show-pollinate': { event: 'swarm:show-pollinate', target: 'window' },
-  'show-history': { event: 'swarm:show-history', target: 'window' },
-  'show-todo': { event: 'swarm:show-todo', target: 'window' },
-  'show-jobs': { event: 'swarm:show-jobs', target: 'window' },
+  'back-to-chat': { event: BACK_TO_CHAT_EVENT, target: 'window' },
+  // Derived from the LeftNav SSOT — one entry per overlay, auto-synced:
+  ...Object.fromEntries(
+    ALL_SHOW_EVENTS.map((event) => [
+      event.slice(SWARM_PREFIX.length),
+      { event, target: 'window' as const },
+    ]),
+  ),
 };
 
 /**

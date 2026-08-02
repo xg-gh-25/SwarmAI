@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { dispatchUiCommand, UI_COMMAND_TABLE } from '../uiCommands';
+import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../../components/layout/useExclusiveOverlay';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -30,6 +31,32 @@ describe('UI_COMMAND_TABLE', () => {
     for (const banned of ['open-file', 'open-terminal-here', 'inject-chat-input', 'toast', 'nav-activate', 'show-library']) {
       expect(UI_COMMAND_TABLE[banned]).toBeUndefined();
     }
+  });
+
+  // The "shared list" guarantee: show-* is DERIVED from the LeftNav SSOT, so a
+  // card add/rename/remove auto-syncs the table — no hand-copied list to drift.
+  it('DERIVES every show-* command from the ALL_SHOW_EVENTS SSOT', () => {
+    for (const event of ALL_SHOW_EVENTS) {
+      const cmd = event.slice('swarm:'.length); // 'swarm:show-todo' → 'show-todo'
+      expect(UI_COMMAND_TABLE[cmd]).toEqual({ event, target: 'window' });
+    }
+    // Bidirectional: every show-* in the table traces back to the SSOT — no
+    // stale show-* entry survives a card removal.
+    const ssot = new Set<string>(ALL_SHOW_EVENTS);
+    for (const [cmd, entry] of Object.entries(UI_COMMAND_TABLE)) {
+      if (cmd.startsWith('show-')) {
+        expect(ssot.has(entry.event)).toBe(true);
+      }
+    }
+  });
+
+  it('keeps open-canvas + back-to-chat as explicit non-overlay commands', () => {
+    // These are NOT in ALL_SHOW_EVENTS (open-canvas has no overlay; back-to-chat
+    // is the close event) — they must be present regardless of the SSOT.
+    expect(UI_COMMAND_TABLE['open-canvas']).toEqual({ event: 'swarm:open-canvas', target: 'window' });
+    expect(UI_COMMAND_TABLE['back-to-chat']).toEqual({ event: BACK_TO_CHAT_EVENT, target: 'window' });
+    // back-to-chat wires the imported constant, not a hand-typed string.
+    expect(UI_COMMAND_TABLE['back-to-chat'].event).toBe(BACK_TO_CHAT_EVENT);
   });
 });
 
