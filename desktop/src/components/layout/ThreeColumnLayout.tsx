@@ -768,6 +768,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // selected — so the output list is reachable even when auto-surface is muted
   // or nothing is open yet. Decouples "see my outputs" from "have a file open".
   const [canvasManuallyOpen, setCanvasManuallyOpen] = useState(false);
+  // Panel-internal Canvas state (collapsed + output count) lifted up from
+  // FileViewerPanel via onCanvasMeta, so the swarm:canvas-state proprioception
+  // event can include them. Reset to neutral when Canvas closes (panel unmounts)
+  // so a stale count never leaks to the agent (Gate-1 CRITICAL).
+  const [canvasMeta, setCanvasMeta] = useState<{ collapsed: boolean; outputCount: number }>(
+    { collapsed: false, outputCount: 0 },
+  );
   useCanvasAutoSurface({ pinned: canvasPinned, muted: canvasMuted, activeSessionId: activeSessionMeta?.sessionId });
   useEffect(() => {
     const onOpenCanvas = () => setCanvasManuallyOpen(true);
@@ -791,6 +798,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       setCanvasManuallyOpen(false);
       setCanvasPinned(false);
       setCanvasMuted(false);
+      setCanvasMeta({ collapsed: false, outputCount: 0 });
       setEditorMode('panel');
     }
     prevTabIdRef.current = activeTabId;
@@ -821,6 +829,36 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       detail: editorFileDetail,
     }));
   }, [editorFileDetail]);
+
+  // Agent proprioception (SENSE): publish the Canvas panel's state so ChatPage can
+  // include it in the request-time UI snapshot. `isCanvasOpen` mirrors the mount
+  // condition exactly (FileViewerPanel unmounts when false) — when closed we emit
+  // NEUTRAL state (open:false, count 0, not collapsed) so a stale count from a
+  // prior open never leaks to the agent (Gate-1 CRITICAL). Equality-guarded via a
+  // memoized detail so an unchanged snapshot does not re-dispatch (Gate-1 MED:
+  // the count leg could otherwise fire per output-poll tick).
+  const isCanvasOpen = !!(fileViewerFile || canvasManuallyOpen) && editorMode === 'panel';
+  const canvasStateDetail = useMemo(
+    () => isCanvasOpen
+      ? {
+          open: true,
+          outputCount: canvasMeta.outputCount,
+          pinned: canvasPinned,
+          muted: canvasMuted,
+          collapsed: canvasMeta.collapsed,
+        }
+      : { open: false, outputCount: 0, pinned: false, muted: false, collapsed: false },
+    [isCanvasOpen, canvasMeta.outputCount, canvasMeta.collapsed, canvasPinned, canvasMuted],
+  );
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail: canvasStateDetail }));
+  }, [canvasStateDetail]);
+  // When Canvas closes, reset the lifted meta so a re-open never briefly shows a
+  // stale count before FileViewerPanel remounts and republishes (belt-and-braces
+  // with the neutral emit above).
+  useEffect(() => {
+    if (!isCanvasOpen) setCanvasMeta({ collapsed: false, outputCount: 0 });
+  }, [isCanvasOpen]);
 
   // Ref for file open routing — assigned after handleFileDoubleClick is defined below
   const handleFileDoubleClickRef = useRef<(file: FileTreeItem, autoDiff?: boolean) => Promise<void>>(null!);
@@ -1087,6 +1125,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
               onTogglePin={() => setCanvasPinned((p) => !p)}
               muted={canvasMuted}
               onToggleMute={() => setCanvasMuted((m) => !m)}
+              onCanvasMeta={setCanvasMeta}
             />
           )}
         </div>

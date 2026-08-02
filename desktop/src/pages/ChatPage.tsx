@@ -38,6 +38,8 @@ import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../compon
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
 import { useSessionMeta } from '../contexts/LayoutContext';
+import { useActiveOverlayEvent } from '../components/layout/useExclusiveOverlay';
+import type { UiContextSnapshot, CanvasSnapshot } from '../utils/uiContext';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
@@ -336,16 +338,44 @@ export default function ChatPage() {
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  // Track currently-open file in editor panel — included in chat requests
-  // so the agent knows what doc the user is viewing.
-  const editorContextRef = useRef<{ filePath: string; fileName: string } | null>(null);
+  // Agent UI proprioception (SENSE): assemble a request-time snapshot of the
+  // agent's own UI state — open file + Canvas state + which nav overlay is open —
+  // so the agent can perceive what it is currently showing the user. Merged from
+  // three existing signals into ONE uiStateRef snapshot (the send path reads
+  // .current and serializes via toEditorContextPayload). Superset of the former
+  // file-only editorContextRef; the wire key stays `editorContext`.
+  const uiStateRef = useRef<UiContextSnapshot | null>(null);
+  const mergeUiState = useCallback((patch: Partial<UiContextSnapshot>) => {
+    uiStateRef.current = { ...(uiStateRef.current ?? {}), ...patch };
+  }, []);
+  // (a) open file — swarm:editor-file-changed carries {filePath, fileName} | null
   useEffect(() => {
     const handler = (e: Event) => {
-      editorContextRef.current = (e as CustomEvent).detail ?? null;
+      const detail = (e as CustomEvent).detail as
+        | { filePath: string; fileName: string }
+        | null;
+      mergeUiState({ filePath: detail?.filePath ?? '', fileName: detail?.fileName ?? '' });
     };
     window.addEventListener('swarm:editor-file-changed', handler);
     return () => window.removeEventListener('swarm:editor-file-changed', handler);
-  }, []);
+  }, [mergeUiState]);
+  // (b) Canvas state — swarm:canvas-state carries a CanvasSnapshot (open/count/
+  //     pin/mute/collapsed). ThreeColumnLayout emits {open:false,...} on close so
+  //     a stale count never lingers (Gate-1 CRITICAL: panel unmounts when closed).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      mergeUiState({ canvas: (e as CustomEvent).detail as CanvasSnapshot | null });
+    };
+    window.addEventListener('swarm:canvas-state', handler);
+    return () => window.removeEventListener('swarm:canvas-state', handler);
+  }, [mergeUiState]);
+  // (c) which fullscreen nav overlay is open — a hook (useState-backed), so read
+  //     it at top level and sync into the ref via an effect (Gate-1: cannot merge
+  //     a hook return value via a subscription callback).
+  const activeOverlay = useActiveOverlayEvent();
+  useEffect(() => {
+    mergeUiState({ activeOverlay });
+  }, [activeOverlay, mergeUiState]);
 
   // P2: attached terminal output — set once when the user clicks "Attach to
   // chat" on a terminal, consumed on the NEXT send, then cleared (one-shot, so
@@ -2206,7 +2236,7 @@ export default function ChatPage() {
         sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
-        ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        ...(uiStateRef.current && { editorContext: uiStateRef.current }),
         ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         clientId,  // Correlation ID for optimistic message dedup
       },
@@ -2231,7 +2261,7 @@ export default function ChatPage() {
         sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
-        ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        ...(uiStateRef.current && { editorContext: uiStateRef.current }),
         ...(terminalContextRef.current ? { terminalContext: terminalContextRef.current } : {}),
       };
       const capturedTabIdForRetry = currentActiveTabId;
@@ -2376,7 +2406,7 @@ export default function ChatPage() {
           sessionId: resolvedSessionId,
           enableSkills,
           enableMCP,
-          ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+          ...(uiStateRef.current && { editorContext: uiStateRef.current }),
           ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         },
         createStreamHandler(assistantMessageId, tabId),

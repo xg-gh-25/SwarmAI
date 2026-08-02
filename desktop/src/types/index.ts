@@ -292,8 +292,10 @@ export interface ChatRequest {
   sessionId?: string;
   enableSkills?: boolean;
   enableMCP?: boolean;
-  /** Currently open file in the editor panel — injected as agent context */
-  editorContext?: { filePath: string; fileName: string };
+  /** Request-time snapshot of the agent's own UI state (proprioception, SENSE) —
+   *  open file + Canvas state + which nav overlay is open. Superset of the former
+   *  file-only descriptor; serialized via utils/uiContext.toEditorContextPayload. */
+  editorContext?: import('../utils/uiContext').UiContextSnapshot;
   /** Attached integrated-terminal output (P2) — read-only context for the agent.
    *  Set only when the user explicitly attaches a terminal (terminal → session). */
   terminalContext?: { bufferTail: string; cwd: string };

@@ -1,4 +1,5 @@
 import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion } from '../types';
+import { toEditorContextPayload } from '../utils/uiContext';
 
 /** Raw snake_case shape of a streaming-state entry as emitted by the backend.
  *
@@ -431,12 +432,14 @@ export const chatService = {
       session_id: request.sessionId,
       enable_skills: request.enableSkills,
       enable_mcp: request.enableMCP,
-      ...(request.editorContext && {
-        editor_context: {
-          file_path: request.editorContext.filePath,
-          file_name: request.editorContext.fileName,
-        },
-      }),
+      // UI-state proprioception (SENSE): serialize the full snapshot via the
+      // SSOT mapper — NEVER hand-pick fields here (that dropped canvas +
+      // active_overlay silently — Gate-1 CRITICAL). Mapper returns null for an
+      // empty snapshot, so we omit editor_context exactly as the legacy null did.
+      ...((() => {
+        const p = toEditorContextPayload(request.editorContext);
+        return p ? { editor_context: p } : {};
+      })()),
       ...(request.terminalContext && {
         terminal_context: {
           buffer_tail: request.terminalContext.bufferTail,

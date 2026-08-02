@@ -42,6 +42,11 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
   onTogglePin?: () => void;
   muted?: boolean;
   onToggleMute?: () => void;
+  /** Report panel-internal Canvas state (collapsed + output count) UP to the
+   *  parent so it can include them in the swarm:canvas-state proprioception
+   *  event. Only these two live inside the panel; pin/mute/open are parent state.
+   *  The parent zeroes them when the panel unmounts (Canvas closed). */
+  onCanvasMeta?: (meta: { collapsed: boolean; outputCount: number }) => void;
 };
 
 export default function FileViewerPanel({
@@ -50,6 +55,7 @@ export default function FileViewerPanel({
   onTogglePin,
   muted,
   onToggleMute,
+  onCanvasMeta,
   ...props
 }: FileViewerPanelProps) {
   const [width, setWidth] = useState(getStoredWidth);
@@ -115,6 +121,14 @@ export default function FileViewerPanel({
 
   // Output counts published by the rail — drives the header summary.
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
+
+  // Report panel-internal state (collapsed + output count) UP so the parent can
+  // fold it into the swarm:canvas-state proprioception event. Fires on change;
+  // the parent equality-guards the actual DOM dispatch. (pin/mute/open are parent
+  // state already.) On unmount the parent resets these to neutral — no stale leak.
+  useEffect(() => {
+    onCanvasMeta?.({ collapsed, outputCount: counts.total });
+  }, [collapsed, counts.total, onCanvasMeta]);
 
   // Persist width changes
   const updateWidth = useCallback((newWidth: number) => {
