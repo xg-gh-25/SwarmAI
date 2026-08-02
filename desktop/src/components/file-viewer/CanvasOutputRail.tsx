@@ -19,6 +19,7 @@
  *
  * @exports CanvasOutputRail
  * @exports isBookkeepingPath — pure predicate (unit-tested)
+ * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
  */
 import { memo, useCallback, useMemo, useEffect } from 'react';
 import { useReferencedFiles, type ReferencedFile } from '../../hooks/useReferencedFiles';
@@ -68,6 +69,22 @@ function badgeRank(s: ChangeStatus | undefined): number {
   return s === 'new' ? 0 : s === 'upd' ? 1 : 2;
 }
 
+/**
+ * Build the swarm:open-file event detail for an output row. Pure — unit-tested.
+ *
+ * AC3: outputs open on SOURCE (single line-number gutter), NEVER auto-diff. The
+ * diff view renders two before|after gutters which reads as "double line numbers";
+ * a user who wants the diff toggles it via the editor's Show Changes button. The
+ * `badge` arg is retained for signature stability / future per-status behavior but
+ * no longer forces the diff view open.
+ */
+export function outputRowOpenDetail(
+  path: string,
+  _badge: ChangeStatus | undefined,
+): { path: string; autoDiff: boolean } {
+  return { path, autoDiff: false };
+}
+
 const OutputRow = memo(function OutputRow({
   file,
   badge,
@@ -76,12 +93,10 @@ const OutputRow = memo(function OutputRow({
   badge: ChangeStatus | undefined;
 }) {
   const handleClick = useCallback(() => {
-    // Modified (upd) → open directly on diff; new/unbadged → plain open
-    // (renderers default renderable types to preview; text lands on source).
+    // Always open on source (single gutter). Diff is reached via the editor's
+    // Show Changes toggle — auto-diff-on-open showed a doubled old|new gutter.
     document.dispatchEvent(
-      new CustomEvent(OPEN_FILE_EVENT, {
-        detail: { path: file.path, autoDiff: badge === 'upd' },
-      }),
+      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge) }),
     );
   }, [file.path, badge]);
 

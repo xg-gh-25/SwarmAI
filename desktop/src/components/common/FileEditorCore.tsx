@@ -617,6 +617,13 @@ export default function FileEditorCore({
     return ws ? `${ws}/${filePath}` : filePath;
   }, [filePath]);
 
+  // Panel variant (Canvas) uses a compact icon-only header — buttons drop their
+  // text spans and carry the label in `title` (hover tooltip) instead, grouped by
+  // vertical dividers. Stateful toggles keep their active-tint so the state signal
+  // survives without text. Modal variant keeps the roomy icon+text header. `iconOnly`
+  // gates the text spans; label always lives in `title` so nothing is lost.
+  const iconOnly = variant === 'panel';
+
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
@@ -1205,6 +1212,7 @@ export default function FileEditorCore({
             {isMarkdown && (
               <button
                 onClick={() => { setShowMarkdownPreview((p) => !p); if (showDiff) setShowDiff(false); }}
+                title={showMarkdownPreview ? 'Edit source' : 'Preview markdown'}
                 className={clsx(
                   'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
                   showMarkdownPreview
@@ -1216,13 +1224,14 @@ export default function FileEditorCore({
                 <span className="material-symbols-outlined text-sm">
                   {showMarkdownPreview ? 'edit' : 'visibility'}
                 </span>
-                {showMarkdownPreview ? 'Edit' : 'Preview'}
+                {!iconOnly && (showMarkdownPreview ? 'Edit' : 'Preview')}
               </button>
             )}
             {/* SVG Preview toggle */}
             {isSvg && (
               <button
                 onClick={() => { setShowSvgPreview((p) => !p); if (showDiff) setShowDiff(false); }}
+                title={showSvgPreview ? 'Edit source' : 'Preview SVG'}
                 className={clsx(
                   'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
                   showSvgPreview
@@ -1234,8 +1243,12 @@ export default function FileEditorCore({
                 <span className="material-symbols-outlined text-sm">
                   {showSvgPreview ? 'edit' : 'image'}
                 </span>
-                {showSvgPreview ? 'Edit' : 'Preview'}
+                {!iconOnly && (showSvgPreview ? 'Edit' : 'Preview')}
               </button>
+            )}
+            {/* Divider: view-toggles (preview/svg) | file-actions group (panel only) */}
+            {iconOnly && (isMarkdown || isSvg) && (
+              <span className="w-px h-4 bg-[var(--color-border-strong,var(--color-border))] mx-0.5 shrink-0" aria-hidden="true" />
             )}
             {/* Reload button — refetch file from disk */}
             <button
@@ -1267,10 +1280,10 @@ export default function FileEditorCore({
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
               )}
               data-testid="review-mode-toggle"
-              title="Toggle review mode — click line numbers to add comments"
+              title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
             >
               <span className="material-symbols-outlined text-sm">rate_review</span>
-              {review.isReviewMode ? 'Exit Review' : 'Review'}
+              {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
               {review.comments.length > 0 && (
                 <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[10px] font-bold">
                   {review.comments.length}
@@ -1289,11 +1302,12 @@ export default function FileEditorCore({
                 !isDirty && !showDiff && 'opacity-40 cursor-not-allowed'
               )}
               data-testid="show-changes-toggle"
+              title={showDiff ? 'Back to edit' : 'Show changes (diff)'}
             >
               <span className="material-symbols-outlined text-sm">
                 {showDiff ? 'edit' : 'difference'}
               </span>
-              {showDiff ? 'Back to Edit' : 'Show Changes'}
+              {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
             </button>
             {/* Open externally — browser for HTML/SVG, system app for PDF/XML */}
             {(() => {
@@ -1322,7 +1336,7 @@ export default function FileEditorCore({
                   title={useBrowser ? 'Open in browser' : 'Open with system app'}
                 >
                   <span className="material-symbols-outlined text-sm">open_in_browser</span>
-                  Open
+                  {!iconOnly && 'Open'}
                 </button>
               );
             })()}
@@ -1345,13 +1359,13 @@ export default function FileEditorCore({
                   ? 'text-[var(--color-success)] cursor-default'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
               )}
-              title="Copy absolute file path"
+              title={copyPathFeedback ? 'Copied!' : 'Copy absolute file path'}
               data-testid="copy-path-btn"
             >
               <span className="material-symbols-outlined text-sm">
                 {copyPathFeedback ? 'check' : 'content_copy'}
               </span>
-              {copyPathFeedback ? 'Copied' : 'Copy Path'}
+              {!iconOnly && (copyPathFeedback ? 'Copied' : 'Copy Path')}
             </button>
             {/* Attach to Chat */}
             {onAttachToChat && (
@@ -1365,12 +1379,22 @@ export default function FileEditorCore({
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                 )}
                 data-testid="attach-to-chat-btn"
+                title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
               >
                 <span className="material-symbols-outlined text-sm">
                   {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
                 </span>
-                {isAttached || attachFeedback ? 'Attached' : 'Attach'}
+                {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
               </button>
+            )}
+            {/* Divider: file-actions | window-controls group (panel only). Gated
+                on onToggleMode too — the window group is just the mode toggle +
+                close; when onToggleMode is absent (the Canvas panel case, which
+                doesn't pass it) the only thing right of the divider is Close, so
+                without this guard the divider would dangle. Close alone still
+                reads fine ungrouped. */}
+            {iconOnly && onToggleMode && (
+              <span className="w-px h-4 bg-[var(--color-border-strong,var(--color-border))] mx-0.5 shrink-0" aria-hidden="true" data-testid="editor-header-window-divider" />
             )}
             {/* Mode toggle: panel ↔ modal */}
             {onToggleMode && (

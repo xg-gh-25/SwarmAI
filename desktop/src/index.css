@@ -768,22 +768,25 @@ body {
   animation: canvas-content-fade 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
-/* Canvas ← chat spout: a small triangle INSIDE the Canvas's left edge (does not
-   overhang the chat pane), pointing left toward the chat — reads as "this Canvas
-   spouted out of the conversation." Tinted with the session accent (--spout-tint).
-   Vertically CENTERED on the chat window (bug4) — no longer pinned to the header. */
+/* Canvas ← chat spout: a 45°-rotated square "beak" overhanging the Canvas's
+   left edge into the seam — the leftNav-overlay technique (mirrors Modal.tsx
+   .modal-spout). Only the left+bottom edges are tinted; a panel-colored fill
+   hides the inner two sides, so it reads as a nub GROWING OUT of the Canvas edge
+   pointing back at the chat ("this Canvas spouted out of the conversation").
+   Vertically CENTERED on the chat window. Tint via --spout-tint (→ --color-primary).
+   All colors are theme variables — no hardcoded hex. */
 .canvas-spout {
   position: absolute;
-  left: 2px;
+  left: -6px;
   top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
-  /* border-right colored + left/top/bottom transparent = triangle pointing LEFT
-     (toward the chat pane). */
-  border-right: 7px solid var(--spout-tint, var(--color-primary));
+  transform: translateY(-50%) rotate(45deg);
+  width: 12px;
+  height: 12px;
+  background: var(--color-bg);
+  border-left: 1.5px solid var(--spout-tint, var(--color-primary));
+  border-bottom: 1.5px solid var(--spout-tint, var(--color-primary));
+  border-bottom-left-radius: 4px;
+  box-shadow: -3px 3px 8px rgba(0, 0, 0, 0.35);
   z-index: 2;
   pointer-events: none;
 }

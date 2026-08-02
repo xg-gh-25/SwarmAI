@@ -221,8 +221,11 @@ export default function FileViewerPanel({
             flex-shrink-0 action cluster on the right, so buttons never get
             occluded on narrow widths (item 3). */}
         {stableSessionId !== undefined && (
-          <div className="flex-shrink-0 border-b border-[var(--color-border)]">
-            <div className="flex items-center gap-2 px-2 h-7 text-[11px] text-[var(--color-text-muted)]">
+          <div
+            className="flex-shrink-0 border-b-2 border-[var(--color-border-strong,var(--color-border))] bg-[var(--color-bg-secondary,var(--color-card))]"
+            data-testid="canvas-region-outputs"
+          >
+            <div className="flex items-center gap-2 px-2.5 h-8 text-[11px] text-[var(--color-text-muted)]">
               {/* Count summary (item 2): "Outputs · N" + new/modified breakdown. */}
               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                 <span className="font-semibold tracking-wide uppercase shrink-0">Outputs</span>
@@ -293,7 +296,7 @@ export default function FileViewerPanel({
                 </button>
               </div>
             </div>
-            <div className="max-h-32 overflow-y-auto">
+            <div className="max-h-32 overflow-y-auto px-1.5 pb-1.5">
               <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} />
             </div>
           </div>
