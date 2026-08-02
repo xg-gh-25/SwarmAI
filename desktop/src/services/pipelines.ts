@@ -62,6 +62,105 @@ export function pipelineToCamelCase(r: Record<string, unknown>): PipelineRun {
   };
 }
 
+// ── Retro-Analytics dashboard types (run_f8494370) ──────────────────────────
+// The WORK-zone Pipeline NavCard is a RETROSPECTIVE surface — these back
+// GET /api/pipelines/analytics + GET /api/pipelines/{run_id}.
+
+export interface PipelineRunSummary {
+  id: string;
+  requirement: string;
+  status: string;
+  profile: string;
+  progress: string;
+  cycleTimeMin: number | null;
+  tokensActual: number;
+  tokensEst: number;
+  createdAt: string;
+  updatedAt: string;
+  pauseKind: 'crash_residue' | 'decision' | null;
+  checkpointReason: string | null;
+}
+
+export interface PipelineProjectGroup {
+  project: string;
+  runCount: number;
+  completionRate: number;
+  avgCycleMin: number | null;
+  abortedCount: number;
+  runs: PipelineRunSummary[];
+}
+
+export interface PipelineTrendPoint {
+  week: string;
+  runs: number;
+  completed: number;
+  avgCycleMin: number | null;
+  tokens: number;
+}
+
+export interface PipelineOverall {
+  totalRuns: number;
+  completed: number;
+  completionRate: number;
+  avgCycleMin: number | null;
+  tokensActual: number;
+  tokensEst: number;
+  profileMix: Record<string, number>;
+  abortedCount: number;
+}
+
+export interface PipelineAnalytics {
+  window: string;
+  overall: PipelineOverall;
+  trend: PipelineTrendPoint[];
+  byProject: PipelineProjectGroup[];
+}
+
+export interface PipelineStageTokens {
+  stage: string;
+  est: number;
+  actual: number;
+}
+
+export interface PipelineCommit {
+  repo: string;
+  sha: string;
+  files: string[];
+}
+
+export interface PipelineRunDetail {
+  id: string;
+  project: string;
+  requirement: string;
+  status: string;
+  profile: string;
+  cycleTimeMin: number | null;
+  reportMd: string;
+  reflectLessons: string[];
+  stageTokens: PipelineStageTokens[];
+  commits: PipelineCommit[];
+  checkpointReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
+  return {
+    id: r.id as string,
+    requirement: (r.requirement as string) ?? '',
+    status: (r.status as string) ?? '',
+    profile: (r.profile as string) ?? '',
+    progress: (r.progress as string) ?? '',
+    cycleTimeMin: (r.cycle_time_min as number | null) ?? null,
+    tokensActual: (r.tokens_actual as number) ?? 0,
+    tokensEst: (r.tokens_est as number) ?? 0,
+    createdAt: (r.created_at as string) ?? '',
+    updatedAt: (r.updated_at as string) ?? '',
+    pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
+    checkpointReason: (r.checkpoint_reason as string | null) ?? null,
+  };
+}
+
 export const pipelinesService = {
   /**
    * Fetch active (running + paused) pipeline runs across all projects.
@@ -87,5 +186,94 @@ export const pipelinesService = {
     );
     const rows = response.data?.pipelines ?? [];
     return rows.map(pipelineToCamelCase);
+  },
+
+  /**
+   * Fetch the retro-analytics payload: overall rollup + weekly trend + by-project
+   * grouping. `window` = '30d' (default) | 'ytd'. Returns a zeroed payload on any
+   * shape surprise — the dashboard must never crash on this.
+   */
+  async fetchAnalytics(window: '30d' | 'ytd' = '30d'): Promise<PipelineAnalytics> {
+    const empty: PipelineAnalytics = {
+      window,
+      overall: {
+        totalRuns: 0, completed: 0, completionRate: 0, avgCycleMin: null,
+        tokensActual: 0, tokensEst: 0, profileMix: {}, abortedCount: 0,
+      },
+      trend: [],
+      byProject: [],
+    };
+    try {
+      const { data } = await api.get<Record<string, unknown>>(
+        `/pipelines/analytics?window=${window}`,
+      );
+      const o = (data?.overall as Record<string, unknown>) ?? {};
+      return {
+        window: (data?.window as string) ?? window,
+        overall: {
+          totalRuns: (o.total_runs as number) ?? 0,
+          completed: (o.completed as number) ?? 0,
+          completionRate: (o.completion_rate as number) ?? 0,
+          avgCycleMin: (o.avg_cycle_min as number | null) ?? null,
+          tokensActual: (o.tokens_actual as number) ?? 0,
+          tokensEst: (o.tokens_est as number) ?? 0,
+          profileMix: (o.profile_mix as Record<string, number>) ?? {},
+          abortedCount: (o.aborted_count as number) ?? 0,
+        },
+        trend: ((data?.trend as Record<string, unknown>[]) ?? []).map((t) => ({
+          week: (t.week as string) ?? '',
+          runs: (t.runs as number) ?? 0,
+          completed: (t.completed as number) ?? 0,
+          avgCycleMin: (t.avg_cycle_min as number | null) ?? null,
+          tokens: (t.tokens as number) ?? 0,
+        })),
+        byProject: ((data?.by_project as Record<string, unknown>[]) ?? []).map((g) => ({
+          project: (g.project as string) ?? 'unknown',
+          runCount: (g.run_count as number) ?? 0,
+          completionRate: (g.completion_rate as number) ?? 0,
+          avgCycleMin: (g.avg_cycle_min as number | null) ?? null,
+          abortedCount: (g.aborted_count as number) ?? 0,
+          runs: ((g.runs as Record<string, unknown>[]) ?? []).map(runSummaryToCamel),
+        })),
+      };
+    } catch {
+      return empty;
+    }
+  },
+
+  /**
+   * Fetch one run's full retrospective (REPORT + reflect + stage tokens + commits).
+   * Returns null on 404/any error — the drawer shows a graceful "not found".
+   */
+  async fetchRunDetail(runId: string): Promise<PipelineRunDetail | null> {
+    try {
+      const { data } = await api.get<Record<string, unknown>>(`/pipelines/${runId}`);
+      if (!data || !data.id) return null;
+      return {
+        id: data.id as string,
+        project: (data.project as string) ?? '',
+        requirement: (data.requirement as string) ?? '',
+        status: (data.status as string) ?? '',
+        profile: (data.profile as string) ?? '',
+        cycleTimeMin: (data.cycle_time_min as number | null) ?? null,
+        reportMd: (data.report_md as string) ?? '',
+        reflectLessons: (data.reflect_lessons as string[]) ?? [],
+        stageTokens: ((data.stage_tokens as Record<string, unknown>[]) ?? []).map((s) => ({
+          stage: (s.stage as string) ?? '',
+          est: (s.est as number) ?? 0,
+          actual: (s.actual as number) ?? 0,
+        })),
+        commits: ((data.commits as Record<string, unknown>[]) ?? []).map((c) => ({
+          repo: (c.repo as string) ?? '',
+          sha: (c.sha as string) ?? '',
+          files: (c.files as string[]) ?? [],
+        })),
+        checkpointReason: (data.checkpoint_reason as string | null) ?? null,
+        createdAt: (data.created_at as string) ?? '',
+        updatedAt: (data.updated_at as string) ?? '',
+      };
+    } catch {
+      return null;
+    }
   },
 };

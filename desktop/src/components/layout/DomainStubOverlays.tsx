@@ -25,12 +25,10 @@ const STUBS: StubDef[] = [
   // CMBrainOverlay (C&M Global Brain, run_5f7d4fe1), rendered in ThreeColumnLayout.
   // It must NOT also be a stub here, or both would open on the same event (double
   // fullscreen overlay) — same contract as the `history` note below.
-  {
-    key: 'pipeline',
-    event: 'swarm:show-pipeline',
-    title: 'Pipeline',
-    blurb: 'Code-delivery runs (EVALUATE→REFLECT), live status, and history. Full view coming in a later cycle.',
-  },
+  // NOTE: `pipeline` is NO LONGER a stub — swarm:show-pipeline now opens the real
+  // PipelineOverlay (retro-analytics dashboard, run_f8494370), rendered in ChatPage.
+  // It must NOT also be a stub here, or both would open on the same event (double
+  // fullscreen overlay) — same contract as the `context`/`history` notes.
   {
     key: 'pollinate',
     event: 'swarm:show-pollinate',

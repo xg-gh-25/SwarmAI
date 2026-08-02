@@ -25,17 +25,31 @@ from fastapi import APIRouter, Query
 from core.pipeline_profiles import get_profile_stages
 from jobs.paths import SWARMWS
 from schemas.pipeline_run import (
+    PipelineAnalytics,
     PipelineCheckpoint,
+    PipelineCommit,
     PipelineDashboard,
+    PipelineOverall,
+    PipelineProjectGroup,
+    PipelineRunDetail,
     PipelineRunResponse,
     PipelineRunStatus,
+    PipelineRunSummary,
+    PipelineStageTokens,
     PipelineStatusSummary,
+    PipelineTrendPoint,
 )
 # Canonical crash-zombie discriminator + terminal-run predicate — single source
 # of truth in artifact_cli (already reused by proactive_intelligence). Importing
 # them here (rather than re-inventing a string/status match) keeps ONE definition
 # of "this pause is crash residue" / "this run is finished" across all consumers.
-from scripts.artifact_cli import _CRASH_ZOMBIE_REASON, is_terminal_run
+# _extract_run_metrics is the SAME metrics primitive cmd_run_analytics uses — the
+# analytics endpoint reuses it (never a 3rd run.json parser — run_0f03fa9d split-brain).
+from scripts.artifact_cli import (
+    _CRASH_ZOMBIE_REASON,
+    _extract_run_metrics,
+    is_terminal_run,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -318,3 +332,283 @@ async def list_pipelines(
         count=len(responses),
         summary=summary,
     )
+
+
+# ── Retro-Analytics dashboard (run_f8494370) ─────────────────────────────────
+
+import re as _re
+
+# run_<hex> — the ONLY shape a run_id ever takes (run-create). Used to reject a
+# path-traversal token BEFORE it touches the filesystem (Gate-1 BLOCK: run_id is
+# a user-controlled path param; a bare `../../etc` would escape the runs dir).
+_RUN_ID_RE = _re.compile(r"^run_[A-Za-z0-9]+$")
+
+
+def _run_metrics_cached(project: str, run_id: str, raw: dict) -> dict:
+    """METRICS.json if present, else generate on-read (G2 — covers paused/abandoned
+    runs that never hit the completion-only auto-gen). Reuses _extract_run_metrics,
+    the SAME primitive cmd_run_analytics uses — never a 2nd parser. Best-effort:
+    returns {} on any failure (the dashboard must never 500 on a bad run dir)."""
+    try:
+        mfile = _get_swarmws() / "Projects" / project / ".artifacts" / "runs" / run_id / "METRICS.json"
+        if mfile.exists():
+            return json.loads(mfile.read_text(encoding="utf-8"))
+        return _extract_run_metrics(project, run_id, raw)
+    except Exception:  # noqa: BLE001 — dashboard read must be fault-tolerant
+        return {}
+
+
+def _iso_week_start(iso_ts: str) -> Optional[str]:
+    """Monday (YYYY-MM-DD) of the ISO week containing iso_ts. None if unparseable."""
+    try:
+        d = datetime.fromisoformat(iso_ts)
+        monday = d - __import__("datetime").timedelta(days=d.weekday())
+        return monday.date().isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def _window_cutoff(window: str) -> Optional[datetime]:
+    """Start of the analytics window. 30d = 30 days ago; ytd = Jan 1 this year.
+    None = no lower bound (defensive: unknown window → show all, never crash)."""
+    now = datetime.now(timezone.utc)
+    if window == "ytd":
+        return datetime(now.year, 1, 1, tzinfo=timezone.utc)
+    if window == "30d":
+        return now - __import__("datetime").timedelta(days=30)
+    return None
+
+
+@router.get("/analytics", response_model=PipelineAnalytics)
+async def pipeline_analytics(
+    window: str = Query("30d", description="Trend window: 30d | ytd"),
+) -> PipelineAnalytics:
+    """Retro-analytics: overall rollup + weekly trend + by-project grouping over
+    every pipeline run in the window. RETROSPECTIVE (fetch-once, no live state) —
+    chat is the live surface. Reuses _load_pipeline_runs (the existing all-project
+    scanner) + _extract_run_metrics (the existing metrics primitive). Always 200.
+    """
+    if window not in ("30d", "ytd"):
+        window = "30d"
+    cutoff = _window_cutoff(window)
+    all_runs = _load_pipeline_runs()
+
+    def _in_window(raw: dict) -> bool:
+        if cutoff is None:
+            return True
+        ts = raw.get("created_at") or raw.get("updated_at") or ""
+        try:
+            return datetime.fromisoformat(ts) >= cutoff
+        except (ValueError, TypeError):
+            return True  # undated run → keep (fail-show, never silently drop)
+
+    runs = [r for r in all_runs if _in_window(r)]
+
+    by_project: dict[str, list[PipelineRunSummary]] = {}
+    trend_buckets: dict[str, dict] = {}
+    overall_completed = 0
+    overall_tokens_actual = 0
+    overall_tokens_est = 0
+    profile_mix: dict[str, int] = {}
+    all_cycles: list[float] = []
+    overall_aborted = 0
+
+    for raw in runs:
+        project = raw.get("_project", raw.get("project", "unknown"))
+        run_id = raw.get("id", "unknown")
+        status = raw.get("status", "unknown")
+        profile = raw.get("profile") or "unknown"
+        m = _run_metrics_cached(project, run_id, raw)
+        cycle = m.get("duration_minutes")
+        tok_actual = int(m.get("total_tokens") or 0)
+        budget = raw.get("budget") or {}
+        tok_est = int(sum((budget.get("stage_estimates") or {}).values())) if isinstance(budget, dict) else 0
+
+        # pause_kind: consume the backend's canonical classification, never re-derive.
+        ckpt = raw.get("checkpoint") or {}
+        reason = ckpt.get("reason") if isinstance(ckpt, dict) else None
+        pause_kind = None
+        if status == "paused":
+            pause_kind = "crash_residue" if reason == _CRASH_ZOMBIE_REASON else "decision"
+        is_aborted = status == "abandoned" or pause_kind == "decision"
+
+        summary = PipelineRunSummary(
+            id=run_id,
+            requirement=(raw.get("requirement", "") or "")[:100],
+            status=status,
+            profile=profile,
+            progress=m.get("stages_completed") is not None
+            and f"{m.get('stages_completed', 0)}/{m.get('stages_total', 0)}" or "",
+            cycle_time_min=cycle,
+            tokens_actual=tok_actual,
+            tokens_est=tok_est,
+            created_at=raw.get("created_at", ""),
+            updated_at=raw.get("updated_at", ""),
+            pause_kind=pause_kind,
+            checkpoint_reason=reason,
+        )
+        by_project.setdefault(project, []).append(summary)
+
+        # overall rollups
+        profile_mix[profile] = profile_mix.get(profile, 0) + 1
+        overall_tokens_actual += tok_actual
+        overall_tokens_est += tok_est
+        if status == "completed":
+            overall_completed += 1
+        if is_aborted:
+            overall_aborted += 1
+        if isinstance(cycle, (int, float)):
+            all_cycles.append(float(cycle))
+
+        # weekly trend bucket (by created_at)
+        wk = _iso_week_start(raw.get("created_at", ""))
+        if wk:
+            b = trend_buckets.setdefault(wk, {"runs": 0, "completed": 0, "cycles": [], "tokens": 0})
+            b["runs"] += 1
+            b["tokens"] += tok_actual
+            if status == "completed":
+                b["completed"] += 1
+            if isinstance(cycle, (int, float)):
+                b["cycles"].append(float(cycle))
+
+    def _avg(xs: list[float]) -> Optional[float]:
+        return round(sum(xs) / len(xs), 1) if xs else None
+
+    # Build by-project groups (each with its own health rollup).
+    groups: list[PipelineProjectGroup] = []
+    for project, summaries in sorted(by_project.items()):
+        completed = sum(1 for s in summaries if s.status == "completed")
+        cycles = [s.cycle_time_min for s in summaries if isinstance(s.cycle_time_min, (int, float))]
+        aborted = sum(1 for s in summaries if s.status == "abandoned" or s.pause_kind == "decision")
+        # newest-first roster
+        summaries.sort(key=lambda s: s.updated_at or s.created_at, reverse=True)
+        groups.append(PipelineProjectGroup(
+            project=project,
+            run_count=len(summaries),
+            completion_rate=round(completed / len(summaries), 3) if summaries else 0.0,
+            avg_cycle_min=_avg([float(c) for c in cycles]),
+            aborted_count=aborted,
+            runs=summaries,
+        ))
+    groups.sort(key=lambda g: g.run_count, reverse=True)
+
+    trend = [
+        PipelineTrendPoint(
+            week=wk,
+            runs=b["runs"],
+            completed=b["completed"],
+            avg_cycle_min=_avg(b["cycles"]),
+            tokens=b["tokens"],
+        )
+        for wk, b in sorted(trend_buckets.items())
+    ]
+
+    total = len(runs)
+    overall = PipelineOverall(
+        total_runs=total,
+        completed=overall_completed,
+        completion_rate=round(overall_completed / total, 3) if total else 0.0,
+        avg_cycle_min=_avg(all_cycles),
+        tokens_actual=overall_tokens_actual,
+        tokens_est=overall_tokens_est,
+        profile_mix=profile_mix,
+        aborted_count=overall_aborted,
+    )
+
+    return PipelineAnalytics(window=window, overall=overall, trend=trend, by_project=groups)
+
+
+@router.get("/{run_id}", response_model=PipelineRunDetail)
+async def pipeline_run_detail(run_id: str):
+    """One run's full retrospective: REPORT.md body + reflect lessons + per-stage
+    est-vs-actual tokens + related commits (G1). Path-traversal safe: run_id is
+    validated against ^run_[A-Za-z0-9]+$ AND the resolved run dir is confirmed
+    inside the project's runs/ dir (resolve()+relative_to) before ANY read.
+    """
+    from fastapi.responses import JSONResponse
+
+    # Gate-1 BLOCK fix: reject a traversal/garbage token BEFORE touching the FS.
+    if not _RUN_ID_RE.match(run_id):
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+    projects_dir = _get_swarmws() / "Projects"
+    if not projects_dir.exists():
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        runs_root = (project_dir / ".artifacts" / "runs").resolve()
+        run_dir = (runs_root / run_id).resolve()
+        # Containment: the resolved run dir MUST live under runs_root (defense in
+        # depth beyond the regex — never trust a single guard for a path read).
+        try:
+            run_dir.relative_to(runs_root)
+        except ValueError:
+            continue
+        run_file = run_dir / "run.json"
+        if not run_file.exists():
+            continue
+
+        try:
+            raw = json.loads(run_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+
+        project = raw.get("_project", raw.get("project", project_dir.name))
+        m = _run_metrics_cached(project, run_id, raw)
+
+        # REPORT.md body (retro), if present.
+        report_md = ""
+        rpt = run_dir / "REPORT.md"
+        if rpt.exists():
+            try:
+                report_md = rpt.read_text(encoding="utf-8")
+            except OSError:
+                report_md = ""
+
+        # reflect lessons live in the reflect stage record.
+        reflect_lessons: list[str] = []
+        for s in raw.get("stages", []):
+            if s.get("stage") == "reflect":
+                lessons = s.get("lessons") or []
+                if isinstance(lessons, list):
+                    reflect_lessons = [str(x) for x in lessons]
+                break
+
+        # per-stage est (budget.stage_estimates) vs actual (METRICS.stage_tokens)
+        budget = raw.get("budget") or {}
+        est_map = (budget.get("stage_estimates") or {}) if isinstance(budget, dict) else {}
+        actual_map = m.get("stage_tokens") or {}
+        stage_names = list(dict.fromkeys([*est_map.keys(), *actual_map.keys()]))
+        stage_tokens = [
+            PipelineStageTokens(stage=st, est=int(est_map.get(st, 0)), actual=int(actual_map.get(st, 0)))
+            for st in stage_names
+        ]
+
+        commits = [
+            PipelineCommit(
+                repo=c.get("repo", ""), sha=c.get("sha", ""),
+                files=list(c.get("files", [])),
+            )
+            for c in (raw.get("commits") or []) if isinstance(c, dict)
+        ]
+
+        ckpt = raw.get("checkpoint") or {}
+        return PipelineRunDetail(
+            id=run_id,
+            project=project,
+            requirement=raw.get("requirement", ""),
+            status=raw.get("status", ""),
+            profile=raw.get("profile") or "",
+            cycle_time_min=m.get("duration_minutes"),
+            report_md=report_md,
+            reflect_lessons=reflect_lessons,
+            stage_tokens=stage_tokens,
+            commits=commits,
+            checkpoint_reason=ckpt.get("reason") if isinstance(ckpt, dict) else None,
+            created_at=raw.get("created_at", ""),
+            updated_at=raw.get("updated_at", ""),
+        )
+
+    return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})

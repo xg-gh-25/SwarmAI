@@ -27,7 +27,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
-import { DEFAULT_WORKSPACE_ID } from '../types/workspace-config';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { agentsService } from '../services/agents';
@@ -49,10 +48,10 @@ import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView } from './chat/components';
-import { RadarSidebar } from './chat/components/RightSidebar';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { ToDoOverlay } from '../components/layout/ToDoOverlay';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
+import { PipelineOverlay } from '../components/layout/PipelineOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
@@ -3137,16 +3136,10 @@ export default function ChatPage() {
           </ErrorBoundary>
         </div>
 
-        {/* Right Sidebar — persistent Radar panel */}
-        <RadarSidebar
-          workspaceId={DEFAULT_WORKSPACE_ID}
-          sessionId={sessionId}
-          onItemClick={handleItemClick}
-          onSendMessage={handleFocusClick}
-          onSelectTab={selectTab}
-          openTabs={openTabs}
-          attentionItems={attentionItems}
-        />
+        {/* SwarmRadar removed (2026-08-02): all 3 sections have live replacements —
+            Changes → Canvas (CanvasOutputRail), Attention → ChatHeader AlertsPill
+            (same useRadarAttention poll → attentionItems), Jobs & Runs → left-nav
+            overlay (swarm:show-jobs). Right column width reclaimed for chat. */}
 
         {/* History — full-screen overlay opened from the left-nav History row
             (swarm:show-history). Props-direct (Wiring B): reuses the same
@@ -3162,6 +3155,7 @@ export default function ChatPage() {
             tab landing + inject + snapshot; overlay auto-closes on landed. */}
         <ToDoOverlay onDispatch={handleDispatchTodo} />
         <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
+        <PipelineOverlay onDispatch={handleDispatchJobPrompt} />
       </div>
 
       {/* Modals */}

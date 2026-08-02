@@ -95,3 +95,94 @@ class PipelineDashboard(BaseModel):
     pipelines: list[PipelineRunResponse] = Field(default_factory=list)
     count: int = 0
     summary: PipelineStatusSummary = Field(default_factory=PipelineStatusSummary)
+
+
+# ── Retro-Analytics dashboard (run_f8494370) ─────────────────────────────────
+# The WORK-zone Pipeline NavCard is a RETROSPECTIVE surface (chat is the live
+# surface). These models back GET /api/pipelines/analytics (overall + trend +
+# by-project) and GET /api/pipelines/{run_id} (per-run retro detail).
+
+class PipelineRunSummary(BaseModel):
+    """One run's row in the by-project roster (subset for the list view)."""
+    id: str
+    requirement: str
+    status: str
+    profile: str
+    progress: str = ""
+    cycle_time_min: Optional[float] = Field(None, description="duration_minutes; None if not finished")
+    tokens_actual: int = 0
+    tokens_est: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+    pause_kind: Optional[str] = None
+    checkpoint_reason: Optional[str] = None
+
+
+class PipelineProjectGroup(BaseModel):
+    """A project/DDD group: its health rollup + its runs."""
+    project: str
+    run_count: int = 0
+    completion_rate: float = Field(0.0, description="completed / total, 0-1")
+    avg_cycle_min: Optional[float] = None
+    aborted_count: int = Field(0, description="paused(decision)+abandoned needing attention")
+    runs: list[PipelineRunSummary] = Field(default_factory=list)
+
+
+class PipelineTrendPoint(BaseModel):
+    """One time bucket (ISO week) in the trend series."""
+    week: str = Field(..., description="ISO week start date YYYY-MM-DD")
+    runs: int = 0
+    completed: int = 0
+    avg_cycle_min: Optional[float] = None
+    tokens: int = 0
+
+
+class PipelineOverall(BaseModel):
+    """Global rollup across all projects in the window."""
+    total_runs: int = 0
+    completed: int = 0
+    completion_rate: float = 0.0
+    avg_cycle_min: Optional[float] = None
+    tokens_actual: int = 0
+    tokens_est: int = 0
+    profile_mix: dict[str, int] = Field(default_factory=dict)
+    aborted_count: int = 0
+
+
+class PipelineAnalytics(BaseModel):
+    """GET /api/pipelines/analytics — the retro dashboard payload."""
+    window: str = Field("30d", description="30d | ytd")
+    overall: PipelineOverall = Field(default_factory=PipelineOverall)
+    trend: list[PipelineTrendPoint] = Field(default_factory=list)
+    by_project: list[PipelineProjectGroup] = Field(default_factory=list)
+
+
+class PipelineStageTokens(BaseModel):
+    """Per-stage estimated-vs-actual token cost for the detail view."""
+    stage: str
+    est: int = 0
+    actual: int = 0
+
+
+class PipelineCommit(BaseModel):
+    """A commit this run produced (persisted by run-commit, G1)."""
+    repo: str = ""
+    sha: str = ""
+    files: list[str] = Field(default_factory=list)
+
+
+class PipelineRunDetail(BaseModel):
+    """GET /api/pipelines/{run_id} — one run's full retrospective."""
+    id: str
+    project: str = ""
+    requirement: str = ""
+    status: str = ""
+    profile: str = ""
+    cycle_time_min: Optional[float] = None
+    report_md: str = Field("", description="REPORT.md body if present, else empty")
+    reflect_lessons: list[str] = Field(default_factory=list)
+    stage_tokens: list[PipelineStageTokens] = Field(default_factory=list)
+    commits: list[PipelineCommit] = Field(default_factory=list)
+    checkpoint_reason: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""

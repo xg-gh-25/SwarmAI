@@ -18,7 +18,6 @@ import { DomainStubOverlays } from './DomainStubOverlays';
 afterEach(() => cleanup());
 
 const CASES: Array<[string, string, string]> = [
-  ['swarm:show-pipeline', 'stub-overlay-pipeline', 'Pipeline'],
   ['swarm:show-pollinate', 'stub-overlay-pollinate', 'Pollinate'],
 ];
 
@@ -41,14 +40,15 @@ describe('DomainStubOverlays', () => {
     expect(overlay.textContent).toContain(label);
   });
 
-  it('opening one overlay does not open the others', () => {
+  it('does not open a stub for events that now have real overlays', () => {
     render(<DomainStubOverlays />);
     act(() => {
-      window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
+      window.dispatchEvent(new CustomEvent('swarm:show-pollinate'));
     });
-    expect(screen.getByTestId('stub-overlay-pipeline')).toBeInTheDocument();
-    expect(screen.queryByTestId('stub-overlay-pollinate')).toBeNull();
-    // context is no longer a stub at all (real CMBrainOverlay) — never present here
+    expect(screen.getByTestId('stub-overlay-pollinate')).toBeInTheDocument();
+    // pipeline is no longer a stub (real PipelineOverlay, run_f8494370) — never here
+    expect(screen.queryByTestId('stub-overlay-pipeline')).toBeNull();
+    // context is no longer a stub either (real CMBrainOverlay) — never present here
     expect(screen.queryByTestId('stub-overlay-context')).toBeNull();
   });
 });

@@ -190,3 +190,86 @@ class TestRunCommitPathspecOnly:
         result = json.loads(capsys.readouterr().out)
         assert result["pushed"] is False
         assert "user-initiated" in result["note"].lower() or "push" in result["note"].lower()
+
+
+class TestRunCommitPersistsCommits:
+    """G1 (run_f8494370): run-commit writes committed shas to run.json.commits[]
+    so the retro-analytics dashboard can trace which run made which commit.
+    Gate-1 fix: the write RE-READS run.json fresh + merges ONLY `commits`, so a
+    concurrent stage update is not clobbered by a stale write-back."""
+
+    def _git(self, repo, *a):
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, timeout=15)
+
+    def _setup_repo(self, tmp_path, name):
+        repo = tmp_path / name
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "f.py").write_text("v1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        (repo / "f.py").write_text("v2\n")
+        return repo
+
+    def test_commits_persisted_to_run_json(self, workspace, tmp_path, capsys):
+        repo = self._setup_repo(tmp_path, "prepo")
+        rf = _write_run(workspace, "run_p",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_p")
+        result = json.loads(capsys.readouterr().out)
+        assert len(result["committed"]) == 1
+        expected_sha = result["committed"][0]["sha"]
+        # THE G1 ASSERTION: the sha is now queryable in run.json
+        data = json.loads(rf.read_text())
+        assert "commits" in data, "run.json must persist commits[] after run-commit"
+        assert len(data["commits"]) == 1
+        assert data["commits"][0]["sha"] == expected_sha
+        assert data["commits"][0]["files"] == ["f.py"]
+
+    def test_commits_dedup_across_calls(self, workspace, tmp_path, capsys):
+        repo = self._setup_repo(tmp_path, "prepo2")
+        rf = _write_run(workspace, "run_q",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        _run_commit(workspace, "run_q")
+        capsys.readouterr()
+        # 2nd run-commit with nothing new staged → no new commit → no dup row
+        _run_commit(workspace, "run_q")
+        capsys.readouterr()
+        data = json.loads(rf.read_text())
+        assert len(data.get("commits", [])) == 1, "no duplicate commit row on re-run"
+
+    def test_write_does_not_clobber_concurrent_field(self, workspace, tmp_path, capsys):
+        # Simulate a concurrent stage update landing AFTER cmd_run_commit read
+        # run_state but BEFORE it writes back. The fresh re-read must preserve it.
+        repo = self._setup_repo(tmp_path, "prepo3")
+        rf = _write_run(workspace, "run_r",
+                        stages=[{"stage": "deliver", "status": "completed", "push_ready": True}],
+                        files_touched=[str(repo / "f.py")])
+        from unittest.mock import patch
+        from scripts import artifact_cli as ac
+        orig_reader = ac.Path.read_text
+        state = {"n": 0}
+
+        def _inject(self, *a, **k):
+            txt = orig_reader(self, *a, **k)
+            # After cmd_run_commit's FIRST read of this run.json, a concurrent
+            # writer adds a new field. The G1 fresh re-read must see it.
+            if self == rf and state["n"] == 0:
+                state["n"] = 1
+                d = json.loads(txt)
+                d["concurrent_marker"] = "from_parallel_stage"
+                rf.write_text(json.dumps(d), encoding="utf-8")
+            return txt
+
+        with patch.object(ac.Path, "read_text", _inject):
+            _run_commit(workspace, "run_r")
+        capsys.readouterr()
+        data = json.loads(rf.read_text())
+        assert data.get("concurrent_marker") == "from_parallel_stage", \
+            "G1 write must re-read fresh and NOT clobber a concurrent field update"
+        assert len(data.get("commits", [])) == 1, "commits still persisted"

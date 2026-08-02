@@ -1848,6 +1848,32 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         else:
             warnings.append(f"[{root}] git commit failed: {commit.stderr.strip()[:200]}")
 
+    # ── G1 (run_f8494370): persist committed shas to run.json.commits so the
+    #    retro-analytics dashboard can trace WHICH run produced WHICH commit.
+    #    The sha is already in hand (committed[] above) — this just records it.
+    #    Gate-1 fix: RE-READ run.json fresh right before the write (run_state at
+    #    the top of this fn is stale — a concurrent stage `run-update` may have
+    #    written since), then merge ONLY the `commits` key, dedup by sha, and
+    #    atomic tmp+replace. We never write back the stale full run_state, so a
+    #    parallel stage update is not clobbered. R29-safe: `committed` holds ONLY
+    #    this run's own commit results (per-repo pathspec add), never a git HEAD
+    #    guess — so no parallel session's commit can leak in.
+    if committed:
+        try:
+            fresh = json.loads(run_file.read_text(encoding="utf-8"))
+            existing = fresh.get("commits", [])
+            seen_shas = {c.get("sha") for c in existing if isinstance(c, dict)}
+            for c in committed:
+                if c.get("sha") not in seen_shas:
+                    existing.append(c)
+                    seen_shas.add(c.get("sha"))
+            fresh["commits"] = existing
+            tmp = run_file.with_suffix(".commits.tmp")
+            tmp.write_text(json.dumps(fresh, indent=2), encoding="utf-8")
+            tmp.replace(run_file)
+        except (OSError, json.JSONDecodeError) as e:
+            warnings.append(f"commits recorded to git but not persisted to run.json: {e}")
+
     print(json.dumps({
         "committed": committed,
         "warnings": warnings,

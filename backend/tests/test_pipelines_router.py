@@ -413,3 +413,146 @@ class TestPauseKindClassification:
         ids = {p["id"] for p in resp.json()["pipelines"]}
         assert "run_zombie" not in ids, "terminal zombie must be excluded from active"
         assert "run_midpause" in ids, "a mid-pipeline paused run must remain active/resumable"
+
+
+# ── Retro-Analytics endpoints (run_f8494370) ─────────────────────────────────
+
+def _create_run_dir(workspace: Path, project: str, run_id: str, *, status="completed",
+                    profile="full", requirement="Do X", created_at="2026-08-01T10:00:00+00:00",
+                    completed_at=None, stages=None, budget=None, commits=None,
+                    metrics=None, report_md=None, checkpoint=None):
+    """Create a NEW-path run: Projects/<p>/.artifacts/runs/<id>/{run.json,METRICS.json,REPORT.md}."""
+    run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    state = {
+        "id": run_id, "project": project, "requirement": requirement,
+        "profile": profile, "status": status,
+        "stages": stages if stages is not None else [
+            {"stage": "evaluate", "status": "completed", "token_cost": 4000},
+        ],
+        "taste_decisions": [], "created_at": created_at,
+        "updated_at": completed_at or created_at,
+        "budget": budget or {"stage_estimates": {"evaluate": 6000, "build": 40000}},
+        "checkpoint": checkpoint,
+    }
+    if completed_at:
+        state["completed_at"] = completed_at
+    if commits is not None:
+        state["commits"] = commits
+    (run_dir / "run.json").write_text(json.dumps(state), encoding="utf-8")
+    if metrics is not None:
+        (run_dir / "METRICS.json").write_text(json.dumps(metrics), encoding="utf-8")
+    if report_md is not None:
+        (run_dir / "REPORT.md").write_text(report_md, encoding="utf-8")
+    return run_dir
+
+
+class TestPipelineAnalytics:
+    def test_empty_analytics_200(self, client, workspace):
+        resp = client.get("/api/pipelines/analytics")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["overall"]["total_runs"] == 0
+        assert d["by_project"] == []
+        assert d["window"] == "30d"
+
+    def test_overall_and_by_project(self, client, workspace):
+        now = datetime.now(timezone.utc).isoformat()
+        # Project A: 1 completed (with metrics), 1 abandoned
+        _create_run_dir(workspace, "ProjA", "run_a1", status="completed",
+                        created_at=now, completed_at=now,
+                        metrics={"total_tokens": 30000, "duration_minutes": 12.0,
+                                 "stage_tokens": {"evaluate": 4000}, "stages_completed": 7, "stages_total": 7,
+                                 "status": "completed"})
+        _create_run_dir(workspace, "ProjA", "run_a2", status="abandoned", created_at=now,
+                        metrics={"total_tokens": 5000, "duration_minutes": None,
+                                 "stage_tokens": {}, "stages_completed": 2, "stages_total": 8, "status": "abandoned"})
+        # Project B: 1 completed
+        _create_run_dir(workspace, "ProjB", "run_b1", status="completed", profile="bugfix",
+                        created_at=now, completed_at=now,
+                        metrics={"total_tokens": 20000, "duration_minutes": 8.0,
+                                 "stage_tokens": {"evaluate": 3000}, "stages_completed": 8, "stages_total": 8, "status": "completed"})
+        resp = client.get("/api/pipelines/analytics?window=ytd")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["window"] == "ytd"
+        assert d["overall"]["total_runs"] == 3
+        assert d["overall"]["completed"] == 2
+        assert d["overall"]["aborted_count"] == 1
+        assert d["overall"]["tokens_actual"] == 55000
+        assert d["overall"]["profile_mix"]["full"] == 2
+        assert d["overall"]["profile_mix"]["bugfix"] == 1
+        # by-project grouping present, both projects
+        projects = {g["project"]: g for g in d["by_project"]}
+        assert "ProjA" in projects and "ProjB" in projects
+        assert projects["ProjA"]["run_count"] == 2
+        assert projects["ProjA"]["aborted_count"] == 1
+        assert projects["ProjB"]["completion_rate"] == 1.0
+
+    def test_est_tokens_from_budget(self, client, workspace):
+        now = datetime.now(timezone.utc).isoformat()
+        _create_run_dir(workspace, "ProjE", "run_e1", status="completed",
+                        created_at=now, completed_at=now,
+                        budget={"stage_estimates": {"evaluate": 6000, "build": 40000}},
+                        metrics={"total_tokens": 30000, "duration_minutes": 5.0,
+                                 "stage_tokens": {}, "stages_completed": 7, "stages_total": 7, "status": "completed"})
+        d = client.get("/api/pipelines/analytics?window=ytd").json()
+        assert d["overall"]["tokens_est"] == 46000  # 6000+40000
+
+
+class TestPipelineRunDetail:
+    def test_detail_returns_retro(self, client, workspace):
+        _create_run_dir(
+            workspace, "ProjD", "run_d1", status="completed",
+            requirement="Ship the thing",
+            completed_at="2026-08-01T10:20:00+00:00",
+            stages=[
+                {"stage": "evaluate", "status": "completed", "token_cost": 4000},
+                {"stage": "reflect", "status": "completed",
+                 "lessons": ["Lesson one about X", "Lesson two about Y"]},
+            ],
+            budget={"stage_estimates": {"evaluate": 6000, "build": 40000}},
+            commits=[{"repo": "/src", "sha": "abc123", "files": ["a.py"]}],
+            metrics={"total_tokens": 30000, "duration_minutes": 20.0,
+                     "stage_tokens": {"evaluate": 4000, "build": 38000},
+                     "stages_completed": 7, "stages_total": 7, "status": "completed"},
+            report_md="# Report\nTL;DR: it works",
+        )
+        resp = client.get("/api/pipelines/run_d1")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["id"] == "run_d1"
+        assert d["requirement"] == "Ship the thing"
+        assert "TL;DR: it works" in d["report_md"]
+        assert d["reflect_lessons"] == ["Lesson one about X", "Lesson two about Y"]
+        assert d["commits"][0]["sha"] == "abc123"
+        assert d["cycle_time_min"] == 20.0
+        # est-vs-actual per stage
+        st = {s["stage"]: s for s in d["stage_tokens"]}
+        assert st["evaluate"]["est"] == 6000 and st["evaluate"]["actual"] == 4000
+        assert st["build"]["est"] == 40000 and st["build"]["actual"] == 38000
+
+    def test_detail_404_for_missing_run(self, client, workspace):
+        assert client.get("/api/pipelines/run_nope").status_code == 404
+
+    def test_detail_rejects_path_traversal(self, client, workspace):
+        # The Gate-1 BLOCK: a traversal token must NEVER read a file outside runs/.
+        # FastAPI won't match a raw slash in {run_id}; test the encoded + dotted forms.
+        for tok in ["..%2f..%2f..%2fetc%2fpasswd", "run_..%2f..%2fsecret", "..", "run_"]:
+            r = client.get(f"/api/pipelines/{tok}")
+            assert r.status_code == 404, f"traversal token {tok!r} must 404, got {r.status_code}"
+
+    def test_detail_partial_metrics_for_paused(self, client, workspace):
+        # A paused run with NO METRICS.json → endpoint generates partial on-read (G2).
+        _create_run_dir(
+            workspace, "ProjP", "run_p1", status="paused",
+            created_at="2026-08-01T10:00:00+00:00",  # no completed_at, no metrics file
+            stages=[{"stage": "evaluate", "status": "completed", "token_cost": 4000}],
+            checkpoint={"reason": "Gate 1 BLOCK: needs decision", "stage": "build"},
+        )
+        resp = client.get("/api/pipelines/run_p1")
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["status"] == "paused"
+        assert d["cycle_time_min"] is None  # None-safe, no completed_at
+        assert d["checkpoint_reason"] == "Gate 1 BLOCK: needs decision"
