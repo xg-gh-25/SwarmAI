@@ -1,54 +1,42 @@
 /**
  * Tests for DomainStubOverlays — the placeholder fullscreen overlays for A10
- * domains that don't yet have a full surface (Context / Pipeline / Pollinate).
- * Each opens on its `swarm:show-<domain>` window event (same contract as
- * BrainHubDemoOverlay) and renders a labeled skeleton. Cycle-3 scope: every
- * domain card opens SOMETHING; content精修 is a later cycle.
+ * domains that don't yet have a full surface.
  *
- * NOTE: `history` and `context` are NOT stubs — they have real surfaces
- * (HistoryOverlay handles swarm:show-history; CMBrainOverlay handles
- * swarm:show-context, run_5f7d4fe1). Both were removed from STUBS so a real
- * overlay and a stub never open on the same event.
+ * As of run_ea7c5fbc, STUBS is EMPTY: every A10 domain now has a real overlay.
+ *  - context  → CMBrainOverlay (swarm:show-context, run_5f7d4fe1)
+ *  - pipeline → PipelineOverlay (swarm:show-pipeline, run_f8494370)
+ *  - pollinate→ PollinateOverlay (swarm:show-pollinate, run_ea7c5fbc)
+ *  - history  → HistoryOverlay (swarm:show-history)
+ * None must open a STUB here, or a real overlay + a stub would open on the same
+ * event (double fullscreen overlay).
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
 import { DomainStubOverlays } from './DomainStubOverlays';
 
 // Modal renders via a portal to document.body; RTL queries find it fine.
 afterEach(() => cleanup());
 
-const CASES: Array<[string, string, string]> = [
-  ['swarm:show-pollinate', 'stub-overlay-pollinate', 'Pollinate'],
+// Every A10 domain now has a real overlay elsewhere — NONE should be a stub here.
+const NO_LONGER_STUBS: Array<[string, string]> = [
+  ['swarm:show-pollinate', 'stub-overlay-pollinate'],
+  ['swarm:show-pipeline', 'stub-overlay-pipeline'],
+  ['swarm:show-context', 'stub-overlay-context'],
+  ['swarm:show-history', 'stub-overlay-history'],
 ];
 
 describe('DomainStubOverlays', () => {
-  it('renders nothing until an event fires', () => {
-    render(<DomainStubOverlays />);
-    for (const [, testid] of CASES) {
-      expect(screen.queryByTestId(testid)).toBeNull();
-    }
+  it('renders nothing on mount (no stubs remain)', () => {
+    const { container } = render(<DomainStubOverlays />);
+    // The fragment renders no children — no stub overlay markup.
+    expect(container.querySelector('[data-testid^="stub-overlay-"]')).toBeNull();
   });
 
-  it.each(CASES)('opens the %s overlay on its window event', (evt, testid, label) => {
+  it.each(NO_LONGER_STUBS)('does NOT open a stub for %s (real overlay owns it)', (evt, testid) => {
     render(<DomainStubOverlays />);
-    expect(screen.queryByTestId(testid)).toBeNull();
     act(() => {
       window.dispatchEvent(new CustomEvent(evt));
     });
-    const overlay = screen.getByTestId(testid);
-    expect(overlay).toBeInTheDocument();
-    expect(overlay.textContent).toContain(label);
-  });
-
-  it('does not open a stub for events that now have real overlays', () => {
-    render(<DomainStubOverlays />);
-    act(() => {
-      window.dispatchEvent(new CustomEvent('swarm:show-pollinate'));
-    });
-    expect(screen.getByTestId('stub-overlay-pollinate')).toBeInTheDocument();
-    // pipeline is no longer a stub (real PipelineOverlay, run_f8494370) — never here
-    expect(screen.queryByTestId('stub-overlay-pipeline')).toBeNull();
-    // context is no longer a stub either (real CMBrainOverlay) — never present here
-    expect(screen.queryByTestId('stub-overlay-context')).toBeNull();
+    expect(screen.queryByTestId(testid)).toBeNull();
   });
 });

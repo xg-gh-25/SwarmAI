@@ -54,6 +54,7 @@ import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { ToDoOverlay } from '../components/layout/ToDoOverlay';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
 import { PipelineOverlay } from '../components/layout/PipelineOverlay';
+import { PollinateOverlay } from '../components/layout/PollinateOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
@@ -3186,6 +3187,7 @@ export default function ChatPage() {
         <ToDoOverlay onDispatch={handleDispatchTodo} />
         <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
         <PipelineOverlay onDispatch={handleDispatchJobPrompt} />
+        <PollinateOverlay onDispatch={handleDispatchJobPrompt} />
       </div>
 
       {/* Modals */}

@@ -29,12 +29,9 @@ const STUBS: StubDef[] = [
   // PipelineOverlay (retro-analytics dashboard, run_f8494370), rendered in ChatPage.
   // It must NOT also be a stub here, or both would open on the same event (double
   // fullscreen overlay) — same contract as the `context`/`history` notes.
-  {
-    key: 'pollinate',
-    event: 'swarm:show-pollinate',
-    title: 'Pollinate',
-    blurb: 'Media-delivery packages — poster / video / narrative / shorts. Full view coming in a later cycle.',
-  },
+  // NOTE: `pollinate` is NO LONGER a stub — swarm:show-pollinate now opens the real
+  // PollinateOverlay (content-asset gallery, run_ea7c5fbc), rendered in ChatPage.
+  // Same double-overlay contract as pipeline/context/history.
   // NOTE: `history` is NOT a stub — it has a real surface. The left-nav History
   // row's `swarm:show-history` event is handled by HistoryOverlay (rendered in
   // ChatPage), which hosts the searchable HistoryView. It must NOT also be a stub
