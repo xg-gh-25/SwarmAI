@@ -93,6 +93,11 @@ export default function Modal({
   // (not the viewport), so it never overlaps the dynamic-width Radar. Subscribed
   // so radar-drag / hide / window-resize re-bounds the open panel (run_a95e266a).
   const [chatRect, setChatRect] = useState<ChatAreaRect | null>(readChatAreaRect());
+  // Live window size — only consumed by the null-rect FALLBACK below (first paint
+  // before ChatPage registers the chat rect). Kept reactive so a resize during that
+  // transient window still yields a viewport-bounded scrim. The observed-rect path
+  // reacts separately via subscribeChatArea's own resize listener.
+  const [windowSize, setWindowSize] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
 
   const isFullscreen = size === 'fullscreen';
 
@@ -187,11 +192,20 @@ export default function Modal({
   }, []);
 
   // Track the live chat-area rect while a fullscreen panel is open, so radar-drag /
-  // hide / window-resize re-bounds it. Seed on open; unsubscribe on close.
+  // hide / window-resize re-bounds it. Seed on open; unsubscribe on close. Also
+  // track window size so the null-rect fallback stays viewport-bounded across a
+  // resize before the chat rect is first observed.
   useEffect(() => {
     if (!isFullscreen || !isOpen) return;
     setChatRect(readChatAreaRect());
-    return subscribeChatArea(setChatRect);
+    setWindowSize({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => setWindowSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    const unsubscribe = subscribeChatArea(setChatRect);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      unsubscribe();
+    };
   }, [isFullscreen, isOpen]);
 
   // Position the spout by MEASURING the panel's real top after layout — the card's
@@ -240,15 +254,17 @@ export default function Modal({
           // Falls back to a WINDOW-BOUNDED box if the rect isn't observed yet (first
           // paint before ChatPage registers): width/height from the viewport, NOT
           // right:0/bottom:0 — an unbounded fallback let the panel overflow the
-          // window right+bottom (2026-08-02). Both the observed rect (clamped in
-          // chatAreaBounds.measure) and this fallback stay within the viewport.
+          // window right+bottom (2026-08-02). width/height come from `windowSize`
+          // state (resize-reactive), so this fallback re-bounds on a resize too.
+          // Both the observed rect (clamped in chatAreaBounds.measure) and this
+          // fallback stay within the viewport.
           ? (chatRect
               ? { left: chatRect.left, top: chatRect.top, width: chatRect.width, height: chatRect.height, background: 'rgba(0,0,0,0.35)' }
               : {
                   left: PANEL_LEFT,
                   top: PANEL_TOP,
-                  width: Math.max(0, window.innerWidth - PANEL_LEFT),
-                  height: Math.max(0, window.innerHeight - PANEL_TOP),
+                  width: Math.max(0, windowSize.w - PANEL_LEFT),
+                  height: Math.max(0, windowSize.h - PANEL_TOP),
                   background: 'rgba(0,0,0,0.35)',
                 })
           : undefined

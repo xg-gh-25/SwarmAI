@@ -181,6 +181,34 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     expect(scrim.style.bottom).toBe('');
   });
 
+  it('null-rect FALLBACK re-bounds on window resize (stays viewport-bounded)', () => {
+    // The fallback reads window size from resize-reactive state, so a resize while
+    // the rect is still unobserved must re-size the scrim (not stay a stale
+    // render-time snapshot). Save/restore window size so this test can't pollute
+    // the innerWidth-sensitive clamp tests that follow.
+    const origW = window.innerWidth;
+    const origH = window.innerHeight;
+    try {
+      Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true, writable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true, writable: true });
+      render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+      const scrim = screen.getByTestId('modal-scrim');
+      expect(scrim.style.width).toBe('1050px');  // 1200 - 150 (PANEL_LEFT)
+
+      act(() => {
+        Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true, writable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true, writable: true });
+        window.dispatchEvent(new Event('resize'));
+      });
+
+      expect(scrim.style.width).toBe('750px');   // 900 - 150 → re-bounded, not stale
+      expect(scrim.style.height).toBe('520px');  // 600 - 80
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: origW, configurable: true, writable: true });
+      Object.defineProperty(window, 'innerHeight', { value: origH, configurable: true, writable: true });
+    }
+  });
+
   it('a non-fullscreen modal keeps full-viewport inset-0 (unchanged)', () => {
     render(<Modal isOpen onClose={noop} title="T" size="md"><div>b</div></Modal>);
     const scrim = screen.getByTestId('modal-scrim');
