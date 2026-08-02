@@ -156,6 +156,30 @@ describe('JobsRunsOverlay interactions', () => {
     expect(prompt).toMatch(/script/);
     expect(prompt).toContain('rm -rf /tmp/cache');
     expect(prompt).toMatch(/s_job-manager/);
+    // A script job's shell command MUST land in config.command (the field
+    // executor._handle_script reads) — a script job built with the command in
+    // the prompt field fails run-now with "No command configured" (proven by E2E).
+    // The dispatched prompt must tell inline Swarm exactly where the command goes.
+    expect(prompt).toMatch(/config\.command/);
+  });
+
+  it('New Job form: agent_task type does NOT mention config.command (only script needs it)', async () => {
+    const onDispatch = vi.fn(() => true);
+    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    openOverlay();
+    await screen.findByTestId('jobs-overlay');
+
+    fireEvent.click(screen.getByTestId('jobs-new-btn'));
+    fireEvent.change(await screen.findByTestId('jobs-new-name'), { target: { value: 'Daily digest' } });
+    fireEvent.change(screen.getByTestId('jobs-new-schedule'), { target: { value: '0 9 * * *' } });
+    fireEvent.change(screen.getByTestId('jobs-new-prompt'), { target: { value: 'summarize my inbox' } });
+    fireEvent.click(screen.getByTestId('jobs-new-submit'));
+
+    const prompt = onDispatch.mock.calls[0][0];
+    // agent_task reads the prompt field directly — no config.command note (avoids
+    // steering the agent to the wrong field for an agent_task job).
+    expect(prompt).not.toMatch(/config\.command/);
+    expect(prompt).toContain('summarize my inbox');
   });
 
   it('AC6: system jobs hide pause/edit/delete (yaml-read-only)', async () => {

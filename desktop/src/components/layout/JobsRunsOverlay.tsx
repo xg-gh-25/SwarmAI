@@ -491,14 +491,24 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
     // The overlay never writes yaml itself — s_job-manager owns cron/type/tool
     // validation + user-jobs.yaml integrity, and the human confirms before send
     // (dispatch is autoSend:false) and again at the skill's create gate (HITL).
-    const bodyLabel = type === 'agent_task' ? 'Prompt (what Swarm should do each run)' : 'Command (shell)';
+    // Field placement differs by type — spell it out so inline Swarm creates a
+    // RUNNABLE job (E2E proved a script command left in `prompt` fails run-now with
+    // "No command configured"; executor._handle_script reads job.config.command):
+    //  - agent_task → the run instruction goes in the `prompt` field
+    //  - script     → the shell command goes in `config.command` (NOT prompt)
+    // Gate the script instruction on the ACTUAL script type (not "anything that
+    // isn't agent_task") so a future 3rd CRON_TYPE can't silently inherit the
+    // config.command note — default to the neutral prompt phrasing (adversarial LOW).
+    const bodyLine = type === 'script'
+      ? `- Command (shell — put this in config.command, NOT the prompt field): ${p}`
+      : `- Prompt (what Swarm should do each run): ${p}`;
     onDispatch(
       [
         `Create a new scheduled job for me using the s_job-manager skill. Confirm the details with me, then create it. Here's what I want:`,
         `- Name: ${n}`,
         `- Type: ${type}`,
         `- Schedule (cron): ${s}`,
-        `- ${bodyLabel}: ${p}`,
+        bodyLine,
       ].join('\n'),
     );
     onCreated();
