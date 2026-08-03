@@ -27,6 +27,7 @@ import {
   detectKind,
   type GovernsKind,
   type StarterItem,
+  type StarterKind,
   type StarterRole,
 } from '../../utils/newBrainDispatch';
 
@@ -78,22 +79,28 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
   const [draft, setDraft] = useState('');
 
   // Fresh, empty birth every time the launcher closes (one-shot gate — no state
-  // carried between brains).
+  // carried between brains). Reset is DEFERRED past the Modal's exit animation
+  // (~300ms) so the user doesn't see the fields blank out mid-fade (#4b). If the
+  // launcher re-opens before the timer fires, the cleanup cancels the reset so a
+  // genuine re-open still starts empty (the open path never carries old state
+  // because a real close always eventually resets).
   useEffect(() => {
-    if (!open) {
+    if (open) return;
+    const t = setTimeout(() => {
       setName('');
       setGoverns('codebase');
       setItems([]);
       setDraft('');
-    }
+    }, 320);
+    return () => clearTimeout(t);
   }, [open]);
 
-  const addItem = useCallback((raw: string) => {
+  const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
     const value = raw.trim();
     if (!value) return;
     setItems((prev) => {
       if (prev.some((it) => it.value === value)) return prev; // dedupe
-      const kind = detectKind(value);
+      const kind = kindOverride ?? detectKind(value);
       const role = classifyStarterItem({ value, kind });
       return [...prev, { id: ++itemSeq, value, kind, role, displayKind: kind }];
     });
@@ -142,14 +149,46 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
   const onDropZoneDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      // Files dropped from the OS.
+      e.stopPropagation();
+      // Path 1 (PRIMARY — the reliable one): a drag from the app's own Workspace
+      // Explorer carries `application/json` = a FileTreeItem with a REAL workspace
+      // path (this is the ChatDropZone precedent). Unlike ChatDropZone we accept
+      // BOTH file AND directory — a directory is valid starter material (→ SHELF).
+      // The OS `.path` route below is unreliable in the Tauri webview (`.path` is
+      // non-standard + dragDropEnabled isn't configured), so this internal-drag
+      // path is how "material already in the workspace" actually gets in.
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (jsonData) {
+        try {
+          const fileData = JSON.parse(jsonData) as { path?: string; name?: string; type?: string };
+          const val = fileData.path || fileData.name;
+          if (val) {
+            // A directory drag → force SHELF via the folder kind (its path has no
+            // trailing slash, so detectKind alone could mis-read it).
+            const kind = fileData.type === 'directory' ? 'folder' : undefined;
+            addItem(val, kind);
+          }
+        } catch {
+          /* malformed payload — ignore, nothing to add */
+        }
+        return; // internal drag handled; don't double-add from files/text
+      }
+      // Path 2 (fallback): native OS file drop. NOTE: `.path` is undefined in the
+      // Tauri/browser webview → we can only get the basename, which the agent
+      // can't resolve. Kept as best-effort; the reliable routes are Path 1 and
+      // pasting a full path/URL into the input.
+      let added = false;
       for (const f of Array.from(e.dataTransfer.files ?? [])) {
         const path = (f as File & { path?: string }).path || f.name;
         addItem(path);
+        added = true;
       }
-      // Text/URI dropped (links, pasted text).
-      const text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-      if (text) text.split('\n').forEach((l) => addItem(l));
+      // Path 3: text/URI drop (links, pasted text) — only if no files came with it,
+      // so a single drop carrying BOTH files and a uri-list can't double-add (#4c).
+      if (!added) {
+        const text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+        if (text) text.split('\n').forEach((l) => addItem(l));
+      }
     },
     [addItem],
   );
@@ -175,8 +214,9 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
         <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr]">
           <div className="p-5 border-r border-[var(--color-border)] flex flex-col gap-5 overflow-y-auto">
             <div>
-              <label className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
+              <label htmlFor="new-brain-name-input" className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
               <input
+                id="new-brain-name-input"
                 data-testid="new-brain-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -184,12 +224,13 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
                 className="w-full bg-[var(--color-bg)] border border-[var(--color-border-strong)] rounded-lg px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
               />
             </div>
-            <div>
-              <span className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">WHAT IT GOVERNS</span>
+            <fieldset className="border-0 p-0 m-0">
+              <legend className="block text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5 p-0">WHAT IT GOVERNS</legend>
               <div className="flex flex-col gap-1.5">
                 {GOVERNS_OPTIONS.map((opt) => (
                   <button
                     key={opt.kind}
+                    type="button"
                     data-testid={`new-brain-governs-${opt.kind}`}
                     aria-pressed={governs === opt.kind}
                     onClick={() => setGoverns(opt.kind)}
@@ -203,7 +244,7 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
                   </button>
                 ))}
               </div>
-            </div>
+            </fieldset>
           </div>
 
           <div className="p-5 flex flex-col min-w-0">
