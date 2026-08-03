@@ -18,13 +18,17 @@ import { CanvasOutputRail } from './CanvasOutputRail';
 export const PANEL_CONSTANTS = {
   DEFAULT_WIDTH: 500,
   MIN_WIDTH: 320,
-  MAX_WIDTH: 1200,
+  MAX_WIDTH: 900,
   STORAGE_KEY: 'fileViewerPanelWidth',
   /** Responsive default = this fraction of the viewport width, clamped to MIN/MAX.
    *  Chat stays the majority pane; Canvas is wide enough for decks/tables. This is
    *  the industry pattern (ChatGPT Canvas / Claude Artifacts / VS Code side panel):
    *  percentage default + px clamp + remember the user's manual drag. */
-  DEFAULT_FRACTION: 0.42,
+  DEFAULT_FRACTION: 0.34,
+  /** Breathing gap (px) between the panel's right edge and the window edge, so
+   *  Canvas never sits flush against the frame (the docked panel is flex-shrink-0
+   *  at the chat container's right edge → this margin is its only right gutter). */
+  RIGHT_GAP: 12,
 } as const;
 
 /** clamp(MIN, fraction×viewport, MAX) — the responsive default before any drag. */
@@ -260,7 +264,7 @@ function FileViewerPanelImpl({
     return (
       <div
         className="relative flex-shrink-0 canvas-width-reveal"
-        style={{ width: RAIL_WIDTH, '--spout-tint': canvasTint } as CSSProperties}
+        style={{ width: RAIL_WIDTH, marginRight: PANEL_CONSTANTS.RIGHT_GAP, '--spout-tint': canvasTint } as CSSProperties}
         data-testid="file-viewer-panel"
       >
         <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
@@ -299,7 +303,7 @@ function FileViewerPanelImpl({
   return (
     <div
       className={`relative flex-shrink-0 flex ${isDragging ? '' : 'canvas-width-reveal'}`}
-      style={{ width: revealWidth, '--spout-tint': canvasTint } as CSSProperties}
+      style={{ width: revealWidth, marginRight: PANEL_CONSTANTS.RIGHT_GAP, '--spout-tint': canvasTint } as CSSProperties}
       data-testid="file-viewer-panel"
     >
       {/* Spout — a small triangle sitting IN the panel's left edge (inside the
