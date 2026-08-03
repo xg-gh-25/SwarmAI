@@ -12,8 +12,12 @@ Design directives (from the user, 2026-08-03):
      paths (.artifacts / .git / .context / dotfiles / tmp) are filtered entirely.
   conservative Bash parsing → a MISSED deliverable is far better than a FALSE pop,
      so parse_bash_write_targets deliberately UNDER-matches: it catches the common
-     redirection/copy shapes and returns [] on anything it cannot parse confidently
-     (heredoc bodies, command substitution, nested subshells, quoted '>').
+     redirection/copy shapes and returns [] on anything it cannot parse confidently.
+     Quoted spans and heredoc bodies are BLANKED before redirect-matching (a `>`
+     inside them is not a real redirect); shell-metachar bare words are rejected as
+     non-filenames (run_6ebe2d09). Command substitution / nested subshells remain
+     under-matched by design. The emit layer additionally drops any target that
+     fails to resolve to a real on-disk file (streaming_orchestrator Layer 1).
 
 Pure — no I/O, no imports beyond stdlib — so it is unit-tested exhaustively and
 callable on the streaming hot path.
@@ -78,11 +82,27 @@ _REDIRECT_RE = re.compile(r"(?<![\d&])>>?\s*([^\s;|&<>]+)")
 _DISCARD_TARGETS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
 
 
+# Shell metacharacters that CANNOT appear in an UNQUOTED redirect/copy target —
+# bash would word-split or syntax-error on them. Their presence means the token is
+# NOT a real filename (e.g. `L4(top-right)` from a mis-parsed prose `>`), so it is
+# rejected at the source (Layer 3, run_6ebe2d09). Legal filename chars — letters
+# (incl. CJK/unicode), digits, `.`, `-`, `_`, `/`, `~`, `@`, `+`, `:`, `,`, `=`,
+# `%`, `!` — are all allowed; only true shell metacharacters are banned. (`!` is
+# NOT here: it is a literal in non-interactive shells — the runtime here — and a
+# legal filename char; Gate-2 F5 flagged it as an over-rejection.)
+_ILLEGAL_TARGET_CHARS = frozenset(" \t()[]{}*?|&;<>`#$'\"\\")
+
+
 def _clean_target(tok: str) -> str | None:
-    """A redirect/copy target is a real file iff it is not a discard sink."""
+    """A redirect/copy target is a real file iff it is not a discard sink AND does
+    not contain shell metacharacters that can't appear in an unquoted filename."""
     if not tok or tok in _DISCARD_TARGETS:
         return None
     if tok.startswith("&"):          # fd dup, e.g. &1 in 2>&1
+        return None
+    # Layer 3: a bare word carrying a shell metacharacter is not a real unquoted
+    # filename — drop it (kills `L4(top-right)`, globs, subshells, etc.).
+    if any(ch in _ILLEGAL_TARGET_CHARS for ch in tok):
         return None
     return tok
 
@@ -101,9 +121,10 @@ def parse_bash_write_targets(command: str) -> list[str]:
     targets: list[str] = []
 
     # 1) Redirection operators (regex on the raw string — robust to spacing).
-    #    Skip anything inside single/double quotes by blanking quoted spans first,
-    #    so `echo 'a > b'` does not register a redirect.
-    unquoted = _blank_quoted(command)
+    #    Blank heredoc BODIES first (so a `>` inside <<EOF..EOF is not a redirect —
+    #    Layer 2, run_6ebe2d09), then blank single/double-quoted spans (so
+    #    `echo 'a > b'` does not register a redirect either).
+    unquoted = _blank_quoted(_blank_heredocs(command))
     for m in _REDIRECT_RE.finditer(unquoted):
         t = _clean_target(m.group(1))
         if t:
@@ -133,6 +154,58 @@ def parse_bash_write_targets(command: str) -> list[str]:
                     targets.append(t)
 
     return targets
+
+
+# A heredoc opener: `<<` optionally `-`, optional quote, a delimiter WORD, optional
+# closing quote. The leading `(?<!<)` rejects `<<<WORD` (a herestring, NOT a heredoc
+# body — Gate-2 F4: without it the regex matched the trailing `<<WORD` inside `<<<`).
+_HEREDOC_OPEN_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _blank_heredocs(s: str) -> str:
+    """Blank the CONTENTS of heredoc bodies (length-preserving), so a `>` inside a
+    heredoc body is not mistaken for a shell redirect (Layer 2, run_6ebe2d09).
+
+    Only the BODY is blanked — the opener line (which may carry a REAL trailing
+    redirect, e.g. `cat <<EOF > real.html`) is left intact, and the closing
+    delimiter line is preserved. Conservative safe-direction (design directive):
+    if no closing delimiter is found, blank to end-of-string — over-blanking can
+    only MISS a later redirect (a tolerated under-match), never produce a false pop.
+
+    Handles `<<WORD`, `<<-WORD` (leading-tab close), and quoted `<<'WORD'`/`<<"WORD"`.
+    The closing line is the delimiter alone (whitespace-trimmed; `<<-` also allows
+    leading tabs). Multiple heredocs in one command are handled left-to-right.
+    """
+    if "<<" not in s:
+        return s  # fast path — no heredoc possible
+    lines = s.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)  # opener line kept intact (may carry a real redirect)
+        m = _HEREDOC_OPEN_RE.search(line)
+        # `<<<` is a herestring, not a heredoc — the regex won't match `<<<` because
+        # after `<<` it needs an optional `-`/quote then a WORD, and `<` is neither.
+        if m:
+            delim = m.group(2)
+            dash = line[m.start():m.start() + 3].startswith("<<-")
+            i += 1
+            # Blank body lines until the closing delimiter line (or end-of-string).
+            while i < len(lines):
+                body = lines[i]
+                # Bash close rule: the delimiter must be ALONE on the line. For `<<-`
+                # leading TABS are stripped first; for plain `<<` the line must equal
+                # the delimiter EXACTLY (an indented `EOF` stays in the body — Gate-2
+                # F3: `.strip()` here wrongly closed on an indented delimiter).
+                closes = (body.lstrip("\t").rstrip() == delim) if dash else (body == delim)
+                if closes:
+                    out.append(body)  # closing delimiter line kept
+                    break
+                out.append(" " * len(body))  # blank the body (length-preserving)
+                i += 1
+        i += 1
+    return "\n".join(out)
 
 
 def _blank_quoted(s: str) -> str:

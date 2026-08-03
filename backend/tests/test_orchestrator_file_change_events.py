@@ -2,8 +2,9 @@
 
 The unified backend file-change emit: raw written path(s) → enriched SSE event(s)
 {path, absolutePath, relevance, operation}, resolved once (cached), bookkeeping
-dropped, unresolvable fails-open to the raw path. Mocks the resolver boundary so
-the test is hermetic (no real workspace walk).
+dropped, and — since run_6ebe2d09 (Layer 1) — unresolvable written paths are
+DROPPED (not fail-open-emitted with path==raw), because a just-written file always
+exists on disk. Mocks the resolver boundary so the test is hermetic (no real walk).
 """
 import asyncio
 
@@ -55,16 +56,17 @@ def test_bookkeeping_path_dropped(monkeypatch):
     assert called["n"] == 0  # bookkeeping never even pays resolution (perf)
 
 
-def test_unresolvable_fails_open_to_raw(monkeypatch):
+def test_unresolvable_written_path_is_dropped(monkeypatch):
+    # Layer 1 (run_6ebe2d09): a WRITTEN path that fails to resolve is NOT a real
+    # file — a just-written deliverable always exists on disk, so resolve=None means
+    # the "path" is garbage (e.g. `L4(top-right)` / `bottom` mis-parsed from a Bash
+    # `>` operator). Emitting it produced a broken Canvas row → "Resource not found".
+    # The old fail-open behavior (emit with path==raw) is REVERSED: drop the event.
     monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
                         lambda raw, ws: None)
     orch = _orch()
-    events = _run(orch._build_file_change_events(["ghost.html"], {}))
-    assert len(events) == 1
-    # fail-open: still emits, absolutePath == raw (link/highlight degrade, don't vanish)
-    assert events[0]["path"] == "ghost.html"
-    assert events[0]["absolutePath"] == "ghost.html"
-    assert events[0]["relevance"] == "deliverable"
+    events = _run(orch._build_file_change_events(["L4(top-right)", "bottom", "ghost.html"], {}))
+    assert events == []  # unresolvable written paths never reach the Canvas
 
 
 def test_resolution_cached_per_turn(monkeypatch):

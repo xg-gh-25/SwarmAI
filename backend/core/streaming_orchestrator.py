@@ -289,8 +289,9 @@ class StreamingOrchestrator:
         paths are dropped (never surfaced). Resolution runs in a thread (the
         bare-name branch may os.walk) but only for these deliverable-candidate
         writes — reads/greps never reach here (perf directive). Unresolvable paths
-        still emit with absolutePath == the raw path (fail-open: the file link/
-        highlight degrade gracefully rather than vanish).
+        are DROPPED (Layer 1, run_6ebe2d09): a just-written file always exists on
+        disk, so resolve=None means the token was not a real file (e.g. a Bash `>`
+        fragment) — emitting it produced a broken Canvas row ("Resource not found").
         """
         from core.file_change_classifier import classify_relevance
         from core.project_registry import get_swarmws
@@ -310,12 +311,19 @@ class StreamingOrchestrator:
                 except Exception:
                     resolved = None
                 resolve_cache[raw] = resolved
-            display = resolved["relative"] if resolved else raw
-            absolute = resolved["absolute"] if resolved else raw
+            # Layer 1 emit-gate (run_6ebe2d09): a WRITTEN path that fails to resolve
+            # is NOT a real file. A just-written deliverable always exists on disk,
+            # so resolve=None means the "path" is garbage — e.g. `L4(top-right)` /
+            # `bottom` mis-parsed from a Bash `>` operator. Emitting it produced a
+            # broken Canvas row → "Resource not found". Drop it (was: fail-open emit
+            # with path==raw, which surfaced the garbage). Under-surfacing a truly
+            # unresolvable write is the design's safe direction (a miss ≫ a false pop).
+            if not resolved:
+                continue
             events.append({
                 "type": "file_changed",
-                "path": display,
-                "absolutePath": absolute,
+                "path": resolved["relative"],
+                "absolutePath": resolved["absolute"],
                 "relevance": relevance,
                 "operation": "written",
             })
