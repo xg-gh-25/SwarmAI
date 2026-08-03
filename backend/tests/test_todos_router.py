@@ -318,6 +318,29 @@ class TestListTodos:
         assert resp.status_code == 200
         assert len(resp.json()) <= 3
 
+    def test_list_limit_accepts_flow_board_500(self, client: TestClient, workspace_id: str):
+        """The Flow board (ToDoOverlay) fetches limit=500 to derive zones client-side.
+        The router cap MUST accept it (aligned to todo_manager.list's min(limit,1000)
+        authority) — a le=200 cap here 400'd the Flow tab and was mislabeled a backend
+        outage. Regression guard for that bug."""
+        resp = client.get("/api/todos?limit=500")
+        assert resp.status_code == 200
+
+    def test_list_limit_boundary_1000_and_over(self, client: TestClient, workspace_id: str):
+        """le=1000 mirrors the manager ceiling: 1000 accepted, 1001 rejected at the
+        FastAPI boundary (validation preserved — the cap is aligned, not removed)."""
+        assert client.get("/api/todos?limit=1000").status_code == 200
+        assert client.get("/api/todos?limit=1001").status_code == 400
+
+    def test_list_default_limit_unchanged(self, client: TestClient, workspace_id: str):
+        """Raising the cap must NOT change the default: no limit param → still capped
+        at 50 (default is independent of le)."""
+        for i in range(55):
+            _create_todo(client, workspace_id, title=f"Default cap {i}")
+        resp = client.get("/api/todos")
+        assert resp.status_code == 200
+        assert len(resp.json()) <= 50
+
 
 # ---------------------------------------------------------------------------
 # Response format (snake_case)

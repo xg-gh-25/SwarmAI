@@ -36,7 +36,7 @@ router = APIRouter()
 async def list_todos(
     workspace_id: Optional[str] = Query(None, description="Filter by workspace ID"),
     status: Optional[ToDoStatus] = Query(None, description="Filter by status"),
-    limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
+    limit: int = Query(50, ge=1, le=1000, description="Maximum number of results (cap aligned to todo_manager.list's min(limit,1000) authority; the Flow board fetches 500 to derive zones client-side)"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
 ):
     """List all ToDos with optional filtering and pagination.

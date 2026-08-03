@@ -41,8 +41,25 @@ import { useCallback, useEffect, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { todosService, type ToDoHistoryStats } from '../../services/todos';
+import { isApiError } from '../../services/api';
 import type { ToDo, Priority } from '../../types/todo';
 import { deriveZones, type ZonedTodos } from './todoZones';
+
+/** Classify a caught load error into a user-facing message.
+ *  A 4xx is a CLIENT-SIDE contract bug (bad params / stale client), NOT a backend
+ *  outage — mislabeling it "backend may be unavailable" is what sent the user
+ *  debugging a healthy backend (the limit=500 vs le=200 incident). The axios
+ *  interceptor wraps every failure in an ApiError with a numeric statusCode; a true
+ *  network outage has no response → statusCode falls back to 500 → stays "unavailable".
+ *  So a 4xx (isApiError && statusCode < 500) is the ONLY thing routed to the contract
+ *  branch; everything else (5xx, network, non-ApiError) keeps the outage message. */
+function classifyLoadError(e: unknown, what: string): string {
+  if (isApiError(e) && e.statusCode < 500) {
+    console.error(`[ToDoOverlay] ${what} request rejected (HTTP ${e.statusCode}) — client/contract error, backend is up:`, e);
+    return `Could not load ${what} — the request was rejected (HTTP ${e.statusCode}). This is a client error, not a backend outage.`;
+  }
+  return `Could not load ${what} — the backend may be unavailable.`;
+}
 
 export interface ToDoOverlayProps {
   /** Land a todo into a chat tab (inject + snapshot). Returns true if it landed
@@ -101,9 +118,9 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
       const all = await todosService.list(undefined, undefined, 500);
       setZones(deriveZones(all));
       setLoadErr(null);
-    } catch {
+    } catch (e) {
       setZones(EMPTY_ZONES);
-      setLoadErr('Could not load ToDos — the backend may be unavailable.');
+      setLoadErr(classifyLoadError(e, 'ToDos'));
     } finally {
       setLoading(false);
     }
@@ -116,10 +133,10 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
       setHistoryRows(h.todos);
       setStats(s);
       setLoadErr(null);
-    } catch {
+    } catch (e) {
       setHistoryRows([]);
       setStats(null);
-      setLoadErr('Could not load ToDo history — the backend may be unavailable.');
+      setLoadErr(classifyLoadError(e, 'ToDo history'));
     } finally {
       setLoading(false);
     }

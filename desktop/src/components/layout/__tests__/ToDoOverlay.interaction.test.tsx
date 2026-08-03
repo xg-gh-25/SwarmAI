@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ToDoOverlay } from '../ToDoOverlay';
 import { todosService } from '../../../services/todos';
+import { ApiError } from '../../../services/api';
 import type { ToDo } from '../../../types/todo';
 
 vi.mock('../../../services/todos', () => ({
@@ -106,6 +107,59 @@ describe('ToDoOverlay interactions', () => {
     fireEvent.click(screen.getByTestId('todo-view-history'));
     await screen.findByTestId('todo-history-pane');
     expect(screen.getByTestId('todo-guide-banner')).toBeTruthy();
+  });
+
+  it('Flow load 4xx is labeled a CLIENT error, NOT a backend outage', async () => {
+    // The limit=500-vs-le=200 bug: a 400 was mislabeled "backend may be unavailable",
+    // sending the user to debug a healthy backend. A 4xx must be classified as a
+    // contract/client error instead.
+    (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError({ code: 'VALIDATION_FAILED', message: 'bad limit' }, 400),
+    );
+    render(<ToDoOverlay onDispatch={() => true} />);
+    openOverlay();
+    const err = await screen.findByTestId('todo-load-error');
+    expect(err.textContent).toContain('HTTP 400');
+    expect(err.textContent).toContain('client error');
+    expect(err.textContent).not.toContain('backend may be unavailable');
+  });
+
+  it('Flow load true outage (5xx) KEEPS the backend-unavailable message', async () => {
+    // A 503 is a genuine outage — the honest "unavailable" signal must be preserved.
+    (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 503),
+    );
+    render(<ToDoOverlay onDispatch={() => true} />);
+    openOverlay();
+    const err = await screen.findByTestId('todo-load-error');
+    expect(err.textContent).toContain('backend may be unavailable');
+    expect(err.textContent).not.toContain('client error');
+  });
+
+  it('Flow load NETWORK outage (no response → statusCode 500) stays unavailable', async () => {
+    // The real network-down path: the axios interceptor gives a no-response failure
+    // statusCode = (error.response?.status || 500) = 500, so it is NOT < 500 and must
+    // stay in the outage branch. This is the exact case the classification must not
+    // misroute to "client error" (which would hide a genuine outage).
+    (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' }, 500),
+    );
+    render(<ToDoOverlay onDispatch={() => true} />);
+    openOverlay();
+    const err = await screen.findByTestId('todo-load-error');
+    expect(err.textContent).toContain('backend may be unavailable');
+    expect(err.textContent).not.toContain('client error');
+  });
+
+  it('Flow load non-ApiError (unexpected throw) defaults to unavailable', async () => {
+    // A non-ApiError reaching the catch (isApiError=false) must fall to the
+    // conservative outage branch, never the client-error branch.
+    (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
+    render(<ToDoOverlay onDispatch={() => true} />);
+    openOverlay();
+    const err = await screen.findByTestId('todo-load-error');
+    expect(err.textContent).toContain('backend may be unavailable');
+    expect(err.textContent).not.toContain('client error');
   });
 
   it('clicking the card BODY opens the detail drawer', async () => {
