@@ -17,15 +17,23 @@ import { InlinePermissionRequest } from './InlinePermissionRequest';
 import { EscalationBlock } from './EscalationBlock';
 
 /**
- * Re-render budget while streaming. MarkdownRenderer re-parses the FULL string
- * (4 remark/rehype plugins + KaTeX + highlight.js) whenever its `content` prop
- * changes, and a streaming text block grows by a token on every SSE chunk. Parsing
- * per-token is O(n²) over the stream (run_00e0e872 jank). Throttling the markdown
- * INPUT to one update per window bounds the parse COUNT by elapsed time (~10/sec),
- * not by token count — O(n²) → O(duration/window · n). 100ms ≈ 10fps: formatted
- * markdown stays visibly live without the per-token reparse storm.
+ * Re-render budget while streaming. On each throttled fire MarkdownRenderer
+ * re-parses the FULL growing string via its remark/rehype plugin chain
+ * (remarkGfm + remarkBreaks + remarkMath + rehypeKatex — NOT highlight.js, which
+ * runs post-render in a per-CodeBlock useEffect, so it is not multiplied by this
+ * throttle). A streaming text block grows by a token on every SSE chunk, so an
+ * un-throttled parse is O(n²) over the stream (run_00e0e872 jank). Throttling the
+ * markdown INPUT to one update per window bounds the parse COUNT by elapsed time,
+ * not by token count — O(n²) → O(duration/window · n).
+ *
+ * 200ms ≈ 5 parses/sec (run_954d7c48, raised from 100ms/~10fps): halves the reparse
+ * frequency vs 100ms with imperceptible added latency before a token becomes visible
+ * (a streamed reply arrives far faster than a reader consumes it), while keeping
+ * formatted markdown live during streaming (the deliberate run_087e097e UX — NOT
+ * reverted to plaintext). Do not raise much further: too-long a window makes the
+ * live-formatting update visibly laggy.
  */
-const STREAM_RENDER_THROTTLE_MS = 100;
+const STREAM_RENDER_THROTTLE_MS = 200;
 
 /**
  * Renders streaming markdown text, but throttles the value fed to MarkdownRenderer

@@ -2,15 +2,18 @@
  * Streaming-render policy — markdown DURING streaming, throttled to bound reparse cost.
  *
  * History: run_00e0e872 (e96b45a9) rendered streaming text as PLAINTEXT to kill
- * O(n²) reparse jank — MarkdownRenderer re-parses the FULL string (4 remark/rehype
- * plugins + KaTeX + highlight.js) on every token, and block.text grows per token via
- * MessageStore.updateLast → O(n²). That fixed the jank but lost live markdown
- * (headings/lists/code only appeared at stream end, with a visible reflow jump).
+ * O(n²) reparse jank — MarkdownRenderer re-parses the FULL string via its
+ * remark/rehype plugin chain (remarkGfm + remarkBreaks + remarkMath + rehypeKatex;
+ * highlight.js runs post-render per CodeBlock, not in this parse) on every token,
+ * and block.text grows per token via MessageStore.updateLast → O(n²). That fixed
+ * the jank but lost live markdown (headings/lists/code only appeared at stream end,
+ * with a visible reflow jump).
  *
- * Current policy (run_087e097e): render MARKDOWN during streaming too, but THROTTLE
- * the re-render to ~100ms so the expensive parse runs ~10×/sec instead of once per
- * token. This keeps O(n²) away (parse count is bounded by time, not token count)
- * while showing formatted markdown live.
+ * Current policy (run_087e097e, window widened to 200ms in run_954d7c48): render
+ * MARKDOWN during streaming too, but THROTTLE the re-render to ~200ms so the
+ * expensive parse runs ~5×/sec instead of once per token. This keeps O(n²) away
+ * (parse count is bounded by time, not token count) while showing formatted
+ * markdown live. Tests settle the throttle with advanceTimersByTime(200).
  *
  * Behavioral discriminator (no mocks): "# Heading" parses to an <h1> when rendered as
  * markdown, but is literal "# Heading" text as plaintext. We assert:
@@ -97,8 +100,8 @@ describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e0
       act(() => { vi.advanceTimersByTime(200); });
       expect(container.querySelector('h1')?.textContent).toContain('H');
 
-      // Now push 5 rapid token updates inside ONE throttle window (each < 100ms apart).
-      // The throttle must NOT immediately reflect each intermediate value.
+      // Now push 5 rapid token updates inside ONE throttle window (50ms total, well
+      // within the 200ms window). The throttle must NOT immediately reflect each value.
       for (let i = 0; i < 5; i++) {
         rerender(
           <ContentBlockRenderer
@@ -108,7 +111,7 @@ describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e0
             isStreaming={true}
           />,
         );
-        act(() => { vi.advanceTimersByTime(10); }); // 10ms between tokens, all within one 100ms window
+        act(() => { vi.advanceTimersByTime(10); }); // 10ms between tokens, all within one 200ms window
       }
       // Within the window the rendered heading should still lag behind the latest "# Hiiiii".
       const midText = container.querySelector('h1')?.textContent ?? '';
