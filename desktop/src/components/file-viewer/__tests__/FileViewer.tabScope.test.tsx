@@ -1,30 +1,37 @@
 /**
- * FileViewer tabScopeKey — chat-tab scope clearing WITHOUT remount (run_0fb40bbc).
+ * FileViewer tabScopeKey — chat-tab scope clearing (run_0fb40bbc, guard fixed run_6619da3b).
  *
- * The bug: the first cut used key={activeTabId} on the panel, which remounted
- * FileViewer on every chat-tab switch → replayed the width-reveal animation +
- * dropped the content cache. The fix: a tabScopeKey prop that clears the
- * internal tab list on change (no remount). This test asserts:
- *  - opening a file adds an internal tab (via mocked FileViewerTabBar);
- *  - changing tabScopeKey CLEARS that tab list (tab A's file doesn't bleed);
- *  - the SAME FileViewer instance persists (no remount → cache/animation survive).
+ * WHAT THIS FILE TESTS (and, honestly, what it does NOT):
  *
- * Heavy children (tab bar, editor core, api, renderers) are mocked to leaf stubs
- * so we test the scope-clearing wiring only.
+ *  1. Scope-clearing wiring — the `tabScopeKey` prop effect (FileViewer.tsx:179):
+ *     when tabScopeKey CHANGES, the internal tab list is cleared (tab A's file
+ *     doesn't bleed into tab B); on the FIRST render it must NOT wipe a fresh open.
+ *     Observed via the mocked FileViewerTabBar (which renders the internal tab list).
  *
- * NOTE (v6, run_09431085): the tab-scope clearing logic (useFileViewerTabs +
- * tabScopeKey effect) is variant-INDEPENDENT, but the horizontal FileViewerTabBar
- * — the observable used here to read the internal tab list — now renders only in
- * the MODAL variant (the PANEL variant uses the Canvas OUTPUTS list as selector).
- * So these tests render variant="modal" to observe the same clearing logic through
- * the surface that still shows the tab list. The logic under test is unchanged.
+ *  2. No-remount / content-cache survival — the PROPERTY that motivated the fix.
+ *     The first cut used key={activeTabId} on the panel, which REMOUNTED FileViewer
+ *     on every chat-tab switch → wiped the `contentCache` useRef → re-fetched every
+ *     file. The fix passes tabScopeKey as a PROP (no React key), so the SAME
+ *     FileViewer instance persists and contentCache survives. The observable that
+ *     SEPARATES the two designs is a re-fetch: with the surviving instance, re-opening
+ *     an already-loaded path is a cache HIT → NO second `/workspace/file` GET for it.
+ *
+ * WHY NOT count FileEditorCore mounts (the previous, vacuous approach): FileEditorCore
+ * is rendered `key={filePath}` (FileViewer.tsx:441), so switching a.md→b.md remounts
+ * it legitimately (count=2) under BOTH the prop design AND the old key-remount — the
+ * editor-mount counter cannot tell the designs apart. The content-cache re-fetch can.
+ *
+ * The remount DECISION itself lives one level up (ChatPage.tsx:3293 / FileViewerPanel
+ * pass tabScopeKey as a prop, never a React key). This unit test renders <FileViewer>
+ * directly, so it guards the INSTANCE-LEVEL invariant (cache survives a scope change);
+ * the "parent must not use key=" invariant is guarded by those call sites' code + the
+ * mutation check documented at the bottom of the no-remount test.
+ *
+ * Heavy children (tab bar, editor core, api, renderers) are mocked to leaf stubs.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import FileViewer from '../FileViewer';
-
-// Count FileViewer body mounts to prove NO remount on scope change.
-let bodyMounts = 0;
 
 vi.mock('../FileViewerTabBar', () => ({
   default: ({ tabs }: { tabs: Array<{ id: string; fileName: string }> }) => (
@@ -37,25 +44,28 @@ vi.mock('../FileViewerTabBar', () => ({
 }));
 vi.mock('../FileViewerStatusBar', () => ({ default: () => <div data-testid="status-bar" /> }));
 vi.mock('../../common/FileEditorCore', () => ({
-  default: () => {
-    bodyMounts += 1;
-    return <div data-testid="editor-core" />;
-  },
+  default: () => <div data-testid="editor-core" />,
 }));
-vi.mock('../../../services/api', () => ({
-  default: { get: vi.fn().mockResolvedValue({ data: { content: 'x', size: 1, readonly: false } }) },
-}));
+
+// api.get spy — the content-load effect (FileViewer.tsx:213) calls /workspace/file
+// on a cache MISS and short-circuits (no call) on a cache HIT. Counting the GETs
+// per path is how we observe contentCache survival across a scope change.
+const apiGet = vi.fn(async (url: string, _cfg?: unknown) => {
+  if (url === '/workspace/file') return { data: { content: 'x', encoding: 'utf-8', size: 1 } };
+  if (url === '/workspace/file/committed') return { data: { content: '' } };
+  return { data: {} };
+});
+vi.mock('../../../services/api', () => ({ default: { get: (...args: unknown[]) => apiGet(...args) } }));
 
 const md = (name: string) => ({ filePath: `/ws/${name}`, fileName: name });
 
 describe('FileViewer tabScopeKey', () => {
-  beforeEach(() => { bodyMounts = 0; });
+  beforeEach(() => { apiGet.mockClear(); });
 
   it('opens a file into an internal tab, then CLEARS on tabScopeKey change (no bleed)', async () => {
     const { rerender } = render(
       <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
     );
-    // a.md is an internal tab
     expect(await screen.findByText('a.md')).toBeTruthy();
     expect(screen.getAllByTestId('fv-tab')).toHaveLength(1);
 
@@ -75,5 +85,38 @@ describe('FileViewer tabScopeKey', () => {
     );
     // The first scope set must not wipe the just-opened file.
     expect(await screen.findByText('a.md')).toBeTruthy();
+  });
+
+  it('preserves the content cache across a scope change (proves NO remount)', async () => {
+    // Open a.md — one /workspace/file GET for it.
+    const { rerender } = render(
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
+    );
+    expect(await screen.findByText('a.md')).toBeTruthy();
+
+    const getsFor = (path: string) =>
+      apiGet.mock.calls.filter(([u, cfg]: any[]) => u === '/workspace/file' && cfg?.params?.path === path).length;
+    expect(getsFor('/ws/a.md')).toBe(1);
+
+    // Switch to tab-B (b.md) — clears the tab LIST, but the SAME FileViewer
+    // instance keeps its contentCache useRef (a.md's content still cached).
+    rerender(
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-B" initialFile={md('b.md')} />,
+    );
+    expect(await screen.findByText('b.md')).toBeTruthy();
+
+    // Switch BACK to tab-A, re-opening a.md. The scope-change effect resets
+    // prevInitialFileRef (FileViewer.tsx:181-186) so the open effect re-fires —
+    // and it hits the SURVIVING cache → NO second GET for a.md.
+    rerender(
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
+    );
+    expect(await screen.findByText('a.md')).toBeTruthy();
+
+    // THE GUARD: still exactly ONE fetch for a.md. A key={tabScopeKey} remount
+    // (the reverted design) wipes contentCache → a.md re-fetches → this is 2.
+    // Mutation-verified: adding key={tabScopeKey} to the render above makes this
+    // assertion RED (getsFor('/ws/a.md') === 2), confirming it is non-vacuous.
+    expect(getsFor('/ws/a.md')).toBe(1);
   });
 });
