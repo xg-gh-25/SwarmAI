@@ -281,6 +281,12 @@ function TabViewImpl({
   // active view scrolls independently. DOM is never destroyed on switch, so the
   // browser preserves scrollTop natively (no save/restore needed).
   const containerRef = useRef<HTMLDivElement>(null);
+  // Inner wrapper around the message list. The ResizeObserver observes THIS (not
+  // just the fixed-height scroll viewport) so content-height growth during
+  // streaming — whose markdown render is 200ms-throttled (ContentBlockRenderer) —
+  // triggers the re-pin (root cause B, run_24f98f06). Without it, streaming grew
+  // scrollHeight with no observer fire and stranded the view above the newest msg.
+  const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
   // "Was the view at bottom by the user's INTENT" — the signal the resize re-pin
@@ -326,33 +332,39 @@ function TabViewImpl({
     }
   }, [messages, isActive]);
 
-  // Re-pin to bottom when the scroll container RESIZES (bugfix run_75691aa8).
-  // Opening Canvas shrinks the chat width → content reflows TALLER, and the
-  // 220ms width-reveal animation lands that taller layout AFTER the one-shot
-  // message-scroll already ran — stranding the view above the newest message.
-  // Tab activation (display:none→visible) and window resize are the same class.
+  // Re-pin to bottom when the scroll VIEWPORT resizes (bugfix run_75691aa8) OR
+  // when the CONTENT grows taller (bugfix run_24f98f06, root cause B). Two
+  // distinct triggers, one observer:
+  //   • container (viewport) resize — opening Canvas shrinks the chat width →
+  //     content reflows TALLER, and the 220ms width-reveal lands that taller
+  //     layout AFTER the one-shot message-scroll ran; tab activation + window
+  //     resize are the same class.
+  //   • content wrapper (contentRef) resize — during streaming the message list
+  //     grows as tokens render (200ms-throttled in ContentBlockRenderer). The
+  //     viewport's border-box is FIXED, so observing only the container missed
+  //     this entirely (the view stranded above the newest message). The inner
+  //     wrapper's box grows with content, so observing it catches every growth.
   //
   // The guard is SUBTLE (Gate-2 HIGH): we must NOT trust `userScrolledUpRef` at
-  // RO-fire time, because the reflow that GREW the content also fires a scroll
-  // event (scrollTop stays, scrollHeight grows → handleScroll reads "scrolled
-  // up" and sets the ref true), which would suppress the very re-pin we need.
-  // Instead we capture "was the view at bottom BEFORE this resize" from the
-  // PREVIOUS frame's metrics (wasAtBottomRef, updated only by genuine user
-  // scrolls via handleScroll) and re-pin on that. behavior:'auto' = instant, so
-  // per-frame re-pin during the reveal doesn't stack smooth-scroll jank.
+  // RO-fire time, because the reflow/growth that GREW the content also fires a
+  // scroll event (scrollTop stays, scrollHeight grows → handleScroll reads
+  // "scrolled up" and sets the ref true), which would suppress the very re-pin we
+  // need. Instead we read `wasAtBottomRef` (updated ONLY by genuine user scrolls —
+  // scrollTop actually moved), so a user reading history (wasAtBottom=false) is
+  // never yanked back. behavior:'auto' = instant, so per-frame re-pin during the
+  // reveal/streaming doesn't stack smooth-scroll jank, and it changes scrollTop
+  // (not element size) so it cannot feed back into the observer (no loop).
   useEffect(() => {
     if (!isActive) return;
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      // wasAtBottomRef reflects the user's INTENT before the resize (only genuine
-      // scrolls update it). A reflow-induced scroll event can't corrupt this
-      // decision because we read the pre-resize intent, not the post-grow metric.
       if (wasAtBottomRef.current) {
         endRef.current?.scrollIntoView({ behavior: 'auto' });
       }
     });
     ro.observe(el);
+    if (contentRef.current) ro.observe(contentRef.current);
     return () => ro.disconnect();
   }, [isActive]);
 
@@ -409,11 +421,20 @@ function TabViewImpl({
       style={isActive ? undefined : { display: 'none' }}
       className={messages.length === 0
         ? 'flex-1 overflow-hidden flex flex-col'
-        : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0'
+        : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 min-w-0'
       }
     >
       {everActiveRef.current ? (
-      <>
+      // Inner content wrapper — the ResizeObserver observes THIS element so
+      // content-height growth during streaming triggers the re-pin (root cause B).
+      // `space-y-2.5` moved here from the scroll container: with the list wrapped
+      // in one div, container-level space-y no longer reaches the message rows, so
+      // the inter-message spacing lives on the wrapper (non-empty). Empty state
+      // gets flex-col/flex-1 so WelcomeScreen's h-full still fills the viewport.
+      <div
+        ref={contentRef}
+        className={messages.length === 0 ? 'flex-1 flex flex-col min-h-0' : 'space-y-2.5'}
+      >
       {isLoadingOlderMessages && (
         <div className="flex justify-center py-2">
           <Spinner size="sm" />
@@ -651,7 +672,7 @@ function TabViewImpl({
         </div>
       )}
       <div ref={endRef} />
-      </>
+      </div>
       ) : null}
     </div>
   );

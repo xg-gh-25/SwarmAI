@@ -10,7 +10,7 @@
  * - `PANEL_CONSTANTS`   — Min/max/default width values
  */
 
-import { useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, type CSSProperties } from 'react';
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
@@ -46,7 +46,7 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
   onCanvasMeta?: (meta: { collapsed: boolean; outputCount: number }) => void;
 };
 
-export default function FileViewerPanel({
+function FileViewerPanelImpl({
   sessionId,
   pinned,
   onTogglePin,
@@ -312,3 +312,15 @@ export default function FileViewerPanel({
     </div>
   );
 }
+
+// LOAD-BEARING memo (run_24f98f06, root cause A). ChatPage holds `inputValue` in
+// useState and the chat textarea is controlled (value={inputValue}), so EVERY
+// keystroke re-renders ChatPage — which would re-render this whole heavy Canvas
+// subtree (FileViewer + FileEditorCore ~1780L + CanvasOutputRail) on each key,
+// freezing input whenever Canvas is open. All props from the ChatPage call site
+// are referentially stable across a keystroke render (useCanvasHost callbacks are
+// useCallback dep-[patch]/[patch,activeTabId]; file/pinned/muted/isOpen from slice
+// state; sessionId/tabScopeKey primitive), so the default shallow compare blocks
+// the re-render. Do NOT remove without eliminating the ChatPage keystroke
+// re-render at its source (the deferred lift-input-state-down refactor).
+export default memo(FileViewerPanelImpl);
