@@ -275,6 +275,48 @@ class StreamingOrchestrator:
             yield event
 
 
+    async def _build_file_change_events(
+        self, raw_paths: list[str], resolve_cache: "dict[str, dict | None]"
+    ) -> list[dict]:
+        """Turn a tool's written raw path(s) into unified file_changed SSE events.
+
+        For each raw path: resolve its PHYSICAL absolute path ONCE (per-turn cache),
+        classify relevance (whitelist), and build an enriched event. Bookkeeping
+        paths are dropped (never surfaced). Resolution runs in a thread (the
+        bare-name branch may os.walk) but only for these deliverable-candidate
+        writes — reads/greps never reach here (perf directive). Unresolvable paths
+        still emit with absolutePath == the raw path (fail-open: the file link/
+        highlight degrade gracefully rather than vanish).
+        """
+        from core.file_change_classifier import classify_relevance
+        from core.project_registry import get_swarmws
+        from routers.workspace_api import resolve_path_to_physical
+
+        ws_root = get_swarmws()
+        events: list[dict] = []
+        for raw in raw_paths:
+            relevance = classify_relevance(raw, "written")
+            if relevance == "bookkeeping":
+                continue  # never surface .artifacts/.git/.context/dotfile/tmp
+            if raw in resolve_cache:
+                resolved = resolve_cache[raw]
+            else:
+                try:
+                    resolved = await asyncio.to_thread(resolve_path_to_physical, raw, ws_root)
+                except Exception:
+                    resolved = None
+                resolve_cache[raw] = resolved
+            display = resolved["relative"] if resolved else raw
+            absolute = resolved["absolute"] if resolved else raw
+            events.append({
+                "type": "file_changed",
+                "path": display,
+                "absolutePath": absolute,
+                "relevance": relevance,
+                "operation": "written",
+            })
+        return events
+
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _read_formatted_response
     # ═══════════════════════════════════════════════════════════════
@@ -349,7 +391,14 @@ class StreamingOrchestrator:
 
         response_iter = self._parent._client.receive_response().__aiter__()
         _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
-        _pending_file_changes: dict[str, str] = {}  # tool_use_id → file_path for Edit/Write
+        # tool_use_id → list[raw_path] written by that tool (Write/Edit/NotebookEdit
+        # or a parsed Bash command). Resolved + classified at the ToolResult point.
+        _pending_file_changes: dict[str, list[str]] = {}
+        # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
+        # Turn-scoped (local to this method), so no cross-session leak; keyed by the
+        # raw path string. Only deliverable-candidate writes are ever resolved —
+        # reads/greps never reach here, so they never pay the os.walk bare-name cost.
+        _resolve_cache: dict[str, "dict | None"] = {}
 
         async def _next_or_sentinel():
             """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
@@ -745,11 +794,28 @@ class StreamingOrchestrator:
                                 "label": _agent_label[:80],
                                 "start_time": time.time(),
                             }
-                        # ── Track file-modifying tools for file_changed events ──
+                        # ── Track file-modifying tools for the unified file_changed
+                        #    event (run_e626e121). THREE sources, all backend-side —
+                        #    the single authority that replaces the old frontend
+                        #    summary-parse trigger:
+                        #    (a) Write/Edit/NotebookEdit  → block.input.file_path
+                        #    (b) Bash redirection/copy    → parse_bash_write_targets
+                        #    (c) output-declaring skill   → covered by (a)/(b) in
+                        #        practice (skills write via Write or Bash); a manifest
+                        #        `output:` field would slot in here if ever present.
+                        #    We store raw path(s) keyed by tool_use_id; resolution +
+                        #    relevance happen at the ToolResult (success) point so a
+                        #    failed tool never surfaces, and a read/grep never pays
+                        #    path resolution (perf directive). ──
                         if block.name in ("Edit", "Write", "NotebookEdit") and isinstance(block.input, dict):
                             _fp = block.input.get("file_path", "")
                             if _fp:
-                                _pending_file_changes[block.id] = _fp
+                                _pending_file_changes[block.id] = [_fp]
+                        elif block.name == "Bash" and isinstance(block.input, dict):
+                            from core.file_change_classifier import parse_bash_write_targets
+                            _targets = parse_bash_write_targets(block.input.get("command", ""))
+                            if _targets:
+                                _pending_file_changes[block.id] = _targets
                         # ── UI-action (ACT): agent drives its own UI (Run 2) ──
                         # The agent calls the ui_action tool; we observe it here,
                         # validate cmd against the fail-closed allowlist, and yield
@@ -839,19 +905,30 @@ class StreamingOrchestrator:
                             "content": truncated, "is_error": getattr(block, "is_error", False),
                             "truncated": was_truncated,
                         })
-                        # ── Emit file_changed event for Edit/Write completions ──
-                        _changed_path = _pending_file_changes.pop(block.tool_use_id, None)
-                        if _changed_path and not getattr(block, "is_error", False):
-                            # Flush accumulated content blocks first, then emit file_changed
-                            if content_blocks:
-                                self._parent._content_emitted = True
-                                yield {
-                                    "type": "assistant",
-                                    "content": content_blocks,
-                                    "model": getattr(message, "model", None),
-                                }
-                                content_blocks = []
-                            yield {"type": "file_changed", "path": _changed_path}
+                        # ── Emit the UNIFIED file_changed event(s) (run_e626e121) ──
+                        # One enriched event per touched file: {path (ws-relative),
+                        # absolutePath (resolved physical, for copy-path), relevance
+                        # (deliverable|incidental|bookkeeping), operation}. This is the
+                        # SINGLE authority the frontend consumes (auto-surface + rail +
+                        # highlight) — the old frontend summary-parse trigger is gone.
+                        _changed_paths = _pending_file_changes.pop(block.tool_use_id, None)
+                        if _changed_paths and not getattr(block, "is_error", False):
+                            _events = await self._build_file_change_events(
+                                _changed_paths, _resolve_cache
+                            )
+                            if _events:
+                                # Flush accumulated content blocks first (ordering:
+                                # the tool_result must precede its file_changed).
+                                if content_blocks:
+                                    self._parent._content_emitted = True
+                                    yield {
+                                        "type": "assistant",
+                                        "content": content_blocks,
+                                        "model": getattr(message, "model", None),
+                                    }
+                                    content_blocks = []
+                                for _ev in _events:
+                                    yield _ev
                 if content_blocks:
                     self._parent._content_emitted = True
                     yield {
