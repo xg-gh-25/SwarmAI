@@ -1,18 +1,27 @@
 /**
- * HtmlRenderer — open-in-system-browser contract (run_628c36d3).
+ * HtmlRenderer — inline render via src=<raw endpoint URL> (run_344d1fd6).
  *
- * Bug: the in-app HTML preview used a sandboxed iframe with `srcDoc={content}`.
- * In the Tauri WKWebView production build, srcDoc renders a BLANK frame (works in
- * Chrome/dev, so invisible until packaged). Same conclusion the Eval report viewer
- * already reached (EvalDashboard ReportsTab). Fix: default "Rendered" mode is a card
- * with an "Open in browser" button (opens /workspace/file/raw in the system browser),
- * plus the existing in-app "Source" view (<pre>, unaffected by the iframe bug).
+ * Bug + fix history: the in-app HTML preview used `<iframe srcDoc={content}>`.
+ * In the packaged Tauri WKWebView, srcDoc (a JS→DOM string injection) renders a
+ * BLANK frame. Two earlier srcDoc fixes (sandbox, height) were both falsified
+ * (commit 496bbd7c). The reliable path in WKWebView is REAL NAVIGATION: point the
+ * iframe `src` at the backend raw endpoint (which serves Content-Type: text/html,
+ * no Content-Disposition:attachment — verified live), so the WebView loads it as a
+ * normal document instead of a srcDoc string. The user wants the report rendered
+ * INLINE in Canvas (not a browser jump), so this keeps the iframe — but src=, not
+ * srcDoc.
+ *
+ * Isolation is UNCHANGED: sandbox="allow-scripts" WITHOUT allow-same-origin forces
+ * an OPAQUE origin even for a same-origin src URL (MDN-verified) — the frame still
+ * cannot reach the parent DOM/cookies/storage. Same risk profile as the old
+ * srcDoc+allow-scripts, but it actually renders.
  *
  * Invariants under test:
- *  - the default view renders NO iframe (the blank-frame bug is gone, not relocated)
- *  - clicking "Open in browser" calls openExternal exactly once, with the dynamic
- *    api base (NOT hardcoded host/port) + /api/workspace/file/raw + encoded path
- *  - the Source toggle shows the raw HTML markup in-app
+ *  - default (Rendered) mode renders an iframe whose `src` is the dynamic api base
+ *    (NOT hardcoded) + /api/workspace/file/raw + encoded path, NOT srcDoc
+ *  - the iframe sandbox has `allow-scripts` but NOT `allow-same-origin` (opaque origin)
+ *  - "Open in browser" fallback still calls openExternal with the same URL
+ *  - the Source toggle shows the raw HTML markup in-app (no iframe)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -41,10 +50,27 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('HtmlRenderer opens HTML in the system browser', () => {
-  it('renders NO iframe by default (blank-frame bug is eliminated)', () => {
+const EXPECTED_RAW_URL = `http://localhost:18321/api/workspace/file/raw?path=${encodeURIComponent(PROPS.filePath)}`;
+
+describe('HtmlRenderer renders HTML inline via src=<raw endpoint URL>', () => {
+  it('default mode renders an iframe with src=<raw URL> (NOT srcDoc — the WKWebView blank-frame fix)', () => {
     const { container } = render(<HtmlRenderer {...PROPS} />);
-    expect(container.querySelector('iframe')).toBeNull();
+    const iframe = container.querySelector('iframe');
+    expect(iframe).not.toBeNull();
+    // Real navigation: src points at the raw endpoint (dynamic base + encoded path)…
+    expect(iframe!.getAttribute('src')).toBe(EXPECTED_RAW_URL);
+    // …and it is NOT the old srcDoc string-injection path (the blank-frame trigger).
+    expect(iframe!.hasAttribute('srcdoc')).toBe(false);
+    // encodeURIComponent escaped the space in the path.
+    expect(iframe!.getAttribute('src')).toContain('my%20report.html');
+    expect(iframe!.getAttribute('src')).not.toContain(' ');
+  });
+
+  it('iframe sandbox keeps allow-scripts but NOT allow-same-origin (opaque-origin isolation)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const sandbox = container.querySelector('iframe')!.getAttribute('sandbox') ?? '';
+    expect(sandbox).toContain('allow-scripts');
+    expect(sandbox).not.toContain('allow-same-origin');
   });
 
   it('clicking "Open in browser" calls openExternal once with dynamic base + /api/workspace/file/raw + encoded path', () => {

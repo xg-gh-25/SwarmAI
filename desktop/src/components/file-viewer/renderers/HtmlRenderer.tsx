@@ -81,12 +81,18 @@ export default function HtmlRenderer({
     onStatusInfo?.({ customInfo: formatFileSize(fileSize) });
   }, [fileSize, onStatusInfo]);
 
-  // Open the file in the system browser, which renders text/html natively and
-  // process-isolated. Reuse the dynamic api base (dev=8000 / desktop=dynamic /
-  // Hive=same-origin) — never hardcode host/port — and encode the path (paths
-  // contain spaces/CJK). Same contract as EvalDashboard ReportsTab.
+  // The backend raw endpoint URL for this file. Serves Content-Type: text/html
+  // with NO Content-Disposition:attachment (verified live) → a browser/WebView
+  // navigates + renders it as a normal document. Reuse the dynamic api base
+  // (dev=8000 / desktop=dynamic / Hive=same-origin) — never hardcode host/port —
+  // and encode the path (paths contain spaces/CJK). Same URL drives BOTH the inline
+  // iframe (src=) and the open-in-browser fallback.
+  const rawUrl = `${getApiBaseUrl()}/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+
+  // Open the fully-isolated system browser (escape hatch for anything needing
+  // real same-origin network, which the opaque-origin iframe sandbox blocks).
   const openInBrowser = () => {
-    void openExternal(`${getApiBaseUrl()}/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`);
+    void openExternal(rawUrl);
   };
 
   if (!content) {
@@ -118,22 +124,25 @@ export default function HtmlRenderer({
 
       {/* Content area */}
       {mode === 'rendered' ? (
-        /* Inline render via a sandboxed iframe — same pattern FilePreviewModal
-           already ships for html-preview (sandbox='allow-same-origin', srcDoc).
-           An 'Open in browser' fallback sits bottom-right in case the packaged
-           WebKit ever renders a blank frame (the historical worry) — the user
-           always has an escape hatch to the fully-isolated system browser. */
+        /* Inline render via REAL NAVIGATION: the iframe loads src={rawUrl} (the
+           backend raw endpoint, Content-Type: text/html). This replaces the old
+           srcDoc={content} string-injection, which rendered a BLANK frame in the
+           packaged Tauri WKWebView (two prior srcDoc fixes — sandbox, height —
+           were both falsified, commit 496bbd7c). WKWebView renders a navigated
+           document reliably; a srcDoc string it does not. An 'Open in browser'
+           fallback stays bottom-right for anything the sandbox blocks. */
         <div className="flex-1 relative min-h-0">
-          {/* sandbox="allow-scripts" WITHOUT allow-same-origin: agent HTML
-              reports rely on inline <script> (Chart.js/Plotly/D3, tabs) — scripts
-              must run or the report renders dead. Omitting allow-same-origin puts
-              the frame in a null/opaque origin so it CANNOT reach the parent
-              (the dangerous combo is allow-scripts + allow-same-origin together).
-              Same-origin fetch/XHR inside the report is blocked — the
-              "Open in browser" fallback covers anything needing real network. */}
+          {/* sandbox="allow-scripts" WITHOUT allow-same-origin: agent HTML reports
+              rely on inline <script> (Chart.js/Plotly/D3, tabs) — scripts must run.
+              Omitting allow-same-origin forces a null/OPAQUE origin EVEN THOUGH
+              src is same-origin as the app (MDN-verified) → the frame CANNOT reach
+              the parent DOM/cookies/storage or make same-origin requests. The
+              dangerous combo is allow-scripts + allow-same-origin together (lets the
+              frame drop its own sandbox). Anything needing real network → the
+              "Open in browser" fallback (fully-isolated system browser). */}
           <iframe
             sandbox="allow-scripts allow-popups"
-            srcDoc={content}
+            src={rawUrl}
             className="w-full h-full border-0 bg-white"
             title={fileName}
             data-testid="html-preview-iframe"
