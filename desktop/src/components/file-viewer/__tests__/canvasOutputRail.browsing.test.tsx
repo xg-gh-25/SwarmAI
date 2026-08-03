@@ -98,4 +98,32 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
     const last = onCounts.mock.calls.at(-1)?.[0];
     expect(last).toEqual({ total: 1, neu: 0, upd: 0 });
   });
+
+  // ── region A is accent-FREE: ONLY the header carries the primary accent ──
+  // (run_02c5e32a). Selection/browse use neutral greys (--color-hover / --color-
+  // border), never --color-primary — a colored fill on a list row read as
+  // "region A is also accented", which the header-only rule forbids.
+  it('selected output row carries NO primary accent, and its fill differs from hover', () => {
+    mockFiles = [mkFile('written.ts')];
+    render(<CanvasOutputRail sessionId="s1" selectedPath="src/written.ts" />);
+    const row = screen.getByTestId('canvas-output-row');
+    expect(row.className).not.toContain('color-primary');
+    // Selected fill = --color-border (a STRONGER neutral than the --color-hover the
+    // hover state uses) so a selected row is distinguishable from a merely-hovered
+    // one (Gate-2 F2: same var for both collided the two states).
+    expect(row.className).toContain('bg-[var(--color-border)]');
+    expect(row.className).not.toContain('bg-[var(--color-hover)]');
+    // left-bar is neutral (text-muted), never primary
+    expect(row.innerHTML).not.toContain('bg-[var(--color-primary)]');
+  });
+
+  it('browsing row carries NO primary accent (neutral fill + neutral bar)', () => {
+    mockFiles = [];
+    render(<CanvasOutputRail sessionId="s1" selectedPath="/some/where/deck.html" />);
+    const row = screen.getByTestId('canvas-browsing-row');
+    expect(row.className).not.toContain('color-primary');
+    expect(row.className).toContain('bg-[var(--color-border)]');
+    // the left-bar (::before span) is neutral, not primary
+    expect(row.innerHTML).not.toContain('bg-[var(--color-primary)]');
+  });
 });

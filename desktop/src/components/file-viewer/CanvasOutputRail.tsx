@@ -138,16 +138,19 @@ const OutputRow = memo(function OutputRow({
   const dir = dirOf(file.path);
 
   // Row = [status dot] [mono name] [NEW/UPD tag] [dir · right-aligned] [copy · hover].
-  // Selected row carries an accent left-bar (::before) — the ONE signal linking
-  // the stream to the focused file below. Uses --color-primary (the active-tab
-  // accent) so Canvas reads as belonging to the current tab.
+  // Selected row carries a NEUTRAL left-bar (::before) + neutral fill — the ONE
+  // signal linking the stream to the focused file below. Region A (the list) is
+  // kept accent-FREE by design: ONLY the header carries the primary accent (the
+  // color-primary bottom-border in FileViewerPanel). So selection uses neutral
+  // greys — a --color-border FILL (stronger than the --color-hover hover shade, so
+  // selected ≠ hovered) + a --color-text-muted left bar — never --color-primary.
   return (
     <div
       className={`group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors ${
         fresh ? 'canvas-output-fresh ' : ''
       }${
         selected
-          ? 'bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]'
+          ? 'bg-[var(--color-border)]'
           : 'hover:bg-[var(--color-hover)]'
       }`}
       onClick={handleClick}
@@ -158,7 +161,7 @@ const OutputRow = memo(function OutputRow({
       {selected && (
         <span
           aria-hidden="true"
-          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-primary)]"
+          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
         />
       )}
       {style && <span className={`shrink-0 w-[7px] h-[7px] rounded-full ${style.dotCls}`} aria-hidden="true" />}
@@ -348,7 +351,7 @@ const BrowsingRow = memo(function BrowsingRow({
         Browsing
       </div>
       <div
-        className="group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]"
+        className="group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors bg-[var(--color-border)]"
         onClick={handleClick}
         title={path}
         data-selected
@@ -356,7 +359,7 @@ const BrowsingRow = memo(function BrowsingRow({
       >
         <span
           aria-hidden="true"
-          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-primary)]"
+          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
         />
         <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
         <span className="shrink-0 truncate font-mono text-[var(--color-text)] font-medium">{fileName}</span>

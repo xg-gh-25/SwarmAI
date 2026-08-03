@@ -837,7 +837,9 @@ body {
    the row element is keyed by path (mounts once, no replay on re-render).
    prefers-reduced-motion disables it. */
 @keyframes canvas-output-land {
-  0%   { background-color: color-mix(in srgb, var(--color-primary) 24%, transparent); }
+  /* Region A is accent-FREE (run_02c5e32a): the arrival pulse uses a NEUTRAL
+     surface, not --color-primary — only the Canvas header carries the accent. */
+  0%   { background-color: var(--color-border); }
   100% { background-color: transparent; }
 }
 .canvas-output-fresh {
