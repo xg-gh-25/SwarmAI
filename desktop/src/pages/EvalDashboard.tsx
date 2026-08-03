@@ -493,11 +493,13 @@ function SummaryChips({
 }
 
 export function GoldenSetTab() {
-  const { data: gs } = useGoldenSet();
+  const { data: gs, isError: gsError } = useGoldenSet();
   const deleteCase = useDeleteCase();
   const triggerRun = useTriggerRun();
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [archiveId, setArchiveId] = useState<string | null>(null); // B11: in-app archive-confirm (was native confirm())
+  const [archiveErr, setArchiveErr] = useState(false); // B11: surface archive failure (Gate-2 INFO)
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -510,6 +512,7 @@ export function GoldenSetTab() {
   // before the early return, so guard against undefined data inside the memo.
   const breakdowns = useMemo(() => computeBreakdowns(gs?.cases ?? []), [gs?.cases]);
 
+  if (gsError) return <ErrorState message="Failed to load the golden set. Is the backend running?" />;
   if (!gs) return <Loading />;
 
   // Client-side filtering
@@ -639,7 +642,7 @@ export function GoldenSetTab() {
                           <td className="px-3 py-2"><StatusBadge status={c.last_result?.status} /></td>
                           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                             <button
-                              onClick={() => { if (confirm(`Archive case ${c.id}?`)) deleteCase.mutate(c.id); }}
+                              onClick={() => setArchiveId(c.id)}
                               className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
                               title="Archive"
                             >
@@ -700,6 +703,39 @@ export function GoldenSetTab() {
       {/* Add Case Modal */}
       {showAddForm && (
         <AddCaseModal onClose={() => setShowAddForm(false)} categories={gs.categories || []} />
+      )}
+      {/* B11: in-app archive confirmation (was a jarring native confirm()). */}
+      {archiveId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!deleteCase.isPending) { setArchiveId(null); setArchiveErr(false); } }}>
+          <div className="w-full max-w-sm bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold mb-2">Archive golden case?</h3>
+            <p className="text-xs text-[var(--color-text-muted)] mb-4 break-all">
+              <span className="font-mono">{archiveId}</span> will be archived (removed from the active set).
+            </p>
+            {archiveErr && (
+              <p data-testid="eval-archive-error" className="text-xs text-red-400 mb-3">Could not archive — please try again.</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button disabled={deleteCase.isPending} onClick={() => { setArchiveId(null); setArchiveErr(false); }} className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50">Cancel</button>
+              <button
+                data-testid="eval-archive-confirm"
+                disabled={deleteCase.isPending}
+                onClick={() => {
+                  setArchiveErr(false);
+                  // B11 (Gate-2 INFO): only close on SUCCESS; surface failure instead
+                  // of optimistically closing (the silent-failure class this set fixes).
+                  deleteCase.mutate(archiveId, {
+                    onSuccess: () => setArchiveId(null),
+                    onError: () => setArchiveErr(true),
+                  });
+                }}
+                className="px-3 py-1.5 text-xs rounded bg-red-500 text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {deleteCase.isPending ? 'Archiving…' : 'Archive'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -819,7 +855,7 @@ export function GovernanceProposalCard({
 }
 
 function GovernanceTab() {
-  const { data, isLoading } = useGovernancePending();
+  const { data, isLoading, isError } = useGovernancePending();
   const decide = useGovernanceDecision();
   const proposals = data?.proposals ?? [];
 
@@ -841,9 +877,11 @@ function GovernanceTab() {
         </p>
       </div>
 
-      {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Loading…</div>}
+      {isError && <div className="text-sm text-red-400">Failed to load governance proposals. Is the backend running?</div>}
 
-      {!isLoading && proposals.length === 0 && (
+      {isLoading && !isError && <div className="text-sm text-[var(--color-text-muted)]">Loading…</div>}
+
+      {!isLoading && !isError && proposals.length === 0 && (
         <div className="text-sm text-[var(--color-text-muted)] border border-dashed border-[var(--color-border)] rounded-lg p-6 text-center">
           No pending governance proposals. The escalation ladder surfaces them here when a
           correction class recurs ≥3× without a structural fix.
@@ -862,9 +900,10 @@ function GovernanceTab() {
 // ─── Trends Tab ───────────────────────────────────────────────────────────────
 
 export function TrendsTab() {
-  const { data: history } = useEvalHistory();
+  const { data: history, isError } = useEvalHistory();
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
+  if (isError) return <ErrorState message="Failed to load eval history. Is the backend running?" />;
   if (!history || history.length === 0) {
     return (
       <div className="max-w-5xl mx-auto p-6">
@@ -1255,7 +1294,7 @@ function useEvalReports() {
 }
 
 export function ReportsTab() {
-  const { data: reports, isLoading } = useEvalReports();
+  const { data: reports, isLoading, isError } = useEvalReports();
 
   // Reports open in the SYSTEM BROWSER, not an in-app iframe. srcDoc rendering in
   // the Tauri WebKit webview proved unreliable, and rendering arbitrary report HTML
@@ -1267,6 +1306,7 @@ export function ReportsTab() {
     void openExternal(`${getApiBaseUrl()}/api/eval/reports/${encodeURIComponent(filename)}`);
   };
 
+  if (isError) return <ErrorState message="Failed to load reports. Is the backend running?" />;
   if (isLoading) return <Loading />;
   if (!reports || reports.length === 0) {
     return (
@@ -1381,11 +1421,12 @@ function useSessionQualityDrafts() {
 // redefine it here (R27: reuse the existing symbol, don't duplicate).
 
 export function SessionQualityTab() {
-  const { data: overview, isLoading } = useSessionQuality();
-  const { data: draftData, isLoading: draftsLoading } = useSessionQualityDrafts();
+  const { data: overview, isLoading, isError: overviewErr } = useSessionQuality();
+  const { data: draftData, isLoading: draftsLoading, isError: draftsErr } = useSessionQualityDrafts();
   const updateCase = useUpdateCase();
   const deleteCase = useDeleteCase();
 
+  if (overviewErr || draftsErr) return <ErrorState message="Failed to load session quality data. Is the backend running?" />;
   if (isLoading || draftsLoading) return <Loading />;
 
   const drafts = draftData?.drafts ?? [];

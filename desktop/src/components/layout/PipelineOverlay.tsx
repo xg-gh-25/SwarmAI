@@ -97,6 +97,8 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
   const [loading, setLoading] = useState(false);
+  const [loadErr, setLoadErr] = useState(false); // B2: fetch failed (was permanent Loading)
+  const [reloadTick, setReloadTick] = useState(0); // Retry trigger
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -106,11 +108,14 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    void pipelinesService.fetchAnalytics(window).then((a) => {
-      if (!cancelled) { setAnalytics(a); setLoading(false); }
-    });
+    setLoadErr(false);
+    // B2: a rejected fetch used to leave loading=true forever (permanent
+    // "Loading…") — now .catch surfaces an error state with Retry.
+    pipelinesService.fetchAnalytics(window)
+      .then((a) => { if (!cancelled) { setAnalytics(a); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setLoadErr(true); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [open, window]);
+  }, [open, window, reloadTick]);
 
   useEffect(() => {
     if (!open) { setSelectedRunId(null); setDetail(null); setWindow('30d'); }
@@ -140,7 +145,7 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
     );
   }, [dispatchToChat]);
 
-  const handleCancel = useCallback(async (runId: string) => {
+  const handleCancel = useCallback(async (runId: string): Promise<boolean> => {
     try {
       await api.patch(`/pipelines/${runId}/cancel`);
       // reflect locally: re-fetch analytics for the current window. (A window
@@ -150,8 +155,11 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
       setAnalytics(a);
       setSelectedRunId(null);
       setDetail(null);
+      return true;
     } catch {
-      /* best-effort; overlay stays open */
+      // B7: was a silent no-op — user clicked Cancel, PATCH failed, nothing
+      // happened. Return false so the drawer can surface the failure.
+      return false;
     }
   }, [window]);
 
@@ -211,8 +219,25 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
             </div>
           )}
 
+          {/* Fetch failure (B2) — distinct from "no runs", with Retry. */}
+          {loadErr && !loading && (
+            <div
+              data-testid="pipeline-load-error"
+              className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
+            >
+              <div className="text-sm text-[var(--color-text)]">Could not load pipeline analytics — the backend may be unavailable.</div>
+              <button
+                data-testid="pipeline-load-retry"
+                onClick={() => setReloadTick((t) => t + 1)}
+                className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
+                style={{ background: '#d0524a' }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {/* By-project groups */}
-          {analytics && analytics.byProject.length === 0 && !loading && (
+          {analytics && analytics.byProject.length === 0 && !loading && !loadErr && (
             <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">
               No pipeline runs in this window. Start one by asking Swarm in chat to run a pipeline.
             </div>
@@ -305,8 +330,10 @@ function RunDetailDrawer({
   loading: boolean;
   onClose: () => void;
   onResume: (run: PipelineRunDetail, project: string) => void;
-  onCancel: (runId: string) => void;
+  onCancel: (runId: string) => Promise<boolean>;
 }) {
+  const [cancelErr, setCancelErr] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   return (
     <div
       className="absolute top-0 right-0 bottom-0 w-[420px] max-w-[90%] z-10 bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-xl flex flex-col"
@@ -347,14 +374,28 @@ function RunDetailDrawer({
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (
                 <button
-                  onClick={() => onCancel(detail.id)}
+                  disabled={cancelling}
+                  onClick={async () => {
+                    setCancelErr(false);
+                    setCancelling(true);
+                    const ok = await onCancel(detail.id);
+                    // On success the drawer unmounts (onCancel clears selectedRunId/
+                    // detail) — only touch local state on the FAILURE path, or we'd
+                    // setState on an unmounting component (Gate-2 LOW).
+                    if (!ok) { setCancelling(false); setCancelErr(true); }
+                  }}
                   data-testid="pipeline-cancel-btn"
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-rose-500 hover:bg-rose-500/10 transition-colors"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md text-rose-500 hover:bg-rose-500/10 transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined text-[15px]">cancel</span>Cancel
+                  <span className="material-symbols-outlined text-[15px]">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
                 </button>
               )}
             </div>
+            {cancelErr && (
+              <div data-testid="pipeline-cancel-error" className="text-[11px] text-rose-500">
+                Could not cancel this run — please try again.
+              </div>
+            )}
 
             {/* Est-vs-actual token bars */}
             {detail.stageTokens.length > 0 && (

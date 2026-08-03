@@ -28,6 +28,7 @@ export function BrainHubDemoOverlay() {
       title="Brain Hub — phase-1 · read-only lens"
       size="fullscreen"
       mode="BRAIN"
+      fullscreenWidth="xl"
     >
       <div className="flex-1 overflow-hidden" data-testid="brain-hub-overlay">
         <BrainHub />

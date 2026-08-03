@@ -95,7 +95,7 @@ export function CMBrainOverlay() {
   const [tab, setTab] = useState<TabKey>('context');
 
   // Fetch ONLY while the overlay is open (see `enabled` in useContextHealth).
-  const { data } = useContextHealth(open);
+  const { data, isError: healthErr, refetch: refetchHealth } = useContextHealth(open);
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
 
@@ -103,12 +103,15 @@ export function CMBrainOverlay() {
   // DIFFERENT queue from pending_proposals which drives Review). Approve = proposals
   // awaiting yes/no. (An 'Action' bucket that duplicated this same queue was removed
   // 2026-08-03 — see the needsMeta note below.)
-  const { data: gov } = useQuery<{ proposals: unknown[]; total: number }>({
+  const { data: gov, isError: govErr, refetch: refetchGov } = useQuery<{ proposals: unknown[]; total: number }>({
     queryKey: ['cm-governance-pending'],
     queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
     staleTime: 30_000, enabled: open,
   });
   const approveCount = gov?.total ?? 0;
+  // B1: a failed governance/health fetch used to fall back to 0 / '—' silently —
+  // the user believed all-clear when the backend actually errored. Surface it.
+  const needsErr = healthErr || govErr;
 
   // Growth-trend series for the rail (same source as the Memory size-trend).
   const { data: trend } = useQuery<BrainTrend>({
@@ -151,6 +154,9 @@ export function CMBrainOverlay() {
             {block?.over_budget && (
               <div className="mt-1 text-[11px] font-medium text-[#d08a4a]">over assembly budget</div>
             )}
+            {healthErr && !block && (
+              <div className="mt-1 text-[11px] text-[#d08a4a]">couldn’t load — not “0”</div>
+            )}
           </div>
 
           {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
@@ -163,10 +169,25 @@ export function CMBrainOverlay() {
 
           <div>
             <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Needs you</div>
-            <div className="mt-2 flex flex-col gap-1.5">
-              <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" onClick={() => setNeedsFilter('review')} />
-              <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" onClick={() => setNeedsFilter('approve')} />
-            </div>
+            {needsErr ? (
+              // B1: don't show a false "0" — say the fetch failed + offer Retry.
+              <div data-testid="cm-needs-error" className="mt-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
+                <div>Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.</div>
+                <button
+                  data-testid="cm-needs-retry"
+                  onClick={() => { void refetchHealth(); void refetchGov(); }}
+                  className="mt-1.5 rounded px-2 py-0.5 text-[10px] font-medium text-white"
+                  style={{ background: '#d0524a' }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-col gap-1.5">
+                <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" onClick={() => setNeedsFilter('review')} />
+                <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" onClick={() => setNeedsFilter('approve')} />
+              </div>
+            )}
           </div>
         </aside>
 

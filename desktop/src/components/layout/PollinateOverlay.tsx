@@ -78,10 +78,37 @@ function isoWeek(iso: string | null): string | null {
   return `${mon.getFullYear()}-${p(mon.getMonth() + 1)}-${p(mon.getDate())}`;
 }
 
+/** Image with a broken-image fallback (B5): if the raw-file endpoint 404s or the
+ *  file moved, show a neutral placeholder icon instead of the browser's broken
+ *  glyph. Used for both the gallery thumbnail and the drawer's big image. */
+function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: string; className?: string; lazy?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className={`flex items-center justify-center bg-[var(--color-bg)] ${className ?? ''}`} data-testid="pollinate-img-fallback">
+        <span className="material-symbols-outlined text-[28px] text-[var(--color-text-faint)]" title={`Preview unavailable: ${alt}`}>
+          broken_image
+        </span>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading={lazy ? 'lazy' : undefined}
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   const { open, close } = useExclusiveOverlay('swarm:show-pollinate');
   const [data, setData] = useState<PollinateAssetsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadErr, setLoadErr] = useState(false); // B3: fetch failed (was permanent Loading/blank)
+  const [reloadTick, setReloadTick] = useState(0);
   const [view, setView] = useState<View>('gallery');
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatform] = useState<string>('');
@@ -99,11 +126,14 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    void pollinateService.fetchAssets().then((d) => {
-      if (!cancelled) { setData(d); setLoading(false); }
-    });
+    setLoadErr(false);
+    // B3: a rejected fetch used to leave loading=true forever (blank gallery) —
+    // now .catch surfaces an error state with Retry.
+    pollinateService.fetchAssets()
+      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setLoadErr(true); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, reloadTick]);
 
   useEffect(() => {
     if (!open) {
@@ -251,7 +281,24 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
 
             {/* Body: content cards (newest-first, newest expanded) */}
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
-              {!loading && filtered.length === 0 && (
+              {/* Fetch failure (B3) — distinct from "no content", with Retry. */}
+              {loadErr && !loading && (
+                <div
+                  data-testid="pollinate-load-error"
+                  className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
+                >
+                  <div className="text-sm text-[var(--color-text)]">Could not load content assets — the backend may be unavailable.</div>
+                  <button
+                    data-testid="pollinate-load-retry"
+                    onClick={() => setReloadTick((t) => t + 1)}
+                    className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
+                    style={{ background: '#d0524a' }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {!loading && !loadErr && filtered.length === 0 && (
                 <div className="text-center py-10 text-sm text-[var(--color-text-faint)]">
                   {cards.length === 0
                     ? 'No content yet. Ask Swarm in chat to pollinate a topic.'
@@ -357,10 +404,10 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
                 >
                   <div className="aspect-[4/3] bg-[var(--color-bg)] flex items-center justify-center overflow-hidden">
                     {a.isImage ? (
-                      <img
+                      <ImgWithFallback
                         src={assetThumbUrl(a.filePath)}
                         alt={a.fileName}
-                        loading="lazy"
+                        lazy
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -430,6 +477,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   onProduce: (platform: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copyErr, setCopyErr] = useState(false); // B7: clipboard-blocked was silent
   const [body, setBody] = useState<string | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
 
@@ -458,11 +506,17 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   // Copy the real BODY text (the whole point — grab the caption to go publish);
   // fall back to the path only if the body couldn't be fetched.
   const doCopy = useCallback(async () => {
+    setCopyErr(false);
     try {
       await navigator.clipboard.writeText(body ?? asset.filePath);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch { /* clipboard blocked — no-op */ }
+    } catch {
+      // B7: clipboard blocked was a silent no-op — the button showed no
+      // 'Copied' and no error, so the user couldn't tell it failed.
+      setCopyErr(true);
+      setTimeout(() => setCopyErr(false), 2500);
+    }
   }, [body, asset.filePath]);
 
   // Platforms this topic has NOT produced yet (known universe − produced) → offer to make.
@@ -482,10 +536,10 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
           {card.topic} · {fmtDate(card.createdAt)}
         </div>
         {asset.isImage ? (
-          <img
+          <ImgWithFallback
             src={assetThumbUrl(asset.filePath)}
             alt={asset.fileName}
-            className="w-full rounded border border-[var(--color-border)]"
+            className="w-full rounded border border-[var(--color-border)] min-h-[120px]"
           />
         ) : (
           <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-6 text-center">
@@ -533,8 +587,8 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             data-testid="pollinate-copy-btn"
             className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px]">{copied ? 'check' : 'content_copy'}</span>
-            {copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
+            <span className="material-symbols-outlined text-[15px]">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
+            {copyErr ? 'Copy blocked' : copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
           </button>
           {asset.platform && (
             <button

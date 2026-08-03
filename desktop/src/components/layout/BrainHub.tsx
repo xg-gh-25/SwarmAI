@@ -40,9 +40,9 @@ const SECTION_NUM: Record<string, string> = {
 };
 
 const DECAY_STYLE: Record<DecayState, string> = {
-  active: 'text-[#e6edf3]',
-  dormant: 'text-[#8b949e] opacity-70',
-  archived: 'text-[#5b636d] line-through opacity-50',
+  active: 'text-[var(--color-text)]',
+  dormant: 'text-[var(--color-text-muted)] opacity-70',
+  archived: 'text-[var(--color-text-faint)] line-through opacity-50',
 };
 
 const TYPE_COLOR: Record<EntryType, string> = {
@@ -68,7 +68,7 @@ const isAssetKey = (k: string | null): k is AssetKey =>
 
 const GIT_DOT: Record<string, string> = {
   clean: 'transparent', modified: '#f0a500', added: '#3fb950',
-  untracked: '#8b949e', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
+  untracked: 'var(--color-text-muted)', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
 };
 
 const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
@@ -81,11 +81,13 @@ export function BrainHub() {
   const [tab, setTab] = useState<Tab>('gallery');
   const [brains, setBrains] = useState<BrainSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0); // B10: retry trigger for getBrains
   const [selected, setSelected] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string>('');
 
   useEffect(() => {
     let alive = true;
+    setError(null);
     getBrains().then(
       (b) => alive && setBrains(b),
       (e) => alive && setError(String(e?.message ?? e)),
@@ -95,7 +97,7 @@ export function BrainHub() {
       () => {/* preview just won't open without an agent — non-fatal */},
     );
     return () => { alive = false; };
-  }, []);
+  }, [reloadTick]);
 
   const openBrain = useCallback((name: string) => {
     setSelected(name);
@@ -103,8 +105,8 @@ export function BrainHub() {
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-[#0e1117] text-[#e6edf3]" data-testid="brain-hub">
-      <div className="flex items-center gap-1 px-3 h-9 border-b border-[#222831] flex-shrink-0 text-[12px]">
+    <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
+      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-[12px]">
         <TabBtn active={tab === 'gallery'} onClick={() => setTab('gallery')} testid="brainhub-tab-gallery">Gallery</TabBtn>
         <TabBtn active={tab === 'brain'} onClick={() => setTab('brain')} disabled={!selected} testid="brainhub-tab-brain">
           Brain{selected ? ` · ${selected}` : ''}
@@ -118,7 +120,19 @@ export function BrainHub() {
       </div>
 
       <div className="flex-1 overflow-auto">
-        {error && <div className="p-4 text-[#ef4444] text-[13px]" data-testid="brainhub-error">Failed to load brains: {error}</div>}
+        {error && (
+          <div className="p-4 text-[13px]" data-testid="brainhub-error">
+            <div className="text-[var(--color-error,#ef4444)]">Failed to load brains: {error}</div>
+            <button
+              data-testid="brainhub-retry"
+              onClick={() => setReloadTick((t) => t + 1)}
+              className="mt-2 rounded-md px-3 py-1 text-xs font-medium text-white"
+              style={{ background: 'var(--color-error,#ef4444)' }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {!error && tab === 'gallery' && <Gallery brains={brains} onOpen={openBrain} />}
         {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE (Gate-2
             MED, verified NOT-currently-reachable): today every `selected` change is a
@@ -146,7 +160,7 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
       disabled={disabled}
       onClick={onClick}
       className={`px-3 py-1 rounded-md transition-colors ${
-        active ? 'bg-[#1f2630] text-[#e6edf3]' : 'text-[#8b949e] hover:text-[#e6edf3]'
+        active ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
       } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
     >
       {children}
@@ -157,8 +171,8 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
 // ── Gallery ──────────────────────────────────────────────────────────────────
 
 function Gallery({ brains, onOpen }: { brains: BrainSummary[] | null; onOpen: (n: string) => void }) {
-  if (brains === null) return <div className="p-4 text-[#8b949e] text-[13px]">Loading brains…</div>;
-  if (brains.length === 0) return <div className="p-4 text-[#8b949e] text-[13px]">No DDD brains found.</div>;
+  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading brains…</div>;
+  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
   return (
     <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} data-testid="brainhub-gallery">
       {brains.map((b) => <BrainCard key={b.name} brain={b} onOpen={onOpen} />)}
@@ -172,12 +186,12 @@ function BrainCard({ brain, onOpen }: { brain: BrainSummary; onOpen: (n: string)
     <button
       onClick={() => onOpen(brain.name)}
       data-testid={`brain-card-${brain.name}`}
-      className="text-left rounded-lg border border-[#222831] bg-[#161b22] p-3 hover:border-[#3b4552] transition-colors"
+      className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors"
     >
       <div className="flex items-center gap-2 mb-2">
         <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
         <span className="text-[13px] font-semibold">{brain.name}</span>
-        <span className="ml-auto text-[10px] font-mono text-[#5b636d] px-1.5 py-0.5 rounded bg-[#0e1117]">{brain.kind}</span>
+        <span className="ml-auto text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{brain.kind}</span>
       </div>
 
       {/* six-section presence bar */}
@@ -186,7 +200,7 @@ function BrainCard({ brain, onOpen }: { brain: BrainSummary; onOpen: (n: string)
           <span
             key={k}
             data-testid={`presence-${brain.name}-${k}`}
-            className={`flex-1 h-1.5 rounded-sm ${brain.sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[#2d333b]'}`}
+            className={`flex-1 h-1.5 rounded-sm ${brain.sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`}
           />
         ))}
       </div>
@@ -213,9 +227,9 @@ function BrainCard({ brain, onOpen }: { brain: BrainSummary; onOpen: (n: string)
 
 function Health({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="flex items-center justify-between px-1.5 py-0.5 rounded bg-[#0e1117]">
-      <span className="text-[#5b636d]">{label}</span>
-      <span className={warn ? 'text-[#f0a500]' : 'text-[#8b949e]'}>{value}</span>
+    <div className="flex items-center justify-between px-1.5 py-0.5 rounded bg-[var(--color-bg)]">
+      <span className="text-[var(--color-text-faint)]">{label}</span>
+      <span className={warn ? 'text-[#f0a500]' : 'text-[var(--color-text-muted)]'}>{value}</span>
     </div>
   );
 }
@@ -276,7 +290,7 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
   }, [name]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]">Failed to load brain: {error}</div>;
-  if (!detail) return <div className="p-4 text-[#8b949e] text-[13px]">Loading {name}…</div>;
+  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
 
   // Gate-1 CRITICAL: nav AND content both derive from the RUNTIME detail.sections
   // (never a hardcoded SECTION_ORDER) — so a backend that drops/reorders a section
@@ -302,7 +316,7 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
     <div className="flex flex-col h-full" data-testid="brainhub-brain">
       <div className="flex items-center gap-2 px-4 pt-4 pb-3 flex-shrink-0">
         <span className="text-[14px] font-semibold">{detail.name}</span>
-        <span className="text-[10px] font-mono text-[#5b636d] px-1.5 py-0.5 rounded bg-[#161b22]">{detail.kind}</span>
+        <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-card)]">{detail.kind}</span>
         {/* #10 — open the EXISTING CodeGraph overlay for THIS brain (project={name},
             never a hardcoded literal). Gated on hasCodeIntel (a live code_intel.db
             presence check), NOT on kind: every DDD resolves to kind='knowledge'
@@ -325,7 +339,7 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
       <div className="flex-1 flex min-h-0">
         <nav
           data-testid="brainhub-brain-nav"
-          className="w-44 flex-shrink-0 border-r border-[#222831] overflow-y-auto py-2"
+          className="w-44 flex-shrink-0 border-r border-[var(--color-border)] overflow-y-auto py-2"
         >
           {sections.map((s) => {
             const isActive = s.key === currentKey;
@@ -335,13 +349,13 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
                 data-testid={`nav-item-${s.key}`}
                 onClick={() => setActiveKey(s.key)}
                 className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
-                  isActive ? 'bg-[#1f2630] text-[#e6edf3] border-l-2 border-[#f0a500]' : 'text-[#8b949e] hover:text-[#e6edf3] border-l-2 border-transparent'
+                  isActive ? 'bg-[var(--color-hover)] text-[var(--color-text)] border-l-2 border-[#f0a500]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-l-2 border-transparent'
                 }`}
               >
                 <span className="font-mono text-[#f0a500]">{SECTION_NUM[s.key] ?? s.num}</span>
                 <span className="truncate">{s.label}</span>
                 {s.members.length > 0 && (
-                  <span className="ml-auto text-[9px] text-[#5b636d]">{s.members.length}</span>
+                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{s.members.length}</span>
                 )}
               </button>
             );
@@ -356,7 +370,7 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
             <>
               <div
                 data-testid="assets-group-header"
-                className="mt-2 pt-2 px-3 border-t border-[#222831] text-[9px] uppercase tracking-wider text-[#5b636d] font-semibold"
+                className="mt-2 pt-2 px-3 border-t border-[var(--color-border)] text-[9px] uppercase tracking-wider text-[var(--color-text-faint)] font-semibold"
               >
                 Assets
               </div>
@@ -394,7 +408,7 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           ) : active ? (
             <SectionCard key={active.key} section={active} onOpenFile={openFile} />
           ) : (
-            <div className="text-[12px] text-[#5b636d] italic">No sections to display.</div>
+            <div className="text-[12px] text-[var(--color-text-faint)] italic">No sections to display.</div>
           )}
         </div>
       </div>
@@ -429,13 +443,13 @@ function AssetNavItem({
       data-testid={`nav-item-${assetKey}`}
       onClick={() => onSelect(assetKey)}
       className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-[12px] transition-colors ${
-        active ? 'bg-[#1f2630] text-[#e6edf3] border-l-2 border-[#58a6ff]' : 'text-[#8b949e] hover:text-[#e6edf3] border-l-2 border-transparent'
+        active ? 'bg-[var(--color-hover)] text-[var(--color-text)] border-l-2 border-[#58a6ff]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-l-2 border-transparent'
       }`}
     >
       <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">{icon}</span>
       <span className="truncate">{label}</span>
       {count != null && count > 0 && (
-        <span className="ml-auto text-[9px] text-[#5b636d]">{count}</span>
+        <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{count}</span>
       )}
     </button>
   );
@@ -447,11 +461,11 @@ function AssetNavItem({
 // FilePreviewModal path the section members use.
 function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
   return (
-    <div className="rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="specs-panel">
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid="specs-panel">
       <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
         <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">description</span>
         <span>Specs</span>
-        <span className="text-[9px] text-[#5b636d] font-normal">{specs.length}</span>
+        <span className="text-[9px] text-[var(--color-text-faint)] font-normal">{specs.length}</span>
       </div>
       <div className="flex flex-col gap-0.5">
         {specs.map((f) => (
@@ -459,7 +473,7 @@ function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: st
             key={f}
             onClick={() => onOpenFile(`${SPEC_DETAILS_REL}/${f}`)}
             data-testid={`spec-${f}`}
-            className="flex items-center gap-1.5 text-[11px] text-[#8b949e] hover:text-[#e6edf3] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+            className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
           >
             <span className="font-mono truncate">{f}</span>
           </button>
@@ -491,16 +505,16 @@ function CodeIntelPanel({ project }: { project: string }) {
   }, [project]);
 
   return (
-    <div className="rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid="code-intel-panel">
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid="code-intel-panel">
       <div className="flex items-center gap-2 mb-1.5 text-[12px] font-semibold">
         <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">hub</span>
         <span>Code Intelligence</span>
       </div>
-      <div className="text-[11px] text-[#8b949e]" data-testid="code-intel-body">
-        {state === 'loading' && <div className="italic text-[#5b636d]">Loading code map…</div>}
-        {state === 'error' && <div className="italic text-[#5b636d]">Code intel unavailable.</div>}
+      <div className="text-[11px] text-[var(--color-text-muted)]" data-testid="code-intel-body">
+        {state === 'loading' && <div className="italic text-[var(--color-text-faint)]">Loading code map…</div>}
+        {state === 'error' && <div className="italic text-[var(--color-text-faint)]">Code intel unavailable.</div>}
         {state === 'loaded' && summary === null && (
-          <div className="italic text-[#5b636d]">No code intelligence indexed for this brain.</div>
+          <div className="italic text-[var(--color-text-faint)]">No code intelligence indexed for this brain.</div>
         )}
         {state === 'loaded' && summary && (
           <>
@@ -509,7 +523,7 @@ function CodeIntelPanel({ project }: { project: string }) {
               {summary.modulesTop5.map((mod) => (
                 <div key={mod.name} className="flex items-center gap-2" data-testid={`ci-module-${mod.name}`}>
                   <span className="font-mono truncate">{mod.name}</span>
-                  <span className="ml-auto text-[9px] text-[#5b636d]">
+                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
                     {mod.function_count}fn / {mod.class_count}cls / {mod.file_count}f
                   </span>
                 </div>
@@ -524,18 +538,18 @@ function CodeIntelPanel({ project }: { project: string }) {
 
 function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFile: (p: string) => void }) {
   return (
-    <div className="rounded-lg border border-[#222831] bg-[#161b22] p-2.5" data-testid={`section-${section.key}`}>
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid={`section-${section.key}`}>
       <div className="flex items-center gap-2 mb-1.5 text-[12px]">
         <span className="text-[#f0a500] font-mono">{SECTION_NUM[section.key] ?? section.num}</span>
         <span className="font-semibold">{section.label}</span>
         <span className={`text-[9px] px-1 py-0.5 rounded font-mono ${
           section.ownGovern === 'OWN' ? 'bg-[#1f3a2e] text-[#3fb950]' : 'bg-[#3a2e1f] text-[#f0a500]'
         }`}>{section.ownGovern}</span>
-        <span className="ml-auto text-[10px] text-[#5b636d]">{section.curator}</span>
+        <span className="ml-auto text-[10px] text-[var(--color-text-faint)]">{section.curator}</span>
       </div>
 
       {section.members.length === 0 ? (
-        <div className="text-[11px] text-[#5b636d] italic" data-testid={`empty-${section.key}`}>
+        <div className="text-[11px] text-[var(--color-text-faint)] italic" data-testid={`empty-${section.key}`}>
           {section.completeNotBroken ? 'empty — complete, not broken' : 'empty'}
         </div>
       ) : (
@@ -545,7 +559,7 @@ function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFil
               key={m.path}
               onClick={() => onOpenFile(m.path)}
               data-testid={`member-${m.path}`}
-              className="flex items-center gap-1.5 text-[11px] text-[#8b949e] hover:text-[#e6edf3] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+              className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
             >
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: GIT_DOT[m.gitStatus] ?? 'transparent' }} title={m.gitStatus} />
               <span className="font-mono truncate">{m.path.split('/').pop()}</span>
@@ -565,7 +579,7 @@ function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
   for (const e of entries) counts[e.entryType] = (counts[e.entryType] ?? 0) + 1;
 
   return (
-    <div className="mt-2 pt-2 border-t border-[#222831]">
+    <div className="mt-2 pt-2 border-t border-[var(--color-border)]">
       <div className="flex gap-0.5 mb-1.5 h-1.5 rounded-sm overflow-hidden" title="7-type composition">
         {/* F5: STABLE order — canonical TYPE_COLOR order first (deterministic across
             brains, vs Object.keys(counts) insertion order). Gate-2: also append any
@@ -580,11 +594,11 @@ function KnowledgeEntries({ entries }: { entries: KnowledgeEntry[] }) {
           <span
             key={t}
             data-testid={`typebar-${t}`}
-            style={{ background: TYPE_COLOR[t as EntryType] ?? '#5b636d', flex: counts[t] }}
+            style={{ background: TYPE_COLOR[t as EntryType] ?? 'var(--color-text-faint)', flex: counts[t] }}
           />
         ))}
       </div>
-      <div className="text-[10px] text-[#5b636d] mb-1">{entries.length} entries</div>
+      <div className="text-[10px] text-[var(--color-text-faint)] mb-1">{entries.length} entries</div>
       {/* AC3: entries GROUPED BY 7-type (collapsible), not a flat list — structure
           is visible without scrolling 700 uniform titles. Group order = canonical
           TYPE_COLOR order + any unknown type appended (matches the composition bar).
@@ -617,22 +631,22 @@ function EntryGroup({ type, entries }: { type: string; entries: KnowledgeEntry[]
       <button
         onClick={() => setOpen((v) => !v)}
         data-testid={`entry-group-toggle-${type}`}
-        className="w-full flex items-center gap-1.5 text-[10px] text-left px-1 py-0.5 rounded hover:bg-[#1f2630]"
+        className="w-full flex items-center gap-1.5 text-[10px] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
       >
-        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[type as EntryType] ?? '#5b636d' }} />
-        <span className="font-mono text-[#8b949e]">{type}</span>
-        <span className="text-[9px] text-[#5b636d]">{entries.length}</span>
-        <span className="ml-auto text-[9px] text-[#5b636d]">{open ? '▾' : '▸'}</span>
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[type as EntryType] ?? 'var(--color-text-faint)' }} />
+        <span className="font-mono text-[var(--color-text-muted)]">{type}</span>
+        <span className="text-[9px] text-[var(--color-text-faint)]">{entries.length}</span>
+        <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">{open ? '▾' : '▸'}</span>
       </button>
       {open && (
         <div className="flex flex-col gap-0.5 pl-3">
           {entries.slice(0, CAP).map((e, i) => (
             <div key={`${e.file}-${i}`} className="flex items-center gap-1.5 text-[10px]" data-testid="entry-line">
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? '#5b636d' }} title={e.entryType} />
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: TYPE_COLOR[e.entryType] ?? 'var(--color-text-faint)' }} title={e.entryType} />
               <span className={`truncate font-mono ${DECAY_STYLE[e.decayState] ?? DECAY_STYLE.active}`}>{e.title}</span>
             </div>
           ))}
-          {entries.length > CAP && <div className="text-[10px] text-[#5b636d] italic">+{entries.length - CAP} more…</div>}
+          {entries.length > CAP && <div className="text-[10px] text-[var(--color-text-faint)] italic">+{entries.length - CAP} more…</div>}
         </div>
       )}
     </div>
@@ -716,7 +730,7 @@ function ReviewView({ name }: { name: string }) {
   }, [name, load]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="review-error">Failed to load review: {error}</div>;
-  if (!data) return <div className="p-4 text-[#8b949e] text-[13px]">Loading review…</div>;
+  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading review…</div>;
 
   // Zone A = auto-applied hunks; Zone C = pending risky proposals. (F1: the former
   // Zone B "decay·sinking" was removed — the backend never emitted that tag, so it
@@ -728,11 +742,11 @@ function ReviewView({ name }: { name: string }) {
   return (
     <div className="p-4" data-testid="brainhub-review">
       {/* diff header */}
-      <div className="flex items-center gap-2 mb-3 text-[11px] font-mono text-[#8b949e]" data-testid="review-diff-header">
+      <div className="flex items-center gap-2 mb-3 text-[11px] font-mono text-[var(--color-text-muted)]" data-testid="review-diff-header">
         <span className="material-symbols-outlined text-[15px] text-[#a855f7]">commit</span>
-        diff <span className="text-[#e6edf3]">Projects/{name}/</span>
-        · last-reviewed <span className="text-[#e6edf3]">{shortSha(data.last_reviewed_sha)}</span>
-        → HEAD <span className="text-[#e6edf3]">{shortSha(data.head_sha)}</span>
+        diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
+        · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
+        → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
         <button
           onClick={onApproveAll}
           // F8: NEVER advance the watermark when the diff is incomplete (timed out) —
@@ -772,7 +786,7 @@ function ReviewView({ name }: { name: string }) {
           <span className="material-symbols-outlined text-[14px]">error</span>
           Action failed: {actionError}
           <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
-            className="ml-auto text-[10px] text-[#8b949e] hover:text-[#e6edf3] px-1.5">dismiss</button>
+            className="ml-auto text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1.5">dismiss</button>
         </div>
       )}
 
@@ -801,10 +815,10 @@ function ReviewView({ name }: { name: string }) {
             <div key={p.id} className="rounded-md border border-dashed border-[#3a2e12] bg-[#1a1710] p-2 mb-1.5" data-testid="review-proposal">
               <div className="flex items-center gap-1.5 mb-1 text-[11px]">
                 <span className="font-mono text-[#f0a500]">{p.target_doc}</span>
-                <span className="text-[#5b636d]">· {p.target_section}</span>
+                <span className="text-[var(--color-text-faint)]">· {p.target_section}</span>
                 {/* F4: confidence is the human-gate decision signal — render it
                     (null-guarded: an un-scored proposal shows "—", never "null"). */}
-                <span className="text-[10px] text-[#8b949e]" data-testid="proposal-confidence" title="cultivation confidence">
+                <span className="text-[10px] text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
                   conf {p.confidence != null ? p.confidence.toFixed(2) : '—'}
                 </span>
                 <div className="ml-auto flex gap-1">
@@ -814,7 +828,7 @@ function ReviewView({ name }: { name: string }) {
                     className="text-[10px] text-[#ef4444] border border-[#5a1f1f] rounded px-1.5 py-0.5 hover:bg-[#2a1214] disabled:opacity-40">Reject</button>
                 </div>
               </div>
-              <div className="text-[10px] text-[#8b949e] line-clamp-2">{p.content}</div>
+              <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
             </div>
           ))}
       </ReviewZone>
@@ -829,7 +843,7 @@ function ReviewZone({ testid, title, desc, color, children }: {
     <div className="mb-4" data-testid={testid}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[12px] font-semibold" style={{ color }}>{title}</span>
-        <span className="text-[10px] text-[#5b636d]">{desc}</span>
+        <span className="text-[10px] text-[var(--color-text-faint)]">{desc}</span>
       </div>
       {children}
     </div>
@@ -837,14 +851,14 @@ function ReviewZone({ testid, title, desc, color, children }: {
 }
 
 function ZoneEmpty({ text }: { text: string }) {
-  return <div className="text-[11px] text-[#5b636d] italic px-1 py-1">{text}</div>;
+  return <div className="text-[11px] text-[var(--color-text-faint)] italic px-1 py-1">{text}</div>;
 }
 
 function HunkCard({ hunk, busy, onReject }: { hunk: ReviewHunk; busy: boolean; onReject: () => void }) {
   return (
-    <div className="rounded-md border border-[#222831] bg-[#12161c] mb-1.5 overflow-hidden" data-testid="review-hunk">
-      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[#222831]">
-        <span className="font-mono text-[10px] text-[#8b949e]">{hunk.file}</span>
+    <div className="rounded-md border border-[var(--color-border)] bg-[#12161c] mb-1.5 overflow-hidden" data-testid="review-hunk">
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]">
+        <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{hunk.file}</span>
         <button
           onClick={onReject}
           disabled={busy}
@@ -859,7 +873,7 @@ function HunkCard({ hunk, busy, onReject }: { hunk: ReviewHunk; busy: boolean; o
         {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
           const c = ln.startsWith('+') && !ln.startsWith('+++') ? '#7ee787'
             : ln.startsWith('-') && !ln.startsWith('---') ? '#ff9a94'
-            : '#5b636d';
+            : 'var(--color-text-faint)';
           return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
         })}
       </pre>
@@ -901,7 +915,7 @@ function DistributeView({ name }: { name: string }) {
   }, [distributeCmd]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]" data-testid="distribute-error">Failed to load distribution: {error}</div>;
-  if (!data) return <div className="p-4 text-[#8b949e] text-[13px]">Loading distribution…</div>;
+  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading distribution…</div>;
 
   return (
     <div className="p-4" data-testid="brainhub-distribute">
@@ -910,33 +924,33 @@ function DistributeView({ name }: { name: string }) {
         <>
           <div className="flex items-center gap-2 mb-3 text-[12px]">
             <span className="material-symbols-outlined text-[16px] text-[#3fb950]">outbound</span>
-            <span className="font-semibold text-[#e6edf3]">Distributable</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[#1f2630] text-[#8b949e]'}`}>
+            <span className="font-semibold text-[var(--color-text)]">Distributable</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${data.visibility === 'external' ? 'bg-[#3a2412] text-[#f0a500]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
             </span>
           </div>
           <div className="flex flex-col gap-1.5 mb-4" data-testid="distribute-targets">
             {data.declared_targets.map((t) => (
-              <div key={t} className="flex items-center gap-2 rounded-md border border-[#222831] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
+              <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[#12161c] px-2.5 py-1.5" data-testid="distribute-target-row">
                 <span className="material-symbols-outlined text-[14px] text-[#58a6ff]">deployed_code</span>
-                <span className="font-mono text-[11px] text-[#e6edf3]">{t}</span>
+                <span className="font-mono text-[11px] text-[var(--color-text)]">{t}</span>
                 {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
                     uncommitted output) must NOT fall into "up to date" (the old
                     `!source_changed_since` did exactly that, re-burying staleness). */}
                 {!data.has_output ? (
-                  <span className="ml-auto text-[9px] text-[#5b636d]">never distributed</span>
+                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">never distributed</span>
                 ) : data.source_changed_since === true ? (
                   <span className="ml-auto text-[9px] text-[#f0a500]" title="knowledge changed since last distribute">● source changed since last distribute</span>
                 ) : data.source_changed_since === false ? (
-                  <span className="ml-auto text-[9px] text-[#5b636d]">up to date</span>
+                  <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">up to date</span>
                 ) : (
-                  <span className="ml-auto text-[9px] text-[#8b949e]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
+                  <span className="ml-auto text-[9px] text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
                 )}
               </div>
             ))}
           </div>
           {data.has_output && (
-            <div className="text-[10px] text-[#5b636d] mb-3 font-mono">
+            <div className="text-[10px] text-[var(--color-text-faint)] mb-3 font-mono">
               last output: {data.output_path} {data.last_distribute_time ? `· ${data.last_distribute_time.slice(0, 10)}` : ''}
             </div>
           )}
@@ -947,10 +961,10 @@ function DistributeView({ name }: { name: string }) {
             <span className="material-symbols-outlined text-[16px]">block</span>
             Not distributable
           </div>
-          <div className="text-[10px] text-[#8b949e] leading-relaxed">
+          <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
             This brain has no <span className="font-mono">distribution</span> block in its <span className="font-mono">aim.json</span>.
             The owner must declare a reach before it can be distributed — add to <span className="font-mono">aim.json</span>:
-            <code className="block mt-1 px-2 py-1 rounded bg-[#0e1117] text-[#8b949e] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
+            <code className="block mt-1 px-2 py-1 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
             {data.warnings.length > 0 && <span className="block mt-1 text-[#ff9a94]">⚠ {data.warnings.join('; ')}</span>}
             {/* Gate-2 MED: a stale output with the block since removed — surface it, don't hide it. */}
             {data.has_output && (
@@ -975,7 +989,7 @@ function DistributeView({ name }: { name: string }) {
           {copied ? 'Copied — paste into a chat tab' : 'Distribute a brain'}
         </button>
         {data.distributable && (
-          <span className="text-[10px] text-[#5b636d] font-mono">→ {distributeCmd}</span>
+          <span className="text-[10px] text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
         )}
       </div>
     </div>

@@ -54,7 +54,7 @@ import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
-import { ToDoOverlay } from '../components/layout/ToDoOverlay';
+import { ToDoOverlay, parseWorkPacket } from '../components/layout/ToDoOverlay';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
 import { PipelineOverlay } from '../components/layout/PipelineOverlay';
 import { PollinateOverlay } from '../components/layout/PollinateOverlay';
@@ -76,6 +76,40 @@ import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
  */
 export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS } from '../hooks/useChatStreamingLifecycle';
 export { MAX_OPEN_TABS, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '../hooks/useUnifiedTabState';
+
+/**
+ * Build the full injected prompt for a dispatched ToDo (B6 fix, run_937f5cc9).
+ * A dispatched todo is a self-contained work packet — the injected chat prompt
+ * must carry ALL of it (description + files + design docs + next step + acceptance
+ * + blockers + notes), not just the title. Sections are omitted when empty, so a
+ * bare todo (no linked context) degrades to just its title (old behavior).
+ */
+export function buildDispatchPrompt(todo: ToDo): string {
+  const wp = parseWorkPacket(todo.linkedContext);
+  const lines: string[] = [todo.title];
+  if (todo.description) lines.push('', todo.description);
+  const section = (label: string, items?: string[]) => {
+    // Array.isArray guard: linkedContext is parsed JSON, so a hand-edited/malformed
+    // DB row could put a scalar where an array is typed — never call .filter on it.
+    const list = (Array.isArray(items) ? items : []).filter((s) => typeof s === 'string' && s.trim());
+    if (list.length) lines.push('', `${label}:`, ...list.map((s) => `- ${s}`));
+  };
+  const line = (label: string, val?: string) => {
+    if (val && val.trim()) lines.push('', `${label}: ${val.trim()}`);
+  };
+  if (wp) {
+    section('Files to read/modify', wp.files);
+    section('Design docs', wp.design_docs);
+    section('Related commits', wp.commits);
+    section('Related sessions', wp.sessions);
+    section('Memory refs', wp.memory_refs);
+    section('Blockers', wp.blockers);
+    line('Next step', wp.next_step);
+    line('Acceptance', wp.acceptance);
+    line('Notes', wp.notes);
+  }
+  return lines.join('\n');
+}
 
 /** Max messages to load on initial session restore / tab switch.
  *  Backend validates limit 1–200; 200 covers 95%+ of sessions in one fetch.
@@ -1149,9 +1183,14 @@ export default function ChatPage() {
     const tabIdx = openTabsRef.current.findIndex((t) => t.id === targetTabId);
     const tabLabel = `Tab ${tabIdx >= 0 ? tabIdx + 1 : openTabsRef.current.length}`;
     const existingSid = tabMapRef.current.get(targetTabId)?.sessionId;
-    // Fire the injection into the (now active) target tab — not auto-sent.
+    // Build the FULL work packet as the injected prompt (B6 fix, run_937f5cc9):
+    // dispatching used to inject only todo.title, silently dropping the files /
+    // design docs / next step / acceptance the drawer promised — the user reviewed
+    // a rich packet and got a one-line title. Now we assemble the whole packet so
+    // the agent lands with all context. Falls back to just the title when there's
+    // no linked context (parity with old behavior for a bare todo).
     window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
-      detail: { text: todo.title, focus: true, autoSend: false },
+      detail: { text: buildDispatchPrompt(todo), focus: true, autoSend: false },
     }));
     // Snapshot: tab_label + timestamp now; session_id now if the tab already has
     // one (reuse-current of a tab that previously sent), else backfill at send.

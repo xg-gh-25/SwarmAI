@@ -88,6 +88,11 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ToDo | null>(null);
   const [creating, setCreating] = useState(false);
+  // Distinguish "fetch failed" from "genuinely empty" (B4) — an empty board on a
+  // backend outage used to look identical to having no todos. `actionErr` surfaces
+  // a failed mutation (retreat/review) that used to fail silently (B7).
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
   const refreshFlow = useCallback(async () => {
     setLoading(true);
@@ -95,8 +100,10 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
       // Fetch a broad set (all non-terminal + recent) and derive zones client-side.
       const all = await todosService.list(undefined, undefined, 500);
       setZones(deriveZones(all));
+      setLoadErr(null);
     } catch {
       setZones(EMPTY_ZONES);
+      setLoadErr('Could not load ToDos — the backend may be unavailable.');
     } finally {
       setLoading(false);
     }
@@ -108,9 +115,11 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
       const [h, s] = await Promise.all([todosService.history(500), todosService.historyStats()]);
       setHistoryRows(h.todos);
       setStats(s);
+      setLoadErr(null);
     } catch {
       setHistoryRows([]);
       setStats(null);
+      setLoadErr('Could not load ToDo history — the backend may be unavailable.');
     } finally {
       setLoading(false);
     }
@@ -138,14 +147,26 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
   }, [onDispatch, close]);
 
   const handleRetreat = useCallback(async (todo: ToDo) => {
-    try { await todosService.retreat(todo.id); } catch { /* non-fatal */ }
-    setSelected(null);
+    setActionErr(null);
+    try {
+      await todosService.retreat(todo.id);
+      setSelected(null);
+    } catch {
+      // B7: was a silent no-op — the card stayed put with no explanation.
+      setActionErr('Could not move that ToDo back — please try again.');
+    }
     void refreshFlow();
   }, [refreshFlow]);
 
   const handleReview = useCallback(async (todo: ToDo, action: 'confirm' | 'reject') => {
-    try { await todosService.review(todo.id, action); } catch { /* non-fatal */ }
-    setSelected(null);
+    setActionErr(null);
+    try {
+      await todosService.review(todo.id, action);
+      setSelected(null);
+    } catch {
+      // B7: was a silent no-op — user clicked Confirm/Reject and nothing happened.
+      setActionErr(`Could not ${action} that ToDo — please try again.`);
+    }
     void refreshFlow();
   }, [refreshFlow]);
 
@@ -184,6 +205,36 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
 
         {/* Persistent user-guide banner (both views) — AI-native first. */}
         <GuideBanner />
+
+        {/* Fetch failure (B4) — distinct from an empty board, with Retry. */}
+        {loadErr && (
+          <div
+            data-testid="todo-load-error"
+            className="mx-4 mt-2 flex items-center gap-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-3 py-2 text-[12px] text-[var(--color-text)]"
+          >
+            <span className="material-symbols-outlined text-[15px] text-[#d0524a]">error</span>
+            <span className="flex-1">{loadErr}</span>
+            <button
+              data-testid="todo-load-retry"
+              onClick={() => { view === 'flow' ? void refreshFlow() : void refreshHistory(); }}
+              className="rounded px-2 py-0.5 text-[11px] font-medium text-white"
+              style={{ background: '#d0524a' }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {/* Failed mutation (B7) — retreat/review no longer fail silently. */}
+        {actionErr && (
+          <div
+            data-testid="todo-action-error"
+            className="mx-4 mt-2 flex items-center gap-2 rounded-md bg-[#d0524a]/10 px-3 py-2 text-[12px] text-[#d0524a]"
+          >
+            <span className="material-symbols-outlined text-[15px]">warning</span>
+            <span className="flex-1">{actionErr}</span>
+            <button onClick={() => setActionErr(null)} className="text-[11px] underline opacity-80 hover:opacity-100">dismiss</button>
+          </div>
+        )}
 
         {view === 'flow' ? (
           <FlowBoard
