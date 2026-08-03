@@ -2561,7 +2561,10 @@ export function useChatStreamingLifecycle(
               detail: {
                 path,
                 absolutePath: (e.absolutePath as string) ?? path,
-                relevance: (e.relevance as string) ?? 'deliverable',
+                // Fail CLOSED on an older backend that omits relevance: default to
+                // 'incidental' (lists in the rail, never auto-pops) — directive #3
+                // 别什么都 trigger 成噪音. The current backend always sends it.
+                relevance: (e.relevance as string) ?? 'incidental',
                 operation: (e.operation as string) ?? 'written',
                 sessionId: capturedTabId ? tabMapRef.current.get(capturedTabId)?.sessionId : undefined,
               },

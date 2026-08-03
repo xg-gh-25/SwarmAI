@@ -89,6 +89,17 @@ def test_dev_null_filtered_even_with_real_write():
     assert parse_bash_write_targets("gen > real.html 2> /dev/null") == ["real.html"]
 
 
+def test_escaped_quote_does_not_hide_real_redirect():
+    # Gate-2 HIGH: an escaped quote inside a double-quoted arg must NOT swallow the
+    # real redirect that follows the true closing quote.
+    assert parse_bash_write_targets('echo "a\\"b" > out.html') == ["out.html"]
+
+
+def test_quoted_redirect_still_ignored():
+    # And the inverse still holds: a '>' truly inside quotes is not a redirect.
+    assert parse_bash_write_targets('echo "a > b"') == []
+
+
 def test_empty_and_none_safe():
     assert parse_bash_write_targets("") == []
     assert parse_bash_write_targets("   ") == []

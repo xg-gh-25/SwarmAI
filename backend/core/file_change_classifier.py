@@ -138,12 +138,25 @@ def parse_bash_write_targets(command: str) -> list[str]:
 def _blank_quoted(s: str) -> str:
     """Replace the CONTENTS of single/double-quoted spans with spaces so quoted
     `>` is not mistaken for a redirect. Length-preserving; unbalanced quotes are
-    left as-is (the shlex path already bails safely on those)."""
+    left as-is (the shlex path already bails safely on those).
+
+    Handles backslash-escaped quotes inside a double-quoted span (`"a\\"b"` — the
+    escaped `"` does NOT close the span) so a real `>` after the true closing quote
+    is still detected. Single-quoted spans do not process escapes (POSIX shell
+    semantics: no escaping inside single quotes)."""
     out = []
     quote = None
+    escaped = False
     for ch in s:
         if quote:
-            if ch == quote:
+            if escaped:
+                # inside "..."; previous char was a backslash → this char is literal
+                out.append(" ")
+                escaped = False
+            elif quote == '"' and ch == "\\":
+                out.append(" ")   # blank the backslash too (content, not delimiter)
+                escaped = True
+            elif ch == quote:
                 quote = None
                 out.append(ch)
             else:

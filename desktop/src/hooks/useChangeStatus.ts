@@ -112,9 +112,10 @@ export function useChangeStatus(paths: string[]): Map<string, ChangeStatus> {
   // backend-authoritative signal (window-dispatched, like the other three).
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ path?: string; operation?: string }>).detail;
+      const detail = (e as CustomEvent<{ path?: string; operation?: string; relevance?: string }>).detail;
       const p = detail?.path;
       if (!p || detail?.operation !== 'written') return;
+      if (detail?.relevance === 'bookkeeping') return; // never heal a bookkeeping path
       if (!resolvedRef.current.has(p)) return; // not cached → nothing to heal
       resolvedRef.current.delete(p);
       // Also drop the stale badge from the visible map; the resolve effect below
