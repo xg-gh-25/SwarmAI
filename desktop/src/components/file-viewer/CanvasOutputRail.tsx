@@ -21,7 +21,7 @@
  * @exports isBookkeepingPath — pure predicate (unit-tested)
  * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
  */
-import { memo, useCallback, useMemo, useEffect } from 'react';
+import { memo, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useReferencedFiles, type ReferencedFile } from '../../hooks/useReferencedFiles';
 import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
@@ -101,11 +101,16 @@ const OutputRow = memo(function OutputRow({
   file,
   badge,
   selected,
+  fresh,
 }: {
   file: ReferencedFile;
   badge: ChangeStatus | undefined;
   /** True when this row's file is the one shown in Region B below → accent left-bar. */
   selected: boolean;
+  /** True when this output ARRIVED after the rail mounted → one gentle accent
+   *  land-pulse (announces the product without grabbing). Keyed rows mount once,
+   *  so the CSS animation plays exactly once and never replays on re-render. */
+  fresh: boolean;
 }) {
   const handleClick = useCallback(() => {
     // Always open on source (single gutter). Diff is reached via the editor's
@@ -133,6 +138,8 @@ const OutputRow = memo(function OutputRow({
   return (
     <div
       className={`group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors ${
+        fresh ? 'canvas-output-fresh ' : ''
+      }${
         selected
           ? 'bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]'
           : 'hover:bg-[var(--color-hover)]'
@@ -192,6 +199,12 @@ export interface CanvasOutputRailProps {
 export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCounts, selectedPath }: CanvasOutputRailProps) {
   const { files: grouped } = useReferencedFiles(sessionId ?? '');
 
+  // Mount timestamp — an output whose firstSeen is AFTER this arrived while the
+  // user was watching → it gets one land-pulse (§v6 #4). Outputs already present
+  // at mount (session restore, tab switch) are NOT "fresh" (no pulse-storm on
+  // open). Ref, set once on mount; never triggers a re-render.
+  const mountedAtRef = useRef<number>(Date.now());
+
   // Real deliverables only: written group minus bookkeeping noise.
   const outputs = useMemo(
     () => (grouped.written ?? []).filter((f) => !isBookkeepingPath(f.path)),
@@ -250,6 +263,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
           file={file}
           badge={statusMap.get(file.path)}
           selected={selectedPath === file.path}
+          fresh={file.firstSeen > mountedAtRef.current}
         />
       ))}
     </div>

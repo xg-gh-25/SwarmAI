@@ -826,6 +826,21 @@ body {
   white-space: nowrap;
 }
 
+/* Land-pulse: a newly-arrived output row flashes the accent once, then settles
+   — announces the product without grabbing (§v6 #4). Plays exactly once because
+   the row element is keyed by path (mounts once, no replay on re-render).
+   prefers-reduced-motion disables it. */
+@keyframes canvas-output-land {
+  0%   { background-color: color-mix(in srgb, var(--color-primary) 24%, transparent); }
+  100% { background-color: transparent; }
+}
+.canvas-output-fresh {
+  animation: canvas-output-land 1.6s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-output-fresh { animation: none; }
+}
+
 /* Canvas ↔ chat divider: a colorful tinted seam instead of the plain grey
    border, so the boundary reads as an intentional review surface edge. */
 .canvas-divider {
