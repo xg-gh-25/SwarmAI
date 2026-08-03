@@ -6,9 +6,7 @@ dropped, unresolvable fails-open to the raw path. Mocks the resolver boundary so
 the test is hermetic (no real workspace walk).
 """
 import asyncio
-from types import SimpleNamespace
 
-import pytest
 
 import core.streaming_orchestrator as so
 
@@ -91,3 +89,162 @@ def test_multiple_targets_from_one_bash(monkeypatch):
     events = _run(orch._build_file_change_events(["a.md", "b.md"], {}))
     assert [e["path"] for e in events] == ["a.md", "b.md"]
     assert all(e["relevance"] == "deliverable" for e in events)
+
+
+# ── run_0520a394: the agent's OWN Edit/Write must emit file_changed even though
+#    its tool_result arrives in a UserMessage (Anthropic protocol), not the
+#    AssistantMessage branch. These drive the REAL _read_formatted_response
+#    generator end-to-end (AssistantMessage Edit ToolUse → UserMessage matching
+#    ToolResult) — NOT the _build_file_change_events pure fn — so they cover the
+#    exact wiring the prior RP45 tests missed. ─────────────────────────────────
+
+import sys
+from unittest.mock import MagicMock, patch
+
+
+class _MRev:  # ── mock SDK message/block types (isinstance targets) ──
+    class ResultMessage: pass
+    class AssistantMessage: pass
+    class SystemMessage: pass
+    class TextBlock: pass
+    class ToolUseBlock: pass
+    class ToolResultBlock: pass
+    class UserMessage: pass
+    class StreamEvent: pass
+    class ThinkingBlock: pass
+
+
+def _patch_sdk():
+    return patch.dict(sys.modules, {
+        "claude_agent_sdk": MagicMock(**{
+            "ResultMessage": _MRev.ResultMessage, "AssistantMessage": _MRev.AssistantMessage,
+            "SystemMessage": _MRev.SystemMessage, "TextBlock": _MRev.TextBlock,
+            "ToolUseBlock": _MRev.ToolUseBlock, "ToolResultBlock": _MRev.ToolResultBlock,
+            "UserMessage": _MRev.UserMessage,
+        }),
+        "claude_agent_sdk.types": MagicMock(**{
+            "StreamEvent": _MRev.StreamEvent, "ThinkingBlock": _MRev.ThinkingBlock,
+        }),
+    })
+
+
+def _tool_use(tool_id, name, file_path):
+    b = _MRev.ToolUseBlock()
+    b.id = tool_id
+    b.name = name
+    b.input = {"file_path": file_path}
+    return b
+
+
+def _tool_result(tool_use_id, *, is_error=False):
+    b = _MRev.ToolResultBlock()
+    b.tool_use_id = tool_use_id
+    b.content = "ok"
+    b.is_error = is_error
+    return b
+
+
+def _assistant(blocks):
+    m = _MRev.AssistantMessage()
+    m.content = blocks
+    m.model = "claude-opus-4-8"
+    return m
+
+
+def _user(content):
+    m = _MRev.UserMessage()
+    m.content = content
+    return m
+
+
+def _make_unit():
+    from core.session_unit import SessionState, SessionUnit
+    unit = SessionUnit(session_id="test-usermsg-fc", agent_id="default")
+    unit._model_name = "claude-opus-4-8"
+    unit._transition(SessionState.IDLE)
+    unit._transition(SessionState.STREAMING)
+    unit._content_emitted = True  # suppress zombie/empty-result guard on instant mock
+    return unit
+
+
+def _drive(unit, messages, monkeypatch):
+    """Run the REAL _read_formatted_response over a mock SDK message stream,
+    collect yielded events. Resolver monkeypatched (hermetic — no workspace walk)."""
+    monkeypatch.setattr(
+        "routers.workspace_api.resolve_path_to_physical",
+        lambda raw, ws: {"relative": raw, "absolute": "/abs/" + raw},
+    )
+
+    async def _mock_response():
+        for m in messages:
+            yield m
+
+    mock_client = MagicMock()
+    mock_client.receive_response = MagicMock(return_value=_mock_response())
+    unit._client = mock_client
+
+    async def _collect():
+        mock_pm = MagicMock()
+        mock_pm.get_session_queue = MagicMock(return_value=asyncio.Queue())
+        with patch("core.permission_manager.permission_manager", mock_pm):
+            out = []
+            async for ev in unit._read_formatted_response():
+                out.append(ev)
+            return out
+
+    return _run(_collect())
+
+
+def test_parent_edit_result_via_usermessage_emits_file_changed(monkeypatch):
+    """AC1: Edit ToolUse (AssistantMessage) → matching ToolResult (UserMessage)
+    → a file_changed event IS emitted (the bug: it wasn't, because the emit
+    lived only in the AssistantMessage branch)."""
+    with _patch_sdk():
+        unit = _make_unit()
+        result = _MRev.ResultMessage()
+        result.is_error = False; result.subtype = None; result.result = ""
+        result.error = ""; result.session_id = None; result.usage = None
+        result.duration_ms = 1; result.total_cost_usd = 0.0; result.num_turns = 1
+        msgs = [
+            _assistant([_tool_use("tu_edit_1", "Edit", "Knowledge/x.md")]),
+            _user([_tool_result("tu_edit_1")]),  # protocol: result in UserMessage
+            result,
+        ]
+        events = _drive(unit, msgs, monkeypatch)
+    fc = [e for e in events if e.get("type") == "file_changed"]
+    assert len(fc) == 1, f"expected 1 file_changed, got {[e.get('type') for e in events]}"
+    assert fc[0]["operation"] == "written"
+    assert fc[0]["path"] == "Knowledge/x.md"
+
+
+def test_subagent_result_via_usermessage_does_not_emit(monkeypatch):
+    """AC2: a UserMessage ToolResult whose id was NEVER a parent Edit ToolUse
+    (i.e. a sub-agent Agent result — never in _pending_file_changes) emits NO
+    file_changed."""
+    with _patch_sdk():
+        unit = _make_unit()
+        result = _MRev.ResultMessage()
+        result.is_error = False; result.subtype = None; result.result = ""
+        result.error = ""; result.session_id = None; result.usage = None
+        result.duration_ms = 1; result.total_cost_usd = 0.0; result.num_turns = 1
+        msgs = [_user([_tool_result("tu_agent_99")]), result]  # no preceding Edit ToolUse
+        events = _drive(unit, msgs, monkeypatch)
+    assert [e for e in events if e.get("type") == "file_changed"] == []
+
+
+def test_parent_edit_is_error_via_usermessage_does_not_emit(monkeypatch):
+    """AC3: a FAILED Edit (is_error) must not surface, even though its id is in
+    _pending_file_changes."""
+    with _patch_sdk():
+        unit = _make_unit()
+        result = _MRev.ResultMessage()
+        result.is_error = False; result.subtype = None; result.result = ""
+        result.error = ""; result.session_id = None; result.usage = None
+        result.duration_ms = 1; result.total_cost_usd = 0.0; result.num_turns = 1
+        msgs = [
+            _assistant([_tool_use("tu_edit_2", "Write", "Knowledge/y.md")]),
+            _user([_tool_result("tu_edit_2", is_error=True)]),
+            result,
+        ]
+        events = _drive(unit, msgs, monkeypatch)
+    assert [e for e in events if e.get("type") == "file_changed"] == []

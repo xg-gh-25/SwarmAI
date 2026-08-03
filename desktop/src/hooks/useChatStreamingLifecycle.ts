@@ -2557,6 +2557,7 @@ export function useChatStreamingLifecycle(
           const e = event as unknown as Record<string, unknown>;
           const path = e.path as string;
           if (path) {
+            const _stampSession = capturedTabId ? tabMapRef.current.get(capturedTabId)?.sessionId : undefined;
             window.dispatchEvent(new CustomEvent('swarm:file-changed', {
               detail: {
                 path,
@@ -2566,7 +2567,7 @@ export function useChatStreamingLifecycle(
                 // 别什么都 trigger 成噪音. The current backend always sends it.
                 relevance: (e.relevance as string) ?? 'incidental',
                 operation: (e.operation as string) ?? 'written',
-                sessionId: capturedTabId ? tabMapRef.current.get(capturedTabId)?.sessionId : undefined,
+                sessionId: _stampSession,
               },
             }));
           }

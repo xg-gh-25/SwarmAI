@@ -126,14 +126,14 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       // When isStreaming is undefined the gate is off (legacy behavior).
       const streamingGate = isStreamingRef.current;
       if (streamingGate !== undefined) {
-        if (streamingGate === false) return;               // idle write → historical/non-live
-        if (!activeSessionIdRef.current) return;            // gated + unresolved session → fail closed
+        if (streamingGate === false) return;  // not live output → historical re-dispatch
+        if (!activeSessionIdRef.current) return;  // gated but no session baseline → fail closed
       }
       // Tab-scope: ignore a background (keep-mounted) tab's write. Fail open
       // when the event is unstamped (evtSessionId absent) or we have no active
       // id yet — surface anyway rather than regress (legacy path, gate off).
       const activeId = activeSessionIdRef.current;
-      if (evtSessionId && activeId && evtSessionId !== activeId) return;
+      if (evtSessionId && activeId && evtSessionId !== activeId) return;  // background tab's write
       // Local bookkeeping fallback (kept as defense-in-depth for an older backend
       // that doesn't classify relevance; the primary filter is the server-side
       // `relevance` gate above + server-side drop of bookkeeping paths).

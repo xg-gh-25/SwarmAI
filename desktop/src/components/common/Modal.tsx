@@ -42,7 +42,8 @@ interface ModalProps {
 const PANEL_LEFT = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH; // 150
 const PANEL_TOP = LAYOUT_CONSTANTS.CHAT_CONTENT_TOP;    // 80
 const PANEL_GAP = 20;                                    // right/bottom breathing gap
-// Responsive width tiers — CSS clamp(min, preferred%, max). The `%` is resolved by
+// Responsive width tiers — CSS clamp(min, preferred%, max).
+// The `%` is resolved by
 // the browser against the panel's containing block, which is the scrim (position:
 // fixed, sized to the live chat-area rect) — so the panel adapts to the chat area on
 // laptop / large / ultrawide with NO per-device hardcode. Each tier's `max` caps the

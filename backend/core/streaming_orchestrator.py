@@ -28,7 +28,7 @@ from .session_healing import get_process_rss_mb
 from .ui_actions import build_ui_command_event, UI_ACTION_FULL_TOOL_NAME
 
 if TYPE_CHECKING:
-    from .session_unit import SessionState, SessionUnit
+    from .session_unit import SessionUnit
 
 logger = logging.getLogger(__name__)
 
@@ -173,8 +173,12 @@ class StreamingOrchestrator:
         content. ``_active_agent_tools`` only ever holds **Agent-tool** ids
         (populated under ``block.name == "Agent"``), so ``pop(id, None)`` is a
         safe no-op for any unrelated tool_result (e.g. a parent's own
-        Edit/Write result) — those are rendered by the AssistantMessage
-        branch and are untouched here.
+        Edit/Write result) — this helper leaves those untouched. NOTE: a
+        parent's own Edit/Write result ALSO arrives via UserMessage (per the
+        Anthropic protocol), and its ``file_changed`` emit is handled INLINE in
+        the UserMessage branch of ``_read_formatted_response`` (guarded on
+        ``_pending_file_changes`` membership), NOT here and NOT in the
+        AssistantMessage branch (run_0520a394).
 
         Args:
             message: An SDK message (typically UserMessage). Its ``content``
@@ -668,14 +672,44 @@ class StreamingOrchestrator:
                     yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
                 continue
 
-            # ── UserMessage: sub-agent tool results (cleanup only) ─
-            # Agent (sub-agent) tool_result blocks arrive here, NOT in
-            # AssistantMessage. Clear their progress-tracking entries so
-            # count/timer/label don't freeze. No yield, no rendering —
-            # the parent's own tool_results render via AssistantMessage.
+            # ── UserMessage: tool_result blocks (Anthropic protocol) ─
+            # Per the Anthropic protocol a tool_result is carried by a role=user
+            # turn, so the parent's own Edit/Write/Bash results AND sub-agent
+            # (Agent) results both arrive HERE via UserMessage (the AssistantMessage
+            # ToolResultBlock branch handles server/advisor tool results, not these
+            # client-tool executions). Two disjoint jobs on this branch:
+            #   (a) sub-agent cleanup — pop _active_agent_tools/_open_tool_uses so
+            #       count/timer/label don't freeze (via _clear_completed_sub_agents).
+            #   (b) file_changed emit for the PARENT's own edits — the tool_use was
+            #       recorded in _pending_file_changes at emit time (AssistantMessage,
+            #       line ~813); its RESULT lands here. Without this the Canvas
+            #       auto-surface never fired for the agent's own writes (run_0520a394,
+            #       the fix for the AssistantMessage-only emit that never ran because
+            #       Edit/Write results are UserMessage-delivered).
+            # Discriminator is free: _pending_file_changes holds ONLY parent
+            # tool_use ids (populated in the parent's own AssistantMessage), so a
+            # sub-agent Agent result — never in that dict — is correctly skipped.
             if isinstance(message, UserMessage):
                 self._parent._last_progress_time = time.time()  # sub-agent progress
                 self._clear_completed_sub_agents(message)
+                # (b) parent-edit file_changed emit. List-guard mirrors
+                # _clear_completed_sub_agents (string content carries no blocks).
+                _um_content = getattr(message, "content", None)
+                if isinstance(_um_content, list):
+                    for _blk in _um_content:
+                        if not isinstance(_blk, ToolResultBlock):
+                            continue
+                        _tuid = getattr(_blk, "tool_use_id", None)
+                        # only the parent's own tracked writes; is_error mirrors the
+                        # AssistantMessage branch idiom (line ~915).
+                        if _tuid in _pending_file_changes and not getattr(_blk, "is_error", False):
+                            _um_paths = _pending_file_changes.pop(_tuid, None)
+                            if _um_paths:
+                                _um_events = await self._build_file_change_events(
+                                    _um_paths, _resolve_cache
+                                )
+                                for _ev in _um_events:
+                                    yield _ev
                 continue
 
             # ── AssistantMessage: full content blocks ─────────────
