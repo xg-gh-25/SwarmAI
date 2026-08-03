@@ -80,6 +80,15 @@ export class MessageStore {
   private _destroyed = false;
   private _snapshot: Message[] | null = null;
   private _snapshotSource: Message[] | null = null;
+  // Monotonic content-version. Bumped by _touchVersion() on EVERY content change.
+  // getSnapshot() memoizes on this (in addition to array identity) so the HOT-PATH
+  // writers (updateLast/updateById) can mutate _messages IN PLACE — O(1) instead of
+  // an O(n) full-array spread per streaming token (was O(n²) per message) — while
+  // still invalidating React's snapshot every token. LOAD-BEARING: an in-place
+  // mutation that does NOT bump _version leaves getSnapshot serving a stale array
+  // (silent render loss, OT01). That is why the two are coupled in one statement.
+  private _version = 0;
+  private _snapshotVersion = -1;
 
   // ─── Resume boundary tracking ───
   // Index of the last resume_boundary system message in _messages.
@@ -134,6 +143,7 @@ export class MessageStore {
   append(msg: Message): void {
     if (this._destroyed) return;
     this._messages = [...this._messages, msg];
+    this._touchVersion();
     // Track resume boundary position for filtering
     if (msg.role === 'system' && msg.id?.startsWith('resume-boundary')) {
       this._resumeBoundaryIdx = this._messages.length - 1;
@@ -161,6 +171,7 @@ export class MessageStore {
   appendMany(msgs: Message[]): void {
     if (this._destroyed || msgs.length === 0) return;
     this._messages = [...this._messages, ...msgs];
+    this._touchVersion();
     this._notify();
   }
 
@@ -177,12 +188,15 @@ export class MessageStore {
 
     if (idx < 0) return;
 
-    // Create new array reference for React immutability contract.
-    // Spread is necessary: getter exposes _messages directly, and rAF-deferred
-    // notification means reads between mutation and flush would see stale ref.
-    const updated = [...this._messages];
-    updated[idx] = updater(updated[idx]);
-    this._messages = updated;
+    // HOT PATH (per token): mutate the element IN PLACE + bump the version in the
+    // SAME step. No full-array spread — that was O(n) per token → O(n²) per
+    // message. The updater returns a NEW message object at idx (so a snapshot
+    // taken before this call keeps the old object ref — MessageBubble memo), and
+    // _touchVersion() drives getSnapshot() invalidation since the array identity
+    // is deliberately unchanged. These two lines are coupled: an in-place write
+    // without the version bump = stale getSnapshot = silent render loss (OT01).
+    this._messages[idx] = updater(this._messages[idx]);
+    this._touchVersion();
     this._resetWatchdog();
     this._notify();
   }
@@ -194,10 +208,11 @@ export class MessageStore {
     if (this._destroyed) return;
     const idx = this._messages.findIndex(m => m.id === id);
     if (idx < 0) return;
-    // New array reference for React immutability contract (same as updateLast)
-    const updated = [...this._messages];
-    updated[idx] = updater(updated[idx]);
-    this._messages = updated;
+    // In-place mutate + version bump (same hot-path contract as updateLast) —
+    // no full-array spread. _touchVersion() is what invalidates getSnapshot here
+    // (array identity is intentionally unchanged); the two are coupled.
+    this._messages[idx] = updater(this._messages[idx]);
+    this._touchVersion();
     this._notify();
   }
 
@@ -242,6 +257,7 @@ export class MessageStore {
     this._reconcileGen++;
     const _prevClobber = this._lastAsstChars(this._messages);
     this._messages = messages;
+    this._touchVersion();
     this._initialLoadComplete = true;
     this._probeClobber(_prevClobber, 'replace');
     this._notify();
@@ -255,6 +271,7 @@ export class MessageStore {
     if (this._destroyed) return;
     const _prevClobber = this._lastAsstChars(this._messages);
     this._messages = this._messages.filter(m => !predicate(m));
+    this._touchVersion();
     this._probeClobber(_prevClobber, 'remove');
     this._notify();
   }
@@ -385,6 +402,7 @@ export class MessageStore {
       const convert = this._toDisplayMessage || this._defaultToDisplay;
       const _prevInitClobber = this._lastAsstChars(this._messages);
       this._messages = dbMessages.map(convert);
+      this._touchVersion();
       this._initialLoadComplete = true;
       this._probeClobber(_prevInitClobber, 'initialize');
       this._notify();
@@ -419,6 +437,13 @@ export class MessageStore {
     }
     this._listeners.clear();
     this._messages = [];
+    // Reset the snapshot memo + bump version so a post-destroy getSnapshot() can
+    // never serve the stale populated snapshot (Gate-1 fix, run_ebbb7ccb): the
+    // version-memo would otherwise match (_snapshotVersion===_version) and return
+    // the pre-destroy array. Belt: identity also changed (new []). Suspenders:
+    this._snapshot = null;
+    this._snapshotSource = null;
+    this._touchVersion();
   }
 
   // ─── Subscriptions ───
@@ -439,14 +464,34 @@ export class MessageStore {
    * calls this every frame). React can bail out when reference is unchanged.
    */
   getSnapshot(): Message[] {
-    if (this._snapshotSource !== this._messages) {
+    // Invalidate on EITHER a new array identity (append/replace/… — the belt) OR
+    // a content-version bump (updateLast/updateById mutate in place, so identity
+    // is unchanged — the suspenders). The shallow [...] copy still happens here,
+    // ONCE per change (typically once per rAF flush), freezing element refs at
+    // snapshot time so React's per-message memo sees a stable ref for unchanged
+    // messages and a new object only for the one that changed.
+    if (this._snapshotSource !== this._messages || this._snapshotVersion !== this._version) {
       this._snapshot = [...this._messages];
       this._snapshotSource = this._messages;
+      this._snapshotVersion = this._version;
     }
     return this._snapshot!;
   }
 
   // ─── Private Methods ───
+
+  /**
+   * Bump the content version. MUST be called by EVERY writer that changes
+   * message content — it is the single source of truth for getSnapshot()
+   * invalidation. New-array writers (append/replace/…) also flip _messages
+   * identity (a belt), but the in-place hot-path writers (updateLast/updateById)
+   * rely SOLELY on this bump (suspenders) — so routing all writes through it
+   * keeps one uniform invalidation rule and stops a future writer from silently
+   * going stale. Never called by touch()/watchdog (no content change).
+   */
+  private _touchVersion(): void {
+    this._version++;
+  }
 
   /**
    * Force-drain any pending rAF/timeout-gated notification synchronously.
@@ -872,6 +917,7 @@ export class MessageStore {
     }
 
     this._messages = merged;
+    this._touchVersion();
     this._initialLoadComplete = true;
     this._probeClobber(_prevMergeClobber, 'reconcile/_applyMerge');
     this._notify();

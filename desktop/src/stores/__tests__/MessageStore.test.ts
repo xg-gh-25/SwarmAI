@@ -668,6 +668,108 @@ describe('MessageStore single-writer behavior', () => {
     store.destroy();
   });
 
+  // ─── Version-counter hot-path memo (run_ebbb7ccb) ───
+  // updateLast/updateById mutate _messages IN PLACE (no per-token full-array
+  // spread — the O(n²)-per-message fix). getSnapshot must still invalidate on
+  // each content change (driven by a monotonic _version, since array identity
+  // no longer flips on the in-place path), while FREEZING element refs per
+  // snapshot so React's per-message memo re-renders only the changed bubble.
+  describe('version-counter snapshot invalidation (hot-path clone fix)', () => {
+    it('updateLast invalidates getSnapshot on every token even though array identity is stable', () => {
+      const store = new MessageStore();
+      store.append(makeMsg('a1', 'assistant', ''));
+
+      const snap1 = store.getSnapshot();
+      store.updateLast((m) => ({ ...m, content: [{ type: 'text', text: 'to' }] }));
+      const snap2 = store.getSnapshot();
+      store.updateLast((m) => ({ ...m, content: [{ type: 'text', text: 'token' }] }));
+      const snap3 = store.getSnapshot();
+
+      // Each token must yield a FRESH snapshot reference (React needs a new array
+      // to re-render) — this is what the per-token spread used to guarantee and
+      // the version counter must now guarantee without the O(n) copy.
+      expect(snap2).not.toBe(snap1);
+      expect(snap3).not.toBe(snap2);
+      // And the content must be the latest.
+      expect((snap3[0].content[0] as { text: string }).text).toBe('token');
+
+      store.destroy();
+    });
+
+    it('freezes element refs per snapshot: unchanged message keeps old ref, changed message gets a new object', () => {
+      const store = new MessageStore();
+      store.append(makeMsg('u1', 'user', 'hi'));       // idx 0 — never updated again
+      store.append(makeMsg('a1', 'assistant', ''));    // idx 1 — the streaming message
+
+      const before = store.getSnapshot();
+      store.updateLast((m) => ({ ...m, content: [{ type: 'text', text: 'reply' }] }));
+      const after = store.getSnapshot();
+
+      // Unchanged message: SAME object reference across snapshots → MessageBubble
+      // memo bails out (no re-render of historical bubbles).
+      expect(after[0]).toBe(before[0]);
+      // Changed message: a NEW object → its bubble re-renders.
+      expect(after[1]).not.toBe(before[1]);
+      // The prior snapshot must NOT have been mutated retroactively (element-ref
+      // freezing): before[1] still shows the pre-token content.
+      expect((before[1].content[0] as { text?: string }).text ?? '').toBe('');
+      expect((after[1].content[0] as { text: string }).text).toBe('reply');
+
+      store.destroy();
+    });
+
+    it('touch() does NOT invalidate the snapshot (no version bump on liveness pings)', () => {
+      vi.useFakeTimers();
+      const store = new MessageStore();
+      store.append(makeMsg('a1', 'assistant', 'x'));
+      store.startStreaming('a1');
+
+      const snap1 = store.getSnapshot();
+      store.touch();
+      const snap2 = store.getSnapshot();
+      expect(snap2).toBe(snap1); // liveness ping = no content change = same snapshot
+
+      store.destroy();
+      vi.useRealTimers();
+    });
+
+    it('every content writer invalidates the snapshot (append/updateById/remove/replace)', () => {
+      const store = new MessageStore();
+      store.append(makeMsg('a1', 'assistant', 'one'));
+      const s0 = store.getSnapshot();
+
+      store.append(makeMsg('a2', 'assistant', 'two'));
+      const s1 = store.getSnapshot();
+      expect(s1).not.toBe(s0);
+
+      store.updateById('a1', (m) => ({ ...m, content: [{ type: 'text', text: 'ONE' }] }));
+      const s2 = store.getSnapshot();
+      expect(s2).not.toBe(s1);
+      expect((s2.find((m) => m.id === 'a1')!.content[0] as { text: string }).text).toBe('ONE');
+
+      store.remove((m) => m.id === 'a2');
+      const s3 = store.getSnapshot();
+      expect(s3).not.toBe(s2);
+      expect(s3).toHaveLength(1);
+
+      store.replace([makeMsg('r1', 'user', 'fresh')]);
+      const s4 = store.getSnapshot();
+      expect(s4).not.toBe(s3);
+      expect(s4[0].id).toBe('r1');
+
+      store.destroy();
+    });
+
+    it('destroy() does not leave getSnapshot serving a stale populated snapshot', () => {
+      const store = new MessageStore();
+      store.append(makeMsg('a1', 'assistant', 'content that should not survive destroy'));
+      store.getSnapshot(); // populate the memo
+      store.destroy();
+      // After destroy the store is empty; a stale memo must never resurface it.
+      expect(store.getSnapshot()).toHaveLength(0);
+    });
+  });
+
   it('subscription fires on store mutation and delivers correct snapshot', () => {
     const store = new MessageStore();
     store.append(makeMsg('a1', 'assistant'));
