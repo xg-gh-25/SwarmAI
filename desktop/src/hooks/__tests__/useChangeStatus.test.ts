@@ -127,8 +127,8 @@ describe('useChangeStatus', () => {
     // File gets committed, then written again → the write event must invalidate
     // the cached 'new' and re-resolve to 'upd'.
     inHead = true;
-    document.dispatchEvent(new CustomEvent('swarm:file-referenced', {
-      detail: { path: '/abs/a.py', operation: 'written' },
+    window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+      detail: { path: '/abs/a.py', operation: 'written', relevance: 'deliverable' },
     }));
     await waitFor(() => expect(result.current.get('/abs/a.py')).toBe('upd'), { timeout: 2000 });
   });

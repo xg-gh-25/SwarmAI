@@ -7,9 +7,17 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useReferencedFiles } from '../hooks/useReferencedFiles';
 
-function dispatchFileRef(path: string, operation: 'read' | 'written' | 'searched' = 'read') {
-  document.dispatchEvent(
-    new CustomEvent('swarm:file-referenced', { detail: { path, operation } }),
+function dispatchFileRef(
+  path: string,
+  operation: 'read' | 'written' | 'searched' = 'read',
+  absolutePath?: string,
+) {
+  // Unified backend event (run_e626e121): swarm:file-changed on window, carries a
+  // resolved physical absolutePath used for copy-path.
+  window.dispatchEvent(
+    new CustomEvent('swarm:file-changed', {
+      detail: { path, operation, absolutePath: absolutePath ?? path, relevance: 'deliverable' },
+    }),
   );
 }
 

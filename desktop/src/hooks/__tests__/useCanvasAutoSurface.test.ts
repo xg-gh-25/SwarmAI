@@ -13,8 +13,10 @@ import { OPEN_FILE_EVENT } from '../../components/common/MarkdownRenderer';
 
 const DEBOUNCE = 20;
 
-function writeFile(path: string, operation = 'written', sessionId?: string) {
-  document.dispatchEvent(new CustomEvent('swarm:file-referenced', { detail: { path, operation, sessionId } }));
+function writeFile(path: string, operation = 'written', sessionId?: string, relevance = 'deliverable') {
+  // Unified backend event (run_e626e121): swarm:file-changed on window, carries
+  // the whitelist `relevance` (only 'deliverable' auto-surfaces).
+  window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path, operation, relevance, sessionId } }));
 }
 function setPanelOpen(open: boolean) {
   window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', { detail: { open } }));
@@ -45,6 +47,15 @@ describe('useCanvasAutoSurface', () => {
     writeFile('Knowledge/out.md');
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual(['Knowledge/out.md']);
+  });
+
+  it('does NOT surface an INCIDENTAL file (whitelist gate — read/grep goes to rail only)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    // A written event but classified incidental → must NOT pop. Mutation-provable:
+    // remove the `relevance !== 'deliverable'` gate → this goes RED.
+    writeFile('Knowledge/out.md', 'written', undefined, 'incidental');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]);
   });
 
   it('coalesces a write-burst to the LAST file', () => {

@@ -18,7 +18,7 @@
  * @exports getToolIcon          — Returns Material Symbols icon name for a tool category
  */
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 import { usePendingToolElapsed } from '../../../hooks/usePendingToolElapsed';
@@ -111,10 +111,11 @@ interface MergedToolBlockProps {
   isPending: boolean;
   /** @deprecated No longer used — kept for backward compatibility. */
   isStreaming?: boolean;
-  /** Owning tab's session id — stamped onto swarm:file-referenced so Canvas /
-   *  Referenced-Files consumers can filter out background-tab writes (all tabs
-   *  are keep-mounted, so a background tab's dispatch would otherwise leak into
-   *  the active tab). Absent → consumers fail open (no regression). */
+  /** @deprecated (run_e626e121) No longer used. Tab-scoping of file-change
+   *  events moved to the backend-authoritative `swarm:file-changed` signal
+   *  (stamped with sessionId by the SSE bridge). Kept on the interface so the
+   *  caller (ContentBlockRenderer) still typechecks without a ripple change;
+   *  MergedToolBlock itself no longer dispatches any file event. */
   sessionId?: string;
 }
 
@@ -127,7 +128,6 @@ export function MergedToolBlock({
   resultTruncated,
   resultIsError,
   isPending,
-  sessionId,
 }: MergedToolBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -179,20 +179,15 @@ export function MergedToolBlock({
     return extractFilePath(summary);
   }, [summary, category]);
 
-  // Dispatch file-referenced event for the Referenced Files panel (once per path, when not pending)
-  const dispatchedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (fileParts && !isPending && dispatchedRef.current !== fileParts.path) {
-      dispatchedRef.current = fileParts.path;
-      const operation = (category === 'write' || category === 'edit') ? 'written'
-        : category === 'search' ? 'searched' : 'read';
-      document.dispatchEvent(
-        new CustomEvent('swarm:file-referenced', {
-          detail: { path: fileParts.path, operation, sessionId },
-        }),
-      );
-    }
-  }, [fileParts, isPending, category, sessionId]);
+  // NOTE (run_e626e121): the old swarm:file-referenced dispatch that lived here
+  // is GONE. Canvas auto-surface + the Outputs rail + editor highlight are now
+  // driven by the SINGLE backend-authoritative `swarm:file-changed` event
+  // (streaming_orchestrator → useChatStreamingLifecycle bridge), which carries a
+  // resolved physical absolutePath + a whitelist relevance. This block only ever
+  // re-parsed the backend summary string (a drift-prone tool-TYPE trigger that
+  // missed skill/Bash/pipeline outputs); it is intentionally removed so exactly
+  // one mechanism is alive. `fileParts` is retained ONLY for the clickable link
+  // below (click → open the file), which is a user gesture, not an auto-trigger.
 
   const handlePathClick = (e: React.MouseEvent) => {
     e.preventDefault();

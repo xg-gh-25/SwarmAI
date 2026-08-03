@@ -1,9 +1,14 @@
 /**
  * useReferencedFiles — Tracks files the agent touches during a chat session.
  *
- * Listens for 'swarm:file-referenced' custom events dispatched by MergedToolBlock
- * when tool summaries contain file paths. Maintains a deduplicated, grouped list
- * persisted in sessionStorage (survives component remounts, resets on new session).
+ * Consumes the UNIFIED backend file-change event `swarm:file-changed`
+ * (run_e626e121) — the single backend-authoritative Canvas signal that replaced
+ * the old frontend summary-parse trigger. The event carries a RESOLVED physical
+ * `absolutePath` (so copy-path yields a real path, not an unresolved string) and a
+ * `relevance` classification; bookkeeping files are already dropped server-side, so
+ * everything arriving here is a deliverable or incidental (rail) file. Maintains a
+ * deduplicated, grouped list persisted in sessionStorage (survives remounts, resets
+ * on new session).
  *
  * @exports useReferencedFiles hook
  * @exports ReferencedFile interface
@@ -12,11 +17,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 export type FileOperation = 'written' | 'read' | 'searched';
+export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
 
 export interface ReferencedFile {
-  /** File path as emitted (relative or absolute) */
+  /** File path as emitted (workspace-relative for display) */
   path: string;
-  /** Resolved absolute path (for clipboard copy) */
+  /** Resolved PHYSICAL absolute path (for clipboard copy) — real path, not a copy of `path` */
   absolutePath: string;
   /** Basename for display */
   fileName: string;
@@ -28,18 +34,22 @@ export interface ReferencedFile {
   count: number;
 }
 
-/** Custom event detail shape dispatched by MergedToolBlock */
-export interface FileReferencedDetail {
+/** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
+export interface FileChangedDetail {
   path: string;
+  /** Resolved physical absolute path (backend-resolved once). */
+  absolutePath?: string;
   operation: FileOperation;
-  /** Owning tab's session id (stamped by MergedToolBlock). Consumers filter on
-   *  it to ignore background-tab writes; absent → treated as current (fail-open). */
+  /** Backend whitelist classification; bookkeeping is pre-filtered server-side. */
+  relevance?: FileRelevance;
+  /** Owning tab's session id (stamped by the SSE bridge). Consumers filter on it
+   *  to ignore background-tab writes; absent → treated as current (fail-open). */
   sessionId?: string;
 }
 
 const MAX_FILES = 100;
 const STORAGE_PREFIX = 'swarm:referenced-files:';
-const EVENT_NAME = 'swarm:file-referenced';
+const EVENT_NAME = 'swarm:file-changed';
 
 function getStorageKey(sessionId: string): string {
   return `${STORAGE_PREFIX}${sessionId}`;
@@ -97,8 +107,12 @@ export function useReferencedFiles(sessionId: string | undefined) {
     if (!sessionId) return;
 
     const handler = (e: Event) => {
-      const { path, operation, sessionId: evtSessionId } = (e as CustomEvent<FileReferencedDetail>).detail ?? {};
+      const { path, absolutePath, operation, relevance, sessionId: evtSessionId } =
+        (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
+      // Bookkeeping is dropped server-side, but guard defensively (an older
+      // backend without relevance fails open → treated as listable).
+      if (relevance === 'bookkeeping') return;
       // Tab-scope: all tabs are keep-mounted, so a background tab's dispatch
       // would otherwise be recorded into THIS (active) session's store. Ignore
       // events stamped with a DIFFERENT session. Fail OPEN when unstamped
@@ -113,6 +127,8 @@ export function useReferencedFiles(sessionId: string | undefined) {
           // Update count and operation (promote read→written if now written)
           next.set(path, {
             ...existing,
+            // A later event may carry a resolved absolutePath the first lacked.
+            absolutePath: absolutePath || existing.absolutePath,
             count: existing.count + 1,
             operation: operation === 'written' ? 'written' : existing.operation,
           });
@@ -132,7 +148,9 @@ export function useReferencedFiles(sessionId: string | undefined) {
 
           next.set(path, {
             path,
-            absolutePath: path, // Will be resolved by consumer if relative
+            // Backend-resolved PHYSICAL absolute path (copy-path uses this). Falls
+            // back to the display path only if the backend couldn't resolve it.
+            absolutePath: absolutePath || path,
             fileName: basename(path),
             operation,
             firstSeen: Date.now(),
@@ -146,8 +164,8 @@ export function useReferencedFiles(sessionId: string | undefined) {
       });
     };
 
-    document.addEventListener(EVENT_NAME, handler);
-    return () => document.removeEventListener(EVENT_NAME, handler);
+    window.addEventListener(EVENT_NAME, handler);
+    return () => window.removeEventListener(EVENT_NAME, handler);
   }, [sessionId]);
 
   // Group files by operation (memoized to avoid unnecessary re-renders)

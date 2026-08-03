@@ -2544,11 +2544,28 @@ export function useChatStreamingLifecycle(
           pendingToolUseRef.current = false;
         }
 
-        // ── File change notification — dispatch DOM event for FileEditorCore ──
+        // ── Unified file-change notification (run_e626e121) — the SINGLE
+        //    backend-authoritative Canvas trigger. Carries the enriched payload
+        //    {path (ws-relative), absolutePath (physical, for copy-path),
+        //    relevance (deliverable|incidental|bookkeeping), operation}. ALL three
+        //    consumers read this one DOM event: FileEditorCore highlight,
+        //    useReferencedFiles (rail), useCanvasAutoSurface (deliverable-only pop).
+        //    Stamped with the active sessionId for tab-scoping (background-tab
+        //    writes must not surface in the active tab). Replaces the old frontend
+        //    summary-parse trigger (MergedToolBlock swarm:file-referenced). ──
         if (event.type === 'file_changed') {
-          const path = (event as unknown as Record<string, unknown>).path as string;
+          const e = event as unknown as Record<string, unknown>;
+          const path = e.path as string;
           if (path) {
-            window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path } }));
+            window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+              detail: {
+                path,
+                absolutePath: (e.absolutePath as string) ?? path,
+                relevance: (e.relevance as string) ?? 'deliverable',
+                operation: (e.operation as string) ?? 'written',
+                sessionId: capturedTabId ? tabMapRef.current.get(capturedTabId)?.sessionId : undefined,
+              },
+            }));
           }
         }
 

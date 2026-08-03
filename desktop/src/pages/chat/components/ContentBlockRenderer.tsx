@@ -111,9 +111,10 @@ interface ContentBlockRendererProps {
    *  callback presence, so omitting callbacks alone would still render
    *  live-looking controls. */
   readOnly?: boolean;
-  /** Owning tab's session id — forwarded to MergedToolBlock so its
-   *  swarm:file-referenced dispatch is tab-scoped (keep-mounted background tabs
-   *  otherwise leak into the active tab's Canvas / Referenced-Files). */
+  /** @deprecated (run_e626e121) Forwarded to MergedToolBlock but no longer used —
+   *  file-change tab-scoping moved to the backend-authoritative
+   *  `swarm:file-changed` signal (stamped with sessionId by the SSE bridge). Kept
+   *  to avoid a caller ripple; MergedToolBlock no longer dispatches a file event. */
   sessionId?: string;
 }
 

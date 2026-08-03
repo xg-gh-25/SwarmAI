@@ -107,8 +107,9 @@ export function useChangeStatus(paths: string[]): Map<string, ChangeStatus> {
   // the outputs rail couples click-to-diff to badge==='upd', so a stale badge
   // mis-routes the open. Fix: when the SAME path is written again (the exact
   // signal that its git status may have changed), drop its cache entry + its
-  // current badge so the next resolve re-fetches fresh. Listens to the same
-  // 'swarm:file-referenced' event that feeds the written list.
+  // current badge so the next resolve re-fetches fresh. Consumes the UNIFIED
+  // 'swarm:file-changed' event (run_e626e121) — the 4th consumer of the single
+  // backend-authoritative signal (window-dispatched, like the other three).
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ path?: string; operation?: string }>).detail;
@@ -129,8 +130,8 @@ export function useChangeStatus(paths: string[]): Map<string, ChangeStatus> {
       // lands back in `unresolved` and gets re-fetched.
       setHealTick((t) => t + 1);
     };
-    document.addEventListener('swarm:file-referenced', handler);
-    return () => document.removeEventListener('swarm:file-referenced', handler);
+    window.addEventListener('swarm:file-changed', handler);
+    return () => window.removeEventListener('swarm:file-changed', handler);
   }, []);
 
   useEffect(() => {

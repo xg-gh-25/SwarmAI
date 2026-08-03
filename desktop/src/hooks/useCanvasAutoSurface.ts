@@ -6,7 +6,8 @@
  * for files the agent WRITES and opens the newest one in Canvas ONLY when you
  * are not already looking at something.
  *
- * Trigger: `swarm:file-referenced` with operation==='written'. There is NO turn
+ * Trigger: the unified `swarm:file-changed` (run_e626e121) with operation==='written'
+ * AND relevance==='deliverable'. There is NO turn
  * / message id on that event (verified: MergedToolBlock dispatches {path,
  * operation} only), so "first write of a turn" is unbuildable — instead we
  * DEBOUNCE: a burst of writes coalesces to a single surface of the LAST written
@@ -107,8 +108,15 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
     let pendingPath: string | null = null;
 
     const onWritten = (e: Event) => {
-      const { path, operation, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; sessionId?: string }>).detail ?? {};
+      const { path, operation, relevance, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; sessionId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
+      // WHITELIST gate (run_e626e121): only a backend-classified `deliverable`
+      // auto-surfaces. `incidental` (read/grep/list) lists in the rail but never
+      // pops. bookkeeping is already dropped server-side. This replaces the old
+      // isBookkeepingPath() blacklist call below. Fail OPEN for an older backend
+      // that doesn't send `relevance` (undefined → treat a write as deliverable,
+      // preserving legacy behavior; no regression).
+      if (relevance !== undefined && relevance !== 'deliverable') return;
       // Streaming gate (bug1) — checked at WRITE-ARRIVAL, not debounce-fire,
       // because a historical MergedToolBlock re-dispatch arrives while the tab
       // is idle. Active ONLY when isStreaming was explicitly provided:
@@ -126,6 +134,9 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       // id yet — surface anyway rather than regress (legacy path, gate off).
       const activeId = activeSessionIdRef.current;
       if (evtSessionId && activeId && evtSessionId !== activeId) return;
+      // Local bookkeeping fallback (kept as defense-in-depth for an older backend
+      // that doesn't classify relevance; the primary filter is the server-side
+      // `relevance` gate above + server-side drop of bookkeeping paths).
       if (isBookkeepingPath(path)) return;
       // Coalesce a burst → last written path wins.
       pendingPath = path;
@@ -154,9 +165,9 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       }, debounceMs);
     };
 
-    document.addEventListener('swarm:file-referenced', onWritten);
+    window.addEventListener('swarm:file-changed', onWritten);
     return () => {
-      document.removeEventListener('swarm:file-referenced', onWritten);
+      window.removeEventListener('swarm:file-changed', onWritten);
       if (timer) clearTimeout(timer);
     };
   }, [debounceMs]);
