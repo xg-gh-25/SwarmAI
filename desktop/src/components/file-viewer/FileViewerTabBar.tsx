@@ -65,7 +65,7 @@ export default function FileViewerTabBar({
                 transition-colors duration-100
                 border-b-2
                 ${isActive
-                  ? 'bg-[var(--color-bg)] text-[var(--color-text)] border-[var(--color-accent)]'
+                  ? 'bg-[var(--color-bg)] text-[var(--color-text)] border-[var(--color-primary)]'
                   : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] border-transparent hover:bg-[var(--color-bg-hover)]'
                 }
               `}

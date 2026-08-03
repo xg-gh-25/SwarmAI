@@ -509,23 +509,41 @@ export default function FileViewer({
   /*  Layout                                                         */
   /* -------------------------------------------------------------- */
 
+  // Which view types delegate to FileEditorCore, which renders its OWN footer
+  // (language chip + Save/Close). For these, a FileViewerStatusBar below would be
+  // a SECOND footer (the double-footer bug). This is the EXACT set routed to
+  // FileEditorCore at renderActiveContent() — NOT isEditableType(), which also
+  // includes 'csv' → CsvRenderer (a lazy renderer with NO own footer, so csv
+  // still needs the status bar). Gate-1 CRITICAL catch (run_09431085).
+  const hasOwnFooter =
+    activeTab != null &&
+    (activeTab.viewType === 'text' ||
+      activeTab.viewType === 'markdown' ||
+      activeTab.viewType === 'svg');
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]">
-      {/* Tab bar */}
-      <FileViewerTabBar
-        tabs={tabs}
-        activeTabId={activeTab?.id ?? null}
-        onSwitch={switchTab}
-        onClose={handleCloseTab}
-      />
+      {/* Tab bar — the Canvas OUTPUTS list is the file selector in panel variant,
+          so the redundant horizontal tab strip is only for the modal variant.
+          (v6 Canvas redesign, run_09431085.) */}
+      {variant === 'modal' && (
+        <FileViewerTabBar
+          tabs={tabs}
+          activeTabId={activeTab?.id ?? null}
+          onSwitch={switchTab}
+          onClose={handleCloseTab}
+        />
+      )}
 
       {/* Renderer area */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {renderActiveContent()}
       </div>
 
-      {/* Status bar — shown when there is an active tab with loaded content */}
-      {activeTab && !loadingContent && !contentError && (
+      {/* Status bar — ONE footer only. Suppressed for text/markdown/svg because
+          FileEditorCore already renders its own footer for those (double-footer
+          dedup); kept for binary/csv renderers that have no footer of their own. */}
+      {activeTab && !loadingContent && !contentError && !hasOwnFooter && (
         <FileViewerStatusBar
           fileName={activeTab.fileName}
           fileSize={statusBarInfo.fileSize}

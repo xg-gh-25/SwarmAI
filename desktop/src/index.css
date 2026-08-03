@@ -777,18 +777,53 @@ body {
    All colors are theme variables — no hardcoded hex. */
 .canvas-spout {
   position: absolute;
-  left: -6px;
+  left: -10px;
   top: 50%;
   transform: translateY(-50%) rotate(45deg);
-  width: 12px;
-  height: 12px;
+  width: 20px;
+  height: 20px;
   background: var(--color-bg);
   border-left: 1.5px solid var(--spout-tint, var(--color-primary));
   border-bottom: 1.5px solid var(--spout-tint, var(--color-primary));
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: 5px;
   box-shadow: -3px 3px 8px rgba(0, 0, 0, 0.35);
   z-index: 2;
   pointer-events: none;
+}
+
+/* Canvas OUTPUTS nav-bar: an accent-tinted top bar (gradient from --color-primary)
+   above the accent bottom-border — reads as "belonging to the active tab", the
+   same visual language as the active chat-tab chip. All theme-var driven. */
+.canvas-outputs-navbar {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-primary) 18%, var(--color-card)),
+    color-mix(in srgb, var(--color-primary) 9%, var(--color-card))
+  );
+}
+
+/* Collapsed rail: the whole Canvas as a thin vertical strip. Vertical text reads
+   up the strip; accent tint matches the nav-bar so the collapsed state still reads
+   as the active tab's Canvas. */
+.canvas-rail {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-primary) 16%, var(--color-card)),
+    color-mix(in srgb, var(--color-primary) 8%, var(--color-card))
+  );
+  transition: background 0.15s;
+}
+.canvas-rail:hover {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-primary) 26%, var(--color-card)),
+    color-mix(in srgb, var(--color-primary) 14%, var(--color-card))
+  );
+}
+.canvas-rail-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
 }
 
 /* Canvas ↔ chat divider: a colorful tinted seam instead of the plain grey

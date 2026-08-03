@@ -59,9 +59,9 @@ export function isBookkeepingPath(path: string): boolean {
   return false;
 }
 
-const BADGE_STYLE: Record<ChangeStatus, { label: string; cls: string }> = {
-  new: { label: 'NEW', cls: 'text-green-400 bg-green-400/10' },
-  upd: { label: 'UPD', cls: 'text-yellow-500 bg-yellow-500/10' },
+const BADGE_STYLE: Record<ChangeStatus, { dotCls: string; tag: string; tagCls: string }> = {
+  new: { dotCls: 'bg-green-400', tag: 'NEW', tagCls: 'text-green-400' },
+  upd: { dotCls: 'bg-yellow-500', tag: 'UPD', tagCls: 'text-yellow-500' },
 };
 
 /** Sort: NEW first, then UPD, then unbadged; newest-first within a group. */
@@ -85,12 +85,27 @@ export function outputRowOpenDetail(
   return { path, autoDiff: false };
 }
 
+/** Directory portion of a path (everything before the basename), for the dim
+ *  right-aligned locator. Empty string when the path has no directory.
+ *  Paths here are always POSIX workspace paths (`/Users/.../file`); a Windows
+ *  drive-root like `C:\x` would yield `C:` as the "dir", but that input class
+ *  cannot occur in this macOS/Linux app — not defended (adversarial MED,
+ *  run_09431085; cosmetic-only + non-triggering, so no dead guard added). */
+function dirOf(path: string): string {
+  const norm = path.replace(/\\/g, '/');
+  const i = norm.lastIndexOf('/');
+  return i > 0 ? norm.slice(0, i) : '';
+}
+
 const OutputRow = memo(function OutputRow({
   file,
   badge,
+  selected,
 }: {
   file: ReferencedFile;
   badge: ChangeStatus | undefined;
+  /** True when this row's file is the one shown in Region B below → accent left-bar. */
+  selected: boolean;
 }) {
   const handleClick = useCallback(() => {
     // Always open on source (single gutter). Diff is reached via the editor's
@@ -108,21 +123,48 @@ const OutputRow = memo(function OutputRow({
     [file.absolutePath, file.path],
   );
 
+  const style = badge ? BADGE_STYLE[badge] : null;
+  const dir = dirOf(file.path);
+
+  // Row = [status dot] [mono name] [NEW/UPD tag] [dir · right-aligned] [copy · hover].
+  // Selected row carries an accent left-bar (::before) — the ONE signal linking
+  // the stream to the focused file below. Uses --color-primary (the active-tab
+  // accent) so Canvas reads as belonging to the current tab.
   return (
     <div
-      className="group flex h-6 items-center gap-1 px-2 cursor-pointer hover:bg-[var(--color-hover)] rounded text-[12px] transition-colors"
+      className={`group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors ${
+        selected
+          ? 'bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]'
+          : 'hover:bg-[var(--color-hover)]'
+      }`}
       onClick={handleClick}
       title={file.path}
+      data-selected={selected || undefined}
+      data-testid="canvas-output-row"
     >
-      {badge && (
-        <span className={`shrink-0 rounded px-1 text-[9px] font-bold tracking-wide ${BADGE_STYLE[badge].cls}`}>
-          {BADGE_STYLE[badge].label}
+      {selected && (
+        <span
+          aria-hidden="true"
+          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-primary)]"
+        />
+      )}
+      {style && <span className={`shrink-0 w-[7px] h-[7px] rounded-full ${style.dotCls}`} aria-hidden="true" />}
+      <span
+        className={`shrink-0 truncate font-mono ${
+          selected ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text-muted)]'
+        }`}
+      >
+        {file.fileName}
+      </span>
+      {style && <span className={`shrink-0 text-[9px] font-bold tracking-wide ${style.tagCls}`}>{style.tag}</span>}
+      {dir && (
+        <span className="ml-auto truncate font-mono text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+          {dir}
         </span>
       )}
-      <span className="flex-1 truncate font-mono text-[var(--color-text)]">{file.fileName}</span>
       <button
         onClick={handleCopy}
-        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all"
+        className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
         title="Copy path"
         aria-label={`Copy path of ${file.fileName}`}
       >
@@ -143,9 +185,11 @@ export interface CanvasOutputRailProps {
   sessionId: string | undefined;
   /** Reports the current counts up to the header (for the summary line). */
   onCounts?: (counts: OutputCounts) => void;
+  /** Path of the file currently shown in Region B — gets the accent left-bar. */
+  selectedPath?: string;
 }
 
-export function CanvasOutputRail({ sessionId, onCounts }: CanvasOutputRailProps) {
+export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCounts, selectedPath }: CanvasOutputRailProps) {
   const { files: grouped } = useReferencedFiles(sessionId ?? '');
 
   // Real deliverables only: written group minus bookkeeping noise.
@@ -199,10 +243,15 @@ export function CanvasOutputRail({ sessionId, onCounts }: CanvasOutputRailProps)
   }
 
   return (
-    <div className="py-0.5" data-testid="canvas-output-rail">
+    <div className="flex flex-col gap-px py-0.5" data-testid="canvas-output-rail">
       {ordered.map((file) => (
-        <OutputRow key={file.path} file={file} badge={statusMap.get(file.path)} />
+        <OutputRow
+          key={file.path}
+          file={file}
+          badge={statusMap.get(file.path)}
+          selected={selectedPath === file.path}
+        />
       ))}
     </div>
   );
-}
+});

@@ -22,6 +22,11 @@ export const PANEL_CONSTANTS = {
   STORAGE_KEY: 'fileViewerPanelWidth',
 } as const;
 
+/** Width of the collapsed vertical rail (whole panel → a thin clickable strip). */
+const RAIL_WIDTH = 38;
+const OUTPUTS_COLLAPSED_KEY = 'canvasOutputsCollapsed';
+const RAILED_KEY = 'canvasRailed';
+
 function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
@@ -29,6 +34,17 @@ function getStoredWidth(): number {
   const parsed = parseInt(stored, 10);
   if (isNaN(parsed)) return PANEL_CONSTANTS.DEFAULT_WIDTH;
   return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, parsed));
+}
+
+function getStoredBool(key: string): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(key) === '1';
+}
+
+function setStoredBool(key: string, val: boolean): void {
+  try {
+    localStorage.setItem(key, val ? '1' : '0');
+  } catch { /* quota — no-op */ }
 }
 
 type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
@@ -115,6 +131,24 @@ function FileViewerPanelImpl({
   // culprit (a half-panel that read as broken). Outputs stay reachable via the
   // Canvas nav card re-open, not a stunted dock.
 
+  // ── Two-level collapse (v6 redesign, run_09431085) ──
+  // (1) outputsCollapsed: caret in the OUTPUTS bar folds ONLY the output LIST —
+  //     the bar + Region-B file stay, panel keeps full width. Space goes to the file.
+  // (2) railed: the whole Canvas collapses to a ~38px vertical strip showing a
+  //     rotated "Canvas · Outputs" + count; click the strip to expand. This is
+  //     NOT the removed bug6 dock (a stunted HALF-panel that read as broken) — it
+  //     is an intentional, obviously-clickable rail with a clear expand affordance.
+  const [outputsCollapsed, setOutputsCollapsed] = useState(() => getStoredBool(OUTPUTS_COLLAPSED_KEY));
+  const [railed, setRailed] = useState(() => getStoredBool(RAILED_KEY));
+  const toggleOutputs = useCallback(() => {
+    setOutputsCollapsed((v) => { const n = !v; setStoredBool(OUTPUTS_COLLAPSED_KEY, n); return n; });
+  }, []);
+  const collapseToRail = useCallback(() => { setRailed(true); setStoredBool(RAILED_KEY, true); }, []);
+  const expandFromRail = useCallback(() => { setRailed(false); setStoredBool(RAILED_KEY, false); }, []);
+
+  // The file shown in Region B — drives the accent left-bar on its output row.
+  const selectedPath = props.initialFile?.filePath;
+
   // Output counts published by the rail — drives the header summary.
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
@@ -181,6 +215,49 @@ function FileViewerPanelImpl({
     };
   }, [isDragging, updateWidth]);
 
+  // ── Collapsed rail: the whole Canvas as a thin clickable vertical strip ──
+  // Click anywhere on it → expand. Vertical "Canvas · Outputs" + count carry the
+  // accent (var(--color-primary)) so it still reads as belonging to the active tab.
+  if (railed) {
+    return (
+      <div
+        className="relative flex-shrink-0 canvas-width-reveal"
+        style={{ width: RAIL_WIDTH, '--spout-tint': canvasTint } as CSSProperties}
+        data-testid="file-viewer-panel"
+      >
+        <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
+        <button
+          type="button"
+          onClick={expandFromRail}
+          className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l-2 border-[var(--color-primary)]"
+          title="Expand Canvas"
+          aria-label="Expand Canvas"
+          data-testid="canvas-rail"
+        >
+          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
+          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Outputs</span>
+          {counts.total > 0 && (
+            <span className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]">
+              {counts.total} file{counts.total !== 1 ? 's' : ''}
+              {counts.neu > 0 && <span className="text-green-400"> · {counts.neu} new</span>}
+            </span>
+          )}
+        </button>
+        {/* Rail-count must stay LIVE: the rail displays counts.total, but the rail
+            component is the ONLY source of counts (onCounts→setCounts). Keep it
+            MOUNTED-but-hidden while railed (display:none) so a file written while
+            collapsed still bumps the strip's "N files" — otherwise the count
+            freezes at the pre-rail value (the self-suppressing-count class,
+            IMPROVEMENT.md:7). Zero-size, no visual footprint. */}
+        {stableSessionId !== undefined && (
+          <div className="hidden" aria-hidden="true">
+            <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} selectedPath={selectedPath} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`relative flex-shrink-0 flex ${isDragging ? '' : 'canvas-width-reveal'}`}
@@ -222,18 +299,28 @@ function FileViewerPanelImpl({
             occluded on narrow widths (item 3). */}
         {stableSessionId !== undefined && (
           <div
-            className="flex-shrink-0 border-b-2 border-[var(--color-border-strong,var(--color-border))] bg-[var(--color-bg-secondary,var(--color-card))]"
+            className="flex-shrink-0 border-b-2 border-[var(--color-primary)] canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
           >
-            <div className="flex items-center gap-2 px-2.5 h-8 text-[11px] text-[var(--color-text-muted)]">
-              {/* Count summary (item 2): "Outputs · N" + new/modified breakdown. */}
-              <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                <span className="font-semibold tracking-wide uppercase shrink-0">Outputs</span>
+            <div className="flex items-center gap-2 px-2 h-9 text-[11px] text-[var(--color-text-muted)]">
+              {/* Caret — folds ONLY the output list (panel keeps full width). */}
+              <button
+                onClick={toggleOutputs}
+                className="shrink-0 p-0.5 -ml-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all"
+                title={outputsCollapsed ? 'Show outputs' : 'Hide outputs list'}
+                aria-label={outputsCollapsed ? 'Show outputs list' : 'Hide outputs list'}
+                aria-expanded={!outputsCollapsed}
+                data-testid="canvas-outputs-caret"
+              >
+                <span className={`material-symbols-outlined text-[18px] block transition-transform duration-200 ${outputsCollapsed ? '-rotate-90' : ''}`}>expand_more</span>
+              </button>
+              {/* Brand + count: "Canvas · Outputs  N files · M new" */}
+              <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
+                <span className="font-bold tracking-[0.09em] uppercase shrink-0 text-[var(--color-text)]">
+                  Canvas<span className="text-[color-mix(in_srgb,var(--color-primary)_60%,var(--color-text-muted))]"> · Outputs</span>
+                </span>
                 {counts.total > 0 && (
-                  <span className="shrink-0 text-[var(--color-text-faint,var(--color-text-muted))]">·</span>
-                )}
-                {counts.total > 0 && (
-                  <span className="truncate">
+                  <span className="truncate text-[var(--color-text-muted)]">
                     {counts.total}
                     {(counts.neu > 0 || counts.upd > 0) && (
                       <span className="text-[var(--color-text-faint,var(--color-text-muted))]">
@@ -278,6 +365,15 @@ function FileViewerPanelImpl({
                   toggle) + Close. No collapse-to-dock (removed, bug6). */}
               <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-window-controls">
                 <button
+                  onClick={collapseToRail}
+                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
+                  title="Collapse Canvas to a side rail"
+                  aria-label="Collapse Canvas to a side rail"
+                  data-testid="canvas-collapse-rail-btn"
+                >
+                  <span className="material-symbols-outlined text-[14px]">right_panel_close</span>
+                </button>
+                <button
                   onClick={toggleExpand}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
                   title={expanded ? 'Restore width' : 'Expand — widen the Canvas for review'}
@@ -296,8 +392,15 @@ function FileViewerPanelImpl({
                 </button>
               </div>
             </div>
-            <div className="max-h-32 overflow-y-auto px-1.5 pb-1.5">
-              <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} />
+            {/* Output list — the caret folds ONLY the list (panel keeps full
+                width; space goes to the Region-B file). Kept MOUNTED-but-hidden
+                when collapsed (not unmounted) so counts + onCanvasMeta stay live
+                — the bar's "N files" summary keeps updating while folded. */}
+            <div
+              className={outputsCollapsed ? 'hidden' : 'max-h-32 overflow-y-auto px-1.5 pb-1.5'}
+              data-testid="canvas-outputs-list"
+            >
+              <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} selectedPath={selectedPath} />
             </div>
           </div>
         )}

@@ -11,6 +11,13 @@
  *
  * Heavy children (tab bar, editor core, api, renderers) are mocked to leaf stubs
  * so we test the scope-clearing wiring only.
+ *
+ * NOTE (v6, run_09431085): the tab-scope clearing logic (useFileViewerTabs +
+ * tabScopeKey effect) is variant-INDEPENDENT, but the horizontal FileViewerTabBar
+ * — the observable used here to read the internal tab list — now renders only in
+ * the MODAL variant (the PANEL variant uses the Canvas OUTPUTS list as selector).
+ * So these tests render variant="modal" to observe the same clearing logic through
+ * the surface that still shows the tab list. The logic under test is unchanged.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -46,7 +53,7 @@ describe('FileViewer tabScopeKey', () => {
 
   it('opens a file into an internal tab, then CLEARS on tabScopeKey change (no bleed)', async () => {
     const { rerender } = render(
-      <FileViewer variant="panel" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
     );
     // a.md is an internal tab
     expect(await screen.findByText('a.md')).toBeTruthy();
@@ -54,7 +61,7 @@ describe('FileViewer tabScopeKey', () => {
 
     // Switch chat tab → tabScopeKey changes, new tab has its own file b.md.
     rerender(
-      <FileViewer variant="panel" onClose={() => {}} tabScopeKey="tab-B" initialFile={md('b.md')} />,
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-B" initialFile={md('b.md')} />,
     );
     // a.md must be GONE (cleared), only b.md present — no bleed.
     expect(await screen.findByText('b.md')).toBeTruthy();
@@ -64,7 +71,7 @@ describe('FileViewer tabScopeKey', () => {
 
   it('does NOT clear on the first render (undefined→first scope must not wipe a fresh open)', async () => {
     render(
-      <FileViewer variant="panel" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
+      <FileViewer variant="modal" onClose={() => {}} tabScopeKey="tab-A" initialFile={md('a.md')} />,
     );
     // The first scope set must not wipe the just-opened file.
     expect(await screen.findByText('a.md')).toBeTruthy();
