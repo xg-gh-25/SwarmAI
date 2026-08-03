@@ -2566,6 +2566,11 @@ export function useChatStreamingLifecycle(
                 // 'incidental' (lists in the rail, never auto-pops) — directive #3
                 // 别什么都 trigger 成噪音. The current backend always sends it.
                 relevance: (e.relevance as string) ?? 'incidental',
+                // Unified review verdict (run_dcce7023): content|knowledge → rail+pop;
+                // source → aggregated into the pipeline-finish local PR (NOT the rail);
+                // process → never (already dropped server-side). Omitted by an older
+                // backend → undefined → consumers fall back to `relevance` (migration).
+                kind: (e.kind as string) ?? undefined,
                 operation: (e.operation as string) ?? 'written',
                 sessionId: _stampSession,
               },

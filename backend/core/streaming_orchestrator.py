@@ -294,6 +294,7 @@ class StreamingOrchestrator:
         fragment) — emitting it produced a broken Canvas row ("Resource not found").
         """
         from core.file_change_classifier import classify_relevance
+        from core.needs_human_review import needs_human_review
         from core.project_registry import get_swarmws
         from routers.workspace_api import resolve_path_to_physical
 
@@ -320,11 +321,26 @@ class StreamingOrchestrator:
             # unresolvable write is the design's safe direction (a miss ≫ a false pop).
             if not resolved:
                 continue
+            # Enrich with the unified review verdict (run_dcce7023). needs_human_review
+            # does its OWN owning-tree resolution + relativization on the resolved
+            # ABSOLUTE path (never trusts resolved["relative"], which is the absolute
+            # string in the no-project-match branch — the F-NEW-2 seam trap). Runs a
+            # `git check-ignore` subprocess, so off-loop via to_thread. Fail-safe: it
+            # never raises; `kind` is additive — `relevance` is KEPT for the 4 existing
+            # consumers during the migration window (single-writer safety).
+            try:
+                verdict = await asyncio.to_thread(
+                    needs_human_review, resolved["absolute"], "written"
+                )
+                kind = verdict.kind
+            except Exception:
+                kind = "content"  # fail-open: a resolved deliverable surfaces
             events.append({
                 "type": "file_changed",
                 "path": resolved["relative"],
                 "absolutePath": resolved["absolute"],
                 "relevance": relevance,
+                "kind": kind,
                 "operation": "written",
             })
         return events

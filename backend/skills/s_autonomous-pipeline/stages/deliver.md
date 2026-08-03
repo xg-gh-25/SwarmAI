@@ -1051,6 +1051,20 @@ push_ready or if `files_touched` is empty, and WARNS (listing them) if the worki
 tree has changes this run didn't track — so a forgotten record surfaces loudly
 instead of silently committing the wrong set.
 
+**Local PR (run_dcce7023) — surface it EXPLICITLY, it does NOT auto-pop.** When there
+are source-repo commits, `run-commit` also writes a `LOCAL_PR.md` (TL;DR + this-run
+commits + files-changed + REPORT link + PUSH-READY state) and returns its path as
+`local_pr` in the JSON output. Because the pipeline runs source changes as `kind=source`
+(deliberately NOT per-file popped, XG: 真实 repo 改动中途不 display,收尾聚成 PR),
+this aggregate is the review home for them — but it is written by THIS CLI subprocess,
+so no `file_changed` event auto-fires for it (and it lives under `.artifacts/` = a
+`process` path). **The agent MUST surface it as an explicit COMPLETE-stage action:**
+read the `local_pr` path from the JSON, present the LOCAL_PR.md contents **inline in the
+chat** (the visible channel, STEERING #13), and open the Canvas panel via the existing
+`ui_action open-canvas`. (There is intentionally no `open-file` action — host-path
+infoleak, `ui_actions.py`; the agent presents the content itself, it does not hand the
+UI a host path.)
+
 **Why this boundary exists:**
 - Local commit is safe + reversible; push is a deployment decision (user controls
   when the remote — possibly PUBLIC — gets updated).

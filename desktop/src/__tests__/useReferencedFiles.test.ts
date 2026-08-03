@@ -23,6 +23,15 @@ function dispatchFileRef(
   );
 }
 
+/** Dispatch with an explicit review `kind` (run_dcce7023). */
+function dispatchWithKind(path: string, kind: string) {
+  window.dispatchEvent(
+    new CustomEvent('swarm:file-changed', {
+      detail: { path, operation: 'written', absolutePath: path, relevance: 'deliverable', kind },
+    }),
+  );
+}
+
 describe('useReferencedFiles', () => {
   const SESSION_ID = 'test-session-123';
 
@@ -50,6 +59,35 @@ describe('useReferencedFiles', () => {
     expect(result.current.totalCount).toBe(1);
     expect(result.current.files.written[0].path).toBe('~/file.py');
     expect(result.current.files.written[0].fileName).toBe('file.py');
+  });
+
+  // ── AC5 (run_dcce7023): the unified review `kind` gates rail membership ──
+  it('EXCLUDES kind=source from the rail (aggregated into the local PR instead)', () => {
+    const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
+    act(() => dispatchWithKind('backend/core/foo.py', 'source'));
+    expect(result.current.totalCount).toBe(0);
+  });
+
+  it('EXCLUDES kind=process from the rail (machine noise)', () => {
+    const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
+    act(() => dispatchWithKind('Projects/X/.artifacts/runs/y/REPORT.md', 'process'));
+    expect(result.current.totalCount).toBe(0);
+  });
+
+  it('ADMITS kind=content and kind=knowledge, carrying the kind onto the file', () => {
+    const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
+    act(() => dispatchWithKind('Knowledge/Designs/foo.md', 'content'));
+    act(() => dispatchWithKind('MEMORY.md', 'knowledge'));
+    expect(result.current.totalCount).toBe(2);
+    const byName = Object.fromEntries(result.current.files.written.map((f) => [f.fileName, f.kind]));
+    expect(byName['foo.md']).toBe('content');
+    expect(byName['MEMORY.md']).toBe('knowledge');
+  });
+
+  it('undefined kind (older backend) still lands in the rail (migration fallback)', () => {
+    const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
+    act(() => dispatchFileRef('~/legacy.py'));  // no kind
+    expect(result.current.totalCount).toBe(1);
   });
 
   it('does NOT clear the list on a transient sessionId=undefined (tab-switch flicker)', () => {

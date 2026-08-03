@@ -311,6 +311,15 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
         "bind_repo: bound '%s' → worktree=%s, code_intel=%s, nodes=%d",
         binding.repo, worktree, db_path, node_count,
     )
+    # A new worktree now exists on disk → the review-verdict authority's cached
+    # worktree map is stale (it would misclassify this repo's source files until
+    # daemon restart, Gate-2 F2). Invalidate it now. Local import avoids an import
+    # cycle (needs_human_review imports ddd_bindings.load_bindings function-locally).
+    try:
+        from core.needs_human_review import clear_worktree_cache
+        clear_worktree_cache()
+    except Exception:  # noqa: BLE001 — cache invalidation must never fail a bind
+        pass
     return BindResult(worktree=str(worktree), code_intel_db=str(db_path), node_count=node_count)
 
 

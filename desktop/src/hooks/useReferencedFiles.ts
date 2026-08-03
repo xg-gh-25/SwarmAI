@@ -25,6 +25,11 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 export type FileOperation = 'written';
 export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
 
+/** Unified review-verdict kind (backend needs_human_review, run_dcce7023):
+ *  content|knowledge → surface in the rail (+pop); source → aggregated into the
+ *  pipeline-finish local PR, NOT the rail; process → never (dropped server-side). */
+export type ReviewKind = 'content' | 'knowledge' | 'source' | 'process';
+
 export interface ReferencedFile {
   /** File path as emitted (workspace-relative for display) */
   path: string;
@@ -38,6 +43,8 @@ export interface ReferencedFile {
   firstSeen: number;
   /** Number of times referenced */
   count: number;
+  /** Unified review verdict kind (undefined from an older backend). */
+  kind?: ReviewKind;
 }
 
 /** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
@@ -48,6 +55,10 @@ export interface FileChangedDetail {
   operation: FileOperation;
   /** Backend whitelist classification; bookkeeping is pre-filtered server-side. */
   relevance?: FileRelevance;
+  /** Unified review verdict kind (run_dcce7023): content|knowledge → rail; source →
+   *  local PR (not rail); process → never. Undefined from an older backend → the
+   *  consumer falls back to `relevance` (migration window). */
+  kind?: ReviewKind;
   /** Owning tab's session id (stamped by the SSE bridge). Consumers filter on it
    *  to ignore background-tab writes; absent → treated as current (fail-open). */
   sessionId?: string;
@@ -113,12 +124,19 @@ export function useReferencedFiles(sessionId: string | undefined) {
     if (!sessionId) return;
 
     const handler = (e: Event) => {
-      const { path, absolutePath, operation, relevance, sessionId: evtSessionId } =
+      const { path, absolutePath, operation, relevance, kind, sessionId: evtSessionId } =
         (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
       // Bookkeeping is dropped server-side, but guard defensively (an older
       // backend without relevance fails open → treated as listable).
       if (relevance === 'bookkeeping') return;
+      // AC5 (run_dcce7023): the unified verdict decides rail membership.
+      //  - process → never in the rail (machine noise; also dropped server-side).
+      //  - source  → aggregated into the pipeline-finish local PR, NOT per-file in
+      //              the rail (XG: 真实 repo 改动中途不 display, 收尾聚成 PR).
+      //  - content|knowledge (or undefined from an older backend) → rail.
+      // Undefined kind falls through to the rail (migration: relevance still gates pop).
+      if (kind === 'process' || kind === 'source') return;
       // Tab-scope: all tabs are keep-mounted, so a background tab's dispatch
       // would otherwise be recorded into THIS (active) session's store. Ignore
       // events stamped with a DIFFERENT session. Fail OPEN when unstamped
@@ -137,6 +155,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
             ...existing,
             absolutePath: absolutePath || existing.absolutePath,
             count: existing.count + 1,
+            kind: kind ?? existing.kind,
           });
         } else {
           // Enforce cap — evict oldest if at limit
@@ -161,6 +180,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
             operation,
             firstSeen: Date.now(),
             count: 1,
+            kind,
           });
         }
 

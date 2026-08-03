@@ -270,3 +270,43 @@ class TestRunCommitPersistsCommits:
         assert data.get("concurrent_marker") == "from_parallel_stage", \
             "G1 write must re-read fresh and NOT clobber a concurrent field update"
         assert len(data.get("commits", [])) == 1, "commits still persisted"
+
+
+# ── AC7 (run_dcce7023): the pipeline-finish local PR ──────────────────────────
+class TestLocalPR:
+    """_write_local_pr aggregates a run's SOURCE changes into LOCAL_PR.md at finish.
+
+    The file list comes from committed[].files (= git diff ∩ files_touched, the
+    actually-committed set), NOT a bare base..HEAD range (F-NEW-3 / R29).
+    """
+
+    def test_writes_local_pr_with_commits_and_files(self, tmp_path):
+        from scripts.artifact_cli import _write_local_pr
+
+        run_dir = tmp_path / "runs" / "run_x"
+        run_dir.mkdir(parents=True)
+        committed = [
+            {"repo": "/repo/swarmai", "sha": "abc1234",
+             "files": ["backend/core/needs_human_review.py", "backend/core/nhr_test.py"]},
+        ]
+        p = _write_local_pr(run_dir, "run_x", "Unify review trigger", committed, [])
+        assert p.exists()
+        body = p.read_text(encoding="utf-8")
+        assert "# Local PR — run_x" in body
+        assert "Unify review trigger" in body            # TL;DR
+        assert "PUSH-READY" in body                       # state
+        assert "abc1234" in body                          # commit sha
+        assert "backend/core/needs_human_review.py" in body  # a committed file
+        assert "2 file(s)" in body                        # count
+
+    def test_local_pr_includes_warnings(self, tmp_path):
+        from scripts.artifact_cli import _write_local_pr
+
+        run_dir = tmp_path / "runs" / "run_y"
+        run_dir.mkdir(parents=True)
+        committed = [{"repo": "/r", "sha": "def5678", "files": ["a.py"]}]
+        p = _write_local_pr(run_dir, "run_y", "req", committed,
+                            ["[/r] working tree has 1 change NOT tracked by this run"])
+        body = p.read_text(encoding="utf-8")
+        assert "⚠️ Warnings" in body
+        assert "NOT tracked by this run" in body

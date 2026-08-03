@@ -108,14 +108,16 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
     let pendingPath: string | null = null;
 
     const onWritten = (e: Event) => {
-      const { path, operation, relevance, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; sessionId?: string }>).detail ?? {};
+      const { path, operation, relevance, kind, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; kind?: string; sessionId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
-      // WHITELIST gate (run_e626e121): only a backend-classified `deliverable`
-      // auto-surfaces. `incidental` (read/grep/list) lists in the rail but never
-      // pops. bookkeeping is already dropped server-side. This replaces the old
-      // isBookkeepingPath() blacklist call below. Fail OPEN for an older backend
-      // that doesn't send `relevance` (undefined → treat a write as deliverable,
-      // preserving legacy behavior; no regression).
+      // Unified-verdict gate (run_dcce7023, PRIMARY): only content|knowledge auto-pop.
+      // `source` is aggregated into the pipeline-finish local PR (never mid-run pop);
+      // `process` is machine noise (also dropped server-side). Undefined kind (older
+      // backend) → fall through to the legacy `relevance` gate below (no regression).
+      if (kind !== undefined && kind !== 'content' && kind !== 'knowledge') return;
+      // WHITELIST gate (run_e626e121, legacy/migration): only a backend-classified
+      // `deliverable` auto-surfaces. Fail OPEN for an older backend that doesn't send
+      // `relevance` (undefined → treat a write as deliverable, no regression).
       if (relevance !== undefined && relevance !== 'deliverable') return;
       // Streaming gate (bug1) — checked at WRITE-ARRIVAL, not debounce-fire,
       // because a historical MergedToolBlock re-dispatch arrives while the tab

@@ -1874,12 +1874,76 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
         except (OSError, json.JSONDecodeError) as e:
             warnings.append(f"commits recorded to git but not persisted to run.json: {e}")
 
+    # ── AC7 (run_dcce7023): generate the pipeline-finish "local PR" ──────────
+    # Source changes are NOT displayed per-file mid-run (they carry kind=source →
+    # excluded from the Canvas rail). Their review home is HERE: one aggregated
+    # local-PR at finish (XG: 真实 repo 改动 …… 最后 commits 方式处理, 中途不 display).
+    # Files come from `committed[].files` = `git diff --cached --name-only` — the
+    # ACTUALLY-committed set (git diff ∩ files_touched), never a bare base..HEAD
+    # range (which would bleed in a parallel session's commits — F-NEW-3 / R29).
+    local_pr_path = None
+    try:
+        if committed:
+            local_pr_path = _write_local_pr(
+                _run_dir(args.project, args.run_id), args.run_id,
+                requirement, committed, warnings,
+            )
+    except Exception as e:  # noqa: BLE001 — never let PR-gen fail the commit
+        warnings.append(f"local PR not generated: {e}")
+
     print(json.dumps({
         "committed": committed,
         "warnings": warnings,
         "pushed": False,  # NEVER — push is user-initiated (STEERING #5)
+        "local_pr": str(local_pr_path) if local_pr_path else None,
         "note": "Local commit only. To push: `git push origin main` (user decision).",
     }, indent=2))
+
+
+def _write_local_pr(run_dir: Path, run_id: str, requirement: str,
+                    committed: list[dict], warnings: list[str]) -> Path:
+    """Write LOCAL_PR.md — the finish-time aggregate of a run's SOURCE changes.
+
+    Content (AC7): TL;DR + this-run commits + files-changed (from committed[].files,
+    i.e. git diff ∩ files_touched) + a REPORT link + PUSH-READY state. Returns the
+    written path. Pure-ish: only writes the one file into the run dir.
+
+    ⚠️ This file does NOT auto-surface to Canvas. It's written by this CLI subprocess
+    (no streaming `file_changed` event fires for it) and lives under `.artifacts/`
+    (a `process` path per needs_human_review). The path is returned as `local_pr` in
+    run-commit's JSON; the AGENT surfaces it explicitly at pipeline COMPLETE — presents
+    the contents inline + opens Canvas via `ui_action open-canvas` (deliver.md). This
+    is the design's "knowing party declares the deliverable", not an auto-sniff.
+    """
+    total_files = sum(len(c.get("files", [])) for c in committed)
+    lines = [
+        f"# Local PR — {run_id}",
+        "",
+        f"**TL;DR** — {requirement}",
+        "",
+        f"**State: PUSH-READY** — committed locally, NOT pushed "
+        f"(push is your call: `git push origin main`).",
+        "",
+        f"## Commits ({len(committed)}) · {total_files} file(s)",
+    ]
+    for c in committed:
+        repo = c.get("repo", "?")
+        sha = c.get("sha", "?")
+        files = c.get("files", [])
+        lines.append(f"\n### `{sha}` — {repo}")
+        for f in files:
+            lines.append(f"- {f}")
+    if warnings:
+        lines.append("\n## ⚠️ Warnings")
+        for w in warnings:
+            lines.append(f"- {w}")
+    lines.append(f"\n## Report")
+    lines.append(f"See `REPORT.md` in this run dir for the quality verdict "
+                 f"(tests / adversarial / gate status).")
+    lines.append("")
+    pr_path = run_dir / "LOCAL_PR.md"
+    pr_path.write_text("\n".join(lines), encoding="utf-8")
+    return pr_path
 
 
 # ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b ──────
