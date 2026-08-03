@@ -18,7 +18,7 @@
  *
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useLayoutEffect, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
 import {
@@ -78,22 +78,26 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
   const [items, setItems] = useState<RowItem[]>([]);
   const [draft, setDraft] = useState('');
 
-  // Fresh, empty birth every time the launcher closes (one-shot gate — no state
-  // carried between brains). Reset is DEFERRED past the Modal's exit animation
-  // (~300ms) so the user doesn't see the fields blank out mid-fade (#4b). If the
-  // launcher re-opens before the timer fires, the cleanup cancels the reset so a
-  // genuine re-open still starts empty (the open path never carries old state
-  // because a real close always eventually resets).
-  useEffect(() => {
-    if (open) return;
-    const t = setTimeout(() => {
-      setName('');
-      setGoverns('codebase');
-      setItems([]);
-      setDraft('');
-    }, 320);
-    return () => clearTimeout(t);
-  }, [open]);
+  // Fresh, empty birth every time the launcher OPENS (one-shot gate — no state
+  // carried between brains). Reset is driven by the RAW show-event, NOT by the
+  // `open` boolean's transition, because a rapid close→reopen batches
+  // setOpen(false)+setOpen(true) into one React commit — `open` never observably
+  // leaves `true`, so an effect keyed on `[open]` would NOT re-run and the prior
+  // brain's state would leak (the bug the deferred-close-reset also had, #4b-regression).
+  // The DOM event fires synchronously on EVERY dispatch, before React re-renders,
+  // so the reset is queued in the same commit as the open → no stale frame, and it
+  // fires even when `open` doesn't transition. Resetting on OPEN (not on close)
+  // also means closing never blanks the fields mid-fade (the original #4b flash).
+  const resetFields = useCallback(() => {
+    setName('');
+    setGoverns('codebase');
+    setItems([]);
+    setDraft('');
+  }, []);
+  useLayoutEffect(() => {
+    window.addEventListener('swarm:show-new-brain', resetFields);
+    return () => window.removeEventListener('swarm:show-new-brain', resetFields);
+  }, [resetFields]);
 
   const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
     const value = raw.trim();

@@ -165,6 +165,27 @@ describe('NewBrainOverlay', () => {
     expect(prompt).toContain('github.com/acme/x');
   });
 
+  it('#4b-regression: a rapid close→reopen starts EMPTY (no leak of the prior brain)', async () => {
+    render(<NewBrainOverlay onDispatch={() => true} />);
+    // First brain: fill name + add an item.
+    openOverlay();
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'First Brain' } });
+    const input = screen.getByTestId('new-brain-material-input');
+    fireEvent.change(input, { target: { value: 'github.com/acme/first' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(await screen.findByText('github.com/acme/first')).toBeTruthy();
+
+    // Close, then IMMEDIATELY reopen (the <320ms window the old deferred reset leaked).
+    window.dispatchEvent(new CustomEvent('swarm:back-to-chat'));
+    openOverlay();
+    await screen.findByTestId('new-brain-overlay');
+
+    // The reopened launcher must be a fresh birth — no residual name, no residual item.
+    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText('github.com/acme/first')).toBeNull();
+  });
+
   it('a role pill cycles GOVERN→DISTILL→SHELF on click (user override)', async () => {
     render(<NewBrainOverlay onDispatch={() => true} />);
     openOverlay();
