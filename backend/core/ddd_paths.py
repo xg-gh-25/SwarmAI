@@ -37,7 +37,6 @@ SSOT is unchanged); this module maps their LOCATION only.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from core.project_registry import DDD_CANONICAL_DOCS

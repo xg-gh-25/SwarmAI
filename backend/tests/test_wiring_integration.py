@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from database import db
-from tests.helpers import now_iso, create_workspace_with_path
+from tests.helpers import now_iso
 
 
 _SEEDED_SKILL_PATHS: list[Path] = []

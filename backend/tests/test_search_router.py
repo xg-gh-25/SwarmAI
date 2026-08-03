@@ -6,7 +6,6 @@ scope filtering, entity type filtering, result limits, and response format.
 Requirements: 31.7, 38.10
 """
 import pytest
-import tempfile
 from uuid import uuid4
 from datetime import datetime, timezone
 

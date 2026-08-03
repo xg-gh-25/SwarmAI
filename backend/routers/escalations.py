@@ -18,9 +18,7 @@ from pydantic import BaseModel
 
 from jobs.paths import SWARMWS
 from core.escalation import (
-    Level,
     build_sse_event,
-    create_radar_todo,
     get_open_escalations,
     load_escalation,
     resolve,

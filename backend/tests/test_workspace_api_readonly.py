@@ -11,9 +11,6 @@ Testing methodology: unit tests for the helper function plus integration
 tests via FastAPI TestClient with a temporary workspace directory.
 """
 
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest

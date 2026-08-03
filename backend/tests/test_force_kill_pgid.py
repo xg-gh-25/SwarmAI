@@ -8,7 +8,6 @@ child shares the backend's pgid (safety guard — prevents self-kill).
 
 from __future__ import annotations
 
-import os
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 

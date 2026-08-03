@@ -378,7 +378,6 @@ def _build_learning_dashboard(root) -> dict:
     Scans IMPROVEMENT.md and TECH.md for entries with metadata comments.
     Returns counts for the OS Eval Context Health tab.
     """
-    from pathlib import Path
     from datetime import datetime, timedelta
     from core.ddd_entry_lifecycle import parse_entries
 

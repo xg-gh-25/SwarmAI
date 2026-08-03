@@ -20,7 +20,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from routers.workspace_api import _build_tree, _get_git_status, _should_include, _tree_fingerprint
 from tests.helpers import PROPERTY_SETTINGS

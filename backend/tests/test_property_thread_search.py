@@ -9,12 +9,12 @@ critical distinction: the search index is built from summaries, not messages.
 **Validates: Requirements 31.1-31.7**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck, assume
+from hypothesis import given, strategies as st, assume
 from uuid import uuid4
 
 from database import db
 from core.search_manager import search_manager
-from tests.helpers import ensure_default_workspace, create_custom_workspace, now_iso
+from tests.helpers import create_custom_workspace, now_iso
 from tests.helpers import PROPERTY_SETTINGS
 
 

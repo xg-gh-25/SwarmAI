@@ -1,9 +1,7 @@
 """Tests for OS Eval P4 — auto-growth hooks (seeder, change-trigger, stable promotion, IV)."""
 
 import json
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 import sys

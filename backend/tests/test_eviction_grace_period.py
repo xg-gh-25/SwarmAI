@@ -7,7 +7,6 @@ Verifies that _evict_idle respects the EVICTION_GRACE_SECONDS threshold:
 - Channel eviction is unaffected by grace period
 - Protected states (STREAMING, WAITING_INPUT) remain immune regardless
 """
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 

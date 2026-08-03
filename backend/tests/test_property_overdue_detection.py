@@ -9,9 +9,8 @@ while leaving other ToDos unaffected.
 **Validates: Requirements 4.5, 4.6**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from datetime import datetime, timezone, timedelta
-from uuid import uuid4
 
 from database import db
 from core.todo_manager import todo_manager

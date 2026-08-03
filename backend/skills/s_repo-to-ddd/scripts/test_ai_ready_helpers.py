@@ -5,7 +5,6 @@ Uses real filesystem fixtures where possible (no mocks for file operations).
 """
 import json
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -988,7 +987,7 @@ class TestStalenessDetection:
 
     def test_fresh_output_returns_fresh(self, tmp_path):
         """Output just generated from current state = fresh."""
-        from scripts.ai_ready_helpers import check_staleness, gather_repo_info, build_ai_ready_meta
+        from scripts.ai_ready_helpers import check_staleness, build_ai_ready_meta
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -2743,7 +2742,7 @@ class TestGate2F1IdlessRoute:
     from the coverage denominator — it must be a loud error, not a false 1.0."""
 
     def test_idless_route_is_flagged_not_dropped(self):
-        from scripts.ai_ready_helpers import check_anchor_accounting, compute_anchor_accounting
+        from scripts.ai_ready_helpers import check_anchor_accounting
         doc = _minimal_v2_doc()
         doc["version"] = "3.0"
         doc["routes"] = [
@@ -3209,7 +3208,7 @@ class TestRenderBlindSpotsMd:
         })
 
     def test_blind_spots_all_appear_in_render(self):
-        from scripts.ai_ready_helpers import render_blind_spots_md, blind_spot_scan
+        from scripts.ai_ready_helpers import render_blind_spots_md
         scan = self._scan_blind()
         md = render_blind_spots_md(scan, "my-package")
         # per-package: the package name is in the doc (not a shared/global title)

@@ -6,7 +6,6 @@ ensuring backward compatibility when the seed database has an older schema.
 Validates: Requirements 5.3, 5.4
 """
 import pytest
-import asyncio
 import tempfile
 import os
 import shutil

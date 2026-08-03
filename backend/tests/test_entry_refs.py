@@ -11,7 +11,6 @@ see PERMANENT_SECTIONS / ACTIVE_SECTIONS.
 """
 from __future__ import annotations
 
-import pytest
 
 
 SAMPLE_MEMORY = """\
@@ -115,7 +114,7 @@ class TestEntryRefs:
 
     def test_refs_load_related_entries(self):
         """When loading DEC01 with refs: COE02, COE02 is also loaded (1-hop)."""
-        from core.memory_index import select_memory_sections, generate_memory_index
+        from core.memory_index import generate_memory_index
 
         # This test verifies that select_memory_sections in selective mode
         # will include referenced entries. We need a large enough memory

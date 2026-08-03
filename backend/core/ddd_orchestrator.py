@@ -1257,7 +1257,7 @@ class DddCultivationOrchestrator:
 
         try:
             from core.auto_refresh import (
-                LlmRefreshProposer, log_refresh_results, RefreshResult,
+                LlmRefreshProposer,
             )
             from core.ddd_cultivation import CultivationProposal, write_proposal
 

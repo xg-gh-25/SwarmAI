@@ -25,8 +25,6 @@ Key properties verified:
   when budget mismatch, content when budget matches.
 """
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -35,7 +33,6 @@ from core.context_directory_loader import (
     BUDGET_LARGE_MODEL,
     ContextDirectoryLoader,
     DEFAULT_TOKEN_BUDGET,
-    THRESHOLD_USE_L1,
 )
 
 
@@ -826,7 +823,6 @@ class TestTokenCalibration:
         from core.context_directory_loader import ContextDirectoryLoader
         text = "SwarmAI 是一个自进化的 Agent OS。The READ path is THE differentiator."
         old_cjk = text  # simulate old: cjk/1.5 + words*4/3
-        import re
         cjk_re = ContextDirectoryLoader._CJK_RE
         cjk = len(cjk_re.findall(text))
         words = len(cjk_re.sub("", text).split())

@@ -1340,7 +1340,7 @@ class DistillationTriggerHook:
         longer applies: this is a SINGLE call into the facade's own lock, not a
         lock nested inside another. (run_b356b552)
         """
-        from scripts.locked_write import locked_read_modify_write, LockedWriteError
+        from scripts.locked_write import locked_read_modify_write
         try:
             locked_read_modify_write(
                 memory_path, section, text, mode="prepend",

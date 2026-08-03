@@ -15,7 +15,6 @@ Key behaviors tested:
 - ``asyncio.to_thread`` is used for the synchronous boto3 call
 """
 
-import asyncio
 import time
 from unittest.mock import MagicMock, patch
 

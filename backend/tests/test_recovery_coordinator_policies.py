@@ -16,14 +16,12 @@ R3a sets the correct template WITHOUT migrating all 8:
 This test pins the template; it does NOT migrate the other 6 triggers.
 """
 
-import pytest
 
 from core.session_healing import (
     HealingLoop,
     MAX_HEAL_ATTEMPTS,
     RecoveryCoordinator,
     RecoveryVerdict,
-    RecoveryDecision,
     AttemptBreakerPolicy,
     CooldownThresholdPolicy,
     BareThresholdPolicy,

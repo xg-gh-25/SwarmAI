@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 logger = logging.getLogger("swarm.jobs.estimation_learner")

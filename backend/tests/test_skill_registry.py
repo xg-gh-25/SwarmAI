@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from core.skill_registry import SkillRegistry, SKILL_CATEGORIES
+from core.skill_registry import SkillRegistry
 
 
 # ---------------------------------------------------------------------------

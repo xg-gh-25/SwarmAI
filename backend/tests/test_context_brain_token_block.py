@@ -15,7 +15,6 @@ has NO owner field — only user_customized; the 4-way owner category system/use
 agent/auto is documented in KNOWLEDGE.md but not on the dataclass, so the map lives
 here, NOT as a dataclass mutation).
 """
-import json
 from pathlib import Path
 
 import pytest

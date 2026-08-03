@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
 from core.evolution.gate_scaffold import scaffold_gate_stub  # RED until implemented
 

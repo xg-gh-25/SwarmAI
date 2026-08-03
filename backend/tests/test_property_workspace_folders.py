@@ -16,7 +16,7 @@ import shutil
 import tempfile
 
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
 from tests.helpers import PROPERTY_SETTINGS

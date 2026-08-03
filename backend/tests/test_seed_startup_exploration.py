@@ -23,9 +23,8 @@ Key properties being verified:
 Validates: Requirements 1.1, 1.2, 1.3, 1.6, 2.1, 2.2, 2.6, 2.7, 2.8
 """
 import sqlite3
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -354,7 +353,6 @@ async def test_pragma_failure_continues_startup(
     so there is no pragma failure path to test. This test validates the
     FIXED code's graceful degradation.
     """
-    import logging
 
     monkeypatch.setattr("main.get_app_data_dir", lambda: temp_app_data_dir)
     monkeypatch.setattr("main._get_seed_database_path", lambda: seed_db_path)

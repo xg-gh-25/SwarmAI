@@ -6,13 +6,10 @@ concurrent cycle rejection via file lock, and deploy verification/rollback.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
-from core.session_miner import EvalExample
 
 
 def _make_skill_dir(skills_dir: Path, name: str, body: str = "Do the thing.") -> Path:

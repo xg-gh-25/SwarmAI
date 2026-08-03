@@ -6,7 +6,6 @@ the SearchManager. Results are grouped by entity type with a limit of
 
 Requirements: 31.1-31.7, 38.1-38.12
 """
-from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 

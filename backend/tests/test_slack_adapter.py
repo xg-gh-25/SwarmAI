@@ -10,9 +10,7 @@ All slack-bolt/slack-sdk calls are mocked (no real Slack API needed).
 from __future__ import annotations
 
 import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -184,7 +182,6 @@ class TestSlackMessageHandling:
 
     def test_handle_message_event_creates_inbound(self, adapter):
         """Normal DM message creates correct InboundMessage."""
-        from channels.base import InboundMessage
 
         event = {
             "type": "message",

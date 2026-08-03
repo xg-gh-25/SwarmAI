@@ -22,7 +22,6 @@ import subprocess
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from core.session_unit import (
     _get_children,

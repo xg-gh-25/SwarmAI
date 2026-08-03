@@ -35,7 +35,6 @@ Output (JSON):
 import argparse
 import json
 import os
-import sys
 
 
 def _load_json(path: str) -> dict | None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from core.code_intel.change_risk_score import (
     RISK_WEIGHTS,
     SECURITY_KEYWORDS,
-    RiskScoreResult,
     _bucket,
     _score_caller_count,
     _score_module_crossing,

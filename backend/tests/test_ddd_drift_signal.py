@@ -21,13 +21,11 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-import pytest
 
 from core.ddd_drift_signal import (
     get_semantic_drift,
     map_at_risk_cases,
     _parse_doc_targets,
-    _latest_report,
 )
 
 

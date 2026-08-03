@@ -38,7 +38,6 @@ from core.evolution.escalation_ladder import decide_escalation  # noqa: E402
 
 def _fresh_tracker(td: str) -> CorrectionClassTracker:
     # Unique per-invariant state file so invariants never cross-contaminate.
-    import time
     name = f"tracker_{len(td)}_{int.from_bytes(td.encode()[:4] or b'x', 'big')}.json"
     return CorrectionClassTracker(state_path=Path(td) / name)
 

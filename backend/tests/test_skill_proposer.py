@@ -3,7 +3,6 @@
 Tests: gap filtering, skill dedup, proposal output, integration gates.
 """
 import json
-from pathlib import Path
 
 import pytest
 
@@ -13,8 +12,6 @@ from jobs.handlers.skill_proposer import (
     _find_existing_skill,
     _write_skill_proposal,
     _load_gaps_from_findings,
-    MIN_OCCURRENCES,
-    MIN_CONFIDENCE,
 )
 
 

@@ -4,7 +4,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-import pytest
 
 
 def _seed_todos_schema(db_path: Path):

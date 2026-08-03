@@ -9,7 +9,7 @@ retrieved via TaskManager.
 **Validates: Requirements 5.4**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from datetime import datetime, timezone
 from uuid import uuid4
 

@@ -7,7 +7,6 @@ reviews on substantial diffs.
 
 import json
 import pytest
-from pathlib import Path
 
 
 def _make_run(stages, profile="bugfix"):

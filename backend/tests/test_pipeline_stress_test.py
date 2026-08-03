@@ -9,7 +9,6 @@ Validates the stress test script against 5 acceptance criteria:
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 

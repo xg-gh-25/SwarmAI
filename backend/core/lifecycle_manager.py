@@ -1383,7 +1383,6 @@ class LifecycleManager:
         """
         try:
             from core.backup_manager import BackupManager
-            import json as _json
             from datetime import datetime, timedelta
 
             if not hasattr(self, "_backup_manager"):

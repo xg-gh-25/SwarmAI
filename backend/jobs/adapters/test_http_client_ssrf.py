@@ -13,9 +13,7 @@ monkeypatched resolver (so no live network + deterministic rebind simulation).
 Mutation check: neutralize the guard (make _classify_ip always return False /
 allow non-https) → the block assertions go RED.
 """
-import ipaddress
 
-import httpx
 import pytest
 
 

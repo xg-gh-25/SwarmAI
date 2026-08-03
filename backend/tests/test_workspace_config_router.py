@@ -17,7 +17,6 @@ Key helpers:
 Requirements: 19.6-19.9
 """
 import json
-import tempfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -75,7 +74,6 @@ async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> s
     Tracks created paths for cleanup by ``_cleanup_seeded_skills``.
     Name is lowercased to match SDK command-matching convention.
     """
-    from pathlib import Path
 
     # Create folder name from skill name (kebab-case, lowercase)
     folder_name = name.lower().replace(" ", "-")

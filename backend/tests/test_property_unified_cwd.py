@@ -9,10 +9,8 @@ regardless of ``global_user_mode`` or other config variations.
 **Validates: Requirements 1.3, 1.4, 5.1, 5.4**
 """
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
 
-import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.initialization_manager import InitializationManager
 from tests.helpers import PROPERTY_SETTINGS

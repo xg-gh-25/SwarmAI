@@ -489,7 +489,7 @@ class TestSchemaEvolution:
 # Property-based tests: Chat thread project_id semantics
 # ---------------------------------------------------------------------------
 
-from hypothesis import given, settings, HealthCheck
+from hypothesis import given
 import hypothesis.strategies as st
 
 from core.chat_thread_manager import chat_thread_manager

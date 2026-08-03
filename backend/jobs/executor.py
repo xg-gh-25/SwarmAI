@@ -40,7 +40,7 @@ from .models import (
 
 logger = logging.getLogger("swarm.jobs.executor")
 
-from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, MCPS_DIR, DB_PATH, ESTIMATION_LEARNER_FILE
+from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, DB_PATH, ESTIMATION_LEARNER_FILE
 
 
 # ── Module-level PATH fix ────────────────────────────────────────────

@@ -5,16 +5,10 @@ verifying that the backend components work together correctly.
 
 Requirements: 4.7, 4.8, 16.5, 17.5, 36.1-36.11, 37.1-37.12, 38.1-38.12
 """
-import json
-from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 
-from database import db
 from tests.helpers import (
-    now_iso,
-    create_workspace,
     create_custom_workspace,
     ensure_default_workspace,
     seed_todo,

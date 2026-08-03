@@ -6,8 +6,6 @@ classes after 30 days of no post-gate recurrence.
 """
 
 import json
-import time
-from pathlib import Path
 
 import pytest
 

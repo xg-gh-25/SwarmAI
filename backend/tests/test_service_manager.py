@@ -1,10 +1,7 @@
 """Tests for core.service_manager — sidecar service lifecycle management."""
 import asyncio
 import json
-import os
 import sys
-import tempfile
-import time
 from pathlib import Path
 
 import pytest

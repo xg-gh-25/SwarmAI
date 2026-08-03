@@ -18,7 +18,6 @@ Output (JSON):
 """
 import argparse
 import json
-import sys
 
 
 def _parse_bool(value: str) -> bool:

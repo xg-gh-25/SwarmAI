@@ -9,7 +9,6 @@ user-facing `recovery_exhausted` SSE event, gated on the
 
 Design decision #3 (pulled forward from R4). run_d8dce02a.
 """
-import pytest
 
 from core.session_healing import MAX_HEAL_ATTEMPTS, RecoveryVerdict
 from core.session_unit import SessionUnit

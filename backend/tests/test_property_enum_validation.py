@@ -10,11 +10,11 @@ Reflection) were removed as part of the operating-loop-cleanup spec.
 **Validates: Requirements 4.2, 4.3, 4.4, 5.2, 5.3**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from pydantic import ValidationError
 
 # --- ToDo enums ---
-from schemas.todo import ToDoStatus, ToDoSourceType, Priority, ToDoCreate, ToDoUpdate, ToDoResponse
+from schemas.todo import ToDoStatus, ToDoSourceType, Priority, ToDoCreate, ToDoUpdate
 
 # --- Task enums ---
 from schemas.task import TaskStatus

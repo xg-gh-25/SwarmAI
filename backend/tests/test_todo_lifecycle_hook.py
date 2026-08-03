@@ -12,16 +12,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from hooks.todo_lifecycle_hook import (
     TodoLifecycleHook,
     _files_overlap,
-    _get_session_changed_files,
-    _get_session_commit_count,
 )
 from core.session_hooks import HookContext
 

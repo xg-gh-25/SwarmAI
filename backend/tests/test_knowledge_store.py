@@ -7,8 +7,7 @@ Knowledge/ directory indexing system.
 import hashlib
 import sqlite3
 import textwrap
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

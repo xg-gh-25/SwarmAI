@@ -20,7 +20,6 @@ Key invariants proven here (the ones Gate-1 flagged as make-or-break):
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path

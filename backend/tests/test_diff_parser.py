@@ -12,7 +12,6 @@ Key properties verified:
 - Edge cases: single-line hunks, binary markers, unicode content
 """
 
-import pytest
 from utils.diff_parser import parse_unified_diff, format_human_summary, DiffHunk
 
 

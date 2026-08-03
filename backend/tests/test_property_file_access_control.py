@@ -8,11 +8,8 @@ Uses Hypothesis to verify that:
 
 **Validates: Requirements 7.1, 7.2, 7.3**
 """
-from pathlib import Path
-from unittest.mock import patch
 
-import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.security_hooks import create_file_access_permission_handler
 from tests.helpers import PROPERTY_SETTINGS

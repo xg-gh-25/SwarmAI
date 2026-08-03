@@ -12,7 +12,6 @@ Consumes ``GraphStore`` from ``graph_store.py``.  Key API surface used:
 
 from __future__ import annotations
 
-import re
 import subprocess
 import logging
 from dataclasses import dataclass, field

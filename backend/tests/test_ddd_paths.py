@@ -15,7 +15,6 @@ Contract under test:
 
 from __future__ import annotations
 
-import pytest
 
 from core import ddd_paths
 

@@ -24,7 +24,6 @@ AND approve a pytest invocation that IS wall-clock-wrapped without a pager pipe.
 
 import asyncio
 
-import pytest
 
 from core.security_hooks import pytest_command_guard
 

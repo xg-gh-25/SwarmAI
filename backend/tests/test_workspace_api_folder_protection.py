@@ -8,10 +8,7 @@ Testing methodology: unit tests using FastAPI TestClient with mocked
 workspace path to avoid touching real filesystem.
 """
 
-import os
-import tempfile
 
-import pytest
 from fastapi.testclient import TestClient
 
 from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS

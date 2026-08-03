@@ -20,9 +20,7 @@ are no longer scanned — see PERMANENT_SECTIONS / ACTIVE_SECTIONS.
 """
 
 import textwrap
-from datetime import datetime, timedelta
 
-import pytest
 
 
 # ── Sample MEMORY.md for testing ──────────────────────────────────────
@@ -719,9 +717,6 @@ class TestCompressAliases:
         import re
         from core.memory_index import (
             generate_memory_index,
-            extract_index_from_memory,
-            MEMORY_INDEX_START,
-            MEMORY_INDEX_END,
         )
 
         raw = generate_memory_index(SAMPLE_MEMORY)
@@ -823,7 +818,6 @@ class TestKeyToSectionLiveSchema:
 
     def test_keyword_leg_maps_majority_of_live_index(self):
         """The pure-keyword leg must map >=95% of live index entries (was 10/443)."""
-        import re
         from core.memory_index import _key_to_section, _parse_index_entries
 
         mem_path = "/Users/gawan/.swarm-ai/SwarmWS/.context/MEMORY.md"

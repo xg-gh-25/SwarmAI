@@ -27,12 +27,9 @@ Validates: Requirements 3.1, 3.2, 3.3, 3.4
 
 import asyncio
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 

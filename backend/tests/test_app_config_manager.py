@@ -15,7 +15,6 @@ Key invariants verified:
 """
 
 import json
-import os
 import stat
 import sys
 import pytest
@@ -306,7 +305,6 @@ class TestSecretStore:
         if _sys.platform.startswith("win"):
             pytest.skip("flock semantics differ on Windows; race not exercised there")
         import threading
-        import time
         from utils.file_lock import flock_exclusive, flock_unlock
 
         mgr = AppConfigManager(config_path=tmp_config)

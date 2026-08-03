@@ -2995,7 +2995,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 run_start_ts = 0.0
                 if run_created:
                     try:
-                        from datetime import datetime, timezone
+                        from datetime import datetime
                         dt = datetime.fromisoformat(run_created.replace("Z", "+00:00"))
                         run_start_ts = dt.timestamp()
                     except (ValueError, TypeError):

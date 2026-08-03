@@ -8,10 +8,8 @@ Covers:
 - Performance: hook latency must be <1ms
 """
 import asyncio
-import json
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

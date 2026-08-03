@@ -12,12 +12,8 @@ these tests were updated to the calibrated estimator + observability
 thresholds (WARNING 91K = assembly budget, EMERGENCY 130K).
 """
 
-import re
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 
 # ── Token Measurement Tests ──────────────────────────────────────────

@@ -39,7 +39,6 @@ Exit 0 + marker on PASS; exit 1 (no marker) on regression.
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 

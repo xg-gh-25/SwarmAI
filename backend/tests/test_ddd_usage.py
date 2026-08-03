@@ -88,10 +88,9 @@ def test_e2e_real_improvement_md_anchor_symmetry():
     data, with ZERO cross-entry collisions (a collision = false bump of the
     wrong entry). Runs against the real SwarmAI IMPROVEMENT.md if present; skips
     otherwise (CI has no workspace)."""
-    import re as _re
     from pathlib import Path
 
-    from core import memory_index, recall_multi
+    from core import recall_multi
     from core.ddd_entry_lifecycle import parse_entries
     from core.ddd_usage import entry_anchor_text
 

@@ -7,7 +7,7 @@ Key invariant: pipe flush must COMPLETE (not be cancelled) before new send()
 proceeds. This ensures the subprocess stdout pipe is clean.
 """
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

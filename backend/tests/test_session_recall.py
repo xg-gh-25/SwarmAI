@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
 
-from core.session_recall import SessionRecall, SessionMatch, RecallResult
+from core.session_recall import SessionRecall
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ Requirements: 26.1, 26.4, 26.5, 35.1, 35.6, 8.1, 8.2, 8.3, 8.4, 8.5, 10.1, 10.2,
 """
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from schemas.message import ChatRequest, ChatSessionResponse, AnswerQuestionRequest, ChatMessageResponse
+from schemas.message import ChatRequest, ChatSessionResponse, AnswerQuestionRequest
 from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest
@@ -35,7 +35,6 @@ from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 
 # ── Multi-session architecture ────────────────────────────────────
-import os as _os
 import logging as _logging
 from typing import Optional
 
@@ -148,8 +147,6 @@ from core.exceptions import (
     AgentNotFoundException,
     SessionNotFoundException,
     ValidationException,
-    AgentExecutionException,
-    AgentTimeoutException,
     ResourceExhaustedException,
 )
 import json
@@ -157,7 +154,6 @@ import asyncio
 import logging
 import re as _re
 import time
-from datetime import datetime
 from typing import AsyncIterator, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -1309,7 +1305,6 @@ async def cmd_permission_continue(request: Request):
         )
 
     # Verify permission request exists
-    from core.permission_manager import permission_manager as _pm
     perm_req = _pm.get_pending_request(permission_request.request_id)
     if not perm_req:
         # Approve-into-void recovery (run_65f317db): the request is gone because

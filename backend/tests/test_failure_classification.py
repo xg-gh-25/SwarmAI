@@ -321,7 +321,7 @@ class TestHookBuilderFailureHooks:
     async def test_notification_hook_writes_context(self):
         """Notification hook writes _last_notification to session_context."""
         from core.hook_builder import build_hooks
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         pm = MagicMock()
         pm.is_command_approved = MagicMock(return_value=False)

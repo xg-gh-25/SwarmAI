@@ -6,11 +6,9 @@ re-indexes them into the code_intel graph if a project graph exists.
 
 from __future__ import annotations
 
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-from hooks.code_change_feed import CodeChangeFeed, _reindex_changed_files
+from hooks.code_change_feed import _reindex_changed_files
 
 
 class TestReindexChangedFiles:

@@ -12,7 +12,6 @@ Covers:
 import asyncio
 import json
 import time
-from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
 from core.context_injector import (
@@ -30,7 +29,6 @@ from core.context_injector import (
     _extract_uncommitted_state,
     _merge_crash_checkpoint,
     _extract_key_tool_results,
-    _build_checkpoint,
     _format_recent_turns,
     _trim_to_budget,
 )

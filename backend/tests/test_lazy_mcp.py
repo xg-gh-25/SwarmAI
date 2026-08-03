@@ -13,8 +13,7 @@ Acceptance criteria:
 
 import json
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +489,7 @@ class TestExtraMcpsSurvival:
 
     def test_cleanup_internal_preserves_extra_mcps(self):
         """_cleanup_internal() must NOT reset _extra_mcps."""
-        from core.session_unit import SessionUnit, SessionState
+        from core.session_unit import SessionUnit
 
         unit = SessionUnit.__new__(SessionUnit)
         unit.session_id = "test-session"

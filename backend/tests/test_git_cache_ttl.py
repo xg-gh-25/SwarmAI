@@ -6,11 +6,9 @@ forking a `git status` subprocess on every chat message.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from core.context_directory_loader import ContextDirectoryLoader
 

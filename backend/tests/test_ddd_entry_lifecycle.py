@@ -6,7 +6,6 @@ metadata injection, and archival. Uses real IMPROVEMENT.md format.
 
 import pytest
 from datetime import date, timedelta
-from unittest.mock import patch
 
 from core.ddd_entry_lifecycle import (
     EntryMetadata,
@@ -15,7 +14,6 @@ from core.ddd_entry_lifecycle import (
     inject_entry_metadata,
     bump_references,
     assess_decay,
-    DecayTransition,
 )
 
 
@@ -625,7 +623,7 @@ class TestRetireEntry:
         """Gate-2 MED: an entry in an evergreen SECTION (Open Threads = type process,
         Standing Preferences = type guideline) is keep-class by SECTION even though
         its TYPE isn't — must be refused without force, parity with reclaim."""
-        from core.ddd_entry_lifecycle import retire_entry, RetireError, MEMORY_EVERGREEN_SECTIONS
+        from core.ddd_entry_lifecycle import retire_entry, RetireError
         today = date(2026, 7, 3)
         recent = (today - timedelta(days=2)).isoformat()
         content = f"""\
@@ -774,7 +772,7 @@ class TestComputeEntryNoise:
         # assess_decay so a just-dormant entry is never invisible for a day).
         from datetime import timedelta
         from core.ddd_entry_lifecycle import (
-            compute_entry_noise, assess_decay, parse_entries, GRACE_PERIOD_DAYS,
+            compute_entry_noise, parse_entries, GRACE_PERIOD_DAYS,
         )
         boundary = _NOISE_TODAY - timedelta(days=GRACE_PERIOD_DAYS)  # age == 30
         content = f"""\

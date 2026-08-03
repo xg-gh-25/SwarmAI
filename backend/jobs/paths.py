@@ -8,7 +8,6 @@ System job definitions live in code (system_jobs.py), not YAML.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from config import get_app_data_dir
 

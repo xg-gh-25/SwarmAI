@@ -6,7 +6,6 @@ entries first (.memory-usage.json tracking).
 """
 
 import json
-import re
 from datetime import date, timedelta
 from pathlib import Path
 

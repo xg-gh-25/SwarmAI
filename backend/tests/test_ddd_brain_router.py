@@ -102,7 +102,6 @@ class TestSourceChangedSinceTristate:
 
     def test_uncommitted_output_is_none_not_false(self, monkeypatch, tmp_path):
         import routers.ddd_brain as m
-        from pathlib import Path as _P
 
         pd = tmp_path / "Proj"
         out = pd / ".artifacts" / "distribute"

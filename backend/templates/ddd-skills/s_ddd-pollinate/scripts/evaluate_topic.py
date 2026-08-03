@@ -11,7 +11,6 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, asdict
-from typing import Optional
 
 
 @dataclass

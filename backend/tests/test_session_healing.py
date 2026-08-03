@@ -19,7 +19,6 @@ from core.session_healing import (
     HANG_TIMEOUT_S,
     HEAL_COOLDOWN_S,
     MAX_HEAL_ATTEMPTS,
-    RSS_GROWTH_THRESHOLD_MB,
     RSS_WINDOW,
     TURN_APPROACH_BUFFER,
     WRAP_UP_PROMPT,

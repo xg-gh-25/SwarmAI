@@ -12,16 +12,12 @@ Key invariants:
 - Cooldown prevents rapid re-nudging
 """
 
-import time
-from unittest.mock import patch
 
 from hooks.evolution_trigger_hook import (
     ToolFailureTracker,
     check_tool_result_for_failure,
     format_evolution_nudge,
     _failure_signature,
-    FAILURE_THRESHOLD,
-    NUDGE_COOLDOWN_SECONDS,
 )
 
 

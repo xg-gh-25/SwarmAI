@@ -16,8 +16,6 @@ import pytest
 
 from hooks.evolution_maintenance_hook import (
     EvolutionMaintenanceHook,
-    _parse_entries,
-    _append_changelog,
 )
 from core.session_hooks import HookContext
 

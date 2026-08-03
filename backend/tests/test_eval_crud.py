@@ -1,7 +1,6 @@
 """Tests for EvalService CRUD operations and run triggers (P3)."""
 
 import json
-import tempfile
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -296,7 +295,6 @@ class TestTriggerRun:
         join the background thread, return the include_behavior kwarg run_eval
         actually received. This proves end-to-end threading
         TriggerRunRequest -> trigger_run -> _execute_run -> run_eval."""
-        import time
         captured = {}
         done = threading.Event()
 
@@ -536,7 +534,6 @@ class TestPersistCrossProcessLock:
         persist in a background thread, and assert it does not complete until
         we release."""
         import threading
-        import time
         from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = self._lock_path(eval_workspace)

@@ -13,8 +13,7 @@ Acceptance criteria:
 5. Write failure never breaks streaming
 """
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
 import database as database_module
 

@@ -12,12 +12,10 @@ This test pins the decision matrix, the terminal-signal-exactly-once invariant,
 and that the Coordinator is a thin wrapper over HealingLoop (behavior parity).
 """
 
-import pytest
 
 from core.session_healing import (
     HealingLoop,
     MAX_HEAL_ATTEMPTS,
-    HEAL_COOLDOWN_S,
     RecoveryCoordinator,
     RecoveryVerdict,
 )

@@ -1412,7 +1412,6 @@ class TestPipelineSupersedeAndActiveSkip:
     def test_mtime_old_run_skipped_without_read(self, tmp_path, monkeypatch):
         """A run whose file mtime is >48h old is pre-filtered: json.loads is
         never called on it (the whole point of the optimization)."""
-        import core.proactive_intelligence as _pmod
         # A run with a FRESH updated_at in CONTENT, but an OLD file mtime.
         # Pre-filter must skip it on mtime alone, before reading content.
         from datetime import datetime, timezone, timedelta

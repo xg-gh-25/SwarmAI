@@ -23,8 +23,6 @@ Testing methodology: pytest with Hypothesis for property-based tests.
 """
 from __future__ import annotations
 
-import pytest
-from hypothesis import given, strategies as st, settings
 
 from core.compaction_guard import (
     CompactionGuard,

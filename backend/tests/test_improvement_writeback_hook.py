@@ -18,7 +18,6 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from core.session_hooks import HookContext
 from hooks.improvement_writeback_hook import ImprovementWritebackHook

@@ -7,16 +7,13 @@ METHODOLOGY: Call REAL functions (get_process_rss_mb, build_rich_checkpoint,
 HealingLoop.can_heal) with mocked external deps (psutil, git, time).
 """
 
-import asyncio
-import os
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from core.session_healing import (
     HealingLoop,
-    HealthSensor,
     TaskCheckpoint,
     build_rich_checkpoint,
     get_process_rss_mb,

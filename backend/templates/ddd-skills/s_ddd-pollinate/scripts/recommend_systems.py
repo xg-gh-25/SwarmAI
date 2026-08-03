@@ -14,7 +14,7 @@ Usage:
 Output (JSON): ranked list of {slug, score, formality, scheme, tagline, thumbnail,
 why} — `thumbnail` is the workspace-relative PNG path the chat gallery inlines.
 """
-import re, glob, os, sys, json, argparse
+import re, glob, os, json, argparse
 from pathlib import Path
 
 # Bundled into this skill's own data/ (decoupled from the SwarmAI-sibling s_frontend-design).

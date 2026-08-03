@@ -73,7 +73,6 @@ def _build_bare_unit():
 
 async def _run() -> tuple[bool, str]:
     """Inject 1 transient error, drive the REAL retry loop, assert recovery ran."""
-    from core import retry_manager as rm_mod
 
     u = _build_bare_unit()
     MAX = u.MAX_RETRY_ATTEMPTS  # real constant (3)

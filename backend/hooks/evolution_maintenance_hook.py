@@ -351,7 +351,7 @@ class EvolutionMaintenanceHook:
 
         Returns the (possibly modified) content string.
         """
-        from scripts.locked_write import _find_section_range, _find_entry_in_section
+        from scripts.locked_write import _find_entry_in_section
         from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")

@@ -9,7 +9,6 @@ Acceptance criteria covered:
   AC5: Error states: empty text, Polly failure
 """
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest

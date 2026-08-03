@@ -14,10 +14,8 @@ Acceptance criteria under test:
   7. Short/empty messages skip recall
 """
 
-import asyncio
-import re
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

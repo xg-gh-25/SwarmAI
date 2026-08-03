@@ -13,7 +13,6 @@ import hashlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 
 from jobs.handlers.ddd_self_audit import (
     _AUDIT_TOOLS,

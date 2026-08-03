@@ -31,7 +31,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-import database as database_module
 
 # NOTE on loop scope (root cause of the cross-test "database is locked" errors,
 # run_6a4402cb): pyproject.toml sets asyncio_default_fixture_loop_scope=session

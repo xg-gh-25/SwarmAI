@@ -12,7 +12,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 
 
 class TestStalenessScore:
@@ -126,7 +125,7 @@ class TestCompositeAndTrust:
     """Composite scoring and trust level derivation."""
 
     def test_composite_weighted_average(self):
-        from core.ddd_health import compute_composite, derive_trust_level
+        from core.ddd_health import compute_composite
 
         scores = {
             "staleness": 100,

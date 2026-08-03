@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 REPO = Path(__file__).resolve().parents[1].parent  # repo root
 PY_ENTRY = REPO / "backend/skills/s_estimate-tokens/scripts/estimate_tokens.py"

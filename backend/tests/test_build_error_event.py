@@ -13,7 +13,6 @@ Requirements: 9.1, 9.2
 """
 from unittest.mock import patch
 
-import pytest
 
 from core.session_utils import _build_error_event
 

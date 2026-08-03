@@ -4,11 +4,8 @@ Tests the heuristic-based detection of architecture-impacting git commits
 and generation of CultivationProposal targeting TECH.md.
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-from hooks.code_change_feed import CodeChangeFeed, ArchChange, _SKIP_PREFIXES
+from hooks.code_change_feed import CodeChangeFeed, ArchChange
 
 
 class TestParseNameStatus:

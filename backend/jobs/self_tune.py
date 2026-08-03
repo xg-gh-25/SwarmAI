@@ -28,14 +28,12 @@ import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import yaml
 
 # Paths — centralized in paths.py
 from .paths import (
-    CONFIG_FILE, STATE_FILE, LOG_DIR, SWARMWS,
-    CONTEXT_DIR, DAILY_DIR, SIGNALS_DIR, PROJECTS_DIR, SIGNAL_DIGEST_FILE,
+    CONFIG_FILE, STATE_FILE, LOG_DIR, CONTEXT_DIR, DAILY_DIR, SIGNALS_DIR, PROJECTS_DIR, SIGNAL_DIGEST_FILE,
 )
 
 LOG_DIR.mkdir(exist_ok=True)

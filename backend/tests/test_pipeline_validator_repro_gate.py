@@ -9,7 +9,6 @@ These tests FORCE EXECUTION of the gate (mock the artifact, assert the
 block/pass), per STEERING #11 (recovery/guard paths need a test that runs them).
 """
 
-import pytest
 
 from scripts.pipeline_validator import validate_artifact_data
 

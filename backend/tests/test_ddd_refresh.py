@@ -3,10 +3,7 @@
 Tests: staleness detection, context gathering, proposal output, integration
 with maintenance job.
 """
-import json
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 

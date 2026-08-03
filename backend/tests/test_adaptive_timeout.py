@@ -7,8 +7,6 @@ Verifies:
 - AC5: Normal sessions (<500K) keep 300s timeout
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestAdaptiveTimeout:

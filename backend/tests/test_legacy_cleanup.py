@@ -23,8 +23,6 @@ Validates: Requirements 24.1, 24.2, 24.3, 24.4
 """
 
 import os
-import shutil
-import tempfile
 
 import aiosqlite
 import pytest

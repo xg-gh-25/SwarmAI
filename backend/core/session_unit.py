@@ -50,7 +50,6 @@ from .session_healing import (
     RecoveryVerdict,
     TaskCheckpoint,
     build_rich_checkpoint,
-    get_process_rss_mb,
     is_self_heal_enabled,
     release_canary,
 )

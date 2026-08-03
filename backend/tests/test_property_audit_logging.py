@@ -10,9 +10,8 @@ old_value, new_value, changed_by, changed_at.
 **Validates: Requirements 25.1-25.8**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
-from datetime import datetime, timezone
-from uuid import uuid4
+from hypothesis import given, strategies as st
+from datetime import datetime
 
 from database import db
 from core.audit_manager import audit_manager

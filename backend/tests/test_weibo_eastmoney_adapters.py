@@ -10,7 +10,6 @@ Verifies:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -19,7 +18,6 @@ import pytest
 from jobs.adapters.weibo_trending import (
     fetch_weibo_trending,
     _fetch_hot_search,
-    _search_keyword,
     _parse_mblog,
 )
 from jobs.adapters.eastmoney_market import (

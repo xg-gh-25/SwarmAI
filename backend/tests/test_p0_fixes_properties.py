@@ -23,7 +23,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from hooks.evolution_maintenance_hook import _append_changelog
 from tests.helpers import PROPERTY_SETTINGS

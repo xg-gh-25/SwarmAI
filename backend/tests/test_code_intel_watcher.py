@@ -5,7 +5,6 @@ TDD: tests written first, implementation follows.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -192,7 +191,7 @@ class TestWatcherBatchHandling:
     @pytest.mark.asyncio
     async def test_watcher_processes_small_batch(self):
         """Batches within _MAX_BATCH_SIZE are processed normally."""
-        from core.code_intel.watcher import CodeIntelWatcher, _MAX_BATCH_SIZE
+        from core.code_intel.watcher import CodeIntelWatcher
 
         graph = MagicMock()
         watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
@@ -256,7 +255,6 @@ class TestWatcherRegistry:
         from core.code_intel.watcher import (
             CodeIntelWatcher,
             start_watcher,
-            stop_all_watchers,
             _MAX_WATCHERS,
         )
 

@@ -157,7 +157,6 @@ class TestEvolutionConfidenceGate:
 
     def test_high_confidence_creates_todo(self):
         """Proposals with confidence >= 0.5 should attempt to create a todo."""
-        import json
         import tempfile
         from pathlib import Path
         from core.evolution_optimizer import _write_evolution_proposal
@@ -252,7 +251,6 @@ def _backdate_todo_via_app(client: TestClient, todo_id: str, iso_date: str) -> N
     loop. We use `client.app` to access the FastAPI app, then run an async
     helper inside that app's event loop via a temporary endpoint.
     """
-    from starlette.testclient import TestClient as _TC
     from starlette.responses import JSONResponse
     from fastapi import Request
 

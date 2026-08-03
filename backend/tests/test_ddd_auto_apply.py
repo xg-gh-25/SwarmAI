@@ -10,9 +10,7 @@ TDD tests for _auto_apply_ddd_proposals():
 """
 
 import json
-from pathlib import Path
 
-import pytest
 
 from hooks.context_health_hook import ContextHealthHook
 

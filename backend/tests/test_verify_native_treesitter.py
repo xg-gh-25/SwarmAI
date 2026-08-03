@@ -13,7 +13,6 @@ SWARMAI_VERIFY_BUILD=1, exactly mirroring the endpoint's real dispatch. No mock 
 tree-sitter — the whole point is to exercise the REAL parse.
 """
 
-import os
 
 import pytest
 from fastapi.testclient import TestClient

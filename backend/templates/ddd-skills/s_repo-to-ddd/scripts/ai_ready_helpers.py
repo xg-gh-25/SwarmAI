@@ -3158,7 +3158,6 @@ def _count_langs_by_ext(files) -> "Counter":
 # Deferred: per-package full v3 (domains/flows/steps) generation is the LLM fan-out
 # layer (§4.9 orchestration), not a deterministic helper.
 
-import fnmatch as _fnmatch
 from dataclasses import dataclass, field
 
 

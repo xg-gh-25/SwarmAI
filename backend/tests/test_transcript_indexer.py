@@ -3,12 +3,10 @@
 Validates JSONL parsing, turn-pair chunking, delta-sync, hybrid search,
 and integration with RecallEngine. Follows knowledge_store test patterns.
 """
-import hashlib
 import json
 import sqlite3
-import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

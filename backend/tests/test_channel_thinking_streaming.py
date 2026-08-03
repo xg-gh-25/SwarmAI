@@ -10,7 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +18,6 @@ from channels.streaming import (
     StreamContext,
     cleanup_stream,
     end_thinking_phase,
-    schedule_native_flush,
 )
 
 

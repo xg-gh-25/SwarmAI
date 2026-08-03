@@ -9,7 +9,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 # Import the module under test
 import sys
@@ -164,7 +163,6 @@ class TestStalenessDetection:
 
     def test_detects_missing_code_file(self):
         """Reports MISSING when code file doesn't exist."""
-        from scripts.refresh_ai_docs import STALENESS_CHECKS
 
         with patch.object(
             sys.modules["scripts.refresh_ai_docs"],

@@ -6,7 +6,6 @@ subprocess execution that survives session death. Core ACs from run_e5ccef04.
 import asyncio
 import os
 import signal
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 

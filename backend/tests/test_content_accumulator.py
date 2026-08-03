@@ -10,8 +10,7 @@ blocks with unknown types or missing IDs are always added.
 **Validates: Requirements 5.2, 5.3**
 """
 
-import pytest
-from hypothesis import given, strategies as st, settings
+from hypothesis import given, strategies as st
 
 from core.content_accumulator import ContentBlockAccumulator
 from tests.helpers import PROPERTY_SETTINGS

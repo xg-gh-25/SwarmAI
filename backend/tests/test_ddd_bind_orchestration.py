@@ -137,7 +137,6 @@ class TestBindProjectOrchestration:
         _write_bindings(proj, [_external("adlc-workflows"), _internal("GCRAIDLCPreset")])
 
         real_bind_repo = None
-        import core.ddd_bindings as m
 
         def fake_bind_repo(binding, worktree_root=None):
             # external → succeed; internal still raises NotImplementedError via the real guard

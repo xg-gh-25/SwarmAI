@@ -11,11 +11,10 @@ Validates:
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jobs.models import Job, JobSafety, SchedulerState
+from jobs.models import Job, SchedulerState
 
 
 # ── AC1: on:git_commit job becomes due after event emitted ──────────
@@ -154,7 +153,6 @@ class TestAutoFullReindex:
     def test_suggest_full_rebuild_triggers_background_reindex(self):
         """When freshness.suggest_full_rebuild is True, a background
         reindex task is spawned instead of just logging."""
-        from unittest.mock import AsyncMock
 
         # This test validates the behavioral change in context_health_hook
         # The actual wiring is integration-level; here we verify the

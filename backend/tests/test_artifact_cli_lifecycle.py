@@ -9,10 +9,7 @@ Tests AC1-AC5 of pipeline run_fd0064e6:
 """
 
 import json
-import os
-import tempfile
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

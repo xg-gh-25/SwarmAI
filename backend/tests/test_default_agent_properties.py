@@ -2,8 +2,7 @@
 
 Uses Hypothesis to verify universal properties across all valid inputs.
 """
-import pytest
-from hypothesis import given, strategies as st, settings, assume, HealthCheck
+from hypothesis import given, strategies as st, assume
 from fastapi.testclient import TestClient
 from tests.helpers import PROPERTY_SETTINGS
 

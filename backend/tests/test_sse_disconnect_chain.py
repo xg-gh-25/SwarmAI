@@ -172,7 +172,6 @@ class TestAutoRecoverStallGuard:
             unit, "force_unstick_streaming", side_effect=mock_force_unstick,
         ) as mock_unstick:
             # Stall >= threshold → should call force_unstick, NOT raise SessionBusyError
-            from core.exceptions import SessionBusyError
             try:
                 async for event in unit.send(
                     query_content="Boundary",

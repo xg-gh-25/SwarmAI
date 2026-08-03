@@ -5,7 +5,6 @@ Methodology: TDD vertical tracer bullets — one AC per test group.
 """
 
 import json
-import pytest
 from datetime import datetime, timezone
 from core.ddd_maturity import (
     MaturityState,
@@ -460,7 +459,7 @@ class TestPipelineIntegration:
 
     def test_verified_by_production_flag(self, tmp_path):
         """Simulating pipeline deliver success: sections loaded get verified=true."""
-        from core.ddd_maturity import parse_maturity, inject_maturity, MaturityState
+        from core.ddd_maturity import parse_maturity, inject_maturity
 
         # Setup: TECH.md with unverified section
         tech = tmp_path / "TECH.md"

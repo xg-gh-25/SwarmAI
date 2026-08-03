@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 from ..paths import SWARMWS, PROJECTS_DIR

@@ -12,7 +12,7 @@ import fnmatch
 import json
 
 import pytest
-from hypothesis import given, strategies as st, settings
+from hypothesis import given, strategies as st
 
 from core.security_hooks import (
     DEFAULT_DANGEROUS_PATTERNS,

@@ -25,7 +25,7 @@ import json
 import logging
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar

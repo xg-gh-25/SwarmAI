@@ -31,14 +31,11 @@ from uuid import uuid4
 
 from database import db
 from schemas.chat_thread import (
-    ChatMode,
     ChatMessageCreate,
     ChatMessageResponse,
     ChatThreadCreate,
     ChatThreadResponse,
     ChatThreadUpdate,
-    MessageRole,
-    SummaryType,
     ThreadSummaryCreate,
     ThreadSummaryResponse,
     ThreadSummaryUpdate,

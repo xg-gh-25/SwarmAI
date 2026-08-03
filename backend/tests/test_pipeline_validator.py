@@ -27,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.pipeline_validator import (
     DECISION_OPTIONAL_STAGES,
-    NO_ARTIFACT_STAGES,
     STAGE_ROUTING,
     STAGE_SCHEMAS,
     _check_artifact_exists,
@@ -48,7 +47,6 @@ from scripts.pipeline_validator import (
 from scripts.artifact_cli import (
     _extract_run_metrics,
     _record_validation_event,
-    _load_artifact_for_metrics,
 )
 from core.pipeline_profiles import get_profile_stages, PIPELINE_PROFILES
 

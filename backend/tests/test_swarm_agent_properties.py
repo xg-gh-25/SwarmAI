@@ -6,7 +6,7 @@ Uses Hypothesis to verify universal properties across all valid inputs.
 """
 import pytest
 import asyncio
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from fastapi.testclient import TestClient
 from datetime import datetime
 from tests.helpers import PROPERTY_SETTINGS

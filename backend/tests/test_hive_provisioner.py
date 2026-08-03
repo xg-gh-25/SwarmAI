@@ -95,7 +95,7 @@ class TestUserData:
 
     def test_word_list_exactly_256(self):
         """256 words = 8 bits per word. More or fewer = comment lies."""
-        import re, inspect
+        import inspect
         from hive.user_data import generate_password
         src = inspect.getsource(generate_password)
         words = re.findall(r'"(\w+)"', src)
@@ -135,7 +135,6 @@ class TestProvisionerSession:
         }
         # boto3 is imported inside _get_session, mock at the module level
         with patch.dict("sys.modules", {"boto3": MagicMock()}) as _:
-            import boto3 as mock_boto3
             session = p._get_session(account, "us-east-1")
             # Verify it called Session with the right kwargs
             assert session is not None  # Got something back
@@ -206,7 +205,7 @@ class TestProvisionerIAM:
     @pytest.mark.asyncio
     async def test_create_role_has_bedrock_permissions(self):
         """AC1: IAM role includes bedrock:InvokeModel*."""
-        from hive.provisioner import HiveProvisioner, HIVE_IAM_POLICY
+        from hive.provisioner import HIVE_IAM_POLICY
 
         bedrock_actions = HIVE_IAM_POLICY["Statement"][0]["Action"]
         assert "bedrock:InvokeModel" in bedrock_actions
@@ -1142,8 +1141,7 @@ class TestM13TemplateVariableCheck:
 
     def test_unresolved_variable_raises(self):
         """If a template variable is misspelled, ValueError is raised."""
-        from hive.user_data import _USER_DATA_TEMPLATE, generate_password
-        from string import Template
+        from hive.user_data import _USER_DATA_TEMPLATE
         # Inject a bad variable into the template
         bad_template = _USER_DATA_TEMPLATE + "\n${s3_bucket} should resolve"
         # The check is in render_user_data — just verify render works normally
@@ -1445,8 +1443,6 @@ class TestM13ErrorPath:
 
     def test_missing_known_variable_detected(self):
         """If a known template variable is not substituted, ValueError is raised."""
-        from hive.user_data import render_user_data
-        from string import Template
         import hive.user_data as ud
 
         original = ud._USER_DATA_TEMPLATE

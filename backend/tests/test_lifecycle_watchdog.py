@@ -12,11 +12,9 @@ Property-based tests with Hypothesis for PID set invariants.
 from __future__ import annotations
 
 import asyncio
-import os
 import signal
-import subprocess
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from hypothesis import given, settings, HealthCheck
@@ -669,7 +667,6 @@ class TestStuckWaitingRoutesCoordinator:
     which protects it). A recover that bypasses decide_bare is a regression."""
 
     def _make_waiting_unit(self, *, state, user_stopped=False, waited_over=True):
-        from core.session_unit import SessionState
 
         unit = MagicMock()
         unit.state = state
@@ -757,7 +754,7 @@ def _make_streaming_unit(
     (session_unit.py:3055) so the watchdog sees a realistic stall.
     """
     import time as _t
-    from core.session_unit import SessionState, SessionUnit
+    from core.session_unit import SessionState
 
     unit = MagicMock()
     unit.state = SessionState.STREAMING

@@ -70,7 +70,6 @@ def _point_singleton_at(monkeypatch, temp_app_data_dir, seed_db_path):
     (``settings.sqlite_db_path``) resolve to the SAME temp data.db, and the
     DB singleton is fresh for this test.
     """
-    import main
     import database
     from config import settings
 
@@ -263,7 +262,6 @@ def test_reseed_retry_is_bounded_not_infinite(temp_app_data_dir, monkeypatch):
     data.db then can't be recovered → _init_db_bounded must raise (bounded
     KeepAlive restart), not spin.
     """
-    import main
     import database
     from config import settings
 
@@ -294,7 +292,6 @@ def test_reseed_succeeds_but_fresh_db_also_bad_propagates(
     ``_reseed_from_seed`` return True while leaving a garbage file in place, so
     the retry migration raises a SECOND DatabaseError.
     """
-    import main
     import database
     from config import settings
 

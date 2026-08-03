@@ -20,14 +20,11 @@ Key properties / invariants being verified:
 **Validates: Requirements 1.1, 1.2, 1.3, 2.1, 2.2, 2.3**
 """
 
-import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from dataclasses import dataclass
-from typing import Literal
 
-from hypothesis import given, settings, assume, HealthCheck
+from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
 # Import the function under test

@@ -40,7 +40,6 @@ from core import ddd_distribution_policy as policy
 from core.ddd_distribution_policy import (
     TARGET_AIM,
     TARGET_OPEN_PLUGIN,
-    DistributionPolicy,
 )
 from core.project_registry import DDD_CANONICAL_DOCS
 from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)

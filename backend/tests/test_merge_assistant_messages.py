@@ -3,7 +3,6 @@
 Covers: consecutive merge, user-separator no-merge, legacy string content,
 empty content, and model attribution.
 """
-import pytest
 from routers.chat import _merge_consecutive_assistant_messages
 
 

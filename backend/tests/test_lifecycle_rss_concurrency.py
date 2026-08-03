@@ -16,7 +16,6 @@ old serial implementation (that is the RED proof) and passes on the gather fix.
 """
 from __future__ import annotations
 
-import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch

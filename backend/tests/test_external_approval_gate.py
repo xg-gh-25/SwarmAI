@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from core.security_hooks import create_external_approval_gate
 

@@ -3,9 +3,7 @@
 Tests: memory effectiveness analysis, DDD change suggestions,
 session stats, engine level computation, unified metrics collection.
 """
-import json
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 

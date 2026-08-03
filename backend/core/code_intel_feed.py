@@ -42,7 +42,6 @@ def _get_channel_threshold(channel: str, default: float) -> float:
     try:
         from core.proposal_feedback import ProposalFeedbackTracker, THRESHOLD_FLOOR
         import json as _json
-        from pathlib import Path as _Path
 
         from config import get_app_data_dir
         stats_file = get_app_data_dir() / "SwarmWS" / "Projects" / "SwarmAI" / ".artifacts" / "channel_stats.json"

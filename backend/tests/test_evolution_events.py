@@ -9,7 +9,6 @@ Requirements: self-evolution E2E pipeline
 """
 
 import json
-import pytest
 
 # Import the private helper directly from the chat module.
 from routers.chat import _extract_evolution_events

@@ -21,7 +21,7 @@ Validates: Requirements 1.1, 1.2, 1.4, 1.5, 1.6, 1.7
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -265,9 +265,7 @@ class TestC3SlotRaceCondition:
 # Validates: Requirements 3.1–3.14
 # ===========================================================================
 
-import os
 import signal
-from unittest.mock import call
 
 from hypothesis import given, strategies as st, settings
 

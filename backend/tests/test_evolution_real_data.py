@@ -25,7 +25,6 @@ from core.evolution_optimizer import (
     TextChange,
     atomic_deploy,
     compute_confidence,
-    run_evolution_cycle,
 )
 from core.session_miner import EvalExample
 

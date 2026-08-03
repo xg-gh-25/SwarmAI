@@ -5,9 +5,6 @@ from pathlib import Path
 import pytest
 
 from core.code_intel.parser import (
-    CodeEdge,
-    CodeNode,
-    LANGUAGE_MAP,
     ParseResult,
     QUALIFIED_SEPARATOR,
     _build_file_scope_regex,
@@ -346,7 +343,6 @@ class TestParseRepo:
 # ═══════════════════════════════════════════════════════════════════════
 
 from core.code_intel.parser import (  # noqa: E402
-    parse_repo_with_coverage,
     ParseRepoResult,
 )
 

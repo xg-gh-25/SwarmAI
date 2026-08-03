@@ -11,7 +11,6 @@ import hashlib
 import json
 import sqlite3
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # ---------------------------------------------------------------------------
@@ -106,7 +105,7 @@ class TestSemanticRecall:
 
     def test_hybrid_search_combines_keyword_and_vector(self):
         """Hybrid search merges keyword and vector scores with 0.6v + 0.4k weights."""
-        from core.memory_embeddings import hybrid_memory_search, ScoredEntry
+        from core.memory_embeddings import hybrid_memory_search
 
         # Mock both scoring systems
         keyword_scores = {"RC01": 0.8, "KD01": 0.0, "LL01": 0.3}

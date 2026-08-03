@@ -7,12 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.code_intel.module_map import (
-    ModuleCrossing,
     ModuleInfo,
     ModuleMapResult,
     _dir_prefix,
     _group_nodes,
-    _regroup_if_flat,
     build_module_map,
     detect_cross_module_changes,
 )

@@ -877,7 +877,6 @@ def compute_subsystem_coverage(doc: dict, seed: list[dict]) -> dict:
       gap_queue:  sorted names of spine/extension subsystems with NO domain
                   (the non-silent gap list — pkgs-gaps-status style, §12.2 AC2)
     """
-    import fnmatch as _fnmatch
 
     domains = doc.get("domains") or []
     flows = doc.get("flows") or []
@@ -3537,7 +3536,6 @@ def evaluate_verification_response(
 # Deferred: per-package full v3 (domains/flows/steps) generation is the LLM fan-out
 # layer (§4.9 orchestration), not a deterministic helper.
 
-import fnmatch as _fnmatch
 from dataclasses import dataclass, field
 
 

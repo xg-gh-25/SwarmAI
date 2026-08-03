@@ -30,7 +30,6 @@ self-contained with no cross-module dependencies.
 import json
 import os
 import re
-import struct
 import subprocess
 import time
 from functools import lru_cache

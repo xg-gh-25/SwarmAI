@@ -10,7 +10,6 @@ Parity requirements (Gate-1 verified vs distillation_hook.py:1360-1399):
 - title key = lowercased bold-title (**...**), title-set is MUTATED intra-batch
 - a fully-filtered batch returns "" (caller must guard against empty write)
 """
-import pytest
 from pathlib import Path
 
 

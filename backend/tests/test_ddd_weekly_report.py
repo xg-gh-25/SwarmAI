@@ -6,7 +6,6 @@ health stats, markdown generation, edge cases (0 projects, empty data).
 """
 
 import json
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch

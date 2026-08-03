@@ -2,7 +2,6 @@
 import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
-import json
 
 from database import db
 
@@ -112,7 +111,6 @@ class TestChatSessionsLimit:
 
     async def _seed_sessions(self, count: int = 5):
         """Seed N sessions with staggered timestamps for ordering tests."""
-        from core.session_manager import session_manager
         import uuid
         sessions = []
         for i in range(count):

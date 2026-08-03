@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from unittest.mock import patch
 
 import pytest
@@ -12,14 +11,10 @@ from core.evolution_optimizer import (
     EvolutionOptimizer,
     OptimizationResult,
     TextChange,
-    CORRECTION_PATTERNS,
     compute_confidence,
     atomic_deploy,
     CycleReport,
     DeployResult,
-    SkillHealthEntry,
-    Recommendation,
-    SkillHealthReport,
     ExecutionTraceCollector,
     AntiPatternGenerator,
 )
@@ -886,7 +881,6 @@ class TestProposalFreshnessCheck:
         no proposal should be written."""
         from core.evolution_optimizer import (
             run_evolution_cycle,
-            _write_evolution_proposal,
         )
 
         skills_dir = tmp_path / "skills"

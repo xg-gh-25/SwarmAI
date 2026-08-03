@@ -12,7 +12,6 @@ Testing methodology: unit tests for specific examples and edge cases.
 Property-based tests (Hypothesis) are in separate sub-tasks.
 """
 
-import pytest
 
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter
 

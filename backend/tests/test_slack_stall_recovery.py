@@ -19,9 +19,7 @@ Gate-1-hardened invariants under test:
 """
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-import pytest
 
 from channels.adapters import slack as slackmod
 from channels.adapters.slack import SlackChannelAdapter, _STALL_MISS_THRESHOLD

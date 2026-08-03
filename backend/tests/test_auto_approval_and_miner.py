@@ -5,10 +5,7 @@ Step 3: ObservationMiner extracts RETRY + LONG_TOOL patterns from observation da
 """
 import json
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -111,7 +108,7 @@ class TestObservationMiner:
 
     def test_retry_detected(self):
         """Same tool+intent 3+ times with errors → RETRY pattern."""
-        from core.observation_miner import ObservationMiner, Pattern
+        from core.observation_miner import ObservationMiner
         from core.observation_ring import Observation
 
         observations = []

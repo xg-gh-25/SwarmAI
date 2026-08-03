@@ -9,9 +9,7 @@ Validates the anti-death-spiral mechanisms:
 - Fix 5: OOM events yield status messages to frontend
 """
 
-from unittest.mock import patch
 
-import pytest
 
 from core.session_utils import FailureType, compute_backoff
 

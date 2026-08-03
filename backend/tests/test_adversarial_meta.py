@@ -7,7 +7,6 @@ Verifies:
 import json
 from pathlib import Path
 
-import pytest
 
 
 def _make_run(runs_dir: str, run_id: str, findings_total: int, files_changed: int):

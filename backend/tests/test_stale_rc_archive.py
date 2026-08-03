@@ -10,9 +10,7 @@ TDD tests for _archive_stale_rc_entries():
 """
 
 from datetime import date, timedelta
-from pathlib import Path
 
-import pytest
 
 from hooks.distillation_hook import DistillationTriggerHook
 

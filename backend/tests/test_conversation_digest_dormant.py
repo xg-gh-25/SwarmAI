@@ -9,10 +9,7 @@ Two structural guarantees:
 """
 
 import asyncio
-import json
-from pathlib import Path
 
-import pytest
 
 from jobs.handlers.conversation_digest import (
     run_conversation_digest,

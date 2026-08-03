@@ -8,8 +8,6 @@ Methodology: TDD RED phase — all tests written before implementation.
 """
 
 import pytest
-from pathlib import Path
-from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
 # Fixture: minimal MEMORY.md content for budget tests

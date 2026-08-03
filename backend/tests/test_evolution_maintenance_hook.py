@@ -12,9 +12,7 @@ Key invariants:
 - File locking is used for prune operations
 """
 
-import asyncio
 import json
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,7 +22,6 @@ from hooks.evolution_maintenance_hook import (
     EvolutionMaintenanceHook,
     _parse_entries,
     _get_field,
-    _append_changelog,
 )
 from core.session_hooks import HookContext
 

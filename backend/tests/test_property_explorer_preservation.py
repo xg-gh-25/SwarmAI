@@ -22,11 +22,9 @@ Key properties / invariants being verified:
 **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6**
 """
 
-import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
-from typing import Literal
 
 from hypothesis import given, settings, assume, HealthCheck
 from hypothesis import strategies as st

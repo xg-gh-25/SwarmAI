@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .parser import CodeEdge, CodeNode, ParseResult
+    pass
 
 logger = logging.getLogger(__name__)
 

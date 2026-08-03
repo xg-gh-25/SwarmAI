@@ -6,11 +6,8 @@ for git repos and in-memory SQLite for DB round-trips.
 """
 import asyncio
 import gzip
-import json
 import os
 import subprocess
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -430,7 +427,7 @@ class TestKeychainToken:
 
     def test_set_and_get_token_roundtrip(self):
         """set_token → get_token returns same value."""
-        from core.backup_manager import set_backup_token, get_backup_token
+        from core.backup_manager import get_backup_token
 
         # Use env var fallback for testability (avoid real Keychain in CI)
         with patch.dict(os.environ, {"SWARM_BACKUP_TOKEN": "ghp_test123"}):

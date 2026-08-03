@@ -22,7 +22,6 @@ on-demand ``s_save-activity`` skill to ensure consistent extraction.
 
 from __future__ import annotations
 
-import asyncio
 import re
 import json
 import logging

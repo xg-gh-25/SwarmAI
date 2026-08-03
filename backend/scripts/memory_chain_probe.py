@@ -30,7 +30,6 @@ Usage: python backend/scripts/memory_chain_probe.py <scenario> [negative]
 """
 from __future__ import annotations
 
-import os
 import sqlite3
 import sys
 import tempfile

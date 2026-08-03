@@ -8,11 +8,8 @@ Covers:
 - run-commit NEVER pushes (no remote interaction; pushed:false always)
 """
 import json
-import os
 import subprocess
-import sys
 from argparse import Namespace
-from pathlib import Path
 
 import pytest
 

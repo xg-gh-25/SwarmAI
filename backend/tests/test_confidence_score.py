@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 
-import pytest
 
 SCRIPT = os.path.join(
     os.path.dirname(__file__),

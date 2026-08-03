@@ -3,11 +3,8 @@
 Verifies that the core modules (transcript_indexer, temporal validity,
 multi-store RecallEngine) are actually wired into production hooks.
 """
-import re
 import sqlite3
-import textwrap
-from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 import pytest
 
@@ -83,7 +80,7 @@ class TestW2TemporalWeightInScoring:
 
     def test_superseded_entry_scores_lower(self):
         """An entry with superseded_by metadata should score lower."""
-        from core.memory_index import keyword_relevance, _entry_temporal_weight
+        from core.memory_index import _entry_temporal_weight
 
         # Active entry
         active_weight = _entry_temporal_weight(

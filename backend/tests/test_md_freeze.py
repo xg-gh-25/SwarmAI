@@ -14,7 +14,6 @@ Key invariants under test:
 - Sentinel collision in source aborts with a clear error (AC6)
 """
 import importlib.util
-import json
 import subprocess
 import sys
 from pathlib import Path

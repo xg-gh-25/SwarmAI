@@ -1149,7 +1149,6 @@ class ContextHealthHook:
         non-duplicate run are auto-sunk — protected tiers (principle/correction/
         decision/model) are always HELD-BACK because decay can never reclaim them.
         """
-        from core.ddd_entry_lifecycle import classify_entry_type
 
         memory_path = root / ".context" / "MEMORY.md"
         if not memory_path.exists():

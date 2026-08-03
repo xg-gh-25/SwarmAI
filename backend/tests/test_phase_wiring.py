@@ -1,7 +1,6 @@
 """Tests for phase 1+2 wiring — import checks."""
 from __future__ import annotations
 
-import pytest
 
 
 class TestUserObserverHookImportable:

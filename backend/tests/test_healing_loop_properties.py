@@ -11,10 +11,8 @@ These properties catch edge cases that example-based tests miss
 """
 
 import time
-from unittest.mock import patch
 
-import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from core.session_healing import (
@@ -22,7 +20,6 @@ from core.session_healing import (
     HealthSensor,
     HEAL_COOLDOWN_S,
     MAX_HEAL_ATTEMPTS,
-    RSS_WINDOW,
 )
 
 

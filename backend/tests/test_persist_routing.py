@@ -3,7 +3,6 @@
 Verifies that classify_content() routes knowledge to the correct destination
 and that the routing table is consumed identically by auto hooks and manual skill.
 """
-import pytest
 
 
 class TestClassifyContent:

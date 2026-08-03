@@ -6,7 +6,6 @@ replacing the duplicated logic formerly in executor._load_mcp_config().
 """
 
 import json
-import pytest
 from pathlib import Path
 
 

@@ -28,7 +28,6 @@ from core import session_unit as su
 from core.session_unit import (
     SessionUnit,
     SessionState,
-    SOFT_COMPACT_PCT,
     SOFT_COMPACT_COOLDOWN,
     SOFT_COMPACT_HANG_S,
     SOFT_COMPACT_FAIL_BACKOFF,

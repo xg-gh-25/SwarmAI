@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from core.session_unit import SessionUnit, SessionState
+from core.session_unit import SessionUnit
 
 
 def _cold_unit(session_id: str = "test-cred-preflight") -> SessionUnit:

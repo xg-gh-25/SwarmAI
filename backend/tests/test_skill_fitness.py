@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from core.skill_fitness import FitnessScore, JudgeScore, LLMJudge, SkillFitnessEvaluator
+from core.skill_fitness import JudgeScore, LLMJudge, SkillFitnessEvaluator
 
 
 @pytest.fixture

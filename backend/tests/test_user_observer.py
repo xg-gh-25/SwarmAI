@@ -7,12 +7,10 @@ Key public symbols tested:
 """
 from __future__ import annotations
 
-import json
 import pytest
 from pathlib import Path
-from dataclasses import asdict
 
-from core.user_observer import UserObserver, Observation, CORRECTION_PATTERNS, EXPERTISE_KEYWORDS
+from core.user_observer import UserObserver, Observation
 from core.session_hooks import SessionLifecycleHook
 
 

@@ -20,10 +20,9 @@ Testing methodology: unit test with mocked Claude SDK types.
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

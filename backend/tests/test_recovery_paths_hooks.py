@@ -11,7 +11,6 @@ graceful degradation (never crash, never corrupt state).
 import asyncio
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 import pytest
 

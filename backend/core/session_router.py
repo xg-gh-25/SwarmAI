@@ -21,11 +21,9 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
-import json as _json
 import logging
-import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
@@ -36,7 +34,6 @@ from .session_unit import SessionState, SessionUnit
 if TYPE_CHECKING:
     from .prompt_builder import PromptBuilder
     from .app_config_manager import AppConfigManager
-    from .lifecycle_manager import LifecycleManager
 
 logger = logging.getLogger(__name__)
 
@@ -855,7 +852,6 @@ async def _convert_unsupported_blocks_to_path_hints(
         A new list with image/document blocks replaced by text path hints.
     """
     import base64
-    from pathlib import Path
     from uuid import uuid4 as _uuid4
 
     converted: list[dict] = []

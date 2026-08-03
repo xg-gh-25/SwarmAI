@@ -14,12 +14,10 @@ consistency between the ``GET /api/system/max-tabs`` endpoint and
 """
 from __future__ import annotations
 
-import asyncio
-import math
-from unittest.mock import patch, PropertyMock, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from core.resource_monitor import ResourceMonitor, SystemMemory, SpawnBudget
 from core.session_router import SessionRouter

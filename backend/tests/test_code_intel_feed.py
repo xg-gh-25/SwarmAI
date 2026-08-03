@@ -5,7 +5,6 @@ health enrichment via coverage, and maturity evidence from tests.
 """
 
 import pytest
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from core.code_intel_feed import (
@@ -13,7 +12,6 @@ from core.code_intel_feed import (
     get_code_coverage_for_health,
     get_test_coverage_for_maturity,
     _extract_backtick_symbols,
-    _get_all_symbol_names,
 )
 
 

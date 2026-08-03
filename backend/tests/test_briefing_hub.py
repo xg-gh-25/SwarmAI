@@ -12,12 +12,8 @@ Methodology: TDD RED→GREEN. All tests must FAIL before implementation.
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 
 # ── P1: Signal Pipeline Tests ────────────────────────────────────────

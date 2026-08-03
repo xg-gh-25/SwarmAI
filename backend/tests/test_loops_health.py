@@ -16,7 +16,7 @@ import pytest
 
 # Import the engine directly (avoids subprocess + network timeout issues in CI)
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "s_loops-health" / "scripts"))
-from loops_health_check import SelfLoopsHealthEngine, Finding, HealthReport
+from loops_health_check import SelfLoopsHealthEngine
 
 
 @pytest.fixture

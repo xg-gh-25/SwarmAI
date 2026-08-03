@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from core.context_directory_loader import ContextDirectoryLoader
 

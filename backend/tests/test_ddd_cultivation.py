@@ -5,7 +5,6 @@ Tests: model → filter → auto-apply → changelog → escalation → cultivat
 """
 
 import json
-import os
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -716,7 +715,6 @@ class TestSafeAppendSectionsExistInDocs:
         import re
         from core.ddd_cultivation import SAFE_APPEND_SECTIONS
 
-        import pytest
         # Resolve the workspace the SAME way production does — never hardcode a
         # developer-machine path (that would make the check pass VACUOUSLY in CI
         # where the path is absent). Adversarial MED.
@@ -1825,7 +1823,6 @@ class TestNormalizeCultivatedBullet:
     def test_apply_to_ddd_emits_parseable_titled_bullet(self, tmp_path):
         """End-to-end: apply_to_ddd on a raw-prose lesson writes a bullet that
         parse_entries (the autonomous default path) can now see."""
-        import os
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
         from core.ddd_entry_lifecycle import parse_entries
         proj = tmp_path / "P" / "2-understanding"

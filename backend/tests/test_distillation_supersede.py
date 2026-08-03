@@ -8,7 +8,6 @@ This prevents the "memory pipeline temporal lag gap" where stale claims
 from early sessions persist alongside newer, more accurate ones.
 """
 
-import pytest
 
 from hooks.distillation_hook import DistillationTriggerHook
 

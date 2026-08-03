@@ -298,7 +298,7 @@ async def get_recent_artifacts(
 # Pipeline Artifact Endpoints (ArtifactRegistry)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from core.artifact_registry import ArtifactRegistry, ARTIFACT_TYPES, PIPELINE_STATES
+from core.artifact_registry import ArtifactRegistry
 
 
 def _get_registry() -> ArtifactRegistry:

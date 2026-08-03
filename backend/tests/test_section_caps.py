@@ -5,11 +5,8 @@ overflow entries are archived, and under-cap sections are untouched.
 """
 from __future__ import annotations
 
-import re
 from datetime import date
-from pathlib import Path
 
-import pytest
 
 
 def _build_memory_md(sections: dict[str, list[str]]) -> str:

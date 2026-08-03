@@ -3,8 +3,6 @@
 Tests the E2E flow without requiring tree-sitter (uses regex fallback).
 """
 
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

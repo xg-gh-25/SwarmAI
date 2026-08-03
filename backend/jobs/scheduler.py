@@ -19,7 +19,6 @@ import logging
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import yaml
 
@@ -27,7 +26,7 @@ from .models import Feed, FeedType, Job, JobSafety, SchedulerDefaults, Scheduler
 from .executor import execute_job
 from .cron_utils import is_cron_due
 from .paths import (
-    STATE_FILE, CONFIG_FILE, USER_JOBS_FILE, LOG_DIR, SWARMWS,
+    STATE_FILE, CONFIG_FILE, USER_JOBS_FILE, SWARMWS,
 )
 from .system_jobs import get_all_system_jobs, SYSTEM_JOB_IDS
 

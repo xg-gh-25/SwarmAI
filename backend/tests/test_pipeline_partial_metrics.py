@@ -10,7 +10,6 @@ generation, and prove a partial run does NOT crash the extractor.
 """
 import json
 from argparse import Namespace
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

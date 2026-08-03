@@ -11,7 +11,7 @@ approvals and permission decisions.
 
 import pytest
 import asyncio
-from hypothesis import given, strategies as st, settings
+from hypothesis import given, strategies as st
 
 from core.permission_manager import PermissionManager
 from tests.helpers import PROPERTY_SETTINGS

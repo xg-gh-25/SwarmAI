@@ -1,7 +1,6 @@
 """Tests for GraphStore — SQLite graph store with CTE-based queries."""
 
 import sqlite3
-import time
 from pathlib import Path
 
 import pytest

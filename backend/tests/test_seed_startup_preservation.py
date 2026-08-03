@@ -23,7 +23,6 @@ Validates: Requirements 3.1, 3.2, 3.3, 3.4, 2.2
 """
 import json
 import sqlite3
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch

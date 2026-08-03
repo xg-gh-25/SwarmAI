@@ -11,10 +11,8 @@ Tests:
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -109,7 +107,7 @@ class TestNotifyConfig:
 
     def test_disabled_channels_skipped(self, tmp_path):
         """Disabled channels are not sent to."""
-        from skills.s_notify.notify import send_notification, load_notify_config
+        from skills.s_notify.notify import send_notification
 
         config_file = tmp_path / "notify-channels.yaml"
         import yaml

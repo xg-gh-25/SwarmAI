@@ -32,7 +32,6 @@ in the test (the Part-B test-theater lesson, run_4b74b764).
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 

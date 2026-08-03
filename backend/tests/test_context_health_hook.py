@@ -6,7 +6,7 @@ import subprocess
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 

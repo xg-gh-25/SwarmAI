@@ -28,7 +28,7 @@ import asyncio
 
 import pytest
 
-from core.session_unit import SessionUnit, SessionState
+from core.session_unit import SessionUnit
 
 
 def _unit() -> SessionUnit:

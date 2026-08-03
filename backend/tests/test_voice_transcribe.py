@@ -12,7 +12,6 @@ Acceptance criteria covered:
 import asyncio
 import io
 import struct
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -47,7 +46,6 @@ class TestVoiceTranscribeModule:
 
     def test_uses_amazon_transcribe(self):
         """Module must use amazon_transcribe SDK."""
-        from core.voice_transcribe import transcribe_audio
         import core.voice_transcribe as mod
         source = Path(mod.__file__).read_text()
         assert 'amazon_transcribe' in source or 'transcribe' in source.lower(), \

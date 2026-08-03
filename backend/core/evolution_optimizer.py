@@ -1559,7 +1559,6 @@ def _run_evolution_cycle_locked(
     governance_proposals_count = 0
     try:
         from core.evolution.governance_miner import generate_governance_proposals
-        from pathlib import Path as _Path
 
         # Locate context files relative to evals_dir
         # evals_dir = ~/.swarm-ai/SwarmWS/.context/SkillEvals → parent = .context/

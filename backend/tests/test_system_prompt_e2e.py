@@ -27,7 +27,6 @@ from pathlib import Path
 import pytest
 
 from core.context_directory_loader import (
-    BUDGET_LARGE_MODEL,
     CHANNEL_LIGHT_EXCLUDE,
     CONTEXT_FILES,
     ContextDirectoryLoader,

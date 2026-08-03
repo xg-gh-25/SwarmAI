@@ -5,7 +5,6 @@ asserts the actual committed tree. Mutation-provable: removing the _unstage_path
 call (exclude) → the sibling file gets committed → these fail.
 """
 import subprocess
-from pathlib import Path
 
 import pytest
 

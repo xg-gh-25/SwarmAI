@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timedelta
 
 from hooks.skill_metrics_hook import (
     SkillMetricsHook,

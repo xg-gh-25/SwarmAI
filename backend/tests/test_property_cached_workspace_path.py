@@ -11,8 +11,7 @@ of ``{app_data_dir}/SwarmWS``.
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.initialization_manager import InitializationManager
 from core.swarm_workspace_manager import SwarmWorkspaceManager

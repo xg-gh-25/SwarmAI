@@ -4,7 +4,6 @@ use_bedrock cannot distinguish ada from sso; both are Bedrock. The persisted
 auth_method drives the remediation text so an external SSO user isn't told to
 run `mwinit -f` (an Amazon-internal command they don't have).
 """
-import pytest
 from core.auth_remediation import remediation_for
 
 

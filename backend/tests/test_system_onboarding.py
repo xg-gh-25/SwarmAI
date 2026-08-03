@@ -10,7 +10,6 @@ Validates:
 import os
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 
 # ── AC1: verify-auth returns success/error with model, latency, error taxonomy ──
@@ -220,7 +219,6 @@ class TestVerifyAuthAnthropicAPI:
 
     def test_verify_auth_apikey_success(self, client):
         """Happy path: mock _verify_anthropic_api returns success."""
-        import asyncio
 
         async def mock_verify(config):
             return {"success": True, "model": "claude-opus-4-6", "latency_ms": 100}
@@ -590,7 +588,6 @@ class TestAnthropicDirectPath:
             # config must carry the key from the secret store, not env
             assert config.get("anthropic_api_key") == "sk-ant-persisted"
             return {"success": True, "model": "claude-opus-4-6", "latency_ms": 40}
-        from core.app_config_manager import AppConfigManager
         with patch("routers.system._verify_anthropic_api", side_effect=mock_verify_ok), \
              patch("routers.system._get_auth_config", return_value={
                  "use_bedrock": False, "default_model": "claude-opus-4-6",

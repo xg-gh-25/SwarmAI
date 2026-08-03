@@ -6,7 +6,6 @@ Tests cover:
 3. HumanResponseFormatter — splitting long responses
 4. Effort Calibration system prompt injection (channel-only)
 """
-import asyncio
 import pytest
 
 from channels.message_queue import (

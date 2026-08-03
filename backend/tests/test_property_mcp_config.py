@@ -9,10 +9,8 @@ and that name deduplication works correctly.
 **Validates: Requirements 9.1, 9.2, 9.3**
 """
 import asyncio
-from unittest.mock import AsyncMock, patch
 
-import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from tests.helpers import PROPERTY_SETTINGS
 
 

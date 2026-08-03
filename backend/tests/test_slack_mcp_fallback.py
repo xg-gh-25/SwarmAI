@@ -14,10 +14,7 @@ Acceptance criteria tested:
 from __future__ import annotations
 
 import asyncio
-import json
-from pathlib import Path
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

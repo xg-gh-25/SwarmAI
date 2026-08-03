@@ -26,9 +26,7 @@ the 300s default, a test here goes RED.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
-import pytest
 
 
 # The measured cycle time that motivated this fix (daemon.log 2026-07-02:

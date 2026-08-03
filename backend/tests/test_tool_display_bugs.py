@@ -20,7 +20,7 @@ the bugs exist. Do NOT fix the code when tests fail.
 """
 
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.tool_summarizer import (
     summarize_tool_use,
@@ -158,9 +158,6 @@ from core.tool_summarizer import (
     _WRITE_NAMES,
     _SEARCH_NAMES,
     _WEB_FETCH_NAMES,
-    _WEB_SEARCH_NAMES,
-    _TOOL_SEARCH_NAMES,
-    _SKILL_NAMES,
     _LIST_DIR_NAMES,
     _TODOWRITE_NAMES,
 )

@@ -189,7 +189,6 @@ def test_f3_discard_waiter_reaps_leaked_event():
 @pytest.mark.asyncio
 async def test_f3_hook_discards_waiter_when_enqueue_raises(monkeypatch):
     """End-to-end: ask_question_gate must NOT leak a waiter if enqueue raises."""
-    from core import security_hooks
     from core.ask_question_manager import ask_question_manager
 
     # Ensure clean slate for this id.

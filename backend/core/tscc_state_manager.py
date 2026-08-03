@@ -27,7 +27,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from schemas.tscc import (
-    TSCCActiveCapabilities,
     TSCCContext,
     TSCCLiveState,
     TSCCState,

@@ -1,8 +1,7 @@
 """Tests for route_parser.py — route extraction for FastAPI, Express, Next.js."""
 
-import pytest
 
-from core.code_intel.route_parser import CodeRoute, extract_routes, detect_framework, build_prefix_map
+from core.code_intel.route_parser import extract_routes, detect_framework, build_prefix_map
 
 
 # ── test_extract_fastapi_routes ─────────────────────────────────────────

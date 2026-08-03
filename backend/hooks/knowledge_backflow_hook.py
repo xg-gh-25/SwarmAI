@@ -26,7 +26,6 @@ import tempfile
 import unicodedata
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from core.session_hooks import HookContext
 from database import db

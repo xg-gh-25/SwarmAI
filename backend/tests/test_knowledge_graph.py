@@ -5,9 +5,8 @@ and stale/expired filtering.
 """
 
 import pytest
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from core.knowledge_graph import (
     Relation,
@@ -18,7 +17,6 @@ from core.knowledge_graph import (
     touch_relation,
     query_relations,
     query_related_entries,
-    VALID_PREDICATES,
 )
 
 
@@ -238,7 +236,6 @@ class TestBackfill:
             ),
         ]
 
-        from pathlib import Path
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as tmp:
             graph_path = Path(tmp) / ".knowledge-graph.yaml"
@@ -255,9 +252,8 @@ class TestBackfill:
 
     def test_backfill_skips_short_filenames(self):
         """Backfill ignores very short matches like 'a.py' or 'io.py'."""
-        from core.knowledge_graph import backfill_from_entries, load_graph
+        from core.knowledge_graph import backfill_from_entries
         from core.ddd_entry_lifecycle import EntryMetadata
-        from pathlib import Path
         from tempfile import TemporaryDirectory
 
         entries = [
@@ -280,7 +276,6 @@ class TestAutoExtraction:
         """AC1: when entry is bumped AND raw_text mentions context file → add relation."""
         from core.ddd_entry_lifecycle import EntryMetadata, bump_references
         from core.knowledge_graph import load_graph
-        from pathlib import Path
         from tempfile import TemporaryDirectory
         from datetime import date
 
@@ -311,8 +306,7 @@ class TestAutoExtraction:
     def test_bump_no_duplicate_relations(self):
         """AC2: bumping twice doesn't create duplicate relations."""
         from core.ddd_entry_lifecycle import EntryMetadata, bump_references
-        from core.knowledge_graph import load_graph, add_relation
-        from pathlib import Path
+        from core.knowledge_graph import load_graph
         from tempfile import TemporaryDirectory
         from datetime import date
 

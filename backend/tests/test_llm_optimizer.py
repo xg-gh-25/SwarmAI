@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from core.evolution_optimizer import TextChange
 from core.llm_optimizer import LLMUsage

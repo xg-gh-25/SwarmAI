@@ -5,9 +5,6 @@ spec.  Covers the three query modes (both params, limit-only, neither) and
 verifies correct ordering, tie-breaking on shared timestamps, and backward
 compatibility with the existing list_by_session() method.
 """
-import asyncio
-import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import pytest

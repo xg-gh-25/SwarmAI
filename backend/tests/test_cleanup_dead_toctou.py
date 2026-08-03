@@ -20,8 +20,7 @@ DEAD→STREAMING DURING the awaited _build_hook_context (simulating the concurre
 send() recovery), and assert _cleanup_dead does NOT touch the reclaimed unit.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

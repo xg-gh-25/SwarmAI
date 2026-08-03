@@ -15,7 +15,7 @@ updated to use the new skill discovery mechanism.
 **Validates: Requirements 26.1-26.7, 34.1-34.7**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -50,7 +50,6 @@ capability_name_strategy = st.text(
 
 async def _create_skill(name: str, is_privileged: bool = False) -> str:
     """Create a filesystem-based skill and return its folder name."""
-    from pathlib import Path
     
     # Create folder name from skill name (kebab-case)
     folder_name = name.lower().replace(" ", "-")

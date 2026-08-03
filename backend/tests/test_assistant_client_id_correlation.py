@@ -16,7 +16,6 @@ continuation paths (continue_with_answer / continue_with_permission) pass None
 
 These tests exercise the backend persist contract (AC1).
 """
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

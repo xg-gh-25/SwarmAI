@@ -16,14 +16,9 @@ Python installer changes and bash wrapper changes are unit-testable.
 """
 from __future__ import annotations
 
-import os
-import stat
-import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 BACKEND_DIR = Path(__file__).parent.parent

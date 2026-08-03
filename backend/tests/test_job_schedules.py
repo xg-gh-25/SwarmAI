@@ -14,10 +14,7 @@ weekend schedule. It parses the REAL sources, not a snapshot.
 """
 from __future__ import annotations
 
-import re
-from pathlib import Path
 
-import pytest
 
 # ── Policy constants ────────────────────────────────────────────────
 _AFTERNOON_UTC_HOURS = set(range(5, 11))  # UTC 5,6,7,8,9,10 == ICT 13-18

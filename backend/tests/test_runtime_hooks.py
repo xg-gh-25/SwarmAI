@@ -6,11 +6,8 @@ Verifies:
 - UserPromptSubmit detects CN + EN correction patterns
 - Hook timeout behavior
 """
-import asyncio
 import json
-import os
 import pytest
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock

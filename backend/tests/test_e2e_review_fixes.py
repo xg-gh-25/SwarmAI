@@ -17,12 +17,9 @@ Covers:
 from __future__ import annotations
 
 import os
-import re
-import tempfile
 import textwrap
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -224,7 +221,7 @@ class TestF6SkillGuardAtDiscovery:
 
     def test_discover_skills_includes_trust_annotation(self, tmp_path):
         """Compact registry should annotate skills with trust status."""
-        from core.skill_registry import SkillRegistry, _get_skill_registry
+        from core.skill_registry import SkillRegistry
 
         # Create a skill
         skill_dir = tmp_path / "s_test-skill"

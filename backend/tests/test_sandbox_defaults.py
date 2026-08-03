@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock
 
-import pytest
 
 from core.app_config_manager import DEFAULT_CONFIG
 from core.prompt_builder import PromptBuilder

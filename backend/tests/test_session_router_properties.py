@@ -8,12 +8,11 @@ FIFO queue dispatch, and routing correctness.
 """
 from __future__ import annotations
 
-import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from core.session_unit import SessionState, SessionUnit
 from core.session_router import SessionRouter

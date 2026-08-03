@@ -28,7 +28,6 @@ Public symbols:
 - ``MEMORY_INDEX_END``             — End marker constant
 """
 
-import json
 import re
 import logging
 from datetime import datetime, date
@@ -158,7 +157,6 @@ def _compress_aliases(aliases: list[str]) -> list[str]:
 from .ddd_entry_lifecycle import (
     MEMORY_PERMANENT_SECTIONS,
     MEMORY_ACTIVE_SECTIONS,
-    MEMORY_EVERGREEN_SECTIONS,
     MEMORY_PREFIX_MAP,
     MEMORY_PREFIX_TO_SECTION,
 )

@@ -10,7 +10,6 @@ Usage: font_backfill.py [--apply]   (default: dry-run)
 """
 import re, glob, sys, os, urllib.request
 
-import os
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates", "html-deck", "systems")
 APPLY = "--apply" in sys.argv
 

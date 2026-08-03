@@ -21,11 +21,9 @@ Key property verified:
 Validates: Requirements 1.1, 2.1, 10.5, 14.3
 """
 
-import os
 import tempfile
 from pathlib import Path
 
-import pytest
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 

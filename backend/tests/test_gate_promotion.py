@@ -7,9 +7,7 @@ Covers:
 - Auto-demotion (3 overrides in 7d)
 - Record methods (trigger, false_positive, override, incident)
 """
-import json
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 

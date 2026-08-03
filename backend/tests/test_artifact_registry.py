@@ -11,18 +11,12 @@ Tests cover:
 """
 
 import json
-import os
-import shutil
-import tempfile
 
 import pytest
 
 from core.artifact_registry import (
-    ARTIFACT_TYPES,
     PIPELINE_STATES,
-    Artifact,
     ArtifactRegistry,
-    ProjectPipelineStatus,
     _slugify,
 )
 

@@ -10,7 +10,6 @@ from schemas.marketplace import (
     MarketplaceResponse,
     PluginInstallRequest,
     PluginResponse,
-    AvailablePlugin,
     AvailablePluginInfo,
 )
 from database import db

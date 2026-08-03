@@ -12,7 +12,6 @@ AND session identity / thread_follow lookup so they can't drift:
 
 These tests drive the REAL helper (no mock of the code under change).
 """
-import pytest
 
 from channels.gateway import _resolve_reply_thread_ts
 

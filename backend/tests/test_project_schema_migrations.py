@@ -20,8 +20,7 @@ import copy
 from datetime import datetime, timezone
 from uuid import uuid4
 
-import pytest
-from hypothesis import given, settings, strategies as st, HealthCheck
+from hypothesis import given, strategies as st
 
 from tests.helpers import PROPERTY_SETTINGS
 from core.project_schema_migrations import (

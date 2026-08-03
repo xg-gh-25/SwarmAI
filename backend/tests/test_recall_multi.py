@@ -13,7 +13,6 @@ READ-only: only the Bedrock network boundary is ever patched; no embed/write.
 """
 
 import json
-import sqlite3
 import pytest
 
 
@@ -267,7 +266,6 @@ class TestMultiWordFTSRecall:
         """AC1: SessionRecall builds an OR query for multi-word input (each term
         quoted, joined by OR) — not one verbatim phrase. Verified by patching the
         DB execute to capture the MATCH string the real search() builds."""
-        import sqlite3
         from unittest.mock import MagicMock
         from core.session_recall import SessionRecall
 
@@ -744,7 +742,6 @@ class TestRun3RecallLegsE2E:
     through the real _recall_ddd. This is the red→green liveness contract."""
 
     def _make_project(self, tmp_path, monkeypatch, *, with_domains, with_human):
-        from core import recall_multi
         proj = tmp_path / "Proj"
         proj.mkdir()
         # a canonical doc must exist so base.exists() + ddd leg run

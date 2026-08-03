@@ -13,8 +13,6 @@ These are ADDITIVE to test_hybrid_memory.py — the existing file's contract
 (default-arg behavior of hybrid_memory_search) is preserved unchanged.
 """
 
-import json
-import sqlite3
 import pytest
 
 

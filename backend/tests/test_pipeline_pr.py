@@ -4,14 +4,12 @@ Verifies: profile gating, title formatting, body structure, branch handling,
 graceful failure on gh auth issues, dry-run mode.
 """
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import sys
-from pathlib import Path
 
 # Add the skills scripts directory to path for direct import
 _scripts_dir = Path(__file__).parent.parent / "skills" / "s_autonomous-pipeline" / "scripts"

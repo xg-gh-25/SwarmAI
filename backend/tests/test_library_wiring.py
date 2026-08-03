@@ -8,7 +8,6 @@ below; the skill is a thin CLI over the same core fns already tested).
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest

@@ -9,7 +9,6 @@ the fix would break (→ RED).
 
 from __future__ import annotations
 
-import pytest
 
 from channels.egress_redactor import (
     StreamRedactor,

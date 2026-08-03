@@ -8,9 +8,7 @@ specifying a workspace_id, it gets assigned the SwarmWS default workspace ID.
 **Validates: Requirements 1.3, 1.4**
 """
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
-from datetime import datetime, timezone
-from uuid import uuid4
+from hypothesis import given, strategies as st
 
 from database import db
 from core.todo_manager import todo_manager

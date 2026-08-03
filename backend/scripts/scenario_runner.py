@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from pathlib import Path
 
 # Reuse executor's proven spawn helpers — do NOT re-derive the CLI resolution,
 # env construction, or bare-flag detection (Gate 1: under-specified spawn =

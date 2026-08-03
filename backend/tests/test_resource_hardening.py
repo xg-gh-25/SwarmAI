@@ -9,7 +9,6 @@ Testing methodology: unit tests with mocked resource_monitor and session state.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch

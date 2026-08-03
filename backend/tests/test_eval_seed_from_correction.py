@@ -17,7 +17,6 @@ to spend an LLM call (goal_success is an LLM evaluator).
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pytest
 import yaml

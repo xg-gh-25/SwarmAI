@@ -17,7 +17,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import pipeline_analytics as pa  # noqa: E402

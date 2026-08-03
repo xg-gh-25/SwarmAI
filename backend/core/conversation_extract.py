@@ -30,7 +30,6 @@ Two structural gates enforced in code (NOT left to the prompt):
 
 import json
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

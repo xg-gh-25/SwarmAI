@@ -11,7 +11,6 @@ TDD RED phase: all tests should FAIL before implementation.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch

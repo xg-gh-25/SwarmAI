@@ -34,7 +34,6 @@ Usage::
         ...
 """
 
-import asyncio
 import logging
 import time
 from typing import Any, Literal

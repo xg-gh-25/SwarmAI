@@ -6,13 +6,11 @@ from daily signal digests and learn-content knowledge cards.
 
 import json
 import pytest
-from pathlib import Path
 
 from hooks.signal_ddd_bridge import (
     bridge_signals_to_ddd,
     bridge_learned_content_to_ddd,
     _classify_signal,
-    _MIN_RELEVANCE_SCORE,
     _MAX_PROPOSALS_PER_RUN,
 )
 

@@ -4,10 +4,8 @@ Uses Hypothesis to verify universal properties across all valid inputs.
 
 **Feature: swarm-init-status-display**
 """
-import pytest
-import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 from fastapi.testclient import TestClient
 from tests.helpers import PROPERTY_SETTINGS
 

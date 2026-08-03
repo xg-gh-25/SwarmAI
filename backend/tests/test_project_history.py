@@ -20,12 +20,11 @@ Key test areas:
 """
 
 import copy
-import json
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
 from tests.helpers import PROPERTY_SETTINGS

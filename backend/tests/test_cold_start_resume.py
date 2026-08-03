@@ -11,8 +11,7 @@ Four cases:
 4. Non-COLD state (IDLE/STREAMING) → no injection (subprocess already running)
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

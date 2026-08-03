@@ -7,8 +7,7 @@ frontend reconcile from force-clearing active streams.
 Key invariant: state reported to frontend must reflect streaming REALITY,
 not just the internal unit.state enum.
 """
-import os
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 

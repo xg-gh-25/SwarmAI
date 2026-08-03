@@ -76,7 +76,6 @@ class TestExtractRepoPath:
 
     def test_real_swarmai_tech_md(self):
         """AC2 regression: the real SwarmAI TECH.md resolves to the source repo."""
-        from pathlib import Path
         from jobs.paths import PROJECTS_DIR
 
         tech = PROJECTS_DIR / "SwarmAI" / "TECH.md"

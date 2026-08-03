@@ -9,7 +9,7 @@ import pytest
 from uuid import uuid4
 
 from database import db
-from core.search_manager import search_manager, SEARCHABLE_ENTITY_TYPES
+from core.search_manager import search_manager
 from tests.helpers import now_iso, create_workspace
 
 

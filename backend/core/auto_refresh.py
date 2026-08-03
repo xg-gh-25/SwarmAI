@@ -22,11 +22,10 @@ import json
 import logging
 import os
 import re
-import subprocess
 
 from core.ddd_paths import ddd_path
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional

@@ -24,7 +24,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from routers.settings import router, set_config_manager, WRITABLE_KEYS
+from routers.settings import router, set_config_manager
 from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEYS
 
 

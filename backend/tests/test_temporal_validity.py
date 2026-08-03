@@ -4,9 +4,7 @@ Validates HTML comment metadata (valid_from, superseded_by), scoring
 weight reduction for superseded entries, distillation hook integration,
 and memory_health superseded_by linking.
 """
-import re
 import textwrap
-from unittest.mock import patch, MagicMock
 
 import pytest
 

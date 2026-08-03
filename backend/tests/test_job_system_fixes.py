@@ -13,12 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 
 # ── AC2: _write_job_result accepts status parameter ─────────────────
@@ -91,7 +88,7 @@ class TestCrashHandlerPersistence:
     def test_crashed_job_appears_in_jsonl(self, tmp_path):
         """When execute_job() catches an exception, the failure should
         appear in the JSONL results file."""
-        from jobs.models import Job, SchedulerState, SchedulerDefaults
+        from jobs.models import Job, SchedulerState
         from jobs.executor import execute_job
 
         jsonl_path = tmp_path / "JobResults" / ".job-results.jsonl"
@@ -221,7 +218,6 @@ class TestBriefingEndpointPerf:
 
     def test_briefing_cache_returns_same_within_ttl(self):
         """Calling briefing twice within TTL should return cached result."""
-        from routers.system import _briefing_cache, get_session_briefing
 
         # _briefing_cache should exist as a module-level cache dict
         assert hasattr(__import__("routers.system", fromlist=["_briefing_cache"]), "_briefing_cache"), \
@@ -231,7 +227,6 @@ class TestBriefingEndpointPerf:
         """run_b36c7880: the heavy briefing recompute must run on the dedicated
         'briefing' pool, NEVER the default ThreadPoolExecutor — otherwise it can
         starve the default pool the event loop uses to schedule /health."""
-        import asyncio
         import routers.system as sysmod
 
         seen = {}
@@ -256,7 +251,6 @@ class TestBriefingEndpointPerf:
     def test_stale_cache_served_without_blocking_on_recompute(self):
         """Stale-while-revalidate: a stale-but-present cache is returned
         immediately; the request must NOT block on the recompute."""
-        import asyncio
         import time as _t
         import routers.system as sysmod
 
@@ -279,7 +273,6 @@ class TestBriefingEndpointPerf:
         """A failing background refresh must NOT push expiry a full TTL (which
         would strand the cache stale forever). The stale path advances expiry by
         only the short debounce window, so it re-converges to a cold miss."""
-        import asyncio
         import time as _t
         import routers.system as sysmod
 
@@ -347,7 +340,7 @@ class TestAuthFailureFallback:
     def test_fallback_runs_on_auth_failure(self):
         """When agent_task returns auth_failed and fallback_script is set,
         the fallback script is executed and its result replaces the original."""
-        from jobs.models import Job, JobResult, JobSafety, SchedulerState, JobState
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
 
         state = SchedulerState(jobs={})
 
@@ -496,7 +489,6 @@ class TestUnifiedStatusEnabledGap:
     """/api/jobs/status must not count disabled jobs as failing (same class as run_01d2fd9d)."""
 
     def test_disabled_failing_job_not_counted(self):
-        import asyncio
         from jobs.models import Job, SchedulerState, JobState
         from routers import jobs as jobs_router
 

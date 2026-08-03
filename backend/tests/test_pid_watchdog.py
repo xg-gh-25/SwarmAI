@@ -14,10 +14,7 @@ Key properties:
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
-import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

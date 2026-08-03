@@ -16,7 +16,6 @@ Validates: Requirements 1.1-1.10, 2.1-2.4
 
 import os
 import shutil
-import tempfile
 
 import pytest
 

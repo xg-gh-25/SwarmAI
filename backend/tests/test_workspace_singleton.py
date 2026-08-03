@@ -14,12 +14,10 @@ Key property verified:
 
 **Validates: Requirements 1.1, 1.3**
 """
-import os
 import pytest
 import aiosqlite
-import tempfile
 from pathlib import Path
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from database.sqlite import SQLiteDatabase
 from core.swarm_workspace_manager import SwarmWorkspaceManager

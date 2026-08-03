@@ -1,5 +1,4 @@
 """SRT subtitle and timing.json generation."""
-import os
 import re
 import json
 

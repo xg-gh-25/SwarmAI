@@ -16,7 +16,6 @@ escalated==0 → test RED.
 import json
 from pathlib import Path
 
-import pytest
 
 from core.ddd_cultivation import (
     CultivationProposal,

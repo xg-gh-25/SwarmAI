@@ -6,11 +6,8 @@ across all projects and produces a flat routing table of entities
 """
 
 import pytest
-from pathlib import Path
-from unittest.mock import patch
 
 from core.entity_extractor import (
-    EntityRef,
     extract_entities_from_ddd,
     format_entity_index,
     prune_entity_index,

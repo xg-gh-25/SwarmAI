@@ -23,7 +23,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from core.session_unit import SessionState, SessionUnit
 from tests.helpers import PROPERTY_SETTINGS

@@ -18,13 +18,11 @@ heals + resets turn_count before -5 is hit).
 """
 from __future__ import annotations
 
-import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.compaction_guard import CompactionGuard, EscalationLevel
 from core.session_unit import SessionState, SessionUnit
 
 

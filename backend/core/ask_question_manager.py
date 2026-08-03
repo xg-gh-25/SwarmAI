@@ -36,7 +36,7 @@ State managed:
 
 import asyncio
 import logging
-from typing import Any, Optional, Union
+from typing import Any, Union
 
 logger = logging.getLogger(__name__)
 

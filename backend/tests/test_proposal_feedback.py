@@ -5,7 +5,6 @@ Verifies:
 - AC5: When precision < 40%, threshold tightens
 """
 import json
-from pathlib import Path
 
 import pytest
 

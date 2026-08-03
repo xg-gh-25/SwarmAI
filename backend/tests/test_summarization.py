@@ -23,7 +23,6 @@ from core.extraction_patterns import (
     DECISION_PATTERNS_BROAD,
     DECISION_PATTERNS_STRICT,
     AGENT_MONOLOGUE,
-    NOISE_PATTERNS,
     LESSON_PATTERNS,
     is_noise_entry,
 )

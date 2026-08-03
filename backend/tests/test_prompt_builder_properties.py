@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-from hypothesis import given, settings, HealthCheck, strategies as st
+from hypothesis import given, strategies as st
 
 from core.prompt_builder import PromptBuilder
 from tests.helpers import PROPERTY_SETTINGS

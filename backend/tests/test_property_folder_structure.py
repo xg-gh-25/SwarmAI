@@ -7,12 +7,11 @@ creates all standard folders and does not modify any pre-existing files.
 
 **Validates: Requirements 8.1, 8.2**
 """
-import asyncio
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given, strategies as st
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
 from tests.helpers import PROPERTY_SETTINGS

@@ -1,4 +1,4 @@
-import re, glob, os
+import re
 from pathlib import Path
 
 SK = Path("backend/skills")

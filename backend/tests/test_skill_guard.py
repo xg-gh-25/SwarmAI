@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pathlib import Path
 
-from core.skill_guard import SkillGuard, TrustLevel, SkillScanResult, SkillFinding
+from core.skill_guard import SkillGuard, TrustLevel
 
 
 # ---------------------------------------------------------------------------

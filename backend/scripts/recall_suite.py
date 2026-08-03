@@ -33,7 +33,6 @@ make it blind to regression).
 
 from __future__ import annotations
 
-from typing import Optional
 
 
 def _gold_titles(gold) -> tuple[str, ...]:

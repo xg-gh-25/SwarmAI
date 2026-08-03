@@ -16,7 +16,6 @@ import json
 import sqlite3
 import sys
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 from .paths import APP_DATA_DIR, DB_PATH, JOB_RESULTS_DIR
 

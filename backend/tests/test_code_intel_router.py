@@ -150,7 +150,6 @@ class TestRunReindexRepoPathParsing:
 
     def _run_with_tech_md(self, tmp_path, tech_md_content):
         """Drive _run_reindex against a fake project dir; capture parse_repo's arg."""
-        from pathlib import Path
         from unittest.mock import patch, MagicMock
         import routers.code_intel as mod
 

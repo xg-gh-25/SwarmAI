@@ -5,7 +5,6 @@ Design: Knowledge/Designs/2026-08-01-todo-flow-closure-design.md
 Covers AC1-AC7. Sweep tests call the private sweep helpers directly against a real
 temp DB (no mocks of our own code — boundary-only mock discipline).
 """
-import json
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone

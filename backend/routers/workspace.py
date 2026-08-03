@@ -20,7 +20,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from database import db
 
 from schemas.workspace import (
     WorkspaceFileInfo,

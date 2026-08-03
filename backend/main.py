@@ -1,5 +1,5 @@
 """FastAPI application entry point."""
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -704,7 +704,7 @@ async def _start_code_intel_watchers() -> None:
     """
     await asyncio.sleep(10)  # Let startup settle
     try:
-        from core.code_intel import load_project_graph, get_code_intel_db_path, repo_root_is_owned
+        from core.code_intel import load_project_graph, repo_root_is_owned
         from core.code_intel.watcher import start_watcher
         from jobs.paths import PROJECTS_DIR
 

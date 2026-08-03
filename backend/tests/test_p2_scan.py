@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 SCRIPT = Path(__file__).parent.parent / "skills" / "s_pollinate" / "scripts" / "p2_scan.py"
 

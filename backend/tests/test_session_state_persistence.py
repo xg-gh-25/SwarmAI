@@ -12,8 +12,7 @@ Tests cover:
 
 import json
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -312,7 +311,6 @@ class TestDisconnectAllPreservesIdentity:
         # Verify the method doesn't CALL clear_session_identity.
         # Check for actual call invocations (`.clear_session_identity()`), not comments.
         import inspect
-        import textwrap
         from core.session_router import SessionRouter
 
         source = inspect.getsource(SessionRouter.disconnect_all)

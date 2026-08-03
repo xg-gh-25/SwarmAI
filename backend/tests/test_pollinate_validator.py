@@ -3,10 +3,8 @@
 Verifies:
 - AC8: pollinate_validator.py exists with >= 5 structural invariant checks
 """
-import json
 from pathlib import Path
 
-import pytest
 
 
 def _make_valid_content_dir(tmp_path: Path) -> Path:

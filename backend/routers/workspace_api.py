@@ -44,7 +44,6 @@ import os
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -57,7 +56,6 @@ from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace
 from database import db
 from utils.diff_parser import parse_unified_diff, format_human_summary
 from schemas.workspace_config import (
-    TreeNodeResponse,
     WorkspaceConfigResponse,
     WorkspaceConfigUpdate,
 )

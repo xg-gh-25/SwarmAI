@@ -10,7 +10,6 @@ WS1 foundation:
 Methodology: drives the REAL recommend_systems.score/load_cards against the REAL
 34 preview cards on disk. No mocks.
 """
-import importlib.util
 import sys
 from pathlib import Path
 

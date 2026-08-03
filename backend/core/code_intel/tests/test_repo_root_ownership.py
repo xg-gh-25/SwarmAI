@@ -107,7 +107,6 @@ def test_case_and_symlink_variants_match_same_dir(tmp_path):
     """Gate-2 MED: a stored root that differs by case (case-insensitive FS) or via a
     symlink but points at the SAME dir must be accepted (samefile inode identity),
     not rejected by a raw string ==."""
-    import os
     real = tmp_path / "RealRepo"; real.mkdir()
     pd = _mk_project(tmp_path, "P", f"# TECH\n\n**Local:** `{real}`\n")
     # symlink pointing at the same dir → samefile True → owned

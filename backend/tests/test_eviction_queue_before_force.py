@@ -12,7 +12,7 @@ Fix: Insert queue wait between graceful eviction attempt and force eviction.
 """
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

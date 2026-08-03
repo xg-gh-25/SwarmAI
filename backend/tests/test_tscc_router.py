@@ -22,7 +22,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from schemas.tscc import (
-    TSCCActiveCapabilities,
     TSCCContext,
     TSCCLiveState,
     TSCCState,

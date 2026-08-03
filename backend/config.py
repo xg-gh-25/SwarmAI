@@ -1,5 +1,4 @@
 """Application configuration settings."""
-import platform
 import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict

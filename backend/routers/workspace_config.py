@@ -11,7 +11,6 @@ Requirements: 19.6, 19.7, 19.8, 25.5, 29.9, 29.10
 """
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -24,7 +23,6 @@ from schemas.workspace_config import (
     WorkspaceKnowledgebaseConfig,
     WorkspaceKnowledgebaseCreate,
     WorkspaceKnowledgebaseUpdate,
-    AuditLogEntry,
     ChangeType,
     EntityType,
 )

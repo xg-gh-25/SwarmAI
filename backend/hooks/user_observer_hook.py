@@ -13,7 +13,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from core.session_hooks import HookContext, SessionLifecycleHook
+from core.session_hooks import HookContext
 from core.user_observer import UserObserver
 
 logger = logging.getLogger(__name__)
