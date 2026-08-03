@@ -1078,10 +1078,14 @@ async def resolve_workspace_file(
 async def get_workspace_file_meta(
     path: str = Query(..., description="Absolute or workspace-relative file path"),
 ):
-    """Return lightweight file metadata (size, mime type) without reading content.
+    """Return lightweight file metadata (size, mime type, absolute path) without
+    reading content.
 
-    Used by the BinaryPreviewModal unsupported mode to display file size
-    and type information without fetching potentially large binary files.
+    Used by the FileViewer's UnsupportedRenderer (PPTX/DOCX/XLSX/…) to show file
+    size + type and to power the OS-level actions (Open in Default App / Reveal in
+    Finder / Copy Path) — those need the PHYSICAL absolute path, which a
+    workspace-relative path can't provide. Content is never read here (the point is
+    to avoid fetching a potentially large binary just to show a metadata card).
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
@@ -1104,6 +1108,11 @@ async def get_workspace_file_meta(
         "path": path,
         "size": stat.st_size,
         "mime_type": mime_type,
+        # PHYSICAL absolute path (run_405d221c). `target` is the resolved on-disk
+        # Path; the FileViewer's UnsupportedRenderer needs it for Open-in-System-App
+        # / Reveal-in-Finder / Copy-Path — a workspace-relative path is meaningless
+        # to the OS opener. Additive: existing fields unchanged.
+        "absolute_path": str(target),
     }
 
 

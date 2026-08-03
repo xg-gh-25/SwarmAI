@@ -14,7 +14,7 @@
  */
 import { useState, useCallback } from 'react';
 import { getFileTypeInfo } from '../utils/fileViewTypes';
-import { openInSystemApp } from '../../../utils/openExternal';
+import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
 import { copyToClipboard } from '../../../utils/clipboard';
 
 interface RendererProps {
@@ -24,6 +24,10 @@ interface RendererProps {
   encoding: 'utf-8' | 'base64';
   mimeType: string;
   fileSize: number;
+  /** PHYSICAL absolute path (run_405d221c) — required for OS-level open/reveal/copy.
+   *  A workspace-relative filePath is meaningless to the OS opener. Falls back to
+   *  filePath only when the meta fetch couldn't resolve it (fail-safe). */
+  absolutePath?: string;
   onStatusInfo?: (info: { dimensions?: string; pageInfo?: string; rowColCount?: string; customInfo?: string }) => void;
 }
 
@@ -60,8 +64,22 @@ function getHelpfulText(ext: string): string {
   const execExts = new Set(['exe', 'dll', 'so', 'dylib', 'wasm']);
   const compiledExts = new Set(['pyc', 'class', 'o', 'a']);
 
+  // Per-app guidance (A+B) — name the actual native apps so the user knows exactly
+  // where this opens. macOS-first (Numbers/Keynote/Pages) since that's the runtime.
+  const wordExts = new Set(['docx', 'doc', 'odt']);
+  const sheetExts = new Set(['xlsx', 'xls', 'ods']);
+  const slideExts = new Set(['pptx', 'ppt', 'odp']);
+  if (slideExts.has(ext)) {
+    return 'Presentations open in Keynote or PowerPoint. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+  }
+  if (sheetExts.has(ext)) {
+    return 'Spreadsheets open in Numbers or Excel. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+  }
+  if (wordExts.has(ext)) {
+    return 'Documents open in Pages or Word. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+  }
   if (officeExts.has(ext)) {
-    return 'Office documents can be analyzed by attaching to a chat session, or opened in their native application.';
+    return 'Office documents open in their native application. Use “Open in Default App”, or attach to a chat session for analysis.';
   }
   if (archiveExts.has(ext)) {
     return 'Archives can be extracted via terminal commands (unzip, tar, etc.) or opened in your system file manager.';
@@ -100,6 +118,7 @@ export default function UnsupportedRenderer({
   filePath,
   fileName,
   fileSize,
+  absolutePath,
   onAttachToChat,
 }: UnsupportedRendererProps) {
   const [copyFeedback, setCopyFeedback] = useState(false);
@@ -108,26 +127,47 @@ export default function UnsupportedRenderer({
   const typeInfo = getFileTypeInfo(fileName);
   const helpText = getHelpfulText(ext);
   const showTauriButton = isTauriContext();
+  // OS-level actions need the PHYSICAL absolute path (run_405d221c). Fall back to
+  // filePath only when the meta fetch couldn't resolve it (fail-safe — a relative
+  // path may still work if the opener's cwd happens to match, and is better than
+  // a dead button).
+  const osPath = absolutePath || filePath;
+  // Copy-Path is the ONLY action shown on Hive/web (Open + Reveal are Tauri-gated).
+  // There, the backend is a REMOTE box, so its absolute path (/home/ubuntu/…) is
+  // meaningless on the user's local machine — copy the workspace-relative path
+  // instead. In Tauri (local backend) the absolute path is what Finder/terminal want.
+  const copyPath = showTauriButton ? osPath : filePath;
 
   const handleOpenInSystemApp = useCallback(async () => {
     try {
-      await openInSystemApp(filePath);
+      await openInSystemApp(osPath);
     } catch {
       // Fallback: copy path instead
-      await copyToClipboard(filePath);
+      await copyToClipboard(osPath);
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
     }
-  }, [filePath]);
+  }, [osPath]);
+
+  const handleRevealInFolder = useCallback(async () => {
+    try {
+      await revealInFolder(osPath);
+    } catch {
+      await copyToClipboard(osPath);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    }
+  }, [osPath]);
 
   const handleCopyPath = useCallback(async () => {
     if (copyFeedback) return;
-    const ok = await copyToClipboard(filePath);
+    // Absolute in Tauri (local backend), workspace-relative on Hive (remote backend).
+    const ok = await copyToClipboard(copyPath);
     if (ok) {
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
     }
-  }, [filePath, copyFeedback]);
+  }, [copyPath, copyFeedback]);
 
   const handleAttachToChat = useCallback(() => {
     onAttachToChat?.(filePath);
@@ -172,9 +212,11 @@ export default function UnsupportedRenderer({
           </div>
         </div>
 
-        {/* Message */}
+        {/* Message — this format is NOT previewable in Swarm (not "yet": Swarm
+            renders text/image/pdf/html/av/csv; Office/binary open in their native
+            app by design). State it plainly + point to the local-app path. */}
         <p className="text-sm text-[var(--color-text-muted)]">
-          This file type can't be previewed in Swarm yet.
+          Swarm doesn't preview this file type — open it in your local app.
         </p>
         <p className="text-xs text-[var(--color-text-dim)] leading-relaxed">
           {helpText}
@@ -189,7 +231,20 @@ export default function UnsupportedRenderer({
                 bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
             >
               <span className="material-symbols-outlined text-base">open_in_new</span>
-              Open in System App
+              Open in Default App
+            </button>
+          )}
+
+          {showTauriButton && (
+            <button
+              onClick={handleRevealInFolder}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg
+                text-[var(--color-text)] hover:bg-[var(--color-hover)]
+                border border-[var(--color-border)] transition-colors"
+              title="Reveal this file in Finder"
+            >
+              <span className="material-symbols-outlined text-base">folder_open</span>
+              Reveal in Finder
             </button>
           )}
 

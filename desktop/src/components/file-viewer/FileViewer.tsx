@@ -144,6 +144,10 @@ export default function FileViewer({
         mimeType?: string;
         readonly?: boolean;
         committedContent?: string;
+        /** PHYSICAL absolute path (from /workspace/file/meta, run_405d221c) — what
+         *  the OS opener needs for Open-in-System-App / Reveal / Copy-Path. Only
+         *  populated for the unsupported-file meta fetch; undefined elsewhere. */
+        absolutePath?: string;
       }
     >
   >({}); // React 19 requires initial value
@@ -248,7 +252,7 @@ export default function FileViewer({
         } else if (tab.viewType === 'unsupported') {
           // Unsupported — metadata only
           try {
-            const resp = await api.get<{ size: number; mime_type: string }>(
+            const resp = await api.get<{ size: number; mime_type: string; absolute_path?: string }>(
               '/workspace/file/meta',
               { params: { path: tab.filePath } },
             );
@@ -257,6 +261,7 @@ export default function FileViewer({
               content: '',
               size: resp.data.size ?? 0,
               mimeType: resp.data.mime_type,
+              absolutePath: resp.data.absolute_path,
             };
             setStatusBarInfo({ fileSize: resp.data.size ?? 0 });
           } catch {
@@ -476,6 +481,10 @@ export default function FileViewer({
       mimeType: cached.mimeType ?? 'application/octet-stream',
       fileSize: cached.size,
       onStatusInfo: handleStatusInfo,
+      // Physical absolute path for OS-level actions (open/reveal/copy). Common to
+      // ALL renderers (run_405d221c) — Unsupported uses it today; any future
+      // renderer that adds an "open locally" action inherits it for free.
+      absolutePath: cached.absolutePath,
     };
 
     return (
