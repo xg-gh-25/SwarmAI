@@ -55,7 +55,7 @@ class UiCommandEntry(TypedDict):
 # Run 2 scope = window-target nav/display only:
 #   - open-canvas          → ThreeColumnLayout window listener
 #   - back-to-chat         → useExclusiveOverlay window listener (closes overlays)
-#   - show-* (8 overlays)  → useExclusiveOverlay ALL_SHOW_EVENTS (all window)
+#   - show-* (9 overlays)  → useExclusiveOverlay ALL_SHOW_EVENTS (all window)
 # DROPPED on purpose: open-file (host-path infoleak), toast/nav-activate (no
 # live listener), show-library (not in ALL_SHOW_EVENTS). Anything side-effecting
 # is NEVER added without an explicit human decision (STEERING / EVALUATE gate).
@@ -70,6 +70,10 @@ UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     "show-history": {"event": "swarm:show-history", "target": "window"},
     "show-todo": {"event": "swarm:show-todo", "target": "window"},
     "show-jobs": {"event": "swarm:show-jobs", "target": "window"},
+    # New Brain launcher — non-destructive: opens the collect-modal only; "Create"
+    # still routes through chat (autoSend:false, human reviews before send). Safe
+    # for the agent to open per the Run-2 nav/display charter.
+    "show-new-brain": {"event": "swarm:show-new-brain", "target": "window"},
 }
 
 # The enum the agent chooses from — sorted for a stable tool schema.

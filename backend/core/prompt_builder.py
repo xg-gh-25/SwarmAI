@@ -134,6 +134,7 @@ _OVERLAY_LABELS = {
     "swarm:show-todo": "ToDo",
     "swarm:show-jobs": "Jobs & Runs",
     "swarm:show-library": "Library",
+    "swarm:show-new-brain": "New Brain",
 }
 
 

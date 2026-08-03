@@ -262,9 +262,10 @@ function LeftSidebar() {
           <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-library'} onClick={() => showOverlay('swarm:show-library')} data-testid="nav-library" />
           <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
           <button
-            className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"
+            className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${activeOverlay === 'swarm:show-new-brain' ? ' a10-newbrain--active' : ''}`}
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
-            onClick={() => { clearNavSource(); showOverlay('swarm:show-brain-hub'); }}
+            aria-pressed={activeOverlay === 'swarm:show-new-brain'}
+            onClick={() => { clearNavSource(); showOverlay('swarm:show-new-brain'); }}
             title="New Brain — 建一个新大脑"
             data-testid="nav-new-brain"
           >

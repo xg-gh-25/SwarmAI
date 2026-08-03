@@ -28,6 +28,7 @@ export const ALL_SHOW_EVENTS = [
   'swarm:show-history',
   'swarm:show-todo',
   'swarm:show-jobs',
+  'swarm:show-new-brain',
 ] as const;
 
 /* ── Shared "which domain overlay is currently open" source ──────────────────

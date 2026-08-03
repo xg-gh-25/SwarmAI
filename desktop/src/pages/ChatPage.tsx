@@ -56,6 +56,7 @@ import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { HistoryOverlay } from '../components/layout/HistoryOverlay';
 import { ToDoOverlay, parseWorkPacket } from '../components/layout/ToDoOverlay';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
+import { NewBrainOverlay } from '../components/layout/NewBrainOverlay';
 import { PipelineOverlay } from '../components/layout/PipelineOverlay';
 import { PollinateOverlay } from '../components/layout/PollinateOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
@@ -3329,6 +3330,10 @@ export default function ChatPage() {
         <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
         <PipelineOverlay onDispatch={handleDispatchJobPrompt} />
         <PollinateOverlay onDispatch={handleDispatchJobPrompt} />
+        {/* New Brain launcher — collects name/governs/starter-material, then
+            dispatches ONE categorized-manifest prompt into a chat tab (same
+            handleDispatchJobPrompt path) and closes. One-shot birth gate. */}
+        <NewBrainOverlay onDispatch={handleDispatchJobPrompt} />
       </div>
 
       {/* Modals */}

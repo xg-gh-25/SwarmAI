@@ -486,6 +486,12 @@ body {
   background: color-mix(in srgb, var(--ac) 12%, transparent);
   transform: translateX(3px);
 }
+/* Active — the launcher overlay is open (parity with A10Card active highlight,
+   since New Brain is a bespoke button, not an A10Card — its `isActive` is inert). */
+.a10-newbrain--active {
+  background: color-mix(in srgb, var(--ac) 16%, transparent);
+  border-color: color-mix(in srgb, var(--ac) 45%, transparent);
+}
 .a10-newbrain .a10-plus {
   color: #0c1f18;
   background: linear-gradient(180deg,
