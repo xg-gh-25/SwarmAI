@@ -20,7 +20,19 @@ export const PANEL_CONSTANTS = {
   MIN_WIDTH: 320,
   MAX_WIDTH: 1200,
   STORAGE_KEY: 'fileViewerPanelWidth',
+  /** Responsive default = this fraction of the viewport width, clamped to MIN/MAX.
+   *  Chat stays the majority pane; Canvas is wide enough for decks/tables. This is
+   *  the industry pattern (ChatGPT Canvas / Claude Artifacts / VS Code side panel):
+   *  percentage default + px clamp + remember the user's manual drag. */
+  DEFAULT_FRACTION: 0.42,
 } as const;
+
+/** clamp(MIN, fraction×viewport, MAX) — the responsive default before any drag. */
+function responsiveDefaultWidth(): number {
+  if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
+  const raw = Math.round(PANEL_CONSTANTS.DEFAULT_FRACTION * window.innerWidth);
+  return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, raw));
+}
 
 /** Width of the collapsed vertical rail (whole panel → a thin clickable strip). */
 const RAIL_WIDTH = 38;
@@ -30,9 +42,11 @@ const RAILED_KEY = 'canvasRailed';
 function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
-  if (!stored) return PANEL_CONSTANTS.DEFAULT_WIDTH;
+  // No manual drag on record → responsive default (fraction of viewport). A stored
+  // value means the user dragged (updateWidth is the ONLY writer) → honor it verbatim.
+  if (!stored) return responsiveDefaultWidth();
   const parsed = parseInt(stored, 10);
-  if (isNaN(parsed)) return PANEL_CONSTANTS.DEFAULT_WIDTH;
+  if (isNaN(parsed)) return responsiveDefaultWidth();
   return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, parsed));
 }
 
@@ -214,6 +228,30 @@ function FileViewerPanelImpl({
       document.body.style.cursor = '';
     };
   }, [isDragging, updateWidth]);
+
+  // Responsive default follows the viewport — recompute on window resize, but ONLY
+  // when the user has NOT manually sized the panel (no localStorage) — a dragged
+  // width is authoritative and immune to resize. Gate-1 CRITICAL fixes:
+  //  · `!expanded`  — expand snaps width to MAX_WIDTH via setWidth (NOT updateWidth,
+  //    so it never persists); recomputing during expand would clobber MAX_WIDTH and
+  //    leave a stale preExpandWidthRef.
+  //  · `entered`    — the mount reveal eases MIN→width via a CSS width transition;
+  //    a mid-animation setWidth restarts/janks it.
+  // NOT persisted here (setWidth, not updateWidth): a resize is not a manual choice,
+  // so it must not turn the panel into a "user-sized" one and lock out future resizes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!entered || expanded) return;
+    if (localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY) !== null) return;
+    const handleResize = () => {
+      // Re-check the guard at fire time: the user may have dragged (→ stored) or
+      // expanded since the effect bound.
+      if (expanded || localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY) !== null) return;
+      setWidth(responsiveDefaultWidth());
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [entered, expanded]);
 
   // ── Collapsed rail: the whole Canvas as a thin clickable vertical strip ──
   // Click anywhere on it → expand. Vertical "Canvas · Outputs" + count carry the
