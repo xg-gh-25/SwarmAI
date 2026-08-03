@@ -664,11 +664,24 @@ export function GoldenSetTab() {
           >
             + Add Case
           </button>
-          <button className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors">
+          {/* Not yet wired (no /eval import-from-correction or archive-stable
+              endpoint) — disabled + labeled so they don't look clickable.
+              Enable when those APIs ship. */}
+          <button
+            disabled
+            title="Coming soon — not yet available"
+            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+          >
             Import from Correction
+            <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
           </button>
-          <button className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors">
+          <button
+            disabled
+            title="Coming soon — not yet available"
+            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] opacity-50 cursor-not-allowed"
+          >
             Archive Stable
+            <span className="ml-1 text-[8px] uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             onClick={() => triggerRun.mutate({})}

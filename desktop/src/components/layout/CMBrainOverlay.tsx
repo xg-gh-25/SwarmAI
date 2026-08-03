@@ -99,9 +99,10 @@ export function CMBrainOverlay() {
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
 
-  // Needs-you Approve/Action: real governance-pending queue (Gate-1: {proposals,total},
-  // a DIFFERENT queue from pending_proposals which drives Review). Approve = awaiting
-  // yes/no; Action shares the same queue count (both are decisions the user must take).
+  // Needs-you Approve: real governance-pending queue (Gate-1: {proposals,total}, a
+  // DIFFERENT queue from pending_proposals which drives Review). Approve = proposals
+  // awaiting yes/no. (An 'Action' bucket that duplicated this same queue was removed
+  // 2026-08-03 — see the needsMeta note below.)
   const { data: gov } = useQuery<{ proposals: unknown[]; total: number }>({
     queryKey: ['cm-governance-pending'],
     queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
@@ -117,14 +118,16 @@ export function CMBrainOverlay() {
   });
 
   // Which Needs-you list is filtered into the main area (null = show the tab).
-  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve' | 'action'>(null);
+  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve'>(null);
 
   if (!open) return null;
 
+  // NOTE: an 'action' bucket was removed (2026-08-03) — it reused Approve's exact
+  // count + items (same queue, two labels), which read as duplicated/fake. Re-add
+  // only if a distinct action queue with its OWN source exists.
   const needsMeta = {
     review: { label: 'Review', count: reviewCount, items: data?.pending_proposals ?? [] },
     approve: { label: 'Approve', count: approveCount, items: (gov?.proposals ?? []) as Array<Record<string, unknown>> },
-    action: { label: 'Action', count: approveCount, items: (gov?.proposals ?? []) as Array<Record<string, unknown>> },
   };
 
   return (
@@ -163,7 +166,6 @@ export function CMBrainOverlay() {
             <div className="mt-2 flex flex-col gap-1.5">
               <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" onClick={() => setNeedsFilter('review')} />
               <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" onClick={() => setNeedsFilter('approve')} />
-              <NeedsBtn testid="cm-needs-action" label="Action" count={approveCount} tint="#4a8fb0" onClick={() => setNeedsFilter('action')} />
             </div>
           </div>
         </aside>

@@ -9,7 +9,8 @@
  *      System (Capabilities/OS Eval/Settings/Community), each with a
  *      titled+colored group label.
  *   4. DOMAIN CARDS top-to-bottom in that exact order.
- *   5. Y/R SIGNAL FLAGS — Memory=Y, Brain Hub=Y, OS Eval=R, none elsewhere.
+ *   5. Y/R SIGNAL FLAGS — none rendered (hardcoded literals removed 2026-08-03;
+ *      the prop is retained for future real-signal-driven use only).
  *
  * Drives the REAL LeftSidebar through real providers (no mock of the component
  * under change — GUI32 prompt-source = answer-source). Only the pty boundary is
@@ -139,23 +140,25 @@ describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
 });
 
 describe('LeftSidebar A10 — Y/R signal flags', () => {
-  it('shows a Y flag on Brain Hub', () => {
+  // Contract (2026-08-03): flags are NOT shown as hardcoded literals — they were
+  // permanent fake alarms (alarm fatigue). NO card renders a Y/R flag until one is
+  // driven by a REAL signal (a live count/query). Until then, every card is flagless.
+  // The A10Card `flag` prop + render branch are retained for that future real-signal
+  // use; these tests pin "no static flags anywhere".
+  it('shows NO Y flag on any card (no hardcoded alarm)', () => {
     renderSidebar();
-    expect(within(screen.getByTestId('nav-brain-hub')).getByTestId('flag-y')).toBeInTheDocument();
+    expect(screen.queryByTestId('flag-y')).toBeNull();
   });
 
-  it('shows an R flag on OS Eval', () => {
+  it('shows NO R flag on any card (no hardcoded alarm)', () => {
     renderSidebar();
-    expect(within(screen.getByTestId('nav-eval')).getByTestId('flag-r')).toBeInTheDocument();
+    expect(screen.queryByTestId('flag-r')).toBeNull();
   });
 
-  it('shows NO flag on the other domains (no-news = no flag)', () => {
+  it('Brain Hub and OS Eval specifically carry no flag', () => {
     renderSidebar();
-    for (const id of ['nav-context', 'nav-pipeline', 'nav-pollinate', 'nav-swarmws', 'nav-capabilities', 'nav-settings', 'nav-community']) {
-      const card = screen.getByTestId(id);
-      expect(within(card).queryByTestId('flag-y')).toBeNull();
-      expect(within(card).queryByTestId('flag-r')).toBeNull();
-    }
+    expect(within(screen.getByTestId('nav-brain-hub')).queryByTestId('flag-y')).toBeNull();
+    expect(within(screen.getByTestId('nav-eval')).queryByTestId('flag-r')).toBeNull();
   });
 });
 

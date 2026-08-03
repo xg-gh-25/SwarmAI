@@ -250,15 +250,17 @@ function LeftSidebar() {
       </div>
 
       {/* A10 domain cards. Cognitive = a distinct "green panel" zone (核心差异化 —
-          你的大脑); Work/System = plain titled groups. Y/R signal flags only where
-          attention is needed (Memory=Y, Brain Hub=Y, OS Eval=R). System titles are
-          dimmed (low-frequency OS mechanics, don't compete for attention). */}
+          你的大脑); Work/System = plain titled groups. System titles are dimmed
+          (low-frequency OS mechanics, don't compete for attention).
+          NOTE: Y/R attention flags were removed (2026-08-03) — they were hardcoded
+          literals that never cleared (alarm fatigue). Re-add a flag ONLY when it is
+          driven by a real signal (a live count/query), never as a static prop. */}
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
           <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
           <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-library'} onClick={() => showOverlay('swarm:show-library')} data-testid="nav-library" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} flag="y" highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
           <button
             className="a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors"
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
@@ -295,7 +297,7 @@ function LeftSidebar() {
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
-          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} flag="r" isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
+          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>
