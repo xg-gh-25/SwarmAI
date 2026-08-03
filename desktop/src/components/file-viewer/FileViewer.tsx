@@ -550,6 +550,25 @@ export default function FileViewer({
           viewType={activeTab.viewType}
           encoding={statusBarInfo.encoding}
           extraInfo={statusBarInfo.extraInfo}
+          // Non-text renderers have no footer of their own → surface file ops here
+          // (parity with FileEditorCore's header for text/md/svg). copy-path uses
+          // filePath; attach dispatches the SAME decoupled window event the
+          // Explorer uses (swarm:attach-file → ChatPage → addWorkspaceFiles), so no
+          // prop-threading through the Canvas host is needed. Prefer onAttachToChat
+          // when the caller wired it (modal/single-instance); else the event.
+          filePath={activeTab.filePath}
+          onAttach={() => {
+            const item: FileTreeItem = {
+              id: activeTab.filePath,
+              name: activeTab.fileName,
+              type: 'file',
+              path: activeTab.filePath,
+              workspaceId: workspaceIdRef.current,
+              workspaceName: '',
+            };
+            if (onAttachToChat) onAttachToChat(item);
+            else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
+          }}
         />
       )}
     </div>

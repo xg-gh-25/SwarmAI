@@ -17,6 +17,12 @@
  * `autoDiff` is set for modified files (git 'upd') so they land on their diff;
  * new files open on source; renderable types default to preview in the viewer.
  *
+ * Browsing row (run_5b330415): Canvas is also used to BROWSE a file opened from a
+ * chat link that was NOT written this session. Such a file (the `selectedPath`
+ * prop, when it matches no written output) is injected as a single "Browsing" row
+ * below the outputs, and the bee empty-state is suppressed while it is shown — so
+ * browsing never leaves a big empty band obscuring the file surface below.
+ *
  * @exports CanvasOutputRail
  * @exports isBookkeepingPath — pure predicate (unit-tested)
  * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
@@ -222,6 +228,28 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
     });
   }, [outputs, statusMap]);
 
+  // ── Browsing row ────────────────────────────────────────────────────────────
+  // Canvas is used two ways: (1) the agent WRITES a file → it lands in `outputs`
+  // above; (2) the user clicks a file link in chat to BROWSE a file NOT written
+  // this session. In case (2) `selectedPath` is set but matches no written row, so
+  // the outputs list is empty and the bee empty-state used to render ABOVE the file
+  // surface, obscuring it. We inject the browsed file as one "Browsing" row instead.
+  //
+  // Dedup (Gate-1 A): `selectedPath` is the RESOLVED path (useCanvasHost resolves via
+  // /workspace/file/resolve), while a written row's identity is the DISPLAY `path`.
+  // So compare against BOTH `f.path` (display) AND `f.absolutePath` (resolved) — a
+  // browsed file that IS also a written output must NOT double-render. Uses the
+  // existing fields; no fragile path normalizer.
+  const browsingFile = useMemo((): { path: string; fileName: string } | null => {
+    if (!selectedPath) return null;
+    const isWritten = outputs.some(
+      (f) => f.path === selectedPath || f.absolutePath === selectedPath,
+    );
+    if (isWritten) return null;
+    const fileName = selectedPath.replace(/\\/g, '/').split('/').pop() || selectedPath;
+    return { path: selectedPath, fileName };
+  }, [selectedPath, outputs]);
+
   // Publish counts to the header. Effect (not render-time call) so we never
   // setState-in-render a parent. neu/upd from the git badge map.
   useEffect(() => {
@@ -235,10 +263,13 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
     onCounts({ total: outputs.length, neu, upd });
   }, [outputs, statusMap, onCounts]);
 
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && !browsingFile) {
     // Empty state: a friendly reminder + a pure-CSS bee (🐝 Swarm identity)
     // flying a gentle loop. When the first output lands it flies out (the rail
     // re-renders into the list). Zero-dependency — see index.css .canvas-bee*.
+    // Guarded on `!browsingFile`: when the user is browsing a chat-opened file
+    // (not a written output), we show a Browsing row instead of the big empty
+    // band that would otherwise obscure the file surface below (run_5b330415).
     return (
       <div
         className="flex flex-col items-center justify-center gap-2 px-3 py-6 text-center"
@@ -266,6 +297,83 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
           fresh={file.firstSeen > mountedAtRef.current}
         />
       ))}
+      {browsingFile && (
+        <BrowsingRow
+          path={browsingFile.path}
+          fileName={browsingFile.fileName}
+        />
+      )}
     </div>
+  );
+});
+
+/**
+ * BrowsingRow — the file the user is currently VIEWING that is NOT one of this
+ * session's written outputs (opened via a chat file-link). Visually distinct from
+ * an output row (eye icon, no NEW/UPD badge, always shown selected). Click
+ * re-dispatches open-file (idempotent — keeps it open); copy-path yields the path.
+ */
+const BrowsingRow = memo(function BrowsingRow({
+  path,
+  fileName,
+}: {
+  path: string;
+  fileName: string;
+}) {
+  const handleClick = useCallback(() => {
+    document.dispatchEvent(
+      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(path, undefined) }),
+    );
+  }, [path]);
+
+  const handleCopy = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      await copyToClipboard(path);
+    },
+    [path],
+  );
+
+  const dir = dirOf(path);
+
+  return (
+    <>
+      {/* Always label the browsing row — a lone unlabeled row (browsing with no
+          written outputs, the common case) reads as noise; the label gives it
+          context (adversarial F2). */}
+      <div
+        className="px-3 pt-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-faint,var(--color-text-muted))]"
+        aria-hidden="true"
+      >
+        Browsing
+      </div>
+      <div
+        className="group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]"
+        onClick={handleClick}
+        title={path}
+        data-selected
+        data-testid="canvas-browsing-row"
+      >
+        <span
+          aria-hidden="true"
+          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-primary)]"
+        />
+        <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
+        <span className="shrink-0 truncate font-mono text-[var(--color-text)] font-medium">{fileName}</span>
+        {dir && (
+          <span className="ml-auto truncate font-mono text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+            {dir}
+          </span>
+        )}
+        <button
+          onClick={handleCopy}
+          className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
+          title="Copy path"
+          aria-label={`Copy path of ${fileName}`}
+        >
+          <span className="material-symbols-outlined text-[12px]">content_copy</span>
+        </button>
+      </div>
+    </>
   );
 });

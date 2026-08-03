@@ -6,8 +6,10 @@
  * Uses CSS-variable theming and stays at a fixed ~28px height.
  */
 
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { FileViewType } from './utils/fileViewTypes';
 import { getFileTypeInfo } from './utils/fileViewTypes';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export interface FileViewerStatusBarProps {
   fileName: string;
@@ -16,6 +18,14 @@ export interface FileViewerStatusBarProps {
   encoding?: string;
   /** Renderer-specific key/value pairs (e.g. "Dimensions": "1920x1080"). */
   extraInfo?: Record<string, string>;
+  /** Absolute file path — when present, the bar renders a file-operation cluster
+   *  (copy-path + optional attach). Non-text renderers (html/image/pdf/csv) have
+   *  no footer of their own, so this brings them to parity with FileEditorCore's
+   *  header actions. Absent → the bar is info-only (default, unchanged). */
+  filePath?: string;
+  /** Attach-to-chat handler — when provided (alongside filePath), an attach button
+   *  is shown. Omitted → no attach button (copy-path still shown if filePath set). */
+  onAttach?: () => void;
 }
 
 /** Format bytes into a human-readable string (KB / MB / GB). */
@@ -33,9 +43,26 @@ export default function FileViewerStatusBar({
   viewType,
   encoding,
   extraInfo,
+  filePath,
+  onAttach,
 }: FileViewerStatusBarProps) {
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
+
+  const [copied, setCopied] = useState(false);
+  // Hold the "Copied!" reset timer in a ref so we can cancel it on unmount —
+  // otherwise the 2s callback fires after the component is gone and setState on
+  // an unmounted component leaks (adversarial F1, conf 9).
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimerRef.current) clearTimeout(copyTimerRef.current); }, []);
+  const handleCopy = useCallback(async () => {
+    if (!filePath || copied) return;
+    const ok = await copyToClipboard(filePath);
+    if (ok) {
+      setCopied(true);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    }
+  }, [filePath, copied]);
 
   return (
     <div
@@ -63,7 +90,7 @@ export default function FileViewerStatusBar({
         )}
       </div>
 
-      {/* Right: file size + extra info */}
+      {/* Right: file size + extra info + optional file-operation cluster */}
       <div className="flex items-center gap-2">
         <span>{formatFileSize(fileSize)}</span>
 
@@ -75,6 +102,36 @@ export default function FileViewerStatusBar({
             </span>
           </span>
         ))}
+
+        {/* File-operation cluster — parity with FileEditorCore's header actions
+            for renderers (html/image/pdf/csv) that have no footer of their own. */}
+        {filePath && (
+          <>
+            <span className="opacity-40">&middot;</span>
+            {onAttach && (
+              <button
+                onClick={onAttach}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+                title="Attach to chat"
+                aria-label="Attach to chat"
+                data-testid="statusbar-attach"
+              >
+                <span className="material-symbols-outlined text-[13px] leading-none">attach_file</span>
+              </button>
+            )}
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+              title={copied ? 'Copied!' : 'Copy absolute file path'}
+              aria-label="Copy file path"
+              data-testid="statusbar-copy-path"
+            >
+              <span className="material-symbols-outlined text-[13px] leading-none">
+                {copied ? 'check' : 'content_copy'}
+              </span>
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
