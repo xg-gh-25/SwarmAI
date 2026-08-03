@@ -926,6 +926,115 @@ async def get_workspace_file(
     }
 
 
+def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
+    """Resolve a partial/relative/absolute path to BOTH a workspace-relative
+    display path and its PHYSICAL absolute path.
+
+    Extracted (Extract≠Extend, run_e626e121) from ``resolve_workspace_file`` so
+    non-HTTP callers (the streaming orchestrator, resolving a written file's real
+    absolute path for the unified Canvas file-change event + copy-path) reuse the
+    exact same cascade without an HTTP round-trip. The HTTP endpoint delegates here.
+
+    Cascade (unchanged behavior): absolute → project-symlink → direct → bare-name
+    recursive walk (depth-8, prunes node_modules/.git/etc).
+
+    Returns ``{"relative": <ws-relative-or-absolute-str>, "absolute": <physical abs>}``
+    on success, or ``None`` if not found / invalid. **Fails SAFE to None** — unlike
+    the endpoint it NEVER raises (it runs on the streaming hot path; a null byte /
+    traversal / miss must not crash the turn, just skip the surface).
+    """
+    if "\x00" in path:
+        return None
+
+    # --- Stage 0: Absolute path handling ---
+    normalized = os.path.normpath(path)
+    if os.path.isabs(normalized):
+        abs_path = Path(normalized).resolve()
+        projects_dir = workspace_root / "Projects"
+        if projects_dir.is_dir():
+            for project in sorted(projects_dir.iterdir()):
+                if not project.is_dir():
+                    continue
+                try:
+                    symlink_target = project.resolve()
+                    rel = abs_path.relative_to(symlink_target)
+                    return {
+                        "relative": f"Projects/{project.name}/{rel}",
+                        "absolute": str(abs_path),
+                    }
+                except ValueError:
+                    continue
+        # No project match — accept the absolute path as-is if the file exists.
+        if abs_path.is_file():
+            return {"relative": str(abs_path), "absolute": str(abs_path)}
+        return None
+
+    # Reject ".." traversal after normalization (relative paths only)
+    if normalized.startswith(".."):
+        return None
+
+    # --- Stage 1: Direct lookup (already workspace-relative) ---
+    direct = (workspace_root / path).resolve()
+    if direct.is_file() and (
+        _is_path_under(direct, workspace_root) or _is_symlink_traversal(workspace_root, path)
+    ):
+        return {"relative": path, "absolute": str(direct)}
+
+    # --- Stage 2: Try under each project in Projects/{name}/{path} ---
+    projects_dir = workspace_root / "Projects"
+    if projects_dir.is_dir():
+        for project in sorted(projects_dir.iterdir()):
+            if not project.is_dir():
+                continue
+            candidate_rel = f"Projects/{project.name}/{path}"
+            candidate = (workspace_root / candidate_rel).resolve()
+            if candidate.is_file() and (
+                _is_path_under(candidate, workspace_root)
+                or _is_symlink_traversal(workspace_root, candidate_rel)
+            ):
+                return {"relative": candidate_rel, "absolute": str(candidate)}
+
+    # --- Stage 3 & 4: Bare filename → recursive search (depth-capped, pruned) ---
+    _MAX_DEPTH = 8
+    _EXCLUDED_DIRS = {'.git', 'node_modules', '__pycache__', '.pytest_cache', '.venv', '.mypy_cache'}
+    if "/" not in path and "\\" not in path:
+        # Stage 3: inside Projects/ (symlinked repos)
+        if projects_dir.is_dir():
+            for project in sorted(projects_dir.iterdir()):
+                if not project.is_dir():
+                    continue
+                project_resolved = project.resolve()
+                for root, dirs, files in os.walk(project_resolved):
+                    dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED_DIRS)
+                    try:
+                        rel_root = Path(root).relative_to(project_resolved)
+                    except ValueError:
+                        continue
+                    if len(rel_root.parts) >= _MAX_DEPTH:
+                        dirs.clear()
+                        continue
+                    if path in files:
+                        return {
+                            "relative": f"Projects/{project.name}/{rel_root / path}",
+                            "absolute": str(Path(root) / path),
+                        }
+        # Stage 4: workspace root (Knowledge/, .context/, Services/, …), excl Projects/
+        _STAGE4_EXCLUDE = _EXCLUDED_DIRS | {'Projects'}
+        for root, dirs, files in os.walk(workspace_root):
+            dirs[:] = sorted(d for d in dirs if d not in _STAGE4_EXCLUDE)
+            try:
+                rel_root = Path(root).relative_to(workspace_root)
+            except ValueError:
+                continue
+            if len(rel_root.parts) >= _MAX_DEPTH:
+                dirs.clear()
+                continue
+            if path in files:
+                return {"relative": str(rel_root / path), "absolute": str(Path(root) / path)}
+
+    return None
+
+
 @router.get("/workspace/file/resolve")
 async def resolve_workspace_file(
     path: str = Query(..., description="Partial or relative file path to resolve", max_length=1024),
@@ -945,124 +1054,24 @@ async def resolve_workspace_file(
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
 
-    # Reject null bytes early — they crash Path.resolve() and are a classic injection vector
+    # Reject null bytes early — they crash Path.resolve() and are a classic
+    # injection vector. The HTTP contract distinguishes 400 (bad input) from 404
+    # (not found); the shared helper collapses both to None (it runs on the hot
+    # path and must never raise), so we re-assert the 400 cases here before
+    # delegating the cascade.
     if "\x00" in path:
         raise HTTPException(status_code=400, detail="Invalid path: contains null byte")
-
-    # --- Stage 0: Absolute path handling ---
-    # The agent often outputs absolute paths like /Users/.../swarmai/backend/foo.py.
-    # First try to convert to workspace-relative via project symlinks.
-    # If no match but the file exists, return the absolute path as-is so
-    # the file editor can open any file on the host.
     normalized = os.path.normpath(path)
-    if os.path.isabs(normalized):
-        abs_path = Path(normalized).resolve()
-
-        # Try to convert to a workspace-relative path via project symlinks
-        projects_dir = workspace_root / "Projects"
-        if projects_dir.is_dir():
-            for project in sorted(projects_dir.iterdir()):
-                if not project.is_dir():
-                    continue
-                try:
-                    symlink_target = project.resolve()
-                    rel = abs_path.relative_to(symlink_target)
-                    # Convert to workspace-relative and restart resolution
-                    path = f"Projects/{project.name}/{rel}"
-                    normalized = os.path.normpath(path)
-                    break
-                except ValueError:
-                    continue
-            else:
-                # No project match — return absolute path as-is if file exists
-                if abs_path.is_file():
-                    return {"resolved_path": str(abs_path)}
-                raise HTTPException(status_code=404, detail=f"File not found: {path}")
-        else:
-            # No Projects/ dir — return absolute path as-is if file exists
-            if abs_path.is_file():
-                return {"resolved_path": str(abs_path)}
-            raise HTTPException(status_code=404, detail=f"File not found: {path}")
-
-    # Reject ".." traversal after normalization (relative paths only)
-    if normalized.startswith(".."):
+    if not os.path.isabs(normalized) and normalized.startswith(".."):
         raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
 
-    # --- Stage 1: Direct lookup (already workspace-relative) ---
-    direct = (workspace_root / path).resolve()
-    if direct.is_file() and (_is_path_under(direct, workspace_root) or _is_symlink_traversal(workspace_root, path)):
-        return {"resolved_path": path}
-
-    # --- Stage 2: Try under each project in Projects/{name}/{path} ---
-    projects_dir = workspace_root / "Projects"
-    if projects_dir.is_dir():
-        for project in sorted(projects_dir.iterdir()):
-            if not project.is_dir():
-                continue
-            candidate_rel = f"Projects/{project.name}/{path}"
-            candidate = (workspace_root / candidate_rel).resolve()
-            if candidate.is_file():
-                if _is_path_under(candidate, workspace_root) or _is_symlink_traversal(workspace_root, candidate_rel):
-                    return {"resolved_path": candidate_rel}
-
-    # --- Stage 3 & 4: Bare filename → recursive search ---
-    # For paths like "fileClassification.ts" or "2026-04-29-foo.md" with no
-    # directory separators, search in Projects/ first, then workspace root.
-    # Uses os.walk for pruning (avoids walking node_modules/etc) and
-    # exact string match (`path in files`) — no glob expansion.
-    _MAX_DEPTH = 8
-    _EXCLUDED_DIRS = {'.git', 'node_modules', '__pycache__', '.pytest_cache', '.venv', '.mypy_cache'}
-
-    if "/" not in path and "\\" not in path:
-
-        def _find_bare_filename() -> str | None:
-            """Synchronous search — run via to_thread to avoid blocking event loop."""
-            # Stage 3: search inside Projects/ (symlinked repos)
-            if projects_dir.is_dir():
-                for project in sorted(projects_dir.iterdir()):
-                    if not project.is_dir():
-                        continue
-                    project_resolved = project.resolve()
-                    for root, dirs, files in os.walk(project_resolved):
-                        # Sort dirs for deterministic traversal order
-                        dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED_DIRS)
-                        # Depth check
-                        try:
-                            rel_root = Path(root).relative_to(project_resolved)
-                        except ValueError:
-                            continue
-                        if len(rel_root.parts) >= _MAX_DEPTH:
-                            dirs.clear()
-                            continue
-                        if path in files:
-                            rel_file = rel_root / path
-                            return f"Projects/{project.name}/{rel_file}"
-
-            # Stage 4: search workspace root (Knowledge/, .context/, Services/, etc.)
-            # Exclude Projects/ (already searched) and other noise directories.
-            _STAGE4_EXCLUDE = _EXCLUDED_DIRS | {'Projects'}
-            for root, dirs, files in os.walk(workspace_root):
-                # Sort dirs for deterministic traversal order
-                dirs[:] = sorted(d for d in dirs if d not in _STAGE4_EXCLUDE)
-                try:
-                    rel_root = Path(root).relative_to(workspace_root)
-                except ValueError:
-                    continue
-                if len(rel_root.parts) >= _MAX_DEPTH:
-                    dirs.clear()
-                    continue
-                if path in files:
-                    return str(rel_root / path)
-
-            return None
-
-        try:
-            result = await asyncio.to_thread(_find_bare_filename)
-        except OSError:
-            result = None
-
-        if result:
-            return {"resolved_path": result}
+    # The bare-name branch walks the tree — keep it off the event loop.
+    resolved = await asyncio.to_thread(resolve_path_to_physical, path, workspace_root)
+    if resolved is not None:
+        # Endpoint contract is unchanged: it returns the workspace-relative
+        # display path under "resolved_path" (the helper additionally exposes the
+        # physical absolute path for non-HTTP callers).
+        return {"resolved_path": resolved["relative"]}
 
     raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
 
