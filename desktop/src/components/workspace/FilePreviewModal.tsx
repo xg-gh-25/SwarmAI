@@ -188,15 +188,25 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
       );
     }
 
-    // HTML preview — sandboxed iframe
+    // HTML preview — inline render via a data: URL built from the ALREADY-FETCHED
+    // content. NOT srcDoc: srcDoc (JS→DOM string injection) renders a BLANK frame
+    // in the packaged Tauri WKWebView (same bug + fix family as HtmlRenderer,
+    // run_344d1fd6). NOT src=<raw endpoint URL> either: that endpoint resolves only
+    // the singleton workspace, so it loses the basePath/agentId context this modal
+    // reads with → agent-workdir files would 404 (Gate-1 CRITICAL, run_7886ca1c).
+    // A data: URL uses content already in memory, renders in WKWebView, and is
+    // natively an OPAQUE origin. sandbox="" keeps it script-inert (this is a generic
+    // preview of arbitrary files, not an agent report — no allow-scripts by design).
     if (viewType === 'html-preview' && fileContent.encoding === 'utf-8') {
+      const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(fileContent.content)}`;
       return (
         <div className="flex flex-col">
           <iframe
-            sandbox="allow-same-origin"
-            srcDoc={fileContent.content}
+            sandbox=""
+            src={dataUrl}
             className="w-full h-[55vh] rounded-lg border border-[var(--color-border)] bg-white"
             title={file.name}
+            data-testid="file-preview-html-iframe"
           />
           {infoBar}
         </div>
