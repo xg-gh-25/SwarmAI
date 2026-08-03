@@ -670,6 +670,28 @@ within ±50 lines, or change is adding a new function (nothing pre-existing to g
       The bug you just found likely exists in 2-5 other places.
       This session: fixed `"version":"` JSON parsing in one function,
       missed 3 identical `contains("\"healthy\"")` patterns 200 lines away.
+    - **FRONTEND SMOKE (the pipeline is weaker here — this is the counterweight):**
+      the Python import-smoke above does NOT transfer to a React/Tauri change.
+      `vitest`+`jsdom` prove STRUCTURE/LOGIC only — jsdom returns 0-rects, has no
+      ResizeObserver, runs no CSS. So for a frontend changeset, unit-green is NOT
+      a smoke pass. The frontend SMOKE has three parts, gated on what the change
+      touches (see REVIEW_PATTERNS RP57-60 + TECH.md § "Frontend Fragile Zones"):
+      1. **Multi-tab isolation (RP57):** if the change adds per-tab state — open
+         tab A, set the value, open tab B, confirm B is independent, switch back,
+         confirm A restored, close, confirm cleared. jsdom cannot fake keep-mounted
+         multi-tab; this is a real-machine or a store-level test.
+      2. **Geometry/scroll/animation (RP59/RP60):** if the change touches layout,
+         scroll, overflow, drag-drop, or a CSS transition — `cd desktop &&
+         npm run build:all` → relaunch the .app → exercise it (open Canvas/overlay,
+         resize the window, drag the radar, switch tabs, watch a stream land at the
+         bottom). A daemon-only restart does NOT embed frontend changes.
+      3. **Every ENTRY, not just the one you designed (RP60):** enumerate every way
+         a user reaches this feature (each drop source, each nav path, each trigger)
+         and exercise EACH — an "E2E verified" that traces only your happy-path is
+         not E2E. For a drop/paste/import surface, test the APP-NATIVE gesture (drag
+         from the Explorer = `application/json`), not just OS files (RP56).
+      If the change is pure logic (a util, a reducer, no geometry/tabs/entries),
+      the unit smoke above is sufficient — don't build:all for a pure function.
     - Smoke tests are **inline verification only** -- don't commit them.
       They're a build-time gate, not regression tests.
     - If a smoke test crashes -- fix the bug before proceeding to REVIEW.
