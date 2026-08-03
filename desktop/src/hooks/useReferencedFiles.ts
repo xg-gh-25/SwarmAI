@@ -16,7 +16,13 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
-export type FileOperation = 'written' | 'read' | 'searched';
+// The backend emits ONLY write operations (streaming_orchestrator._build_file_change_events
+// hardcodes operation:"written"; detection is scoped to write SOURCES — Write/Edit/
+// NotebookEdit + parseable Bash redirection — per the run_e626e121 directive #6). There is
+// no read/grep/list tracking, so 'read'/'searched' were never-populated dead values; the
+// type is narrowed to what is actually emitted. FileRelevance below is SEPARATE and
+// load-bearing (incidental = the SSE bridge's fail-closed default for an older backend).
+export type FileOperation = 'written';
 export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
 
 export interface ReferencedFile {
@@ -124,13 +130,13 @@ export function useReferencedFiles(sessionId: string | undefined) {
         const existing = next.get(path);
 
         if (existing) {
-          // Update count and operation (promote read→written if now written)
+          // Dedup: bump count. operation is always 'written' (the only emitted op),
+          // so there is nothing to promote — just refresh the resolved absolutePath if
+          // a later event carried one the first lacked.
           next.set(path, {
             ...existing,
-            // A later event may carry a resolved absolutePath the first lacked.
             absolutePath: absolutePath || existing.absolutePath,
             count: existing.count + 1,
-            operation: operation === 'written' ? 'written' : existing.operation,
           });
         } else {
           // Enforce cap — evict oldest if at limit
@@ -168,22 +174,18 @@ export function useReferencedFiles(sessionId: string | undefined) {
     return () => window.removeEventListener(EVENT_NAME, handler);
   }, [sessionId]);
 
-  // Group files by operation (memoized to avoid unnecessary re-renders)
+  // Group files by operation (memoized to avoid unnecessary re-renders).
+  // Only 'written' is ever emitted (see FileOperation), so the group is a single
+  // key — kept as a Record so CanvasOutputRail's `grouped.written` stays stable.
   const { grouped, totalCount } = useMemo(() => {
-    const g: Record<FileOperation, ReferencedFile[]> = {
-      written: [],
-      read: [],
-      searched: [],
-    };
+    const g: Record<FileOperation, ReferencedFile[]> = { written: [] };
 
     for (const file of files.values()) {
       g[file.operation].push(file);
     }
 
-    // Sort each group by firstSeen descending (newest first)
-    for (const key of Object.keys(g) as FileOperation[]) {
-      g[key].sort((a, b) => b.firstSeen - a.firstSeen);
-    }
+    // Newest first.
+    g.written.sort((a, b) => b.firstSeen - a.firstSeen);
 
     return { grouped: g, totalCount: files.size };
   }, [files]);

@@ -16,7 +16,7 @@ import type { ReferencedFile } from '../../../hooks/useReferencedFiles';
 let mockFiles: ReferencedFile[] = [];
 vi.mock('../../../hooks/useReferencedFiles', () => ({
   useReferencedFiles: () => ({
-    files: { written: mockFiles, read: [], searched: [] },
+    files: { written: mockFiles },
     totalCount: mockFiles.length,
     clear: () => {},
   }),
