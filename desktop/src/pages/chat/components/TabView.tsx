@@ -74,6 +74,17 @@ export function nextScrollIntent(
   };
 }
 
+/** Pure: should a tab, on becoming active, re-pin to the bottom? YES iff the view
+ *  was at the bottom by the user's intent when they left it (wasAtBottom). A user
+ *  who deliberately scrolled up (wasAtBottom=false) is NEVER yanked back on return.
+ *  This is the ACTIVATION trigger the 4 prior fixes missed — they all hardened the
+ *  RESIZE/content-growth re-pin, but a display:none→block visibility flip at an
+ *  unchanged width is neither a resize nor new content, so no existing mechanism
+ *  fired on switch. Exported for a DOM-free unit test. (run_a319239e, 4th recurrence) */
+export function shouldPinOnActivation(wasAtBottom: boolean): boolean {
+  return wasAtBottom;
+}
+
 export interface TabViewProps {
   /** Registry key for this tab — used to scope the cancel-queued callback. */
   tabId: string;
@@ -331,6 +342,33 @@ function TabViewImpl({
       endRef.current?.scrollIntoView({ behavior: 'auto' });
     }
   }, [messages, isActive]);
+
+  // ── Re-pin to bottom on tab ACTIVATION (run_a319239e — 4th recurrence fix) ──
+  // The bug the 4 prior fixes missed: switching TO a tab did not land at the
+  // bottom. Neither existing mechanism fires on a switch —
+  //   • the auto-scroll above runs in the SAME commit as display:none→block, and
+  //     for a tab the user once scrolled up in, userScrolledUpRef is stale-true →
+  //     it early-returns forever; even when false, message markdown renders
+  //     async (200ms-throttled ContentBlockRenderer), so endRef isn't at its
+  //     final Y yet in this synchronous pass → lands mid-list;
+  //   • the resize ResizeObserver (below) fires only on a SIZE change — a
+  //     visibility flip at an unchanged width is no resize → never fires.
+  // Fix = the missing ACTIVATION trigger: when this tab becomes active AND the
+  // user was at the bottom when they left it (wasAtBottomRef — NOT the reflow-
+  // pollutable userScrolledUpRef), reset the intent and scroll to bottom on the
+  // NEXT frame (rAF), so the display:block layout + any just-committed messages
+  // are laid out before we measure endRef. behavior:'auto' = instant + idempotent
+  // (a no-op if already at bottom), so it can't fight the auto-scroll/RO. Gated on
+  // wasAtBottomRef so a deliberate scroll-up is preserved across the switch (AC2).
+  useEffect(() => {
+    if (!isActive) return;
+    if (!shouldPinOnActivation(wasAtBottomRef.current)) return;
+    userScrolledUpRef.current = false;
+    const id = requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: 'auto' });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isActive]);
 
   // Re-pin to bottom when the scroll VIEWPORT resizes (bugfix run_75691aa8) OR
   // when the CONTENT grows taller (bugfix run_24f98f06, root cause B). Two
