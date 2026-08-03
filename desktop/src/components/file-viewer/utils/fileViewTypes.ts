@@ -34,9 +34,19 @@ const AUDIO_EXTENSIONS = new Set([
   'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus',
 ]);
 
-const NON_RENDERABLE_BINARY = new Set([
-  // Office documents
+/**
+ * Office/OpenDocument extensions — the SINGLE SOURCE OF TRUTH (run_a3292e2f).
+ * Consumed by NON_RENDERABLE_BINARY (routing), MarkdownRenderer's clickable-path
+ * list (union), and UnsupportedRenderer's per-type guidance — so the set never
+ * drifts across surfaces (MarkdownRenderer previously omitted odt/ods/odp).
+ */
+export const OFFICE_EXTENSIONS: ReadonlySet<string> = new Set([
   'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'odt', 'ods', 'odp',
+]);
+
+const NON_RENDERABLE_BINARY = new Set([
+  // Office documents (SSOT — see OFFICE_EXTENSIONS)
+  ...OFFICE_EXTENSIONS,
   // Non-browser images
   'tiff', 'tif', 'heic', 'heif', 'raw', 'cr2', 'nef',
   // Archives

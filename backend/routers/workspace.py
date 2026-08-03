@@ -524,6 +524,56 @@ async def read_file(
     )
 
 
+@router.get("/{agent_id}/file-meta")
+async def read_file_meta(
+    agent_id: str,
+    path: str = Query(..., description="Relative path to file"),
+    base_path: str | None = Query(None, description="Custom base path for file browser"),
+):
+    """Return lightweight file metadata (size, mime, PHYSICAL absolute path) without
+    reading content — the agent-scoped, base_path-aware counterpart of ``/read``.
+
+    Used by FilePreviewModal's unsupported-file card (Office/binary): it needs the
+    absolute path for OS-level actions (Open in Default App / Reveal in Finder /
+    Copy Path) but must NOT fetch a potentially large binary just to show a card.
+    Mirrors the global ``/workspace/file/meta`` (workspace_api.py) but resolves
+    through ``get_workspace_root(agent_id, base_path)`` so the "work in a folder"
+    base is honored (the global endpoint is base_path-unaware). Named ``file-meta``
+    (not ``meta``) so ``/{agent_id}/meta`` does NOT shadow the sibling router's
+    literal ``/workspace/file/meta`` (agent_id would capture "file").
+    """
+    workspace_root = get_workspace_root(agent_id, base_path)
+    await ensure_workspace_exists(agent_id, workspace_root, base_path)
+
+    # Same resolution + traversal guards as /read (validate_path returns an absolute
+    # resolved Path; _validate_workspace_path re-checks via realpath).
+    file_path = validate_path(workspace_root, path)
+    _validate_workspace_path(path, str(workspace_root))
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if file_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is a directory: {path}")
+
+    try:
+        file_size = file_path.stat().st_size
+    except (PermissionError, OSError) as e:
+        raise HTTPException(status_code=403, detail=f"Cannot access file: {e}")
+
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    return {
+        "name": file_path.name,
+        "path": path,
+        "size": file_size,
+        "mime_type": mime_type,
+        # PHYSICAL absolute path — what the OS opener needs (run_a3292e2f).
+        "absolute_path": str(file_path),
+    }
+
+
 # Maximum upload file size (10MB for TXT/CSV)
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024
 

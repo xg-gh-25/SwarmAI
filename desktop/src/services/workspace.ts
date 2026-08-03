@@ -307,6 +307,33 @@ export const workspaceService = {
   },
 
   /**
+   * Lightweight metadata (size, mime, absolute path) WITHOUT reading content —
+   * for the unsupported-file card's OS-level actions (open/reveal/copy). The
+   * base_path-aware counterpart of readFile; never fetches a large binary.
+   */
+  async readFileMeta(
+    agentId: string,
+    path: string,
+    basePath?: string,
+  ): Promise<{ name: string; path: string; size: number; mimeType: string; absolutePath: string }> {
+    const params: Record<string, string> = { path };
+    if (basePath) {
+      params.base_path = basePath;
+    }
+    const response = await api.get<Record<string, unknown>>(`/workspace/${agentId}/file-meta`, {
+      params,
+    });
+    const d = response.data;
+    return {
+      name: d.name as string,
+      path: d.path as string,
+      size: (d.size as number) ?? 0,
+      mimeType: (d.mime_type as string) ?? 'application/octet-stream',
+      absolutePath: (d.absolute_path as string) ?? '',
+    };
+  },
+
+  /**
    * Upload a file to the agent's workspace
    * Used for TXT/CSV files that Claude reads via Read tool
    * @param agentId The agent ID

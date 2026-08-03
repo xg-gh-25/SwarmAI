@@ -13,7 +13,7 @@
  *   - Uses getFileTypeInfo from fileViewTypes for icon/label resolution
  */
 import { useState, useCallback } from 'react';
-import { getFileTypeInfo } from '../utils/fileViewTypes';
+import { getFileTypeInfo, OFFICE_EXTENSIONS } from '../utils/fileViewTypes';
 import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
 import { copyToClipboard } from '../../../utils/clipboard';
 
@@ -55,7 +55,8 @@ function getExtension(fileName: string): string {
  * Returns a per-category helpful hint for unsupported file types.
  */
 function getHelpfulText(ext: string): string {
-  const officeExts = new Set(['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'odt', 'ods', 'odp']);
+  // Office set = the shared SSOT (run_a3292e2f) — no local copy to drift.
+  const officeExts = OFFICE_EXTENSIONS;
   const archiveExts = new Set(['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z', 'jar', 'war']);
   const diskImageExts = new Set(['dmg', 'iso']);
   const fontExts = new Set(['ttf', 'otf', 'woff', 'woff2']);

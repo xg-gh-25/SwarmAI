@@ -19,6 +19,7 @@ import { classifyFileForViewer, getFileTypeInfo, isBinaryType } from '../file-vi
 import type { FileViewType } from '../file-viewer/utils/fileViewTypes';
 
 const PdfRenderer = lazy(() => import('../file-viewer/renderers/PdfRenderer'));
+const UnsupportedRenderer = lazy(() => import('../file-viewer/renderers/UnsupportedRenderer'));
 
 interface FilePreviewModalProps {
   isOpen: boolean;
@@ -62,6 +63,17 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     staleTime: 60000, // Cache for 1 minute
   });
 
+  // For UNSUPPORTED files: fetch lightweight metadata (size + absolute path) so the
+  // shared UnsupportedRenderer can drive Open-in-Default-App / Reveal / Copy-Path
+  // with the PHYSICAL path (run_a3292e2f). Never reads content (avoids fetching a
+  // large binary just to show a card). base_path-aware via readFileMeta.
+  const { data: fileMeta } = useQuery({
+    queryKey: ['workspace-file-meta', agentId, file?.path, basePath],
+    queryFn: () => workspaceService.readFileMeta(agentId, file!.path, basePath),
+    enabled: isOpen && !!file && !!agentId && !canPreview,
+    staleTime: 60000,
+  });
+
   // Handle reveal file in system file manager (Finder/Explorer)
   const handleRevealInFinder = useCallback(async () => {
     if (!file || !basePath) return;
@@ -99,19 +111,24 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
       </button>
     );
 
-    // For unsupported files (Office, archives, executables, etc.) — friendly info card
+    // For unsupported files (Office, archives, executables, etc.) — the SHARED
+    // UnsupportedRenderer (run_a3292e2f), the same card the Canvas/FileViewer uses,
+    // so both surfaces are unified: "Swarm doesn't preview this" + Open-in-Default-
+    // App / Reveal-in-Finder / Copy-Path on the PHYSICAL absolute path (from meta).
     if (!canPreview) {
-      const info = typeInfo ?? { label: 'File', icon: 'insert_drive_file' };
       return (
-        <div className="flex flex-col items-center justify-center h-64 text-[var(--color-text-muted)]">
-          <div className="w-20 h-20 rounded-2xl bg-[var(--color-hover)] flex items-center justify-center mb-4">
-            <span className="material-symbols-outlined text-4xl text-primary">{info.icon}</span>
-          </div>
-          <span className="text-lg font-medium text-[var(--color-text)] mb-1">{file.name}</span>
-          <span className="text-sm text-[var(--color-text-muted)] mb-4">
-            {info.label} — can&apos;t be previewed in Swarm yet
-          </span>
-          <RevealButton />
+        <div className="h-64">
+          <Suspense fallback={<div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">Loading…</div>}>
+            <UnsupportedRenderer
+              filePath={file.path}
+              fileName={file.name}
+              content={null}
+              encoding="utf-8"
+              mimeType={fileMeta?.mimeType ?? 'application/octet-stream'}
+              fileSize={fileMeta?.size ?? 0}
+              absolutePath={fileMeta?.absolutePath}
+            />
+          </Suspense>
         </div>
       );
     }

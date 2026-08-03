@@ -13,6 +13,7 @@ import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
+import { OFFICE_EXTENSIONS } from '../file-viewer/utils/fileViewTypes';
 
 interface MarkdownRendererProps {
   content: string;
@@ -573,7 +574,10 @@ const CLICKABLE_EXTENSIONS = new Set([
   '.pl', '.php', '.dart', '.scala', '.zig', '.tf', '.hcl', '.proto', '.graphql',
   '.dockerfile', '.makefile', '.csv', '.log', '.env',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',
-  '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt',
+  // Office/OpenDocument: unioned from the OFFICE_EXTENSIONS SSOT (run_a3292e2f) so
+  // this list never drifts from the viewer's classifier (it previously omitted
+  // odt/ods/odp). This is a broad ALL-clickable-types set; office is one subset.
+  ...[...OFFICE_EXTENSIONS].map((e) => `.${e}`),
 ]);
 
 /**
