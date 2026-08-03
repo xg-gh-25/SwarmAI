@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup } from '@testing-library/react';
-import Modal from './Modal';
+import Modal, { FS_WIDTH } from './Modal';
 import { setNavSource, clearNavSource } from '../layout/navSource';
 import { observeChatArea } from '../layout/chatAreaBounds';
 
@@ -218,17 +218,60 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     expect(scrim.style.left).toBe(''); // no positional override
   });
 
-  it('applies the content-adaptive width for the declared fullscreenWidth profile', () => {
+  it('all width tiers are RESPONSIVE clamp(min, preferred%, max) — adapts to chat-area, no per-device hardcode', () => {
+    // Widths are CSS clamp() so the panel adapts to the chat-area width on
+    // laptop/large/ultrawide with NO per-device breakpoint. The % resolves (in a
+    // real WKWebView) against the panel's containing block = the scrim (= chat-area
+    // rect). We assert the exported contract, NOT card.style.width, because jsdom's
+    // CSSOM cannot round-trip a clamp() value through element.style (it rejects it
+    // → stores '') — a harness limitation, not a code issue (run_5b5c3f7d).
+    expect(FS_WIDTH.s).toBe('clamp(360px, 34%, 560px)');
+    expect(FS_WIDTH.m).toBe('clamp(440px, 46%, 760px)');
+    expect(FS_WIDTH.l).toBe('clamp(600px, 62%, 1080px)');
+    expect(FS_WIDTH.xl).toBe('clamp(760px, 70%, 1200px)');
+    // every tier IS a clamp() and NONE is the old full-coverage 100% / bare px
+    for (const v of Object.values(FS_WIDTH)) {
+      expect(v).toMatch(/^clamp\(\d+px, \d+%, \d+px\)$/);
+    }
+  });
+
+  it('xl is capped (max 1200px, preferred 70%) so a chat strip always remains — never the old full-coverage 100%', () => {
+    // The regression this run fixes: xl used to be width:'100%' → the panel covered
+    // the whole chat area minus a 40px gap. It is now clamp(760px, 70%, 1200px) — the
+    // 1200px cap + 70% preferred leave the chat visible to the right on a wide window.
+    expect(FS_WIDTH.xl).not.toBe('100%');
+    const m = FS_WIDTH.xl.match(/^clamp\((\d+)px, (\d+)%, (\d+)px\)$/);
+    expect(m).not.toBeNull();
+    const [, min, pct, max] = m!.map(Number);
+    expect(min).toBeLessThan(max);       // well-formed clamp
+    expect(pct).toBeLessThan(100);       // never prefers full width
+    expect(max).toBeLessThanOrEqual(1200); // hard cap so chat stays visible
+    // the wiring: the fullscreen panel applies width: FS_WIDTH[fullscreenWidth]
+    // (asserted structurally by the render tests above; the value contract here).
+  });
+
+  it('fullscreen panel still carries the maxWidth backstop (never exceeds the chat area)', () => {
+    // maxWidth is the hard backstop RELATIVE to the scrim (= chat-area rect): scrim
+    // width minus both 20px gaps. Even if a clamp min ever exceeded a narrow chat
+    // area, maxWidth clamps the panel so it can never overflow (run_a95e266a).
     const { container } = render(
       <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X" fullscreenWidth="s"><div>b</div></Modal>,
     );
-    // the card is the scrim's child div carrying the width style
     const card = container.querySelector('[data-testid="modal-scrim"] > div') as HTMLElement;
-    expect(card.style.width).toBe('380px'); // FS_WIDTH.s
-    // maxWidth is now RELATIVE to the scrim (= the chat-area rect): scrim width
-    // minus both gaps. The panel can never exceed the chat area whatever the
-    // window/radar size — the scrim, not the viewport, is the bound (run_a95e266a).
     expect(card.style.maxWidth).toBe('calc(100% - 40px)');
+  });
+
+  it('fullscreen scrim has NO backdrop-blur (chat behind stays legible); small dialogs KEEP the blur', () => {
+    // XG: "modal 后面那个毛玻璃层...我们要看到后面的 chat window". The blur is removed
+    // from the fullscreen scrim only; centered small dialogs keep it (run_5b5c3f7d).
+    const fs = render(<Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>);
+    const fsScrim = fs.container.querySelector('[data-testid="modal-scrim"]') as HTMLElement;
+    expect(fsScrim.className).not.toContain('backdrop-blur');
+    fs.unmount();
+
+    const sm = render(<Modal isOpen onClose={noop} title="T" size="md"><div>b</div></Modal>);
+    const smScrim = sm.container.querySelector('[data-testid="modal-scrim"]') as HTMLElement;
+    expect(smScrim.className).toContain('backdrop-blur');
   });
 
   it('DEFAULT fullscreen = definite full height (bottom anchored) so flex children do not collapse', () => {

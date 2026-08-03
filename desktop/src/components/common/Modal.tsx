@@ -42,7 +42,24 @@ interface ModalProps {
 const PANEL_LEFT = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH; // 150
 const PANEL_TOP = LAYOUT_CONSTANTS.CHAT_CONTENT_TOP;    // 80
 const PANEL_GAP = 20;                                    // right/bottom breathing gap
-const FS_WIDTH = { s: 380, m: 620, l: 880, xl: '100%' } as const; // xl fills to max-width
+// Responsive width tiers — CSS clamp(min, preferred%, max). The `%` is resolved by
+// the browser against the panel's containing block, which is the scrim (position:
+// fixed, sized to the live chat-area rect) — so the panel adapts to the chat area on
+// laptop / large / ultrawide with NO per-device hardcode. Each tier's `max` caps the
+// panel so a chat strip always stays visible to the right (never full-coverage — the
+// old `xl:'100%'` regression). `maxWidth: calc(100% - 40px)` (below) is the hard
+// backstop if a `min` ever exceeds a narrow chat area. (run_5b5c3f7d)
+// Exported so tests can assert the clamp() contract directly: jsdom's CSSOM
+// (cssstyle) cannot round-trip a clamp() value through `element.style.width` (it
+// rejects it → stores ''), so a render-based `card.style.width` assertion is
+// impossible in the test harness even though the value is valid in a real
+// WKWebView. Asserting the exported map is the non-vacuous way to lock the values.
+export const FS_WIDTH = {
+  s: 'clamp(360px, 34%, 560px)',
+  m: 'clamp(440px, 46%, 760px)',
+  l: 'clamp(600px, 62%, 1080px)',
+  xl: 'clamp(760px, 70%, 1200px)',
+} as const;
 
 const sizeClasses = {
   sm: 'max-w-sm',
@@ -230,22 +247,27 @@ export default function Modal({
     <div
       ref={overlayRef}
       className={clsx(
-        'z-50 bg-black/50 backdrop-blur-sm',
+        'z-50',
         'transition-opacity duration-[220ms] ease-out',
         entered ? 'opacity-100' : 'opacity-0',
         isFullscreen
           // A11 card-detail panel: the scrim covers ONLY the chat area (clears the
           // leftNav + tab bar), so leftNav/tabs are never dimmed or covered.
-          // NOTE: no overflow-hidden here — the scrim is now window-bounded (its
-          // rect is clamped in chatAreaBounds.measure + the fallback is
-          // viewport-sized), and the panel is bounded INSIDE the scrim by
-          // construction (left:20 + maxWidth:calc(100%-40) + bottom:20), so it
-          // cannot overflow. overflow-hidden would clip the panel's soft drop
-          // shadow/glow (80px blur extends past the scrim gap) — a visual
-          // regression — for a clip that the clamp already makes unnecessary
-          // (Gate-2 run_0ce60215).
+          // NO backdrop-blur here (removed run_5b5c3f7d): the fullscreen scrim only
+          // covers the chat area and the user wants the chat window behind it to
+          // stay LEGIBLE, not frosted — a light dark scrim (bg set inline below to
+          // rgba(0,0,0,0.15)) + the panel's own border/ring/shadow provide the
+          // layer separation. (backdrop-blur stays on the small-dialog branch.)
+          // NOTE: no overflow-hidden here — the scrim is window-bounded (its rect is
+          // clamped in chatAreaBounds.measure + the fallback is viewport-sized), and
+          // the panel is bounded INSIDE the scrim by construction (left:20 +
+          // maxWidth:calc(100%-40) + bottom:20), so it cannot overflow.
+          // overflow-hidden would clip the panel's soft drop shadow/glow (80px blur
+          // extends past the scrim gap) — a visual regression (Gate-2 run_0ce60215).
           ? 'fixed'
-          : 'fixed inset-0 flex justify-center items-center p-4',
+          // Small centered dialogs keep the frosted-glass scrim (full-viewport, no
+          // chat to preserve behind them) — bg + blur applied here only.
+          : 'fixed inset-0 flex justify-center items-center p-4 bg-black/50 backdrop-blur-sm',
       )}
       style={
         isFullscreen
@@ -259,13 +281,13 @@ export default function Modal({
           // Both the observed rect (clamped in chatAreaBounds.measure) and this
           // fallback stay within the viewport.
           ? (chatRect
-              ? { left: chatRect.left, top: chatRect.top, width: chatRect.width, height: chatRect.height, background: 'rgba(0,0,0,0.35)' }
+              ? { left: chatRect.left, top: chatRect.top, width: chatRect.width, height: chatRect.height, background: 'rgba(0,0,0,0.15)' }
               : {
                   left: PANEL_LEFT,
                   top: PANEL_TOP,
                   width: Math.max(0, windowSize.w - PANEL_LEFT),
                   height: Math.max(0, windowSize.h - PANEL_TOP),
-                  background: 'rgba(0,0,0,0.35)',
+                  background: 'rgba(0,0,0,0.15)',
                 })
           : undefined
       }
