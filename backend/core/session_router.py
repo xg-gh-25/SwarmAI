@@ -147,6 +147,49 @@ _STOP_WORDS: frozenset[str] = frozenset({
 })
 
 
+def _prepend_ui_state_to_query(
+    query_content: Any,
+    editor_context: Optional[dict],
+    should_prefix: bool,
+) -> Any:
+    """Prefix the request-time UI-state (SENSE) onto the user query for a REUSED
+    live subprocess (run_5d460dd5). Pure — no IO, no mutation of inputs.
+
+    Why the query channel (not system_prompt): UI-state normally rides
+    ``options.system_prompt`` (``_render_ui_context_section``), but a reused live
+    ClaudeSDKClient is only handed ``system_prompt`` at ``_spawn`` — subsequent
+    turns send ONLY the query. So for a warm-reuse turn the freshly-built
+    system_prompt (carrying THIS turn's canvas) is discarded, and the query is the
+    ONLY per-message path that reaches the subprocess. A COLD/spawning turn already
+    gets it via system_prompt, so we must NOT double-inject there.
+
+    ``should_prefix`` is the caller's reuse discriminator (state==IDLE AND
+    _client is not None AND _last_turn_clean — the exact complement of the
+    poison-guard recycle at session_unit.py, which would otherwise respawn and
+    re-carry system_prompt → double-inject).
+
+    Returns ``query_content`` UNCHANGED when: not reusing, or the UI-state block is
+    empty (no file/canvas/overlay — e.g. channel sessions). For a ``str`` query the
+    block is prepended as text; for a multimodal ``list`` it is inserted as a
+    leading ``{type:text}`` block (valid before image/document blocks).
+    """
+    if not should_prefix:
+        return query_content
+    # Lazy import: prompt_builder imports session-layer types; keep it in-function
+    # to avoid an import cycle at module load (matches the existing lazy-import
+    # pattern for build_agent_config in this module).
+    from .prompt_builder import _render_ui_context_section
+
+    block = _render_ui_context_section(editor_context)
+    if not block:  # empty → nothing to report (channels / no UI) → clean no-op
+        return query_content
+    # _render_ui_context_section returns a leading "\n\n" — strip for a clean prefix.
+    block = block.lstrip("\n")
+    if isinstance(query_content, list):
+        return [{"type": "text", "text": block}, *query_content]
+    return f"{block}\n\n{query_content}"
+
+
 def _extract_query_keywords(message: str) -> str:
     """Extract searchable keywords from user message.  Pure NLP, no LLM.
 
@@ -2091,6 +2134,23 @@ class SessionRouter:
         # G3 shadow recall REMOVED — recall is already live (wired into
         # prompt assembly via runtime_hooks). Shadow validation data is no
         # longer needed. See: 2026-05-02-evolution-activation-design.md.
+
+        # ── SENSE for a REUSED live subprocess (run_5d460dd5) ──────────────
+        # UI-state (canvas/overlay) rode options.system_prompt, but a warm-reuse
+        # turn discards the rebuilt system_prompt (the SDK client only gets it at
+        # _spawn). So for a reuse turn, deliver THIS turn's UI-state via the query
+        # channel — the only per-message path to a live subprocess. Gate mirrors
+        # send()'s poison-guard: reuse ⟺ IDLE AND client alive AND last turn clean
+        # (a non-clean IDLE recycles→COLD→respawn inside send(), where system_prompt
+        # DOES carry it → prefixing there would double-inject). COLD/spawn: no prefix.
+        _will_reuse_live = (
+            unit.state == SessionState.IDLE
+            and unit._client is not None
+            and unit._last_turn_clean
+        )
+        query_content = _prepend_ui_state_to_query(
+            query_content, editor_context, should_prefix=_will_reuse_live,
+        )
 
         # Stream response — persist each assistant message IMMEDIATELY.
         #

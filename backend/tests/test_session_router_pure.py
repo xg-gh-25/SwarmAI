@@ -336,3 +336,51 @@ class TestGetAccessHint:
         """.XLSX (uppercase) still matches."""
         result = _get_access_hint(".XLSX", "data.XLSX")
         assert "s_xlsx" in result
+
+
+class TestPrependUiStateToQuery:
+    """_prepend_ui_state_to_query — the live-session SENSE fix (run_5d460dd5).
+
+    UI-state (SENSE) reaches a COLD-spawning turn via options.system_prompt, but a
+    REUSED live subprocess discards the rebuilt system_prompt — so the request-time
+    canvas/overlay state must ride the QUERY channel instead. This pure helper
+    decides whether to prefix and builds the prefixed query (str or multimodal list).
+    """
+
+    _CANVAS_CTX = {"file_path": "", "file_name": "", "canvas": {"open": True, "output_count": 2, "pinned": False, "muted": False, "collapsed": False}}
+
+    def test_prefixes_str_query_when_reuse(self):
+        from core.session_router import _prepend_ui_state_to_query
+        out = _prepend_ui_state_to_query("what's open?", self._CANVAS_CTX, should_prefix=True)
+        assert isinstance(out, str)
+        assert "Current UI State" in out
+        assert "Canvas (output panel)" in out
+        assert out.rstrip().endswith("what's open?"), "original query preserved at the end"
+
+    def test_no_prefix_when_not_reuse(self):
+        """COLD/spawn or poisoned-recycle path: system_prompt already carries it →
+        must NOT double-inject."""
+        from core.session_router import _prepend_ui_state_to_query
+        out = _prepend_ui_state_to_query("what's open?", self._CANVAS_CTX, should_prefix=False)
+        assert out == "what's open?", "unchanged when not reusing"
+
+    def test_no_prefix_when_editor_context_empty(self):
+        """Channel/no-UI clients: empty editor_context → clean no-op even on reuse."""
+        from core.session_router import _prepend_ui_state_to_query
+        assert _prepend_ui_state_to_query("hi", None, should_prefix=True) == "hi"
+        assert _prepend_ui_state_to_query("hi", {}, should_prefix=True) == "hi"
+
+    def test_multimodal_list_inserts_leading_text_block(self):
+        from core.session_router import _prepend_ui_state_to_query
+        blocks = [{"type": "image", "source": {"x": 1}}, {"type": "text", "text": "look"}]
+        out = _prepend_ui_state_to_query(blocks, self._CANVAS_CTX, should_prefix=True)
+        assert isinstance(out, list)
+        assert out[0]["type"] == "text", "UI-state text block inserted at index 0"
+        assert "Current UI State" in out[0]["text"]
+        assert out[1:] == blocks, "original blocks preserved after the inserted one"
+
+    def test_multimodal_list_unchanged_when_not_reuse(self):
+        from core.session_router import _prepend_ui_state_to_query
+        blocks = [{"type": "text", "text": "look"}]
+        out = _prepend_ui_state_to_query(blocks, self._CANVAS_CTX, should_prefix=False)
+        assert out == blocks
