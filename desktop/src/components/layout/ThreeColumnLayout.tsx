@@ -14,7 +14,7 @@ import { DomainStubOverlays } from './DomainStubOverlays';
 import { CMBrainOverlay } from './CMBrainOverlay';
 import { LibraryOverlay } from './LibraryOverlay';
 import { setNavSource, clearNavSource } from './navSource';
-import { useActiveOverlayEvent, clearActiveOverlayEvent } from './useExclusiveOverlay';
+import { useActiveOverlayEvent, closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -151,7 +151,7 @@ function LeftSidebar() {
     if (activeModal === 'settings' && settingsTab === targetTab) {
       closeModal();
     } else {
-      clearActiveOverlayEvent(); // a modal takes over — no window card stays lit
+      closeOpenOverlays(); // a modal takes over — close any open overlay + clear its card highlight
       setSettingsTab(targetTab);
       openModal('settings');
     }
@@ -166,7 +166,7 @@ function LeftSidebar() {
     // Opens a file PANEL / toast, not a fullscreen Modal — clear the nav-source so
     // it can't mis-point a later unrelated fullscreen spout (Gate-2 #3).
     clearNavSource();
-    clearActiveOverlayEvent(); // a panel takes over — no window card should stay lit
+    closeOpenOverlays(); // a file panel takes over — close any open overlay + clear its card highlight
     try {
       const resp = await api.get<Array<{ name?: string; path?: string }>>(
         '/workspace/tree/expand',
@@ -190,6 +190,13 @@ function LeftSidebar() {
   // window-highlight fix; run_ad7b32f6 Gate-1 Finding 2).
   const showOverlay = (event: string) => {
     if (activeModal) closeModal();
+    // Single mutual-exclusion chokepoint: close any OTHER open overlay before opening
+    // this one. Handles the overlay→overlay case uniformly INCLUDING Library
+    // (swarm:show-library isn't in ALL_SHOW_EVENTS, so peers' `others` sets can't
+    // close it — the back-to-chat broadcast can). dispatchEvent is synchronous, so
+    // all overlays close here before this event's own `show` handler re-opens the
+    // target and re-points the active highlight to it.
+    closeOpenOverlays();
     window.dispatchEvent(new CustomEvent(event));
   };
 
@@ -226,7 +233,10 @@ function LeftSidebar() {
         {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
         <button
           className="a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          onClick={() => showOverlay('swarm:show-history')}
+          // Publish THIS row as the spit-out source (like A10Card.handleClick) so the
+          // History overlay opens with a cognition-tinted spout pointing back at the
+          // row — it's a raw button, not an A10Card, so it must set the source itself.
+          onClick={(e) => { setNavSource(e.currentTarget.getBoundingClientRect(), A10_GROUP.cognitive); showOverlay('swarm:show-history'); }}
           title="History"
           data-testid="history-row"
         >
@@ -265,7 +275,10 @@ function LeftSidebar() {
             className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${activeOverlay === 'swarm:show-new-brain' ? ' a10-newbrain--active' : ''}`}
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
             aria-pressed={activeOverlay === 'swarm:show-new-brain'}
-            onClick={() => { clearNavSource(); showOverlay('swarm:show-new-brain'); }}
+            // Raw button (not A10Card) — publish its own rect+tint so New Brain opens
+            // with a cognition-green spout pointing back at it (was clearNavSource(),
+            // which left the panel neutral + spout-less).
+            onClick={(e) => { setNavSource(e.currentTarget.getBoundingClientRect(), A10_GROUP.cognitive); showOverlay('swarm:show-new-brain'); }}
             title="New Brain — 建一个新大脑"
             data-testid="nav-new-brain"
           >
@@ -298,8 +311,8 @@ function LeftSidebar() {
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
-          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); openModal('eval'); } }} data-testid="nav-eval" />
-          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { clearActiveOverlayEvent(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
+          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); openModal('eval'); } }} data-testid="nav-eval" />
+          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>
       </nav>
@@ -700,6 +713,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   useEffect(() => {
     const onOpenSettings = (e: Event) => {
       const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      closeOpenOverlays(); // deep-link (CredentialBanner) — close any open overlay so Settings doesn't stack on it
       setSettingsTab(tab);
       openModal('settings');
     };

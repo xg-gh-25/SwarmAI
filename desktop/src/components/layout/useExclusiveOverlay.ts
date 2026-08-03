@@ -52,6 +52,29 @@ export function clearActiveOverlayEvent(): void {
   setActiveOverlayEvent(null);
 }
 
+/**
+ * Close EVERY open window-event overlay + clear the active highlight — the single
+ * cross-mechanism mutual-exclusion primitive (run_9f8b6c21).
+ *
+ * Why a broadcast (not a per-event `others` close): `swarm:show-library` is NOT in
+ * ALL_SHOW_EVENTS (it's banned from the agent UI-action allowlist SSOT — see
+ * uiCommands.ts), so a peer overlay's `others` set does NOT include Library and
+ * cannot close it. But EVERY overlay (Library included) registers a `back-to-chat`
+ * listener regardless of ALL_SHOW_EVENTS membership — so dispatching BACK_TO_CHAT_EVENT
+ * closes ALL of them uniformly. Call this before opening a NON-overlay surface
+ * (Settings/Eval modal, a file panel, the settings deep-link) OR at the overlay-open
+ * chokepoint, so at most one fullscreen surface is ever open.
+ *
+ * dispatchEvent is synchronous: every overlay's closeSelf + clearIfMine run to
+ * completion here before the caller's next line (e.g. the target overlay's own show,
+ * or openModal). setActiveOverlayEvent(null) is belt-and-suspenders — each overlay's
+ * clearIfMine already nulls it; the explicit clear covers the zero-overlay case.
+ */
+export function closeOpenOverlays(): void {
+  window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
+  setActiveOverlayEvent(null);
+}
+
 /** Subscribe a component to "which window overlay is active" (or null). */
 export function useActiveOverlayEvent(): string | null {
   // Seed from the current module value to avoid a first-render flicker.

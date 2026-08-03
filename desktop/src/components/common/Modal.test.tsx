@@ -357,6 +357,38 @@ describe('Modal — fullscreen card-detail panel geometry (A11)', () => {
     expect(spout.style.top).not.toBe(''); // a measured value was applied
   });
 
+  it('computes spout Y from the UNTRANSFORMED chatRect (aligned, not the mid-transform panel rect)', () => {
+    // run_9f8b6c21: the spout panel-local Y = card-center-y − chatRect.top − NUB/2,
+    // read from chatAreaBounds (a ResizeObserver on the message column) — NOT from
+    // panelRef.getBoundingClientRect() which, measured mid enter-transform (scale/
+    // translate), returned a compressed/shifted rect → the mis-alignment bug.
+    // Mutation guard: revert to the panelRef path and jsdom's all-zero rects make
+    // this exact-px assertion RED.
+    const origRO = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {} unobserve() {} disconnect() {}
+    };
+    setWindowSize(2000, 2000);
+    const stub = document.createElement('div');
+    stub.getBoundingClientRect = () =>
+      ({ left: 150, top: 80, width: 900, height: 600, right: 1050, bottom: 680, x: 150, y: 80, toJSON: () => {} } as DOMRect);
+    const stop = observeChatArea(stub);
+    try {
+      setNavSource({ top: 380, height: 40 } as DOMRect, '#5fc99a'); // centerY = 400
+      const { container } = render(
+        <Modal isOpen onClose={noop} title="T" size="fullscreen" mode="X"><div>b</div></Modal>,
+      );
+      act(() => { vi.runOnlyPendingTimers(); }); // let the double-rAF enter settle
+      const spout = container.querySelector('[data-testid="modal-spout"]') as HTMLElement;
+      expect(spout).not.toBeNull();
+      // panel top === scrim top === chatRect.top (80). local = 400 − 80 − 20/2 = 310.
+      expect(spout.style.top).toBe('310px');
+    } finally {
+      stop();
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = origRO;
+    }
+  });
+
   it('aligns the panel accent (--panel-accent) to the source card region tint', () => {
     // A10Card publishes rect + its region tint; the panel border/ring/spout/header
     // underline all read --panel-accent (run_5634980e).

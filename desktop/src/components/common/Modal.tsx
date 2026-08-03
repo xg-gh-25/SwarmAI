@@ -226,21 +226,36 @@ export default function Modal({
     };
   }, [isFullscreen, isOpen]);
 
-  // Position the spout by MEASURING the panel's real top after layout — the card's
-  // viewport center-y minus the panel's actual top = panel-local y. This avoids any
-  // hardcoded-constant assumption about where the chat area starts (the source of
-  // the mis-alignment). Re-runs when the panel mounts or the chat rect shifts.
+  // Position the spout from the UNTRANSFORMED chat-area rect, NOT panelRef.
+  // The panel's viewport top === the scrim top === chatRect.top (the panel is
+  // absolute top:0 inside the scrim, which is positioned at chatRect.top), so
+  // panel-local y = card-center-y − chatRect.top − NUB/2. Reading panelRef here was
+  // the mis-alignment bug: with `entered` in the deps it measured the panel MID
+  // enter-transform (opacity/translate-x/scale .9→1, and transform-origin itself
+  // depends on spoutY — a feedback loop), so getBoundingClientRect() returned the
+  // scaled/shifted rect. chatRect comes from a ResizeObserver on the message column
+  // (chatAreaBounds), is transform-independent, and shares the viewport coord space
+  // of spoutCenterY (navSource stores rect.top+height/2). Falls back to PANEL_TOP /
+  // windowSize — the SAME bounds the scrim uses when chatRect isn't observed yet —
+  // so the spout still renders + aligns on first paint (never a missing spout).
   useLayoutEffect(() => {
-    if (!isFullscreen || spoutCenterY == null || !panelRef.current) {
+    if (!isFullscreen || spoutCenterY == null) {
       if (spoutCenterY == null) setSpoutY(null);
       return;
     }
-    const p = panelRef.current.getBoundingClientRect();
     const NUB = 20; // spout square size
-    const local = spoutCenterY - p.top - NUB / 2;
+    const panelTop = chatRect ? chatRect.top : PANEL_TOP;
+    const scrimHeight = chatRect ? chatRect.height : Math.max(0, windowSize.h - PANEL_TOP);
+    // The default (non-autoHeight) panel is inset PANEL_GAP from the scrim bottom
+    // (`bottom: PANEL_GAP`), so its real height is scrimHeight − PANEL_GAP; autoHeight
+    // panels shrink-to-fit up to that same max. Clamp the nub against the true panel
+    // bottom, not the full scrim, so a source card near the chat-area bottom doesn't
+    // pin the spout past the panel edge.
+    const panelHeight = Math.max(0, scrimHeight - PANEL_GAP);
+    const local = spoutCenterY - panelTop - NUB / 2;
     // clamp so the nub stays fully inside the panel's height
-    setSpoutY(Math.max(8, Math.min(local, p.height - NUB - 8)));
-  }, [isFullscreen, isOpen, spoutCenterY, chatRect, entered]);
+    setSpoutY(Math.max(8, Math.min(local, panelHeight - NUB - 8)));
+  }, [isFullscreen, isOpen, spoutCenterY, chatRect, windowSize.h]);
 
   if (!isRendering) return null;
 

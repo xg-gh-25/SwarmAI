@@ -11,6 +11,7 @@ import {
   useExclusiveOverlay,
   useActiveOverlayEvent,
   clearActiveOverlayEvent,
+  closeOpenOverlays,
   __resetActiveOverlayEvent,
   BACK_TO_CHAT_EVENT,
 } from './useExclusiveOverlay';
@@ -131,5 +132,55 @@ describe('useActiveOverlayEvent (nav card active highlight, run_ad7b32f6)', () =
       clearActiveOverlayEvent();
     });
     expect(screen.getByTestId('active').textContent).toBe('null');
+  });
+});
+
+describe('closeOpenOverlays — cross-mechanism mutual exclusion (run_9f8b6c21)', () => {
+  // Mutation guard: if closeOpenOverlays stops broadcasting back-to-chat, an open
+  // overlay survives when a modal/deep-link takes over → the stacking bug returns.
+  it('closes an open overlay + clears the active highlight', () => {
+    render(<ActiveProbe event="swarm:show-context" />);
+    fire('swarm:show-context');
+    expect(screen.getByTestId('active').textContent).toBe('swarm:show-context');
+    expect(screen.getByTestId('close-btn')).toBeTruthy();
+
+    act(() => { closeOpenOverlays(); });
+
+    // overlay closed (no close-btn) AND highlight cleared — the modal-takeover fix.
+    expect(screen.queryByTestId('close-btn')).toBeNull();
+    expect(screen.getByTestId('active').textContent).toBe('null');
+  });
+
+  // Library is NOT in ALL_SHOW_EVENTS (banned from the agent UI-action allowlist
+  // SSOT), so peers' `others` sets cannot close it — closeOpenOverlays MUST reach it
+  // via the back-to-chat broadcast. This is the exact asymmetry Gate-0 caught.
+  it('closes a Library overlay even though swarm:show-library is not in ALL_SHOW_EVENTS', () => {
+    render(<Probe event="swarm:show-library" label="lib" />);
+    fire('swarm:show-library');
+    expect(screen.getByTestId('open-lib')).toBeTruthy();
+
+    act(() => { closeOpenOverlays(); });
+    expect(screen.queryByTestId('open-lib')).toBeNull();
+  });
+
+  // The chokepoint contract: closeOpenOverlays() then a target show-event ends with
+  // ONLY the target open + active = target (synchronous dispatch ordering holds).
+  it('leaves exactly the target open when used as an open chokepoint', () => {
+    render(
+      <>
+        <ActiveProbe event="swarm:show-context" />
+        <Probe event="swarm:show-pipeline" label="pipe" />
+      </>,
+    );
+    fire('swarm:show-context');
+    expect(screen.getByTestId('active').textContent).toBe('swarm:show-context');
+
+    // Simulate showOverlay's chokepoint: close all, then dispatch the target.
+    act(() => {
+      closeOpenOverlays();
+      window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
+    });
+    expect(screen.getByTestId('open-pipe')).toBeTruthy();
+    expect(screen.getByTestId('active').textContent).toBe('swarm:show-pipeline');
   });
 });
