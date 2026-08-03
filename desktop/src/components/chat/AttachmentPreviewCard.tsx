@@ -93,7 +93,12 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
           <p className="text-xs text-[var(--color-text)] truncate" title={name}>
             {name}
           </p>
-          <p className="text-[10px] text-[var(--color-text-muted)]">{formatFileSize(size)}</p>
+          {/* Hide the size label when size is unknown (0) — e.g. a workspace file
+              whose meta fetch failed. A wrong "0 B" is worse than no label. A real
+              tiny file (size>0, e.g. 100 B) still shows. */}
+          {size > 0 && (
+            <p className="text-[10px] text-[var(--color-text-muted)]">{formatFileSize(size)}</p>
+          )}
         </div>
       </div>
     </div>

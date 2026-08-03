@@ -15,6 +15,7 @@ import { useCallback, lazy, Suspense } from 'react';
 import Modal from '../common/Modal';
 import CodePreview from './CodePreview';
 import { workspaceService } from '../../services/workspace';
+import { isDesktop } from '../../services/tauri';
 import { classifyFileForViewer, getFileTypeInfo, isBinaryType } from '../file-viewer/utils/fileViewTypes';
 import type { FileViewType } from '../file-viewer/utils/fileViewTypes';
 
@@ -81,8 +82,9 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     // Construct full file path
     const fullPath = file.path === '.' ? basePath : `${basePath}/${file.path}`;
 
-    // Check if running in Tauri environment
-    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    // Check if running in Tauri desktop shell — canonical SSOT (services/tauri),
+    // not a local __TAURI_INTERNALS__ literal (single detection authority, RP58).
+    if (isDesktop()) {
       try {
         const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
         await revealItemInDir(fullPath);

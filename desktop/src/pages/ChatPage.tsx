@@ -235,7 +235,7 @@ export default function ChatPage() {
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
   const { attachments, addFiles, addWorkspaceFiles, removeAttachment, clearAll: clearAttachments,
     isProcessing: isProcessingFiles, error: fileError, canAddMore, restoreAttachments } = useUnifiedAttachments(
-    activeTabId, tabMapRef
+    activeTabId, tabMapRef, selectedAgentId, effectiveBasePath
   );
 
   // ── Explorer → Chat custom event bridge ──────────────────────────────

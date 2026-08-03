@@ -20,6 +20,7 @@ import type { UnifiedAttachment, AttachmentType } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
 import type { UnifiedTab } from './useUnifiedTabState';
 import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
+import { workspaceService } from '../services/workspace';
 import {
   classifyFile,
   determineDeliveryStrategy,
@@ -116,6 +117,13 @@ function generatePreview(
 export function useUnifiedAttachments(
   tabId: string | null,
   tabMapRef: React.MutableRefObject<Map<string, UnifiedTab>>,
+  // Optional — only used to fetch a workspace file's real size at attach time.
+  // Optional (trailing) so the null-during-startup case degrades gracefully to
+  // "no size" rather than forcing a non-null assertion at the call site
+  // (Gate-1 defect: selectedAgentId is string|null). basePath honors "work in a
+  // folder" mode so readFileMeta resolves the same root the explorer used.
+  agentId?: string | null,
+  basePath?: string,
 ): UseUnifiedAttachmentsReturn {
   // Display mirror — synced from tabMapRef when tabId changes
   const [displayAttachments, setDisplayAttachments] = useState<UnifiedAttachment[]>([]);
@@ -126,6 +134,13 @@ export function useUnifiedAttachments(
   // closure captures when the user switches tabs during file encoding.
   const tabIdRef = useRef(tabId);
   tabIdRef.current = tabId;
+
+  // Ref mirrors of agentId/basePath — read inside the async workspace-attach
+  // loop to avoid stale-closure capture if the user switches agent mid-attach.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+  const basePathRef = useRef(basePath);
+  basePathRef.current = basePath;
 
   // Sync display mirror when tabId changes
   useEffect(() => {
@@ -340,14 +355,30 @@ export function useUnifiedAttachments(
             strategy = 'path_hint';
           }
 
-          // 4. Create attachment — content is read at send time, not here
+          // 4. Fetch the real file size (lightweight meta — no content read).
+          // Fail-safe: any error → keep 0 (delivery is unaffected; size is a
+          // display-only label). Guarded on agentId so the null-during-startup
+          // case degrades to "no size" rather than crashing (Gate-1 defect).
+          let realSize = 0;
+          const aid = agentIdRef.current;
+          if (aid) {
+            try {
+              const meta = await workspaceService.readFileMeta(aid, file.path, basePathRef.current);
+              realSize = meta.size ?? 0;
+            } catch {
+              // Meta fetch is best-effort — keep size 0, show no label (guarded in card)
+              realSize = 0;
+            }
+          }
+
+          // 5. Create attachment — content is read at send time, not here
           const id = generateId();
           const attachment: UnifiedAttachment = {
             id,
             name: file.name,
             type: fileType,
             deliveryStrategy: strategy,
-            size: 0, // Unknown for workspace files at attach time
+            size: realSize, // real size via readFileMeta; 0 if unavailable (label hidden)
             mediaType: '',
             workspacePath: file.path,
             preview: file.name, // Just show filename for workspace files
@@ -360,7 +391,7 @@ export function useUnifiedAttachments(
         setIsProcessing(false);
       }
     },
-    [tabIdRef, tabMapRef, updateAttachments],
+    [tabIdRef, tabMapRef, updateAttachments, agentIdRef, basePathRef],
   );
 
   // ---- removeAttachment ---------------------------------------------------

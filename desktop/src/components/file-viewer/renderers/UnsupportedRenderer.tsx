@@ -7,7 +7,8 @@
  *   - File name, type label, file size
  *   - Per-type helpful guidance text (Office, Archive, Database, etc.)
  *   - Action buttons:
- *     - "Open in System App" (hidden when window.__TAURI__ is undefined -- Hive/web)
+ *     - "Open in System App" (hidden on Hive/web via isDesktop() — the canonical
+ *        services/tauri SSOT that checks __TAURI_INTERNALS__ (Tauri 2.x) || __TAURI__)
  *     - "Attach to Chat" (when onAttachToChat is provided)
  *     - "Copy Path"
  *   - Uses getFileTypeInfo from fileViewTypes for icon/label resolution
@@ -16,6 +17,7 @@ import { useState, useCallback } from 'react';
 import { getFileTypeInfo, OFFICE_EXTENSIONS } from '../utils/fileViewTypes';
 import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { isDesktop } from '../../../services/tauri';
 
 interface RendererProps {
   filePath: string;
@@ -106,11 +108,6 @@ function getHelpfulText(ext: string): string {
   return 'This file can be opened in its default system application.';
 }
 
-/** Check if we are running inside a Tauri desktop shell. */
-function isTauriContext(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
-}
-
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -127,7 +124,10 @@ export default function UnsupportedRenderer({
   const ext = getExtension(fileName);
   const typeInfo = getFileTypeInfo(fileName);
   const helpText = getHelpfulText(ext);
-  const showTauriButton = isTauriContext();
+  // Canonical SSOT (services/tauri) — checks __TAURI_INTERNALS__ (Tauri 2.x) OR
+  // __TAURI__ (1.x). A local `'__TAURI__' in window` check was always false in the
+  // packaged 2.x app, hiding these OS actions (run_847ed9f9).
+  const showTauriButton = isDesktop();
   // OS-level actions need the PHYSICAL absolute path (run_405d221c). Fall back to
   // filePath only when the meta fetch couldn't resolve it (fail-safe — a relative
   // path may still work if the opener's cwd happens to match, and is better than
