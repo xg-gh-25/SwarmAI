@@ -262,12 +262,23 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
               onDrop={onDropZoneDrop}
               className="flex-1 border border-dashed border-[var(--color-border-strong)] rounded-xl bg-[var(--color-bg)] p-3 flex flex-col min-h-[240px]"
             >
-              <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto">
+              {/* Input FIRST — the primary thing the user acts on sits at the top,
+                  where the eye lands; added chips accumulate BELOW it (#2). */}
+              <input
+                data-testid="new-brain-material-input"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
+                onBlur={commitDraft}
+                placeholder="paste a link / path / repo, or type — Enter to add (or drag files here)"
+                className="w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-[12px] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
+              />
+              <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto mt-2">
                 {items.length === 0 && (
                   <div className="flex-1 grid place-items-center text-center text-[var(--color-text-faint)]">
                     <div>
                       <div className="text-2xl opacity-60 mb-1.5">⤵</div>
-                      <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Drop or paste anything here</div>
+                      <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Drop files, or add links above</div>
                       <div className="text-[10.5px] mt-1">sorted by type — click a pill to change the role</div>
                     </div>
                   </div>
@@ -295,15 +306,6 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
                   </div>
                 ))}
               </div>
-              <input
-                data-testid="new-brain-material-input"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
-                onBlur={commitDraft}
-                placeholder="paste a link / path / repo, or type — Enter to add"
-                className="mt-2 w-full bg-transparent border-t border-[var(--color-border)] pt-2 text-[12px] text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-faint)]"
-              />
             </div>
           </div>
         </div>
