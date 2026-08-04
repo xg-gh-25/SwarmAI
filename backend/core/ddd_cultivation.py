@@ -785,6 +785,91 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     try:
         content = doc_path.read_text(encoding="utf-8")
 
+        # ── DESTRUCTIVE SUPERSEDE (run_6ac7a760, XG-directed; Gate-2-tiered) ────
+        # When this append polarity-flips a same-topic curated entry
+        # (detect_contradiction set proposal.contradiction_flag), the NEW entry
+        # REPLACES the old — new-supersedes-old = clean forgetting = evolution. NOT
+        # advisory-flag-and-keep-both (run_171a17c2 = the hoarding/graveyard anti-
+        # pattern in EVOLUTION). But NOT a blind delete either (Gate-2, XG=Plan-B):
+        #
+        #   ORDINARY knowledge (guideline/pitfall/process, non-evergreen section,
+        #     exactly ONE match) → STRIP the old in-place = auto clean-forgetting.
+        #   PERMANENT knowledge (is_keep_class: principle/correction/decision/model
+        #     or an evergreen section or COE) → do NOT auto-delete. It is my judgment
+        #     BEDROCK; a single wrong polarity match must not silently erase it. →
+        #     ESCALATE a retire-proposal to the human queue instead.
+        #   AMBIGUOUS: >1 entry shares (title,section) → a strip would delete ALL of
+        #     them while detection identified ONE (Gate-2 MED: connected-delete /
+        #     data-loss, exactly what retire_entry refuses). → ESCALATE, never strip.
+        #
+        # This is NOT the keep-class "carve-out from forgetting" XG rejected — it is
+        # ROUTING a high-blast-radius delete to a one-word human confirm (the same
+        # bar retire_entry sets with force=True). Ordinary knowledge still auto-
+        # forgets with zero prompt.
+        #
+        # MUST run HERE — after read (:786), BEFORE section_re/body_start: _strip_
+        # entries mutates `content` in-memory so downstream offsets are computed on
+        # the STRIPPED string (Gate-1 FATAL-2). include_prose=True is MANDATORY
+        # (Gate-1 FATAL-1: the flag's key came from parse_entries(include_prose=True)).
+        # NO archive (XG: git is the only recovery). .get()-guarded (Gate-1 CRASH).
+        cf = proposal.contradiction_flag
+        if cf and cf.get("conflicting_title") and cf.get("section"):
+            from core.ddd_entry_lifecycle import (
+                _strip_entries, parse_entries, is_keep_class,
+                MEMORY_EVERGREEN_SECTIONS,
+            )
+            _old_title, _old_section = cf["conflicting_title"], cf["section"]
+            _matches = [
+                e for e in parse_entries(content, include_prose=True)
+                if e.title == _old_title and e.section == _old_section
+            ]
+            _keep = any(
+                is_keep_class(e, evergreen_sections=MEMORY_EVERGREEN_SECTIONS)
+                for e in _matches
+            )
+            if _matches and (_keep or len(_matches) > 1):
+                # PERMANENT or AMBIGUOUS → escalate a retire proposal, do NOT strip.
+                _why = "keep-class (permanent knowledge)" if _keep else \
+                       f"{len(_matches)} same-title entries (ambiguous — strip would delete all)"
+                logger.warning(
+                    "[SUPERSEDE-ESCALATE] polarity flip targets %s — routing a retire "
+                    "proposal to the human queue instead of auto-deleting: %s § %s | "
+                    "flip=%s | run=%s",
+                    _why, proposal.target_doc, _old_section, cf.get("flip"),
+                    proposal.source_run_id,
+                )
+                _retire = CultivationProposal(
+                    target_doc=proposal.target_doc, target_section=_old_section,
+                    content=(f"Superseded by a newer polarity-flipped lesson "
+                             f"(flip={cf.get('flip')}); human decide whether to retire."),
+                    source_run_id=proposal.source_run_id,
+                    confidence=proposal.confidence, change_type="retire",
+                    target_title=_old_title, evidence=proposal.content.strip(),
+                    auto_apply_ok=False, status="escalated",
+                )
+                write_proposal(_retire, project_dir)
+                # new entry still appends below; the OLD stays until human approves.
+            elif _matches:
+                # ORDINARY knowledge → auto strip (clean forgetting).
+                content = _strip_entries(content, {(_old_title, _old_section)},
+                                         include_prose=True)
+                logger.warning(
+                    "[AUTO-SUPERSEDE] new lesson polarity-flips ordinary curated entry "
+                    "— STRIPPED old (git-recoverable, no archive): %s § %s | flip=%s | "
+                    "conflicting_title=%r | run=%s",
+                    proposal.target_doc, _old_section, cf.get("flip"),
+                    _old_title, proposal.source_run_id,
+                )
+                # Gate-2 MED (audit trail): a hard strip leaves only a transient
+                # WARNING — record the deletion DURABLY in the changelog so the DDD
+                # weekly report surfaces removals (and makes cross-run oscillation
+                # visible) without git archaeology. Body recovery stays git-only (XG).
+                _log_supersede_delete(
+                    proposal, project_dir,
+                    stripped_title=_old_title, stripped_section=_old_section,
+                    stripped_body=next((e.raw_text for e in _matches), ""),
+                )
+
         # Emit the canonical `- [type] **Title** — body (date, run, label)` shape.
         # Normalize (INSERT-ONLY) so the lifecycle engine's _ENTRY_RE can parse/decay/
         # reclaim/retire it — a raw untitled bullet (the pre-run_3e43c7ee format) is
@@ -1358,6 +1443,36 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
         return f"rewrite_partial:{append_status}"
 
     return "retired"
+
+
+def _log_supersede_delete(
+    proposal: CultivationProposal, project_dir: Path, *,
+    stripped_title: str, stripped_section: str, stripped_body: str,
+) -> None:
+    """Durably record an AUTO-SUPERSEDE deletion to the DDD changelog (Gate-2 MED,
+    run_6ac7a760). A hard strip otherwise leaves only a transient WARNING; this
+    makes removals visible in the DDD weekly report and makes cross-run
+    oscillation auditable. Body is recorded truncated for context (full recovery
+    stays git-only per XG). Non-blocking: a logging failure never aborts the apply."""
+    try:
+        changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+        changelog_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "action": "auto-supersede-delete",
+            "target_doc": proposal.target_doc,
+            "stripped_title": stripped_title,
+            "stripped_section": stripped_section,
+            "stripped_body": (stripped_body or "")[:300],
+            "superseded_by": proposal.content[:200],
+            "flip": (proposal.contradiction_flag or {}).get("flip"),
+            "source_run_id": proposal.source_run_id,
+            "recovery": "git-only (no archive, XG-directed)",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(changelog_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("failed to log supersede-delete (non-blocking): %s", e)
 
 
 def log_application(

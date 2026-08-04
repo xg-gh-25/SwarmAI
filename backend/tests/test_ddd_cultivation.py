@@ -2136,3 +2136,244 @@ class TestContradictionDetection:
             (tmp_path / ".artifacts" / "ddd-changelog.jsonl").read_text().strip().splitlines()[-1]
         )
         assert "contradiction_flag" not in entry  # no key when None (no noise)
+
+
+class TestContradictionSupersede:
+    """run_6ac7a760 (XG-directed): a contradiction_flag on an APPEND now makes
+    apply_to_ddd STRIP the old conflicting entry (new supersedes old = clean
+    forgetting). No archive (git recovers), no keep-both, no carve-out."""
+
+    def _proposal(self, *, content, old_title, old_section, target_section="What Worked"):
+        from core.ddd_cultivation import CultivationProposal
+        return CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section=target_section,
+            content=content, source_run_id="run_sup", confidence=0.6,
+            change_type="append",
+            contradiction_flag={"conflicting_title": old_title, "section": old_section,
+                                "flip": ["never", "always"], "shared_topic": "pytest"},
+        )
+
+    def _doc(self, tmp_path, body):
+        (tmp_path / "IMPROVEMENT.md").write_text(body, encoding="utf-8")
+
+    # AC1 + AC2: old stripped, new present, NO archive written
+    def test_supersede_strips_old_keeps_new_no_archive(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n"
+            "- [guideline] **Never wrap pytest in a wall-clock timeout** — old stale rule.\n",
+        )
+        status = apply_to_ddd(
+            self._proposal(
+                content="Always wrap pytest in a wall-clock timeout to prevent hangs",
+                old_title="Never wrap pytest in a wall-clock timeout",
+                old_section="What Worked",
+            ),
+            tmp_path,
+        )
+        assert status in ("applied", "created_section")
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "Never wrap pytest in a wall-clock timeout" not in doc, "old entry must be STRIPPED"
+        assert "Always wrap pytest in a wall-clock timeout" in doc, "new entry must be present"
+        # AC2: no archive file created
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists(), "must NOT archive (git-only recovery)"
+
+    # AC1 FATAL-1 regression: an emoji/curated-PROSE old entry MUST strip
+    # (include_prose=True). Without it, both would persist.
+    def test_supersede_strips_prose_entry(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n"
+            "- 🟡 **Never wrap pytest in a wall-clock timeout** — curated prose bullet.\n",
+        )
+        apply_to_ddd(
+            self._proposal(
+                content="Always wrap pytest in a wall-clock timeout for hang safety",
+                old_title="Never wrap pytest in a wall-clock timeout",
+                old_section="What Worked",
+            ),
+            tmp_path,
+        )
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "curated prose bullet" not in doc, "prose old entry must strip (include_prose=True)"
+        assert "Always wrap pytest in a wall-clock timeout" in doc
+
+    # AC3: same-title sibling in a DIFFERENT section survives; only flagged one stripped
+    def test_supersede_strips_only_flagged_section(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n"
+            "- [guideline] **Never wrap pytest in a wall-clock timeout** — target.\n"
+            "\n## What Failed\n\n"
+            "- [guideline] **Never wrap pytest in a wall-clock timeout** — sibling, survives.\n",
+        )
+        apply_to_ddd(
+            self._proposal(
+                content="Always wrap pytest in a wall-clock timeout now",
+                old_title="Never wrap pytest in a wall-clock timeout",
+                old_section="What Worked",
+            ),
+            tmp_path,
+        )
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "sibling, survives" in doc, "same-title entry in another section MUST survive"
+        assert "target." not in doc, "the flagged (title,section) must be stripped"
+
+    # AC5: idempotent + fail-safe — old already gone → new still lands, no error
+    def test_supersede_idempotent_when_old_absent(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(tmp_path, "## What Worked\n\n- [guideline] **Unrelated entry** — x.\n")
+        status = apply_to_ddd(
+            self._proposal(
+                content="Always wrap pytest in a wall-clock timeout",
+                old_title="Never wrap pytest in a wall-clock timeout",  # not in doc
+                old_section="What Worked",
+            ),
+            tmp_path,
+        )
+        assert status in ("applied", "created_section")
+        # (normalizer may bold a prefix; assert on a durable substring, not exact text)
+        assert "wall-clock" in (tmp_path / "IMPROVEMENT.md").read_text()
+
+    # CRASH regression: malformed flag (missing 'section') must NOT crash — skip strip, append normally
+    def test_malformed_flag_does_not_crash(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd, CultivationProposal
+        self._doc(tmp_path, "## What Worked\n\n- [guideline] **Existing** — x.\n")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="Some new lesson worth keeping around here", source_run_id="run_x",
+            confidence=0.6, change_type="append",
+            contradiction_flag={"conflicting_title": "Existing"},  # missing 'section'
+        )
+        status = apply_to_ddd(p, tmp_path)  # must not raise KeyError
+        assert status in ("applied", "created_section")
+        assert "Some new lesson worth keeping" in (tmp_path / "IMPROVEMENT.md").read_text()
+
+    # AC6: loud WARNING on supersede
+    def test_supersede_logs_warning(self, tmp_path, caplog):
+        import logging
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n- [guideline] **Never wrap pytest in a timeout** — old.\n",
+        )
+        with caplog.at_level(logging.WARNING):
+            apply_to_ddd(
+                self._proposal(
+                    content="Always wrap pytest in a timeout for safety",
+                    old_title="Never wrap pytest in a timeout", old_section="What Worked",
+                ),
+                tmp_path,
+            )
+        assert any("AUTO-SUPERSEDE" in r.message for r in caplog.records), "supersede must log WARNING"
+
+    # No flag → plain append, old-style, nothing stripped
+    def test_no_flag_plain_append(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd, CultivationProposal
+        self._doc(tmp_path, "## What Worked\n\n- [guideline] **Keep me** — x.\n")
+        p = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="A brand new unrelated lesson to append here", source_run_id="run_y",
+            confidence=0.6, change_type="append",
+        )
+        apply_to_ddd(p, tmp_path)
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "Keep me" in doc and "brand new unrelated lesson" in doc
+
+
+class TestSupersedeTiering:
+    """run_6ac7a760 Plan-B (Gate-2): ordinary knowledge auto-strips on a polarity
+    flip; PERMANENT knowledge (keep-class) and AMBIGUOUS (same-title collision)
+    ESCALATE a retire proposal instead of auto-deleting."""
+
+    def _doc(self, tmp_path, body):
+        (tmp_path / "IMPROVEMENT.md").write_text(body, encoding="utf-8")
+
+    def _flag_proposal(self, old_title, old_section, target_section="What Worked"):
+        from core.ddd_cultivation import CultivationProposal
+        return CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section=target_section,
+            content="Always validate untrusted input at the boundary now",
+            source_run_id="run_tier", confidence=0.6, change_type="append",
+            contradiction_flag={"conflicting_title": old_title, "section": old_section,
+                                 "flip": ["never", "always"], "shared_topic": "input"},
+        )
+
+    def _proposals_dir(self, tmp_path):
+        return tmp_path / ".artifacts" / "proposals"
+
+    # PERMANENT: a [principle]-typed entry (keep-class rule 2, type-based, ANY
+    # section) must NOT be auto-stripped even in a safe-append section.
+    def test_keepclass_principle_escalates_not_strips(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n"
+            "- [principle] **Never validate untrusted input at the boundary** — bedrock.\n",
+        )
+        apply_to_ddd(
+            self._flag_proposal("Never validate untrusted input at the boundary",
+                                "What Worked"),
+            tmp_path,
+        )
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "bedrock." in doc, "keep-class principle must NOT be auto-stripped"
+        pd = self._proposals_dir(tmp_path)
+        assert pd.exists() and list(pd.glob("*.json")), "must escalate a retire proposal"
+
+    # AMBIGUOUS: two same-title entries in one section -> escalate, strip neither
+    def test_collision_escalates_not_strips(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n"
+            "- [guideline] **Never trust the cache** — one.\n"
+            "- [guideline] **Never trust the cache** — two.\n",
+        )
+        apply_to_ddd(
+            self._flag_proposal("Never trust the cache", "What Worked"),
+            tmp_path,
+        )
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "one." in doc and "two." in doc, "ambiguous collision must strip NEITHER"
+        pd = self._proposals_dir(tmp_path)
+        assert pd.exists() and list(pd.glob("*.json")), "must escalate instead"
+
+    # ORDINARY: a plain guideline in a safe (non-evergreen) section still auto-strips
+    def test_ordinary_guideline_still_auto_strips(self, tmp_path):
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n- [guideline] **Never validate untrusted input at the boundary** — stale.\n",
+        )
+        apply_to_ddd(
+            self._flag_proposal("Never validate untrusted input at the boundary",
+                                "What Worked"),
+            tmp_path,
+        )
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "stale." not in doc, "ordinary guideline MUST auto-strip (clean forgetting)"
+        assert "validate untrusted input" in doc  # new entry present
+        pd = self._proposals_dir(tmp_path)
+        assert not (pd.exists() and list(pd.glob("*.json"))), "ordinary strip must NOT escalate"
+
+    # Gate-2 MED (audit): an auto-supersede delete is recorded durably in the changelog
+    def test_auto_supersede_delete_is_logged(self, tmp_path):
+        import json as _json
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n- [guideline] **Never trust the cache blindly here** — stale.\n",
+        )
+        apply_to_ddd(
+            self._flag_proposal("Never trust the cache blindly here", "What Worked"),
+            tmp_path,
+        )
+        changelog = tmp_path / ".artifacts" / "ddd-changelog.jsonl"
+        assert changelog.exists(), "auto-supersede must write a durable changelog record"
+        recs = [_json.loads(l) for l in changelog.read_text().splitlines() if l.strip()]
+        dels = [r for r in recs if r.get("action") == "auto-supersede-delete"]
+        assert dels and dels[-1]["stripped_title"] == "Never trust the cache blindly here"
