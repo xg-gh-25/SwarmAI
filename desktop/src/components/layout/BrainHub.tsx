@@ -23,16 +23,15 @@ import {
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
-  ReviewData, ReviewHunk, PendingProposal, DistributionState, DetailHealth,
+  ReviewData, ReviewHunk, PendingProposal, DistributionState,
 } from '../../services/ddd';
+import { DddCard } from './DddCard';
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { getCodeIntelSummary, type CodeIntelSummary } from '../../services/codeIntel';
 
 // ── Visual constants ──────────────────────────────────────────────────────────
-
-const SECTION_ORDER: SectionKey[] = ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 
 const SECTION_NUM: Record<string, string> = {
   identity: '①', knowledge: '②', gates: '③',
@@ -71,8 +70,6 @@ const GIT_DOT: Record<string, string> = {
   untracked: 'var(--color-text-muted)', deleted: '#ef4444', renamed: '#a855f7', conflicting: '#ef4444',
 };
 
-const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
-
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
@@ -103,6 +100,19 @@ export function BrainHub() {
     setSelected(name);
     setTab('brain');
   }, []);
+
+  // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
+  // brain's detail view directly (Brain Home calm-card click). No detail → Gallery,
+  // the default. The overlay is already open by the time this fires (OverlayContext
+  // handles the same event to mount us), so we only need to route the sub-view.
+  useEffect(() => {
+    const onShow = (e: Event) => {
+      const name = (e as CustomEvent<{ brain?: string }>).detail?.brain;
+      if (name) openBrain(name);
+    };
+    window.addEventListener('swarm:show-brain-hub', onShow);
+    return () => window.removeEventListener('swarm:show-brain-hub', onShow);
+  }, [openBrain]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
@@ -175,188 +185,22 @@ function Gallery({ brains, onOpen }: { brains: BrainSummary[] | null; onOpen: (n
   if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
   return (
     <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} data-testid="brainhub-gallery">
-      {brains.map((b) => <BrainCard key={b.name} brain={b} onOpen={onOpen} />)}
+      {brains.map((b) => (
+        <DddCard
+          key={b.name}
+          density="compact"
+          name={b.name}
+          kind={b.kind}
+          sectionsPresent={b.sectionsPresent}
+          lifecycleStage={b.lifecycleStage}
+          health={b.health}
+          onOpen={onOpen}
+        />
+      ))}
     </div>
   );
 }
 
-function BrainCard({ brain, onOpen }: { brain: BrainSummary; onOpen: (n: string) => void }) {
-  const activeStep = LIFECYCLE_STEPS.indexOf(brain.lifecycleStage);
-  return (
-    <button
-      onClick={() => onOpen(brain.name)}
-      data-testid={`brain-card-${brain.name}`}
-      className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors"
-    >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
-        <span className="text-[13px] font-semibold">{brain.name}</span>
-        <span className="ml-auto text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{brain.kind}</span>
-      </div>
-
-      {/* six-section presence bar */}
-      <div className="flex gap-0.5 mb-2" title="six-section presence">
-        {SECTION_ORDER.map((k) => (
-          <span
-            key={k}
-            data-testid={`presence-${brain.name}-${k}`}
-            className={`flex-1 h-1.5 rounded-sm ${brain.sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`}
-          />
-        ))}
-      </div>
-
-      {/* lifecycle progress */}
-      <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
-        {LIFECYCLE_STEPS.map((s, i) => (
-          <span key={s} className={i <= activeStep ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
-            {s}{i < LIFECYCLE_STEPS.length - 1 ? ' ›' : ''}
-          </span>
-        ))}
-      </div>
-
-      {/* 4 live health signals — NO recall-heat number */}
-      <div className="grid grid-cols-2 gap-1 text-[10px]">
-        <Health label="Sinking" value={String(brain.health.sinking)} warn={brain.health.sinking > 0} />
-        <Health label="Pending" value={String(brain.health.pending)} warn={brain.health.pending > 0} />
-        <Health label="Uncommitted" value={brain.health.uncommitted ? 'yes' : 'no'} warn={brain.health.uncommitted} />
-        <Health label="Last change" value={brain.health.lastChangeRelative} />
-      </div>
-    </button>
-  );
-}
-
-function Health({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div className="flex items-center justify-between px-1.5 py-0.5 rounded bg-[var(--color-bg)]">
-      <span className="text-[var(--color-text-faint)]">{label}</span>
-      <span className={warn ? 'text-[#f0a500]' : 'text-[var(--color-text-muted)]'}>{value}</span>
-    </div>
-  );
-}
-
-// ── Detail-view health metrics (design 2026-08-04, §6.3 render hierarchy) ─────
-//
-// Two visual tiers, deliberately distinct so a reader (and a copyist) can tell at
-// a glance "these I ACT on, these EXPLAIN them":
-//   • ACTION tiles (headline): each maps to an owner action (noise→reclaim,
-//     escalation→review, trust→attention). Larger, an action-hint line when live.
-//   • DIAGNOSTICS row (demoted): the 5-dim per-section scores — smaller, muted,
-//     NO action-hint, NO status color. Context, not a call-to-action.
-// recall is SHOWN-but-EXPERIMENTAL (design §4): a chip + NO action-hint (it has no
-// owner action yet). NEVER derives a project trust rollup (backend Gate-1 MAJOR
-// refused one) — the trust tile reports the section DISTRIBUTION, not a verdict.
-
-const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
-
-/** Count sections whose trust is BELOW `high` across the doc→section→level map.
- *  A factual distribution count, NOT a collapsed rollup verdict (Gate-1). */
-function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: number } {
-  if (!trust) return { below: 0, total: 0 };
-  let below = 0;
-  let total = 0;
-  for (const sections of Object.values(trust)) {
-    for (const level of Object.values(sections)) {
-      total += 1;
-      const idx = level ? _TRUST_ORDER.indexOf(level as (typeof _TRUST_ORDER)[number]) : -1;
-      // below `high` = low/moderate (idx 0..1) OR an unknown/null level
-      if (idx < _TRUST_ORDER.indexOf('high')) below += 1;
-    }
-  }
-  return { below, total };
-}
-
-function ActionTile(
-  { label, value, hint, warn, experimental }:
-  { label: string; value: string; hint?: string; warn?: boolean; experimental?: boolean },
-) {
-  return (
-    <div
-      data-testid={`health-tile-${label.toLowerCase()}`}
-      className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-card)] border border-[var(--color-border)] min-w-[92px]"
-    >
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</span>
-        {experimental && (
-          <span
-            data-testid="recall-experimental-chip"
-            title="Benchmark口径 not yet validated against real usage — trend, not a grade"
-            className="text-[8px] px-1 rounded bg-[#3a2f12] text-[#e0b050] uppercase"
-          >
-            exp
-          </span>
-        )}
-      </div>
-      <span className={`text-[15px] font-semibold ${warn ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}`}>{value}</span>
-      {/* action-hint: present ONLY on action tiles with a live action; never on recall */}
-      {hint && <span className="text-[9px] text-[var(--color-text-muted)]">{hint}</span>}
-    </div>
-  );
-}
-
-/** HealthStrip — renders NOTHING when health is absent OR structurally partial
- *  (daemon-skew guard). The type says `noise` is required and the current backend
- *  always sends it, but `health` crosses the API deserialization boundary (O023:
- *  never trust a wire type at runtime) — a pre-deploy/partial daemon could send
- *  `health` present but `noise` missing. Guard on the load-bearing `noise` field
- *  so a partial object degrades to render-nothing, never a TypeError (Gate-2 MED). */
-function HealthStrip({ health }: { health?: DetailHealth }) {
-  if (!health || !health.noise) return null;
-
-  const { below, total } = _trustBelowHigh(health.trust);
-  const trustValue = total === 0 ? '—' : `${below}/${total}`;
-
-  // 5-dim diagnostics row (demoted): flatten doc→section → one muted line each.
-  const diagFlat: { key: string; composite?: number; trust?: string }[] = [];
-  if (health.diagnostics) {
-    for (const [doc, docData] of Object.entries(health.diagnostics)) {
-      const sections = docData?.sections ?? {};
-      for (const [sec, s] of Object.entries(sections)) {
-        diagFlat.push({ key: `${doc}·${sec}`, composite: s?.composite, trust: s?.trust });
-      }
-    }
-  }
-
-  return (
-    <div data-testid="brainhub-healthstrip" className="px-4 pb-3 flex-shrink-0 border-b border-[var(--color-border)]">
-      {/* ── ACTION tiles (headline) ── */}
-      <div className="flex flex-wrap gap-2">
-        <ActionTile
-          label="Noise"
-          value={String(health.noise.reclaimable)}
-          warn={health.noise.reclaimable > 0}
-          hint={health.noise.reclaimable > 0 ? 'reclaim can strip' : undefined}
-        />
-        <ActionTile
-          label="Trust"
-          value={trustValue}
-          warn={below > 0}
-          hint={total === 0 ? 'no scheduled score' : (below > 0 ? 'sections below high' : 'all ≥ high')}
-        />
-        <ActionTile
-          label="Escalation"
-          value={String(health.escalationPending)}
-          warn={health.escalationPending > 0}
-          hint={health.escalationPending > 0 ? 'awaiting review' : undefined}
-        />
-        <ActionTile
-          label="Recall"
-          value={health.recall.value === null ? '—' : String(health.recall.value)}
-          experimental={health.recall.experimental}
-        />
-      </div>
-      {/* ── DIAGNOSTICS row (demoted: smaller, muted, no action-hint, no status color) ── */}
-      {diagFlat.length > 0 && (
-        <div data-testid="health-diagnostics" className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
-          {diagFlat.map((r) => (
-            <span key={r.key} className="text-[9px] text-[var(--color-text-faint)]">
-              {r.key}: {r.composite ?? '?'}{r.trust ? ` (${r.trust})` : ''}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Brain view ─────────────────────────────────────────────────────────────────
 
@@ -459,9 +303,15 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
         )}
       </div>
 
-      {/* Detail-view health metrics (design 2026-08-04) — renders nothing on an
-          old daemon that omits health (daemon-skew guard inside HealthStrip). */}
-      <HealthStrip health={detail.health} />
+      {/* Detail-view health metrics (design 2026-08-04) — unified DddCard in full
+          density, metrics-only (BrainView keeps its own header+nav above/below).
+          Renders nothing on an old daemon that omits health OR noise (density-scoped
+          daemon-skew guard inside DddCard/MetricTiles, O023). */}
+      {detail.health?.noise && (
+        <div className="px-4 pb-3 flex-shrink-0" data-testid="brainhub-healthstrip">
+          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health} />
+        </div>
+      )}
 
       {/* #8 — 2-pane: left section-nav + right content pane (one section at a time) */}
       <div className="flex-1 flex min-h-0">

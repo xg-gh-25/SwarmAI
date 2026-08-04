@@ -1,39 +1,35 @@
 /**
- * DddCard.tsx — the unified, density-driven DDD card (run_6924b463, cycle 2).
+ * DddCard.tsx — the unified, density-driven DDD card (run_6924b463, cycles 2-3).
  *
- * SSOT for rendering ONE brain's state at two densities, replacing the old split
- * between BrainHub's `BrainCard` (gallery) and `HealthStrip` (detail). Cycle 3
- * migrates BrainHub's call sites onto this component; the markup here is cloned
- * verbatim from the shipped BrainHub primitives so that migration keeps the
- * existing `presence-*` / `health-tile-*` / `recall-experimental-chip` testids
- * and visual shape green (R27 contract-preserving).
+ * SSOT for rendering ONE brain's state, replacing BrainHub's old split between
+ * `BrainCard` (gallery) and `HealthStrip`/`ActionTile` (detail). Three consumers,
+ * TWO densities:
+ *   • compact — clickable gallery / Home-calm card: name·kind header + six-section
+ *     presence bar + lifecycle progress + 4 CHEAP health signals (from BrainSummary).
+ *   • full    — a static, metrics-bearing card whose SUMMARY decorations are
+ *     CONDITIONAL, because its two consumers carry different data:
+ *       - detail view (BrainView): the endpoint returns BrainDetail, which has NO
+ *         lifecycleStage / cheap-health / clean sectionsPresent — only DetailHealth.
+ *         So detail passes ONLY `metrics` → renders bare tiles+diagnostics (a
+ *         faithful HealthStrip replacement; BrainView keeps its own header+nav).
+ *       - Home hero: has BOTH a BrainSummary and the hero's BrainDetail → passes
+ *         everything → renders the rich card (header+presence+lifecycle+cheap+tiles).
+ *     Each `full` sub-block renders iff its data is present — never crashes, never
+ *     shows a header/presence for a consumer that lacks the data.
  *
- * DENSITY (the one axis that varies):
- *   • compact — a clickable gallery card: six-section presence bar + lifecycle
- *     progress + the 4 CHEAP health signals (sinking/pending/uncommitted/
- *     lastChange, all from BrainSummary.health). Carries NO expensive metrics.
- *   • full    — a static detail header: presence bar + lifecycle + the 4
- *     EXPENSIVE action tiles (noise/trust/escalation/recall) PLUS the demoted
- *     per-section diagnostics row — all from DetailHealth (HealthStrip parity).
- *
- * GATE-1 CORRECTION (density-aware guard — the load-bearing invariant):
- *   A naïve unification would put a single `if (!health?.noise) return null`
- *   whole-card guard (lifted from HealthStrip). That is WRONG here: a compact
- *   card legitimately has NO `noise` (BrainSummary omits it), so the guard would
- *   blank EVERY gallery card. The guard is scoped per-density:
- *     - compact: NEVER guards on metrics — always renders.
- *     - full:    guards ONLY the metric-tiles sub-block on `metrics?.noise`
- *                (O023 daemon-skew: `metrics` crosses the API boundary; a
- *                pre-deploy/partial daemon may send it present-but-noise-missing),
- *                so partial payloads degrade the TILES to render-nothing WITHOUT
- *                blanking the card body (presence/lifecycle still render).
+ * GATE-1 CORRECTION (the load-bearing invariant): the guard is density-scoped, NOT
+ * a whole-card `if(!health?.noise) return null`. compact has no `noise` and MUST
+ * always render (a blank gallery card is the bug the skeptic caught). full guards
+ * ONLY the metric-tiles sub-block on `metrics?.noise` (O023 daemon-skew: `metrics`
+ * crosses the API boundary; a partial daemon may send it present-but-noise-missing),
+ * so a partial payload degrades the TILES to nothing WITHOUT blanking the card body.
  */
 import type { BrainHealth, DetailHealth, SectionKey } from '../../services/ddd';
 
-// ── Shared constants (cloned from BrainHub SSOT — cycle 3 will import from here) ──
+// ── Shared constants (SSOT — the old BrainHub local copies are gone; DddCard owns them) ──
 const SECTION_ORDER: SectionKey[] = ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
-type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
+export type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
 
 const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
 
@@ -57,60 +53,83 @@ function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: 
 interface CommonProps {
   name: string;
   kind: string;
-  sectionsPresent: Record<SectionKey, boolean>;
-  lifecycleStage: LifecycleStage;
 }
 interface CompactProps extends CommonProps {
   density: 'compact';
+  sectionsPresent: Record<SectionKey, boolean>;
+  lifecycleStage: LifecycleStage;
   health: BrainHealth;          // cheap signals, always present in a gallery summary
   onOpen: (name: string) => void;
 }
 interface FullProps extends CommonProps {
   density: 'full';
-  metrics?: DetailHealth;       // expensive; OPTIONAL (daemon-skew) — guarded below
+  /** summary decorations — present on the Home hero, ABSENT on the bare detail
+   *  view (BrainDetail has no lifecycle/cheap-health). Header+presence+lifecycle+
+   *  cheap-health render iff their data is provided. */
+  sectionsPresent?: Record<SectionKey, boolean>;
+  lifecycleStage?: LifecycleStage;
+  health?: BrainHealth;
+  metrics?: DetailHealth;       // expensive tiles; OPTIONAL (daemon-skew) — guarded
 }
 type DddCardProps = CompactProps | FullProps;
 
-export function DddCard(props: DddCardProps) {
-  const { name, kind, sectionsPresent, lifecycleStage } = props;
+/** name·kind header (compact always; full only when it's a hero i.e. has summary). */
+function CardHeader({ name, kind }: { name: string; kind: string }) {
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
+      <span className="text-[13px] font-semibold">{name}</span>
+      <span className="ml-auto text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+    </div>
+  );
+}
+
+function PresenceBar({ name, sectionsPresent }: { name: string; sectionsPresent: Record<SectionKey, boolean> }) {
+  return (
+    <div className="flex gap-0.5 mb-2" title="six-section presence">
+      {SECTION_ORDER.map((k) => (
+        <span
+          key={k}
+          data-testid={`presence-${name}-${k}`}
+          className={`flex-1 h-1.5 rounded-sm ${sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function LifecycleBar({ lifecycleStage }: { lifecycleStage: LifecycleStage }) {
   const activeStep = LIFECYCLE_STEPS.indexOf(lifecycleStage);
+  return (
+    <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
+      {LIFECYCLE_STEPS.map((s, i) => (
+        <span key={s} className={i <= activeStep ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
+          {s}{i < LIFECYCLE_STEPS.length - 1 ? ' ›' : ''}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function DddCard(props: DddCardProps) {
+  const { name, kind } = props;
+
+  // Summary decorations render iff their data is present: always for compact;
+  // for full only when it's a hero (detail view omits lifecycle/cheap-health).
+  const { sectionsPresent, lifecycleStage, health } = props;
 
   const body = (
     <>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
-        <span className="text-[13px] font-semibold">{name}</span>
-        <span className="ml-auto text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
-      </div>
-
-      {/* six-section presence bar */}
-      <div className="flex gap-0.5 mb-2" title="six-section presence">
-        {SECTION_ORDER.map((k) => (
-          <span
-            key={k}
-            data-testid={`presence-${name}-${k}`}
-            className={`flex-1 h-1.5 rounded-sm ${sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`}
-          />
-        ))}
-      </div>
-
-      {/* lifecycle progress */}
-      <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
-        {LIFECYCLE_STEPS.map((s, i) => (
-          <span key={s} className={i <= activeStep ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
-            {s}{i < LIFECYCLE_STEPS.length - 1 ? ' ›' : ''}
-          </span>
-        ))}
-      </div>
-
-      {props.density === 'compact'
-        ? <CheapHealth health={props.health} />
-        : <MetricTiles metrics={props.metrics} />}
+      {sectionsPresent != null && <CardHeader name={name} kind={kind} />}
+      {sectionsPresent != null && <PresenceBar name={name} sectionsPresent={sectionsPresent} />}
+      {lifecycleStage != null && <LifecycleBar lifecycleStage={lifecycleStage} />}
+      {health != null && <CheapHealth health={health} />}
+      {props.density === 'full' && <MetricTiles metrics={props.metrics} />}
     </>
   );
 
-  // compact = clickable open-button; full = static header. Guard is density-scoped
-  // in the sub-blocks above — the card body ALWAYS renders (Gate-1 invariant).
+  // compact = clickable open-button; full = static. The guard is density-scoped in
+  // the sub-blocks above — the card body ALWAYS renders (Gate-1 invariant).
   if (props.density === 'compact') {
     const onOpen = props.onOpen;
     return (
@@ -130,7 +149,7 @@ export function DddCard(props: DddCardProps) {
   );
 }
 
-/** 4 cheap health signals (compact) — cloned from BrainHub `Health` grid. */
+/** 4 cheap health signals — cloned from BrainHub `Health` grid. */
 function CheapHealth({ health }: { health: BrainHealth }) {
   return (
     <div className="grid grid-cols-2 gap-1 text-[10px]">
@@ -151,18 +170,14 @@ function Cheap({ testid, label, value, warn }: { testid: string; label: string; 
   );
 }
 
-/** 4 expensive metric tiles (full) — cloned from BrainHub `HealthStrip` action
- *  tiles. Density-scoped guard: `metrics?.noise` missing → render nothing (the
- *  card body is unaffected — that's the Gate-1 correction). */
+/** 4 expensive action tiles + demoted diagnostics row — cloned from BrainHub
+ *  `HealthStrip`. Density-scoped guard: `metrics?.noise` missing → render nothing
+ *  (the card body is unaffected — that's the Gate-1 correction). */
 function MetricTiles({ metrics }: { metrics?: DetailHealth }) {
   if (!metrics || !metrics.noise) return null;
   const { below, total } = _trustBelowHigh(metrics.trust);
   const trustValue = total === 0 ? '—' : `${below}/${total}`;
 
-  // 5-dim diagnostics row (demoted): flatten doc→section → one muted line each.
-  // Cloned verbatim from HealthStrip (BrainHub.tsx) so the detail view keeps ALL
-  // its DetailHealth signal after cycle-3 migration — dropping it would be silent
-  // information loss (the per-section composite/trust scores).
   const diagFlat: { key: string; composite?: number; trust?: string }[] = [];
   if (metrics.diagnostics) {
     for (const [doc, docData] of Object.entries(metrics.diagnostics)) {

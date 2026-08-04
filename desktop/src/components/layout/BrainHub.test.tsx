@@ -163,8 +163,8 @@ beforeEach(() => {
 describe('BrainHub — Gallery (AC3)', () => {
   it('renders one card per real brain', async () => {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    expect(screen.getByTestId('brain-card-AIDLC')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy();
   });
 
   it('shows six-section presence bar (present vs absent styled differently)', async () => {
@@ -177,8 +177,8 @@ describe('BrainHub — Gallery (AC3)', () => {
 
   it('shows the 4 live health signals', async () => {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    const card = screen.getByTestId('brain-card-SwarmAI');
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    const card = screen.getByTestId('dddcard-SwarmAI');
     expect(card.textContent).toContain('Sinking');
     expect(card.textContent).toContain('Pending');
     expect(card.textContent).toContain('Uncommitted');
@@ -187,11 +187,31 @@ describe('BrainHub — Gallery (AC3)', () => {
 
   it('renders NO recall-heat / crown / ref_count number anywhere (R30#4)', async () => {
     const { container } = render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     const html = container.innerHTML.toLowerCase();
     for (const banned of ['ref_count', 'refcount', 'recall', 'crown', 'heat', '×']) {
       expect(html).not.toContain(banned);
     }
+  });
+
+  it('deep-link: swarm:show-brain-hub with detail.brain opens THAT brain (Brain Home calm-click)', async () => {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    // starts on Gallery
+    expect(screen.queryByTestId('brainhub-brain')).toBeNull();
+    // fire the deep-link event carrying a target brain
+    window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: 'AIDLC' } }));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    // routed to the AIDLC brain view (tab label carries the selected name)
+    expect(screen.getByTestId('brainhub-tab-brain').textContent).toContain('AIDLC');
+  });
+
+  it('deep-link with NO detail.brain leaves Gallery as the default view', async () => {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'));
+    // no target → stays on Gallery, does not jump to a brain view
+    expect(screen.queryByTestId('brainhub-brain')).toBeNull();
   });
 });
 
@@ -202,8 +222,8 @@ describe('BrainHub — Brain view (AC4)', () => {
   // (default active section = the FIRST section returned by the backend).
   async function openBrain() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
   async function openSection(key: string) {
@@ -271,8 +291,8 @@ describe('BrainHub — Brain view (AC4)', () => {
 describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robustness)', () => {
   async function openBrain() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
@@ -322,8 +342,8 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
     }]);
     mockGetBrainDetail.mockResolvedValue(BARE);
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SomeoneElsesProject')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SomeoneElsesProject'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SomeoneElsesProject')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SomeoneElsesProject'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
     // all six nav items present even though 5 sections are empty
     for (const key of SECTION_KEYS) {
@@ -365,8 +385,8 @@ describe('BrainHub — Brain view 2-pane + CodeGraph (Run 4, #8/#10 + AC4 robust
 describe('BrainHub — Assets group in left nav (Specs + Code Intelligence)', () => {
   async function openBrain() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
@@ -438,8 +458,8 @@ describe('BrainHub — Assets group in left nav (Specs + Code Intelligence)', ()
 describe('BrainHub — Review tab (Run 2, AC5)', () => {
   async function openReview() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));         // selects + opens Brain
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));         // selects + opens Brain
     await waitFor(() => expect(screen.getByTestId('brainhub-tab-review')).toBeTruthy());
     fireEvent.click(screen.getByTestId('brainhub-tab-review'));
     await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
@@ -552,8 +572,8 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     // pitfall-first arrival
     mockGetBrainDetail.mockResolvedValue(mkDetail(['pitfall', 'guideline']));
     const { unmount } = render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
     fireEvent.click(screen.getByTestId('nav-item-knowledge'));
     await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
@@ -562,8 +582,8 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     // guideline-first arrival → must produce the SAME segment order
     mockGetBrainDetail.mockResolvedValue(mkDetail(['guideline', 'pitfall']));
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('nav-item-knowledge')).toBeTruthy());
     fireEvent.click(screen.getByTestId('nav-item-knowledge'));
     await waitFor(() => expect(screen.getByTestId('typebar-guideline')).toBeTruthy());
@@ -590,8 +610,8 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
 describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
   async function openDistribute() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
     fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
     await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
@@ -644,8 +664,8 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
 describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
   async function openBrain() {
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
@@ -697,8 +717,8 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     const { health: _omit, ...noHealth } = DETAIL;
     mockGetBrainDetail.mockResolvedValueOnce(noHealth);
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
     expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });
@@ -708,8 +728,8 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     // field absent — a wire-type violation the runtime must survive, not TypeError.
     mockGetBrainDetail.mockResolvedValueOnce({ ...DETAIL, health: {} as BrainDetail['health'] });
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
     expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });

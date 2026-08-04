@@ -72,54 +72,55 @@ describe('DddCard — compact density (gallery)', () => {
   });
 });
 
-describe('DddCard — full density (detail)', () => {
-  it('renders the 4 expensive metric tiles when metrics.noise is present', () => {
-    render(
-      <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" metrics={METRICS} />,
-    );
+describe('DddCard — full density, DETAIL consumer (metrics-only, no summary data)', () => {
+  // BrainView passes ONLY metrics (BrainDetail has no lifecycle/cheap-health).
+  it('renders the 4 tiles + diagnostics, and NO summary decorations', () => {
+    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={METRICS} />);
     expect(screen.getByTestId('health-tile-noise')).toBeTruthy();
     expect(screen.getByTestId('health-tile-trust')).toBeTruthy();
     expect(screen.getByTestId('health-tile-escalation')).toBeTruthy();
     expect(screen.getByTestId('health-tile-recall')).toBeTruthy();
-    // recall is experimental → chip present
     expect(screen.getByTestId('recall-experimental-chip')).toBeTruthy();
-    // full density is NOT a clickable open-button
-    expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
-    // HealthStrip parity: the demoted diagnostics row is NOT dropped (finding #4)
+    // HealthStrip parity: diagnostics row present
     const diag = screen.getByTestId('health-diagnostics');
     expect(diag.textContent).toContain('PRODUCT.md·identity');
     expect(diag.textContent).toContain('88');
+    // detail consumer carries no summary → NO presence bar / lifecycle, NOT a button
+    expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
+    expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
   });
 
   it('diagnostics row is omitted when diagnostics is null (no scheduled score)', () => {
-    render(
-      <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW"
-        metrics={{ ...METRICS, diagnostics: null }} />,
-    );
+    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={{ ...METRICS, diagnostics: null }} />);
     expect(screen.getByTestId('health-tile-noise')).toBeTruthy();
     expect(screen.queryByTestId('health-diagnostics')).toBeNull();
   });
 
-  it('GATE-1 GUARD: metrics undefined → tiles block renders nothing, card still renders', () => {
-    render(
-      <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" />,
-    );
-    // tiles gone (daemon-skew guard)…
+  it('GATE-1 GUARD: metrics undefined → tiles render nothing, card container still renders', () => {
+    render(<DddCard density="full" name="SwarmAI" kind="knowledge" />);
     expect(screen.queryByTestId('health-tile-noise')).toBeNull();
-    // …but the card body (presence) still renders — NOT blanked
-    expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
+    expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy(); // container, not blanked
   });
 
   it('GATE-1 GUARD: metrics present but noise missing (partial daemon payload) → no tiles, no crash', () => {
     const partial = { ...METRICS, noise: undefined } as unknown as DetailHealth;
+    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={partial} />);
+    expect(screen.queryByTestId('health-tile-noise')).toBeNull();
+    expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy();
+  });
+});
+
+describe('DddCard — full density, HOME-HERO consumer (summary + metrics)', () => {
+  // Home hero passes BOTH summary and metrics → the rich card.
+  it('renders header + presence + lifecycle + cheap health + metric tiles together', () => {
     render(
       <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" metrics={partial} />,
+        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" health={CHEAP} metrics={METRICS} />,
     );
-    expect(screen.queryByTestId('health-tile-noise')).toBeNull();
-    expect(screen.getByTestId('presence-SwarmAI-identity')).toBeTruthy();
+    expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
+    expect(screen.getByTestId('dddcard-cheap-sinking')).toBeTruthy();
+    expect(screen.getByTestId('health-tile-noise')).toBeTruthy();
+    // hero is still static, not a clickable open-button
+    expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
   });
 });

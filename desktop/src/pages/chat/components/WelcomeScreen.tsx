@@ -26,6 +26,7 @@ import {
   StocksSection,
   SwarmOutputSection,
 } from './briefing';
+import { BrainHomeView } from './BrainHomeView';
 
 // ---------------------------------------------------------------------------
 // Focus Item (kept inline — only used here)
@@ -230,6 +231,15 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
       >
         Welcome to SwarmAI
       </h1>
+
+      {/* Durable Brain Home layer (design 2026-08-04) — an INDEPENDENT read from the
+          session-briefing below: an empty/failed briefing must not blank the brains,
+          and an empty/failed brain read must not blank the briefing. Renders nothing
+          on zero brains / read failure (AC5). */}
+      <BrainHomeView
+        onOpenHub={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))}
+        onOpenBrain={(name) => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: name } }))}
+      />
 
       {/* Briefing content */}
       {!loaded ? null : hasAnyBriefing ? (
