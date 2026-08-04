@@ -889,11 +889,13 @@ async def get_workspace_file(
         )
 
     try:
-        content = target.read_text(encoding="utf-8")
+        # Offload the blocking read off the event loop (a large file blocks all
+        # concurrent HTTP otherwise — the file's established pattern, cf :632/:682).
+        content = await asyncio.to_thread(target.read_text, encoding="utf-8")
     except UnicodeDecodeError:
         # Binary fallback: base64 encode
         logger.info("Binary file fallback for %s (size=%d, not valid UTF-8)", path, file_size)
-        raw = target.read_bytes()
+        raw = await asyncio.to_thread(target.read_bytes)
         mime_type, _ = mimetypes.guess_type(target.name)
         if mime_type is None:
             mime_type = "application/octet-stream"
@@ -1191,7 +1193,9 @@ async def get_workspace_file_diff(
         return {"path": path, "hunks": [], "summary": "", "raw_diff": ""}
 
     try:
-        result = subprocess.run(
+        # Offload the blocking git subprocess off the event loop (cf :632/:682).
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["git", "diff", "--unified=3", "--", git_relative],
             cwd=str(git_root),
             capture_output=True,
@@ -1205,9 +1209,9 @@ async def get_workspace_file_diff(
 
     hunks = parse_unified_diff(raw_diff)
 
-    # Read current file content for section-aware summary
+    # Read current file content for section-aware summary (offloaded — blocking I/O)
     try:
-        file_content = target.read_text(encoding="utf-8")
+        file_content = await asyncio.to_thread(target.read_text, encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         file_content = ""
 
@@ -1290,7 +1294,11 @@ async def get_workspace_file_committed(
         return {"content": "", "in_head": None}  # can't relativize → undetermined
 
     try:
-        result = subprocess.run(
+        # Offload the blocking git subprocess off the event loop — a burst of N
+        # committed-fetches (the rail badges every written file) would otherwise
+        # serialize N × ~79ms on the loop, stalling all concurrent HTTP (cf :632/:682).
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["git", "show", f"HEAD:{git_relative}"],
             cwd=str(git_root),
             capture_output=True,
