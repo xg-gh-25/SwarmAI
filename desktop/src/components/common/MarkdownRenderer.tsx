@@ -498,17 +498,40 @@ const CodeBlock = memo(function CodeBlock({
   const codeRef = useRef<HTMLElement>(null);
   const isMermaid = language === 'mermaid';
 
-  // Apply syntax highlighting (only for non-mermaid code blocks)
+  // Apply syntax highlighting (only for non-mermaid code blocks) — DEFERRED to
+  // after first paint. hljs.highlightElement is a synchronous, per-code-block DOM
+  // walk; running it inside a plain mount-effect makes it part of the first-paint
+  // critical path, so opening a long session with many code blocks blocks the
+  // visible screen behind N synchronous highlight passes. Highlighting is
+  // COLOR-ONLY (adds <span> class markup, does not change layout/height), so
+  // deferring it to idle cannot shift scroll position or move the re-pin — the
+  // code block paints immediately as plain text and gains color a frame later.
+  // requestIdleCallback runs it off the critical path; a setTimeout(0) fallback
+  // covers environments without rIC (jsdom/older Safari). The scheduled handle is
+  // cancelled on re-run/unmount so a fast content change never double-highlights
+  // or fires against a torn-down node.
   useEffect(() => {
-    if (!isMermaid && codeRef.current && language) {
-      // Reset previous highlighting
-      codeRef.current.removeAttribute('data-highlighted');
+    if (isMermaid || !language) return;
+    const run = () => {
+      const el = codeRef.current;
+      if (!el) return;
+      el.removeAttribute('data-highlighted'); // reset previous highlighting
       try {
-        hljs.highlightElement(codeRef.current);
+        hljs.highlightElement(el);
       } catch (err) {
         console.error('Highlight error:', err);
       }
+    };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (h: number) => void;
+    });
+    if (typeof ric.requestIdleCallback === 'function') {
+      const handle = ric.requestIdleCallback(run, { timeout: 500 });
+      return () => ric.cancelIdleCallback?.(handle);
     }
+    const t = setTimeout(run, 0);
+    return () => clearTimeout(t);
   }, [children, language, isMermaid]);
 
   // Render mermaid diagram
