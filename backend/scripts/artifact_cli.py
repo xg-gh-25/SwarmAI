@@ -1536,6 +1536,88 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 }))
                 return
 
+            # ── Local-PR Surface Gate (run_608a6217, AC4 — BLOCKING) ──
+            # If this run COMMITTED source (run.json.commits) AND those committed
+            # files intersect THIS run's files_touched (run-scoped — F3, so a
+            # sibling session's commits on shared main never false-block us), the
+            # source changes MUST have been surfaced to Canvas as the aggregated
+            # LOCAL_PR at COMPLETE. We enforce the agent RECORDED that surface
+            # (deliver.local_pr_surfaced=true).
+            #
+            # HONEST SCOPE — this is SELF-ATTESTATION, not verification: the CLI
+            # subprocess cannot observe whether the frontend actually dispatched
+            # swarm:open-file. The flag is agent-set. It is a defense against
+            # SILENTLY skipping the surface step, not proof Canvas opened. A run
+            # with NO run-scoped source commits (knowledge/docs-only, OR commits
+            # that are all sibling-session files) is NOT gated (no false-block).
+            _commits = run_state.get("commits") or []
+            _committed_files: set[str] = set()
+            for _c in _commits:
+                if isinstance(_c, dict):
+                    for _f in _c.get("files", []) or []:
+                        _committed_files.add(_f)
+            _run_touched = set(run_state.get("files_touched") or [])
+            # Run-scoped source = committed files that THIS run declared it touched.
+            # Match a repo-relative commit path ("backend/foo.py") against a
+            # files_touched entry regardless of absolute/relative recording, but
+            # require a DIRECTORY-anchored suffix (not a bare basename) so unrelated
+            # files that merely share a basename ("a/config.py" vs "b/config.py")
+            # never collide (Gate-2 LOW 1). A path with no "/" (bare basename in
+            # files_touched) only matches an identical bare basename or an exact
+            # full-path equality — never a deep path by basename alone.
+            def _tail_match(a: set[str], b: set[str]) -> bool:
+                for x in a:
+                    for y in b:
+                        if x == y:
+                            return True
+                        # dir-anchored: the shorter must be a trailing PATH segment
+                        # of the longer (both sides carry the separator), so
+                        # "sub/foo.py" matches "/abs/sub/foo.py" but "foo.py" does
+                        # NOT match "sub/foo.py".
+                        if "/" in x and y.endswith("/" + x):
+                            return True
+                        if "/" in y and x.endswith("/" + y):
+                            return True
+                return False
+            _run_scoped_source = bool(_committed_files) and _tail_match(_committed_files, _run_touched)
+            if _run_scoped_source:
+                # Consider BOTH the persisted deliver record AND an incoming
+                # --stage-json in THIS same call (Gate-2 MEDIUM 1): the stage_json
+                # write is applied later (below), so without this a single
+                # `run-update --status completed --stage-json '{deliver...
+                # local_pr_surfaced:true}'` would read the STALE record and
+                # false-block. Merge the incoming deliver ack into the gate's view.
+                _deliver = next(
+                    (s for s in run_state.get("stages", [])
+                     if s.get("stage", s.get("name", "")) == "deliver"
+                     and s.get("status") in ("completed", "done")),
+                    None,
+                )
+                _surfaced = bool(_deliver and _deliver.get("local_pr_surfaced"))
+                if not _surfaced and getattr(args, "stage_json", None):
+                    try:
+                        _incoming = json.loads(args.stage_json)
+                        if (_incoming.get("stage", _incoming.get("name")) == "deliver"
+                                and _incoming.get("local_pr_surfaced")):
+                            _surfaced = True
+                    except (ValueError, TypeError):
+                        pass
+                if not _surfaced:
+                    print(json.dumps({
+                        "error": "Cannot mark completed: this run committed source "
+                                 "changes but the aggregated LOCAL_PR was not surfaced "
+                                 "to Canvas. At COMPLETE you MUST open it via "
+                                 "`ui_action open-canvas-file` with the run-scoped path "
+                                 f".artifacts/runs/{args.run_id}/LOCAL_PR.md, then record "
+                                 "it on the deliver stage.",
+                        "pipeline_id": args.run_id,
+                        "fix": 'run-update --stage-json \'{"stage":"deliver",'
+                               '"status":"completed","local_pr_surfaced":true,'
+                               '"stage_doc_consumed":true}\'',
+                        "committed_source_files": sorted(_committed_files),
+                    }))
+                    return
+
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
             _try_generate_metrics(args.project, args.run_id, run_state, reg)
@@ -1712,6 +1794,25 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             pass  # Budget calculation failure should never block stage update
 
     print(json.dumps(result))
+
+
+def cmd_run_surface_changes(args, reg: ArtifactRegistry) -> None:
+    """Read-only git-based COMPLETE sweep (run_608a6217).
+
+    Stands on GIT — the author-agnostic change truth. `git status` on the SwarmWS
+    tree + every bound source worktree sees main-agent / sub-agent / CLI-subprocess /
+    post-session-hook writes ALIKE (unlike process-tracing, which the SDK's sidechain
+    filtering makes blind to sub-agent writes). Classifies every changed path via
+    needs_human_review and prints the four buckets as JSON:
+      {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
+    The COMPLETE step surfaces content+knowledge to Canvas (file_changed) and
+    aggregates source into the LOCAL_PR. Never mutates any tree.
+    """
+    from core.run_surface_changes import sweep_run_changes
+
+    ws_root = _get_workspace()
+    buckets = sweep_run_changes(swarmws_root=ws_root)
+    print(json.dumps(buckets.as_dict()))
 
 
 def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
@@ -4238,6 +4339,11 @@ def main() -> None:
     p_run_commit.add_argument("--run-id", required=True, help="Pipeline run ID")
     p_run_commit.add_argument("--force", action="store_true", help="Commit even if push_ready gate hasn't passed")
 
+    # run-surface-changes (read-only git sweep → content/knowledge/source/process buckets)
+    p_run_surface = sub.add_parser("run-surface-changes", help="Git-based COMPLETE sweep: classify this run's changed files (SwarmWS + bound repos) into surface buckets")
+    p_run_surface.add_argument("--project", required=False, help="(optional) informational only — the sweep spans all trees")
+    p_run_surface.add_argument("--run-id", required=False, help="(optional) informational only")
+
     # run-checkpoint
     p_run_cp = sub.add_parser("run-checkpoint", help="Checkpoint: pause + artifact + Radar todo")
     p_run_cp.add_argument("--project", required=True)
@@ -4374,6 +4480,7 @@ def main() -> None:
         "run-update": cmd_run_update,
         "run-get": cmd_run_get,
         "run-commit": cmd_run_commit,
+        "run-surface-changes": cmd_run_surface_changes,
         "run-checkpoint": cmd_run_checkpoint,
         "run-history": cmd_run_history,
         "run-budget": cmd_run_budget,

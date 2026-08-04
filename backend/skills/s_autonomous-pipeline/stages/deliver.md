@@ -1051,19 +1051,51 @@ push_ready or if `files_touched` is empty, and WARNS (listing them) if the worki
 tree has changes this run didn't track — so a forgotten record surfaces loudly
 instead of silently committing the wrong set.
 
-**Local PR (run_dcce7023) — surface it EXPLICITLY, it does NOT auto-pop.** When there
-are source-repo commits, `run-commit` also writes a `LOCAL_PR.md` (TL;DR + this-run
-commits + files-changed + REPORT link + PUSH-READY state) and returns its path as
-`local_pr` in the JSON output. Because the pipeline runs source changes as `kind=source`
-(deliberately NOT per-file popped, XG: 真实 repo 改动中途不 display,收尾聚成 PR),
-this aggregate is the review home for them — but it is written by THIS CLI subprocess,
-so no `file_changed` event auto-fires for it (and it lives under `.artifacts/` = a
-`process` path). **The agent MUST surface it as an explicit COMPLETE-stage action:**
-read the `local_pr` path from the JSON, present the LOCAL_PR.md contents **inline in the
-chat** (the visible channel, STEERING #13), and open the Canvas panel via the existing
-`ui_action open-canvas`. (There is intentionally no `open-file` action — host-path
-infoleak, `ui_actions.py`; the agent presents the content itself, it does not hand the
-UI a host path.)
+**COMPLETE-stage Canvas review (run_608a6217) — stand on GIT, two channels.** At
+COMPLETE the agent surfaces "what this run changed" to Canvas. The change truth is
+**git**, not the process that wrote each file — `run-surface-changes` runs `git status`
+on the SwarmWS tree + every bound source worktree and classifies each changed path via
+`needs_human_review`, so it sees main-agent / sub-agent / CLI / hook writes ALIKE (the
+SDK filters sub-agent sidechain messages, so process-tracing is structurally blind to
+them — this is why git, not emit-coverage). Two channels:
+
+```bash
+python backend/scripts/artifact_cli.py run-surface-changes
+# → {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
+```
+
+1. **content + knowledge (DDD / design docs / MEMORY / KNOWLEDGE)** — the "normal
+   workflow, surface if present" default. For each, emit its surface so it pops to
+   Canvas (these are workspace-relative paths — hand each to `ui_action open-canvas-file`
+   with its path, OR they auto-pop if written live during the turn). Do NOT aggregate
+   these into the PR — they go the normal route (XG: DDD/memory/knowledge 变动 走正常
+   workflow,有就 trigger).
+2. **source (code)** — the ONE special case: NOT popped per-file mid-run, aggregated
+   into ONE `LOCAL_PR.md`. When there are source-repo commits, `run-commit` writes it
+   (TL;DR + this-run commits + files-changed + REPORT link + PUSH-READY state) and
+   returns `local_pr` in its JSON. **Surface it EXPLICITLY** — it does NOT auto-pop (it's
+   written by a CLI subprocess under `.artifacts/` = a `process` path, so no
+   `file_changed` fires). Open it in Canvas with the run-scoped **workspace-relative**
+   path (NOT the short `.artifacts/…` form — that misses the resolver; use the full
+   `Projects/<project>/…` form):
+
+   ```
+   ui_action  cmd=open-canvas-file  path=Projects/<project>/.artifacts/runs/<run_id>/LOCAL_PR.md
+   ```
+
+   `open-canvas-file` rides the generic workspace-scoped `swarm:open-file` resolver
+   (rejects abs/host paths + `..`; the agent hands a workspace-relative path, never a
+   host path — that's why the raw `open-file` stays excluded). Then present the
+   LOCAL_PR.md contents **inline in the chat** too (the visible channel, STEERING #13).
+
+**MANDATORY + gated:** record the surface on the deliver stage —
+`run-update --stage-json '{"stage":"deliver","status":"completed","local_pr_surfaced":true,...}'`.
+The completion gate (`run-update --status completed`) BLOCKS if this run committed
+run-scoped source (commits ∩ files_touched) but `local_pr_surfaced` is not set — so the
+source PR can't be silently skipped. (Honest scope: this is self-attestation — the CLI
+can't observe the frontend dispatch; the flag proves the agent RAN the surface step, not
+that Canvas rendered. A knowledge/docs-only run, or one whose commits are all a sibling
+session's files, is NOT gated — no false-block.)
 
 **Why this boundary exists:**
 - Local commit is safe + reversible; push is a deployment decision (user controls

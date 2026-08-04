@@ -18,6 +18,34 @@ INSTRUCTIONS.md Step 6 — read both.
 
 ---
 
+## Step 0: Surface this run's changes to Canvas (MANDATORY — before the summary)
+
+Stand on GIT — surface WHAT THIS RUN CHANGED to the Canvas review panel. Do this
+BEFORE the completion summary box (the summary references it). Full behavior +
+rationale in `stages/deliver.md` § "COMPLETE-stage Canvas review"; the sequence:
+
+```bash
+python backend/scripts/artifact_cli.py run-surface-changes
+# → {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
+```
+
+1. **content + knowledge** (DDD / design docs / MEMORY / KNOWLEDGE) → surface each to
+   Canvas (`ui_action open-canvas-file` per path, or they auto-popped if written live).
+   Normal workflow — NOT aggregated into the PR.
+2. **source** (code) → open the aggregated `LOCAL_PR.md` (written by `run-commit`) via
+   the run-scoped **workspace-relative** path — full form, never the short `.artifacts/…`:
+   ```
+   ui_action  cmd=open-canvas-file  path=Projects/<project>/.artifacts/runs/<run_id>/LOCAL_PR.md
+   ```
+   then present its contents inline in chat (STEERING #13, visible channel).
+3. **Record it** — `run-update --stage-json '{"stage":"deliver","status":"completed","local_pr_surfaced":true,...}'`.
+
+**GATED:** if this run committed run-scoped source (commits ∩ files_touched) and you
+skip step 2/3, `run-update --status completed` BLOCKS. A knowledge/docs-only run (no
+source commits) is not gated — skip steps 2-3, still do step 1.
+
+---
+
 ## Output the completion summary to chat (MANDATORY — never skip)
 
 Pick the variant matching the run's profile.
