@@ -30,7 +30,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
-import api from '../../services/api';
+import api, { classifyLoadError } from '../../services/api';
 import {
   pipelinesService,
   type PipelineAnalytics,
@@ -97,7 +97,7 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
   const [loading, setLoading] = useState(false);
-  const [loadErr, setLoadErr] = useState(false); // B2: fetch failed (was permanent Loading)
+  const [loadErr, setLoadErr] = useState<unknown>(null); // B2: fetch failed (was permanent Loading). Stores the error so classifyLoadError can distinguish 4xx contract vs outage.
   const [reloadTick, setReloadTick] = useState(0); // Retry trigger
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
@@ -108,12 +108,12 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    setLoadErr(false);
+    setLoadErr(null);
     // B2: a rejected fetch used to leave loading=true forever (permanent
     // "Loading…") — now .catch surfaces an error state with Retry.
     pipelinesService.fetchAnalytics(window)
       .then((a) => { if (!cancelled) { setAnalytics(a); setLoading(false); } })
-      .catch(() => { if (!cancelled) { setLoadErr(true); setLoading(false); } });
+      .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
     return () => { cancelled = true; };
   }, [open, window, reloadTick]);
 
@@ -220,12 +220,12 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
           )}
 
           {/* Fetch failure (B2) — distinct from "no runs", with Retry. */}
-          {loadErr && !loading && (
+          {!!loadErr && !loading && (
             <div
               data-testid="pipeline-load-error"
               className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
             >
-              <div className="text-sm text-[var(--color-text)]">Could not load pipeline analytics — the backend may be unavailable.</div>
+              <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'pipeline analytics')}</div>
               <button
                 data-testid="pipeline-load-retry"
                 onClick={() => setReloadTick((t) => t + 1)}

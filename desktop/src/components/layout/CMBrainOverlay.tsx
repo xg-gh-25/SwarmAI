@@ -22,7 +22,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
-import api from '../../services/api';
+import api, { classifyLoadError } from '../../services/api';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
@@ -95,7 +95,7 @@ export function CMBrainOverlay() {
   const [tab, setTab] = useState<TabKey>('context');
 
   // Fetch ONLY while the overlay is open (see `enabled` in useContextHealth).
-  const { data, isError: healthErr, refetch: refetchHealth } = useContextHealth(open);
+  const { data, isError: healthErr, error: healthError, refetch: refetchHealth } = useContextHealth(open);
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
 
@@ -103,7 +103,7 @@ export function CMBrainOverlay() {
   // DIFFERENT queue from pending_proposals which drives Review). Approve = proposals
   // awaiting yes/no. (An 'Action' bucket that duplicated this same queue was removed
   // 2026-08-03 — see the needsMeta note below.)
-  const { data: gov, isError: govErr, refetch: refetchGov } = useQuery<{ proposals: unknown[]; total: number }>({
+  const { data: gov, isError: govErr, error: govError, refetch: refetchGov } = useQuery<{ proposals: unknown[]; total: number }>({
     queryKey: ['cm-governance-pending'],
     queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
     staleTime: 30_000, enabled: open,
@@ -172,7 +172,7 @@ export function CMBrainOverlay() {
             {needsErr ? (
               // B1: don't show a false "0" — say the fetch failed + offer Retry.
               <div data-testid="cm-needs-error" className="mt-2 rounded-md border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-2.5 py-2 text-[11px] text-[var(--color-text)]">
-                <div>Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.</div>
+                <div>{classifyLoadError(healthError ?? govError, 'the queue', 'Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.')}</div>
                 <button
                   data-testid="cm-needs-retry"
                   onClick={() => { void refetchHealth(); void refetchGov(); }}

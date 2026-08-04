@@ -225,6 +225,31 @@ export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
+/**
+ * Classify a caught load error into a user-facing message.
+ *
+ * A 4xx is a CLIENT-SIDE contract bug (bad params / stale client), NOT a backend
+ * outage — mislabeling it as "backend may be unavailable" sends the user to debug
+ * a healthy backend (the ToDo Flow `limit=500` vs `le=200` incident). The axios
+ * interceptor wraps every failure in an ApiError with a numeric statusCode; a true
+ * network outage has no response → statusCode falls back to 500 → stays "unavailable".
+ * So a 4xx (isApiError && statusCode < 500) is the ONLY thing routed to the contract
+ * branch; everything else (5xx, network, non-ApiError) keeps the outage message.
+ *
+ * @param e         the caught error (unknown)
+ * @param what      short noun for the message, e.g. "ToDos", "pipeline analytics"
+ * @param outageMsg optional override for the outage (non-4xx) branch — lets a caller
+ *                  preserve a domain-specific message (e.g. CMBrain's "This is NOT
+ *                  'nothing to do'." nuance) while still gaining 4xx classification.
+ */
+export function classifyLoadError(e: unknown, what: string, outageMsg?: string): string {
+  if (isApiError(e) && e.statusCode < 500) {
+    console.error(`[classifyLoadError] ${what} request rejected (HTTP ${e.statusCode}) — client/contract error, backend is up:`, e);
+    return `Could not load ${what} — the request was rejected (HTTP ${e.statusCode}). This is a client error, not a backend outage.`;
+  }
+  return outageMsg ?? `Could not load ${what} — the backend may be unavailable.`;
+}
+
 // Helper function to extract error response from any error
 export function extractErrorResponse(error: unknown): ErrorResponse {
   if (isApiError(error)) {

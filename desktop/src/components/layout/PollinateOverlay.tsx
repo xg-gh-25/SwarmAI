@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Modal from '../common/Modal';
 import { useExclusiveOverlay } from './useExclusiveOverlay';
+import { classifyLoadError } from '../../services/api';
 import {
   pollinateService,
   assetThumbUrl,
@@ -107,7 +108,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   const { open, close } = useExclusiveOverlay('swarm:show-pollinate');
   const [data, setData] = useState<PollinateAssetsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadErr, setLoadErr] = useState(false); // B3: fetch failed (was permanent Loading/blank)
+  const [loadErr, setLoadErr] = useState<unknown>(null); // B3: fetch failed (was permanent Loading/blank). Stores the error so classifyLoadError can distinguish 4xx contract vs outage.
   const [reloadTick, setReloadTick] = useState(0);
   const [view, setView] = useState<View>('gallery');
   const [query, setQuery] = useState('');
@@ -126,12 +127,12 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    setLoadErr(false);
+    setLoadErr(null);
     // B3: a rejected fetch used to leave loading=true forever (blank gallery) —
     // now .catch surfaces an error state with Retry.
     pollinateService.fetchAssets()
       .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
-      .catch(() => { if (!cancelled) { setLoadErr(true); setLoading(false); } });
+      .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
     return () => { cancelled = true; };
   }, [open, reloadTick]);
 
@@ -282,12 +283,12 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
             {/* Body: content cards (newest-first, newest expanded) */}
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
               {/* Fetch failure (B3) — distinct from "no content", with Retry. */}
-              {loadErr && !loading && (
+              {!!loadErr && !loading && (
                 <div
                   data-testid="pollinate-load-error"
                   className="mx-auto my-8 max-w-sm rounded-lg border border-dashed border-[color-mix(in_srgb,#d0524a_45%,var(--color-border))] px-4 py-4 text-center"
                 >
-                  <div className="text-sm text-[var(--color-text)]">Could not load content assets — the backend may be unavailable.</div>
+                  <div className="text-sm text-[var(--color-text)]">{classifyLoadError(loadErr, 'content assets')}</div>
                   <button
                     data-testid="pollinate-load-retry"
                     onClick={() => setReloadTick((t) => t + 1)}
