@@ -789,8 +789,8 @@ body {
   width: 20px;
   height: 20px;
   background: var(--color-bg);
-  border-left: 1.5px solid var(--spout-tint, var(--color-primary));
-  border-bottom: 1.5px solid var(--spout-tint, var(--color-primary));
+  border-left: 1px solid var(--spout-tint, var(--color-primary));
+  border-bottom: 1px solid var(--spout-tint, var(--color-primary));
   border-bottom-left-radius: 5px;
   box-shadow: -3px 3px 8px rgba(0, 0, 0, 0.35);
   z-index: 2;
@@ -859,7 +859,9 @@ body {
     var(--spout-tint, var(--color-primary)) 88%,
     transparent
   );
-  opacity: 0.55;
+  /* Thinner bar (2px, XG: border too thick) → slightly higher opacity so the
+     seam + resize affordance still reads at the reduced width. */
+  opacity: 0.7;
 }
 
 /* Canvas empty-state bee (🐝 Swarm identity) — a pure-CSS gentle flight loop:

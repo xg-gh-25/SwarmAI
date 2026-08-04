@@ -271,7 +271,7 @@ function FileViewerPanelImpl({
         <button
           type="button"
           onClick={expandFromRail}
-          className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l-2 border-[var(--color-primary)]"
+          className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l border-[var(--color-primary)]"
           title="Expand Canvas"
           aria-label="Expand Canvas"
           data-testid="canvas-rail"
@@ -314,7 +314,7 @@ function FileViewerPanelImpl({
       <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
       {/* Resize handle — left edge, doubles as the colorful Canvas↔chat divider */}
       <div
-        className={`canvas-divider w-1 cursor-col-resize transition-colors flex-shrink-0 ${
+        className={`canvas-divider w-0.5 cursor-col-resize transition-colors flex-shrink-0 ${
           isDragging ? 'opacity-100' : 'hover:opacity-100'
         }`}
         onMouseDown={handleMouseDown}
@@ -341,7 +341,7 @@ function FileViewerPanelImpl({
             occluded on narrow widths (item 3). */}
         {stableSessionId !== undefined && (
           <div
-            className="flex-shrink-0 border-b-2 border-[var(--color-primary)] canvas-outputs-navbar"
+            className="flex-shrink-0 border-b border-[var(--color-primary)] canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
           >
             <div className="flex items-center gap-2 px-2 h-9 text-[11px] text-[var(--color-text-muted)]">
