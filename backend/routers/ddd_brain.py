@@ -52,14 +52,18 @@ import logging
 import os
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.ddd_entry_lifecycle import parse_entries
+from core.ddd_entry_lifecycle import (
+    MEMORY_EVERGREEN_SECTIONS,
+    compute_reclaimable_noise,
+    parse_entries,
+)
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
 from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR
 
@@ -339,6 +343,99 @@ def _entry_count(project_dir: Path) -> int:
     return total
 
 
+def _parse_all_knowledge_entries(project_dir: Path) -> list:
+    """All parsed entries across the ② canonical docs (shared by health metrics).
+
+    One parse pass per canonical doc — the same per-doc loop _sinking_count /
+    _entry_count use, factored out so _brain_health reuses it. A non-UTF-8 or
+    unreadable doc degrades to zero contribution (never a 500), matching the
+    sibling helpers' fault tolerance.
+    """
+    entries: list = []
+    for doc in _KNOWLEDGE_DOCS:
+        p = ddd_path(project_dir, doc)
+        if not p.exists():
+            continue
+        try:
+            entries.extend(parse_entries(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError, UnicodeError):
+            continue
+    return entries
+
+
+def _brain_health(project_dir: Path) -> dict:
+    """Admission-passing DDD health metrics for the DETAIL view (per-open).
+
+    Design: Knowledge/Designs/2026-08-04-ddd-health-metrics-brainhub-component.md.
+    Each metric earns its place by the §1 admission gate (owner action + live/read,
+    never a frozen verdict). Lives in _brain_detail (per-open) — NEVER _brain_summary
+    (that N-globs the gallery, ddd_brain.py:458/463).
+
+    - noise: {reclaimable, rate} — computed LIVE via compute_reclaimable_noise over
+      the ② docs (owner action: >threshold → reclaim-strip). No side effect.
+    - trust / diagnostics / computedAt: READ from the stored section_health.json via
+      the read-only _load_last_scores (written by the scheduled health path). The GET
+      path NEVER calls compute_section_health — that function WRITES the file, and a
+      disk write in a read handler is forbidden (Gate-1 CRITICAL, run_d7146171). Absent
+      score → None (honest: no scheduled computation yet; never fabricated, never a
+      write). No project-composite is invented (Gate-1 MAJOR — that would be a vanity
+      metric); the per-doc scores are surfaced verbatim.
+    - escalationPending: reuse _pending_count (same source as the gallery — no divergence).
+    - recall: {value:None, experimental:True} — recall_suite is a pinned-corpus
+      benchmark with no cheap per-DDD value; the tile is shown but labeled experimental
+      (design §4), never fabricated.
+    """
+    # noise — live, no side effect
+    try:
+        entries = _parse_all_knowledge_entries(project_dir)
+        nr = compute_reclaimable_noise(
+            entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
+        )
+        noise = {"reclaimable": nr.noisy, "rate": round(nr.noise_rate, 4)}
+    except Exception:  # pragma: no cover - defensive: noise never 500s a brain view
+        noise = {"reclaimable": 0, "rate": 0.0}
+
+    # trust / diagnostics — READ-ONLY from the stored scheduled score (no write)
+    trust = None
+    diagnostics = None
+    computed_at = None
+    try:
+        from core.ddd_health import _load_last_scores
+
+        stored = _load_last_scores(project_dir)  # {} when section_health.json absent
+        if stored:
+            # per-doc trust (as stored — no invented rollup, Gate-1 MAJOR)
+            trust = {
+                doc: {
+                    sec: s.get("trust")
+                    for sec, s in doc_data.get("sections", {}).items()
+                }
+                for doc, doc_data in stored.items()
+            }
+            diagnostics = stored  # the 5-dim per-section scores, verbatim
+    except Exception:  # pragma: no cover - defensive
+        trust = None
+        diagnostics = None
+    # computedAt lives on the state file, not inside `docs` — read it read-only.
+    try:
+        import json as _json
+
+        sh = project_dir / ".artifacts" / "section_health.json"
+        if sh.is_file():
+            computed_at = _json.loads(sh.read_text(encoding="utf-8")).get("computed_at")
+    except (OSError, ValueError):
+        computed_at = None
+
+    return {
+        "noise": noise,
+        "trust": trust,
+        "escalationPending": _pending_count(project_dir.name),
+        "recall": {"value": None, "experimental": True},
+        "diagnostics": diagnostics,
+        "computedAt": computed_at,
+    }
+
+
 def _sections_present(project_dir: Path) -> dict[str, bool]:
     return {key: bool(_section_members(project_dir, key)) for key, *_ in _SECTIONS}
 
@@ -464,6 +561,10 @@ def _brain_detail(project_dir: Path) -> dict:
         # (would N-stat the gallery). A 0-symbol/stale db still reports true — the
         # CodeIntel panel renders a graceful "No code intelligence indexed" copy.
         "hasCodeIntel": (project_dir / "code_intel.db").exists(),
+        # health = admission-passing DDD metrics (design 2026-08-04). Per-open ONLY
+        # (like specs/hasCodeIntel) — NEVER added to _brain_summary (N-globs gallery).
+        # Read-side: noise computed live, trust READ from stored score (no GET write).
+        "health": _brain_health(project_dir),
     }
 
 

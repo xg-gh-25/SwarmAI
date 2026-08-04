@@ -430,3 +430,90 @@ class TestSpecsInBrainDetail:
         pd.mkdir()
         detail = m._brain_detail(pd)
         assert len(detail["sections"]) == 6
+
+
+class TestHealthBlockInBrainDetail:
+    """DDD Health Metrics (run 1, backend read side): _brain_detail returns a
+    `health` block with admission-passing metrics. Every value recomputed on
+    read (noise) OR read from the stored scheduled score (trust) — the GET path
+    NEVER calls compute_section_health (the writer). Gate-1 CRITICAL guard."""
+
+    def test_health_block_present_with_keys(self, tmp_path):
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        pd.mkdir()
+        detail = m._brain_detail(pd)
+        assert "health" in detail
+        h = detail["health"]
+        for k in ("noise", "trust", "escalationPending", "recall",
+                  "diagnostics", "computedAt"):
+            assert k in h, f"missing health key {k}: {h}"
+
+    def test_recall_is_experimental_null(self, tmp_path):
+        """recall carries no fabricated value — {value:None, experimental:True}
+        (no cheap per-DDD recall metric exists; recall_suite is pinned-corpus)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        pd.mkdir()
+        h = m._brain_detail(pd)["health"]
+        assert h["recall"] == {"value": None, "experimental": True}
+
+    def test_noise_non_vacuous(self, tmp_path):
+        """noise.reclaimable equals a DIRECT compute_reclaimable_noise count over
+        the ② docs (not a stub). Mutation-anchor: build a doc with a known-stale
+        reclaimable guideline entry and assert the count reflects it."""
+        from datetime import date
+        from routers import ddd_brain as m
+        from core.ddd_entry_lifecycle import (
+            compute_reclaimable_noise, parse_entries, MEMORY_EVERGREEN_SECTIONS,
+        )
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS
+        pd = tmp_path / "P"
+        pd.mkdir()
+        # Plant one reclaimable-noise guideline (ref 0, dormant, aged past grace) in
+        # the FIRST canonical doc, at its real ddd_path location.
+        doc = DDD_CANONICAL_DOCS[0]
+        p = ddd_path(pd, doc)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "## Guidelines\n"
+            "- [guideline] **Old disposable note** — stale (2026-01-01)\n"
+            "  <!-- ref:0 | last:2026-01-01 | decay:dormant -->\n",
+            encoding="utf-8",
+        )
+        h = m._brain_detail(pd)["health"]
+        # Direct computation the helper must match:
+        entries = m._parse_all_knowledge_entries(pd)
+        direct = compute_reclaimable_noise(
+            entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
+        ).noisy
+        assert h["noise"]["reclaimable"] == direct
+        assert direct >= 1, "planted a reclaimable entry — must be counted"
+
+    def test_trust_null_and_no_write_when_no_scheduled_score(self, tmp_path):
+        """Gate-1 CRITICAL: a GET must NOT write section_health.json. When the
+        stored score is absent, trust/diagnostics are None and NO file is created
+        (compute_section_health, the writer, is never called from the read path)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        pd.mkdir()
+        health_file = pd / ".artifacts" / "section_health.json"
+        assert not health_file.exists()
+        h = m._brain_detail(pd)["health"]
+        assert h["trust"] is None
+        assert h["diagnostics"] is None
+        assert h["computedAt"] is None
+        # THE no-write assertion — the whole point of the Gate-1 fix:
+        assert not health_file.exists(), "GET path wrote section_health.json — forbidden"
+
+    def test_summary_health_unchanged(self, tmp_path):
+        """_brain_summary (gallery) is NOT enriched — its health keeps exactly the
+        4 gallery keys (no per-open compute N-globs the gallery)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        pd.mkdir()
+        summ = m._brain_summary(pd)
+        assert set(summ["health"].keys()) == {
+            "sinking", "pending", "uncommitted", "lastChangeRelative"
+        }
