@@ -2749,6 +2749,12 @@ class ContextHealthHook:
         #     silent staleness, never blocks.
         findings += self._check_readme_six_sections(root)
 
+        # 15. Recall/DDD-inject degradation — surface the WRITE-ONLY degradation
+        #     counters (session_router) that were incremented but never read, so a
+        #     silently-failing recall (empty every session on a real failure) is no
+        #     longer invisible for the daemon's whole lifetime. (run_e9861490)
+        findings += self._check_recall_degradation()
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -2826,6 +2832,98 @@ class ContextHealthHook:
                 f"DDD completeness check failed (non-fatal): "
                 f"{type(e).__name__}: {e}"
             )
+        return findings
+
+    def _check_recall_degradation(self) -> list[str]:
+        """Surface the WRITE-ONLY recall/DDD-inject degradation counters (run_e9861490).
+
+        session_router increments _recall_degraded_count + _ddd_inject_count on every
+        recall/inject failure, but NOTHING read them — a silently-failing recall was
+        invisible for the daemon's whole lifetime (the months-hidden class the
+        counters were built to kill; GUI83: a positive counter is only half — it must
+        be READ). This is the read side.
+
+        Reports ONLY true-failure totals (crash/timeout/unavailable) — NEVER the
+        informational no-match keys (empty_with_keywords / declined:no_ddd_hits),
+        which would false-alarm on every legitimate empty recall. Factual, no
+        blocking threshold (STEERING #2): one self-describing line labeled
+        'since daemon start', so a lone transient reads as transient, not chronic.
+        The synonym-miss rate (empty_with_keywords) is reported SEPARATELY as a
+        signal-quality note, not a failure. Fail-open: a metric read never breaks
+        the health check.
+        """
+        findings: list[str] = []
+        try:
+            from core.session_router import (
+                get_recall_degraded_snapshot, get_ddd_inject_snapshot,
+                recall_true_failure_total, ddd_inject_true_failure_total,
+                _is_recall_true_failure, _is_ddd_true_failure,
+            )
+        except Exception as e:  # noqa: BLE001 — never break the health check on a metric
+            logger.debug("recall-degradation check skipped (import failed): %s", e)
+            return findings
+
+        try:
+            recall_snap = get_recall_degraded_snapshot()
+            ddd_snap = get_ddd_inject_snapshot()
+
+            recall_fails = recall_true_failure_total(recall_snap)
+            if recall_fails > 0:
+                reasons = ", ".join(
+                    f"{r}={n}" for r, n in sorted(recall_snap.items())
+                    if _is_recall_true_failure(r)
+                )
+                findings.append(
+                    f"RECALL DEGRADED (since daemon start): {recall_fails} "
+                    f"true-failure(s) [{reasons}] — recall returned empty on a real "
+                    f"failure, not a no-match. Check the daemon log for the WARNINGs."
+                )
+
+            ddd_fails = ddd_inject_true_failure_total(ddd_snap)
+            if ddd_fails > 0:
+                reasons = ", ".join(
+                    f"{r}={n}" for r, n in sorted(ddd_snap.items())
+                    if _is_ddd_true_failure(r)
+                )
+                findings.append(
+                    f"DDD-INJECT DEGRADED (since daemon start): {ddd_fails} "
+                    f"true-failure(s) [{reasons}]."
+                )
+
+            # Signal-quality (NOT a failure): a high synonym-miss rate hints the
+            # keyword-only recall is missing entries that exist under other wording
+            # (the blind spot the vector-leg removal created). Informational only.
+            synonym_miss = recall_snap.get("empty_with_keywords", 0)
+            if synonym_miss >= 20:
+                findings.append(
+                    f"RECALL synonym-miss rate elevated (since daemon start): "
+                    f"empty_with_keywords={synonym_miss} — recall ran but matched "
+                    f"nothing this often; entries may exist under different wording "
+                    f"(keyword-only blind spot). Not a failure, a coverage signal."
+                )
+
+            # Catch-all (Gate-2 LOW, run_e9861490): a reason that is NEITHER a
+            # known true-failure NOR known-informational is UNCLASSIFIED — surface
+            # it so a future writer's new reason string can't silently vanish from
+            # every signal (the dead-signal recursion this whole fix exists to kill).
+            from core.session_router import (
+                recall_unclassified_reasons, ddd_unclassified_reasons,
+            )
+            unclassified = {
+                **recall_unclassified_reasons(recall_snap),
+                **{f"ddd:{k}": v for k, v in ddd_unclassified_reasons(ddd_snap).items()},
+            }
+            if unclassified:
+                pairs = ", ".join(f"{r}={n}" for r, n in sorted(unclassified.items()))
+                findings.append(
+                    f"RECALL/DDD degradation has UNCLASSIFIED reason(s) [{pairs}] — "
+                    f"a writer emits a reason the health classifier doesn't recognize. "
+                    f"Classify it in session_router (true-failure vs known-informational) "
+                    f"so it stops hiding."
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("recall-degradation check failed (non-blocking): %s", e)
+
         return findings
 
     def _check_readme_six_sections(self, root: Path) -> list[str]:

@@ -129,6 +129,113 @@ def _record_ddd_inject(outcome: str) -> None:
     except Exception:  # noqa: BLE001 — metric must never break recall
         pass
 
+
+# ── Degradation readers (run_e9861490) ────────────────────────────────────────
+# Both counters above were WRITE-ONLY — incremented but never read anywhere, so a
+# silently-degrading recall (empty every session on a real failure) was invisible
+# for as long as the daemon ran. This is the READ side that completes the
+# loud-on-degradation contract the counters were built for (GUI83: a positive
+# counter is only half — it must be READ). Consumed by context_health_hook's
+# daily deep-check → session-briefing findings. Cadence note: the counts are
+# CUMULATIVE-SINCE-DAEMON-START (module-level, reset on restart); a once-per-day
+# read of a cumulative counter is the right window for CHRONIC degradation (the
+# months-hidden failure class), NOT per-session transient alerting.
+#
+# TRUE-FAILURE vs INFORMATIONAL — co-located with the writers so the reason
+# strings the _record_* sites emit and the classifier here CANNOT drift.
+# A true failure = recall/inject broke (crash/timeout/unavailable). Informational
+# = ran fine but matched nothing / declined by design — NEVER counted as failure
+# (summing them would false-alarm on every legitimate empty recall; see :98).
+_RECALL_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
+    "vec_db_unavailable", "leg_failure", "disaster_timeout",
+})
+# exception-family reasons are dynamic ("exception:<Type>") → prefix-matched.
+_RECALL_TRUE_FAILURE_PREFIXES: tuple[str, ...] = (
+    "exception:", "inject_exception:", "unified_exception:",
+)
+# INFORMATIONAL (NOT failures): "empty_with_keywords" (genuine no-match),
+# "unified_empty_fallback_legacy" (strangler-fig fallback to legacy, expected).
+_DDD_TRUE_FAILURE_REASONS: frozenset[str] = frozenset({
+    "declined:disaster_timeout",
+})
+_DDD_TRUE_FAILURE_PREFIXES: tuple[str, ...] = ("declined:exception:",)
+# NOT failures: "injected" (success), "declined:no_ddd_hits" (project has no DDD),
+# "declined:<signal>" (fail-closed no-active-project — by design).
+
+
+# Reasons KNOWN to be informational (ran fine / declined by design) — NOT failures,
+# but explicitly recognized so the health reader can tell "known-informational" from
+# "a reason nobody classified yet". A reason that is neither a true-failure NOR here
+# is UNCLASSIFIED → the reader surfaces it (else a future writer's new reason silently
+# vanishes from every signal — the dead-signal recursion Gate-2 flagged, run_e9861490).
+_RECALL_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
+    "empty_with_keywords", "unified_empty_fallback_legacy",
+})
+_DDD_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
+    "injected", "declined:no_ddd_hits",
+    # dynamic "declined:<signal>" from detect_active_project — by-design declines:
+    "declined:no_projects", "declined:ambiguous", "declined:no_signal",
+})
+# NOTE: deliberately NOT a blanket "declined:" prefix — a future "declined:db_broke"
+# should surface as UNCLASSIFIED (visible), not be swallowed as by-design.
+_DDD_KNOWN_INFORMATIONAL_PREFIXES: tuple[str, ...] = ()
+
+
+def _is_recall_true_failure(reason: str) -> bool:
+    return (reason in _RECALL_TRUE_FAILURE_REASONS
+            or reason.startswith(_RECALL_TRUE_FAILURE_PREFIXES))
+
+
+def recall_unclassified_reasons(snapshot: "dict[str, int] | None" = None) -> dict[str, int]:
+    """Recall reasons that are NEITHER true-failure NOR known-informational — i.e.
+    a reason no one classified. Surfacing these prevents a new writer's reason from
+    silently vanishing (dead-signal recursion). Empty in a correctly-maintained tree."""
+    snap = get_recall_degraded_snapshot() if snapshot is None else snapshot
+    return {
+        r: n for r, n in snap.items()
+        if not _is_recall_true_failure(r) and r not in _RECALL_KNOWN_INFORMATIONAL
+    }
+
+
+def ddd_unclassified_reasons(snapshot: "dict[str, int] | None" = None) -> dict[str, int]:
+    """DDD-inject outcomes that are neither true-failure nor known-informational."""
+    snap = get_ddd_inject_snapshot() if snapshot is None else snapshot
+    return {
+        r: n for r, n in snap.items()
+        if not _is_ddd_true_failure(r)
+        and r not in _DDD_KNOWN_INFORMATIONAL
+        and not r.startswith(_DDD_KNOWN_INFORMATIONAL_PREFIXES)
+    }
+
+
+def _is_ddd_true_failure(outcome: str) -> bool:
+    return (outcome in _DDD_TRUE_FAILURE_REASONS
+            or outcome.startswith(_DDD_TRUE_FAILURE_PREFIXES))
+
+
+def get_recall_degraded_snapshot() -> dict[str, int]:
+    """Snapshot (copy) of the recall-degradation counts since daemon start.
+    Copy, so a caller can't mutate the live counter."""
+    return dict(_recall_degraded_count)
+
+
+def get_ddd_inject_snapshot() -> dict[str, int]:
+    """Snapshot (copy) of the DDD-inject outcome counts since daemon start."""
+    return dict(_ddd_inject_count)
+
+
+def recall_true_failure_total(snapshot: "dict[str, int] | None" = None) -> int:
+    """Sum ONLY true-failure recall reasons (excludes informational no-match).
+    Defaults to the live snapshot."""
+    snap = get_recall_degraded_snapshot() if snapshot is None else snapshot
+    return sum(n for r, n in snap.items() if _is_recall_true_failure(r))
+
+
+def ddd_inject_true_failure_total(snapshot: "dict[str, int] | None" = None) -> int:
+    """Sum ONLY true-failure DDD-inject outcomes (excludes declined-by-design)."""
+    snap = get_ddd_inject_snapshot() if snapshot is None else snapshot
+    return sum(n for r, n in snap.items() if _is_ddd_true_failure(r))
+
 _STOP_WORDS: frozenset[str] = frozenset({
     "the", "this", "that", "with", "from", "what", "when", "where",
     "which", "about", "into", "than", "then", "them", "they", "been",

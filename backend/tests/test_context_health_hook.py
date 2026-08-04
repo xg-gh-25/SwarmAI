@@ -1434,3 +1434,128 @@ class TestMaturityWritebackResolvesLayout:
         # No stale lock stranded at project root (lock co-locates with resolved doc).
         assert not (proj / ".TECH.md.lock").exists(), \
             "lock must co-locate with the resolved doc, not strand at project root"
+
+
+class TestRecallDegradationReader:
+    """run_e9861490: the recall/DDD-inject degradation counters were WRITE-ONLY.
+    This wires + verifies the READ side (getters + _deep_check finding)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_counters(self):
+        import core.session_router as sr
+        sr._recall_degraded_count.clear()
+        sr._ddd_inject_count.clear()
+        yield
+        sr._recall_degraded_count.clear()
+        sr._ddd_inject_count.clear()
+
+    # AC1: getters read live counts
+    def test_getters_snapshot_live_counts(self):
+        import core.session_router as sr
+        sr._record_recall_degraded("vec_db_unavailable")
+        sr._record_ddd_inject("injected")
+        assert sr.get_recall_degraded_snapshot()["vec_db_unavailable"] == 1
+        assert sr.get_ddd_inject_snapshot()["injected"] == 1
+
+    # AC4: getter returns a COPY (mutation doesn't leak into the live counter)
+    def test_getter_returns_copy_not_live_ref(self):
+        import core.session_router as sr
+        sr._record_recall_degraded("leg_failure")
+        snap = sr.get_recall_degraded_snapshot()
+        snap["leg_failure"] = 999
+        assert sr._recall_degraded_count["leg_failure"] == 1  # live unchanged
+
+    # AC2: true-failure aggregation excludes informational no-match keys
+    def test_true_failure_excludes_informational(self):
+        import core.session_router as sr
+        sr._record_recall_degraded("vec_db_unavailable")     # failure
+        sr._record_recall_degraded("disaster_timeout")       # failure
+        sr._record_recall_degraded("exception:ValueError")   # failure (prefix)
+        sr._record_recall_degraded("empty_with_keywords")    # INFORMATIONAL
+        sr._record_recall_degraded("unified_empty_fallback_legacy")  # INFORMATIONAL
+        assert sr.recall_true_failure_total() == 3  # only the 3 real failures
+        # ddd side
+        sr._record_ddd_inject("declined:disaster_timeout")   # failure
+        sr._record_ddd_inject("declined:exception:OSError")  # failure (prefix)
+        sr._record_ddd_inject("declined:no_ddd_hits")        # by-design
+        sr._record_ddd_inject("declined:multi_project")      # by-design (signal)
+        sr._record_ddd_inject("injected")                    # success
+        assert sr.ddd_inject_true_failure_total() == 2
+
+    # AC3: a true failure surfaces a finding; only-informational surfaces none
+    def test_deep_check_finding_on_true_failure(self, hook):
+        import core.session_router as sr
+        sr._record_recall_degraded("vec_db_unavailable")
+        findings = hook._check_recall_degradation()
+        assert any("RECALL DEGRADED" in f and "vec_db_unavailable" in f for f in findings)
+
+    def test_no_finding_when_only_informational(self, hook):
+        import core.session_router as sr
+        sr._record_recall_degraded("empty_with_keywords")   # not a failure
+        sr._record_ddd_inject("declined:no_ddd_hits")        # not a failure
+        findings = hook._check_recall_degradation()
+        assert not any("DEGRADED" in f for f in findings), \
+            "informational-only counters must NOT raise a failure finding"
+
+    def test_no_finding_when_clean(self, hook):
+        findings = hook._check_recall_degradation()
+        assert findings == []
+
+    # synonym-miss is a SEPARATE signal-quality note, not a failure
+    def test_synonym_miss_reported_separately_not_as_failure(self, hook):
+        import core.session_router as sr
+        for _ in range(25):
+            sr._record_recall_degraded("empty_with_keywords")
+        findings = hook._check_recall_degradation()
+        assert any("synonym-miss" in f for f in findings)
+        assert not any("RECALL DEGRADED" in f for f in findings), \
+            "synonym-miss must not be reported as a true failure"
+
+    # AC5: the reader has a real caller (not dead code)
+    def test_reader_is_called_by_deep_check(self):
+        import inspect
+        from hooks.context_health_hook import ContextHealthHook
+        src = inspect.getsource(ContextHealthHook._deep_check)
+        assert "_check_recall_degradation()" in src, \
+            "_check_recall_degradation must be called from _deep_check (else it is dead)"
+
+    # Gate-2 LOW fix: an UNCLASSIFIED reason (future writer) must SURFACE, not vanish
+    def test_unclassified_reason_surfaces(self, hook):
+        import core.session_router as sr
+        sr._record_recall_degraded("db_corrupt")           # not failure, not known-informational
+        sr._record_ddd_inject("declined:db_broke")          # ditto on the DDD side
+        findings = hook._check_recall_degradation()
+        assert any("UNCLASSIFIED" in f and "db_corrupt" in f for f in findings), \
+            "a new unclassified recall reason must surface (dead-signal recursion guard)"
+        assert any("ddd:declined:db_broke" in f for f in findings)
+
+    def test_all_known_reasons_no_unclassified_line(self, hook):
+        import core.session_router as sr
+        # every string a current writer actually emits — none should be 'unclassified'
+        for r in ("vec_db_unavailable", "leg_failure", "disaster_timeout",
+                  "exception:ValueError", "inject_exception:OSError",
+                  "unified_exception:KeyError", "empty_with_keywords",
+                  "unified_empty_fallback_legacy"):
+            sr._record_recall_degraded(r)
+        for o in ("injected", "declined:disaster_timeout", "declined:exception:X",
+                  "declined:no_ddd_hits", "declined:no_projects",
+                  "declined:ambiguous", "declined:no_signal"):
+            sr._record_ddd_inject(o)
+        findings = hook._check_recall_degradation()
+        assert not any("UNCLASSIFIED" in f for f in findings), \
+            "all current writer reasons must be classified (no unclassified line)"
+
+    # anti-drift: every literal a writer emits is classified (grep the source)
+    def test_all_emitted_reasons_are_classified(self):
+        import re, inspect
+        import core.session_router as sr
+        src = inspect.getsource(sr)
+        # static literal args to _record_recall_degraded("...") / _record_ddd_inject("...")
+        recall_lits = set(re.findall(r'_record_recall_degraded\(\s*"([^"{]+)"', src))
+        ddd_lits = set(re.findall(r'_record_ddd_inject\(\s*"([^"{]+)"', src))
+        for r in recall_lits:
+            assert (sr._is_recall_true_failure(r) or r in sr._RECALL_KNOWN_INFORMATIONAL), \
+                f"recall reason {r!r} is emitted but unclassified — classify it"
+        for o in ddd_lits:
+            assert (sr._is_ddd_true_failure(o) or o in sr._DDD_KNOWN_INFORMATIONAL), \
+                f"ddd outcome {o!r} is emitted but unclassified — classify it"
