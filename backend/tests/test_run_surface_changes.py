@@ -415,91 +415,11 @@ class TestStageDocsWiring:
         assert "via the existing\n`ui_action open-canvas`" not in deliver
 
 
-# ── run_4de279ca: turn-delta sweep (the author-agnostic LIVE emit) ──────────
-
-class TestSweepTurnDelta:
-    """sweep_turn_delta(swarmws_root, baseline) → (events, dropped): the SOLE live
-    emit. Author-agnostic (git sees any writer), excludes pre-existing dirty via
-    the baseline snapshot, caps giant diffs."""
-
-    def _swarmws(self, tmp_path: Path) -> Path:
-        root = tmp_path / ".swarm-ai" / "SwarmWS"
-        (root / "Knowledge" / "Designs").mkdir(parents=True)
-        _init_repo(root)
-        (root / ".gitignore").write_text("*.db\nnode_modules/\n", encoding="utf-8")
-        return root
-
-    def test_delta_surfaces_a_file_written_after_baseline_authoragnostic(self, tmp_path):
-        """The core fix: a file that appears AFTER the baseline snapshot surfaces —
-        regardless of who wrote it (the test writes it directly, simulating a
-        sub-agent/skill/CLI write that never entered the parent tool stream)."""
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot
-        root = self._swarmws(tmp_path)
-        baseline = porcelain_snapshot(root)               # turn start: clean-ish
-        (root / "Knowledge" / "Designs" / "new.md").write_text("hi", encoding="utf-8")
-        events, dropped = sweep_turn_delta(root, baseline)
-        paths = [e["path"] for e in events]
-        assert any("new.md" in p for p in paths), f"new file not surfaced: {paths}"
-        assert dropped == 0
-        assert all(e["kind"] in ("content", "knowledge") for e in events)
-
-    def test_preexisting_dirty_file_is_NOT_falsely_attributed(self, tmp_path):
-        """A file already dirty at turn-start (a parallel session's / user's edit)
-        is in the baseline → must NOT appear in the delta (the false-attribution
-        bug the snapshot-diff exists to prevent)."""
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot
-        root = self._swarmws(tmp_path)
-        (root / "Knowledge" / "Designs" / "preexisting.md").write_text("old", encoding="utf-8")
-        baseline = porcelain_snapshot(root)               # preexisting is ALREADY dirty
-        (root / "Knowledge" / "Designs" / "mine.md").write_text("new", encoding="utf-8")
-        events, _ = sweep_turn_delta(root, baseline)
-        paths = [e["path"] for e in events]
-        assert any("mine.md" in p for p in paths)
-        assert not any("preexisting.md" in p for p in paths), "false-attributed pre-existing dirty file"
-
-    def test_process_and_source_are_not_live_emitted(self, tmp_path):
-        """Machine noise (gitignored *.db) and source are not live-emitted; only
-        content/knowledge pop live."""
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot
-        root = self._swarmws(tmp_path)
-        baseline = porcelain_snapshot(root)
-        (root / "app.db").write_text("x", encoding="utf-8")            # gitignored → process
-        (root / "Knowledge" / "Designs" / "doc.md").write_text("x", encoding="utf-8")
-        events, _ = sweep_turn_delta(root, baseline)
-        paths = [e["path"] for e in events]
-        assert any("doc.md" in p for p in paths)
-        assert not any("app.db" in p for p in paths)
-
-    def test_cap_drops_excess_and_reports_count(self, tmp_path):
-        """A giant diff is capped at MAX_SURFACE_FILES; the overflow is COUNTED
-        (dropped>0), never silently truncated (P8)."""
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot, MAX_SURFACE_FILES
-        root = self._swarmws(tmp_path)
-        baseline = porcelain_snapshot(root)
-        for i in range(MAX_SURFACE_FILES + 5):
-            (root / "Knowledge" / "Designs" / f"f{i}.md").write_text("x", encoding="utf-8")
-        events, dropped = sweep_turn_delta(root, baseline)
-        assert len(events) == MAX_SURFACE_FILES
-        assert dropped == 5
-
-    def test_no_change_yields_empty(self, tmp_path):
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot
-        root = self._swarmws(tmp_path)
-        baseline = porcelain_snapshot(root)
-        events, dropped = sweep_turn_delta(root, baseline)
-        assert events == [] and dropped == 0
-
-    def test_deleted_file_is_not_surfaced_as_written(self, tmp_path):
-        """A porcelain delta includes DELETED files (status D); live-surfacing must
-        NOT emit them as operation=written (they don't exist on disk). The separate
-        delete path handles operation=deleted."""
-        from core.run_surface_changes import sweep_turn_delta, porcelain_snapshot
-        root = self._swarmws(tmp_path)
-        f = root / "Knowledge" / "Designs" / "doomed.md"
-        f.write_text("bye", encoding="utf-8")
-        _git(root, "add", "-A"); _git(root, "commit", "-qm", "add doomed")
-        baseline = porcelain_snapshot(root)   # clean (committed)
-        f.unlink()                             # delete it this turn
-        events, _ = sweep_turn_delta(root, baseline)
-        paths = [e["path"] for e in events]
-        assert not any("doomed.md" in p for p in paths), f"deleted file surfaced as written: {paths}"
+# run_cce6f4b9: TestSweepTurnDelta DELETED — sweep_turn_delta/porcelain_snapshot (the
+# per-turn LIVE emit) were removed as the Canvas tab-isolation/trigger/cost regression.
+# Live WRITE surfacing is now the EVENT-DRIVEN per-tool emit
+# (StreamingOrchestrator._build_file_write_events); its behavior is covered by
+# tests/test_orchestrator_surface_wiring.py (write emits on tool-result success,
+# failed/non-review-worthy dropped, source kind carried for frontend gating). The
+# author-agnostic pipeline-FINISH fallback (sweep_run_changes) remains covered by
+# TestSweepRunChanges above.

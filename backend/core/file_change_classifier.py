@@ -1,14 +1,17 @@
-"""file_change_classifier — Bash DELETE-target parser for the Canvas surfacing layer.
+"""file_change_classifier — Bash WRITE/DELETE-target parser for the Canvas surfacing layer.
 
 Originally the unified Canvas file-change decision layer (run_e626e121). As of
 run_4de279ca the git-based `needs_human_review` became the sole surfacing authority
-and the relevance/bookkeeping copy was retired; as of run_a18d69f5 the Bash
-WRITE-target parser was retired too (the turn-end git sweep discovers writes
-author-agnostically from `git status`). What remains is the Bash DELETE-target
-parser: a deleted file is gone from disk, so `git status` shows it as `D` and the
-sweep skips it — the operation=deleted rail-drop emit still needs to know which
-paths a `rm`/`mv-SRC` removed. Conservative (under-match HARD): a MISSED delete
-just leaves a stale rail row; a FALSE delete removes a live row.
+and the relevance/bookkeeping copy was retired; run_a18d69f5 then retired the Bash
+WRITE-target parser too (the turn-end git sweep discovered writes author-agnostically
+from `git status`). run_cce6f4b9 REVERSED that: the per-turn git sweep was the root
+cause of the Canvas tab-isolation/trigger/cost regression, so live surfacing went back
+to an EVENT-DRIVEN per-tool emit — which needs to know which paths a Bash command
+WROTE. So this module owns BOTH parsers again:
+  - parse_bash_write_targets: `>`/`>>`, `tee`, `cp/mv DEST` → the write emit.
+  - parse_bash_delete_targets: `rm`, `mv SRC` → the operation=deleted rail-drop emit.
+Both conservative (under-match HARD): a MISSED write/delete just skips one surface;
+a FALSE one pops/removes a phantom row — strictly worse.
 
 Pure — no I/O, no imports beyond stdlib — unit-tested, callable on the hot path.
 """
@@ -18,6 +21,7 @@ import re
 import shlex
 
 __all__ = [
+    "parse_bash_write_targets",
     "parse_bash_delete_targets",
 ]
 
@@ -32,9 +36,12 @@ __all__ = [
 # Bash command deleted, for the operation=deleted emit). Pure, stdlib-only, hot-path.
 
 
-# ── Bash target parsing (conservative, under-match) — DELETE targets only ──
-# (_REDIRECT_RE removed with parse_bash_write_targets, run_a18d69f5 #6.)
-# `cp/mv SRC... DEST` + `rm` handled via token walk in parse_bash_delete_targets.
+# ── Bash target parsing (conservative, under-match) — WRITE + DELETE targets ──
+# `>`/`>>` redirection (write, regex); `tee [-a] f` + `cp/mv SRC... DEST` (write dest,
+# also del src) + `rm` (delete) handled via token walk. (run_cce6f4b9: _REDIRECT_RE +
+# parse_bash_write_targets RESTORED — the event-driven per-tool emit needs the WRITE
+# targets, the symmetric twin of the delete parser.)
+_REDIRECT_RE = re.compile(r"(?<![\d&])>>?\s*([^\s;|&<>]+)")
 _DISCARD_TARGETS = {"/dev/null", "/dev/stdout", "/dev/stderr"}
 
 
@@ -63,10 +70,53 @@ def _clean_target(tok: str) -> str | None:
     return tok
 
 
-# parse_bash_write_targets REMOVED (run_a18d69f5 #6): 0 callers — the turn-end git
-# sweep now discovers writes author-agnostically from `git status`, so the Bash
-# write-target parser is dead. The DELETE parser stays (a deleted file is gone from
-# disk, so the sweep can't see it → the operation=deleted emit still needs it).
+def parse_bash_write_targets(command: str) -> list[str]:
+    """Return the files a Bash command writes — conservatively (run_cce6f4b9 restore).
+
+    Catches: `>`/`>>` redirection (incl. no-space `x>y`), `tee [-a] f`, `cp/mv dest`.
+    Returns [] (not a guess) for anything it cannot parse confidently — a missed
+    deliverable is preferable to a false Canvas pop (directive). /dev/null and fd
+    dups (`2>&1`) never count as writes.
+    """
+    if not command or not command.strip():
+        return []
+
+    targets: list[str] = []
+
+    # 1) Redirection operators (regex on the raw string — robust to spacing).
+    #    Blank heredoc BODIES first (so a `>` inside <<EOF..EOF is not a redirect —
+    #    Layer 2, run_6ebe2d09), then blank single/double-quoted spans (so
+    #    `echo 'a > b'` does not register a redirect either).
+    unquoted = _blank_quoted(_blank_heredocs(command))
+    for m in _REDIRECT_RE.finditer(unquoted):
+        t = _clean_target(m.group(1))
+        if t:
+            targets.append(t)
+
+    # 2) tee / cp / mv via a best-effort token walk (shlex; bail on parse error).
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = []  # unbalanced quotes etc → rely on the redirect regex only
+    for i, tok in enumerate(tokens):
+        if tok == "tee":
+            # tee [-a] FILE... → every following non-flag token is a write target
+            for nxt in tokens[i + 1:]:
+                if nxt.startswith("-"):
+                    continue
+                t = _clean_target(nxt)
+                if t and t not in targets:
+                    targets.append(t)
+                break  # first file target is enough for surfacing
+        elif tok in ("cp", "mv"):
+            # dest is the LAST non-flag argument
+            args = [a for a in tokens[i + 1:] if not a.startswith("-")]
+            if len(args) >= 2:
+                t = _clean_target(args[-1])
+                if t and t not in targets:
+                    targets.append(t)
+
+    return targets
 
 
 def parse_bash_delete_targets(command: str) -> list[str]:
