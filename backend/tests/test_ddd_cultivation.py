@@ -1839,3 +1839,300 @@ class TestNormalizeCultivatedBullet:
         entries = parse_entries(doc.read_text(encoding="utf-8"))
         assert any("raw prose lesson" in e.raw_text for e in entries), \
             "the newly-written bullet is NOT parseable by parse_entries"
+
+
+class TestContradictionDetection:
+    """Admission-gate contradiction DETECTION (Approach A, run_171a17c2).
+
+    detect_contradiction flags (never resolves) when a newly-admitted APPEND
+    lesson polarity-flips a same-topic curated entry. Advisory only: zero
+    delete, zero block, no LLM, no embeddings. Recall boundary is honest —
+    ONLY explicit polarity flips (never/always, do/don't, ...), NOT semantic
+    contradiction (that stays for the deferred D5-LLM job).
+    """
+
+    def _doc(self, tmp_path, body):
+        d = tmp_path / "MEMORY.md"
+        d.write_text(body, encoding="utf-8")
+        return d
+
+    # ── AC1: flag fires on a clean polarity flip ───────────────────────────────
+    def test_polarity_flip_fires_flag(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Never wrap pytest invocation in a wall-clock timeout** — "
+            "the per-test timeout suffices; a wall-clock wrapper masks real hangs.\n",
+        )
+        flag = detect_contradiction(
+            "Always wrap the pytest invocation in a wall-clock timeout — "
+            "a bare pytest can auto-background and read as a hang.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is not None, "a never<->always flip on shared topic must fire"
+        assert "pytest" in flag.conflicting_title.lower()
+        assert flag.section == "Guidelines"
+
+    # Gate-2 HIGH regression (run_171a17c2): a NEGATION on the NEW side must not
+    # silently drop the flip via the positive partner leaking into its token set.
+    def test_polarity_substring_leak_new_side_negative_latin(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction, _polarity_words_present
+        # 'do not' must NOT also register 'do' (the leak that dropped the flip).
+        assert _polarity_words_present("do not retry the operation") == {"do not"}
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Do retry the checkpoint restore operation** — "
+            "a quick retry recovers a transient failure.\n",
+        )
+        flag = detect_contradiction(
+            "Do not retry the checkpoint restore operation — a retry corrupts state.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is not None, "existing 'do' vs new 'do not' MUST flag (was dropped by leak)"
+        assert "checkpoint" in flag.conflicting_title.lower()
+
+    def test_polarity_substring_leak_new_side_negative_cjk(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction, _polarity_words_present
+        # '不要' must NOT also register '要' (CJK mirror of the Latin leak).
+        assert _polarity_words_present("不要重试该操作") == {"不要"}
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **要重试 checkpoint restore 操作** — 快速重试可恢复瞬时失败.\n",
+        )
+        flag = detect_contradiction(
+            "不要重试 checkpoint restore 操作 — 重试会损坏状态.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is not None, "existing '要' vs new '不要' MUST flag (CJK leak)"
+
+    def test_do_dont_flip_fires_flag(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Do mock the resource-management subprocess layer in unit tests** — "
+            "keeps the suite fast and hermetic.\n",
+        )
+        flag = detect_contradiction(
+            "Don't mock the resource-management subprocess layer — "
+            "mocks hide lifecycle bugs the real subprocess would surface.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is not None
+        assert "resource-management" in flag.conflicting_title.lower() \
+            or "resource" in flag.conflicting_title.lower()
+
+    # ── AC2: low false-positive — additive / agreeing / orthogonal → None ──────
+    def test_additive_same_topic_no_flag(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Always wrap pytest invocation in a wall-clock timeout** — "
+            "prevents auto-background hangs.\n",
+        )
+        # Same topic, SAME polarity (both 'always') → agreement, not a flip.
+        flag = detect_contradiction(
+            "Always set the pytest wall-clock timeout generously for slow suites.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is None, "same-polarity same-topic is agreement, must NOT flag"
+
+    def test_orthogonal_topic_no_flag(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Never wrap pytest invocation in a wall-clock timeout** — x.\n",
+        )
+        # Different topic entirely, even though it contains 'always' (polarity word
+        # present but NO shared object token) → topic pre-filter blocks it.
+        flag = detect_contradiction(
+            "Always debounce the frontend scroll handler to avoid re-render storms.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is None, "different topic must NOT flag on a bare polarity word"
+
+    def test_no_polarity_word_no_flag(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Never wrap pytest invocation in a wall-clock timeout** — x.\n",
+        )
+        # Same topic but neither text carries an antonym-pair partner → no flip.
+        flag = detect_contradiction(
+            "The pytest invocation timeout should be documented in TECH.md.",
+            "MEMORY.md", tmp_path,
+        )
+        assert flag is None
+
+    def test_real_memory_pairs_no_false_positive(self, tmp_path):
+        """>=5 real same-topic-ish guideline titles copied from MEMORY.md — none
+        contradict each other → detect_contradiction must return None for each."""
+        from core.ddd_cultivation import detect_contradiction
+        self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **extract intent to a pure helper prod+test share** — mutation-verify.\n\n"
+            "- [guideline] **state ownership follows required DOM position** — x.\n\n"
+            "- [guideline] **data: URL beats both srcDoc and src=endpoint when content is in memory** — y.\n\n"
+            "- [guideline] **fail-closed must pair with a positive counter (silent-death twin)** — z.\n\n"
+            "- [guideline] **regex replacement string must be callable not f-string** — w.\n",
+        )
+        additive = [
+            "extract the pure helper so prod and test share one code path",
+            "state ownership should track the DOM node that must render it",
+            "prefer a data: URL when the artifact content is already in memory",
+            "a fail-closed guard needs a positive counter so silent death is visible",
+        ]
+        for text in additive:
+            assert detect_contradiction(text, "MEMORY.md", tmp_path) is None, \
+                f"additive/agreeing lesson falsely flagged: {text!r}"
+
+    # ── AC3: zero auto-delete / zero block — pure read-only function ───────────
+    def test_detect_is_pure_no_write(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        doc = self._doc(
+            tmp_path,
+            "## Guidelines\n\n"
+            "- [guideline] **Never wrap pytest in a wall-clock timeout** — x.\n",
+        )
+        before = doc.read_text(encoding="utf-8")
+        detect_contradiction("Always wrap pytest in a wall-clock timeout.", "MEMORY.md", tmp_path)
+        after = doc.read_text(encoding="utf-8")
+        assert before == after, "detect_contradiction must NOT modify the doc (zero-write)"
+
+    def test_missing_doc_returns_none(self, tmp_path):
+        from core.ddd_cultivation import detect_contradiction
+        # No doc written → fail-safe None (never crash, never block admission).
+        assert detect_contradiction("Always wrap pytest.", "MEMORY.md", tmp_path) is None
+
+    # ── AC5: no LLM / no embeddings — static source check ──────────────────────
+    def test_no_llm_or_embedding_dependency(self):
+        import ast
+        import inspect
+        from core.ddd_cultivation import detect_contradiction
+        # Check the CODE body, not the docstring (the docstring legitimately says
+        # 'no embedding / D5-LLM job' — a raw substring grep would false-positive on
+        # its own honest prose). Strip the docstring, then scan the executable code.
+        func = ast.parse(inspect.getsource(detect_contradiction)).body[0]
+        if (func.body and isinstance(func.body[0], ast.Expr)
+                and isinstance(func.body[0].value, ast.Constant)):
+            func.body = func.body[1:]  # drop docstring node
+        code_only = ast.unparse(func).lower()
+        for banned in ("bedrock", "embed", "boto3", "invoke_model", "titan", "cosine"):
+            assert banned not in code_only, f"detect_contradiction code must not use {banned!r}"
+
+    # ── AC6: backward-compat — contradiction_flag round-trips, defaults None ───
+    def test_proposal_contradiction_flag_roundtrip(self):
+        from core.ddd_cultivation import CultivationProposal
+        p = CultivationProposal(
+            target_doc="MEMORY.md", target_section="Guidelines",
+            content="always X", source_run_id="run_t", confidence=0.5,
+            contradiction_flag={"conflicting_title": "Never X", "section": "Guidelines",
+                                "flip": ["never", "always"]},
+        )
+        d = p.to_dict()
+        assert d["contradiction_flag"]["conflicting_title"] == "Never X"
+        p2 = CultivationProposal.from_dict(d)
+        assert p2.contradiction_flag == p.contradiction_flag
+
+    def test_legacy_proposal_json_defaults_none(self):
+        """Old proposal JSON (pre-run_171a17c2) lacks contradiction_flag → None."""
+        from core.ddd_cultivation import CultivationProposal
+        legacy = {
+            "id": "proposal_abc", "target_doc": "IMPROVEMENT.md",
+            "target_section": "What Worked", "content": "x", "source_run_id": "run_old",
+            "confidence": 0.7, "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        p = CultivationProposal.from_dict(legacy)
+        assert p.contradiction_flag is None
+
+    def test_default_contradiction_flag_is_none(self):
+        from core.ddd_cultivation import CultivationProposal
+        p = CultivationProposal(
+            target_doc="MEMORY.md", target_section="Guidelines",
+            content="x", source_run_id="run_t", confidence=0.5,
+        )
+        assert p.contradiction_flag is None
+
+    # ── Wiring: filter_lessons_for_ddd append branch sets the flag ─────────────
+    def test_filter_sets_contradiction_flag_on_append(self, tmp_path):
+        from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
+        lesson = ("Always retry the poisoned subprocess in-turn — "
+                  "a quick in-turn retry handles the benign flake.")
+        classified = _classify_lesson(lesson, project="SwarmAI")
+        if classified is None:
+            pytest.skip("lesson not classified — wiring tested via detect_contradiction directly")
+        # Seed the curated (contradicting) entry into the doc the classifier ACTUALLY
+        # routes this lesson to — detect_contradiction reads target_doc, so the fixture
+        # must live there (the classifier may pick TECH.md/IMPROVEMENT.md by content).
+        target_doc, target_section = classified[0], classified[1]
+        # Seed ONE curated entry into the doc+section the classifier routes to.
+        # (Duplicating it would give every topic token doc_freq==2 → the
+        # distinguishing-token FP-guard correctly returns None — a real property,
+        # not a bug.)
+        (tmp_path / target_doc).write_text(
+            f"## {target_section}\n\n"
+            "- [guideline] **Never retry the poisoned subprocess in-turn** — "
+            "cross a process boundary instead.\n",
+            encoding="utf-8",
+        )
+        props = filter_lessons_for_ddd([lesson], "run_t", "SwarmAI", tmp_path)
+        assert len(props) >= 1
+        # It's an append (no supersession language) carrying the advisory flag.
+        appended = [p for p in props if p.change_type == "append"]
+        assert appended, "no-supersession lesson must be an append"
+        assert appended[0].contradiction_flag is not None
+        assert "subprocess" in appended[0].contradiction_flag["conflicting_title"].lower()
+
+    def test_filter_no_flag_when_no_contradiction(self, tmp_path):
+        from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
+        (tmp_path / "IMPROVEMENT.md").write_text(
+            "## What Worked\n\n"
+            "- [guideline] **Gate-1 caught a layer error pre-code** — worth the run.\n",
+            encoding="utf-8",
+        )
+        lesson = "The frontend reconcile store is the single render authority."
+        if _classify_lesson(lesson, project="SwarmAI") is None:
+            pytest.skip("lesson not classified")
+        props = filter_lessons_for_ddd([lesson], "run_t", "SwarmAI", tmp_path)
+        for p in props:
+            assert p.contradiction_flag is None
+
+    # Gate-2 MED regression (run_171a17c2): the flag must NOT be dead on the
+    # auto-apply path — log_application must record it in the changelog.
+    def test_log_application_records_contradiction_flag(self, tmp_path):
+        import json as _json
+        from core.ddd_cultivation import CultivationProposal, log_application
+        p = CultivationProposal(
+            target_doc="MEMORY.md", target_section="Guidelines",
+            content="Always wrap pytest in a timeout", source_run_id="run_t",
+            confidence=0.6,
+            contradiction_flag={"conflicting_title": "Never wrap pytest in a timeout",
+                                "section": "Guidelines", "flip": ["never", "always"],
+                                "shared_topic": "pytest"},
+        )
+        log_application(p, tmp_path, created_section=False)
+        changelog = (tmp_path / ".artifacts" / "ddd-changelog.jsonl").read_text()
+        entry = _json.loads(changelog.strip().splitlines()[-1])
+        assert entry.get("contradiction_flag") is not None, \
+            "auto-apply changelog must surface the contradiction_flag (not dead-drop it)"
+        assert entry["contradiction_flag"]["conflicting_title"] == "Never wrap pytest in a timeout"
+
+    def test_log_application_omits_flag_when_none(self, tmp_path):
+        import json as _json
+        from core.ddd_cultivation import CultivationProposal, log_application
+        p = CultivationProposal(
+            target_doc="MEMORY.md", target_section="Guidelines",
+            content="x", source_run_id="run_t", confidence=0.6,
+        )
+        log_application(p, tmp_path, created_section=False)
+        entry = _json.loads(
+            (tmp_path / ".artifacts" / "ddd-changelog.jsonl").read_text().strip().splitlines()[-1]
+        )
+        assert "contradiction_flag" not in entry  # no key when None (no noise)

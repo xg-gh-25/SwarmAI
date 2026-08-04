@@ -150,6 +150,14 @@ class CultivationProposal:
     # False → the retire ESCALATES to the human queue (borderline / close runner-up
     # / keep-class). Only meaningful when change_type != "append".
     auto_apply_ok: bool = False
+    # run_171a17c2: ADVISORY contradiction signal for APPEND proposals. When
+    # detect_contradiction found this append polarity-flips a same-topic curated
+    # entry, this holds ContradictionFlag.to_dict() ({conflicting_title, section,
+    # flip, shared_topic}); None otherwise. NON-BLOCKING, NON-DESTRUCTIVE — it does
+    # NOT change change_type (stays "append") and does NOT trigger any retire; it is
+    # surfaced to the human/agent review layer to judge. Additive + defaults None →
+    # old proposal JSON round-trips unchanged (AC6).
+    contradiction_flag: "Optional[dict]" = None
 
     def to_dict(self) -> dict:
         """Serialize to dict for JSON storage."""
@@ -169,6 +177,7 @@ class CultivationProposal:
             "evidence": self.evidence,
             "replacement_content": self.replacement_content,
             "auto_apply_ok": self.auto_apply_ok,
+            "contradiction_flag": self.contradiction_flag,
         }
 
     @classmethod
@@ -195,6 +204,7 @@ class CultivationProposal:
             evidence=data.get("evidence", ""),
             replacement_content=data.get("replacement_content", ""),
             auto_apply_ok=data.get("auto_apply_ok", False),
+            contradiction_flag=data.get("contradiction_flag", None),
         )
 
     def is_expired(self) -> bool:
@@ -490,6 +500,7 @@ def filter_lessons_for_ddd(
         target_title = ""
         evidence = ""
         auto_apply_ok = False
+        contradiction_flag = None
         if project_dir is not None and _detect_supersession(lesson):
             located = _locate_target_entry(lesson, target_doc, project_dir)
             if located is not None:
@@ -497,6 +508,17 @@ def filter_lessons_for_ddd(
                 change_type = "retire"
                 evidence = lesson.strip()
                 auto_apply_ok = confident
+
+        # run_171a17c2: ADVISORY contradiction detection on the APPEND path only.
+        # A retire already handles a self-declared supersession; here we catch the
+        # OTHER case — a non-superseding append that silently polarity-flips a
+        # same-topic curated entry. Read-only, non-blocking: sets an advisory flag,
+        # never changes change_type, never retires. Only when project_dir is given
+        # (pure append-only callers with project_dir=None keep zero-I/O behavior).
+        if change_type == "append" and project_dir is not None:
+            _flag = detect_contradiction(lesson, target_doc, project_dir)
+            if _flag is not None:
+                contradiction_flag = _flag.to_dict()
 
         proposal = CultivationProposal(
             target_doc=target_doc,
@@ -508,6 +530,7 @@ def filter_lessons_for_ddd(
             target_title=target_title,
             evidence=evidence,
             auto_apply_ok=auto_apply_ok,
+            contradiction_flag=contradiction_flag,
         )
         proposals.append(proposal)
 
@@ -907,6 +930,209 @@ def _detect_supersession(lesson: str) -> bool:
     return _SUPERSESSION_RE.search(lesson) is not None
 
 
+# ── Topic tokenizer (module-level; extracted from _locate_target_entry's nested
+# ── _tokens/_GENERIC in run_171a17c2 so detect_contradiction can reuse it
+# ── READ-ONLY). Byte-behavior-identical to the former nested version.
+# Generic DDD/engineering vocabulary that co-occurs across unrelated entries and
+# carries no TOPIC identity. Gate-2 HIGH (run_b8f10185): without this filter a
+# lesson about topic A matched topic B on shared structural words ("recovery"+
+# "pattern"). NOTE (run_171a17c2): this denylist DELIBERATELY includes the
+# polarity words never/always/should/would — they carry no *topic* identity, so
+# they MUST be stripped for topic-matching. This is exactly why detect_contradiction
+# runs its polarity test on RAW text, never on _entry_tokens output (Gate-1 FATAL
+# catch: tokenizing would delete the very never/always the flip test needs).
+_ENTRY_GENERIC = frozenset({
+    "pattern", "patterns", "recovery", "approach", "works", "worked",
+    "fix", "fixes", "fixed", "issue", "issues", "problem", "problems",
+    "code", "test", "tests", "session", "sessions", "error", "errors",
+    "gate", "check", "checks", "path", "paths", "case", "cases", "data",
+    "system", "state", "value", "values", "call", "calls", "func", "function",
+    "method", "class", "field", "fields", "change", "changes", "update",
+    "using", "used", "when", "with", "that", "this", "from", "into", "must",
+    "should", "would", "never", "always", "before", "after", "than", "then",
+})
+
+
+def _entry_tokens(text: str) -> set[str]:
+    """Lowercase topic tokens (Latin ≥4 chars / CJK ≥2 chars) minus _ENTRY_GENERIC.
+    Used for TOPIC identity only — NOT for polarity (polarity words are in the
+    denylist by design). Module-level so both _locate_target_entry and
+    detect_contradiction share one tokenizer (run_171a17c2 extract)."""
+    return {
+        w for w in re.findall(r"[a-zA-Z_]{4,}|[一-鿿]{2,}", text.lower())
+        if w not in _ENTRY_GENERIC
+    }
+
+
+@dataclass
+class ContradictionFlag:
+    """Advisory signal: a newly-admitted APPEND lesson polarity-flips a same-topic
+    curated entry. NON-BLOCKING, NON-DESTRUCTIVE — names the conflicting entry for
+    a human/agent to judge; NEVER retires or resolves (do-not-delete-on-guesses).
+
+    Recall boundary (honest): this catches EXPLICIT polarity flips only
+    (never↔always, do↔don't, use↔avoid, enable↔disable, add↔remove, block↔allow,
+    require↔forbid, CJK 要↔不要 / 应该↔不应该). Semantic/paraphrase contradiction is
+    NOT token-detectable and remains the deferred D5-LLM job (ddd_health.py)."""
+    conflicting_title: str  # exact title of the curated entry the new lesson flips
+    section: str            # the curated entry's ## section
+    flip: "tuple[str, str]"  # (word_in_existing, word_in_new) antonym pair that flipped
+    shared_topic: str = ""  # a distinguishing shared object token (proves same-topic)
+
+    def to_dict(self) -> dict:
+        return {
+            "conflicting_title": self.conflicting_title,
+            "section": self.section,
+            "flip": list(self.flip),
+            "shared_topic": self.shared_topic,
+        }
+
+
+# Curated antonym pairs (ordered so each side maps to its partner). A "flip" =
+# one text contains side-A and the other contains side-B (both as whole words).
+# Kept SMALL + high-confidence on purpose — every added pair widens the false-
+# positive surface (Principle 1: a false flag that survives poisons the brain).
+_POLARITY_ANTONYMS: "tuple[tuple[str, str], ...]" = (
+    ("never", "always"),
+    ("don't", "do"),
+    ("do not", "do"),
+    ("avoid", "use"),
+    ("disable", "enable"),
+    ("remove", "add"),
+    ("block", "allow"),
+    ("forbid", "require"),
+    ("reject", "accept"),
+    ("不要", "要"),
+    ("不应该", "应该"),
+    ("禁止", "允许"),
+)
+# Whole-word matcher per polarity token (Latin uses word boundaries; CJK, which
+# has no \b, uses substring — CJK tokens above are distinctive enough).
+_POLARITY_TOKENS = {w for pair in _POLARITY_ANTONYMS for w in pair}
+
+
+def _polarity_words_present(raw_lower: str) -> set[str]:
+    """Which polarity tokens appear in raw_lower (whole-word for Latin, substring
+    for CJK). Operates on RAW text — NOT _entry_tokens output (which strips them).
+
+    Gate-2 HIGH (run_171a17c2): a NEGATION must not also register its POSITIVE
+    partner. 'do not' contains a boundary-matchable 'do'; the CJK '不要' contains
+    '要', '不应该' contains '应该'. Left uncorrected, the flip guard `a not in
+    new_pol` silently DROPS a genuine flip when the negation is on the new side
+    (existing 'do' vs new 'do not' → missed). Fix: after collecting, drop any
+    token that is a PROPER SUBSTRING of another present token (longest wins) —
+    so 'do not'→{'do not'}, '不要'→{'不要'}. Correct for both Latin & CJK."""
+    present: set[str] = set()
+    for tok in _POLARITY_TOKENS:
+        if tok.isascii():
+            if re.search(r"(?<![a-z])" + re.escape(tok) + r"(?![a-z])", raw_lower):
+                present.add(tok)
+        else:
+            if tok in raw_lower:
+                present.add(tok)
+    # Substring-subsumption: a token contained in a longer present token is an
+    # artifact of that longer token (the positive partner leaking out of its
+    # negation), not an independent occurrence — drop it.
+    return {
+        t for t in present
+        if not any(t != other and t in other for other in present)
+    }
+
+
+def detect_contradiction(
+    text: str, target_doc: str, project_dir: Path
+) -> "ContradictionFlag | None":
+    """ADVISORY, READ-ONLY: flag if `text` (a newly-admitted lesson) polarity-flips
+    a same-topic curated entry in target_doc. Returns a ContradictionFlag naming the
+    conflicting entry, or None. NEVER writes, NEVER retires, NEVER blocks admission,
+    NEVER calls an LLM/embedding. Fail-safe: any missing doc / parse error → None.
+
+    Two-stage, both conservative (run_171a17c2, Gate-1 hardened):
+      1. TOPIC pre-filter — reuse _entry_tokens (same denylist as _locate_target_entry)
+         to find the strongest same-topic curated entry: ≥2 non-generic token overlap
+         AND ≥50% coverage AND a distinguishing (doc-frequency-1) shared token. This is
+         the SAME strength gate the locate engine uses to avoid cross-topic collisions.
+      2. POLARITY flip — on RAW lowercased text of BOTH the new lesson and the located
+         entry (title + raw_text), check for an antonym pair where the existing entry
+         carries side-A and the new lesson carries side-B (or vice-versa) AND they are
+         NOT the same side. Runs on RAW text precisely because _entry_tokens strips
+         never/always/should/would (Gate-1 FATAL catch).
+
+    Only an explicit polarity flip fires — semantic contradiction is out of scope
+    (honest recall boundary; that is the deferred D5-LLM job)."""
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        doc_path = ddd_path(project_dir, target_doc)
+        if not doc_path.exists():
+            return None
+        from core.ddd_entry_lifecycle import parse_entries
+        content = doc_path.read_text(encoding="utf-8")
+    except (OSError, ImportError, UnicodeDecodeError):
+        return None
+
+    entries = parse_entries(content, include_prose=True)
+    if not entries:
+        return None
+
+    new_tokens = _entry_tokens(text)
+    if not new_tokens:
+        return None
+
+    # Document-frequency of each title token (for the distinguishing-token gate —
+    # denylist-independent proof the match is about THIS entry, not generic collision).
+    title_tok_lists = [_entry_tokens(e.title) for e in entries]
+    doc_freq: dict[str, int] = {}
+    for tt in title_tok_lists:
+        for w in tt:
+            doc_freq[w] = doc_freq.get(w, 0) + 1
+
+    # Stage 1: strongest same-topic entry (same floor as _locate_target_entry).
+    best = None
+    best_shared: set[str] = set()
+    best_score = 0
+    best_ratio = 0.0
+    for e, title_tokens in zip(entries, title_tok_lists):
+        if not title_tokens:
+            continue
+        shared = new_tokens & title_tokens
+        overlap = len(shared)
+        ratio = overlap / len(title_tokens)
+        if overlap > best_score or (overlap == best_score and ratio > best_ratio):
+            best_score = overlap
+            best_ratio = ratio
+            best = e
+            best_shared = shared
+    if best is None or best_score < 2 or best_ratio < 0.5:
+        return None
+    # Distinguishing token: a shared token unique to this entry's title doc-wide.
+    distinguishing = [w for w in best_shared if doc_freq.get(w, 0) == 1]
+    if not distinguishing:
+        return None
+
+    # Stage 2: polarity flip on RAW text (NOT tokens — they strip never/always).
+    new_lower = text.lower()
+    existing_lower = (best.title + " " + best.raw_text).lower()
+    new_pol = _polarity_words_present(new_lower)
+    existing_pol = _polarity_words_present(existing_lower)
+    if not new_pol or not existing_pol:
+        return None
+    for a, b in _POLARITY_ANTONYMS:
+        # existing carries side-A and new carries side-B (a genuine flip), and the
+        # new lesson does NOT also carry side-A (which would be agreement, not flip).
+        if a in existing_pol and b in new_pol and a not in new_pol:
+            return ContradictionFlag(
+                conflicting_title=best.title, section=best.section,
+                flip=(a, b), shared_topic=sorted(distinguishing)[0],
+            )
+        if b in existing_pol and a in new_pol and b not in new_pol:
+            return ContradictionFlag(
+                conflicting_title=best.title, section=best.section,
+                flip=(b, a), shared_topic=sorted(distinguishing)[0],
+            )
+    return None
+
+
 def _locate_target_entry(
     lesson: str, target_doc: str, project_dir: Path
 ) -> "tuple[str, str, bool] | None":
@@ -952,27 +1178,11 @@ def _locate_target_entry(
     if not entries:
         return None
 
-    # Tokenize into lowercase word-stems ≥4 chars (Latin) or ≥2 chars (CJK),
-    # MINUS generic DDD/engineering vocabulary that co-occurs across unrelated
-    # entries. Gate-2 HIGH (run_b8f10185): without this filter, a lesson about
-    # topic A retires an entry about topic B on 2 shared structural words (e.g.
-    # "recovery"+"pattern", "fix"+"works"). These carry no topic identity.
-    _GENERIC = frozenset({
-        "pattern", "patterns", "recovery", "approach", "works", "worked",
-        "fix", "fixes", "fixed", "issue", "issues", "problem", "problems",
-        "code", "test", "tests", "session", "sessions", "error", "errors",
-        "gate", "check", "checks", "path", "paths", "case", "cases", "data",
-        "system", "state", "value", "values", "call", "calls", "func", "function",
-        "method", "class", "field", "fields", "change", "changes", "update",
-        "using", "used", "when", "with", "that", "this", "from", "into", "must",
-        "should", "would", "never", "always", "before", "after", "than", "then",
-    })
-
-    def _tokens(text: str) -> set[str]:
-        return {
-            w for w in re.findall(r"[a-zA-Z_]{4,}|[一-鿿]{2,}", text.lower())
-            if w not in _GENERIC
-        }
+    # Tokenize into topic tokens via the module-level _entry_tokens (extracted
+    # run_171a17c2 so detect_contradiction can reuse the SAME topic-identity
+    # denylist read-only, without duplicating it). Byte-behavior-identical to the
+    # former nested _tokens/_GENERIC. See _ENTRY_GENERIC / _entry_tokens above.
+    _tokens = _entry_tokens
 
     lesson_tokens = _tokens(lesson)
     if not lesson_tokens:
@@ -1177,6 +1387,22 @@ def log_application(
         "source_stage": proposal.source_stage,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    # Gate-2 MED (run_171a17c2): surface the advisory contradiction_flag on the
+    # AUTO-APPLY path. Without this the flag was computed then discarded exactly
+    # when a contradicting lesson silently lands in the doc (the case it exists to
+    # make visible) — the escalate path serialized it via to_dict, but auto-apply
+    # dropped it. Recording it in the changelog lets the DDD weekly report / audit
+    # see "entry applied but contradicts curated entry X" without blocking the
+    # append (advisory, non-destructive — do-not-delete-on-guesses).
+    if proposal.contradiction_flag is not None:
+        entry["contradiction_flag"] = proposal.contradiction_flag
+        logger.warning(
+            "DDD cultivation: applied append to %s/%s CONTRADICTS curated entry %r "
+            "(polarity flip %s) — advisory, review recommended",
+            proposal.target_doc, proposal.target_section,
+            proposal.contradiction_flag.get("conflicting_title"),
+            proposal.contradiction_flag.get("flip"),
+        )
     with open(changelog_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
