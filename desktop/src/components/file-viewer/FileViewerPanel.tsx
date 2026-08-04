@@ -439,7 +439,7 @@ function FileViewerPanelImpl({
                 when collapsed (not unmounted) so counts + onCanvasMeta stay live
                 — the bar's "N files" summary keeps updating while folded. */}
             <div
-              className={outputsCollapsed ? 'hidden' : 'max-h-32 overflow-y-auto px-1.5 pb-1.5'}
+              className={outputsCollapsed ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
               <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} selectedPath={selectedPath} />

@@ -32,6 +32,7 @@ import { useReferencedFiles, type ReferencedFile } from '../../hooks/useReferenc
 import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
+import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 
 /**
  * Known bookkeeping dot-directories. A DENYLIST, not "any dot-segment" — the
@@ -65,9 +66,15 @@ export function isBookkeepingPath(path: string): boolean {
   return false;
 }
 
-const BADGE_STYLE: Record<ChangeStatus, { dotCls: string; tag: string; tagCls: string }> = {
-  new: { dotCls: 'bg-green-400', tag: 'NEW', tagCls: 'text-green-400' },
-  upd: { dotCls: 'bg-yellow-500', tag: 'UPD', tagCls: 'text-yellow-500' },
+/**
+ * Tree-list status chip (mirrors the SwarmWS explorer's `gitStatusBadge`): a
+ * COMPACT single-letter chip — `A` (added=green) / `M` (modified=yellow) — using
+ * the git SEMANTIC color CSS vars, NEVER `--color-primary` (the accent is
+ * header-only; the list rows carry only git-semantic color, XG 2026-08-04).
+ */
+const BADGE_STYLE: Record<ChangeStatus, { label: string; color: string }> = {
+  new: { label: 'A', color: 'var(--color-git-added)' },
+  upd: { label: 'M', color: 'var(--color-git-modified)' },
 };
 
 /** Sort: NEW first, then UPD, then unbadged; newest-first within a group. */
@@ -137,16 +144,17 @@ const OutputRow = memo(function OutputRow({
   const style = badge ? BADGE_STYLE[badge] : null;
   const dir = dirOf(file.path);
 
-  // Row = [status dot] [mono name] [NEW/UPD tag] [dir · right-aligned] [copy · hover].
-  // Selected row carries a NEUTRAL left-bar (::before) + neutral fill — the ONE
-  // signal linking the stream to the focused file below. Region A (the list) is
-  // kept accent-FREE by design: ONLY the header carries the primary accent (the
-  // color-primary bottom-border in FileViewerPanel). So selection uses neutral
-  // greys — a --color-border FILL (stronger than the --color-hover hover shade, so
+  // Row = [file icon] [name] [A/M chip] [dir · right-aligned] [copy · hover] — the
+  // SwarmWS explorer's standard tree-list style (TreeNodeRow): 12px, ~26px row, a
+  // file-type icon, a compact single-letter git chip. Region A (the list) is kept
+  // accent-FREE by design: ONLY the header carries the primary accent (the
+  // color-primary bottom-border in FileViewerPanel). Selection uses neutral greys —
+  // a --color-border FILL (stronger than the --color-hover hover shade, so
   // selected ≠ hovered) + a --color-text-muted left bar — never --color-primary.
+  // The A/M chip carries only the git SEMANTIC color (green/yellow).
   return (
     <div
-      className={`group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors ${
+      className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors ${
         fresh ? 'canvas-output-fresh ' : ''
       }${
         selected
@@ -161,27 +169,43 @@ const OutputRow = memo(function OutputRow({
       {selected && (
         <span
           aria-hidden="true"
-          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
+          className="absolute left-0.5 top-1 bottom-1 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
         />
       )}
-      {style && <span className={`shrink-0 w-[7px] h-[7px] rounded-full ${style.dotCls}`} aria-hidden="true" />}
       <span
-        className={`shrink-0 truncate font-mono ${
-          selected ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text-muted)]'
+        className="material-symbols-outlined shrink-0 text-[16px] leading-none"
+        style={{ color: fileIconColor(file.fileName) }}
+        aria-hidden="true"
+        data-testid="canvas-output-icon"
+      >
+        {fileIcon(file.fileName)}
+      </span>
+      <span
+        className={`shrink-0 truncate ${
+          selected ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text)]'
         }`}
       >
         {file.fileName}
       </span>
-      {style && <span className={`shrink-0 text-[9px] font-bold tracking-wide ${style.tagCls}`}>{style.tag}</span>}
+      {style && (
+        <span
+          className="shrink-0 text-[10px] font-semibold leading-none font-mono"
+          style={{ color: style.color }}
+          data-testid="canvas-output-badge"
+          title={badge === 'new' ? 'added' : 'modified'}
+        >
+          {style.label}
+        </span>
+      )}
       {dir && (
-        <span className="ml-auto truncate font-mono text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+        <span className="ml-auto truncate text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
           {dir}
         </span>
       )}
       <button
         onClick={handleCopy}
         className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
-        title="Copy path"
+        title="Copy absolute path"
         aria-label={`Copy path of ${file.fileName}`}
       >
         <span className="material-symbols-outlined text-[12px]">content_copy</span>
@@ -351,7 +375,7 @@ const BrowsingRow = memo(function BrowsingRow({
         Browsing
       </div>
       <div
-        className="group relative flex h-[30px] items-center gap-2 pl-3 pr-2 cursor-pointer rounded-md text-[12.5px] transition-colors bg-[var(--color-border)]"
+        className="group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors bg-[var(--color-border)]"
         onClick={handleClick}
         title={path}
         data-selected
@@ -359,19 +383,19 @@ const BrowsingRow = memo(function BrowsingRow({
       >
         <span
           aria-hidden="true"
-          className="absolute left-0.5 top-1.5 bottom-1.5 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
+          className="absolute left-0.5 top-1 bottom-1 w-[2.5px] rounded-full bg-[var(--color-text-muted)]"
         />
         <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-text-muted)]" aria-hidden="true">visibility</span>
-        <span className="shrink-0 truncate font-mono text-[var(--color-text)] font-medium">{fileName}</span>
+        <span className="shrink-0 truncate text-[var(--color-text)] font-medium">{fileName}</span>
         {dir && (
-          <span className="ml-auto truncate font-mono text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
+          <span className="ml-auto truncate text-[10.5px] text-[var(--color-text-faint,var(--color-text-muted))]">
             {dir}
           </span>
         )}
         <button
           onClick={handleCopy}
           className={`${dir ? '' : 'ml-auto '}opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0`}
-          title="Copy path"
+          title="Copy absolute path"
           aria-label={`Copy path of ${fileName}`}
         >
           <span className="material-symbols-outlined text-[12px]">content_copy</span>
