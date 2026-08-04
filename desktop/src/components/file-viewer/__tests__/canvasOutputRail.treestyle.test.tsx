@@ -91,4 +91,14 @@ describe('CanvasOutputRail — tree-list row style', () => {
     // dir locator = dirname of file.path (relative) — proves no new path logic.
     expect(screen.getByText('src/components')).toBeTruthy();
   });
+
+  it('exposes list semantics (role=list wrapping role=listitem rows) for a11y', () => {
+    mockFiles = [mkFile('a.ts', 2000), mkFile('b.ts', 1000)];
+    render(<CanvasOutputRail sessionId="s1" />);
+    const list = screen.getByRole('list');
+    expect(list).toBeTruthy();
+    // Each output row is a listitem within the list.
+    const items = screen.getAllByRole('listitem');
+    expect(items.length).toBe(2);
+  });
 });

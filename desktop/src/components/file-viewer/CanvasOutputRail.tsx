@@ -153,8 +153,8 @@ const OutputRow = memo(function OutputRow({
   // selected ≠ hovered) + a --color-text-muted left bar — never --color-primary.
   // The A/M chip carries only the git SEMANTIC color (green/yellow).
   return (
-    <div
-      className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors ${
+    <li
+      className={`group relative flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors list-none ${
         fresh ? 'canvas-output-fresh ' : ''
       }${
         selected
@@ -210,7 +210,7 @@ const OutputRow = memo(function OutputRow({
       >
         <span className="material-symbols-outlined text-[12px]">content_copy</span>
       </button>
-    </div>
+    </li>
   );
 });
 
@@ -314,7 +314,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
   }
 
   return (
-    <div className="flex flex-col gap-px py-0.5" data-testid="canvas-output-rail">
+    <ul className="flex flex-col gap-px py-0.5 list-none m-0 p-0" data-testid="canvas-output-rail">
       {ordered.map((file) => (
         <OutputRow
           key={file.path}
@@ -330,7 +330,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
           fileName={browsingFile.fileName}
         />
       )}
-    </div>
+    </ul>
   );
 });
 
@@ -364,10 +364,11 @@ const BrowsingRow = memo(function BrowsingRow({
   const dir = dirOf(path);
 
   return (
-    <>
+    <li className="list-none flex flex-col" data-testid="canvas-browsing-item">
       {/* Always label the browsing row — a lone unlabeled row (browsing with no
           written outputs, the common case) reads as noise; the label gives it
-          context (adversarial F2). */}
+          context (adversarial F2). Nested inside the listitem so the <ul> stays
+          valid (a bare <div> child of <ul> is invalid markup). */}
       <div
         className="px-3 pt-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-faint,var(--color-text-muted))]"
         aria-hidden="true"
@@ -401,6 +402,6 @@ const BrowsingRow = memo(function BrowsingRow({
           <span className="material-symbols-outlined text-[12px]">content_copy</span>
         </button>
       </div>
-    </>
+    </li>
   );
 });

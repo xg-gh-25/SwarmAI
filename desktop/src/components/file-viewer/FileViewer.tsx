@@ -161,6 +161,12 @@ export default function FileViewer({
   const [loadingContent, setLoadingContent] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
 
+  /* ---- Refetch nonce (bug #1: cache invalidation on rewrite) ---- */
+  // Deleting a contentCache entry (a useRef) is invisible to React's effect deps,
+  // so the fetch effect below (deps [filePath, viewType, …]) would NOT re-run on a
+  // cache delete. Bumping this nonce is what actually forces the re-fetch.
+  const [refetchNonce, setRefetchNonce] = useState(0);
+
   /* ---- workspaceId placeholder (FileEditorCore needs it) ---- */
   // The unified viewer does not depend on workspaceId for routing, but
   // FileEditorCore requires it for attach-to-chat. We pass '' as a
@@ -308,6 +314,18 @@ export default function FileViewer({
         }
       } catch (err) {
         if (cancelled) return;
+        // #4: the backend stat-gates at 50 MB and returns HTTP 413 BEFORE reading
+        // the file (workspace_api.get_workspace_file) — so an oversized binary never
+        // streams a huge base64 into memory. Surface that as a helpful "open locally"
+        // message rather than a raw axios error string. The absolutePath needed for
+        // an OS open is not in the 413 body, so we point the user at the copy/reveal
+        // affordance already available for the file.
+        const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status;
+        if (status === 413) {
+          const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+          setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+          return;
+        }
         const msg = err instanceof Error ? err.message : 'Failed to load file';
         setContentError(msg);
       } finally {
@@ -319,7 +337,70 @@ export default function FileViewer({
     return () => {
       cancelled = true;
     };
-  }, [activeTab?.filePath, activeTab?.viewType]); // eslint-disable-line react-hooks/exhaustive-deps
+    // refetchNonce forces a re-run when the open file is rewritten (bug #1) —
+    // deleting the cache ref alone is invisible to React's deps.
+  }, [activeTab?.filePath, activeTab?.viewType, refetchNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* -------------------------------------------------------------- */
+  /*  Auto-refresh on rewrite (bug #1, run_a400d951)                 */
+  /* -------------------------------------------------------------- */
+  // When the agent RE-WRITES a file already open here, the per-filePath
+  // contentCache would otherwise serve STALE content forever (the fetch effect's
+  // deps don't change on a re-open, and openTab dedups a same-path re-open). We
+  // listen for the unified swarm:file-changed and invalidate the matching cache
+  // entr(y|ies), then bump refetchNonce to re-run the fetch for the active tab.
+  //
+  // Scope (Gate-1): text/markdown/svg delegate to FileEditorCore, which has its
+  // OWN swarm:file-changed listener (FileEditorCore.tsx:680) that refetches +
+  // highlights changed lines while protecting unsaved edits. Handling those here
+  // too would double-fetch and fight that logic — so we SKIP them and only act on
+  // FileViewer's own contentCache renderers (image/pdf/video/audio/csv/html/unsupported).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
+      if (!changedPath) return;
+      // The ACTIVE tab, if it's a FileEditorCore type (text/md/svg), self-refreshes
+      // via FileEditorCore's own listener — AND its cache entry must NOT be deleted
+      // here: FileViewer renders <LoadingFallback> on a cache miss (renderActiveContent
+      // `if (!cached)`), which would unmount FileEditorCore into a spinner and kill
+      // its in-place refresh. So we leave that one entry alone.
+      const activeIsEditorCoreType =
+        activeTab != null &&
+        (activeTab.viewType === 'text' ||
+          activeTab.viewType === 'markdown' ||
+          activeTab.viewType === 'svg');
+      // Match mirrors FileEditorCore:648 EXACTLY (asymmetric): exact, or the
+      // event's (absolute) path ends with the cached (workspace-relative) path.
+      // Gate-2 HIGH: an earlier bidirectional form also tested
+      // `cachedPath.endsWith('/'+changedPath)`, which FALSE-MATCHES a shorter
+      // changedPath ('deep/foo.ts') against an unrelated longer cachedPath
+      // ('x/deep/foo.ts') — deleting the wrong file's cache. swarm:file-changed
+      // emits RESOLVED ABSOLUTE paths (streaming_orchestrator), so the asymmetric
+      // form is sufficient and collision-free.
+      const matches = (cachedPath: string) =>
+        changedPath === cachedPath || changedPath.endsWith(`/${cachedPath}`);
+      // Invalidate ALL matching cache entries (not just the active tab) so a
+      // background tab is fresh when switched to (the filePath-dep change on switch
+      // triggers its own refetch). EXCEPT the active FileEditorCore-type entry (above).
+      let activeMatched = false;
+      for (const cachedPath of Object.keys(contentCache.current)) {
+        if (!matches(cachedPath)) continue;
+        const isActive = cachedPath === activeTab?.filePath;
+        if (isActive) {
+          activeMatched = true;
+          if (activeIsEditorCoreType) continue; // keep it — FileEditorCore refreshes in place
+        }
+        delete contentCache.current[cachedPath];
+      }
+      // Only the ACTIVE tab is mounted, so only its refetch needs forcing — and only
+      // for FileViewer's own contentCache renderers (not the FileEditorCore types).
+      if (activeMatched && activeTab && !activeIsEditorCoreType) {
+        setRefetchNonce((n) => n + 1);
+      }
+    };
+    window.addEventListener('swarm:file-changed', handler);
+    return () => window.removeEventListener('swarm:file-changed', handler);
+  }, [activeTab?.filePath, activeTab?.viewType]);
 
   /* -------------------------------------------------------------- */
   /*  Save handler for text-editable files                           */
