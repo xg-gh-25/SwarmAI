@@ -19,10 +19,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, within, fireEvent } from '@testing-library/react';
 import { LayoutProvider } from '../../contexts/LayoutContext';
+import { OverlayProvider } from '../../contexts/OverlayContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
 import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
-import { readNavSource, clearNavSource } from './navSource';
 
 vi.mock('../../services/pty', () => ({
   spawn: vi.fn(() => ({
@@ -39,9 +39,11 @@ function renderSidebar() {
   return render(
     <ToastProvider>
       <LayoutProvider>
-        <TerminalProvider>
-          <LeftSidebar />
-        </TerminalProvider>
+        <OverlayProvider>
+          <TerminalProvider>
+            <LeftSidebar />
+          </TerminalProvider>
+        </OverlayProvider>
       </LayoutProvider>
     </ToastProvider>,
   );
@@ -184,14 +186,7 @@ describe('LeftSidebar A10 — highlight tiers (run_edb48c31)', () => {
   });
 });
 
-describe('LeftSidebar A10 — nav-source spit-out origin (spout wiring)', () => {
-  afterEach(() => clearNavSource());
-
-  it('a fullscreen-opening card (SwarmWS) publishes a nav source', () => {
-    clearNavSource();
-    renderSidebar();
-    fireEvent.click(screen.getByTestId('nav-swarmws'));
-    // A10Card captured the card rect (jsdom rects are 0 but the object is set)
-    expect(readNavSource()).not.toBeNull();
-  });
-});
+// The "nav-source spit-out origin" describe was removed 2026-08-04 (M5): A10Card no
+// longer pushes a navSource singleton on click — the OverlayHost re-derives the source
+// card's live rect from its data-testid (sourceCardTestId) at open time. The spout
+// origin is now covered by OverlayHost.test (geometry contract).

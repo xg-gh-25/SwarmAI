@@ -73,7 +73,6 @@ const SECTION_KEYS: Array<BrainDetail['sections'][number]['key']> =
   ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 
 import { BrainHub } from './BrainHub';
-import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
 
 const GALLERY: BrainSummary[] = [
   {
@@ -430,18 +429,11 @@ describe('BrainHub — Assets group in left nav (Specs + Code Intelligence)', ()
   });
 });
 
-describe('BrainHubDemoOverlay (AC5)', () => {
-  it('renders the real BrainHub (not an iframe) on swarm:show-brain-hub', async () => {
-    const { container } = render(<BrainHubDemoOverlay />);
-    // closed initially
-    expect(screen.queryByTestId('brain-hub-overlay')).toBeNull();
-    fireEvent(window, new CustomEvent('swarm:show-brain-hub'));
-    await waitFor(() => expect(screen.getByTestId('brain-hub-overlay')).toBeTruthy());
-    // real React BrainHub mounted, NO iframe
-    expect(screen.getByTestId('brain-hub')).toBeTruthy();
-    expect(container.querySelector('iframe')).toBeNull();
-  });
-});
+// BrainHubDemoOverlay (AC5) describe removed 2026-08-04 (M5): the legacy overlay
+// wrapper was deleted — brain-hub renders through the OverlayHost registry now
+// (overlaySurfaces registers `brain-hub` → <BrainHub/>). The "renders the real
+// BrainHub, not an iframe" guarantee is covered by the Gallery/Brain-view blocks
+// above (they render <BrainHub/> directly) + OverlayHost.test (mount/geometry).
 
 describe('BrainHub — Review tab (Run 2, AC5)', () => {
   async function openReview() {

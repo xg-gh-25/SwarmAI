@@ -17,7 +17,6 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // DomainStubOverlays retired (M3): STUBS array empty, file deleted in M5.
 // CMBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // LibraryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
-import { setNavSource, clearNavSource } from './navSource';
 import { closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
@@ -165,10 +164,9 @@ function LeftSidebar() {
   // list Knowledge/Signals via the existing tree/expand endpoint and open the
   // newest *-digest.md. Graceful toast on empty/failure — never a dead click.
   const handleSignalsClick = async () => {
-    // Opens a file PANEL / toast, not a fullscreen Modal — clear the nav-source so
-    // it can't mis-point a later unrelated fullscreen spout (Gate-2 #3).
-    clearNavSource();
-    closeOpenOverlays(); // a file panel takes over — close any open overlay + clear its card highlight
+    // Opens a file PANEL / toast, not a fullscreen surface — close any open overlay so
+    // the panel isn't stacked under it. (navSource clear removed M5 — no singleton.)
+    closeOpenOverlays();
     try {
       const resp = await api.get<Array<{ name?: string; path?: string }>>(
         '/workspace/tree/expand',
@@ -617,16 +615,12 @@ interface A10CardProps {
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). */
 function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-testid': testId }: A10CardProps) {
-  // Publish THIS card's on-screen position as the shared spit-out origin BEFORE
-  // delegating — so both the window-event overlays and the activeModal modals
-  // open from this card (single injection point, run_2e6d6029 / Gate-1).
-  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    setNavSource(e.currentTarget.getBoundingClientRect(), tint);
-    onClick?.();
-  };
+  // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
+  // its data-testid — sourceCardTestId — at open time, so the spout origin no longer
+  // needs a mutable singleton pushed on click.)
   return (
     <button
-      onClick={handleClick}
+      onClick={onClick}
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
