@@ -260,3 +260,53 @@ def test_batch_stdin_mapping_not_index_aligned(swarmws: Path):
     assert b[paths[0]].review_worthy is True
     assert b[paths[1]].review_worthy is False   # db ignored
     assert b[paths[2]].review_worthy is True     # would be wrong if index-aligned to db's line
+
+
+# ── run_a18d69f5 #5: git-error fails CLOSED (secret-safety), never silent (GUI98) ──
+
+def _make_git_error_run(real_run):
+    """Wrap subprocess.run so `git check-ignore` returns rc 128 (git error),
+    while every OTHER git call (init, etc.) runs for real."""
+    def _run(argv, *a, **kw):
+        if isinstance(argv, (list, tuple)) and "check-ignore" in argv:
+            return subprocess.CompletedProcess(argv, 128, stdout=b"", stderr=b"fatal: boom")
+        return real_run(argv, *a, **kw)
+    return _run
+
+
+def test_single_path_git_error_fails_CLOSED(swarmws: Path, monkeypatch, caplog):
+    """FORCED guard path: git check-ignore errors (rc 128) on a would-be
+    deliverable. Pre-#5 this fail-OPENed → surfaced (could leak a gitignored
+    secret). Post-#5 it fails CLOSED (not surfaced) AND WARN-logs (not silent)."""
+    import logging
+    import core.needs_human_review as mod
+    monkeypatch.setattr(mod.subprocess, "run", _make_git_error_run(subprocess.run))
+    p = _write(swarmws, "secrets.yaml")  # non-dot-prefixed → Layer 2 does NOT catch it
+    with caplog.at_level(logging.WARNING, logger="core.needs_human_review"):
+        v = needs_human_review(str(p.resolve()), "written", swarmws_root=swarmws)
+    assert v.review_worthy is False, "git-error must fail CLOSED (not surface)"
+    assert v.kind == "process"
+    assert any("check-ignore errored" in r.message for r in caplog.records), \
+        "git-error must WARN (GUI98 silent-death guard), not swallow silently"
+
+
+def test_batch_git_error_fails_CLOSED(swarmws: Path, monkeypatch, caplog):
+    """Same as above on the batch path — the second consumption seam must match."""
+    import logging
+    import core.needs_human_review as mod
+    from core.needs_human_review import needs_human_review_batch
+    monkeypatch.setattr(mod.subprocess, "run", _make_git_error_run(subprocess.run))
+    _write(swarmws, "prod.env")
+    _write(swarmws, "Knowledge/Designs/real.md")
+    paths = [
+        str((swarmws / "prod.env").resolve()),
+        str((swarmws / "Knowledge/Designs/real.md").resolve()),
+    ]
+    with caplog.at_level(logging.WARNING, logger="core.needs_human_review"):
+        b = needs_human_review_batch(paths, "written", swarmws_root=swarmws)
+    # BOTH fail closed on git-error — a secret and a deliverable are indistinguishable
+    # when git is broken, so neither surfaces (deliverable re-emits next turn-end sweep).
+    assert b[paths[0]].review_worthy is False
+    assert b[paths[1]].review_worthy is False
+    assert any("check-ignore errored" in r.message for r in caplog.records), \
+        "batch git-error must WARN (GUI98), not swallow silently"

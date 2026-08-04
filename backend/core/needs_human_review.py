@@ -19,8 +19,18 @@ Stand on the signals the system ALREADY maintains authoritatively:
                                     — layer 2: hidden = system = never
 
 - **Default = surface** (it's the human's work). The only subtractions are known
-  machine noise. A miss now fails SAFE (an extra surface, never a dropped piece
-  of the human's work).
+  machine noise. A miss on a NON-git-error path fails SAFE toward surfacing (an
+  extra surface, never a dropped piece of the human's work).
+- **BUT git-error fails CLOSED** (run_a18d69f5 #5, XG-decided): when
+  ``git check-ignore`` itself errors (rc 128 / OSError / timeout / budget-spent)
+  we CANNOT know whether the path is a gitignored secret (``secrets.yaml`` /
+  ``prod.env`` — non-dot-prefixed, so Layer 2 doesn't catch them) or a real
+  deliverable. Surfacing on git-error would leak a secret to the Canvas rail
+  IRREVERSIBLY; under-surfacing a real deliverable is recoverable (the next
+  turn-end sweep re-emits it). Secret-safety > one recoverable missed surface, so
+  the git-error verdict is ``review_worthy=False`` — and is WARN-logged, never
+  silent (the fail-closed silent-death twin, GUI98: a persistently broken git must
+  make noise, not swallow every surface invisibly).
 
 ## Two layers, both load-bearing (Gate-1 corrections, run_dcce7023)
 
@@ -47,16 +57,21 @@ pre-computed "relative" string from elsewhere.
 Fail-safe: NEVER raises (runs on the streaming hot path). On any internal error,
 returns ``review_worthy=False, kind="process"`` (the safe non-surfacing verdict —
 an error must not crash the turn, and defaulting to "don't pop" on error avoids a
-storm of false pops from a broken git).
+storm of false pops from a broken git). This same non-surfacing default is what
+makes the git-error fail-CLOSED path (above) consistent: an unknowable path is
+never surfaced, whether the unknowability comes from a crash or from git erroring.
 """
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["needs_human_review", "ReviewVerdict", "Kind"]
 
@@ -190,7 +205,8 @@ def _git_ignored(tree_root: Path, rel_path: str) -> bool | None:
 
     Returns True if IGNORED (exit 0), False if NOT-IGNORED (exit 1), or ``None``
     if git errored (locked/absent/other) — the caller decides the fail direction
-    for None (fail-OPEN → surface, since the path DID resolve inside a tree).
+    for None (run_a18d69f5 #5: callers now fail-CLOSED on None — an unknowable path
+    might be a gitignored secret, so it is NOT surfaced; WARN-logged, never silent).
     """
     try:
         r = subprocess.run(
@@ -208,7 +224,9 @@ def _git_ignored(tree_root: Path, rel_path: str) -> bool | None:
     return None       # 128 etc → git error
 
 
-def _git_ignored_batch(tree_root: Path, rel_paths: list[str]) -> dict[str, bool | None]:
+def _git_ignored_batch(
+    tree_root: Path, rel_paths: list[str], deadline=None
+) -> dict[str, bool | None]:
     """Batch ``git check-ignore --stdin`` for MANY rel_paths inside ONE tree_root.
 
     ONE subprocess for all paths (vs N single calls — the run_4de279ca perf fix).
@@ -217,26 +235,36 @@ def _git_ignored_batch(tree_root: Path, rel_paths: list[str]) -> dict[str, bool 
     the paths that ARE ignored (a not-ignored input produces NO output line). So
     the mapping is SET-MEMBERSHIP, never index-align. Exit-code contract:
       - rc 0 = at least one ignored, rc 1 = none ignored → BOTH success
-      - rc 128 / OSError / timeout → git error → every path fails-OPEN to None
-        (mirrors the single-path _git_ignored None semantics: the path resolved
-        inside a tree, so under-surfacing is the failure to avoid)
+      - rc 128 / OSError / timeout → git error → every path maps to None
+        (the caller fails-CLOSED on None per run_a18d69f5 #5: an unknowable path
+        might be a gitignored secret, so it is NOT surfaced — WARN-logged, and a
+        real deliverable re-emits on the next turn-end sweep)
+
+    ``deadline`` (run_a18d69f5 #2): a duck-typed object with ``.git_timeout()`` (the
+    run_surface_changes._Deadline) that caps this call at the REMAINING shared budget
+    so a serial multi-tree sweep self-terminates near the total budget. None = the
+    default 15s per-call ceiling. Kept duck-typed (no type import) to avoid a circular
+    import — run_surface_changes imports THIS module.
 
     Returns {rel_path: True(ignored) | False(not) | None(git-errored)}.
     """
     if not rel_paths:
         return {}
+    _git_to = deadline.git_timeout() if deadline is not None else 15.0
+    if _git_to <= 0:
+        return {rel: None for rel in rel_paths}  # budget spent → None (caller fails CLOSED, #5)
     try:
         r = subprocess.run(
             ["git", "check-ignore", "--stdin", "-z"],
             cwd=str(tree_root),
             input=("\x00".join(rel_paths) + "\x00").encode("utf-8"),
             capture_output=True,
-            timeout=15,
+            timeout=_git_to,
         )
     except (OSError, subprocess.SubprocessError):
         return {rel: None for rel in rel_paths}
     if r.returncode not in (0, 1):
-        # 128 etc → git error → fail-OPEN for all (same as single-path None)
+        # 128 etc → git error → None for all (caller fails CLOSED per #5, same as single-path)
         return {rel: None for rel in rel_paths}
     ignored_set = {s for s in r.stdout.decode("utf-8", "replace").split("\x00") if s}
     return {rel: (rel in ignored_set) for rel in rel_paths}
@@ -319,10 +347,19 @@ def needs_human_review(
         ignored = _git_ignored(tree_root, rel_path)
         if ignored is True:
             return ReviewVerdict(False, "process", repo)
-        # ignored is False (not-ignored) OR None (git errored on a resolved path):
-        # both → review-worthy. None fails OPEN because the path DID resolve inside
-        # a tree — under-surfacing a real deliverable is the failure we must avoid.
-
+        if ignored is None:
+            # git ERRORED on a resolved path → fail-CLOSED (run_a18d69f5 #5): we
+            # can't tell a gitignored secret from a deliverable, so don't surface.
+            # WARN (not silent) so a persistently broken git is visible (GUI98).
+            logger.warning(
+                "needs_human_review: git check-ignore errored for %s in %s — "
+                "failing CLOSED (not surfaced); a real deliverable will re-emit "
+                "on the next turn-end sweep.",
+                rel_path, tree_root,
+            )
+            return ReviewVerdict(False, "process", repo)
+        # ignored is False (not-ignored) → review-worthy (the safe direction on a
+        # NON-error verdict: an extra surface, never a dropped piece of work).
         kind = _classify_kind(rel_path, repo)
         return ReviewVerdict(True, kind, repo)
     except Exception:  # noqa: BLE001 — hot-path fail-safe, never crash the turn
@@ -334,13 +371,15 @@ def needs_human_review_batch(
     operation: str = "written",
     *,
     swarmws_root: Optional[str | Path] = None,
+    deadline=None,
 ) -> dict[str, ReviewVerdict]:
     """Batch authority: verdict for MANY paths with ONE check-ignore subprocess PER
     TREE (the run_4de279ca hot-path fix — replaces N per-file subprocesses).
 
     Semantically IDENTICAL to calling ``needs_human_review`` per path (same
     precedence: surfaceable-knowledge → dot-segment → check-ignore → kind; same
-    fail-OPEN on git error; same fail-safe never-raise). Returns {input_path:
+    fail-CLOSED on git error per #5 — an unknowable path is NOT surfaced, WARN-logged;
+    same fail-safe never-raise). Returns {input_path:
     ReviewVerdict} keyed by the ORIGINAL input string (so callers map back
     directly). A path that errors individually gets a process verdict, never
     sinking the batch.
@@ -393,12 +432,22 @@ def needs_human_review_batch(
     # Phase 2: ONE batch check-ignore per tree, then classify_kind on survivors.
     for tree_root, entries in pending.items():
         rel_list = [rel for (_p, rel, _repo) in entries]
-        ignored_map = _git_ignored_batch(tree_root, rel_list)
+        ignored_map = _git_ignored_batch(tree_root, rel_list, deadline)
         for (p, rel_path, repo) in entries:
             ignored = ignored_map.get(rel_path)
             if ignored is True:
                 out[p] = ReviewVerdict(False, "process", repo)
+            elif ignored is None:
+                # git ERRORED → fail-CLOSED (run_a18d69f5 #5): unknowable path is
+                # never surfaced (a gitignored secret must not leak); WARN, not
+                # silent (GUI98). A real deliverable re-emits next turn-end sweep.
+                logger.warning(
+                    "needs_human_review_batch: git check-ignore errored for %s in "
+                    "%s — failing CLOSED (not surfaced).",
+                    rel_path, tree_root,
+                )
+                out[p] = ReviewVerdict(False, "process", repo)
             else:
-                # False (not-ignored) OR None (git-errored) → review-worthy (fail-OPEN)
+                # False (not-ignored) → review-worthy (safe direction, non-error).
                 out[p] = ReviewVerdict(True, _classify_kind(rel_path, repo), repo)
     return out

@@ -448,15 +448,33 @@ class StreamingOrchestrator:
         #    pre-existing dirty files (they're in S0, never in the delta). Captured
         #    off-loop; a git error yields an empty baseline (safe: worst case an
         #    already-dirty file surfaces once, never a crash). ──
+        # run_a18d69f5 (baseline-WARN fix): the turn-START baseline snapshot is
+        # budgeted + wait_for-bounded EXACTLY like the turn-end sweep — otherwise a
+        # wedged git here blocks turn START up to N×15s (the un-bounded twin of the
+        # #2 turn-end bug). _Deadline caps the serial per-tree git calls to the
+        # shared budget; the outer wait_for is a belt-and-suspenders bound (+2s grace
+        # so the inner deadline fires first on the normal path). On timeout/error the
+        # baseline is empty — the safe direction: worst case an already-dirty file
+        # surfaces once at turn-end, never a crash, never a blocked turn start.
         _turn_baseline_paths: set[str] = set()
         try:
-            from core.run_surface_changes import porcelain_snapshot
+            from core.run_surface_changes import porcelain_snapshot, _Deadline
             from core.project_registry import get_swarmws
-            _turn_baseline_paths = await asyncio.to_thread(
-                porcelain_snapshot, get_swarmws()
+            _turn_baseline_paths = await asyncio.wait_for(
+                asyncio.to_thread(
+                    porcelain_snapshot, get_swarmws(), _Deadline(SURFACE_SWEEP_BUDGET_S)
+                ),
+                timeout=SURFACE_SWEEP_BUDGET_S + 2.0,
             )
         except Exception:  # noqa: BLE001 — never block turn start on the baseline
             _turn_baseline_paths = set()
+
+        # run_a18d69f5 #1: did THIS turn issue ANY tool_use? A pure-conversation turn
+        # (zero tool-use) provably cannot mutate the filesystem → the turn-end sweep is
+        # skipped (saves the N+1 git subprocesses). Set on ANY ToolUseBlock below, NEVER
+        # an allowlist — a sub-agent Agent call / Skill / Bash write must all count, or
+        # a non-parent write would be skipped and author-agnostic surfacing would break.
+        _turn_wrote = False
 
         async def _next_or_sentinel():
             """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
@@ -857,6 +875,12 @@ class StreamingOrchestrator:
                             # answered.
                             self._parent._content_emitted = True
                     elif isinstance(block, ToolUseBlock):
+                        # run_a18d69f5 #1: ANY tool_use marks the turn as possibly-wrote
+                        # → the turn-end surface sweep runs. Unconditional (never an
+                        # allowlist): a sub-agent Agent call / Skill / Bash could write
+                        # files the parent never issued a Write for; gating narrower
+                        # would re-break the author-agnostic guarantee.
+                        _turn_wrote = True
                         # ── Track EVERY open tool_use for hang detection (run_fb6e94a9) ──
                         # Records emission time; cleared when the matching
                         # ToolResultBlock arrives. The PID watchdog reads this
@@ -878,19 +902,7 @@ class StreamingOrchestrator:
                                 "label": _agent_label[:80],
                                 "start_time": time.time(),
                             }
-                        # ── Track file-modifying tools for the unified file_changed
-                        #    event (run_e626e121). THREE sources, all backend-side —
-                        #    the single authority that replaces the old frontend
-                        #    summary-parse trigger:
-                        #    (a) Write/Edit/NotebookEdit  → block.input.file_path
-                        #    (b) Bash redirection/copy    → parse_bash_write_targets
-                        #    (c) output-declaring skill   → covered by (a)/(b) in
-                        #        practice (skills write via Write or Bash); a manifest
-                        #        `output:` field would slot in here if ever present.
-                        #    We store raw path(s) keyed by tool_use_id; resolution +
-                        #    relevance happen at the ToolResult (success) point so a
-                        #    failed tool never surfaces, and a read/grep never pays
-                        #    path resolution (perf directive). ──
+                        # ── File-change tracking (run_4de279ca) ──
                         # run_4de279ca: WRITE tracking REMOVED. The turn-end git sweep
                         # (baseline-diff before the `result` yield) is now the SOLE
                         # live-surfacing authority for WRITES — author-agnostic (it
@@ -1450,40 +1462,52 @@ class StreamingOrchestrator:
                 # the delta (S1 - S0) as ONE batched set of file_changed events —
                 # author-agnostic (sub-agent/skill/CLI/hook writes all seen), and
                 # pre-existing dirty files are excluded (they're in the baseline).
-                # LATENCY (Gate-2 F2a — honest): the sweep walks trees SERIALLY, each
-                # git subprocess bounded at 15s — so N trees is N×15s WORST case on
-                # hung git. A total wall-clock budget (SURFACE_SWEEP_BUDGET_S) caps the
-                # whole sweep so a pathological/locked git can NEVER stall the result
-                # yield beyond it; on timeout we skip surfacing this turn (the
-                # pipeline-finish full sweep still catches it). NOT zero latency — the
-                # honest, bounded cost of author-agnostic correctness.
-                try:
-                    from core.run_surface_changes import sweep_turn_delta
-                    from core.project_registry import get_swarmws
-                    _delta_events, _delta_dropped = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            sweep_turn_delta, get_swarmws(), _turn_baseline_paths
-                        ),
-                        timeout=SURFACE_SWEEP_BUDGET_S,
-                    )
-                    for _ev in _delta_events:
-                        yield _ev
-                    if _delta_dropped > 0:
-                        # P8: never silently truncate — one summary row for the overflow.
-                        yield {
-                            "type": "file_changed",
-                            "path": f"… +{_delta_dropped} more files changed (capped)",
-                            "absolutePath": "",
-                            "kind": "content",
-                            "operation": "summary",
-                        }
-                except Exception as _sweep_err:  # noqa: BLE001 — never block turn end
-                    logger.warning(
-                        "turn-end surface sweep failed (session=%s): %s — no live "
-                        "surface this turn, turn still completes",
-                        self._parent.session_id,
-                        f"{type(_sweep_err).__name__}: {_sweep_err}",
-                    )
+                #
+                # run_a18d69f5 #1: SKIP the whole sweep on a ZERO-tool-use turn (pure
+                # conversation) — such a turn provably cannot mutate the filesystem, so
+                # the N+1 git subprocesses would be wasted. Gated on `_turn_wrote`,
+                # set on ANY ToolUseBlock (NOT an allowlist — a sub-agent Agent call or
+                # a Skill/Bash write must still trigger the sweep, else author-agnostic
+                # surfacing silently breaks). The baseline (turn-start) is STILL always
+                # captured — it can't be conditioned on a flag not yet known at capture.
+                #
+                # run_a18d69f5 #2: the sweep gets a TOTAL wall-clock budget (budget_s)
+                # threaded as a monotonic deadline INTO the serial git calls, so the
+                # worker thread self-terminates near the budget (a per-call timeout
+                # could not — N serial calls sum past any per-call value). The outer
+                # asyncio.wait_for is a belt-and-suspenders bound on the await itself
+                # (with a small grace margin so the inner deadline fires first on the
+                # normal path); on either timeout we skip surfacing this turn (the
+                # pipeline-finish full sweep still catches it). Bounded, not zero.
+                if _turn_wrote:
+                    try:
+                        from core.run_surface_changes import sweep_turn_delta
+                        from core.project_registry import get_swarmws
+                        _delta_events, _delta_dropped = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                sweep_turn_delta, get_swarmws(),
+                                _turn_baseline_paths, SURFACE_SWEEP_BUDGET_S,
+                            ),
+                            timeout=SURFACE_SWEEP_BUDGET_S + 2.0,
+                        )
+                        for _ev in _delta_events:
+                            yield _ev
+                        if _delta_dropped > 0:
+                            # P8: never silently truncate — one summary row for overflow.
+                            yield {
+                                "type": "file_changed",
+                                "path": f"… +{_delta_dropped} more files changed (capped)",
+                                "absolutePath": "",
+                                "kind": "content",
+                                "operation": "summary",
+                            }
+                    except Exception as _sweep_err:  # noqa: BLE001 — never block turn end
+                        logger.warning(
+                            "turn-end surface sweep failed (session=%s): %s — no live "
+                            "surface this turn, turn still completes",
+                            self._parent.session_id,
+                            f"{type(_sweep_err).__name__}: {_sweep_err}",
+                        )
 
                 yield {
                     "type": "result",

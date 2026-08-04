@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -107,7 +108,7 @@ def _fp_path(fingerprint: str) -> str:
     return fingerprint.split("\x00", 1)[0]
 
 
-def porcelain_snapshot(swarmws_root: Path | str) -> set[str]:
+def porcelain_snapshot(swarmws_root: Path | str, deadline: "_Deadline | None" = None) -> set[str]:
     """The set of (abs-path, mtime) FINGERPRINTS for every changed file across
     SwarmWS + every bound worktree, from ``git status --porcelain`` — the
     turn-boundary baseline (run_4de279ca).
@@ -117,6 +118,8 @@ def porcelain_snapshot(swarmws_root: Path | str) -> set[str]:
     "new this turn" — the safe direction; the sweep's own error bucket is where a
     hard git failure surfaces). Fingerprints (not bare paths) so a RE-EDIT of an
     already-dirty file still surfaces (Gate-2 F1a — a new mtime = a new key).
+    ``deadline`` (run_a18d69f5 #2): bounds the serial per-tree git calls to the
+    shared budget; None = no budget (the 15s per-call ceiling).
     """
     from core.needs_human_review import _worktree_roots
 
@@ -126,14 +129,42 @@ def porcelain_snapshot(swarmws_root: Path | str) -> set[str]:
     snap: set[str] = set()
     for tree in trees:
         try:
-            for rel in _porcelain_paths(tree):
+            for rel in _porcelain_paths(tree, deadline):
                 snap.add(_fingerprint(str((tree / rel).resolve())))
         except _GitSweepError:
             continue  # a tree we can't read contributes nothing (safe direction)
     return snap
 
 
-def _porcelain_paths(repo_root: Path | str) -> list[str]:
+# run_a18d69f5 (#2 fix): default per-git-subprocess ceiling (the un-budgeted
+# COMPLETE-sweep path keeps this). The turn-end sweep passes a Deadline instead,
+# which caps each call at min(this, remaining-budget) so the SERIAL N-tree thread
+# self-terminates near the total budget (a lowered constant could NOT — N trees ×
+# per-call summed serially exceeds any per-call value for N≥1; only a shared
+# deadline bounds the sum). Gate-1 BLOCK finding 1+2.
+_GIT_CALL_TIMEOUT_S = 15.0
+
+
+class _Deadline:
+    """A monotonic wall-clock budget shared across a serial multi-tree sweep. Each
+    git subprocess gets timeout=min(cap, remaining); when the budget is exhausted,
+    remaining()<=0 and the next call is skipped (raises _GitSweepError, the
+    safe-direction fail). ``None`` deadline = no budget (COMPLETE path)."""
+
+    __slots__ = ("_end",)
+
+    def __init__(self, budget_s: float):
+        self._end = time.monotonic() + budget_s
+
+    def remaining(self) -> float:
+        return self._end - time.monotonic()
+
+    def git_timeout(self) -> float:
+        # cap each call at the default ceiling but never longer than what's left.
+        return min(_GIT_CALL_TIMEOUT_S, max(0.0, self.remaining()))
+
+
+def _porcelain_paths(repo_root: Path | str, deadline: "_Deadline | None" = None) -> list[str]:
     """Return the changed-file paths from `git status --porcelain -z` in *repo_root*.
 
     Uses ``-z`` (NUL-separated) so paths with spaces/newlines are handled. Each
@@ -141,7 +172,15 @@ def _porcelain_paths(repo_root: Path | str) -> list[str]:
     rename record ``R  <new>\\x00<old>`` yields BOTH the new and old path. Fail-safe:
     any git error returns [] (a sweep that can't read a tree surfaces nothing from
     it, never crashes COMPLETE).
+
+    ``deadline`` (run_a18d69f5 #2): when set, the git call is bounded by the
+    REMAINING budget so a serial multi-tree sweep self-terminates near the total
+    budget (the turn-end path passes one; COMPLETE passes None → the 15s ceiling).
     """
+    _git_to = deadline.git_timeout() if deadline is not None else _GIT_CALL_TIMEOUT_S
+    if _git_to <= 0:
+        # budget already spent — skip (safe direction: this tree contributes nothing)
+        raise _GitSweepError(str(repo_root), None, "sweep budget exhausted before git status")
     try:
         # -uall (untracked-files=all): list INDIVIDUAL untracked files, not the
         # collapsed parent directory. Without it, a brand-new file under an
@@ -151,7 +190,7 @@ def _porcelain_paths(repo_root: Path | str) -> list[str]:
         # collapses to "?? Knowledge/", -uall yields the full file path.
         out = subprocess.run(
             ["git", "-C", str(repo_root), "status", "--porcelain", "-z", "-uall"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=_git_to,
         )
         if out.returncode != 0:
             # Gate-2 MEDIUM 2: a git error must NOT be a SILENT all-clear — an empty
@@ -268,6 +307,7 @@ def sweep_run_changes(swarmws_root: Path | str) -> SurfaceBuckets:
 def sweep_turn_delta(
     swarmws_root: Path | str,
     baseline_abs: set[str],
+    budget_s: "float | None" = None,
 ) -> tuple[list[dict], int]:
     """Turn-boundary live-surfacing sweep (run_4de279ca — the SOLE live emit).
 
@@ -278,6 +318,14 @@ def sweep_turn_delta(
     excludes a parallel session's / the user's pre-existing dirty files (they are
     in the baseline, so they never appear in the delta).
 
+    ``budget_s`` (run_a18d69f5 #2): a TOTAL wall-clock budget shared across ALL the
+    serial per-tree git subprocesses (both the porcelain re-snapshot AND the
+    check-ignore batch). Threaded as a monotonic Deadline so the thread self-
+    terminates near the budget — because the calls run SERIALLY, N trees × per-call
+    exceeds any per-call ceiling for N≥1, so ONLY a shared deadline bounds the thread
+    below the orchestrator's asyncio.wait_for budget (which cannot cancel the thread).
+    None = no budget (not used by the turn-end caller; kept for direct/test use).
+
     Returns ``(events, dropped)``:
       - ``events`` — a list of file_changed event dicts (path=SwarmWS-relative for
         content/knowledge; source & process are NOT emitted live — source aggregates
@@ -287,7 +335,8 @@ def sweep_turn_delta(
         silently truncating.
     """
     ws_root = Path(os.path.expanduser(str(swarmws_root))).resolve()
-    current = porcelain_snapshot(ws_root)
+    deadline = _Deadline(budget_s) if budget_s is not None else None
+    current = porcelain_snapshot(ws_root, deadline)
     delta_fps = current - baseline_abs
     if not delta_fps:
         return [], 0
@@ -296,7 +345,9 @@ def sweep_turn_delta(
     # with two mtimes across the diff — dedupe to the path).
     delta_abs = sorted({_fp_path(fp) for fp in delta_fps})
 
-    verdicts = needs_human_review_batch(delta_abs, "written", swarmws_root=ws_root)
+    verdicts = needs_human_review_batch(
+        delta_abs, "written", swarmws_root=ws_root, deadline=deadline
+    )
 
     events: list[dict] = []
     dropped = 0
