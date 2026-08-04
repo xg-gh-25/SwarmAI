@@ -28,85 +28,19 @@ import re
 import shlex
 
 __all__ = [
-    "classify_relevance",
     "parse_bash_write_targets",
     "parse_bash_delete_targets",
-    "Relevance",
 ]
 
-Relevance = str  # 'deliverable' | 'incidental' | 'bookkeeping'
-
-# ── Bookkeeping: never a user-facing deliverable, whatever the operation ──
-# Mirrors the frontend isBookkeepingPath rule (CanvasOutputRail.tsx) so the two
-# agree during the migration window; this is now the authoritative copy.
-_BOOKKEEPING_DIRS = {".artifacts", ".git", ".context"}
-
-# Operations that MODIFY a file (candidate for auto-surface). Everything else
-# (read / searched / listed / …) is at most `incidental`.
-_WRITE_OPS = {"written", "created", "edited"}
-
-# ── PR-review surface allowlist (run_b8ea6d5c) ──────────────────────────────
-# A few knowledge/context docs are user-facing deliverables the user reviews on
-# every change, but they physically live UNDER dot-dirs that _is_bookkeeping would
-# otherwise drop: the canonical context files are at
-# `.../SwarmWS/.context/{MEMORY,EVOLUTION,KNOWLEDGE,PROJECTS}.md` (a `.context`
-# segment), and a pipeline REPORT.md lives at
-# `Projects/<p>/.artifacts/runs/<run_id>/REPORT.md` (a `.artifacts` segment).
-# Gate-1 (run_b8ea6d5c) proved the bookkeeping drop happens at
-# streaming_orchestrator.py:309 BEFORE needs_human_review is ever called — so the
-# escape MUST be HERE, ahead of that drop, as a WHOLE-PATH rule (the PARENT dir is
-# dotted even though the basename is not). Deliberately NARROW: exact basenames +
-# REPORT.md only under a run dir — never a blanket un-block of dot-dirs.
-_KNOWLEDGE_BASENAMES = {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md"}
-
-
-def _is_surfaceable_knowledge(path: str) -> bool:
-    """A dot-dir-resident file that IS a user-facing deliverable (PR-review surface
-    allowlist). Whole-path rule — checked AHEAD of _is_bookkeeping so it wins over
-    the dot-dir drop. Kept in lockstep with needs_human_review's same allowlist."""
-    segments = path.split("/")
-    base = segments[-1] if segments else ""
-    if base in _KNOWLEDGE_BASENAMES and ".context" in segments:
-        return True
-    if base == "REPORT.md" and ".artifacts" in segments and "runs" in segments:
-        return True
-    return False
-
-
-def _is_bookkeeping(path: str) -> bool:
-    # PR-review allowlist wins over the dot-dir drop (run_b8ea6d5c): a small set of
-    # knowledge/report deliverables live under .context/.artifacts but must surface.
-    if _is_surfaceable_knowledge(path):
-        return False
-    segments = path.split("/")
-    base = segments[-1] if segments else ""
-    if any(seg in _BOOKKEEPING_DIRS for seg in segments):
-        return True
-    if base.startswith("."):                       # .DS_Store, .eslintrc, dotfiles
-        return True
-    if path.startswith("/tmp/") or path.startswith("/private/tmp/"):
-        return True
-    if base.endswith(".tmp") or base.endswith("~"):
-        return True
-    return False
-
-
-def classify_relevance(path: str, operation: str) -> Relevance:
-    """Classify a touched file for Canvas surfacing (WHITELIST).
-
-    - bookkeeping  → filtered entirely (never rail, never pop). Wins over all.
-    - deliverable  → a WRITE (written/created/edited) to a non-bookkeeping file →
-                     eligible to auto-surface.
-    - incidental   → anything else (a read / grep / list of a real file) → lists
-                     in the rail, never auto-surfaces.
-    """
-    if not path:
-        return "bookkeeping"
-    if _is_bookkeeping(path):
-        return "bookkeeping"
-    if operation in _WRITE_OPS:
-        return "deliverable"
-    return "incidental"
+# run_4de279ca (Gate-2 F7): classify_relevance / _is_bookkeeping / _BOOKKEEPING_DIRS
+# / _is_surfaceable_knowledge REMOVED. They were the SECOND copy of the machine-vs-
+# human boundary (a hardcoded 3-dir denylist), and the whole-chain root fix collapses
+# ALL surfacing decisions onto the ONE git-based authority `needs_human_review`
+# (git check-ignore + tree-relative dot-scan + the surfaceable-knowledge allowlist,
+# which now lives ONLY in needs_human_review). Both writes (turn-end sweep) and
+# deletes (_build_file_delete_events) call that single authority. This module now
+# owns ONLY the Bash write/delete-target PARSER (still needed to know which paths a
+# Bash command deleted, for the operation=deleted emit). Pure, stdlib-only, hot-path.
 
 
 # ── Bash write-target parsing (conservative, under-match) ──

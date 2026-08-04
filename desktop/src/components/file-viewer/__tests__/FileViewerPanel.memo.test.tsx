@@ -35,7 +35,6 @@ vi.mock('../FileViewer', () => ({
 }));
 vi.mock('../CanvasOutputRail', () => ({
   CanvasOutputRail: () => <div data-testid="rail-stub" />,
-  isBookkeepingPath: () => false,
 }));
 
 // Stable prop references, defined ONCE at module scope so the parent passes the

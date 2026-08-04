@@ -29,7 +29,6 @@
  */
 import { useEffect, useRef } from 'react';
 import { OPEN_FILE_EVENT } from '../components/common/MarkdownRenderer';
-import { isBookkeepingPath } from '../components/file-viewer/CanvasOutputRail';
 
 export interface CanvasAutoSurfaceOptions {
   /** User pinned the panel — never auto-replace what they're looking at. */
@@ -148,10 +147,10 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       // id yet — surface anyway rather than regress (legacy path, gate off).
       const activeId = activeSessionIdRef.current;
       if (evtSessionId && activeId && evtSessionId !== activeId) return;  // background tab's write
-      // Local bookkeeping fallback (kept as defense-in-depth for an older backend
-      // that doesn't classify relevance; the primary filter is the server-side
-      // `relevance` gate above + server-side drop of bookkeeping paths).
-      if (isBookkeepingPath(path)) return;
+      // run_4de279ca: the frontend isBookkeepingPath fallback is REMOVED. The
+      // backend git verdict (`kind`, gated above at the PRIMARY check) is the sole
+      // authority — process/source are never emitted for live surfacing, so a
+      // second frontend denylist is redundant (and drifted from the real boundary).
       // Coalesce a burst → last written path wins.
       pendingPath = path;
       if (timer) clearTimeout(timer);

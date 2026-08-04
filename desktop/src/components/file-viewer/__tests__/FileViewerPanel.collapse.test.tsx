@@ -18,7 +18,6 @@ import FileViewerPanel from '../FileViewerPanel';
 vi.mock('../FileViewer', () => ({ default: () => <div data-testid="file-viewer-stub" /> }));
 vi.mock('../CanvasOutputRail', () => ({
   CanvasOutputRail: () => <div data-testid="rail-stub" />,
-  isBookkeepingPath: () => false,
 }));
 
 const baseProps = {

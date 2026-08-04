@@ -95,9 +95,9 @@ _KNOWLEDGE_BASENAMES = {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.m
 def _is_surfaceable_knowledge(rel_path: str) -> bool:
     """PR-review surface allowlist (run_b8ea6d5c): a dot-dir-resident file that IS a
     user-facing deliverable. Whole-path rule, checked AHEAD of the dot-segment +
-    check-ignore blocks. Kept in lockstep with
-    file_change_classifier._is_surfaceable_knowledge (that copy is the load-bearing
-    one — it runs at the earlier streaming_orchestrator.py:309 relevance gate)."""
+    check-ignore blocks. run_4de279ca: this is now the SOLE copy — the former
+    file_change_classifier._is_surfaceable_knowledge duplicate was retired when the
+    orchestrator relevance gate it fed was removed (git verdict is the one authority)."""
     parts = [p for p in Path(rel_path).parts if p not in (".", "")]
     base = parts[-1] if parts else ""
     if base in _KNOWLEDGE_BASENAMES and ".context" in parts:
@@ -208,6 +208,40 @@ def _git_ignored(tree_root: Path, rel_path: str) -> bool | None:
     return None       # 128 etc → git error
 
 
+def _git_ignored_batch(tree_root: Path, rel_paths: list[str]) -> dict[str, bool | None]:
+    """Batch ``git check-ignore --stdin`` for MANY rel_paths inside ONE tree_root.
+
+    ONE subprocess for all paths (vs N single calls — the run_4de279ca perf fix).
+
+    Parsing contract (Gate-1 pinned): ``git check-ignore --stdin -z`` prints ONLY
+    the paths that ARE ignored (a not-ignored input produces NO output line). So
+    the mapping is SET-MEMBERSHIP, never index-align. Exit-code contract:
+      - rc 0 = at least one ignored, rc 1 = none ignored → BOTH success
+      - rc 128 / OSError / timeout → git error → every path fails-OPEN to None
+        (mirrors the single-path _git_ignored None semantics: the path resolved
+        inside a tree, so under-surfacing is the failure to avoid)
+
+    Returns {rel_path: True(ignored) | False(not) | None(git-errored)}.
+    """
+    if not rel_paths:
+        return {}
+    try:
+        r = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            cwd=str(tree_root),
+            input=("\x00".join(rel_paths) + "\x00").encode("utf-8"),
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {rel: None for rel in rel_paths}
+    if r.returncode not in (0, 1):
+        # 128 etc → git error → fail-OPEN for all (same as single-path None)
+        return {rel: None for rel in rel_paths}
+    ignored_set = {s for s in r.stdout.decode("utf-8", "replace").split("\x00") if s}
+    return {rel: (rel in ignored_set) for rel in rel_paths}
+
+
 def _classify_kind(rel_path: str, repo: Optional[str]) -> Kind:
     """AC4 precedence (order matters):
     (1) dot-segment → process; (2) knowledge md → knowledge (BEFORE source, so a
@@ -271,10 +305,9 @@ def needs_human_review(
         # live UNDER dot-dirs (.context/, .artifacts/runs/) but ARE user-facing
         # deliverables reviewed on every change. They must escape BOTH the
         # dot-segment (Layer 2) and check-ignore (Layer 1) blocks below. Whole-path
-        # rule, mirrored in file_change_classifier._is_surfaceable_knowledge (the
-        # EARLIER gate at streaming_orchestrator.py:309 — that one is load-bearing;
-        # this keeps the two classifiers in lockstep so a direct needs_human_review
-        # caller agrees). Narrow: exact basenames + REPORT.md under a run dir only.
+        # rule. run_4de279ca: this is the SOLE allowlist (the former duplicate in
+        # file_change_classifier was retired). Narrow: exact basenames + REPORT.md
+        # under a run dir only.
         if _is_surfaceable_knowledge(rel_path):
             return ReviewVerdict(True, "knowledge", repo)
 
@@ -294,3 +327,78 @@ def needs_human_review(
         return ReviewVerdict(True, kind, repo)
     except Exception:  # noqa: BLE001 — hot-path fail-safe, never crash the turn
         return ReviewVerdict(False, "process")
+
+
+def needs_human_review_batch(
+    paths: list[str],
+    operation: str = "written",
+    *,
+    swarmws_root: Optional[str | Path] = None,
+) -> dict[str, ReviewVerdict]:
+    """Batch authority: verdict for MANY paths with ONE check-ignore subprocess PER
+    TREE (the run_4de279ca hot-path fix — replaces N per-file subprocesses).
+
+    Semantically IDENTICAL to calling ``needs_human_review`` per path (same
+    precedence: surfaceable-knowledge → dot-segment → check-ignore → kind; same
+    fail-OPEN on git error; same fail-safe never-raise). Returns {input_path:
+    ReviewVerdict} keyed by the ORIGINAL input string (so callers map back
+    directly). A path that errors individually gets a process verdict, never
+    sinking the batch.
+    """
+    out: dict[str, ReviewVerdict] = {}
+    if not paths:
+        return out
+    try:
+        if swarmws_root is not None:
+            ws_root = Path(swarmws_root).resolve()
+        else:
+            from core.project_registry import get_swarmws
+            ws_root = Path(get_swarmws()).resolve()
+    except Exception:  # noqa: BLE001
+        return {p: ReviewVerdict(False, "process") for p in paths}
+
+    # Phase 1: resolve owning tree + apply the pre-check-ignore layers (surfaceable
+    # allowlist, dot-segment) per path. Collect the survivors that still need a
+    # check-ignore verdict, GROUPED BY owning tree so each tree batches once.
+    #   pending[tree_root] = list of (input_path, rel_path, repo)
+    pending: dict[Path, list[tuple[str, str, Optional[str]]]] = {}
+    for p in paths:
+        try:
+            if not p or "\x00" in p:
+                out[p] = ReviewVerdict(False, "process")
+                continue
+            abs_path = Path(os.path.expanduser(p))
+            if not abs_path.is_absolute():
+                abs_path = ws_root / p
+            try:
+                abs_path = abs_path.resolve()
+            except (OSError, RuntimeError):
+                out[p] = ReviewVerdict(False, "process")
+                continue
+            owning = _owning_tree(abs_path, ws_root)
+            if owning is None:
+                out[p] = ReviewVerdict(False, "process")
+                continue
+            tree_root, rel_path, repo = owning
+            if _is_surfaceable_knowledge(rel_path):
+                out[p] = ReviewVerdict(True, "knowledge", repo)
+                continue
+            if _has_dot_segment(rel_path):
+                out[p] = ReviewVerdict(False, "process", repo)
+                continue
+            pending.setdefault(tree_root, []).append((p, rel_path, repo))
+        except Exception:  # noqa: BLE001 — one bad path never sinks the batch
+            out[p] = ReviewVerdict(False, "process")
+
+    # Phase 2: ONE batch check-ignore per tree, then classify_kind on survivors.
+    for tree_root, entries in pending.items():
+        rel_list = [rel for (_p, rel, _repo) in entries]
+        ignored_map = _git_ignored_batch(tree_root, rel_list)
+        for (p, rel_path, repo) in entries:
+            ignored = ignored_map.get(rel_path)
+            if ignored is True:
+                out[p] = ReviewVerdict(False, "process", repo)
+            else:
+                # False (not-ignored) OR None (git-errored) → review-worthy (fail-OPEN)
+                out[p] = ReviewVerdict(True, _classify_kind(rel_path, repo), repo)
+    return out

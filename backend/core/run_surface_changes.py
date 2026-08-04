@@ -34,7 +34,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from core.needs_human_review import needs_human_review, ReviewVerdict
+from core.needs_human_review import (
+    needs_human_review,
+    needs_human_review_batch,
+    ReviewVerdict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +68,69 @@ def classify_git_status_paths(
     content). Returns ``(relative_path, verdict)`` pairs in input order.
     """
     root = Path(repo_root)
-    results: list[tuple[str, ReviewVerdict]] = []
-    for rel in porcelain_paths:
-        abs_path = str((root / rel).resolve())
-        verdict = needs_human_review(abs_path, "written", swarmws_root=swarmws_root)
-        results.append((rel, verdict))
-    return results
+    if not porcelain_paths:
+        return []
+    # run_4de279ca: batch the check-ignore into ONE subprocess for this tree
+    # (was N per-file needs_human_review calls → N check-ignore subprocesses).
+    # Absolutize each rel against ITS OWN repo_root (the F1 contract) BEFORE the
+    # batch classifier, which re-derives the owning tree + relativizes internally.
+    abs_by_rel = {rel: str((root / rel).resolve()) for rel in porcelain_paths}
+    verdicts = needs_human_review_batch(
+        list(abs_by_rel.values()), "written", swarmws_root=swarmws_root
+    )
+    # Preserve input order; map each rel back via its absolute key.
+    return [(rel, verdicts[abs_by_rel[rel]]) for rel in porcelain_paths]
+
+
+# run_4de279ca: giant-diff guard (P8). A pathological tree (a generated dir, an
+# accidental huge checkout) must not emit thousands of Canvas rows. The sweep caps
+# the number of surfaced files; over-cap is observable, never silent.
+MAX_SURFACE_FILES = 50
+
+
+def _fingerprint(abs_path: str) -> str:
+    """A (path, mtime_ns) fingerprint so a RE-EDIT of an already-dirty file changes
+    the key (Gate-2 F1a). Keying the snapshot on bare path would exclude a file
+    already dirty at turn-start that is edited AGAIN this turn (it's in both S0 and
+    S1 → not in the delta → silently not surfaced — the exact "surface the human's
+    work" promise, broken for iterative editing). mtime_ns advances on every write,
+    so a re-edit yields a NEW fingerprint that appears in S1 - S0. A missing/stat-err
+    file falls back to path-only (it will diff out on delete via the is_file gate)."""
+    try:
+        return f"{abs_path}\x00{os.stat(abs_path).st_mtime_ns}"
+    except OSError:
+        return f"{abs_path}\x00"
+
+
+def _fp_path(fingerprint: str) -> str:
+    """Extract the absolute path back out of a fingerprint."""
+    return fingerprint.split("\x00", 1)[0]
+
+
+def porcelain_snapshot(swarmws_root: Path | str) -> set[str]:
+    """The set of (abs-path, mtime) FINGERPRINTS for every changed file across
+    SwarmWS + every bound worktree, from ``git status --porcelain`` — the
+    turn-boundary baseline (run_4de279ca).
+
+    Read-only, author-agnostic (git sees every writer). Per-tree fail-safe: a tree
+    whose git status errors contributes nothing (its files simply won't diff as
+    "new this turn" — the safe direction; the sweep's own error bucket is where a
+    hard git failure surfaces). Fingerprints (not bare paths) so a RE-EDIT of an
+    already-dirty file still surfaces (Gate-2 F1a — a new mtime = a new key).
+    """
+    from core.needs_human_review import _worktree_roots
+
+    ws_root = Path(os.path.expanduser(str(swarmws_root))).resolve()
+    trees: list[Path] = [Path(wt) for wt, _repo in _worktree_roots(str(ws_root))]
+    trees.append(ws_root)
+    snap: set[str] = set()
+    for tree in trees:
+        try:
+            for rel in _porcelain_paths(tree):
+                snap.add(_fingerprint(str((tree / rel).resolve())))
+        except _GitSweepError:
+            continue  # a tree we can't read contributes nothing (safe direction)
+    return snap
 
 
 def _porcelain_paths(repo_root: Path | str) -> list[str]:
@@ -202,3 +263,72 @@ def sweep_run_changes(swarmws_root: Path | str) -> SurfaceBuckets:
             seen_abs.add(abs_key)
             getattr(buckets, verdict.kind).append(rel)
     return buckets
+
+
+def sweep_turn_delta(
+    swarmws_root: Path | str,
+    baseline_abs: set[str],
+) -> tuple[list[dict], int]:
+    """Turn-boundary live-surfacing sweep (run_4de279ca — the SOLE live emit).
+
+    Author-agnostic by construction: diffs the CURRENT porcelain snapshot against
+    ``baseline_abs`` (captured at turn start) and classifies ONLY the delta
+    (S1 - S0). This is the mechanism that makes surfacing independent of WHO wrote
+    the file (main-agent / sub-agent / skill / CLI / hook — git sees them all) AND
+    excludes a parallel session's / the user's pre-existing dirty files (they are
+    in the baseline, so they never appear in the delta).
+
+    Returns ``(events, dropped)``:
+      - ``events`` — a list of file_changed event dicts (path=SwarmWS-relative for
+        content/knowledge; source & process are NOT emitted live — source aggregates
+        at pipeline finish, process is machine noise). Capped at MAX_SURFACE_FILES.
+      - ``dropped`` — how many review-worthy files were cut by the cap (P8), so the
+        caller can emit a single "N more changed (capped)" summary rather than
+        silently truncating.
+    """
+    ws_root = Path(os.path.expanduser(str(swarmws_root))).resolve()
+    current = porcelain_snapshot(ws_root)
+    delta_fps = current - baseline_abs
+    if not delta_fps:
+        return [], 0
+    # The snapshot keys are (path, mtime) fingerprints (Gate-2 F1a); extract the
+    # distinct absolute paths for classification (a path could in theory appear
+    # with two mtimes across the diff — dedupe to the path).
+    delta_abs = sorted({_fp_path(fp) for fp in delta_fps})
+
+    verdicts = needs_human_review_batch(delta_abs, "written", swarmws_root=ws_root)
+
+    events: list[dict] = []
+    dropped = 0
+    for abs_path in delta_abs:
+        # A porcelain delta includes DELETED files (status `D`), which would
+        # misclassify as operation=written. Live-surfacing only pops files that
+        # EXIST on disk (a written deliverable does; a deleted one doesn't — the
+        # separate _pending_file_deletes path emits operation=deleted). Skip
+        # non-existent paths so a delete never surfaces as a phantom written row.
+        try:
+            if not Path(abs_path).is_file():
+                continue
+        except OSError:
+            continue
+        v = verdicts.get(abs_path)
+        if v is None or not v.review_worthy:
+            continue  # process / not-our-concern → never live-emit
+        # source aggregates at pipeline finish (LOCAL_PR), NOT per-file live.
+        if v.kind not in ("content", "knowledge"):
+            continue
+        if len(events) >= MAX_SURFACE_FILES:
+            dropped += 1
+            continue
+        try:
+            rel = str(Path(abs_path).relative_to(ws_root))
+        except ValueError:
+            rel = abs_path  # a bound-repo path outside SwarmWS — keep absolute
+        events.append({
+            "type": "file_changed",
+            "path": rel,
+            "absolutePath": abs_path,
+            "kind": v.kind,
+            "operation": "written",
+        })
+    return events, dropped

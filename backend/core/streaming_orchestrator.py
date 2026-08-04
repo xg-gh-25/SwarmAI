@@ -37,6 +37,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# run_4de279ca (Gate-2 F2a): total wall-clock budget for the turn-end live-surfacing
+# git sweep. The sweep walks trees serially (each git subprocess bounded at 15s), so
+# without a TOTAL cap N trees = N×15s worst case on hung/locked git — which would
+# stall the `result` yield (spinner stuck). This bounds the WHOLE sweep; on timeout
+# the turn surfaces nothing (the pipeline-finish full sweep still catches it) and the
+# result yields immediately. Generous enough for a healthy multi-tree workspace,
+# hard enough to never hang a turn on a wedged repo.
+SURFACE_SWEEP_BUDGET_S = 10.0
+
 
 def _is_blank_api_result(
     *,
@@ -284,90 +293,11 @@ class StreamingOrchestrator:
             yield event
 
 
-    async def _build_file_change_events(
-        self, raw_paths: list[str], resolve_cache: "dict[str, dict | None]"
-    ) -> list[dict]:
-        """Turn a tool's written raw path(s) into unified file_changed SSE events.
-
-        For each raw path: resolve its PHYSICAL absolute path ONCE (per-turn cache),
-        classify relevance (whitelist), and build an enriched event. Bookkeeping
-        paths are dropped (never surfaced). Resolution runs in a thread (the
-        bare-name branch may os.walk) but only for these deliverable-candidate
-        writes — reads/greps never reach here (perf directive). Unresolvable paths
-        are DROPPED (Layer 1, run_6ebe2d09): a just-written file always exists on
-        disk, so resolve=None means the token was not a real file (e.g. a Bash `>`
-        fragment) — emitting it produced a broken Canvas row ("Resource not found").
-        """
-        from core.file_change_classifier import classify_relevance
-        from core.needs_human_review import needs_human_review
-        from core.project_registry import get_swarmws
-        from routers.workspace_api import resolve_path_to_physical
-
-        ws_root = get_swarmws()
-
-        # Filter bookkeeping FIRST (never pays resolution — perf); keep the surviving
-        # (raw, relevance) pairs in ORDER so the emitted events preserve path order.
-        candidates = [
-            (raw, classify_relevance(raw, "written"))
-            for raw in raw_paths
-        ]
-        candidates = [(raw, rel) for (raw, rel) in candidates if rel != "bookkeeping"]
-
-        # G2 (run_5a7be540): resolve + verdict PER PATH concurrently instead of the old
-        # serial `for raw: await resolve; await verdict`, which spawned N git check-ignore
-        # subprocesses one-at-a-time on the streaming hot path. gather preserves order.
-        # We deliberately do NOT cache the verdict (Gate-1): needs_human_review runs
-        # `git check-ignore`, whose result depends on the MUTABLE .gitignore (an agent can
-        # rewrite it mid-session) — a cached verdict would go stale. Only resolve is cached
-        # (path→physical is stable within a turn). Each path's work is independently
-        # fail-safe: an exception in one never drops the batch.
-        async def _resolve_one(raw: str) -> "dict | None":
-            if raw in resolve_cache:
-                return resolve_cache[raw]
-            try:
-                r = await asyncio.to_thread(resolve_path_to_physical, raw, ws_root)
-            except Exception:
-                r = None
-            resolve_cache[raw] = r
-            return r
-
-        async def _build_one(raw: str, relevance: str) -> "dict | None":
-            resolved = await _resolve_one(raw)
-            # Layer 1 emit-gate (run_6ebe2d09): a WRITTEN path that fails to resolve is
-            # NOT a real file (a just-written deliverable always exists on disk), so
-            # resolve=None means garbage (e.g. a mis-parsed Bash `>` fragment) → DROP.
-            if not resolved:
-                return None
-            # Unified review verdict (run_dcce7023). needs_human_review does its own
-            # owning-tree resolution on the ABSOLUTE path; runs a `git check-ignore`
-            # subprocess → off-loop via to_thread. Fail-safe: on any error, fall back
-            # to kind="content" so a resolved deliverable still surfaces.
-            try:
-                verdict = await asyncio.to_thread(
-                    needs_human_review, resolved["absolute"], "written"
-                )
-                kind = verdict.kind
-            except Exception:
-                kind = "content"
-            return {
-                "type": "file_changed",
-                "path": resolved["relative"],
-                "absolutePath": resolved["absolute"],
-                "relevance": relevance,
-                "kind": kind,
-                "operation": "written",
-            }
-
-        built = await asyncio.gather(
-            *(_build_one(raw, rel) for (raw, rel) in candidates),
-            return_exceptions=True,
-        )
-        # Drop None (unresolvable) AND any Exception (a single path's failure must not
-        # sink the batch — G2c negative). gather preserves input order.
-        events: list[dict] = [
-            ev for ev in built if isinstance(ev, dict)
-        ]
-        return events
+    # run_4de279ca: _build_file_change_events REMOVED (dead code, 0 callers). The
+    # per-write, parent-tool-stream-only WRITE emit it powered is replaced by the
+    # turn-end git sweep (sweep_turn_delta, fired before the `result` yield in
+    # stream_query) — the sole, author-agnostic write-surfacing authority. DELETE
+    # emits still go through _build_file_delete_events below.
 
     async def _build_file_delete_events(
         self, raw_paths: list[str], resolve_cache: "dict[str, dict | None]"
@@ -383,18 +313,25 @@ class StreamingOrchestrator:
         path still structurally under a Projects/ symlink — else the raw path for
         BOTH path and absolutePath). The FRONTEND removes conservatively (anchored
         match on path/absolutePath), so a delete that matches nothing is a harmless
-        no-op (a stale row lingers == today's behavior; safe direction). We never
-        run needs_human_review here (can't stat a gone file); bookkeeping paths are
-        still filtered so we don't emit delete churn for .artifacts/.git/dotfiles.
+        no-op (a stale row lingers == today's behavior; safe direction).
+
+        run_4de279ca (Gate-2 F6/F7): the bookkeeping filter uses the SAME git-based
+        authority as writes (`needs_human_review`), NOT the old hardcoded
+        `_BOOKKEEPING_DIRS` denylist — so a delete and a write of the same path get
+        the SAME verdict (no two-authority divergence). `needs_human_review` is
+        PATH-based (git check-ignore matches path patterns; `.resolve()` works on a
+        non-existent path) — it never stats the file, so a deleted (gone) path
+        classifies fine. Only a review-worthy path emits a delete event (drops its
+        stale rail row); machine noise never had a row to drop.
         """
-        from core.file_change_classifier import classify_relevance
+        from core.needs_human_review import needs_human_review
         from core.project_registry import get_swarmws
         from routers.workspace_api import resolve_path_to_physical
 
         ws_root = get_swarmws()
         events: list[dict] = []
         for raw in raw_paths:
-            if classify_relevance(raw, "written") == "bookkeeping":
+            if not needs_human_review(raw, "written").review_worthy:
                 continue
             if raw in resolve_cache:
                 resolved = resolve_cache[raw]
@@ -490,9 +427,6 @@ class StreamingOrchestrator:
 
         response_iter = self._parent._client.receive_response().__aiter__()
         _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
-        # tool_use_id → list[raw_path] written by that tool (Write/Edit/NotebookEdit
-        # or a parsed Bash command). Resolved + classified at the ToolResult point.
-        _pending_file_changes: dict[str, list[str]] = {}
         # tool_use_id → list[raw_path] DELETED by that tool (Bash rm / mv-SRC). Emits
         # operation=deleted at the ToolResult point so the rail drops stale rows (G1,
         # run_5a7be540). Separate from _pending_file_changes because one Bash command
@@ -503,6 +437,26 @@ class StreamingOrchestrator:
         # raw path string. Only deliverable-candidate writes are ever resolved —
         # reads/greps never reach here, so they never pay the os.walk bare-name cost.
         _resolve_cache: dict[str, "dict | None"] = {}
+
+        # ── run_4de279ca: turn-boundary baseline snapshot (the SOLE live-surfacing
+        #    authority — author-agnostic by construction). Capture the set of ALL
+        #    changed-file absolute paths across SwarmWS + bound worktrees at turn
+        #    START; at turn END (before the `result` yield) re-snapshot and emit
+        #    ONLY the delta (S1 - S0). This replaces the old who-wrote-it emit that
+        #    only saw the PARENT agent's tool stream — git sees sub-agent / skill /
+        #    CLI / hook writes alike, and the baseline excludes a parallel session's
+        #    pre-existing dirty files (they're in S0, never in the delta). Captured
+        #    off-loop; a git error yields an empty baseline (safe: worst case an
+        #    already-dirty file surfaces once, never a crash). ──
+        _turn_baseline_paths: set[str] = set()
+        try:
+            from core.run_surface_changes import porcelain_snapshot
+            from core.project_registry import get_swarmws
+            _turn_baseline_paths = await asyncio.to_thread(
+                porcelain_snapshot, get_swarmws()
+            )
+        except Exception:  # noqa: BLE001 — never block turn start on the baseline
+            _turn_baseline_paths = set()
 
         async def _next_or_sentinel():
             """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
@@ -780,37 +734,24 @@ class StreamingOrchestrator:
             # client-tool executions). Two disjoint jobs on this branch:
             #   (a) sub-agent cleanup — pop _active_agent_tools/_open_tool_uses so
             #       count/timer/label don't freeze (via _clear_completed_sub_agents).
-            #   (b) file_changed emit for the PARENT's own edits — the tool_use was
-            #       recorded in _pending_file_changes at emit time (AssistantMessage,
-            #       line ~813); its RESULT lands here. Without this the Canvas
-            #       auto-surface never fired for the agent's own writes (run_0520a394,
-            #       the fix for the AssistantMessage-only emit that never ran because
-            #       Edit/Write results are UserMessage-delivered).
-            # Discriminator is free: _pending_file_changes holds ONLY parent
-            # tool_use ids (populated in the parent's own AssistantMessage), so a
-            # sub-agent Agent result — never in that dict — is correctly skipped.
+            #   (b) file DELETE emit — a Bash rm/mv-SRC result lands here; emit
+            #       operation=deleted so the rail drops the stale row. (run_4de279ca:
+            #       the WRITE emit that used to live here is GONE — the turn-end git
+            #       sweep is now the sole write-surfacing authority, author-agnostic.
+            #       Deletes still need this explicit emit because a deleted path is
+            #       skipped by the sweep, cf. run_5a7be540.)
             if isinstance(message, UserMessage):
                 self._parent._last_progress_time = time.time()  # sub-agent progress
                 self._clear_completed_sub_agents(message)
-                # (b) parent-edit file_changed emit. List-guard mirrors
-                # _clear_completed_sub_agents (string content carries no blocks).
+                # (b) delete emit. List-guard mirrors _clear_completed_sub_agents
+                # (string content carries no blocks).
                 _um_content = getattr(message, "content", None)
                 if isinstance(_um_content, list):
                     for _blk in _um_content:
                         if not isinstance(_blk, ToolResultBlock):
                             continue
                         _tuid = getattr(_blk, "tool_use_id", None)
-                        # only the parent's own tracked writes; is_error mirrors the
-                        # AssistantMessage branch idiom (line ~915).
                         if not getattr(_blk, "is_error", False):
-                            if _tuid in _pending_file_changes:
-                                _um_paths = _pending_file_changes.pop(_tuid, None)
-                                if _um_paths:
-                                    _um_events = await self._build_file_change_events(
-                                        _um_paths, _resolve_cache
-                                    )
-                                    for _ev in _um_events:
-                                        yield _ev
                             if _tuid in _pending_file_deletes:
                                 _um_dels = _pending_file_deletes.pop(_tuid, None)
                                 if _um_dels:
@@ -950,23 +891,23 @@ class StreamingOrchestrator:
                         #    relevance happen at the ToolResult (success) point so a
                         #    failed tool never surfaces, and a read/grep never pays
                         #    path resolution (perf directive). ──
-                        if block.name in ("Edit", "Write", "NotebookEdit") and isinstance(block.input, dict):
-                            _fp = block.input.get("file_path", "")
-                            if _fp:
-                                _pending_file_changes[block.id] = [_fp]
-                        elif block.name == "Bash" and isinstance(block.input, dict):
-                            from core.file_change_classifier import (
-                                parse_bash_write_targets,
-                                parse_bash_delete_targets,
-                            )
+                        # run_4de279ca: WRITE tracking REMOVED. The turn-end git sweep
+                        # (baseline-diff before the `result` yield) is now the SOLE
+                        # live-surfacing authority for WRITES — author-agnostic (it
+                        # sees sub-agent/skill/CLI/hook writes the parent tool stream
+                        # never carried) and free of per-file check-ignore subprocesses.
+                        # The old parent-only `_pending_file_changes[...] = write_paths`
+                        # was exactly the who-wrote-it wall that dropped non-parent
+                        # writes; deleting it removes the double-emit + the hot-path
+                        # N-subprocess debt. DELETE tracking STAYS: a `D` status in the
+                        # sweep is skipped (file gone from disk), so deletes still need
+                        # this explicit operation=deleted emit to drop the stale rail row.
+                        if block.name == "Bash" and isinstance(block.input, dict):
+                            from core.file_change_classifier import parse_bash_delete_targets
                             _cmd = block.input.get("command", "")
-                            _targets = parse_bash_write_targets(_cmd)
-                            if _targets:
-                                _pending_file_changes[block.id] = _targets
                             # G1 (run_5a7be540): a Bash rm/mv-SRC deletes files → track
                             # them so the ToolResult(success) emits operation=deleted and
-                            # the rail drops the stale row. Same tool_use_id may carry BOTH
-                            # (e.g. a script that writes X and rm's Y) — separate dicts.
+                            # the rail drops the stale row.
                             _del_targets = parse_bash_delete_targets(_cmd)
                             if _del_targets:
                                 _pending_file_deletes[block.id] = _del_targets
@@ -1072,26 +1013,18 @@ class StreamingOrchestrator:
                             "content": truncated, "is_error": getattr(block, "is_error", False),
                             "truncated": was_truncated,
                         })
-                        # ── Emit the UNIFIED file_changed event(s) (run_e626e121) ──
-                        # One enriched event per touched file: {path (ws-relative),
-                        # absolutePath (resolved physical, for copy-path), relevance
-                        # (deliverable|incidental|bookkeeping), operation}. This is the
-                        # SINGLE authority the frontend consumes (auto-surface + rail +
-                        # highlight) — the old frontend summary-parse trigger is gone.
-                        _changed_paths = _pending_file_changes.pop(block.tool_use_id, None)
+                        # ── Emit file DELETE event(s) (run_4de279ca) ──
+                        # WRITES are no longer emitted here — the turn-end git sweep
+                        # (before the `result` yield) is the sole author-agnostic
+                        # write-surfacing authority. Only DELETES emit at the tool
+                        # result: a deleted path is skipped by the sweep (gone from
+                        # disk), so operation=deleted still needs this explicit emit
+                        # to drop the stale rail row (run_5a7be540).
                         _deleted_paths = _pending_file_deletes.pop(block.tool_use_id, None)
-                        if (_changed_paths or _deleted_paths) and not getattr(block, "is_error", False):
-                            _events = []
-                            if _changed_paths:
-                                _events += await self._build_file_change_events(
-                                    _changed_paths, _resolve_cache
-                                )
-                            # G1 (run_5a7be540): deleted paths → operation=deleted so the
-                            # rail drops the stale row (a script can write AND rm in one Bash).
-                            if _deleted_paths:
-                                _events += await self._build_file_delete_events(
-                                    _deleted_paths, _resolve_cache
-                                )
+                        if _deleted_paths and not getattr(block, "is_error", False):
+                            _events = await self._build_file_delete_events(
+                                _deleted_paths, _resolve_cache
+                            )
                             if _events:
                                 # Flush accumulated content blocks first (ordering:
                                 # the tool_result must precede its file_changed).
@@ -1507,6 +1440,49 @@ class StreamingOrchestrator:
                         f"duration={(streaming_dur or 0):.1f}s) — likely "
                         f"transient 429/503/timeout "
                         f"(session_id={self._parent.session_id})"
+                    )
+
+                # ── run_4de279ca: TURN-END live-surfacing sweep (the SOLE emit) ──
+                # Fire BEFORE the `result` yield: `result` is the definitive turn-end
+                # signal for the frontend (stops spinner, marks tab idle), so a
+                # file_changed emitted AFTER it would land in an idle tab (OT01 torn
+                # state). Re-snapshot git, diff vs the turn-start baseline, emit ONLY
+                # the delta (S1 - S0) as ONE batched set of file_changed events —
+                # author-agnostic (sub-agent/skill/CLI/hook writes all seen), and
+                # pre-existing dirty files are excluded (they're in the baseline).
+                # LATENCY (Gate-2 F2a — honest): the sweep walks trees SERIALLY, each
+                # git subprocess bounded at 15s — so N trees is N×15s WORST case on
+                # hung git. A total wall-clock budget (SURFACE_SWEEP_BUDGET_S) caps the
+                # whole sweep so a pathological/locked git can NEVER stall the result
+                # yield beyond it; on timeout we skip surfacing this turn (the
+                # pipeline-finish full sweep still catches it). NOT zero latency — the
+                # honest, bounded cost of author-agnostic correctness.
+                try:
+                    from core.run_surface_changes import sweep_turn_delta
+                    from core.project_registry import get_swarmws
+                    _delta_events, _delta_dropped = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            sweep_turn_delta, get_swarmws(), _turn_baseline_paths
+                        ),
+                        timeout=SURFACE_SWEEP_BUDGET_S,
+                    )
+                    for _ev in _delta_events:
+                        yield _ev
+                    if _delta_dropped > 0:
+                        # P8: never silently truncate — one summary row for the overflow.
+                        yield {
+                            "type": "file_changed",
+                            "path": f"… +{_delta_dropped} more files changed (capped)",
+                            "absolutePath": "",
+                            "kind": "content",
+                            "operation": "summary",
+                        }
+                except Exception as _sweep_err:  # noqa: BLE001 — never block turn end
+                    logger.warning(
+                        "turn-end surface sweep failed (session=%s): %s — no live "
+                        "surface this turn, turn still completes",
+                        self._parent.session_id,
+                        f"{type(_sweep_err).__name__}: {_sweep_err}",
                     )
 
                 yield {

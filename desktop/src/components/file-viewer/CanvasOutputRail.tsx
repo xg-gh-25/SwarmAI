@@ -24,7 +24,6 @@
  * browsing never leaves a big empty band obscuring the file surface below.
  *
  * @exports CanvasOutputRail
- * @exports isBookkeepingPath — pure predicate (unit-tested)
  * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
  */
 import { memo, useCallback, useMemo, useEffect, useRef } from 'react';
@@ -34,37 +33,11 @@ import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
 import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 
-/**
- * Known bookkeeping dot-directories. A DENYLIST, not "any dot-segment" — the
- * whole workspace lives under `~/.swarm-ai/`, so a blanket dot-segment rule
- * would drop EVERY absolute deliverable path (caught by test 2026-08-02).
- * `.swarm-ai`, `.aws`, etc. are NOT bookkeeping; these three are.
- */
-const BOOKKEEPING_DIRS = new Set(['.artifacts', '.git', '.context']);
-
-/**
- * True if a path is agent bookkeeping, not a user-facing deliverable.
- * Filtered OUT of the Canvas output list. Pure so it can be unit-tested and
- * reused by the auto-surface hook (same skip rule).
- *  - a `.artifacts` / `.git` / `.context` segment anywhere → bookkeeping
- *  - the FILE ITSELF is a dotfile (basename starts with `.`) → .DS_Store, .eslintrc
- *  - temp/scratch → /tmp, .tmp, ~ backups
- * Note: an ANCESTOR being a dot-dir (e.g. the `.swarm-ai` workspace root) does
- * NOT make a real deliverable bookkeeping — only the specific dirs above do.
- */
-export function isBookkeepingPath(path: string): boolean {
-  if (!path) return true;
-  const segments = path.split('/');
-  const base = segments[segments.length - 1] || '';
-  // known bookkeeping dir anywhere in the path
-  if (segments.some((s) => BOOKKEEPING_DIRS.has(s))) return true;
-  // the file itself is a dotfile
-  if (base.startsWith('.')) return true;
-  // temp / scratch
-  if (path.startsWith('/tmp/') || path.startsWith('/private/tmp/')) return true;
-  if (base.endsWith('.tmp') || base.endsWith('~')) return true;
-  return false;
-}
+// run_4de279ca: isBookkeepingPath + BOOKKEEPING_DIRS REMOVED. The backend git
+// verdict (`kind`, needs_human_review) is the SOLE surfacing authority — this
+// frontend denylist was a byte-for-byte duplicate that drifted from the real
+// git-based machine/human boundary. The rail now filters on `kind` and the
+// auto-surface hook gates on `kind` alone.
 
 /**
  * Tree-list status chip (mirrors the SwarmWS explorer's `gitStatusBadge`): a
@@ -257,9 +230,14 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCo
   // open). Ref, set once on mount; never triggers a re-render.
   const mountedAtRef = useRef<number>(Date.now());
 
-  // Real deliverables only: written group minus bookkeeping noise.
+  // Real deliverables only. run_4de279ca: the backend git verdict (`kind`) is the
+  // SOLE authority — the sweep only ever emits content/knowledge (process/source are
+  // dropped/aggregated server-side), so the old frontend isBookkeepingPath duplicate
+  // is deleted. Filter defensively on kind: keep content/knowledge; drop process; an
+  // undefined kind (older backend) falls through to keep (no regression — server
+  // already dropped bookkeeping upstream).
   const outputs = useMemo(
-    () => (grouped.written ?? []).filter((f) => !isBookkeepingPath(f.path)),
+    () => (grouped.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source'),
     [grouped.written],
   );
 

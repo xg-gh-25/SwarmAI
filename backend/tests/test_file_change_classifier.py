@@ -15,7 +15,6 @@ Cycle 2 of run_e626e121. Two pure functions, no I/O:
 import pytest
 
 from core.file_change_classifier import (
-    classify_relevance,
     parse_bash_write_targets,
     parse_bash_delete_targets,
 )
@@ -58,66 +57,10 @@ def test_mv_multi_source_or_dir_dest_rejected():
     assert parse_bash_delete_targets("mv -t dir a b") == []
 
 
-# ─────────────────────────── classify_relevance ───────────────────────────
-
-@pytest.mark.parametrize("path", [
-    "Projects/SwarmAI/report.html",
-    "Knowledge/Notes/foo.md",
-    "/Users/gawan/Desktop/thing.html",
-    "desktop/src/App.tsx",
-])
-def test_write_to_real_file_is_deliverable(path):
-    assert classify_relevance(path, "written") == "deliverable"
-
-
-@pytest.mark.parametrize("path", [
-    "Projects/SwarmAI/.artifacts/runs/run_x/run.json",    # .artifacts machine-state
-    "Projects/SwarmAI/.git/config",                       # .git
-    ".context/USER.md",                                   # .context, NOT allowlisted
-    ".context/.eval-canary.json",                         # .context dot-basename
-    "Knowledge/.DS_Store",                                # dotfile basename
-    "/tmp/scratch.txt",                                   # tmp
-    "/private/tmp/x",                                     # macos tmp
-    "foo.py.tmp",                                         # .tmp suffix
-    "backup~",                                            # ~ backup
-])
-def test_bookkeeping_paths_filtered(path):
-    assert classify_relevance(path, "written") == "bookkeeping"
-
-
-# ── PR-review surface allowlist (run_b8ea6d5c): a NARROW set of knowledge/report ──
-# docs escape the dot-dir bookkeeping drop and surface as deliverables.
-@pytest.mark.parametrize("path", [
-    ".context/MEMORY.md",
-    ".context/EVOLUTION.md",
-    ".context/KNOWLEDGE.md",
-    ".context/PROJECTS.md",
-    "Projects/SwarmAI/.artifacts/runs/run_x/REPORT.md",   # run REPORT escapes .artifacts
-])
-def test_prreview_allowlist_escapes_bookkeeping(path):
-    assert classify_relevance(path, "written") == "deliverable"
-
-
-@pytest.mark.parametrize("path", [
-    ".context/USER.md",                                   # not in the knowledge basenames
-    "Projects/SwarmAI/.artifacts/runs/run_x/run.json",    # not REPORT.md
-    "Projects/SwarmAI/.artifacts/manifest.json",          # .artifacts but no runs/ + not REPORT
-])
-def test_prreview_allowlist_is_narrow(path):
-    # The allowlist must NOT over-reach: sibling machine-state under the same dot-dirs
-    # stays bookkeeping (else it re-poisons the rail with noise).
-    assert classify_relevance(path, "written") == "bookkeeping"
-
-
-@pytest.mark.parametrize("op", ["read", "searched", "listed"])
-def test_reads_and_searches_are_incidental(op):
-    # A real file, but only READ → rail-only, never auto-surface.
-    assert classify_relevance("Projects/SwarmAI/report.html", op) == "incidental"
-
-
-def test_bookkeeping_beats_incidental_and_deliverable():
-    # A read of a bookkeeping path is still bookkeeping (filtered), not incidental.
-    assert classify_relevance("Projects/SwarmAI/.git/HEAD", "read") == "bookkeeping"
+# classify_relevance tests REMOVED (run_4de279ca Gate-2 F7): the function was
+# retired — the git-based needs_human_review is now the sole surfacing authority
+# (its allowlist + bookkeeping behavior is covered by needs_human_review_test.py,
+# incl. test_memory_md_is_knowledge + test_artifacts_report / .context cases).
 
 
 # ─────────────────────────── parse_bash_write_targets ───────────────────────────
