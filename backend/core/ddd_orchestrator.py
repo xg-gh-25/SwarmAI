@@ -660,7 +660,12 @@ class DddCultivationOrchestrator:
                                 gate_mgr.record_trigger("trust_annotation")
                             continue
 
-                        from utils.file_lock import flock_exclusive, flock_unlock
+                        # Shared doc-write lock via md_lock (run_06350217): the SAME
+                        # <doc>.md.lock name every other writer of these docs uses,
+                        # so this mechanical writeback mutually excludes concurrent
+                        # apply_to_ddd / decay / retire (was hand-rolled flock_exclusive
+                        # — correct name already, but re-derived; md_lock owns it now).
+                        from utils.file_lock import md_lock
                         for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
                             # Resolve via the six-section resolver (strangler): a
                             # migrated DDD keeps its docs under 2-understanding/, so a
@@ -672,16 +677,7 @@ class DddCultivationOrchestrator:
                             doc_path = ddd_path(project_dir, ddd_name)
                             if not doc_path.exists():
                                 continue
-                            lock_path = doc_path.with_suffix(doc_path.suffix + ".lock")
-                            lock_file = None
-                            try:
-                                lock_file = open(lock_path, "w")
-                                flock_exclusive(lock_file)
-                            except OSError:
-                                if lock_file:
-                                    lock_file.close()
-                                continue
-                            try:
+                            with md_lock(doc_path, blocking=True):
                                 ddd_content = doc_path.read_text(encoding="utf-8")
                                 if current_block in ddd_content:
                                     new_content = ddd_content.replace(
@@ -699,9 +695,6 @@ class DddCultivationOrchestrator:
                                         project_dir.name, ddd_name, proposal_path.name,
                                     )
                                     break
-                            finally:
-                                flock_unlock(lock_file)
-                                lock_file.close()
 
                     proposal_path.rename(proposal_path.with_suffix(".md.applied"))
 
@@ -980,9 +973,10 @@ class DddCultivationOrchestrator:
         1. Bump references from recent DailyActivity text (F1 activation)
         2. Assess decay transitions (active→dormant→archived)
         3. Archive entries that reached end-of-life
-        Uses fcntl advisory lock to prevent concurrent read-modify-write.
+        Uses the shared md_lock (utils.file_lock) advisory lock — the SAME
+        <doc>.md.lock name every DDD-doc writer uses — to prevent concurrent
+        read-modify-write (run_06350217).
         """
-        import fcntl
         from datetime import date as _date
         from core.ddd_entry_lifecycle import (
             archive_entries,
@@ -1012,128 +1006,118 @@ class DddCultivationOrchestrator:
             if not imp_path.is_file():
                 continue
 
-            lock_fd = None
             try:
-                # Advisory file lock to prevent concurrent writes (F5 fix)
-                # C1 fix: use try/finally around entire open+lock sequence
-                # Lock MUST be co-located with the file it guards — imp_path now
-                # resolves under 2-understanding/ (six-section tree), so the lock
-                # lives beside it, not at a hardcoded root path (else the lock and
-                # the file it protects diverge → the guard is void).
-                lock_path = imp_path.with_name(".IMPROVEMENT.md.lock")
-                lock_fd = open(lock_path, "w")
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except (OSError, IOError):
-                    # Another process holds the lock — skip this project
-                    lock_fd.close()
-                    lock_fd = None
-                    continue
+                # Shared doc-write lock (run_06350217): lock on the SAME
+                # <doc>.md.lock name every other IMPROVEMENT.md writer uses
+                # (apply_to_ddd, auto-apply, llm-apply, retire) via md_lock — the
+                # old hand-rolled `.IMPROVEMENT.md.lock` name diverged from theirs,
+                # so this decay strip did NOT mutually exclude a concurrent append
+                # → lost-update race. md_lock is co-located (<doc>.md.lock), cross-
+                # platform, non-blocking here (skip the project if another writer
+                # holds it), and never unlinks (inode-race safe, run_24d9f714).
+                from utils.file_lock import md_lock
+                with md_lock(imp_path, blocking=False) as _got:
+                    if not _got:
+                        continue  # another writer holds this doc — skip this project
 
-                content = imp_path.read_text(encoding="utf-8")
-                entries = parse_entries(content)
-                if not entries:
-                    # C2 fix: don't use continue — fall through to finally
-                    pass
-                else:
-                    # F1 prose-bump REMOVED (R2-prime, run_e50621b6). Bumping ref
-                    # from DailyActivity prose-substring matches was a TOXIC fake
-                    # signal (generic-titled entries gamed it → undeserved decay
-                    # protection). The honest ref producer is
-                    # memory_decay.bump_entry_references (real entry-IDs cited in
-                    # session messages). ref_count + the decay HIGH_REF branch are
-                    # KEPT — only this prose producer is removed. NOTE: this call
-                    # site passed graph_path but NOT context_files, so it never
-                    # triggered the G1 graph auto-extraction (which is gated on
-                    # context_files) — removing it loses no graph behavior.
-                    #
-                    # ACCESS-DECAY bump (run_644bfea6): the HONEST usage signal
-                    # for DDD entries. recall records which entries it actually
-                    # surfaced into .ddd-usage.json (keyed by content anchor);
-                    # here we bump each matching entry's last_referenced to its
-                    # recorded hit date BEFORE assess_decay reads last_referenced
-                    # (ddd_entry_lifecycle.py:695). This keeps genuinely-used
-                    # lessons alive instead of decaying them on age alone.
-                    # Anchor MUST use the same normalizer as the write side.
-                    # best-effort: any failure leaves age-only decay intact.
-                    try:
-                        from core.ddd_usage import (
-                            entry_anchor_text,
-                            load_ddd_usage,
-                        )
-                        _usage = load_ddd_usage(project_dir.name)
-                        if _usage:
-                            for _e in entries:
-                                # Anchor IS the key (no section — recall and
-                                # parse_entries disagree on sub-section names,
-                                # so keying on section silently mismatched).
-                                _anchor = entry_anchor_text(_e.raw_text)
-                                _hit = _usage.get(_anchor) if _anchor else None
-                                if _hit and (
-                                    _e.last_referenced is None
-                                    or _hit > _e.last_referenced
-                                ):
-                                    _e.last_referenced = _hit
-                    except Exception:  # noqa: BLE001 — best-effort usage bump
+                    content = imp_path.read_text(encoding="utf-8")
+                    entries = parse_entries(content)
+                    if not entries:
+                        # C2 fix: don't use continue — fall through to finally
                         pass
-                    transitions = assess_decay(entries, today)
-                    if transitions:
-                        # Separate archival transitions from dormant transitions
-                        to_archive = []
-                        for t in transitions:
-                            t.entry.decay_state = t.new_state
-                            findings.append(
-                                f"ENTRY_DECAY: [{t.entry.entry_type}] "
-                                f"'{t.entry.title[:50]}' "
-                                f"{t.old_state}→{t.new_state} ({t.reason})"
+                    else:
+                        # F1 prose-bump REMOVED (R2-prime, run_e50621b6). Bumping ref
+                        # from DailyActivity prose-substring matches was a TOXIC fake
+                        # signal (generic-titled entries gamed it → undeserved decay
+                        # protection). The honest ref producer is
+                        # memory_decay.bump_entry_references (real entry-IDs cited in
+                        # session messages). ref_count + the decay HIGH_REF branch are
+                        # KEPT — only this prose producer is removed. NOTE: this call
+                        # site passed graph_path but NOT context_files, so it never
+                        # triggered the G1 graph auto-extraction (which is gated on
+                        # context_files) — removing it loses no graph behavior.
+                        #
+                        # ACCESS-DECAY bump (run_644bfea6): the HONEST usage signal
+                        # for DDD entries. recall records which entries it actually
+                        # surfaced into .ddd-usage.json (keyed by content anchor);
+                        # here we bump each matching entry's last_referenced to its
+                        # recorded hit date BEFORE assess_decay reads last_referenced
+                        # (ddd_entry_lifecycle.py:695). This keeps genuinely-used
+                        # lessons alive instead of decaying them on age alone.
+                        # Anchor MUST use the same normalizer as the write side.
+                        # best-effort: any failure leaves age-only decay intact.
+                        try:
+                            from core.ddd_usage import (
+                                entry_anchor_text,
+                                load_ddd_usage,
                             )
-                            if t.new_state == "archived":
-                                to_archive.append(t.entry)
+                            _usage = load_ddd_usage(project_dir.name)
+                            if _usage:
+                                for _e in entries:
+                                    # Anchor IS the key (no section — recall and
+                                    # parse_entries disagree on sub-section names,
+                                    # so keying on section silently mismatched).
+                                    _anchor = entry_anchor_text(_e.raw_text)
+                                    _hit = _usage.get(_anchor) if _anchor else None
+                                    if _hit and (
+                                        _e.last_referenced is None
+                                        or _hit > _e.last_referenced
+                                    ):
+                                        _e.last_referenced = _hit
+                        except Exception:  # noqa: BLE001 — best-effort usage bump
+                            pass
+                        transitions = assess_decay(entries, today)
+                        if transitions:
+                            # Separate archival transitions from dormant transitions
+                            to_archive = []
+                            for t in transitions:
+                                t.entry.decay_state = t.new_state
+                                findings.append(
+                                    f"ENTRY_DECAY: [{t.entry.entry_type}] "
+                                    f"'{t.entry.title[:50]}' "
+                                    f"{t.old_state}→{t.new_state} ({t.reason})"
+                                )
+                                if t.new_state == "archived":
+                                    to_archive.append(t.entry)
 
-                        # Archive entries that transitioned to archived state
-                        if to_archive:
-                            archive_entries(project_dir, to_archive)
+                            # Archive entries that transitioned to archived state
+                            if to_archive:
+                                archive_entries(project_dir, to_archive)
 
-                    # Write updated metadata back — covers BOTH ref bumps (F1)
-                    # and decay transitions. Only write if content actually changed.
-                    active_entries = [e for e in entries if e.decay_state != "archived"]
-                    updated = inject_entry_metadata(content, active_entries)
-                    if updated != content:
-                        imp_path.write_text(updated, encoding="utf-8")
-                        content = updated  # reclaim operates on the latest content
+                        # Write updated metadata back — covers BOTH ref bumps (F1)
+                        # and decay transitions. Only write if content actually changed.
+                        active_entries = [e for e in entries if e.decay_state != "archived"]
+                        updated = inject_entry_metadata(content, active_entries)
+                        if updated != content:
+                            imp_path.write_text(updated, encoding="utf-8")
+                            content = updated  # reclaim operates on the latest content
 
-                    # CLEAN (M0 ②): reclaim stale operational noise — archive
-                    # AND physically strip (inject_entry_metadata only annotates,
-                    # it never removes, so archived entries would otherwise persist
-                    # and keep counting as noise). is_keep_class protects permanent
-                    # knowledge (COE/principle/correction/decision/model/ref>=2).
-                    reclaim_report = reclaim_noise_entries(
-                        content, today, project_dir,
-                        source_path=imp_path, dry_run=False,
-                    )
-                    if reclaim_report.new_content is not None:
-                        # reclaim_noise_entries already wrote imp_path
-                        # (source_path given); recovery is archive + git, no
-                        # .bak (6463e1ab). Just log.
-                        findings.append(
-                            f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
-                            f"archived+stripped from {project_dir.name} "
-                            f"({reclaim_report.kept_protected} protected)"
+                        # CLEAN (M0 ②): reclaim stale operational noise — archive
+                        # AND physically strip (inject_entry_metadata only annotates,
+                        # it never removes, so archived entries would otherwise persist
+                        # and keep counting as noise). is_keep_class protects permanent
+                        # knowledge (COE/principle/correction/decision/model/ref>=2).
+                        reclaim_report = reclaim_noise_entries(
+                            content, today, project_dir,
+                            source_path=imp_path, dry_run=False,
                         )
+                        if reclaim_report.new_content is not None:
+                            # reclaim_noise_entries already wrote imp_path
+                            # (source_path given); recovery is archive + git, no
+                            # .bak (6463e1ab). Just log.
+                            findings.append(
+                                f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
+                                f"archived+stripped from {project_dir.name} "
+                                f"({reclaim_report.kept_protected} protected)"
+                            )
 
             except Exception as exc:
                 logger.debug(
                     "entry_lifecycle: %s failed: %s",
                     project_dir.name, type(exc).__name__,
                 )
-            finally:
-                # C1/C2 fix: always release lock regardless of path taken
-                if lock_fd is not None:
-                    try:
-                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    except (OSError, IOError):
-                        pass
-                    lock_fd.close()
+            # md_lock (above) released + closed the fd on with-exit; no manual
+            # finally needed (run_06350217 — was a hand-rolled fcntl LOCK_UN).
 
         return findings
 
@@ -1524,7 +1508,6 @@ class DddCultivationOrchestrator:
         from core.auto_refresh import RefreshResult, log_refresh_results
 
         try:
-            import fcntl
 
             # Length sanity check (pre-lock — no file I/O needed)
             current_len = len(proposal.current_text)
@@ -1537,11 +1520,12 @@ class DddCultivationOrchestrator:
                 )
                 return False
 
-            # Read-modify-write under sidecar lock (consistent with _auto_apply_ddd_proposals)
-            lock_path = doc_path.with_suffix(doc_path.suffix + ".lock")
-            lock_fd = open(lock_path, "w")
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            try:
+            # Read-modify-write under the SHARED doc-write lock (run_06350217):
+            # md_lock on <doc>.md.lock — the SAME name apply_to_ddd / auto-apply /
+            # decay / retire use, so this LLM refresh mutually excludes them (was
+            # hand-rolled fcntl LOCK_EX — correct name, but re-derived). Blocking.
+            from utils.file_lock import md_lock
+            with md_lock(doc_path, blocking=True):
                 content = doc_path.read_text(encoding="utf-8")
 
                 # Exact match replacement
@@ -1559,12 +1543,6 @@ class DddCultivationOrchestrator:
                 tmp_path = doc_path.with_suffix(".tmp")
                 tmp_path.write_text(new_content, encoding="utf-8")
                 os.replace(tmp_path, doc_path)
-            finally:
-                try:
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-                except (OSError, IOError):
-                    pass
-                lock_fd.close()
 
             # Success path only (after lock released)
             result = RefreshResult(

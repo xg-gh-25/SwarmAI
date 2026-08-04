@@ -239,9 +239,11 @@ class TestApplyToDddLeavesLock:
 
         # Reached the write path and succeeded (proves the .lock was actually created).
         assert status in ("applied", "created_section"), f"unexpected early-return: {status}"
-        # The fix: the .lock sidecar must PERSIST (no unlink under flock). Restoring
-        # lock_path.unlink(...) makes this RED.
-        lock_file = doc.with_suffix(".lock")
-        assert lock_file.exists(), "apply_to_ddd must NOT unlink the doc .lock (inode race, run_edcfd0e5)"
+        # The fix: the .lock sidecar must PERSIST (md_lock never unlinks — run_24d9f714).
+        # run_06350217: apply_to_ddd now locks via md_lock, whose name is
+        # <doc>.md.lock (IMPROVEMENT.md.lock), NOT the old with_suffix(".lock")
+        # (IMPROVEMENT.lock) — the convergence onto ONE lock name per doc.
+        lock_file = doc.with_suffix(doc.suffix + ".lock")  # IMPROVEMENT.md.lock
+        assert lock_file.exists(), "apply_to_ddd must lock via md_lock (<doc>.md.lock) and NOT unlink it"
         # And the content actually landed.
         assert "str-division TypeError" in doc.read_text(encoding="utf-8")

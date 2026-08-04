@@ -11,6 +11,90 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+
+class TestDddDocLockConvergence:
+    """run_06350217 — every DDD-doc writer must lock via ONE shared name.
+
+    The bug: IMPROVEMENT.md was guarded by 3 DIFFERENT lock filenames
+    (IMPROVEMENT.lock @ apply_to_ddd, IMPROVEMENT.md.lock @ orchestrator auto-apply,
+    .IMPROVEMENT.md.lock @ orchestrator decay), so concurrent writers did NOT
+    mutually exclude → lost-update race. Fix: all writers use utils.file_lock.md_lock,
+    whose single name derivation (<doc>.md.lock) makes exclusion real.
+    """
+
+    def test_md_lock_name_is_single_derivation(self, tmp_path):
+        """md_lock derives EXACTLY <doc>.md.lock — the one name all writers converge on."""
+        from utils.file_lock import md_lock
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("x", encoding="utf-8")
+        with md_lock(doc, blocking=True):
+            lock = doc.with_suffix(doc.suffix + ".lock")  # IMPROVEMENT.md.lock
+            assert lock.exists(), "md_lock must create <doc>.md.lock"
+        # The OLD divergent names must NOT be what md_lock uses.
+        assert not (tmp_path / "IMPROVEMENT.lock").exists(), "old apply_to_ddd name"
+        assert not (tmp_path / ".IMPROVEMENT.md.lock").exists(), "old decay-site name"
+
+    def test_shared_name_gives_real_mutual_exclusion(self, tmp_path):
+        """Two md_lock(blocking=False) on the SAME doc: 2nd is excluded (got=False).
+
+        This is the invariant the convergence buys — proves a shared name = real
+        exclusion. Under the OLD 3-name scheme these would be different files and
+        BOTH would acquire (the race)."""
+        from utils.file_lock import md_lock
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("x", encoding="utf-8")
+        with md_lock(doc, blocking=False) as got1:
+            assert got1 is True, "first acquire must succeed"
+            with md_lock(doc, blocking=False) as got2:
+                assert got2 is False, "second acquire on SAME doc must be excluded"
+
+    def test_apply_to_ddd_skips_when_doc_lock_held(self, tmp_path):
+        """apply_to_ddd (SITE A) must SKIP (return 'locked') when the doc's md_lock
+        is already held — proving it shares the same lock, not a private name."""
+        from utils.file_lock import md_lock
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+        from datetime import datetime, timezone
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text("# I\n\n## What Worked\n\n- prior\n", encoding="utf-8")
+        prop = CultivationProposal.from_dict({
+            "id": "lk1", "target_doc": "IMPROVEMENT.md", "target_section": "What Worked",
+            "content": "Always validate Path inputs at the boundary before filesystem ops to avoid errors.",
+            "source_run_id": "r", "confidence": 0.9, "status": "escalated",
+            "change_type": "append", "created_at": datetime.now(timezone.utc).isoformat(),
+            "ttl_days": 30,
+        })
+        # Hold the SAME lock apply_to_ddd will try (non-blocking) → it must skip.
+        with md_lock(doc, blocking=False) as got:
+            assert got is True
+            status = apply_to_ddd(prop, tmp_path)
+        assert status == "locked", f"apply_to_ddd must skip when the doc md_lock is held, got {status}"
+
+    def test_promote_section_skips_when_doc_lock_held(self, tmp_path):
+        """SITE G (ddd_maturity.promote_section) must share the same doc md_lock —
+        when held, promotion skips (returns False) instead of clobbering. Before
+        run_06350217 this write was UNLOCKED (Gate-2 meta finding).
+
+        Non-vacuous by construction: the doc is seeded with a REAL maturity state so
+        promote SUCCEEDS (True) when the lock is free — proving it's the LOCK, not a
+        parse-failure, that flips it to False when held. (A divergent lock name →
+        promote acquires its own lock → returns True → this assert goes RED.)"""
+        from utils.file_lock import md_lock
+        from core.ddd_maturity import promote_section, inject_maturity, MaturityState
+        doc = tmp_path / "IMPROVEMENT.md"
+        seeded = inject_maturity(
+            "# I\n\n## What Worked\n\n- x\n", {"What Worked": MaturityState(level="sparse")}
+        )
+        doc.write_text(seeded, encoding="utf-8")
+        # Control: unheld → promote SUCCEEDS (proves the setup reaches the write).
+        assert promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature") is True
+        # Re-seed, then hold the SAME lock → promote must SKIP (return False).
+        doc.write_text(seeded, encoding="utf-8")
+        with md_lock(doc, blocking=False) as got:
+            assert got is True
+            result = promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature")
+        assert result is False, "promote_section must skip (share the doc md_lock) when held"
 
 
 class TestWatchPathsDerivation:

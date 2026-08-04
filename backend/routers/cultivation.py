@@ -124,14 +124,22 @@ async def approve_proposal(
         # destructive change reaching THIS router (an escalated retire the human is
         # approving). Confident retires auto-apply upstream in _cultivate_proposals
         # (run_ecc7a32b) and never reach here; this path is the human-gated remainder.
+        #
+        # OFFLOAD to a worker thread (run_06350217, Gate-2 security): both appliers do
+        # a SYNCHRONOUS fcntl/md_lock acquire + read-modify-write. apply_retire_proposal
+        # now takes a BLOCKING md_lock — running it inline in this async handler would
+        # block the single uvicorn event loop for ALL clients while a background DDD
+        # channel holds the same <doc>.md.lock. Mirror improvement_writeback_hook:318
+        # (asyncio.to_thread) so a blocking flock never runs on the event loop.
+        import asyncio
         if proposal.change_type in ("retire", "rewrite"):
-            status = apply_retire_proposal(proposal, project_dir)
+            status = await asyncio.to_thread(apply_retire_proposal, proposal, project_dir)
             success_states = ("retired", "rewritten")
         else:
             # Apply to DDD document (returns a status string, not a bool).
             # "applied" and "created_section" both mean the lesson landed successfully
             # (created_section = the whitelisted heading was absent and auto-created).
-            status = apply_to_ddd(proposal, project_dir)
+            status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
             success_states = ("applied", "created_section")
         if status not in success_states:
             # Rich diagnostic goes to the SERVER log (includes doc/section names);

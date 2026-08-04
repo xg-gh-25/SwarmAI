@@ -775,21 +775,18 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     if not doc_path.exists():
         return "doc_missing"
 
-    import fcntl
+    # Advisory doc-write lock via the SHARED helper (run_06350217): EVERY writer of
+    # this doc — apply_to_ddd, orchestrator auto-apply/decay/llm-apply, retire —
+    # must lock on the SAME <doc>.md.lock name, or they don't mutually exclude
+    # (the old with_suffix(".lock")=IMPROVEMENT.lock diverged from the orchestrator's
+    # IMPROVEMENT.md.lock → a lost-update race). md_lock owns the ONE derivation,
+    # is cross-platform, and never unlinks (preserves run_24d9f714's inode-race fix).
+    # Non-blocking: skip (return "locked") if another writer holds it — retry next run.
+    from utils.file_lock import md_lock
 
-    # H1 fix: advisory lock prevents concurrent pipeline writes
-    lock_path = doc_path.with_suffix(".lock")
-    lock_fd = None
-    try:
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, IOError):
-        # Another process holds the lock — skip this write, it'll retry next run
-        if lock_fd:
-            lock_fd.close()
-        return "locked"
-
-    try:
+    with md_lock(doc_path, blocking=False) as _got:
+        if not _got:
+            return "locked"
         content = doc_path.read_text(encoding="utf-8")
 
         # ── DESTRUCTIVE SUPERSEDE (run_6ac7a760, XG-directed; Gate-2-tiered) ────
@@ -949,22 +946,13 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             new_content = f"{prefix}## {proposal.target_section}\n\n{entry}"
             result_status = "created_section"
 
-        # Atomic write: write to temp, rename over original
+        # Atomic write: write to temp, rename over original (inside the md_lock).
         tmp_path = doc_path.with_suffix(".tmp")
         tmp_path.write_text(new_content, encoding="utf-8")
         os.replace(str(tmp_path), str(doc_path))
         return result_status
-    finally:
-        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-        lock_fd.close()
-        # Deliberately do NOT unlink the .lock sidecar — unlinking a flock'd path is
-        # the inode-divergence race (run_edcfd0e5): a waiter blocked in flock() holds
-        # an fd to the OLD inode, and a fresh open() after unlink creates a NEW inode,
-        # so two holders "own" the lock on different inodes. The sidecar is one fixed
-        # file per doc (IMPROVEMENT.lock, TECH.lock — reused, not per-proposal),
-        # gitignored + artifact-excluded, so leaving it is harmless. Matches the
-        # corrected pattern in _proposal_lock (routers/cultivation.py) and
-        # ddd_orchestrator.py — NOT the old latent unlink. (run_24d9f714)
+    # md_lock releases + closes the fd on exit and NEVER unlinks the sidecar
+    # (run_24d9f714 inode-race fix, preserved by construction).
 
 
 # ── Evidence-driven supersession detection + retire (run_b8f10185; ────────────
@@ -1415,21 +1403,29 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
     stem = Path(proposal.target_doc).stem  # "IMPROVEMENT" | "TECH" | ...
     archive_name = f"{stem}-archive.md"
 
+    # SHARED doc-write lock (run_06350217): retire_entry does a read-modify-STRIP of
+    # doc_path (source_path=), a WRITE — it must hold the SAME <doc>.md.lock every
+    # other writer (apply_to_ddd append, orchestrator decay/auto-apply/llm) uses, or
+    # the strip races a concurrent append → lost update. Before this run, retire was
+    # the one unlocked doc writer (Gate-1 run_06350217). Blocking. Scope is the
+    # read→retire span ONLY — the rewrite-append below calls apply_to_ddd, which
+    # RE-ACQUIRES this same lock, so it MUST run AFTER this `with` exits (else
+    # self-deadlock on the same lock name).
+    from utils.file_lock import md_lock
     try:
-        content = doc_path.read_text(encoding="utf-8")
+        with md_lock(doc_path, blocking=True):
+            content = doc_path.read_text(encoding="utf-8")
+            retire_entry(
+                content,
+                proposal.target_title,
+                proposal.target_section,
+                project_dir,
+                archive_name=archive_name,
+                source_path=doc_path,
+                dry_run=False,
+            )
     except (OSError, UnicodeDecodeError) as e:
         return f"retire_failed:read_error {type(e).__name__}"
-
-    try:
-        retire_entry(
-            content,
-            proposal.target_title,
-            proposal.target_section,
-            project_dir,
-            archive_name=archive_name,
-            source_path=doc_path,
-            dry_run=False,
-        )
     except RetireError as e:
         # Fail-loud: no match / ambiguous / keep-class refused. Surface, don't strip.
         return f"retire_failed:{str(e)[:120]}"

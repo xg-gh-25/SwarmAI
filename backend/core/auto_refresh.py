@@ -668,29 +668,38 @@ class MechanicalRefresher:
                     self._apply_fixes_locked(abs_path, fixes)
                     applied += sum(1 for f in fixes if f.applied)
                 else:
-                    # DDD docs in Projects/: read, modify, atomic write (tmp+replace)
-                    content = abs_path.read_text(encoding="utf-8")
-                    original = content
+                    # DDD docs in Projects/: read-modify-write under the SHARED
+                    # <doc>.md.lock (run_06350217) — the SAME name every other DDD-doc
+                    # writer (apply_to_ddd / orchestrator decay·auto-apply·llm / retire
+                    # / maturity) uses, so this mechanical drift-fix mutually excludes
+                    # them (was an UNLOCKED tmp+replace → lost-update race). Non-blocking:
+                    # drift fixes are idempotent + retried next run, so skip if held.
+                    from utils.file_lock import md_lock
+                    with md_lock(abs_path, blocking=False) as _got:
+                        if not _got:
+                            continue  # another writer holds this doc — skip, retry next run
+                        content = abs_path.read_text(encoding="utf-8")
+                        original = content
 
-                    pending_fixes: list[RefreshResult] = []
-                    for fix in fixes:
-                        if fix.old_value in content:
-                            content = content.replace(fix.old_value, fix.new_value, 1)
-                            pending_fixes.append(fix)
+                        pending_fixes: list[RefreshResult] = []
+                        for fix in fixes:
+                            if fix.old_value in content:
+                                content = content.replace(fix.old_value, fix.new_value, 1)
+                                pending_fixes.append(fix)
 
-                    if content != original:
-                        tmp_path = abs_path.with_suffix(".tmp")
-                        tmp_path.write_text(content, encoding="utf-8")
-                        os.replace(tmp_path, abs_path)
+                        if content != original:
+                            tmp_path = abs_path.with_suffix(".tmp")
+                            tmp_path.write_text(content, encoding="utf-8")
+                            os.replace(tmp_path, abs_path)
 
-                        for fix in pending_fixes:
-                            fix.applied = True
-                            applied += 1
+                            for fix in pending_fixes:
+                                fix.applied = True
+                                applied += 1
 
-                        logger.info(
-                            "auto_refresh.L1: applied %d fixes to %s",
-                            len(pending_fixes), rel_path,
-                        )
+                            logger.info(
+                                "auto_refresh.L1: applied %d fixes to %s",
+                                len(pending_fixes), rel_path,
+                            )
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("auto_refresh.L1: failed to apply to %s: %s", rel_path, exc)
 

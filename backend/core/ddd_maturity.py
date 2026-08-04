@@ -343,23 +343,29 @@ def promote_section(
     if not doc_path.is_file():
         return False
 
+    # SHARED doc-write lock (run_06350217): this read-modify-write of a DDD doc must
+    # hold the SAME <doc>.md.lock every other writer (apply_to_ddd / orchestrator
+    # decay·auto-apply·llm / retire) uses, or a maturity promotion silently clobbers
+    # a concurrent append/strip. Non-blocking: a promotion is idempotent + retried on
+    # the next health-check, so skip (return False) if another writer holds it.
+    from utils.file_lock import md_lock
     try:
-        content = doc_path.read_text(encoding="utf-8")
-    except OSError:
-        return False
+        with md_lock(doc_path, blocking=False) as _got:
+            if not _got:
+                return False  # another writer holds the doc — retry next health-check
+            content = doc_path.read_text(encoding="utf-8")
 
-    states = parse_maturity(content)
-    if section_name not in states:
-        return False
+            states = parse_maturity(content)
+            if section_name not in states:
+                return False
 
-    state = states[section_name]
-    state.level = new_level
-    state.last_promoted = datetime.now(timezone.utc)
-    state.days_at_level = 0  # Reset on promotion
+            state = states[section_name]
+            state.level = new_level
+            state.last_promoted = datetime.now(timezone.utc)
+            state.days_at_level = 0  # Reset on promotion
 
-    updated = inject_maturity(content, {section_name: state})
-    try:
-        doc_path.write_text(updated, encoding="utf-8")
+            updated = inject_maturity(content, {section_name: state})
+            doc_path.write_text(updated, encoding="utf-8")
     except OSError:
         return False
 
@@ -467,48 +473,53 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
     # because days_at_level needs refreshing for ALL sections.
     now = datetime.now(timezone.utc)
 
+    # SHARED doc-write lock (run_06350217): each doc's read-modify-write must hold the
+    # SAME <doc>.md.lock every other DDD-doc writer uses. Non-blocking per doc — a
+    # maturity refresh is idempotent + retried next health-check, so skip a doc held
+    # by another writer rather than block the health-check loop.
+    from utils.file_lock import md_lock
     for doc_name in DDD_CANONICAL_DOCS:
         doc_path = ddd_path(project_dir, doc_name)
         if not doc_path.is_file():
             continue
 
         try:
-            content = doc_path.read_text(encoding="utf-8")
+            with md_lock(doc_path, blocking=False) as _got:
+                if not _got:
+                    continue  # another writer holds this doc — skip, retry next run
+                content = doc_path.read_text(encoding="utf-8")
+
+                states = parse_maturity(content)
+                if not states:
+                    continue
+
+                changed = False
+
+                for section_name, state in states.items():
+                    # Update source_count from changelog evidence
+                    key = (doc_name, section_name)
+                    if key in evidence:
+                        new_count = evidence[key]["source_count"]
+                        if state.source_count != new_count:
+                            state.source_count = new_count
+                            changed = True
+                            updated += 1
+                        else:
+                            unchanged += 1
+
+                    # Fix #2: Refresh days_at_level from last_promoted timestamp
+                    if state.last_promoted:
+                        computed_days = (now - state.last_promoted).days
+                        if state.days_at_level != computed_days:
+                            state.days_at_level = computed_days
+                            changed = True
+
+                if changed:
+                    new_content = inject_maturity(content, states)
+                    # PE-1: Only write if content actually differs — prevents daily git churn
+                    if new_content != content:
+                        doc_path.write_text(new_content, encoding="utf-8")
         except OSError:
             continue
-
-        states = parse_maturity(content)
-        if not states:
-            continue
-
-        changed = False
-
-        for section_name, state in states.items():
-            # Update source_count from changelog evidence
-            key = (doc_name, section_name)
-            if key in evidence:
-                new_count = evidence[key]["source_count"]
-                if state.source_count != new_count:
-                    state.source_count = new_count
-                    changed = True
-                    updated += 1
-                else:
-                    unchanged += 1
-
-            # Fix #2: Refresh days_at_level from last_promoted timestamp
-            if state.last_promoted:
-                computed_days = (now - state.last_promoted).days
-                if state.days_at_level != computed_days:
-                    state.days_at_level = computed_days
-                    changed = True
-
-        if changed:
-            new_content = inject_maturity(content, states)
-            # PE-1: Only write if content actually differs — prevents daily git churn
-            if new_content != content:
-                try:
-                    doc_path.write_text(new_content, encoding="utf-8")
-                except OSError:
-                    pass
 
     return {"updated": updated, "unchanged": unchanged}

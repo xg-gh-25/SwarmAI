@@ -1755,19 +1755,15 @@ class ContextHealthHook:
             if not doc_path.exists():
                 continue
 
-            # Co-locate the lock with the RESOLVED doc so it doesn't strand a stale
-            # .{doc}.lock at the project root (the old raw path left orphan locks).
-            lock_path = doc_path.parent / f".{doc_name}.lock"
-            lock_fd = None
-            try:
-                lock_fd = open(lock_path, "w")
-                flock_exclusive_nb(lock_fd)
-            except (BlockingIOError, OSError, IOError):
-                if lock_fd:
-                    lock_fd.close()
-                continue  # Another process holds the lock — skip this doc
-
-            try:
+            # SHARED doc-write lock (run_06350217): use md_lock so this verified-flag
+            # write holds the SAME <doc>.md.lock every other DDD-doc writer uses. The
+            # old raw flock on `.{doc}.lock` (= .IMPROVEMENT.md.lock) was a DIVERGENT
+            # name → it did NOT mutually exclude the decay/append/retire writers on
+            # IMPROVEMENT.md.lock. Non-blocking: skip a doc held by another writer.
+            from utils.file_lock import md_lock
+            with md_lock(doc_path, blocking=False) as _got:
+                if not _got:
+                    continue  # another writer holds this doc — skip
                 content = doc_path.read_text(encoding="utf-8")
                 states = parse_maturity(content)
                 if not states:
@@ -1787,12 +1783,6 @@ class ContextHealthHook:
                     if new_content != content:
                         doc_path.write_text(new_content, encoding="utf-8")
                         any_doc_updated = True
-            finally:
-                try:
-                    flock_unlock(lock_fd)
-                except (OSError, IOError):
-                    pass
-                lock_fd.close()
 
         # Only mark run as processed AFTER doc writes succeeded.
         # If no docs were updated (all locked or no maturity states), still mark
