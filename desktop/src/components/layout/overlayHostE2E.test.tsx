@@ -94,7 +94,18 @@ function renderHost() {
   );
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(async () => {
+  vi.clearAllMocks();
+  // G2 (run_06c49540): brain-hub/settings/eval are React.lazy — pre-resolve their
+  // dynamic import()s so this test exercises the event→open WIRING (its job), not the
+  // chunk-fetch timing. Without this the Suspense fallback ("Loading…") is what
+  // findByTestId sees for the lazy surfaces. The eager surfaces are unaffected.
+  await Promise.all([
+    import('./BrainHub'),
+    import('../../pages/SettingsPage'),
+    import('../../pages/EvalDashboard'),
+  ]);
+});
 afterEach(cleanup);
 
 // Each agent-openable surface: its swarm:show-<id> event → the content testid the

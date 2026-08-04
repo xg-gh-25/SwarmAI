@@ -10,12 +10,13 @@
  * window-event bus + singletons + activeModal) + D4 (spout source is `sourceCardId`
  * DATA, re-derived at open time — no mutable navSource singleton to remember to clear).
  *
- * M2 registers ONE pilot (brain-hub) to prove the host end-to-end; M3/M4 migrate the
- * rest. `OverlayId` stays `string` until every surface is registered (M5), then it can
- * be narrowed to a union of the registry keys.
+ * All surfaces are registered (M5 complete). `OverlayId` is the closed union defined
+ * in the `overlayIds` SSOT — `registerOverlay`'s `spec.id: OverlayId` type-binds every
+ * registration to that tuple (an unlisted id is a compile error), and
+ * overlayIds.test.ts asserts registeredOverlayIds() === OVERLAY_IDS both directions.
  */
 import type { ReactNode } from 'react';
-import type { OverlayId } from '../../contexts/OverlayContext';
+import type { OverlayId } from './overlayIds';
 
 /** Handlers the host injects into a surface's `render`. `close` is host-owned and
  *  always present. `dispatch*` are ChatPage-owned tab operations (dispatch is a
@@ -40,7 +41,9 @@ export interface OverlayRenderCtx {
   /** Delete a session (ChatPage's delete-confirm flow). */
   deleteSession?: (session: unknown) => void;
   /** Current agent scope (ChatPage.selectedAgentId) — History's session query key.
-   *  A scalar read at open time; History re-fetches reactively off it. */
+   *  Sourced by the host from OverlayContext (REACTIVE), NOT the module bridge: an open
+   *  History overlay re-renders + re-queries when the agent switches while open
+   *  (run_06c49540). ChatPage publishes it via OverlayContext.setAgentId. */
   agentId?: string | null;
 }
 
@@ -56,18 +59,20 @@ export interface OverlayCtxBridge {
   openFile?: (file: unknown, autoDiff?: boolean) => void;
   resumeSession?: (session: unknown) => boolean;
   deleteSession?: (session: unknown) => void;
-  agentId?: string | null;
 }
 const _bridge: OverlayCtxBridge = {};
 
-/** ChatPage calls this each render to publish its live tab-dispatch closures. */
+/** ChatPage calls this to publish its live tab-dispatch closures. These are all
+ *  ref-backed useCallbacks (stable identity, never stale), so a non-reactive module
+ *  ref is the correct channel — the host reads them at render time and they hold live
+ *  values. The one REACTIVE field (agentId) does NOT ride this bridge: it lives in
+ *  OverlayContext so an open overlay re-renders on an agent switch (run_06c49540). */
 export function setOverlayCtxBridge(b: OverlayCtxBridge): void {
   _bridge.dispatchPrompt = b.dispatchPrompt;
   _bridge.dispatchTodo = b.dispatchTodo;
   _bridge.openFile = b.openFile;
   _bridge.resumeSession = b.resumeSession;
   _bridge.deleteSession = b.deleteSession;
-  _bridge.agentId = b.agentId;
 }
 
 /** OverlayHost reads the current bridge handlers when assembling a render ctx. */

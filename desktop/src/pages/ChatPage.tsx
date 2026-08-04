@@ -424,7 +424,7 @@ export default function ChatPage() {
   //     permanently null, which silently blanked BOTH the agent's SENSE payload
   //     (uiContext active_overlay) AND the AlertsPill/tab-switch BACK_TO_CHAT guard
   //     below. useOverlay() is the live source (ChatPage renders inside OverlayProvider).
-  const activeOverlay = useOverlay().activeOverlay;
+  const { activeOverlay, setAgentId: setOverlayAgentId } = useOverlay();
   useEffect(() => {
     mergeUiState({ activeOverlay });
   }, [activeOverlay, mergeUiState]);
@@ -1361,9 +1361,17 @@ export default function ChatPage() {
       dispatchTodo: (todo) => handleDispatchTodo(todo as ToDo),
       resumeSession: (s) => handleResumeSession(s as ChatSession),
       deleteSession: (s) => setDeleteConfirmSession(s as ChatSession),
-      agentId: selectedAgentId,
     });
-  }, [handleDispatchJobPrompt, handleDispatchTodo, handleResumeSession, selectedAgentId]);
+  }, [handleDispatchJobPrompt, handleDispatchTodo, handleResumeSession]);
+
+  // agentId is published REACTIVELY through OverlayContext (not the non-reactive ref
+  // bridge): an OPEN History overlay must re-render its ['chatSessions', agentId] query
+  // when the agent switches while open (e.g. the delete-agent fallback effect fires with
+  // History open — Gate-2 MED, run_06c49540). The context re-renders OverlayHost; the ref
+  // bridge (host reads at render time) would leave it stale.
+  useEffect(() => {
+    setOverlayAgentId(selectedAgentId);
+  }, [selectedAgentId, setOverlayAgentId]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {

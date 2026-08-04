@@ -25,9 +25,10 @@
  * Chrome (enter/exit state machine, Esc, ref-counted scroll-lock, header, spout nub) is
  * ported faithfully from Modal's fullscreen branch — only the POSITIONING model changes.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { useOverlay } from '../../contexts/OverlayContext';
+import type { OverlayId } from './overlayIds';
 import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
 
 // Responsive width tiers — CSS clamp(min, preferred%, max), resolved by the browser
@@ -45,7 +46,7 @@ const NUB = 20;         // spout square size
 const EXIT_MS = 300;    // exit-transition backstop (> the 280ms card transform)
 
 export function OverlayHost() {
-  const { activeOverlay, closeOverlay } = useOverlay();
+  const { activeOverlay, closeOverlay, agentId } = useOverlay();
   const spec = getOverlaySpec(activeOverlay);
 
   const scrimRef = useRef<HTMLDivElement>(null);
@@ -53,7 +54,7 @@ export function OverlayHost() {
 
   // `renderedId` keeps the surface mounted through its exit transition; `entered`
   // drives the .open visual state. Mirrors Modal's isRendering/entered machine.
-  const [renderedId, setRenderedId] = useState<string | null>(activeOverlay);
+  const [renderedId, setRenderedId] = useState<OverlayId | null>(activeOverlay);
   const [entered, setEntered] = useState(false);
   // The source card's viewport center-y, captured at open (null = no spout).
   const [spoutCenterY, setSpoutCenterY] = useState<number | null>(null);
@@ -230,9 +231,27 @@ export function OverlayHost() {
           </div>
         </div>
         {/* Content — the registry render fn; host provides definite-height clip.
-            ctx = host-owned close + ChatPage-owned tab handlers (via the bridge). */}
+            ctx = host-owned close + ChatPage-owned tab handlers (via the bridge).
+            Suspense boundary is REQUIRED: G2 lazy()-splits the heavy surfaces
+            (BrainHub/Settings/Eval), and a lazy component rendered without a boundary
+            throws "suspended on synchronous input" (run_06c49540, Gate 1). Eager
+            surfaces never suspend, so the fallback only shows during a lazy chunk fetch. */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {renderSpec.render({ close: closeOverlay, ...getOverlayCtxBridge() })}
+          <Suspense
+            fallback={
+              <div
+                className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]"
+                data-testid="overlay-loading"
+              >
+                Loading…
+              </div>
+            }
+          >
+            {/* ctx = host-owned close + reactive agentId (from OverlayContext, so an
+                open surface re-renders on agent switch) + ref-backed dispatch handlers
+                (from the non-reactive module bridge — stable, never stale). */}
+            {renderSpec.render({ close: closeOverlay, agentId, ...getOverlayCtxBridge() })}
+          </Suspense>
         </div>
       </div>
     </div>

@@ -28,16 +28,19 @@
  */
 import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, ReactNode } from 'react';
 import { BACK_TO_CHAT_EVENT, ALL_SHOW_EVENTS } from '../components/layout/useExclusiveOverlay';
+import type { OverlayId } from '../components/layout/overlayIds';
 
-/** `swarm:show-brain-hub` → `brain-hub`. The registry id is the event suffix (verified
- *  1:1 for every ALL_SHOW_EVENTS entry against overlaySurfaces registrations). */
+/** `swarm:show-brain-hub` → `brain-hub`. The registry id is the event suffix; the
+ *  events⊆ids invariant is test-enforced (overlayIds.test.ts), so every
+ *  ALL_SHOW_EVENTS suffix is a real registered OverlayId — the sliced id below needs
+ *  no runtime guard (its listeners bind only to ALL_SHOW_EVENTS; a guard would be
+ *  dead code for an impossible state, PIT77). */
 const SHOW_EVENT_PREFIX = 'swarm:show-';
 
-/**
- * The id of a registered fullscreen surface. Open-ended `string` in M1 (the registry
- * that constrains it lands in M2); a nullable slot = "which single surface is open".
- */
-export type OverlayId = string;
+/** Re-exported from the overlayIds SSOT so existing `import { OverlayId } from
+ *  '../contexts/OverlayContext'` sites keep compiling. The union (not `string`) means
+ *  a typo'd openOverlay(<id>) is now a COMPILE ERROR, not a silent null-render. */
+export type { OverlayId };
 
 interface OverlayContextValue {
   /** The single currently-open surface, or null. At most one — the whole point. */
@@ -46,6 +49,17 @@ interface OverlayContextValue {
   openOverlay: (id: OverlayId) => void;
   /** Close the active surface (if any). */
   closeOverlay: () => void;
+  /** The current agent scope (ChatPage.selectedAgentId), published REACTIVELY here so
+   *  an OPEN overlay (History's ['chatSessions', agentId] query) re-renders when the
+   *  agent switches while it's open. This is the ONE reactive field that could NOT ride
+   *  the non-reactive module `_bridge` (overlayRegistry): the bridge is read at host
+   *  render time and the host only re-renders on activeOverlay change, so a bridged
+   *  agentId went stale when the delete-agent-fallback effect (ChatPage) fired with
+   *  History open (Gate-2 MED, run_06c49540). ChatPage writes it via setAgentId; the
+   *  ref bridge still carries the ref-backed dispatch handlers (never stale). */
+  agentId: string | null;
+  /** ChatPage publishes its live selectedAgentId here (reactive). */
+  setAgentId: (id: string | null) => void;
 }
 
 const OverlayContext = createContext<OverlayContextValue | undefined>(undefined);
@@ -56,6 +70,7 @@ interface OverlayProviderProps {
 
 export function OverlayProvider({ children }: OverlayProviderProps) {
   const [activeOverlay, setActiveOverlay] = useState<OverlayId | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(null);
 
   // A guard so the BACK_TO_CHAT_EVENT we dispatch when opening a new-host overlay
   // does not immediately null the very overlay we are opening (our own broadcast
@@ -88,7 +103,12 @@ export function OverlayProvider({ children }: OverlayProviderProps) {
   // the BACK_TO_CHAT that openOverlay itself fires (targets legacy overlays only).
   useEffect(() => {
     const openFromShow = (e: Event) => {
-      const id = e.type.slice(SHOW_EVENT_PREFIX.length); // 'swarm:show-todo' → 'todo'
+      // 'swarm:show-todo' → 'todo'. The cast is sound WITHOUT a runtime guard: these
+      // listeners bind ONLY to ALL_SHOW_EVENTS (below), and overlayIds.test.ts
+      // asserts every ALL_SHOW_EVENTS suffix ∈ OVERLAY_IDS — so this suffix is always
+      // a registered OverlayId. A runtime isOverlayId() here would be dead code for an
+      // impossible state (PIT77); the test is the guard.
+      const id = e.type.slice(SHOW_EVENT_PREFIX.length) as OverlayId;
       // Reuse openOverlay so the efferent close-legacy broadcast + guard run uniformly.
       openOverlay(id);
     };
@@ -106,8 +126,8 @@ export function OverlayProvider({ children }: OverlayProviderProps) {
   }, [openOverlay]);
 
   const value = useMemo<OverlayContextValue>(
-    () => ({ activeOverlay, openOverlay, closeOverlay }),
-    [activeOverlay, openOverlay, closeOverlay],
+    () => ({ activeOverlay, openOverlay, closeOverlay, agentId, setAgentId }),
+    [activeOverlay, openOverlay, closeOverlay, agentId],
   );
 
   return <OverlayContext.Provider value={value}>{children}</OverlayContext.Provider>;

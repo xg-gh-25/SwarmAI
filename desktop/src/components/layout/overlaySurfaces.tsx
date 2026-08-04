@@ -9,8 +9,8 @@
  * via OverlayShell. Each entry is pure data + a content render fn; the host owns all
  * chrome/geometry.
  */
+import { lazy } from 'react';
 import { registerOverlay } from './overlayRegistry';
-import { BrainHub } from './BrainHub';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import { CMBrainContent } from './CMBrainOverlay';
@@ -21,10 +21,19 @@ import { ToDoContent } from './ToDoOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { PipelineContent } from './PipelineOverlay';
 import { PollinateContent } from './PollinateOverlay';
-import SettingsPage from '../../pages/SettingsPage';
-import EvalDashboard from '../../pages/EvalDashboard';
 import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
+
+// G2 code-split (run_06c49540, MEASURED): the initial bundle was one 3,858 kB
+// (1,102 kB gzip) index chunk with all 12 surfaces eager. These three are the heavy,
+// rarely-first-open surfaces — lazy() moves each into its own chunk fetched on first
+// open. OverlayHost wraps spec.render(ctx) in a <Suspense> boundary (required — a
+// lazy component without one throws "suspended on synchronous input"). The other 9
+// surfaces stay eager (light / opened often). BrainHub (1,125 lines) + EvalDashboard
+// (2,603 lines) + SettingsPage→SettingsTabs (11-tab tree) are the measured-heavy set.
+const BrainHub = lazy(() => import('./BrainHub').then((m) => ({ default: m.BrainHub })));
+const SettingsPage = lazy(() => import('../../pages/SettingsPage'));
+const EvalDashboard = lazy(() => import('../../pages/EvalDashboard'));
 
 // Region tints (mirror ThreeColumnLayout A10_GROUP) — the workbench surfaces spout
 // with their card's zone accent (work = 青蓝, system = slate).

@@ -13,13 +13,16 @@ import { OverlayProvider, useOverlay } from './OverlayContext';
 import { BACK_TO_CHAT_EVENT, ALL_SHOW_EVENTS } from '../components/layout/useExclusiveOverlay';
 
 function Probe() {
-  const { activeOverlay, openOverlay, closeOverlay } = useOverlay();
+  const { activeOverlay, openOverlay, closeOverlay, agentId, setAgentId } = useOverlay();
   return (
     <div>
       <span data-testid="active">{activeOverlay ?? 'null'}</span>
+      <span data-testid="agent">{agentId ?? 'null'}</span>
       <button data-testid="open-todo" onClick={() => openOverlay('todo')}>open todo</button>
       <button data-testid="open-jobs" onClick={() => openOverlay('jobs')}>open jobs</button>
       <button data-testid="close" onClick={() => closeOverlay()}>close</button>
+      <button data-testid="set-agent-a" onClick={() => setAgentId('agent-a')}>a</button>
+      <button data-testid="set-agent-b" onClick={() => setAgentId('agent-b')}>b</button>
     </div>
   );
 }
@@ -79,6 +82,22 @@ describe('OverlayContext — show-event bridge + mutual exclusion', () => {
     // The Chat hero (or any legacy close) broadcasts back-to-chat → new-host closes.
     act(() => window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT)));
     expect(active()).toBe('null');
+  });
+
+  it('REACTIVE agentId: setAgentId updates the value consumers see, even while an overlay is OPEN (G3 anti-staleness, run_06c49540)', () => {
+    // The bug this guards (Gate-2 MED): agentId used to ride the non-reactive module
+    // _bridge, so an open History overlay kept a stale agentId when the agent switched
+    // (e.g. the delete-agent fallback effect). Reactive context = consumers re-render.
+    renderProbe();
+    expect(screen.getByTestId('agent').textContent).toBe('null');
+    act(() => screen.getByTestId('set-agent-a').click());
+    expect(screen.getByTestId('agent').textContent).toBe('agent-a');
+    // Open an overlay, THEN switch agent — the consumer must observe the new value.
+    act(() => screen.getByTestId('open-todo').click());
+    expect(active()).toBe('todo');
+    act(() => screen.getByTestId('set-agent-b').click());
+    expect(screen.getByTestId('agent').textContent).toBe('agent-b'); // NOT stale 'agent-a'
+    expect(active()).toBe('todo'); // still open — agent switch does not close it
   });
 
   it('EFFERENT: opening a new-host overlay broadcasts back-to-chat (closes legacy) WITHOUT closing itself', () => {
