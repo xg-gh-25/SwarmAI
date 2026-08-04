@@ -293,9 +293,14 @@ function ActionTile(
   );
 }
 
-/** HealthStrip — renders NOTHING when health is absent (daemon-skew guard). */
+/** HealthStrip — renders NOTHING when health is absent OR structurally partial
+ *  (daemon-skew guard). The type says `noise` is required and the current backend
+ *  always sends it, but `health` crosses the API deserialization boundary (O023:
+ *  never trust a wire type at runtime) — a pre-deploy/partial daemon could send
+ *  `health` present but `noise` missing. Guard on the load-bearing `noise` field
+ *  so a partial object degrades to render-nothing, never a TypeError (Gate-2 MED). */
 function HealthStrip({ health }: { health?: DetailHealth }) {
-  if (!health) return null;
+  if (!health || !health.noise) return null;
 
   const { below, total } = _trustBelowHigh(health.trust);
   const trustValue = total === 0 ? '—' : `${below}/${total}`;

@@ -710,4 +710,15 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
     expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });
+
+  it('renders NOTHING (no crash) when health is a PARTIAL object missing noise (O023 boundary, Gate-2 MED)', async () => {
+    // A partial/old daemon could send `health` present but the required `noise`
+    // field absent — a wire-type violation the runtime must survive, not TypeError.
+    mockGetBrainDetail.mockResolvedValueOnce({ ...DETAIL, health: {} as BrainDetail['health'] });
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
+  });
 });
