@@ -381,8 +381,18 @@ async def list_files(
     # List directory contents
     files: list[WorkspaceFileInfo] = []
 
+    # Hide advisory sidecars ONLY in the managed DDD workspace (run_419ff7d4).
+    # base_path is set = the "work in a folder" feature pointed at an ARBITRARY repo,
+    # where *.lock is legit user content (Cargo.lock, uv.lock, poetry.lock, …) —
+    # Gate-2 caught that a blanket filter would hide those. In the managed workspace
+    # every *.lock is an advisory flock sidecar and *.tmp is atomic-write scratch.
+    filter_sidecars = base_path is None
     try:
         for item in sorted(target_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            # FILES only — a directory named e.g. "foo.lock" is real content, keep it
+            # (Gate-2: the suffix check must not swallow directories).
+            if filter_sidecars and not item.is_dir() and item.name.endswith((".lock", ".tmp")):
+                continue
             try:
                 stat = item.stat()
                 files.append(

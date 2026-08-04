@@ -83,7 +83,17 @@ class ProposalFeedbackTracker:
         if not proposals_dir.is_dir():
             return stats
 
-        for proposal_file in proposals_dir.glob("proposal_*.json"):
+        # Scan BOTH the live dir AND archive/ (run_419ff7d4): the stale-proposal
+        # reclaim sweep MOVES terminal proposals to proposals/archive/, so the
+        # reject-precision counter must keep counting them or precision silently
+        # degrades after every sweep. Archived proposals are terminal, so they only
+        # add to the historical approved/rejected tallies — never to live "pending".
+        archive_dir = proposals_dir / "archive"
+        proposal_files = list(proposals_dir.glob("proposal_*.json"))
+        if archive_dir.is_dir():
+            proposal_files += list(archive_dir.glob("proposal_*.json"))
+
+        for proposal_file in proposal_files:
             try:
                 data = json.loads(proposal_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):

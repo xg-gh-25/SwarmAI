@@ -28,6 +28,28 @@ class TestComputeChannelStats:
         stats = tracker.compute_channel_stats(proposals_dir)
         assert stats == {}
 
+    def test_archived_proposals_still_counted(self, tmp_path):
+        """run_419ff7d4 (Debt1-safety): after the sweep MOVES terminal proposals to
+        proposals/archive/, compute_channel_stats MUST still count them (widened glob),
+        else the reject-precision loop silently degrades. Stats identical whether a
+        terminal proposal sits in proposals/ or proposals/archive/."""
+        from core.proposal_feedback import ProposalFeedbackTracker
+        proposals_dir = tmp_path / "proposals"
+        (proposals_dir / "archive").mkdir(parents=True)
+
+        # one rejected LIVE-dir, one rejected ARCHIVED — both must count.
+        (proposals_dir / "proposal_live.json").write_text(json.dumps({
+            "source_stage": "code_intel_feed", "status": "rejected",
+        }))
+        (proposals_dir / "archive" / "proposal_arch.json").write_text(json.dumps({
+            "source_stage": "code_intel_feed", "status": "rejected",
+        }))
+
+        tracker = ProposalFeedbackTracker()
+        stats = tracker.compute_channel_stats(proposals_dir)
+        assert stats["code_intel_feed"]["rejected"] == 2, "archived proposal must still be counted"
+        assert stats["code_intel_feed"]["generated"] == 2
+
     def test_counts_by_source_stage(self, tmp_path):
         from core.proposal_feedback import ProposalFeedbackTracker
 

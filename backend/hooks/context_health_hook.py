@@ -2251,43 +2251,129 @@ class ContextHealthHook:
                     reclaim_report.archived, reclaim_report.kept_protected,
                 )
 
-    def _expire_stale_proposals(self, root: Path) -> None:
-        """Archive proposals older than 14 days (Gap #22).
+    @staticmethod
+    def _proposal_age_seconds(proposal_file: Path, data: dict, now: float) -> float:
+        """Age of a proposal in seconds from its TRUE creation time.
 
-        Prevents proposal queue from growing unbounded. Proposals that weren't
-        acted on within 14 days are likely no longer relevant (code has moved on).
+        mtime is an UNRELIABLE age proxy (git checkout / rsync / status-rewrite
+        resets it — run_419ff7d4 Gate-2 HIGH). Prefer, in order:
+          1. the filename stamp `proposal_<id>_YYYYMMDD-HHMMSS.json` (set at write,
+             never rewritten — the reliable source),
+          2. the JSON `created_at` field,
+          3. file mtime (last resort — only when neither above parses).
+        Returns the LARGEST age the reliable sources support (so a reset mtime can
+        only ever make a proposal look OLDER-or-equal, never spuriously younger).
         """
-        proposals_dir = root / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
-        if not proposals_dir.is_dir():
+        candidates: list[float] = []
+        m = re.search(r"_(\d{8})-(\d{6})\.json$", proposal_file.name)
+        if m:
+            try:
+                ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(
+                    tzinfo=timezone.utc
+                )
+                candidates.append(now - ts.timestamp())
+            except ValueError:
+                pass
+        created = data.get("created_at")
+        if created:
+            try:
+                dt = datetime.fromisoformat(created)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                candidates.append(now - dt.timestamp())
+            except (ValueError, TypeError):
+                pass
+        if candidates:
+            return max(candidates)  # trust the oldest reliable signal, ignore reset mtime
+        try:
+            return now - proposal_file.stat().st_mtime  # last resort
+        except OSError:
+            return 0.0  # unknowable → treat as fresh (never reclaim on doubt)
+
+    def _expire_stale_proposals(self, root: Path) -> None:
+        """Expire + RECLAIM stale cultivation proposals across ALL projects.
+
+        TWO actions (run_419ff7d4 — the old version only did #1, which flipped
+        status but NEVER removed files → the proposals dir grew unbounded, 514
+        files / 351 terminal observed):
+          1. EXPIRE: a still-pending/queued proposal older than 14 days →
+             status flipped to "expired" in place (was the only behavior).
+          2. RECLAIM (the fix): a TERMINAL proposal (status NOT in
+             AWAITING_HUMAN_STATUSES — i.e. applied/rejected/dismissed/expired)
+             whose file is older than the RETENTION window → MOVED to a sibling
+             `archive/` subdir. ARCHIVE, never delete: ProposalFeedbackTracker
+             still counts archived proposals for reject-precision (its glob is
+             widened to scan archive/ too), and recall stays intact.
+
+        Safety (Gate-1 run_419ff7d4):
+          - LIVE (pending/escalated) proposals are NEVER moved, at any age — the
+            terminal check gates first, so an unparseable/missing status (defaults
+            to a non-terminal read) is left untouched.
+          - The RETENTION window (30d) >> any in-flight approve/reject, so a
+            proposal being actively written (fresh mtime) is never mid-write-moved
+            (no lock needed: age gate excludes the hot file).
+          - Malformed JSON / bad mtime → skip (leave the file), never move on doubt.
+        """
+        import shutil
+        from core.ddd_cultivation import AWAITING_HUMAN_STATUSES
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
             return
 
         now = time.time()
-        ttl_seconds = 14 * 24 * 60 * 60  # 14 days
-        archived = 0
+        expire_ttl = 14 * 24 * 60 * 60       # 14 days: pending → expired (action 1)
+        retention = 30 * 24 * 60 * 60        # 30 days: terminal → archive (action 2)
+        # >2× the 14d TTL and far beyond any in-flight approve, so archiving never
+        # races a live write and never reclaims a still-referenced proposal.
+        expired = 0
+        reclaimed = 0
 
-        for proposal_file in proposals_dir.glob("*.json"):
-            try:
-                # Check file age (creation time)
-                file_age = now - proposal_file.stat().st_mtime
-                if file_age < ttl_seconds:
-                    continue
-
-                data = json.loads(proposal_file.read_text(encoding="utf-8"))
-                if data.get("status") not in ("pending", "queued"):
-                    continue
-
-                # Archive it
-                data["status"] = "expired"
-                data["expired_reason"] = "14-day TTL exceeded"
-                proposal_file.write_text(
-                    json.dumps(data, indent=2), encoding="utf-8"
-                )
-                archived += 1
-            except (OSError, json.JSONDecodeError):
+        for project_dir in projects_dir.iterdir():
+            proposals_dir = project_dir / ".artifacts" / "proposals"
+            if not proposals_dir.is_dir():
                 continue
+            archive_dir = proposals_dir / "archive"
 
-        if archived:
-            logger.info("context_health: expired %d stale proposals (>14d)", archived)
+            for proposal_file in proposals_dir.glob("*.json"):
+                try:
+                    data = json.loads(proposal_file.read_text(encoding="utf-8"))
+                    status = data.get("status", "pending")
+
+                    # AGE from the proposal's TRUE creation time, NOT file mtime
+                    # (Gate-2 HIGH, run_419ff7d4): mtime is an UNRELIABLE age proxy —
+                    # a git checkout / rsync / bulk status-rewrite resets it, so a
+                    # 60-day-old terminal proposal can look 22 days old by mtime and
+                    # escape reclaim (live: 253 files shared one reset mtime → an
+                    # mtime gate archived 58 of 259 truly-old). The filename carries
+                    # the real created stamp: proposal_<id>_YYYYMMDD-HHMMSS.json.
+                    # Fallback to created_at, then mtime, only when the name lacks it.
+                    file_age = self._proposal_age_seconds(proposal_file, data, now)
+
+                    # Action 1 — EXPIRE a stale still-open proposal (flip in place).
+                    if status in ("pending", "queued") and file_age >= expire_ttl:
+                        data["status"] = "expired"
+                        data["expired_reason"] = "14-day TTL exceeded"
+                        proposal_file.write_text(
+                            json.dumps(data, indent=2), encoding="utf-8"
+                        )
+                        expired += 1
+                        continue  # newly-expired: reclaim on a later sweep
+
+                    # Action 2 — RECLAIM a terminal proposal past the retention window.
+                    # LIVE (AWAITING_HUMAN_STATUSES) is never moved, regardless of age.
+                    if status not in AWAITING_HUMAN_STATUSES and file_age >= retention:
+                        archive_dir.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(proposal_file), str(archive_dir / proposal_file.name))
+                        reclaimed += 1
+                except (OSError, json.JSONDecodeError, ValueError):
+                    continue  # skip on any doubt — never move a file we can't read
+
+        if expired or reclaimed:
+            logger.info(
+                "context_health: expired %d stale proposals (>14d), "
+                "reclaimed %d terminal proposals to archive/ (>30d)",
+                expired, reclaimed,
+            )
 
     def _refresh_ddd_registry(self, root: Path) -> None:
         """Rebuild the DDD skill-registry manifest from every DDD's aim.json.

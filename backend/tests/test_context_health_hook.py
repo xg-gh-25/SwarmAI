@@ -1559,3 +1559,72 @@ class TestRecallDegradationReader:
         for o in ddd_lits:
             assert (sr._is_ddd_true_failure(o) or o in sr._DDD_KNOWN_INFORMATIONAL), \
                 f"ddd outcome {o!r} is emitted but unclassified — classify it"
+
+
+class TestExpireStaleProposalsArchives:
+    """run_419ff7d4 (Debt 1): _expire_stale_proposals must RECLAIM terminal proposals
+    (move to proposals/archive/), not just flip status → the file graveyard (514 live)
+    was caused by the old expirer flipping pending→expired but never removing files.
+
+    Extended behavior: terminal (status NOT in {pending,escalated}) + older than the
+    retention window → MOVE to archive/. Live (pending/escalated) → NEVER moved,
+    regardless of age. Malformed/missing created date on a terminal → SKIP (safe)."""
+
+    def _seed(self, proposals_dir, name, *, status, age_days, reset_mtime_days=None):
+        """Seed a proposal whose TRUE age is encoded in the filename stamp
+        (proposal_<name>_YYYYMMDD-HHMMSS.json — the real created time). Optionally
+        set a DIFFERENT (fresher) mtime to simulate the git-checkout/rsync reset
+        that defeated an mtime-based gate (Gate-2 HIGH, run_419ff7d4)."""
+        import json, os, time
+        from datetime import datetime, timedelta, timezone
+        proposals_dir.mkdir(parents=True, exist_ok=True)
+        created = datetime.now(timezone.utc) - timedelta(days=age_days)
+        stamp = created.strftime("%Y%m%d-%H%M%S")
+        f = proposals_dir / f"proposal_{name}_{stamp}.json"
+        f.write_text(json.dumps({"id": f"proposal_{name}", "source_stage": "reflect_feed",
+                                 "status": status, "change_type": "append",
+                                 "created_at": created.isoformat()}), encoding="utf-8")
+        # mtime = the RESET time if given (fresher than real age), else the real age.
+        mt = time.time() - (reset_mtime_days if reset_mtime_days is not None else age_days) * 86400
+        os.utime(f, (mt, mt))
+        return f
+
+    def test_terminal_old_archived_live_kept(self, hook, tmp_path):
+        proposals = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
+        # terminal + old → should move
+        self._seed(proposals, "dismissed_old", status="dismissed", age_days=40)
+        self._seed(proposals, "rejected_old", status="rejected", age_days=40)
+        # live → must stay even when old
+        self._seed(proposals, "escalated_old", status="escalated", age_days=99)
+        self._seed(proposals, "pending_old", status="pending", age_days=99)
+        # terminal but RECENT (within window) → stay
+        self._seed(proposals, "dismissed_recent", status="dismissed", age_days=1)
+
+        hook._expire_stale_proposals(tmp_path)
+
+        archive = proposals / "archive"
+        moved = {p.name for p in archive.glob("proposal_*.json")} if archive.is_dir() else set()
+        live = {p.name for p in proposals.glob("proposal_*.json")}
+        assert any("dismissed_old" in n for n in moved), "terminal+old must be archived"
+        assert any("rejected_old" in n for n in moved), "terminal+old must be archived"
+        assert any("escalated_old" in n for n in live), "escalated is LIVE — never move"
+        assert any("pending_old" in n for n in live), "pending is LIVE — never move"
+        assert any("dismissed_recent" in n for n in live), "terminal but within window — keep"
+
+    def test_reset_mtime_does_not_hide_true_age(self, hook, tmp_path):
+        """Gate-2 HIGH (run_419ff7d4): a terminal proposal created 60d ago but whose
+        mtime was bulk-reset to 5d ago (git checkout / rsync) MUST still be reclaimed —
+        age comes from the filename/created stamp, not the reset mtime. An mtime gate
+        archived 58 of 259 truly-old; this proves the filename gate reclaims it."""
+        proposals = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
+        # created 60d ago (truly old) but mtime reset to 5d ago (looks fresh by mtime)
+        self._seed(proposals, "reset_terminal", status="dismissed", age_days=60, reset_mtime_days=5)
+
+        hook._expire_stale_proposals(tmp_path)
+
+        archive = proposals / "archive"
+        moved = {p.name for p in archive.glob("proposal_*.json")} if archive.is_dir() else set()
+        assert any("reset_terminal" in n for n in moved), (
+            "a 60d-old terminal proposal with a reset (5d) mtime MUST be archived — "
+            "age must derive from the filename/created stamp, NOT mtime"
+        )

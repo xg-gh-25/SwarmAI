@@ -726,3 +726,53 @@ def test_get_workspace_file_still_rejects_outside_home(tmp_path: Path) -> None:
     with pytest.raises(HTTPException) as exc:
         asyncio.run(_run())
     assert exc.value.status_code == 400  # guard intact
+
+
+class TestListFilesHidesLockAndTmp:
+    """run_419ff7d4 (Debt 3): the workspace file explorer (list_files) must NOT show
+    advisory .lock / .tmp sidecars — they clutter the DDD folder beside the real docs
+    (IMPROVEMENT.md.lock, .IMPROVEMENT.md.lock, atomic-write .tmp scratch). Real docs
+    still appear. Every .lock in the workspace is an advisory sidecar (0 user .lock),
+    and .tmp is transient atomic-write scratch."""
+
+    def _seed(self, d: Path):
+        (d / "IMPROVEMENT.md").write_text("# doc\n", encoding="utf-8")
+        (d / "IMPROVEMENT.md.lock").write_text("", encoding="utf-8")
+        (d / ".TECH.md.lock").write_text("", encoding="utf-8")
+        (d / "IMPROVEMENT.tmp").write_text("", encoding="utf-8")
+        (d / "sub.lock").mkdir()  # a DIRECTORY ending .lock — must NOT be hidden
+
+    def test_managed_workspace_hides_sidecars(self, tmp_path: Path, monkeypatch):
+        """base_path=None (managed DDD workspace): *.lock/*.tmp FILES hidden, real .md
+        kept, a directory named *.lock kept (Gate-2: files-only filter)."""
+        import asyncio
+        import routers.workspace as wa
+        from schemas.workspace import WorkspaceListRequest
+        self._seed(tmp_path)
+        # Force the managed-workspace path: base_path=None → root resolves to tmp_path.
+        monkeypatch.setattr(wa, "get_workspace_root", lambda agent_id, base_path=None: tmp_path)
+
+        async def _run():
+            return await wa.list_files("default", WorkspaceListRequest(path="."), base_path=None)
+        names = {f.name for f in asyncio.run(_run()).files}
+        assert "IMPROVEMENT.md" in names, "real doc must still be listed"
+        assert "IMPROVEMENT.md.lock" not in names, ".lock sidecar must be hidden"
+        assert ".TECH.md.lock" not in names, "dot-prefixed .lock must be hidden"
+        assert "IMPROVEMENT.tmp" not in names, ".tmp scratch must be hidden"
+        assert "sub.lock" in names, "a DIRECTORY named *.lock must NOT be hidden (files-only)"
+
+    def test_work_in_a_folder_keeps_lockfiles(self, tmp_path: Path):
+        """base_path set (work-in-a-folder on an arbitrary repo): *.lock is legit user
+        content (Cargo.lock, uv.lock) → must NOT be filtered (Gate-2 low #1)."""
+        import asyncio
+        from routers.workspace import list_files
+        from schemas.workspace import WorkspaceListRequest
+        (tmp_path / "Cargo.lock").write_text("", encoding="utf-8")
+        (tmp_path / "main.rs").write_text("fn main(){}\n", encoding="utf-8")
+
+        resp = asyncio.run(
+            list_files("default", WorkspaceListRequest(path="."), base_path=str(tmp_path))
+        )
+        names = {f.name for f in resp.files}
+        assert "Cargo.lock" in names, "work-in-a-folder must NOT hide a real Cargo.lock"
+        assert "main.rs" in names
