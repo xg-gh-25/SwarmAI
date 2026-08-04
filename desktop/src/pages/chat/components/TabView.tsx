@@ -98,37 +98,38 @@ export function isAtBottom(scrollTop: number, clientHeight: number, scrollHeight
   return scrollTop + clientHeight >= scrollHeight - BOTTOM_THRESHOLD;
 }
 
-/** Pure: given the prior re-pin INTENT and a scroll event's metrics, compute the
- *  next intent. The key rule (Gate-2 HIGH fix): the re-pin intent (`wasAtBottom`)
- *  changes ONLY when scrollTop actually MOVED — a reflow that grows scrollHeight
- *  with an unchanged scrollTop must NOT be read as "user scrolled up" (that would
- *  self-suppress the re-pin when Canvas opens). Prod's handleScroll delegates
- *  here so the tested rule IS the shipped rule (no re-derivation / test-theater).
- *  Returns the next {wasAtBottom, lastScrollTop, userScrolledUp}. */
-export function nextScrollIntent(
-  prev: { wasAtBottom: boolean; lastScrollTop: number },
+/** Pure: given the prior FOLLOW state and a scroll event's metrics, compute the
+ *  next follow state. `follow` is the SINGLE authoritative "stick to bottom"
+ *  signal that replaces the old wasAtBottomRef + userScrolledUpRef pair and the
+ *  shouldPinOnActivation gate — the root fix for the tab-switch re-pin bug that
+ *  recurred 4× (run_a319239e/75691aa8/24f98f06 …). The old design inferred
+ *  "should I be at the bottom?" from scroll events via THREE scattered gates; a
+ *  background STREAMING tab (display:none + isActive-gated no-render) emits NO
+ *  scroll events, so those gates froze/desynced and the view stopped following
+ *  the live stream on return (symptom C). Instead: DEFAULT is follow=true (pinned
+ *  to bottom for BOTH streaming and idle tabs); it flips false ONLY on a GENUINE
+ *  user scroll-up and flips back true when the user returns to the bottom.
+ *
+ *  The reflow-safety rule is preserved from the old nextScrollIntent (Gate-2 HIGH):
+ *  follow changes ONLY when scrollTop ACTUALLY MOVED — a reflow that grows
+ *  scrollHeight with an unchanged scrollTop (e.g. Canvas opening shrinks width →
+ *  content reflows taller) must NOT be misread as a user scroll-up, or it would
+ *  self-suppress the very follow it should keep. Prod's handleScroll delegates
+ *  here so the tested rule IS the shipped rule (no re-derivation / test-theater). */
+export function nextFollowState(
+  prev: { follow: boolean; lastScrollTop: number },
   scrollTop: number,
   clientHeight: number,
   scrollHeight: number,
-): { wasAtBottom: boolean; lastScrollTop: number; userScrolledUp: boolean } {
+): { follow: boolean; lastScrollTop: number } {
   const atBottom = isAtBottom(scrollTop, clientHeight, scrollHeight);
   const moved = scrollTop !== prev.lastScrollTop;
   return {
-    userScrolledUp: !atBottom,
-    wasAtBottom: moved ? atBottom : prev.wasAtBottom,
+    // Only a genuine scroll (scrollTop moved) can change follow; a reflow-grow
+    // keeps the prior state. On a real move, follow === "am I at the bottom now".
+    follow: moved ? atBottom : prev.follow,
     lastScrollTop: moved ? scrollTop : prev.lastScrollTop,
   };
-}
-
-/** Pure: should a tab, on becoming active, re-pin to the bottom? YES iff the view
- *  was at the bottom by the user's intent when they left it (wasAtBottom). A user
- *  who deliberately scrolled up (wasAtBottom=false) is NEVER yanked back on return.
- *  This is the ACTIVATION trigger the 4 prior fixes missed — they all hardened the
- *  RESIZE/content-growth re-pin, but a display:none→block visibility flip at an
- *  unchanged width is neither a resize nor new content, so no existing mechanism
- *  fired on switch. Exported for a DOM-free unit test. (run_a319239e, 4th recurrence) */
-export function shouldPinOnActivation(wasAtBottom: boolean): boolean {
-  return wasAtBottom;
 }
 
 export interface TabViewProps {
@@ -317,12 +318,20 @@ function TabViewImpl({
   // scrollHeight with no observer fire and stranded the view above the newest msg.
   const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const userScrolledUpRef = useRef(false);
-  // "Was the view at bottom by the user's INTENT" — the signal the resize re-pin
-  // trusts. Distinct from userScrolledUpRef because it is updated ONLY on a
-  // genuine scroll (scrollTop actually moved), so a reflow that grows the content
-  // height (scrollTop unchanged) cannot flip it to false and defeat the re-pin.
-  const wasAtBottomRef = useRef(true);
+  // ── Single authoritative "stick to bottom" signal (root fix, replaces the old
+  //    wasAtBottomRef + userScrolledUpRef pair + the shouldPinOnActivation gate).
+  // DEFAULT = follow=true: every tab, streaming OR idle, is pinned to the bottom
+  // by default. It flips false ONLY when the user GENUINELY scrolls up (scrollTop
+  // actually moves up, past the threshold) and flips back true when they return to
+  // the bottom. Being a ref, it PERSISTS across the display:none deactivation, so a
+  // deliberate scroll-up survives a tab switch (AC2) and — critically — a tab left
+  // at the bottom keeps follow=true through background streaming (no scroll events
+  // fire while hidden, so nothing can wrongly flip it) and resumes following the
+  // live bottom the instant it is shown again (fixes the streaming-tab symptom C
+  // the 3 old scroll-event-inferred gates could not, since a hidden streaming tab
+  // emits no scroll events for them to read). `lastScrollTopRef` is the reflow
+  // discriminator (a grow with unchanged scrollTop is not a user scroll). */
+  const followRef = useRef(true);
   const lastScrollTopRef = useRef(0);
 
   // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
@@ -333,96 +342,53 @@ function TabViewImpl({
   const everActiveRef = useRef(false);
   if (isActive) everActiveRef.current = true;
 
+  // Pin to the very bottom. behavior:'auto' (instant) — the pin path fires per
+  // streaming frame / activation, so smooth-scroll would stack jank; instant is
+  // also idempotent (no-op when already at bottom) and only moves scrollTop, so it
+  // cannot feed back into the ResizeObserver as a size change (no loop).
   const scrollToBottom = useCallback(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    endRef.current?.scrollIntoView({ behavior: 'auto' });
   }, []);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    // Delegate the intent decision to the pure, tested helper (no re-derivation).
-    const next = nextScrollIntent(
-      { wasAtBottom: wasAtBottomRef.current, lastScrollTop: lastScrollTopRef.current },
+    // The ONLY writer of follow intent — a genuine user scroll. Delegated to the
+    // pure, tested helper (reflow-grow safe) so the shipped rule IS the tested rule.
+    const next = nextFollowState(
+      { follow: followRef.current, lastScrollTop: lastScrollTopRef.current },
       el.scrollTop, el.clientHeight, el.scrollHeight,
     );
-    userScrolledUpRef.current = next.userScrolledUp;
-    wasAtBottomRef.current = next.wasAtBottom;
+    followRef.current = next.follow;
     lastScrollTopRef.current = next.lastScrollTop;
     if (el.scrollTop === 0) onLoadOlder();
   }, [onLoadOlder]);
 
-  // Auto-scroll to bottom on new content — only for the active (visible) view
-  // and only when the user has not scrolled up. Scrolling a hidden view is
-  // pointless (and scrollIntoView no-ops on display:none).
+  // ── The SINGLE continuous pin path (replaces auto-scroll + activation-rAF + the
+  //    RO-gated-on-wasAtBottom — three mechanisms consolidated into one signal).
+  // Fires on: new content ([messages]) and tab activation ([isActive]). If follow
+  // is on, land at the bottom. Because follow defaults true and persists, this is
+  // what makes a re-shown streaming tab resume at the live bottom. Markdown renders
+  // async (200ms-throttled + deferred hljs), so the message-effect alone can pin
+  // before content reaches final height — the ResizeObserver below is the other
+  // half: it re-pins on every subsequent content growth (streaming tokens, reflow),
+  // also gated on the SAME followRef. Together = continuous follow, one signal. */
   useEffect(() => {
     if (!isActive) return;
-    if (!userScrolledUpRef.current) {
-      endRef.current?.scrollIntoView({ behavior: 'auto' });
-    }
-  }, [messages, isActive]);
+    if (followRef.current) scrollToBottom();
+  }, [messages, isActive, scrollToBottom]);
 
-  // ── Re-pin to bottom on tab ACTIVATION (run_a319239e — 4th recurrence fix) ──
-  // The bug the 4 prior fixes missed: switching TO a tab did not land at the
-  // bottom. Neither existing mechanism fires on a switch —
-  //   • the auto-scroll above runs in the SAME commit as display:none→block, and
-  //     for a tab the user once scrolled up in, userScrolledUpRef is stale-true →
-  //     it early-returns forever; even when false, message markdown renders
-  //     async (200ms-throttled ContentBlockRenderer), so endRef isn't at its
-  //     final Y yet in this synchronous pass → lands mid-list;
-  //   • the resize ResizeObserver (below) fires only on a SIZE change — a
-  //     visibility flip at an unchanged width is no resize → never fires.
-  // Fix = the missing ACTIVATION trigger: when this tab becomes active AND the
-  // user was at the bottom when they left it (wasAtBottomRef — NOT the reflow-
-  // pollutable userScrolledUpRef), reset the intent and scroll to bottom on the
-  // NEXT frame (rAF), so the display:block layout + any just-committed messages
-  // are laid out before we measure endRef. behavior:'auto' = instant + idempotent
-  // (a no-op if already at bottom), so it can't fight the auto-scroll/RO. Gated on
-  // wasAtBottomRef so a deliberate scroll-up is preserved across the switch (AC2).
-  useEffect(() => {
-    if (!isActive) return;
-    if (!shouldPinOnActivation(wasAtBottomRef.current)) return;
-    userScrolledUpRef.current = false;
-    const id = requestAnimationFrame(() => {
-      endRef.current?.scrollIntoView({ behavior: 'auto' });
-    });
-    return () => cancelAnimationFrame(id);
-  }, [isActive]);
-
-  // Re-pin to bottom when the scroll VIEWPORT resizes (bugfix run_75691aa8) OR
-  // when the CONTENT grows taller (bugfix run_24f98f06, root cause B). Two
-  // distinct triggers, one observer:
-  //   • container (viewport) resize — opening Canvas shrinks the chat width →
-  //     content reflows TALLER, and the 220ms width-reveal lands that taller
-  //     layout AFTER the one-shot message-scroll ran; tab activation + window
-  //     resize are the same class.
-  //   • content wrapper (contentRef) resize — during streaming the message list
-  //     grows as tokens render (200ms-throttled in ContentBlockRenderer). The
-  //     viewport's border-box is FIXED, so observing only the container missed
-  //     this entirely (the view stranded above the newest message). The inner
-  //     wrapper's box grows with content, so observing it catches every growth.
-  //
-  // The guard is SUBTLE (Gate-2 HIGH): we must NOT trust `userScrolledUpRef` at
-  // RO-fire time, because the reflow/growth that GREW the content also fires a
-  // scroll event (scrollTop stays, scrollHeight grows → handleScroll reads
-  // "scrolled up" and sets the ref true), which would suppress the very re-pin we
-  // need. Instead we read `wasAtBottomRef` (updated ONLY by genuine user scrolls —
-  // scrollTop actually moved), so a user reading history (wasAtBottom=false) is
-  // never yanked back. behavior:'auto' = instant, so per-frame re-pin during the
-  // reveal/streaming doesn't stack smooth-scroll jank, and it changes scrollTop
-  // (not element size) so it cannot feed back into the observer (no loop).
   useEffect(() => {
     if (!isActive) return;
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      if (wasAtBottomRef.current) {
-        endRef.current?.scrollIntoView({ behavior: 'auto' });
-      }
+      if (followRef.current) scrollToBottom();
     });
     ro.observe(el);
     if (contentRef.current) ro.observe(contentRef.current);
     return () => ro.disconnect();
-  }, [isActive]);
+  }, [isActive, scrollToBottom]);
 
   // Preserve scroll position when OLDER messages are prepended (load-earlier),
   // so the viewport doesn't jump. Runs before paint; compares scrollHeight

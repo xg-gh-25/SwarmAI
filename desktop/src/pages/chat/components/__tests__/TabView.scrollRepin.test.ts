@@ -11,7 +11,7 @@
  * intent-update rule the handler applies.
  */
 import { describe, it, expect } from 'vitest';
-import { isAtBottom, BOTTOM_THRESHOLD, nextScrollIntent } from '../TabView';
+import { isAtBottom, BOTTOM_THRESHOLD, nextFollowState } from '../TabView';
 
 describe('isAtBottom', () => {
   it('true within threshold of bottom', () => {
@@ -26,27 +26,33 @@ describe('isAtBottom', () => {
   });
 });
 
-describe('nextScrollIntent — reflow must not defeat the re-pin (Gate-2 HIGH)', () => {
-  it('reflow-grow (scrollTop unchanged, scrollHeight up) does NOT flip wasAtBottom off', () => {
-    // Start at bottom: scrollTop 400, client 600, height 1000, lastScrollTop 400.
+describe('nextFollowState — the single default-follow signal (root fix)', () => {
+  it('reflow-grow (scrollTop unchanged, scrollHeight up) does NOT flip follow off', () => {
+    // Start following: scrollTop 400, client 600, height 1000, lastScrollTop 400.
     // Canvas opens → content reflows taller: height 1000→1400, scrollTop STAYS 400.
-    const next = nextScrollIntent({ wasAtBottom: true, lastScrollTop: 400 }, 400, 600, 1400);
-    // raw metric reads "scrolled up" (400+600=1000 < 1400-100)...
-    expect(next.userScrolledUp).toBe(true);
-    // ...BUT the re-pin INTENT stays true because scrollTop never moved → re-pin fires.
-    expect(next.wasAtBottom).toBe(true);
+    // Raw metric would read "not at bottom" (400+600=1000 < 1400-100), BUT because
+    // scrollTop never moved this is a reflow, not a user scroll → follow stays true.
+    const next = nextFollowState({ follow: true, lastScrollTop: 400 }, 400, 600, 1400);
+    expect(next.follow).toBe(true); // still following → the pin keeps firing
+    expect(next.lastScrollTop).toBe(400);
   });
 
-  it('a GENUINE user scroll up (scrollTop moved) DOES flip wasAtBottom off', () => {
-    const next = nextScrollIntent({ wasAtBottom: true, lastScrollTop: 400 }, 100, 600, 1000);
-    expect(next.wasAtBottom).toBe(false); // re-pin suppressed — user is reading history
+  it('a GENUINE user scroll up (scrollTop moved up) flips follow OFF', () => {
+    const next = nextFollowState({ follow: true, lastScrollTop: 400 }, 100, 600, 1000);
+    expect(next.follow).toBe(false); // user is reading history — never yank them back (AC2)
     expect(next.lastScrollTop).toBe(100);
   });
 
-  it('after re-pin (scrollTop moves back to bottom) intent returns to true', () => {
-    const next = nextScrollIntent({ wasAtBottom: false, lastScrollTop: 100 }, 800, 600, 1400);
-    expect(next.wasAtBottom).toBe(true);
-    expect(next.userScrolledUp).toBe(false);
+  it('scrolling back to the bottom restores follow=true', () => {
+    const next = nextFollowState({ follow: false, lastScrollTop: 100 }, 800, 600, 1400);
+    expect(next.follow).toBe(true);
+    expect(next.lastScrollTop).toBe(800);
+  });
+
+  it('default state is follow=true (a fresh tab pins to bottom for streaming AND idle)', () => {
+    // No genuine scroll yet (scrollTop unchanged from the initial 0) → follow unchanged.
+    const next = nextFollowState({ follow: true, lastScrollTop: 0 }, 0, 600, 1400);
+    expect(next.follow).toBe(true);
   });
 
   it('BOTTOM_THRESHOLD is the shared constant', () => {
