@@ -61,6 +61,10 @@ export interface FileViewerProps {
     workspaceId?: string;
     /** Open directly on the diff view (Radar ✍ Changes click). */
     autoDiff?: boolean;
+    /** Git ref to diff AGAINST (run_030dc98e): a source-final row's `<sha>^`, so a
+     *  just-committed file's diff baseline is its pre-run parent, not HEAD (== working
+     *  tree → empty). Passed to /workspace/file/committed?ref=. Absent → HEAD. */
+    baseRef?: string;
   };
   onClose: () => void;
   onAttachToChat?: (item: FileTreeItem) => void;
@@ -306,12 +310,20 @@ export default function FileViewer({
           const d = resp.data;
           let committedContent: string | undefined;
 
-          // Fetch committed (HEAD) version for diff in editable types
+          // Fetch the committed baseline for the diff (editable types). When THIS tab
+          // is the opened file AND it carries a baseRef (a source-final row's `<sha>^`,
+          // run_030dc98e), diff against that pre-run parent instead of HEAD — else a
+          // just-committed file diffs HEAD-vs-working-tree (identical → empty). Only the
+          // initialFile's own path uses its baseRef; other tabs keep the HEAD baseline.
           if (isEditableType(tab.viewType)) {
+            const baseRef =
+              initialFile && tab.filePath === initialFile.filePath
+                ? initialFile.baseRef
+                : undefined;
             try {
               const cResp = await api.get<{ content: string }>(
                 '/workspace/file/committed',
-                { params: { path: tab.filePath } },
+                { params: { path: tab.filePath, ...(baseRef ? { ref: baseRef } : {}) } },
               );
               if (!cancelled) committedContent = cResp.data.content;
             } catch {

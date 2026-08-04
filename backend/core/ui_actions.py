@@ -255,6 +255,12 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
             from core.project_registry import get_swarmws
             ws = Path(get_swarmws())
         ws = ws.resolve()
+        # Validate run_id BEFORE putting it in a glob pattern (a `*`/`..` run_id would
+        # glob-match an arbitrary run or escape the runs dir). Same shape as the CLI's
+        # _RUN_ID_PATTERN — an alnum/_/- token, no glob metachars, no separators.
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+            return []
         # Locate the run dir across projects (run ids are unique).
         run_json = None
         for proj in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):
@@ -267,6 +273,13 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
         seen: set[str] = set()
         for commit in data.get("commits", []) or []:
             repo = commit.get("repo", "")
+            sha = commit.get("sha", "")
+            # baseRef = the commit's PARENT (<sha>^) — the file state BEFORE this run's
+            # change (run_030dc98e). The frontend passes it to /workspace/file/committed
+            # so a just-committed file diffs against its pre-run baseline, not HEAD
+            # (== working tree → empty). Only a syntactically-safe short/full sha earns a
+            # baseRef; else omit → the row falls back to HEAD (empty diff, but no error).
+            base_ref = f"{sha}^" if re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or "") else None
             for f in commit.get("files", []) or []:
                 if not f or f in seen:
                     continue
@@ -274,14 +287,17 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 # Absolute physical path (repo root + repo-relative file). Display
                 # path stays repo-relative (what the user recognizes in a PR).
                 abs_path = str(Path(repo) / f) if repo else f
-                events.append({
+                ev = {
                     "type": "file_changed",
                     "path": f,
                     "absolutePath": abs_path,
                     "operation": "written",
                     "relevance": "deliverable",
                     "kind": "source-final",
-                })
+                }
+                if base_ref:
+                    ev["baseRef"] = base_ref
+                events.append(ev)
         return events
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe
         logger.warning("build_surface_events failed for run %r: %s", run_id, e)

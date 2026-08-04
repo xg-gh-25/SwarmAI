@@ -41,6 +41,7 @@ import logging
 import asyncio
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -1233,14 +1234,37 @@ async def get_workspace_file_diff(
     return {"path": path, "hunks": hunk_dicts, "summary": summary, "raw_diff": raw_diff}
 
 
+# A safe git ref for the diff baseline (run_030dc98e): an abbreviated-or-full sha,
+# optionally suffixed with ONE `^` (the parent — this-run's pre-change baseline). This
+# is deliberately NARROW: it rejects a leading `-` (so a crafted ref can NEVER be
+# parsed by git as an OPTION like `--upload-pack=`, verified: `git show -x:p` errors),
+# rejects `:`/spaces/path-traversal, and permits only hex + one trailing `^`. Anything
+# else → treated as absent (fall back to HEAD), never passed to git.
+_SAFE_GIT_REF = re.compile(r"^[0-9a-fA-F]{7,40}\^?$")
+
+
 @router.get("/workspace/file/committed")
 async def get_workspace_file_committed(
     path: str = Query(..., description="Absolute or workspace-relative file path"),
+    ref: str | None = Query(
+        None,
+        description="Optional git ref to diff AGAINST (e.g. '<sha>^' for a run's "
+        "pre-change baseline). Strict-allowlisted (hex sha + optional '^'); an "
+        "unsafe/absent ref falls back to HEAD. Default HEAD (back-compat).",
+    ),
 ):
-    """Return the last committed version of a file via ``git show HEAD:<path>``.
+    """Return a committed version of a file via ``git show <ref>:<path>`` (``ref``
+    defaults to HEAD).
 
     Finds the containing git repo automatically — works for both workspace
     files and external source files.
+
+    ``ref`` (run_030dc98e): when a Canvas OUTPUTS row carries a ``baseRef`` (a
+    source-final row's ``<sha>^``), it is passed here so the diff baseline is the
+    state BEFORE this run's change — otherwise a just-committed file diffs
+    HEAD-vs-working-tree (identical) and shows an empty diff. An unsafe or missing
+    ref falls back to HEAD (the historical behavior — the git-status badge caller
+    never sends a ref, so it is unaffected).
 
     Returns ``{"content": "<committed text>", "in_head": True}`` for tracked
     text files (the diff baseline).
@@ -1293,13 +1317,20 @@ async def get_workspace_file_committed(
     except ValueError:
         return {"content": "", "in_head": None}  # can't relativize → undetermined
 
+    # Resolve the baseline ref: a strict-allowlisted caller ref, else HEAD. An unsafe
+    # ref is silently downgraded to HEAD (not a 400 — this is a best-effort baseline
+    # endpoint; a bad ref just yields the historical HEAD baseline, never a git error).
+    safe_ref = ref if (isinstance(ref, str) and _SAFE_GIT_REF.fullmatch(ref)) else "HEAD"
+
     try:
         # Offload the blocking git subprocess off the event loop — a burst of N
         # committed-fetches (the rail badges every written file) would otherwise
         # serialize N × ~79ms on the loop, stalling all concurrent HTTP (cf :632/:682).
+        # `<rev>:<path>` is a SINGLE gitrevision arg (no `--` separator applies); the
+        # regex already bars a dash-leading rev, so it can never be read as an option.
         result = await asyncio.to_thread(
             subprocess.run,
-            ["git", "show", f"HEAD:{git_relative}"],
+            ["git", "show", f"{safe_ref}:{git_relative}"],
             cwd=str(git_root),
             capture_output=True,
             timeout=10,

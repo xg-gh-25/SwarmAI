@@ -80,6 +80,64 @@ def test_committed_offloads_git_subprocess(tmp_path: Path, monkeypatch) -> None:
     assert len(calls) >= 1, f"committed endpoint did not offload its git call (to_thread calls: {calls})"
 
 
+def test_committed_ref_returns_that_refs_content(tmp_path: Path, monkeypatch) -> None:
+    """run_030dc98e: ?ref=<sha>^ diffs against the PRE-run baseline. A file committed
+    twice — the committed endpoint with ref=<sha2>^ must return the v1 content (the
+    parent of the 2nd commit), NOT the current HEAD (v2). This is what makes a
+    just-committed source-final row show a NON-EMPTY diff instead of HEAD-vs-HEAD."""
+    _tmp_repo(tmp_path)
+    f = tmp_path / "a.txt"
+    f.write_text("v1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "c1")
+    f.write_text("v2\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "c2")
+    import subprocess as _sp
+    sha2 = _sp.run(["git", "-C", str(tmp_path), "rev-parse", "--short", "HEAD"],
+                   capture_output=True, text=True).stdout.strip()
+    target = f.resolve()
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+
+    # Default (no ref) → HEAD → v2.
+    head_res, _ = _run_endpoint(
+        lambda: wa.get_workspace_file_committed(path=str(target)), tmp_path, monkeypatch)
+    assert head_res["content"] == "v2\n"
+    # ref=<sha2>^ → the parent of c2 → v1 (the pre-run baseline).
+    ref_res, _ = _run_endpoint(
+        lambda: wa.get_workspace_file_committed(path=str(target), ref=f"{sha2}^"),
+        tmp_path, monkeypatch)
+    assert ref_res["content"] == "v1\n", "ref=<sha>^ must return the parent's content, not HEAD"
+
+
+def test_committed_unsafe_ref_falls_back_to_head(tmp_path: Path, monkeypatch) -> None:
+    """An unsafe ref (option-injection / traversal / arbitrary rev) is NOT passed to
+    git — it silently falls back to HEAD (never a git-arg-injection, never a 500)."""
+    _tmp_repo(tmp_path)
+    f = tmp_path / "a.txt"
+    f.write_text("v1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "c1")
+    target = f.resolve()
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (target, False))
+    for bad in ["--upload-pack=evil", "-x", "HEAD~1; rm -rf /", "../etc/passwd", "main"]:
+        res, _ = _run_endpoint(
+            lambda: wa.get_workspace_file_committed(path=str(target), ref=bad),
+            tmp_path, monkeypatch)
+        # Falls back to HEAD → returns the tracked v1 content, never errors on the bad ref.
+        assert res["content"] == "v1\n", f"unsafe ref {bad!r} must fall back to HEAD"
+
+
+def test_safe_git_ref_regex_allows_only_sha_and_caret() -> None:
+    from routers.workspace_api import _SAFE_GIT_REF as R
+    # fullmatch (not match) — a trailing newline / extra chars must be rejected.
+    assert R.fullmatch("abc1234") and R.fullmatch("abc1234^")
+    assert R.fullmatch("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef^")
+    for bad in ["--upload-pack=x", "-x", "abc:etc", "../x", "HEAD", "main",
+                "abc123^^", "", "abc1234\n", "abc1234^ rm"]:
+        assert not R.fullmatch(bad), f"{bad!r} must be rejected by the safe-ref allowlist"
+
+
 def test_get_file_offloads_read(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "b.txt").write_text("hello\n")
     target = (tmp_path / "b.txt").resolve()

@@ -101,6 +101,7 @@ export function outputRowOpenDetail(
   path: string,
   _badge: ChangeStatus | undefined,
   absolutePath?: string,
+  baseRef?: string,
 ): { path: string; autoDiff: boolean; baseRef?: string } {
   // Resolve anchor: prefer the ABSOLUTE path when present. A source-final row
   // (run_b8ea6d5c) carries a repo-relative display `path` (e.g. `backend/foo.py`)
@@ -108,8 +109,11 @@ export function outputRowOpenDetail(
   // 404 at /workspace/file/resolve. The absolutePath resolves for BOTH workspace files
   // and source-repo files (the resolver accepts absolute paths — the user-click-source
   // path). Content/knowledge rows have absolutePath === the workspace file, so this is
-  // a no-op for them. baseRef omitted until the ref-aware diff lands (Known Issue).
-  return { path: absolutePath || path, autoDiff: true };
+  // a no-op for them.
+  // baseRef (run_030dc98e): a source-final row's `<sha>^` — the diff baseline so a
+  // just-committed file opens on this-run's changes, not an empty HEAD diff. Undefined
+  // for content/knowledge rows → they diff against HEAD (correct, still uncommitted).
+  return { path: absolutePath || path, autoDiff: true, baseRef };
 }
 
 /** Directory portion of a path (everything before the basename), for the dim
@@ -144,9 +148,9 @@ const OutputRow = memo(function OutputRow({
     // Pass absolutePath as the resolve anchor so a source-final row (repo-relative
     // display path, repo ≠ workspace) still resolves + opens.
     document.dispatchEvent(
-      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath) }),
+      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath, file.baseRef) }),
     );
-  }, [file.path, file.absolutePath, badge]);
+  }, [file.path, file.absolutePath, file.baseRef, badge]);
 
   const handleCopy = useCallback(
     async (e: React.MouseEvent) => {

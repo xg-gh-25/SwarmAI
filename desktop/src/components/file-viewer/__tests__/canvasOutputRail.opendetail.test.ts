@@ -30,10 +30,9 @@ describe('outputRowOpenDetail (PR-review — opens on diff)', () => {
     expect(outputRowOpenDetail('a/b.md', undefined).autoDiff).toBe(true);
   });
 
-  it('RESERVES baseRef (deferred Known Issue) — omitted for now, param slot exists', () => {
-    // baseRef is part of the return TYPE (threaded to useCanvasHost→FileViewer) but is
-    // not yet populated — the diff baseline stays working-tree-vs-HEAD until a follow-up
-    // makes it ref-aware. Assert we don't accidentally ship a bogus ref.
+  it('omits baseRef when none is given (content/knowledge rows → HEAD baseline)', () => {
+    // A row with no baseRef arg diffs against HEAD (correct for uncommitted immediate
+    // rows). Only source-final rows pass a <sha>^ (see the carry test below).
     const d = outputRowOpenDetail('src/x.ts', 'upd');
     expect(d.baseRef).toBeUndefined();
   });
@@ -44,6 +43,15 @@ describe('outputRowOpenDetail (PR-review — opens on diff)', () => {
     // and source-repo files, so it is the anchor the click must send (run_b8ea6d5c MED).
     const d = outputRowOpenDetail('backend/core/foo.py', 'upd', '/repo/backend/core/foo.py');
     expect(d.path).toBe('/repo/backend/core/foo.py');
+  });
+
+  it('carries baseRef through (run_030dc98e — the this-run diff baseline)', () => {
+    // A source-final row's <sha>^ must reach the open-file detail so FileViewer diffs
+    // against the pre-run parent, not HEAD (which is empty for a committed file).
+    const d = outputRowOpenDetail('backend/foo.py', 'upd', '/repo/backend/foo.py', 'abc1234^');
+    expect(d.baseRef).toBe('abc1234^');
+    // content/knowledge rows pass no baseRef → undefined → FileViewer defaults to HEAD.
+    expect(outputRowOpenDetail('Knowledge/x.md', 'new').baseRef).toBeUndefined();
   });
 
   it('falls back to the display path when no absolutePath (content/knowledge rows)', () => {

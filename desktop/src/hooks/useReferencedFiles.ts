@@ -53,6 +53,11 @@ export interface ReferencedFile {
   count: number;
   /** Unified review verdict kind (undefined from an older backend). */
   kind?: ReviewKind;
+  /** Git ref to diff this file AGAINST (run_030dc98e): a source-final row carries
+   *  `<sha>^` (the pre-run parent of the commit that introduced this run's change) so
+   *  the OUTPUTS row opens on the this-run diff, not an empty HEAD-vs-working-tree one.
+   *  Absent for content/knowledge rows → they diff against HEAD (correct, uncommitted). */
+  baseRef?: string;
 }
 
 /** Detail shape of the unified `swarm:file-changed` event (from the SSE bridge). */
@@ -69,6 +74,9 @@ export interface FileChangedDetail {
    *  batch, run_b8ea6d5c); process → never. Undefined from an older backend → the
    *  consumer falls back to `relevance` (migration window). */
   kind?: ReviewKind;
+  /** Git ref to diff against (run_030dc98e) — a source-final row's `<sha>^`. Threaded
+   *  onto the stored ReferencedFile so the row's click carries it to the diff baseline. */
+  baseRef?: string;
   /** Owning tab's session id (stamped by the SSE bridge). Consumers filter on it
    *  to ignore background-tab writes; absent → treated as current (fail-open). */
   sessionId?: string;
@@ -134,7 +142,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
     if (!sessionId) return;
 
     const handler = (e: Event) => {
-      const { path, absolutePath, operation, relevance, kind, sessionId: evtSessionId } =
+      const { path, absolutePath, operation, relevance, kind, baseRef, sessionId: evtSessionId } =
         (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
       // Bookkeeping is dropped server-side, but guard defensively (an older
@@ -195,6 +203,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
             absolutePath: absolutePath || existing.absolutePath,
             count: existing.count + 1,
             kind: kind ?? existing.kind,
+            baseRef: baseRef ?? existing.baseRef,
           });
         } else {
           // Enforce cap — evict oldest if at limit
@@ -220,6 +229,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
             firstSeen: Date.now(),
             count: 1,
             kind,
+            baseRef,
           });
         }
 

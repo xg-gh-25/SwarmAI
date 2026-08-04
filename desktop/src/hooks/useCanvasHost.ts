@@ -39,12 +39,12 @@ export interface CanvasFile {
   gitStatus?: GitStatus;
   workspaceId?: string;
   autoDiff?: boolean;
-  /** RESERVED (run_b8ea6d5c, PR-review surface): the git ref to diff the file
-   *  AGAINST (e.g. a pipeline run's base commit) instead of the default HEAD. Threaded
-   *  end-to-end but NOT yet wired to the git baseline — the diff is still
-   *  working-tree-vs-HEAD (KNOWN ISSUE: a committed file shows an empty diff until this
-   *  is honored by FileViewer's committed-content fetch). Present so the follow-up is a
-   *  single-spot wire, not another cross-boundary thread. */
+  /** The git ref to diff the file AGAINST instead of the default HEAD (run_b8ea6d5c
+   *  reserved it; run_030dc98e WIRED it). A source-final row carries `<sha>^` (the
+   *  pre-run parent of the commit that introduced this run's change), so a
+   *  just-committed file's diff baseline is its pre-run state, not HEAD (== working
+   *  tree → empty). FileViewer passes it to /workspace/file/committed?ref=. Absent for
+   *  content/knowledge rows → HEAD (correct, still uncommitted). */
   baseRef?: string;
 }
 

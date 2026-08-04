@@ -2571,6 +2571,9 @@ export function useChatStreamingLifecycle(
                 // process → never (already dropped server-side). Omitted by an older
                 // backend → undefined → consumers fall back to `relevance` (migration).
                 kind: (e.kind as string) ?? undefined,
+                // Diff baseline ref (run_030dc98e): a source-final finish-batch event
+                // carries `<sha>^` so the row opens on this-run's diff, not empty.
+                baseRef: (e.baseRef as string) ?? undefined,
                 operation: (e.operation as string) ?? 'written',
                 sessionId: _stampSession,
               },
