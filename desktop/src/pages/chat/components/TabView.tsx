@@ -54,10 +54,20 @@ export const BOTTOM_THRESHOLD = 100;
  *  ref-stable when the store is genuinely empty. */
 const EMPTY_MESSAGES: Message[] = [];
 
-/** Last assistant message in an array (-1/undefined if none). Module-level (not a
- *  per-render closure) — pure, no captured state, so it is stable across renders. */
+/** Last assistant message in an array (undefined if none). Module-level (not a
+ *  per-render closure) — pure, no captured state, stable across renders.
+ *  No-alloc tail scan (break on first assistant from the end) — NOT
+ *  `[...arr].reverse().find()`: the render-source useMemo re-runs on every
+ *  streaming frame (each token bumps the store version → getSnapshot() returns a
+ *  new array identity → the [liveMsgs] dep changes), so a full-array copy+reverse
+ *  here was paid twice per frame during streaming. The assistant is almost always
+ *  the last element, so this is typically O(1). Mirrors MessageStore._lastAsstChars. */
 function lastAsst(arr: Message[] | undefined): Message | undefined {
-  return arr && arr.length > 0 ? [...arr].reverse().find((m) => m.role === 'assistant') : undefined;
+  if (!arr) return undefined;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i].role === 'assistant') return arr[i];
+  }
+  return undefined;
 }
 
 /** Total renderable text length of a message's content blocks (-1 if none). Used
