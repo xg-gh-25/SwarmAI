@@ -6,6 +6,7 @@ import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
+import { OverlayProvider } from '../../contexts/OverlayContext';
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
@@ -679,8 +680,14 @@ interface MainChatPanelProps {
 
 function MainChatPanel({ children }: MainChatPanelProps) {
   return (
+    // `relative` promotes this to the MainContentArea — the positioning parent the
+    // OverlayHost fills with `absolute inset:0` (M2+, OverlayHost subsystem design
+    // 2026-08-04). In M1 this is inert: nothing absolute-positions against it yet, so
+    // it is a zero-behavior-change anchor. `overflow-hidden` does NOT clip an
+    // absolute inset:0 child's own shadow (the child renders its shadow inside its
+    // box + gap, like the current fullscreen scrim) — Gate-1 verified.
     <main
-      className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
+      className="relative flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
       {children}
@@ -888,9 +895,11 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 export default function ThreeColumnLayout({ children }: ThreeColumnLayoutProps) {
   return (
     <LayoutProvider>
-      <TerminalProvider>
-        <ThreeColumnLayoutInner>{children}</ThreeColumnLayoutInner>
-      </TerminalProvider>
+      <OverlayProvider>
+        <TerminalProvider>
+          <ThreeColumnLayoutInner>{children}</ThreeColumnLayoutInner>
+        </TerminalProvider>
+      </OverlayProvider>
     </LayoutProvider>
   );
 }
