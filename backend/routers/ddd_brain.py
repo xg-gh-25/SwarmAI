@@ -365,13 +365,63 @@ def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
     return entries
 
 
-def _brain_health(project_dir: Path) -> dict:
-    """Admission-passing DDD health metrics for the DETAIL view (per-open).
+def _brain_health_base(project_dir: Path, present: dict, pending: int) -> dict:
+    """The CHEAP health fields present at EVERY density (gallery + detail).
+
+    No parse_entries, no section_health read — just git status + cheap counts.
+    This is the gallery's entire health payload and the base of the detail's.
+    Split out (Cycle-1 unify) so build_brain_state composes base + optional
+    detail-metrics from ONE source, killing the _brain_summary/_brain_health fork.
+    """
+    return {
+        "sinking": _sinking_count(project_dir),
+        "pending": pending,
+        "uncommitted": _git_status_dirty(project_dir),
+        "lastChangeRelative": _relative_time(_git_last_commit_iso(project_dir)),
+    }
+
+
+def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
+    """THE single source of a brain's state (Cycle-1 unify — no fork).
+
+    ONE builder feeds BOTH routes; the ONLY axis is `with_noise` (a.k.a. detail):
+      - with_noise=False → gallery projection: identity + sectionsPresent +
+        lifecycleStage + the CHEAP health base. Provably never calls
+        compute_reclaimable_noise / parse_entries (perf: no N-glob on the gallery).
+      - with_noise=True  → detail superset: the same base PLUS the admission-passing
+        detail metrics (noise/trust/escalation/recall/cultivation/diagnostics).
+
+    The health shape is a SUPERSET, not two different shapes: detail = base ∪ metrics.
+    A consumer that only reads the 4 base keys works on both; the DddCard renders the
+    metric tiles only when they are present (the daemon-skew guard, preserved).
+
+    Callers (_brain_summary, _brain_detail) delegate here — there is no second,
+    independent health builder. `_brain_detail` layers sections/entries/specs on top.
+    """
+    name = project_dir.name
+    present = _sections_present(project_dir)
+    pending = _pending_count(name)
+    health = _brain_health_base(project_dir, present, pending)
+    if with_noise:
+        health.update(_brain_detail_metrics(project_dir))
+    return {
+        "name": name,
+        "kind": _read_kind(project_dir),
+        "sectionsPresent": present,
+        "lifecycleStage": _lifecycle_stage(project_dir, present, pending),
+        "health": health,
+    }
+
+
+def _brain_detail_metrics(project_dir: Path) -> dict:
+    """The DETAIL-only, admission-passing DDD health metrics (per-open).
 
     Design: Knowledge/Designs/2026-08-04-ddd-health-metrics-brainhub-component.md.
     Each metric earns its place by the §1 admission gate (owner action + live/read,
-    never a frozen verdict). Lives in _brain_detail (per-open) — NEVER _brain_summary
-    (that N-globs the gallery, ddd_brain.py:458/463).
+    never a frozen verdict). Layered on top of the cheap base ONLY when
+    build_brain_state(with_noise=True) — NEVER on the gallery projection
+    (with_noise=False), because compute_reclaimable_noise parse_entries would N-glob
+    the gallery. This is the sole expensive block; the base is always cheap.
 
     - noise: {reclaimable, rate} — computed LIVE via compute_reclaimable_noise over
       the ② docs (owner action: >threshold → reclaim-strip). No side effect.
@@ -519,25 +569,16 @@ def _read_kind(project_dir: Path) -> str:
 
 
 def _brain_summary(project_dir: Path) -> dict:
-    name = project_dir.name
-    present = _sections_present(project_dir)
-    pending = _pending_count(name)
-    return {
-        "name": name,
-        "kind": _read_kind(project_dir),
-        "sectionsPresent": present,
-        "lifecycleStage": _lifecycle_stage(project_dir, present, pending),
-        "health": {
-            "sinking": _sinking_count(project_dir),
-            "pending": pending,
-            "uncommitted": _git_status_dirty(project_dir),
-            "lastChangeRelative": _relative_time(_git_last_commit_iso(project_dir)),
-        },
-    }
+    """Gallery projection — delegates to the single builder (no fork). Cheap:
+    with_noise=False never calls compute_reclaimable_noise."""
+    return build_brain_state(project_dir, with_noise=False)
 
 
 def _brain_detail(project_dir: Path) -> dict:
-    name = project_dir.name
+    # Detail = the single builder's full state (with_noise=True) PLUS the
+    # per-open-only structural extras (sections/entries/specs/hasCodeIntel).
+    # health/identity/lifecycle come from build_brain_state — no second builder.
+    state = build_brain_state(project_dir, with_noise=True)
     sections = []
     for key, num, label, own_govern, curator in _SECTIONS:
         member_rels = _section_members(project_dir, key)
@@ -560,28 +601,16 @@ def _brain_detail(project_dir: Path) -> dict:
             section["entries"] = _knowledge_entries(project_dir)
         sections.append(section)
 
-    return {
-        "name": name,
-        "kind": _read_kind(project_dir),
-        "sections": sections,
-        # specs = spec-details/*.spec.md filenames (a DERIVED PROJECTION, NOT a
-        # _SECTIONS entry — six-section invariant untouched, R31). A sibling
-        # informational field so a DDD owner can find the domain's specs. Cheap
-        # glob (~N filenames) — safe HERE in _brain_detail (per-brain, on open);
-        # NB: must NOT be added to _brain_summary (would N-glob the gallery).
-        "specs": _spec_files(project_dir),
-        # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT
-        # gated on `kind` (all DDDs resolve to kind='knowledge' — aim.json carries
-        # brain_kind, never kind/asset_kind, so a kind gate never fires). One stat;
-        # per-brain-on-open (like specs). NB: must NOT be added to _brain_summary
-        # (would N-stat the gallery). A 0-symbol/stale db still reports true — the
-        # CodeIntel panel renders a graceful "No code intelligence indexed" copy.
-        "hasCodeIntel": (project_dir / "code_intel.db").exists(),
-        # health = admission-passing DDD metrics (design 2026-08-04). Per-open ONLY
-        # (like specs/hasCodeIntel) — NEVER added to _brain_summary (N-globs gallery).
-        # Read-side: noise computed live, trust READ from stored score (no GET write).
-        "health": _brain_health(project_dir),
-    }
+    # Layer the per-open structural extras onto the single builder's state.
+    state["sections"] = sections
+    # specs = spec-details/*.spec.md filenames (a DERIVED PROJECTION, NOT a
+    # _SECTIONS entry — six-section invariant untouched, R31). Cheap glob, safe
+    # HERE (per-brain, on open); never on the gallery projection (with_noise=False).
+    state["specs"] = _spec_files(project_dir)
+    # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT gated
+    # on `kind` (all DDDs resolve to kind='knowledge'). One stat, per-brain-on-open.
+    state["hasCodeIntel"] = (project_dir / "code_intel.db").exists()
+    return state
 
 
 def _spec_files(project_dir: Path) -> list[str]:

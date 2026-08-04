@@ -546,3 +546,55 @@ class TestHealthBlockInBrainDetail:
         assert set(summ["health"].keys()) == {
             "sinking", "pending", "uncommitted", "lastChangeRelative"
         }
+
+
+class TestUnifiedBrainStateBuilder:
+    """Cycle-1 unify: a SINGLE build_brain_state(project_dir, *, with_noise) is the
+    sole state/health constructor. _brain_summary and _brain_detail both delegate to
+    it — no second, independent health builder (the fork this run kills).
+
+    The perf invariant: with_noise=False (gallery) provably never calls
+    compute_reclaimable_noise (→ parse_entries), so the gallery cannot N-glob.
+    """
+
+    def test_single_builder_exists_and_both_routes_delegate(self):
+        from routers import ddd_brain as m
+        import inspect
+        assert hasattr(m, "build_brain_state"), "the single builder must exist"
+        # both callers delegate to it (source-level, R27 no-fork proof)
+        assert "build_brain_state" in inspect.getsource(m._brain_summary)
+        assert "build_brain_state" in inspect.getsource(m._brain_detail)
+
+    def test_gallery_path_never_computes_noise(self, monkeypatch, tmp_path):
+        """with_noise=False MUST NOT call compute_reclaimable_noise (the sole
+        expensive op). Counter stays 0 → the gallery is cheap by construction."""
+        from routers import ddd_brain as m
+        calls = {"n": 0}
+        real = m.compute_reclaimable_noise
+
+        def _counting(*a, **k):
+            calls["n"] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(m, "compute_reclaimable_noise", _counting)
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        state = m.build_brain_state(pd, with_noise=False)
+        assert calls["n"] == 0, "gallery path called compute_reclaimable_noise — N-glob risk"
+        # and the cheap health keys are all present
+        assert set(state["health"].keys()) == {
+            "sinking", "pending", "uncommitted", "lastChangeRelative"
+        }
+
+    def test_detail_path_includes_noise(self, monkeypatch, tmp_path):
+        """with_noise=True adds the detail metrics (noise/trust/escalation/recall)
+        ON TOP of the cheap base — one shape, superset."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        state = m.build_brain_state(pd, with_noise=True)
+        h = state["health"]
+        # cheap base still present (superset, not a different shape)
+        assert {"sinking", "pending", "uncommitted", "lastChangeRelative"} <= set(h.keys())
+        # detail metrics added
+        assert "noise" in h and "trust" in h and "escalationPending" in h and "recall" in h
