@@ -27,8 +27,6 @@
  */
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import api from '../../services/api';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
@@ -67,8 +65,13 @@ function fmtWhen(mtime: number): string {
   return `${Math.round(diff / 86400)}d ago`;
 }
 
-export function LibraryOverlay() {
-  const { open, close } = useExclusiveOverlay('swarm:show-library');
+/**
+ * LibraryContent — the Library bookshelf surface content (M3: migrated to the
+ * OverlayHost registry). Host owns the Modal chrome + mount lifecycle (mounts this
+ * only while activeOverlay === 'library'), so no open/close self-management; queries
+ * are enabled: true because the component only exists while the surface is open.
+ */
+export function LibraryContent() {
   const [tab, setTab] = useState<TabKey>('browse');
 
   const {
@@ -76,29 +79,26 @@ export function LibraryOverlay() {
   } = useQuery<NativeStore>({
     queryKey: ['library-native'],
     queryFn: async () => (await api.get<NativeStore>('/api/library/native')).data,
-    staleTime: 30_000, enabled: open,
+    staleTime: 30_000, enabled: true,
   });
   const {
     data: recent, isLoading: recentLoading, isError: recentError, refetch: refetchRecent,
   } = useQuery<RecentFeed>({
     queryKey: ['library-recent'],
     queryFn: async () => (await api.get<RecentFeed>('/api/library/recent')).data,
-    staleTime: 30_000, enabled: open,
+    staleTime: 30_000, enabled: true,
   });
   const { data: mounts } = useQuery<MountsList>({
     queryKey: ['library-mounts'],
     queryFn: async () => (await api.get<MountsList>('/api/library/mounts')).data,
-    staleTime: 30_000, enabled: open,
+    staleTime: 30_000, enabled: true,
   });
-
-  if (!open) return null;
 
   const nativeFileTotal = (native?.categories ?? []).reduce((s, c) => s + c.file_count, 0);
   const nativeByteTotal = (native?.categories ?? []).reduce((s, c) => s + c.total_bytes, 0);
   const mountCount = mounts?.count ?? 0;
 
   return (
-    <Modal isOpen={open} onClose={close} title="Library · Bookshelf" size="fullscreen" mode="LIBRARY" fullscreenWidth="xl">
       <div className="flex h-full min-h-0" data-testid="library-overlay">
         {/* ── Left overview rail (fixed 264px, tab-independent) ── */}
         <aside
@@ -161,7 +161,6 @@ export function LibraryOverlay() {
           </div>
         </div>
       </div>
-    </Modal>
   );
 }
 

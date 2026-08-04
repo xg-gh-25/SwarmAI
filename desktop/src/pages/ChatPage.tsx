@@ -53,10 +53,11 @@ import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
-import { HistoryOverlay } from '../components/layout/HistoryOverlay';
+// HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 import { ToDoOverlay, parseWorkPacket } from '../components/layout/ToDoOverlay';
+import { setOverlayCtxBridge } from '../components/layout/overlayRegistry';
 import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
-import { NewBrainOverlay } from '../components/layout/NewBrainOverlay';
+// NewBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 import { PipelineOverlay } from '../components/layout/PipelineOverlay';
 import { PollinateOverlay } from '../components/layout/PollinateOverlay';
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
@@ -66,7 +67,7 @@ import { observeChatArea } from '../components/layout/chatAreaBounds';
 import { useRadarAttention } from '../hooks/useRadarAttention';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
-import { groupSessionsByTime, mergeOlderMessages, toDisplayMessage } from './chat/utils';
+import { mergeOlderMessages, toDisplayMessage } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -204,7 +205,6 @@ export default function ChatPage() {
   });
 
   // Derived state
-  const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
   const effectiveBasePath = agentWorkDir?.path;
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
@@ -1344,6 +1344,21 @@ export default function ChatPage() {
   }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState,
       selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion, selectedAgentId,
       loadSessionMessages]);
+
+  // Publish ChatPage's tab-owned closures + agent scope to the OverlayHost bridge
+  // (decision B): dispatch/resume/delete are ChatPage responsibilities (it owns the
+  // tab store); host-rendered surfaces (NewBrain, History, the 4 workbench) reach them
+  // via ctx. A ref-backed bridge (not context) so this does not re-render the host on
+  // ChatPage updates. History self-fetches its reactive session DATA off `agentId`.
+  useEffect(() => {
+    setOverlayCtxBridge({
+      dispatchPrompt: handleDispatchJobPrompt,
+      dispatchTodo: (todo) => handleDispatchTodo(todo as ToDo),
+      resumeSession: (s) => handleResumeSession(s as ChatSession),
+      deleteSession: (s) => setDeleteConfirmSession(s as ChatSession),
+      agentId: selectedAgentId,
+    });
+  }, [handleDispatchJobPrompt, handleDispatchTodo, handleResumeSession, selectedAgentId]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {
@@ -3314,15 +3329,8 @@ export default function ChatPage() {
             (same useRadarAttention poll → attentionItems), Jobs & Runs → left-nav
             overlay (swarm:show-jobs). Right column width reclaimed for chat. */}
 
-        {/* History — full-screen overlay opened from the left-nav History row
-            (swarm:show-history). Props-direct (Wiring B): reuses the same
-            session data RadarSidebar gets; content-FTS search inside. */}
-        <HistoryOverlay
-          groupedSessions={groupedSessions}
-          agents={agents}
-          onResume={handleResumeSession}
-          onDeleteSession={(session) => setDeleteConfirmSession(session)}
-        />
+        {/* History migrated to OverlayHost registry (M3) — self-fetches its reactive
+            session data; resume/delete/agentId reach it via the ctx bridge. */}
 
         {/* ToDo flow-closure overlay (A2) — left-nav Work card. onDispatch owns
             tab landing + inject + snapshot; overlay auto-closes on landed. */}
@@ -3330,10 +3338,8 @@ export default function ChatPage() {
         <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
         <PipelineOverlay onDispatch={handleDispatchJobPrompt} />
         <PollinateOverlay onDispatch={handleDispatchJobPrompt} />
-        {/* New Brain launcher — collects name/governs/starter-material, then
-            dispatches ONE categorized-manifest prompt into a chat tab (same
-            handleDispatchJobPrompt path) and closes. One-shot birth gate. */}
-        <NewBrainOverlay onDispatch={handleDispatchJobPrompt} />
+        {/* New Brain migrated to OverlayHost registry (M3, overlaySurfaces.tsx) —
+            dispatch reaches it via the ctx bridge (ChatPage owns handleDispatchJobPrompt). */}
       </div>
 
       {/* Modals */}

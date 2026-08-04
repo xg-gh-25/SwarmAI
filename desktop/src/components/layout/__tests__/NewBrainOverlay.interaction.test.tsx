@@ -12,11 +12,15 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { NewBrainOverlay } from '../NewBrainOverlay';
+import { NewBrainContent } from '../NewBrainOverlay';
 
-function openOverlay() {
-  window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
+// M3: NewBrainOverlay → NewBrainContent (OverlayHost registry). Content renders
+// immediately (host-owned open + fresh mount per open); `close` is now a prop (was
+// useExclusiveOverlay). Helper renders it with a stub close + the given onDispatch.
+function renderContent(onDispatch: (p: string) => boolean, close = () => {}) {
+  return render(<NewBrainContent onDispatch={onDispatch} close={close} />);
 }
+function openOverlay() { /* no-op: NewBrainContent renders immediately (host-owned open) */ }
 
 beforeEach(() => {
   // Run rAF synchronously so the double-rAF close resolves within the test.
@@ -32,15 +36,13 @@ afterEach(() => {
 });
 
 describe('NewBrainOverlay', () => {
-  it('opens on swarm:show-new-brain and shows the launcher', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
-    expect(screen.queryByTestId('new-brain-overlay')).toBeNull();
-    openOverlay();
+  it('renders the launcher', async () => {
+    renderContent(() => true);
     expect(await screen.findByTestId('new-brain-overlay')).toBeTruthy();
   });
 
   it('Create is disabled with no name, enabled once named', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
+    renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const create = screen.getByTestId('new-brain-create') as HTMLButtonElement;
@@ -50,7 +52,7 @@ describe('NewBrainOverlay', () => {
   });
 
   it('auto-classifies added items by type into GOVERN/DISTILL/SHELF', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
+    renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const input = screen.getByTestId('new-brain-material-input');
@@ -66,8 +68,8 @@ describe('NewBrainOverlay', () => {
 
   it('Create dispatches ONE manifest containing the collected data, then closes', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<NewBrainOverlay onDispatch={onDispatch} />);
-    openOverlay();
+    const close = vi.fn();
+    renderContent(onDispatch, close);
     await screen.findByTestId('new-brain-overlay');
 
     fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme Payments' } });
@@ -79,44 +81,45 @@ describe('NewBrainOverlay', () => {
     fireEvent.click(screen.getByTestId('new-brain-create'));
 
     expect(onDispatch).toHaveBeenCalledTimes(1);
+    // closed on success — host's close() called (was: overlay self-unmounts)
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     const prompt = onDispatch.mock.calls[0][0] as string;
     expect(prompt).toContain('"Acme Payments"');
     expect(prompt).toContain('governs a codebase');
     expect(prompt).toContain('github.com/acme/payments');
     expect(prompt).toContain('s_project-manager');
-
-    // closed on success — overlay unmounts
-    await waitFor(() => expect(screen.queryByTestId('new-brain-overlay')).toBeNull());
   });
 
-  it('F4: stays OPEN when onDispatch returns false (no tab landed)', async () => {
+  it('F4: does NOT close when onDispatch returns false (no tab landed)', async () => {
     const onDispatch = vi.fn(() => false);
-    render(<NewBrainOverlay onDispatch={onDispatch} />);
-    openOverlay();
+    const close = vi.fn();
+    renderContent(onDispatch, close);
     await screen.findByTestId('new-brain-overlay');
 
     fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'X' } });
     fireEvent.click(screen.getByTestId('new-brain-create'));
 
     expect(onDispatch).toHaveBeenCalledTimes(1);
-    // still open — the launcher must not close on a failed dispatch
+    // must NOT close on a failed dispatch — launcher stays so the toast is visible
+    expect(close).not.toHaveBeenCalled();
     expect(screen.getByTestId('new-brain-overlay')).toBeTruthy();
   });
 
   it('F4/#13: a THROWING onDispatch keeps the launcher open (no dead-end)', async () => {
     const onDispatch = vi.fn(() => { throw new Error('addTab blew up'); });
-    render(<NewBrainOverlay onDispatch={onDispatch} />);
-    openOverlay();
+    const close = vi.fn();
+    renderContent(onDispatch, close);
     await screen.findByTestId('new-brain-overlay');
     fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'X' } });
     // must NOT throw out of the click handler, must NOT close
     expect(() => fireEvent.click(screen.getByTestId('new-brain-create'))).not.toThrow();
     expect(onDispatch).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
     expect(screen.getByTestId('new-brain-overlay')).toBeTruthy();
   });
 
   it('#1: an internal Explorer drag (application/json FileTreeItem) adds a real-path item', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
+    renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const zone = screen.getByTestId('new-brain-dropzone');
@@ -135,7 +138,7 @@ describe('NewBrainOverlay', () => {
   });
 
   it('#1: an internal file drag classifies by type (repo/doc → GOVERN/DISTILL)', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
+    renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const zone = screen.getByTestId('new-brain-dropzone');
@@ -152,8 +155,7 @@ describe('NewBrainOverlay', () => {
 
   it('#3: Create WITHOUT pressing Enter still includes the typed draft (blur-commit)', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<NewBrainOverlay onDispatch={onDispatch} />);
-    openOverlay();
+    renderContent(onDispatch);
     await screen.findByTestId('new-brain-overlay');
     fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme' } });
     const input = screen.getByTestId('new-brain-material-input');
@@ -165,29 +167,15 @@ describe('NewBrainOverlay', () => {
     expect(prompt).toContain('github.com/acme/x');
   });
 
-  it('#4b-regression: a rapid close→reopen starts EMPTY (no leak of the prior brain)', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
-    // First brain: fill name + add an item.
-    openOverlay();
-    await screen.findByTestId('new-brain-overlay');
-    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'First Brain' } });
-    const input = screen.getByTestId('new-brain-material-input');
-    fireEvent.change(input, { target: { value: 'github.com/acme/first' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    expect(await screen.findByText('github.com/acme/first')).toBeTruthy();
-
-    // Close, then IMMEDIATELY reopen (the <320ms window the old deferred reset leaked).
-    window.dispatchEvent(new CustomEvent('swarm:back-to-chat'));
-    openOverlay();
-    await screen.findByTestId('new-brain-overlay');
-
-    // The reopened launcher must be a fresh birth — no residual name, no residual item.
-    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).value).toBe('');
-    expect(screen.queryByText('github.com/acme/first')).toBeNull();
-  });
+  // #4b-regression (fresh-birth-on-reopen) RETIRED (M3): the old reset-on-raw-event
+  // hack existed because the legacy overlay stayed mounted and `open` didn't observably
+  // transition on rapid reopen. In the OverlayHost model the host UNMOUNTS the surface
+  // on close and MOUNTS it fresh on open, so component-local state starts empty every
+  // time by construction. The mount/unmount lifecycle is covered by OverlayHost.test.
+  // A direct-render test here can no longer exercise "reopen" (there is no host).
 
   it('a role pill cycles GOVERN→DISTILL→SHELF on click (user override)', async () => {
-    render(<NewBrainOverlay onDispatch={() => true} />);
+    renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const input = screen.getByTestId('new-brain-material-input');

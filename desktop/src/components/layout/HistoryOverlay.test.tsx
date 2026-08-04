@@ -11,14 +11,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react';
 
-async function flushMicro() {
-  await act(async () => {
-    vi.advanceTimersByTime(300);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
 // jsdom lacks ResizeObserver; MessageBubble → UserMessageView uses it.
 class ResizeObserverStub {
   observe() {}
@@ -37,15 +29,20 @@ vi.mock('../../services/search', () => ({
 }));
 
 const getSessionMessagesPaginated = vi.fn();
+const listSessions = vi.fn();
 vi.mock('../../services/chat', () => ({
-  chatService: { getSessionMessagesPaginated: (id: string, limit?: number) => getSessionMessagesPaginated(id, limit) },
+  chatService: {
+    getSessionMessagesPaginated: (id: string, limit?: number) => getSessionMessagesPaginated(id, limit),
+    listSessions: (agentId?: string) => listSessions(agentId),
+  },
+}));
+vi.mock('../../services/agents', () => ({
+  agentsService: { list: () => Promise.resolve([{ id: 'a1', name: 'Swarm' }]) },
 }));
 
-import { HistoryOverlay } from './HistoryOverlay';
-import type { ChatSession, Agent } from '../../types';
-import { groupSessionsByTime } from '../../pages/chat/utils';
-
-const AGENTS: Agent[] = [{ id: 'a1', name: 'Swarm' } as Agent];
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HistoryContent } from './HistoryOverlay';
+import type { ChatSession } from '../../types';
 
 function mkSession(id: string, title: string): ChatSession {
   const now = new Date().toISOString();
@@ -54,42 +51,41 @@ function mkSession(id: string, title: string): ChatSession {
 
 const SESSIONS = [mkSession('s1', 'Kubernetes chat'), mkSession('s2', 'Docker notes')];
 
-function renderOverlay(overrides: Partial<Parameters<typeof HistoryOverlay>[0]> = {}) {
-  const onResume = vi.fn().mockReturnValue(true);
+// M3: HistoryOverlay → HistoryContent (OverlayHost registry). Content self-fetches
+// sessions/agents from the query cache (mocked here) and takes handlers + agentId via
+// props (was the ctx bridge). It renders immediately (host owns open) — no show-event.
+function renderOverlay(overrides: { onResume?: () => boolean } = {}) {
+  const onResume = vi.fn().mockReturnValue(overrides.onResume ? overrides.onResume() : true);
   const onDeleteSession = vi.fn();
+  listSessions.mockResolvedValue(SESSIONS);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <HistoryOverlay
-      groupedSessions={groupSessionsByTime(SESSIONS)}
-      agents={AGENTS}
-      onResume={onResume}
-      onDeleteSession={onDeleteSession}
-      {...overrides}
-    />,
+    <QueryClientProvider client={qc}>
+      <HistoryContent agentId="a1" onResume={onResume} onDeleteSession={onDeleteSession} close={() => {}} />
+    </QueryClientProvider>,
   );
   return { onResume, onDeleteSession };
 }
 
 describe('HistoryOverlay (方案 B — read-only browser)', () => {
+  // Real timers (was fake): HistoryContent self-fetches sessions via TanStack Query,
+  // whose async resolution does not advance under fake timers. `findBy*` polls real
+  // time for the async list; the search debounce (250ms) is waited on directly.
   beforeEach(() => {
-    vi.useFakeTimers();
     searchSessions.mockReset();
     getSessionMessagesPaginated.mockReset();
     getSessionMessagesPaginated.mockResolvedValue([]);
   });
   afterEach(() => {
-    vi.runOnlyPendingTimers();
-    vi.useRealTimers();
     cleanup();
   });
 
-  it('is closed until swarm:show-history fires, then shows the grouped list + empty preview', () => {
+  it('renders immediately (host-owned open), shows the self-fetched grouped list + empty preview', async () => {
     renderOverlay();
-    expect(screen.queryByTestId('history-overlay')).toBeNull();
-
-    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
-
+    // History content renders at once (host owns open); the session list is
+    // self-fetched (mocked listSessions) → findBy polls until it lands.
     expect(screen.getByTestId('history-overlay')).toBeInTheDocument();
-    expect(screen.getByText('Kubernetes chat')).toBeInTheDocument();
+    expect(await screen.findByText('Kubernetes chat')).toBeInTheDocument();
     // preview pane starts empty
     expect(screen.getByText(/select a conversation to preview/i)).toBeInTheDocument();
   });
@@ -99,54 +95,56 @@ describe('HistoryOverlay (方案 B — read-only browser)', () => {
       { id: 'm1', role: 'user', content: [{ type: 'text', text: 'hello world' }], createdAt: new Date().toISOString() },
     ]);
     const { onResume } = renderOverlay();
-    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
-
-    act(() => fireEvent.click(screen.getByText('Kubernetes chat')));
+    const row = await screen.findByText('Kubernetes chat'); // self-fetched list
+    fireEvent.click(row);
     // preview fetch uses the shared tab-load limit (200)
     expect(getSessionMessagesPaginated).toHaveBeenCalledWith('s1', 200);
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    // resume NOT triggered by a row click; overlay still open
+    // resume NOT triggered by a row click; overlay still open + preview shown
     expect(onResume).not.toHaveBeenCalled();
     expect(screen.getByTestId('history-overlay')).toBeInTheDocument();
-    expect(screen.getByText('Read-only preview')).toBeInTheDocument();
+    expect(await screen.findByText('Read-only preview')).toBeInTheDocument();
   });
 
   it('Resume in tab calls onResume and closes when it lands (true)', async () => {
+    const close = vi.fn();
     const onResume = vi.fn().mockReturnValue(true);
-    renderOverlay({ onResume });
-    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
-    act(() => fireEvent.click(screen.getByText('Kubernetes chat')));
-    await act(async () => { await Promise.resolve(); });
-
-    act(() => fireEvent.click(screen.getByText(/resume in tab/i)));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <HistoryContent agentId="a1" onResume={onResume} onDeleteSession={vi.fn()} close={close} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByText('Kubernetes chat'));
+    fireEvent.click(await screen.findByText(/resume in tab/i));
     expect(onResume).toHaveBeenCalledWith(expect.objectContaining({ id: 's1' }));
-    // landed → close() called → Modal plays its exit transition then unmounts
-    await act(async () => { vi.advanceTimersByTime(400); await Promise.resolve(); });
-    expect(screen.queryByTestId('history-overlay')).toBeNull();
+    // landed → the host's close() is called (host then unmounts the surface).
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it('Resume stays OPEN when onResume returns false (all tabs busy)', async () => {
-    renderOverlay({ onResume: vi.fn().mockReturnValue(false) as any });
-    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
-    act(() => fireEvent.click(screen.getByText('Kubernetes chat')));
-    await act(async () => { await Promise.resolve(); });
-
-    act(() => fireEvent.click(screen.getByText(/resume in tab/i)));
-    // busy → overlay stays open
+  it('does NOT close when onResume returns false (all tabs busy)', async () => {
+    const close = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <HistoryContent agentId="a1" onResume={() => false} onDeleteSession={vi.fn()} close={close} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByText('Kubernetes chat'));
+    fireEvent.click(await screen.findByText(/resume in tab/i));
+    // busy → must NOT close; overlay stays open
+    expect(close).not.toHaveBeenCalled();
     expect(screen.getByTestId('history-overlay')).toBeInTheDocument();
   });
 
   it('debounces then calls searchSessions and renders FTS results', async () => {
     searchSessions.mockResolvedValue([mkSession('s9', 'Untitled')]);
     renderOverlay();
-    act(() => window.dispatchEvent(new CustomEvent('swarm:show-history')));
+    await screen.findByText('Kubernetes chat'); // list loaded
 
     const input = screen.getByPlaceholderText('Search conversations…');
-    act(() => fireEvent.change(input, { target: { value: 'ingress' } }));
+    fireEvent.change(input, { target: { value: 'ingress' } });
     expect(searchSessions).not.toHaveBeenCalled();
-    await flushMicro();
+    // real 250ms debounce → findBy polls for the result
+    expect(await screen.findByText('Untitled')).toBeInTheDocument();
     expect(searchSessions).toHaveBeenCalledWith('ingress');
-    expect(screen.getByText('Untitled')).toBeInTheDocument();
   });
 });

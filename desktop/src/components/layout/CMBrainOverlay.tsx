@@ -20,8 +20,6 @@
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import api, { classifyLoadError } from '../../services/api';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
@@ -90,12 +88,18 @@ function useContextHealth(enabled: boolean) {
   });
 }
 
-export function CMBrainOverlay() {
-  const { open, close } = useExclusiveOverlay('swarm:show-context');
+/**
+ * CMBrainContent — the C&M Global Brain surface content (M3: migrated to the
+ * OverlayHost registry). The host owns the Modal chrome + mount lifecycle (it only
+ * mounts this while `activeOverlay === 'context'`), so this component always renders
+ * its content — no `open`/`close`/`useExclusiveOverlay` self-management. Data queries
+ * are `enabled: true` because the component only exists while the surface is open.
+ */
+export function CMBrainContent() {
   const [tab, setTab] = useState<TabKey>('context');
 
-  // Fetch ONLY while the overlay is open (see `enabled` in useContextHealth).
-  const { data, isError: healthErr, error: healthError, refetch: refetchHealth } = useContextHealth(open);
+  // Always fetch: the host mounts this only while the surface is open.
+  const { data, isError: healthErr, error: healthError, refetch: refetchHealth } = useContextHealth(true);
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
 
@@ -106,7 +110,7 @@ export function CMBrainOverlay() {
   const { data: gov, isError: govErr, error: govError, refetch: refetchGov } = useQuery<{ proposals: unknown[]; total: number }>({
     queryKey: ['cm-governance-pending'],
     queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
-    staleTime: 30_000, enabled: open,
+    staleTime: 30_000, enabled: true,
   });
   const approveCount = gov?.total ?? 0;
   // B1: a failed governance/health fetch used to fall back to 0 / '—' silently —
@@ -117,13 +121,11 @@ export function CMBrainOverlay() {
   const { data: trend } = useQuery<BrainTrend>({
     queryKey: ['cm-brain-trend'],
     queryFn: async () => (await api.get<BrainTrend>('/eval/brain-trend')).data,
-    staleTime: 30_000, enabled: open,
+    staleTime: 30_000, enabled: true,
   });
 
   // Which Needs-you list is filtered into the main area (null = show the tab).
   const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve'>(null);
-
-  if (!open) return null;
 
   // NOTE: an 'action' bucket was removed (2026-08-03) — it reused Approve's exact
   // count + items (same queue, two labels), which read as duplicated/fake. Re-add
@@ -134,7 +136,6 @@ export function CMBrainOverlay() {
   };
 
   return (
-    <Modal isOpen={open} onClose={close} title="C&M · Global Brain" size="fullscreen" mode="BRAIN" fullscreenWidth="xl">
       <div className="flex h-full min-h-0" data-testid="cm-brain-overlay">
         {/* ── Left overview rail (fixed 264px, tab-independent) ── */}
         <aside
@@ -205,14 +206,13 @@ export function CMBrainOverlay() {
 
               <div className="flex-1 min-h-0 overflow-y-auto p-4">
                 {tab === 'context' && <ContextTab block={block} />}
-                {tab === 'memory' && <MemoryTab enabled={open && tab === 'memory'} />}
+                {tab === 'memory' && <MemoryTab enabled={tab === 'memory'} />}
                 {tab === 'guideline' && <GuidelineTab />}
               </div>
             </>
           )}
         </div>
       </div>
-    </Modal>
   );
 }
 

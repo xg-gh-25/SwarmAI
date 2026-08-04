@@ -6,14 +6,17 @@ import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
-import { OverlayProvider } from '../../contexts/OverlayContext';
+import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
+import { OverlayHost } from './OverlayHost';
+import './overlaySurfaces'; // side-effect: registers fullscreen surfaces with the registry
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
-import { BrainHubDemoOverlay } from './BrainHubDemoOverlay';
-import { SwarmWSOverlay } from './SwarmWSOverlay';
-import { DomainStubOverlays } from './DomainStubOverlays';
-import { CMBrainOverlay } from './CMBrainOverlay';
-import { LibraryOverlay } from './LibraryOverlay';
+// BrainHubDemoOverlay retired (M2): brain-hub migrated to the OverlayHost registry
+// (overlaySurfaces.tsx). File kept dormant until M5 (its test still renders it).
+// SwarmWSOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
+// DomainStubOverlays retired (M3): STUBS array empty, file deleted in M5.
+// CMBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
+// LibraryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 import { setNavSource, clearNavSource } from './navSource';
 import { useActiveOverlayEvent, closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
@@ -137,8 +140,12 @@ function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab } = useLayout();
   const { addToast } = useToast();
   // Which window-event overlay is currently open (or null) — drives the
-  // active/selected highlight on the window-event cards (run_ad7b32f6).
+  // active/selected highlight on the LEGACY window-event cards (run_ad7b32f6).
   const activeOverlay = useActiveOverlayEvent();
+  // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
+  // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
+  // legacy + new mutually exclusive until M5 retires the legacy path.
+  const { activeOverlay: newActiveOverlay, openOverlay } = useOverlay();
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
@@ -235,9 +242,9 @@ function LeftSidebar() {
         <button
           className="a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
           // Publish THIS row as the spit-out source (like A10Card.handleClick) so the
-          // History overlay opens with a cognition-tinted spout pointing back at the
-          // row — it's a raw button, not an A10Card, so it must set the source itself.
-          onClick={(e) => { setNavSource(e.currentTarget.getBoundingClientRect(), A10_GROUP.cognitive); showOverlay('swarm:show-history'); }}
+          // History overlay opens via the OverlayHost (M3). The host re-derives this
+          // row's rect from its testid (sourceCardTestId: 'history-row') for the spout.
+          onClick={() => { if (activeModal) closeModal(); openOverlay('history'); }}
           title="History"
           data-testid="history-row"
         >
@@ -269,17 +276,16 @@ function LeftSidebar() {
       <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
-          <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-context'} onClick={() => showOverlay('swarm:show-context')} data-testid="nav-context" />
-          <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={activeOverlay === 'swarm:show-library'} onClick={() => showOverlay('swarm:show-library')} data-testid="nav-library" />
-          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} highlight isActive={activeOverlay === 'swarm:show-brain-hub'} onClick={() => showOverlay('swarm:show-brain-hub')} data-testid="nav-brain-hub" />
+          <A10Card icon="layers" label="C&M" tint={A10_GROUP.cognitive} isActive={newActiveOverlay === 'context'} onClick={() => { if (activeModal) closeModal(); openOverlay('context'); }} data-testid="nav-context" />
+          <A10Card icon="menu_book" label="Library" tint={A10_GROUP.cognitive} isActive={newActiveOverlay === 'library'} onClick={() => { if (activeModal) closeModal(); openOverlay('library'); }} data-testid="nav-library" />
+          <A10Card icon="hub" label="Brain Hub" tint={A10_GROUP.cognitive} highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => { if (activeModal) closeModal(); openOverlay('brain-hub'); }} data-testid="nav-brain-hub" />
           <button
-            className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${activeOverlay === 'swarm:show-new-brain' ? ' a10-newbrain--active' : ''}`}
+            className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${newActiveOverlay === 'new-brain' ? ' a10-newbrain--active' : ''}`}
             style={{ '--ac': A10_GROUP.cognitive } as CSSProperties}
-            aria-pressed={activeOverlay === 'swarm:show-new-brain'}
-            // Raw button (not A10Card) — publish its own rect+tint so New Brain opens
-            // with a cognition-green spout pointing back at it (was clearNavSource(),
-            // which left the panel neutral + spout-less).
-            onClick={(e) => { setNavSource(e.currentTarget.getBoundingClientRect(), A10_GROUP.cognitive); showOverlay('swarm:show-new-brain'); }}
+            aria-pressed={newActiveOverlay === 'new-brain'}
+            // Raw button (not A10Card) — the host re-derives this card's rect from its
+            // testid (sourceCardTestId: 'nav-new-brain') for the cognition-green spout.
+            onClick={() => { if (activeModal) closeModal(); openOverlay('new-brain'); }}
             title="New Brain — 建一个新大脑"
             data-testid="nav-new-brain"
           >
@@ -298,7 +304,7 @@ function LeftSidebar() {
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label="Work" tint={A10_GROUP.work}>
           <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
-          <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-swarmws'} onClick={() => showOverlay('swarm:show-swarmws')} data-testid="nav-swarmws" />
+          <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => { if (activeModal) closeModal(); openOverlay('swarmws'); }} data-testid="nav-swarmws" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
               a chat file-chip click or the agent's swarm:open-canvas command; a
@@ -691,6 +697,11 @@ function MainChatPanel({ children }: MainChatPanelProps) {
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
       {children}
+      {/* OverlayHost — the single fullscreen-surface host, absolute inset:0 of this
+          relative MainContentArea (OverlayHost subsystem, M2+). Renders nothing until
+          a registered surface is active. Sibling of children (chat) = a chat SIBLING,
+          never a chat child (not coupled into chat). */}
+      <OverlayHost />
     </main>
   );
 }
@@ -844,12 +855,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
             button flip panelOpen, which drives the self-hide. */}
         <TerminalPanel />
 
-        {/* SwarmWS explorer overlay — on-demand fullscreen (A10 redesign).
-            Kept inside ExplorerProvider so it reads the same live tree state
-            (the 30s ETag poll lives in the provider, runs whether or not the
-            overlay is open). Opening a file self-closes the overlay first
-            (Gate-1 z-index fix) then delegates to handleFileDoubleClick. */}
-        <SwarmWSOverlay onFileDoubleClick={handleFileDoubleClick} />
+        {/* SwarmWS migrated to the OverlayHost registry (M3, overlaySurfaces.tsx).
+            OverlayHost renders inside this same ExplorerProvider, so WorkspaceExplorer
+            still reads the live tree state. Legacy SwarmWSOverlay retired. */}
 
         {/* Bottom status bar */}
         <BottomBar />
@@ -873,20 +881,16 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         workspaceId={workspaceSettingsId}
       />
       <EvalModal isOpen={activeModal === 'eval'} onClose={closeModal} />
-      {/* Brain Hub demo overlay — self-contained, listens for swarm:show-brain-hub (nav-brain-hub) */}
-      <BrainHubDemoOverlay />
+      {/* Brain Hub migrated to the OverlayHost registry (M2 pilot, overlaySurfaces.tsx).
+          The legacy BrainHubDemoOverlay + its useExclusiveOverlay wiring are retired;
+          the nav-brain-hub card now calls openOverlay('brain-hub'). */}
 
-      {/* C&M Global Brain overlay — real surface for the Context nav card
-          (swarm:show-context). Replaces the former Context stub (run_5f7d4fe1). */}
-      <CMBrainOverlay />
+      {/* C&M Global Brain migrated to OverlayHost registry (M3). */}
 
-      {/* Library overlay — real surface for the Library nav card
-          (swarm:show-library). The bookshelf: Native Knowledge/ + mounts. */}
-      <LibraryOverlay />
+      {/* Library migrated to OverlayHost registry (M3). */}
 
-      {/* A10 domain stub overlays — Pipeline / Pollinate open labeled
-          placeholders (real surfaces land in later per-card cycles). */}
-      <DomainStubOverlays />
+      {/* DomainStubOverlays retired (M3): its STUBS array was already empty — every
+          A10 domain now has a real surface. File deleted in M5. */}
     </div>
   );
 }

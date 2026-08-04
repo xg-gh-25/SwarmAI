@@ -19,41 +19,52 @@
  *
  * @exports HistoryOverlay
  */
-import { useEffect, useRef, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { HistoryView } from '../../pages/chat/components/RightSidebar/HistoryView';
 import { MessageBubble } from '../../pages/chat/components/MessageBubble';
-import type { Agent, ChatSession, Message } from '../../types';
-import type { GroupedSessions } from '../../pages/chat/utils';
-import { toDisplayMessage } from '../../pages/chat/utils';
+import type { ChatSession, Message } from '../../types';
+import { groupSessionsByTime, toDisplayMessage } from '../../pages/chat/utils';
 import { searchService } from '../../services/search';
 import { chatService } from '../../services/chat';
+import { agentsService } from '../../services/agents';
 
 const DEBOUNCE_MS = 250;
 /** Same limit ChatPage uses for a tab load — keeps the shared, sessionId-keyed
  *  ETag cache consistent between a preview fetch and a real tab load. */
 const PREVIEW_MESSAGE_LIMIT = 200;
 
-export interface HistoryOverlayProps {
-  groupedSessions: GroupedSessions[];
-  agents: Agent[];
+export interface HistoryContentProps {
+  /** Agent scope for the session list (ChatPage's selectedAgentId, via bridge). */
+  agentId: string | null;
+  /** Delete a session (ChatPage's delete-confirm flow, via bridge). */
   onDeleteSession: (session: ChatSession) => void;
   /**
-   * Resume the session in a chat tab. Returns `true` if it landed (focused /
-   * opened / reused a tab) → overlay closes; `false` if it could not (all tabs
-   * busy — the executor shows a toast) → overlay stays open.
+   * Resume the session in a chat tab. Returns `true` if it landed → overlay closes;
+   * `false` (all tabs busy) → stays open. ChatPage's handleResumeSession, via bridge.
    */
   onResume: (session: ChatSession) => boolean;
+  /** Close the surface (host's closeOverlay). */
+  close: () => void;
 }
 
-export function HistoryOverlay({
-  groupedSessions,
-  agents,
-  onDeleteSession,
-  onResume,
-}: HistoryOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-history');
+/**
+ * HistoryContent — the History browser surface (M3: migrated to OverlayHost registry).
+ * Unlike the other surfaces it is DATA-REACTIVE + agent-scoped, so it self-fetches
+ * `sessions`/`agents` from the shared TanStack Query cache (staying reactive to live
+ * updates — a ref-bridge would go stale) and takes only the ChatPage-owned HANDLERS
+ * (resume/delete) + the agent scope via the ctx bridge. Host owns the chrome + fresh
+ * mount per open (so the former reset-on-close effect is gone).
+ */
+export function HistoryContent({ agentId, onDeleteSession, onResume, close }: HistoryContentProps) {
+  // Self-fetch, same query keys ChatPage uses → shares the cache, stays reactive.
+  const { data: sessions = [] } = useQuery({
+    queryKey: ['chatSessions', agentId],
+    queryFn: () => chatService.listSessions(agentId || undefined),
+    enabled: !!agentId,
+  });
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: agentsService.list });
+  const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
 
   const [searchText, setSearchText] = useState('');
   const [searchResults, setSearchResults] = useState<ChatSession[] | null>(null);
@@ -119,18 +130,8 @@ export function HistoryOverlay({
     })();
   }, [previewSession]);
 
-  // Reset transient state each time the overlay closes.
-  useEffect(() => {
-    if (!open) {
-      setSearchText('');
-      setSearchResults(null);
-      setIsSearching(false);
-      requestSeq.current++;
-      setPreviewSession(null);
-      setPreviewMessages([]);
-      previewSeq.current++;
-    }
-  }, [open]);
+  // (Former reset-on-close effect removed — the host mounts this fresh on each open
+  //  and unmounts on close, so transient state starts empty every time.)
 
   // If the previewed session disappears (deleted while previewed), clear the
   // pane so it doesn't show stale content with a dead Resume button.
@@ -154,7 +155,6 @@ export function HistoryOverlay({
   };
 
   return (
-    <Modal isOpen={open} onClose={close} title="History" size="fullscreen" mode="HISTORY" fullscreenWidth="xl">
       <div className="flex-1 min-h-0 flex" data-testid="history-overlay">
         {/* LEFT — session list */}
         <div className="w-80 shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
@@ -212,6 +212,5 @@ export function HistoryOverlay({
           )}
         </div>
       </div>
-    </Modal>
   );
 }

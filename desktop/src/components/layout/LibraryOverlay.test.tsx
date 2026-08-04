@@ -19,8 +19,7 @@ vi.mock('../../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
 }));
 import api from '../../services/api';
-import { LibraryOverlay } from './LibraryOverlay';
-import { __resetActiveOverlayEvent } from './useExclusiveOverlay';
+import { LibraryContent } from './LibraryOverlay';
 
 const NATIVE_OK = {
   source: 'native', root: 'Knowledge/', category_count: 2,
@@ -51,20 +50,19 @@ function mockAllOk() {
   });
 }
 
+// M3: LibraryOverlay → LibraryContent (OverlayHost registry). Content renders
+// immediately (host owns open/close); openOverlay() is a no-op kept for readability.
 function renderOverlay() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <LibraryOverlay />
+      <LibraryContent />
     </QueryClientProvider>,
   );
 }
-function openOverlay() {
-  act(() => { window.dispatchEvent(new CustomEvent('swarm:show-library')); });
-}
+function openOverlay() { /* no-op: LibraryContent renders immediately (host-owned open) */ }
 
 beforeEach(() => {
-  __resetActiveOverlayEvent();
   mockAllOk();
 });
 afterEach(() => {

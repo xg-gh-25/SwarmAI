@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { CMBrainOverlay } from '../CMBrainOverlay';
+import { CMBrainContent } from '../CMBrainOverlay';
 import api, { ApiError } from '../../../services/api';
 
 vi.mock('../../../services/api', async (importOriginal) => {
@@ -18,14 +18,14 @@ vi.mock('../../../services/api', async (importOriginal) => {
   return { ...actual, default: { get: vi.fn() } };
 });
 
+// M3: CMBrainContent renders immediately (host-owned open) — no show-event needed.
 function renderOpen() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <CMBrainOverlay />
+      <CMBrainContent />
     </QueryClientProvider>,
   );
-  window.dispatchEvent(new CustomEvent('swarm:show-context'));
 }
 
 describe('CMBrainOverlay needs-error classification', () => {

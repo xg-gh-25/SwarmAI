@@ -18,9 +18,7 @@
  *
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
-import { useCallback, useLayoutEffect, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
+import { useCallback, useState } from 'react';
 import {
   classifyStarterItem,
   buildBrainManifest,
@@ -31,11 +29,13 @@ import {
   type StarterRole,
 } from '../../utils/newBrainDispatch';
 
-export interface NewBrainOverlayProps {
+export interface NewBrainContentProps {
   /** Lands a prompt into a chat tab (new or reused). Returns true on success;
-   *  false (all tabs busy / unsent draft) must keep the launcher open. Wired to
-   *  ChatPage's handleDispatchJobPrompt — the same dispatcher Jobs/Pipeline use. */
+   *  false (all tabs busy / unsent draft) must keep the launcher open. From the
+   *  OverlayHost ctx bridge = ChatPage's handleDispatchJobPrompt. */
   onDispatch: (prompt: string) => boolean;
+  /** Close the surface (host's closeOverlay). */
+  close: () => void;
 }
 
 interface GovernsOption {
@@ -71,33 +71,19 @@ interface RowItem extends StarterItem {
   displayKind: string;
 }
 
-export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-new-brain');
+/**
+ * NewBrainContent — the "grow a new brain" launcher content (M3: migrated to the
+ * OverlayHost registry). Fresh, empty birth every open is now automatic: the host
+ * MOUNTS this component fresh on each open and UNMOUNTS it on close (renderedId→null
+ * after the exit transition), so component-local state starts empty every time — the
+ * former reset-on-raw-event hack (which existed because the old overlay stayed mounted
+ * and `open` didn't observably transition on rapid reopen) is no longer needed.
+ */
+export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
   const [name, setName] = useState('');
   const [governs, setGoverns] = useState<GovernsKind>('codebase');
   const [items, setItems] = useState<RowItem[]>([]);
   const [draft, setDraft] = useState('');
-
-  // Fresh, empty birth every time the launcher OPENS (one-shot gate — no state
-  // carried between brains). Reset is driven by the RAW show-event, NOT by the
-  // `open` boolean's transition, because a rapid close→reopen batches
-  // setOpen(false)+setOpen(true) into one React commit — `open` never observably
-  // leaves `true`, so an effect keyed on `[open]` would NOT re-run and the prior
-  // brain's state would leak (the bug the deferred-close-reset also had, #4b-regression).
-  // The DOM event fires synchronously on EVERY dispatch, before React re-renders,
-  // so the reset is queued in the same commit as the open → no stale frame, and it
-  // fires even when `open` doesn't transition. Resetting on OPEN (not on close)
-  // also means closing never blanks the fields mid-fade (the original #4b flash).
-  const resetFields = useCallback(() => {
-    setName('');
-    setGoverns('codebase');
-    setItems([]);
-    setDraft('');
-  }, []);
-  useLayoutEffect(() => {
-    window.addEventListener('swarm:show-new-brain', resetFields);
-    return () => window.removeEventListener('swarm:show-new-brain', resetFields);
-  }, [resetFields]);
 
   const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
     const value = raw.trim();
@@ -198,7 +184,6 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
   );
 
   return (
-    <Modal isOpen={open} onClose={close} title="Grow a new brain" size="fullscreen" mode="BRAIN" fullscreenWidth="l">
       <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
         {/* Declaration + lifecycle ribbon */}
         <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
@@ -325,8 +310,5 @@ export function NewBrainOverlay({ onDispatch }: NewBrainOverlayProps) {
           </button>
         </div>
       </div>
-    </Modal>
   );
 }
-
-export default NewBrainOverlay;

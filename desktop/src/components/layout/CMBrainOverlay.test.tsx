@@ -20,8 +20,7 @@ vi.mock('../../services/api', () => ({
   default: { get: vi.fn() },
 }));
 import api from '../../services/api';
-import { CMBrainOverlay } from './CMBrainOverlay';
-import { __resetActiveOverlayEvent } from './useExclusiveOverlay';
+import { CMBrainContent } from './CMBrainOverlay';
 
 const TOKEN_BLOCK = {
   total_tokens: 100000,
@@ -63,17 +62,20 @@ function mockHealth(overrides: Record<string, unknown> = {}, opts: { governanceP
   });
 }
 
+// M3: CMBrainOverlay → CMBrainContent (OverlayHost registry). The content component
+// ALWAYS renders (the host owns open/close + mount lifecycle), so tests render it
+// directly; `openOverlay()` is a no-op kept so the content-assertion tests read
+// unchanged. The former "does not render until event" test moved to OverlayHost.test.
 function renderOverlay() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <CMBrainOverlay />
+      <CMBrainContent />
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
-  __resetActiveOverlayEvent();
   mockHealth();
 });
 afterEach(() => {
@@ -81,17 +83,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function openOverlay() {
-  act(() => { window.dispatchEvent(new CustomEvent('swarm:show-context')); });
-}
+function openOverlay() { /* no-op: CMBrainContent renders immediately (host-owned open) */ }
 
-describe('CMBrainOverlay — open/close + tabs', () => {
-  it('does not render until swarm:show-context fires', () => {
-    renderOverlay();
-    expect(screen.queryByTestId('cm-brain-overlay')).toBeNull();
-  });
-
-  it('opens on swarm:show-context with the Context tab active', async () => {
+describe('CMBrainContent — tabs + content', () => {
+  it('renders the Context tab active by default', async () => {
     renderOverlay();
     openOverlay();
     expect(await screen.findByTestId('cm-brain-overlay')).toBeInTheDocument();
