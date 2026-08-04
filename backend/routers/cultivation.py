@@ -34,19 +34,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cultivation", tags=["cultivation"])
 
 
-@router.get("/proposals")
-async def list_proposals(project: str = Query(default="SwarmAI")):
-    """List all pending (non-expired) DDD cultivation proposals for a project."""
+def _resolve_project_dir(project: str) -> Path:
+    """Resolve + VALIDATE a `project` query param to its Projects/<project> dir.
+
+    The `project` param is attacker-controllable on these unauthenticated
+    endpoints. Without validation, `project="../.."` escapes the Projects/ tree
+    (the sink read_pending_proposals globs `<dir>/.artifacts/proposals/*.json`,
+    so traversal = arbitrary proposal-JSON exfiltration). Fail-closed: reject any
+    name with a path separator or `..` component, then assert the resolved path is
+    contained under Projects/. run_24d9f714 (adversarial security MED): the str→Path
+    fix made this pre-existing traversal reachable, so the guard lands with it and
+    covers all three endpoints (list/approve/reject) that share this sink.
+    """
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
         raise HTTPException(status_code=503, detail="Workspace not initialized")
 
+    # Reject traversal BEFORE any filesystem touch. A legit project is a single
+    # path segment (no "/", "\\", or ".." component).
+    if "/" in project or "\\" in project or ".." in Path(project).parts:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
     root = Path(ws_path)
-    project_dir = root / "Projects" / project
+    projects_root = (root / "Projects").resolve()
+    project_dir = (projects_root / project).resolve()
+    # Belt-and-suspenders: even if the checks above are bypassed, the resolved
+    # path MUST stay under Projects/ (fail-closed containment).
+    if project_dir != projects_root and projects_root not in project_dir.parents:
+        raise HTTPException(status_code=400, detail="Invalid project name")
     if not project_dir.exists():
         raise HTTPException(status_code=404, detail=f"Project '{project}' not found")
+    return project_dir
 
-    pending = read_pending_proposals(str(root), project)
+
+@router.get("/proposals")
+async def list_proposals(project: str = Query(default="SwarmAI")):
+    """List all pending (non-expired) DDD cultivation proposals for a project."""
+    # Validate + resolve (fail-closed traversal guard); root is its parent's parent.
+    project_dir = _resolve_project_dir(project)
+    root = project_dir.parent.parent
+
+    # read_pending_proposals(workspace_dir: Path, ...) does `workspace_dir / "Projects"` —
+    # pass the Path, never str(root) (str / str → TypeError → 500). run_24d9f714.
+    pending = read_pending_proposals(root, project)
 
     return {
         "project": project,
@@ -72,12 +102,8 @@ async def approve_proposal(
     to the proposal's suggested target unchanged (existing behavior for
     reflect/decision proposals).
     """
-    ws_path = initialization_manager.get_cached_workspace_path()
-    if not ws_path:
-        raise HTTPException(status_code=503, detail="Workspace not initialized")
-
-    root = Path(ws_path)
-    project_dir = root / "Projects" / project
+    # Validate + resolve (fail-closed traversal guard, run_24d9f714).
+    project_dir = _resolve_project_dir(project)
 
     # Serialize find→apply→mark for this id (run_93594880): a concurrent
     # approve+reject must not interleave to a torn status. 409 on contention.
@@ -161,12 +187,8 @@ async def reject_proposal(
     reason: Optional[str] = Query(default=None),
 ):
     """Reject a proposal: mark as rejected, archive for learning."""
-    ws_path = initialization_manager.get_cached_workspace_path()
-    if not ws_path:
-        raise HTTPException(status_code=503, detail="Workspace not initialized")
-
-    root = Path(ws_path)
-    project_dir = root / "Projects" / project
+    # Validate + resolve (fail-closed traversal guard, run_24d9f714).
+    project_dir = _resolve_project_dir(project)
 
     # Same per-proposal lock as approve (run_93594880): reject must not race a
     # concurrent approve on the same id to a torn status.

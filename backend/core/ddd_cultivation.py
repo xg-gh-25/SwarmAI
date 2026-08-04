@@ -957,11 +957,14 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     finally:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
         lock_fd.close()
-        # Clean up lock file (best effort)
-        try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # Deliberately do NOT unlink the .lock sidecar — unlinking a flock'd path is
+        # the inode-divergence race (run_edcfd0e5): a waiter blocked in flock() holds
+        # an fd to the OLD inode, and a fresh open() after unlink creates a NEW inode,
+        # so two holders "own" the lock on different inodes. The sidecar is one fixed
+        # file per doc (IMPROVEMENT.lock, TECH.lock — reused, not per-proposal),
+        # gitignored + artifact-excluded, so leaving it is harmless. Matches the
+        # corrected pattern in _proposal_lock (routers/cultivation.py) and
+        # ddd_orchestrator.py — NOT the old latent unlink. (run_24d9f714)
 
 
 # ── Evidence-driven supersession detection + retire (run_b8f10185; ────────────
