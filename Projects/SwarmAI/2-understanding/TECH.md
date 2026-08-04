@@ -3360,6 +3360,16 @@ Code that works in dev WILL break in daemon/hive without these guards. The pipel
 
 **Rule:** `useChatStreamingLifecycle.ts` — any property on `UnifiedTab` that drives UI rendering (spinner, status, indicators) MUST be either (a) `readonly` with a dedicated setter function that also triggers re-render, OR (b) managed via `useState` directly. Direct ref mutations for render-driving state = invisible bugs that only manifest on background tabs.
 
+### Frontend Reflow / Layout-Coupling Traps
+
+| Pattern | Looks correct | Actually broken | Correct Approach |
+|---------|--------------|-----------------|-----------------|
+| ChatInput textarea auto-grow (`style.height='auto'` → read `scrollHeight` → write) firing per keystroke | rAF-deferred so "not a sync reflow on the input path" | It's still a forced document reflow every frame; its cost scales with TOTAL DOM size, so it's cheap alone but O(Canvas-lines) when the Canvas panel (FileEditorCore renders one un-virtualized node per line) is open → "输入卡死" | Two independent levers: (1) `contain: layout` on the Canvas **content column** (bounds the reflow so it can't descend into the Canvas DOM) + (2) skip the measure when the `(value, clientWidth, expanded)` signature is unchanged (`heightMeasureUnchanged`). run_1cb87e1a. |
+| A height-measure skip keyed on `value` alone | "value unchanged → height unchanged" | A width-driven rewrap (Canvas open/close, drag-resize, window resize) changes wrapped height with value unchanged → the textarea freezes at a stale height | Key the skip on `(value, clientWidth, expanded)` — width is load-bearing. |
+| Caching a layout-measure signature unconditionally | ref caches the last measure to skip redundant work | A keep-mounted **background tab**'s textarea has `clientWidth=0`; caching `{value,0,…}` lets a later width-recovery (tab active, value unchanged) match-and-skip → frozen height | Never cache a signature measured at width 0 (`cacheableMeasureSig` returns null at width 0) so the next real measure runs. |
+
+**Rule (the meta-lesson, recurrence=wrong-layer applied to layout):** a per-keystroke lag with a big sibling DOM open is almost never a *re-render* problem (check the `memo` actually holds first — if props are stable it does) — it's a *forced-reflow SCOPE* problem. The fix layers, in order: **CSS containment** (bound the reflow) > **skip the measure** (don't run it) > *never* "lift state down" if the memo already holds (that's a no-op patch). `contain: layout` MUST go on an INNER node with no overhanging absolute children — the outer Canvas panel box holds `.canvas-spout` at `left:-10px`, so containment there would clip it. `contain:layout`'s benefit is coupled to the Canvas DOM staying un-virtualized; if Canvas ever virtualizes, the containment becomes redundant.
+
 ## Environment Notes
 <!-- maturity: sparse | sources: 0 | verified: true | used: true | days: 0 | trust: high | promoted: none -->
 
