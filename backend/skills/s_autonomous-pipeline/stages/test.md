@@ -97,6 +97,44 @@ but crashed on real import because of a circular dependency.
 **On failure:** ImportError = wiring bug. Fix the import structure before
 proceeding.
 
+#### Layer 4: Cross-Boundary E2E (CONDITIONAL — fires ONLY when `cross_boundary.value == true`)
+
+Read the EVALUATE artifact's `cross_boundary` flag (see EVALUATE § Cross-Boundary
+Classification). **If `false` → skip this layer** (record `"cross_boundary_e2e": {"run": false, "reason": "not a cross-boundary change"}` and move on — no ceremony tax). **If `true` → this layer is a MANDATORY DoD item; the run is not TEST-complete without it.**
+
+Layers 1-3 are all *unit-shaped* — they exercise one side of a seam (AC's own test,
+importers, a module import). None drive the SEAM. Layer 4 does: it drives the **real
+system through the actual boundary** the change crosses.
+
+**Two hard requirements (both, or it's theater):**
+
+1. **Drive the REAL wiring, not a mock of it.** The test must exercise the actual
+   contract end-to-end: fire the real event through the real listener/registry; send
+   the real payload through the real serializer; run the real reader against the real
+   writer's output. **The test MUST NOT `patch`/mock the thing-under-change** — mocking
+   the event bus / the registry / the serializer you just edited is the CLASS-A
+   test-theater the whole layer exists to prevent. (Mock only the far leaf boundary —
+   a network call, the LLM — never the seam itself.)
+2. **Mutation-verify it's non-vacuous.** Revert the one contract line the change added
+   (the dispatch→open mapping, the migrated field, the allowlist entry) → the Layer-4
+   test MUST go RED. A green-on-revert Layer-4 test proves nothing; state the mutation
+   you ran + that it went RED in the artifact.
+
+**Per boundary kind, "drive the real system" means:**
+- *event-bus / ACT-SENSE* → mount the real provider + host + registry, `dispatchEvent`
+  the real `swarm:*` event, assert the surface opens (+ that its state is READ back).
+  (Canonical example: `overlayHostE2E.test.tsx`, run_567b107e — 7 surfaces × real
+  registry × real event; mutation = revert open-on-show → all RED.)
+- *frontend↔backend contract* → assert the frontend table is DERIVED from (or bound by a
+  test to) the backend SSOT, so a divergence is impossible/RED (e.g.
+  `test_backend_allowlist_is_bound_to_leftnav_ssot`).
+- *data/schema migration* → run the real reader against a real writer's output shape
+  (O009: real production data shape, not a fixture that encodes your assumption).
+- *multi-subsystem shared path* → smoke EACH subsystem independently through the shared
+  path before combining (R16: send 1 msg → stream → content persists on tab switch).
+
+**Record in the TEST artifact:** `"cross_boundary_e2e": {"run": true, "test_file": "...", "drives_real": "what real wiring it exercises", "mutation": "reverted X → test RED"}`.
+
 ### Regression Definition
 
 | Status | Meaning | Action |
@@ -116,6 +154,8 @@ proceeding.
 | "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md "Known Issues." Never silently pass over a red test — it erodes the signal. Today's "pre-existing" is tomorrow's "we thought it was fine." | Pipeline design |
 | "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. The 21st fix historically introduces more bugs than it solves (WTF score data). | WTF Gate |
 | "Tests are flaky, re-run until green" | Flaky = non-deterministic = real bug (race condition, shared state, time dependency). Fix the flake, don't re-roll the dice. A test that passes 9/10 times FAILS. | STEERING.md |
+| "All units pass, the migration is done — Layer 4 is overkill" | Units pass ONE side of a seam; a cross-boundary change breaks the SEAM, which no unit sees. run_fdeaead8: every unit green, the ACT/SENSE contract silently severed, caught by adversarial not E2E. If EVALUATE set `cross_boundary=true`, Layer 4 is mandatory. | run_fdeaead8 (M4) |
+| "I wrote a Layer-4 test and it's green" | Green ≠ non-vacuous. If it mocks the thing-under-change, or stays green when you revert the contract line, it's theater. Mutation-verify: revert the seam → it MUST go RED. | CLASS-A test-theater |
 
 ### WTF Gate
 

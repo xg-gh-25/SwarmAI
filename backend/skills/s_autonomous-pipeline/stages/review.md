@@ -491,6 +491,15 @@ Include checklist results in the review artifact under `"runtime_patterns"`.
 
 **Only when changeset includes BOTH frontend API calls AND backend endpoints** (e.g., new `.ts` service function + new `@router.post`). Skip for single-layer changes.
 
+> **Scope note — this check is the STATIC frontend↔backend HTTP slice of the broader
+> cross-boundary concern.** If EVALUATE set `cross_boundary.value = true` with a kind
+> OTHER than a frontend↔backend HTTP call (event-bus, ACT/SENSE, data migration,
+> multi-subsystem shared path), that seam is verified DYNAMICALLY by **TEST Layer 4**
+> (drive the real system + mutation-verify), not by this static trace. Check 7 covers
+> "does the wire format line up on paper"; Layer 4 covers "does the real seam fire
+> end-to-end". Both can apply to one run. The exit-evidence checklist (check 15) gates
+> that the Layer-4 test EXISTS when `cross_boundary` is set.
+
 For each frontend-to-backend boundary in the changeset, explicitly answer:
 
 | # | Question | How to verify | Example failure |
@@ -815,6 +824,7 @@ Confirm each before publishing:
 - [ ] Operational pattern checklist complete (every applicable OP has pass or N/A, or "no lifecycle ops, N/A")
 - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
 - [ ] Wire test results shown (or "single-layer change, N/A" stated)
+- [ ] **Cross-boundary E2E:** read the EVALUATE `cross_boundary` object. (a) If `value == true`: the TEST artifact's `cross_boundary_e2e.run == true` with a real-system test that does NOT mock the seam AND a stated mutation (revert the contract line → RED). BLOCK if the flag is set but the E2E is absent, mocks the thing-under-change, or has no mutation proof. (b) If `value == false`: a `ruled_out` attestation MUST be present (the negative statement that the 6 kinds were checked and none fire) — a bare `false` with no `ruled_out` is an unjustified skip → BLOCK back to EVALUATE. (c) Cross-check the profile: a `value == true` under `docs`/`research` is a scope contradiction → BLOCK (wrong profile).
 - [ ] Depth & seam analysis completed for new files (or "no new files, N/A" stated)
 - [ ] UX review completed (or "no frontend files, N/A" stated)
 - [ ] Blast radius trace completed (or "no infra/release/deploy files, N/A" stated)

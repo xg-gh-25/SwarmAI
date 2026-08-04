@@ -224,6 +224,62 @@ cost 15 minutes; fixing the gaps individually over time would have cost 15 hours
 **When to skip:** Greenfield features (no existing subsystem to audit), trivial
 one-line fixes, or when the user explicitly says "just fix this one thing."
 
+### Cross-Boundary Classification (P1) — produces the `cross_boundary` flag
+
+**One question, asked on every run:** *does this change cross a CONTRACT BOUNDARY —
+a seam where each side is a separate unit that a unit test can pass in isolation while
+the seam between them silently breaks?* Answer it here; the answer (a `cross_boundary`
+object — `.value` boolean + the `.kinds` that fire when true) is consumed by TEST Layer 4
+and the REVIEW exit checklist. This is the sibling of the Subsystem Health Audit: that audit
+hardens a subsystem's *operations*; this classifies the change's *seams*.
+
+**`cross_boundary = true` if the change touches ANY of these boundary kinds:**
+
+| Boundary kind | Concrete signal |
+|---|---|
+| **event-bus / window-event** | dispatch/listen a `CustomEvent`/`swarm:*` event; add/rename/retire an event name; move a surface off/onto an event mechanism |
+| **IPC / SSE / wire** | a serialized payload crosses a process/network hop (SSE event shape, Tauri command, an `editor_context`/`ui_command` field) |
+| **data / schema migration** | a column/field/dir/contract renames or moves and existing writers OR **readers** must follow (R27 "grep ALL consumers incl. reads") |
+| **multi-subsystem shared path** | ≥2 coupled subsystems share one critical path (resume, spawn, streaming, auth) — the R16 blast-radius case |
+| **frontend↔backend contract** | a backend allowlist/enum and a frontend table must stay in lockstep (e.g. `ui_action` UI_COMMAND_ALLOWLIST ↔ `ALL_SHOW_EVENTS`) |
+| **ACT / SENSE proprioception** | the agent's ability to ACT on a surface (a command that dispatches an event) OR SENSE its state (a payload field read from a store) rides the mechanism being changed |
+
+**`cross_boundary = false` (EXEMPT — no E2E ceremony tax) when the change is:**
+a pure-logic function (inputs→outputs, no seam), a docs-only edit, a single-file config
+value, or a cosmetic/style change. **Do NOT inflate the classification** — if you cannot
+name a SPECIFIC boundary kind from the table above with a file:line, it is `false`.
+Marking everything "cross-boundary" re-creates the ceremony tax this gate exists to
+avoid (the C042 "build a mechanism for every case" over-reach).
+
+**⚠️ The `false` branch is NOT a free pass — it requires a NEGATIVE ATTESTATION.** The
+self-exemption temptation here is the same one the Understanding Gate faces ("this is
+obviously fine, skip it"), and it fires hardest on exactly the run most likely to break
+a seam — a migration where "every unit passes" (the run_fdeaead8 setup). So `false` is
+not "leave the field blank"; you MUST record `ruled_out`: a one-line statement that you
+checked the 6 kinds and none fire, naming what the change touches. A `false` with no
+`ruled_out` is an INVALID EVALUATE artifact (an unjustified skip), not an exempt one —
+REVIEW check 15 rejects it. This forces the classification to be a *decision on record*,
+not a silent default.
+
+**Why this exists (provenance — read it, it's the whole point):** run_fdeaead8 (M4,
+overlay re-architecture) migrated 4 surfaces off the legacy `useExclusiveOverlay`
+window-event bus onto a new host. **Every unit test passed.** But the migration silently
+severed the agent's proprioception contract on BOTH halves — the `swarm:show-<id>` ACT
+vocabulary became close-only (couldn't OPEN a migrated surface) and the `active_overlay`
+SENSE payload read a now-dead singleton (couldn't SEE it). The mandatory **adversarial**
+gate caught it; **no E2E test did, because none drove the real registry end-to-end** —
+the exact hole this classification + TEST Layer 4 close. A migration's visible 20% is
+mounting the new component; the invisible 80% is re-homing the event dispatchers + state
+readers, and only a real-system E2E proves both halves reconnected.
+
+**Record it in the EVALUATE artifact** (add to the artifact JSON) — `true` carries the
+`kinds` that fire + the `seam`; `false` carries `ruled_out` (the negative attestation):
+```json
+"cross_boundary": { "value": true, "kinds": ["event-bus", "frontend-backend-contract", "act-sense"], "seam": "swarm:show-<id> dispatch ↔ OverlayContext listener ↔ backend allowlist" }
+// or, for an exempt run:
+"cross_boundary": { "value": false, "ruled_out": "pure-logic change to score_confidence() — no event/wire/migration/shared-path/fe-be/act-sense seam; single file, callers in same module" }
+```
+
 ### Codebase Complexity Assessment (if code_intel.db exists)
 
 After DDD doc scoring, if the project has a `code_intel.db`, read the codebase
@@ -414,6 +470,16 @@ matched those size gates first). Note: nearly every change *can* be wrapped in a
 shell command that exits 0 — that fact alone is NOT a goal signal; the iteration
 is. (This corrects the old "any exit-0-verifiable → goal" heuristic that mis-routed
 small fixes to the heaviest profile.)
+
+> **⚠️ Cross-boundary × profile consistency check (silent-escape guard).** `docs` and
+> `research` profiles have NO TEST/REVIEW stage — so a `cross_boundary=true` change
+> routed to either would produce the flag and then have NO stage that enforces Layer 4:
+> the requirement silently escapes. Therefore **`cross_boundary.value == true` under a
+> `docs`/`research` profile is a SCOPE CONTRADICTION** — a change that crosses a real
+> contract seam is not docs-only or research-only work. If you land here, the profile is
+> wrong, not the classification: re-route to `bugfix`/`full`/`goal` (which have TEST +
+> REVIEW). The only exception is a genuinely docs-only edit *describing* a boundary
+> (then `cross_boundary=false`, `ruled_out: "docs describe the seam, no code crosses it"`).
 
 ### Intelligence-Informed Profile Selection (Meta-Intelligence L3)
 

@@ -326,12 +326,12 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <com
 
 | Stage | Must Consume (STAGE_ROUTING) | Must Produce |
 |-------|------------------------------|--------------|
-| evaluate | — | evaluation (+ `understanding` block — Understanding Gate, below) |
+| evaluate | — | evaluation (+ `understanding` block — Understanding Gate, below; + `cross_boundary` flag — evaluate.md § Cross-Boundary Classification) |
 | think | evaluation (`understanding` must be SUPPORTED) | research |
 | plan | evaluation, research | design_doc |
 | build | design_doc | changeset |
 | review | changeset | review |
-| test | changeset, review | test_report |
+| test | changeset, review | test_report (+ `cross_boundary_e2e` when EVALUATE set `cross_boundary=true` — test.md Layer 4) |
 | deliver | changeset, review, test_report | delivery |
 | reflect | test_report, delivery | — |
 
