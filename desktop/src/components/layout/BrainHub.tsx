@@ -23,7 +23,7 @@ import {
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
-  ReviewData, ReviewHunk, PendingProposal, DistributionState,
+  ReviewData, ReviewHunk, PendingProposal, DistributionState, DetailHealth,
 } from '../../services/ddd';
 import { agentsService } from '../../services/agents';
 import { FilePreviewModal } from '../workspace/FilePreviewModal';
@@ -234,6 +234,125 @@ function Health({ label, value, warn }: { label: string; value: string; warn?: b
   );
 }
 
+// ── Detail-view health metrics (design 2026-08-04, §6.3 render hierarchy) ─────
+//
+// Two visual tiers, deliberately distinct so a reader (and a copyist) can tell at
+// a glance "these I ACT on, these EXPLAIN them":
+//   • ACTION tiles (headline): each maps to an owner action (noise→reclaim,
+//     escalation→review, trust→attention). Larger, an action-hint line when live.
+//   • DIAGNOSTICS row (demoted): the 5-dim per-section scores — smaller, muted,
+//     NO action-hint, NO status color. Context, not a call-to-action.
+// recall is SHOWN-but-EXPERIMENTAL (design §4): a chip + NO action-hint (it has no
+// owner action yet). NEVER derives a project trust rollup (backend Gate-1 MAJOR
+// refused one) — the trust tile reports the section DISTRIBUTION, not a verdict.
+
+const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
+
+/** Count sections whose trust is BELOW `high` across the doc→section→level map.
+ *  A factual distribution count, NOT a collapsed rollup verdict (Gate-1). */
+function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: number } {
+  if (!trust) return { below: 0, total: 0 };
+  let below = 0;
+  let total = 0;
+  for (const sections of Object.values(trust)) {
+    for (const level of Object.values(sections)) {
+      total += 1;
+      const idx = level ? _TRUST_ORDER.indexOf(level as (typeof _TRUST_ORDER)[number]) : -1;
+      // below `high` = low/moderate (idx 0..1) OR an unknown/null level
+      if (idx < _TRUST_ORDER.indexOf('high')) below += 1;
+    }
+  }
+  return { below, total };
+}
+
+function ActionTile(
+  { label, value, hint, warn, experimental }:
+  { label: string; value: string; hint?: string; warn?: boolean; experimental?: boolean },
+) {
+  return (
+    <div
+      data-testid={`health-tile-${label.toLowerCase()}`}
+      className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-card)] border border-[var(--color-border)] min-w-[92px]"
+    >
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">{label}</span>
+        {experimental && (
+          <span
+            data-testid="recall-experimental-chip"
+            title="Benchmark口径 not yet validated against real usage — trend, not a grade"
+            className="text-[8px] px-1 rounded bg-[#3a2f12] text-[#e0b050] uppercase"
+          >
+            exp
+          </span>
+        )}
+      </div>
+      <span className={`text-[15px] font-semibold ${warn ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}`}>{value}</span>
+      {/* action-hint: present ONLY on action tiles with a live action; never on recall */}
+      {hint && <span className="text-[9px] text-[var(--color-text-muted)]">{hint}</span>}
+    </div>
+  );
+}
+
+/** HealthStrip — renders NOTHING when health is absent (daemon-skew guard). */
+function HealthStrip({ health }: { health?: DetailHealth }) {
+  if (!health) return null;
+
+  const { below, total } = _trustBelowHigh(health.trust);
+  const trustValue = total === 0 ? '—' : `${below}/${total}`;
+
+  // 5-dim diagnostics row (demoted): flatten doc→section → one muted line each.
+  const diagFlat: { key: string; composite?: number; trust?: string }[] = [];
+  if (health.diagnostics) {
+    for (const [doc, docData] of Object.entries(health.diagnostics)) {
+      const sections = docData?.sections ?? {};
+      for (const [sec, s] of Object.entries(sections)) {
+        diagFlat.push({ key: `${doc}·${sec}`, composite: s?.composite, trust: s?.trust });
+      }
+    }
+  }
+
+  return (
+    <div data-testid="brainhub-healthstrip" className="px-4 pb-3 flex-shrink-0 border-b border-[var(--color-border)]">
+      {/* ── ACTION tiles (headline) ── */}
+      <div className="flex flex-wrap gap-2">
+        <ActionTile
+          label="Noise"
+          value={String(health.noise.reclaimable)}
+          warn={health.noise.reclaimable > 0}
+          hint={health.noise.reclaimable > 0 ? 'reclaim can strip' : undefined}
+        />
+        <ActionTile
+          label="Trust"
+          value={trustValue}
+          warn={below > 0}
+          hint={total === 0 ? 'no scheduled score' : (below > 0 ? 'sections below high' : 'all ≥ high')}
+        />
+        <ActionTile
+          label="Escalation"
+          value={String(health.escalationPending)}
+          warn={health.escalationPending > 0}
+          hint={health.escalationPending > 0 ? 'awaiting review' : undefined}
+        />
+        <ActionTile
+          label="Recall"
+          value={health.recall.value === null ? '—' : String(health.recall.value)}
+          experimental={health.recall.experimental}
+        />
+      </div>
+      {/* ── DIAGNOSTICS row (demoted: smaller, muted, no action-hint, no status color) ── */}
+      {diagFlat.length > 0 && (
+        <div data-testid="health-diagnostics" className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+          {diagFlat.map((r) => (
+            <span key={r.key} className="text-[9px] text-[var(--color-text-faint)]">
+              {r.key}: {r.composite ?? '?'}{r.trust ? ` (${r.trust})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Brain view ─────────────────────────────────────────────────────────────────
 
 function BrainView({ name, agentId }: { name: string; agentId: string }) {
@@ -334,6 +453,10 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           </button>
         )}
       </div>
+
+      {/* Detail-view health metrics (design 2026-08-04) — renders nothing on an
+          old daemon that omits health (daemon-skew guard inside HealthStrip). */}
+      <HealthStrip health={detail.health} />
 
       {/* #8 — 2-pane: left section-nav + right content pane (one section at a time) */}
       <div className="flex-1 flex min-h-0">

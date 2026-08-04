@@ -26,6 +26,47 @@ export interface BrainHealth {
   lastChangeRelative: string;
 }
 
+/** Per-section 5-dimensional score (the stored section_health.json shape).
+ *  All scores are 0-100 ints; `trust` is a derived level string. */
+export interface SectionDiagnostic {
+  staleness?: number;
+  completeness?: number;
+  usage?: number;
+  decay?: number;
+  contradiction?: number;
+  composite?: number;
+  trust?: string;   // full | high | moderate | low
+}
+
+/** DETAIL-view health metrics (design 2026-08-04). Distinct from the gallery
+ *  BrainHealth above — this is the richer per-open block the run-1 backend added
+ *  to GET /ddd/brains/{name} (_brain_detail). Each field is an ADMISSION-passing
+ *  metric (owner action + live/read, never a frozen verdict). trust/diagnostics
+ *  are read from the scheduled section_health.json → null when not yet computed.
+ *  NOTE: there is deliberately NO project-level trust rollup (backend Gate-1 MAJOR
+ *  refused to invent one) — the UI reports the per-section DISTRIBUTION, never a
+ *  single collapsed verdict. */
+export interface DetailHealth {
+  /** reclaimable-noise: entries the decay engine would strip. reclaimable>0 → an
+   *  owner action (run reclaim). Computed live. */
+  noise: { reclaimable: number; rate: number };
+  /** doc → section → trust-level string, as stored (no rollup). null = no
+   *  scheduled score computed yet. */
+  trust: Record<string, Record<string, string | null>> | null;
+  /** count of proposals awaiting a human decision (approve/reject via the
+   *  existing cultivation endpoint). Always present. */
+  escalationPending: number;
+  /** recall benchmark — SHOWN BUT EXPERIMENTAL (no cheap per-DDD metric yet):
+   *  value is null today; typed number|null so a future score fits without a
+   *  breaking change. `experimental` gates the UI chip. */
+  recall: { value: number | null; experimental: boolean };
+  /** the 5-dim per-section scores verbatim (doc → {sections: {sec: SectionDiagnostic}}).
+   *  null when no scheduled score. Display-only diagnostic detail. */
+  diagnostics: Record<string, { sections?: Record<string, SectionDiagnostic> }> | null;
+  /** ISO timestamp of the scheduled score, or null if none. */
+  computedAt: string | null;
+}
+
 export interface BrainSummary {
   name: string;
   kind: string;
@@ -82,6 +123,10 @@ export interface BrainDetail {
    *  OPTIONAL by design (daemon skew): an old daemon omits it — consumers MUST
    *  treat `undefined` as false (`detail.hasCodeIntel === true` / `?? false`). */
   hasCodeIntel?: boolean;
+  /** DETAIL-view health metrics (design 2026-08-04, run-1 backend). OPTIONAL by
+   *  design (daemon skew): a pre-deploy daemon omits it — consumers MUST guard
+   *  (`detail.health` undefined → render nothing), same as specs/hasCodeIntel. */
+  health?: DetailHealth;
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────

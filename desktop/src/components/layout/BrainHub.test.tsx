@@ -112,6 +112,19 @@ const DETAIL: BrainDetail = {
   ],
   specs: ['channels.spec.md', 'pipeline.spec.md'],
   hasCodeIntel: true,
+  health: {
+    noise: { reclaimable: 3, rate: 0.12 },
+    trust: {
+      'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
+      'PRODUCT.md': { Vision: 'high', Risks: 'low' },
+    },
+    escalationPending: 2,
+    recall: { value: null, experimental: true },
+    diagnostics: {
+      'TECH.md': { sections: { Architecture: { composite: 88, trust: 'full' } } },
+    },
+    computedAt: '2026-08-01T18:27:57Z',
+  },
 };
 
 const REVIEW = {
@@ -633,5 +646,68 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     fireEvent.click(screen.getByTestId('distribute-button'));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('distribute this ddd: SwarmAI'));
     // No server-side distribute call exists — the button only surfaces the command.
+  });
+});
+
+describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
+  async function openBrain() {
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+  }
+
+  it('renders the 4 action tiles as the headline', async () => {
+    await openBrain();
+    await waitFor(() => expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy());
+    expect(screen.getByTestId('health-tile-noise')).toBeTruthy();
+    expect(screen.getByTestId('health-tile-trust')).toBeTruthy();
+    expect(screen.getByTestId('health-tile-escalation')).toBeTruthy();
+    expect(screen.getByTestId('health-tile-recall')).toBeTruthy();
+  });
+
+  it('noise tile shows the reclaimable count + a reclaim action-hint when > 0', async () => {
+    await openBrain();
+    const noise = await screen.findByTestId('health-tile-noise');
+    expect(noise.textContent).toContain('3');
+    expect(noise.textContent?.toLowerCase()).toContain('reclaim');
+  });
+
+  it('trust tile reports the DISTRIBUTION (sections below high), NOT an invented rollup verdict', async () => {
+    await openBrain();
+    const trust = await screen.findByTestId('health-tile-trust');
+    // fixture: 4 sections, moderate + low are below `high` → 2/4
+    expect(trust.textContent).toContain('2/4');
+    // must NOT collapse to a single verdict word like "moderate"/"low" (that = the
+    // vanity rollup backend Gate-1 refused)
+    expect(trust.textContent).not.toContain('moderate');
+  });
+
+  it('recall tile carries an experimental chip and NO action-hint (design §4)', async () => {
+    await openBrain();
+    expect(await screen.findByTestId('recall-experimental-chip')).toBeTruthy();
+    const recall = screen.getByTestId('health-tile-recall');
+    // null value renders as em-dash, never a fabricated number
+    expect(recall.textContent).toContain('—');
+    expect(recall.textContent?.toLowerCase()).not.toContain('reclaim');
+    expect(recall.textContent?.toLowerCase()).not.toContain('awaiting');
+  });
+
+  it('renders the DEMOTED 5-dim diagnostics row', async () => {
+    await openBrain();
+    const diag = await screen.findByTestId('health-diagnostics');
+    expect(diag.textContent).toContain('Architecture');
+    expect(diag.textContent).toContain('88');
+  });
+
+  it('renders NOTHING when health is undefined (daemon-skew guard)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { health: _omit, ...noHealth } = DETAIL;
+    mockGetBrainDetail.mockResolvedValueOnce(noHealth);
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brain-card-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brain-card-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });
 });
