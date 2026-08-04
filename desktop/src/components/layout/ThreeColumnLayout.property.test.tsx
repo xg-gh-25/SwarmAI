@@ -32,11 +32,13 @@ vi.stubGlobal('XMLHttpRequest', vi.fn().mockImplementation(() => ({
   responseText: '{}',
 })));
 
-// Mock modal components to prevent HTTP requests from their internal pages
-// Note: SkillsModal and MCPSettingsModal removed — now integrated into Settings tabs
-vi.mock('../modals/SettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
+// Settings + OS Eval migrated to the OverlayHost registry (M3-tail) — render via
+// overlaySurfaces (SettingsPage / EvalDashboard). Mock the heavy page content.
+vi.mock('../../pages/SettingsPage', () => ({
+  default: () => <div data-testid="settings-page" />,
+}));
+vi.mock('../../pages/EvalDashboard', () => ({
+  default: () => <div data-testid="eval-dashboard" />,
 }));
 
 // swarmWorkspacesService removed — singleton workspace model (task 12.9)

@@ -22,9 +22,7 @@ import { closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
-import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
-import EvalModal from '../modals/EvalModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
@@ -137,12 +135,12 @@ export function pickLatestDigest(children: Array<{ name?: string; path?: string 
 
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
-  const { activeModal, openModal, closeModal, settingsTab, setSettingsTab } = useLayout();
+  const { activeModal, closeModal, settingsTab, setSettingsTab } = useLayout();
   const { addToast } = useToast();
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
   // legacy + new mutually exclusive until M5 retires the legacy path.
-  const { activeOverlay: newActiveOverlay, openOverlay } = useOverlay();
+  const { activeOverlay: newActiveOverlay, openOverlay, closeOverlay } = useOverlay();
   // Terminal panel open-state + toggle — LeftSidebar is inside <TerminalProvider>
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
@@ -153,12 +151,11 @@ function LeftSidebar() {
   const handleNavClick = (target: 'skills' | 'mcp' | 'engine') => {
     const tabMap = { skills: 'skills', mcp: 'mcp-servers', engine: 'engine' };
     const targetTab = tabMap[target];
-    if (activeModal === 'settings' && settingsTab === targetTab) {
-      closeModal();
+    if (newActiveOverlay === 'settings' && settingsTab === targetTab) {
+      closeOverlay();
     } else {
-      closeOpenOverlays(); // a modal takes over — close any open overlay + clear its card highlight
       setSettingsTab(targetTab);
-      openModal('settings');
+      openOverlay('settings'); // host closes any other overlay; efferent BACK_TO_CHAT covers legacy
     }
   };
 
@@ -303,8 +300,8 @@ function LeftSidebar() {
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={newActiveOverlay === 'jobs'} onClick={() => { if (activeModal) closeModal(); openOverlay('jobs'); }} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
-          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); openModal('eval'); } }} data-testid="nav-eval" />
-          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />
+          <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={newActiveOverlay === 'eval'} onClick={() => { if (newActiveOverlay === 'eval') { closeOverlay(); } else { openOverlay('eval'); } }} data-testid="nav-eval" />
+          <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={newActiveOverlay === 'settings' && !settingsTab} onClick={() => { if (newActiveOverlay === 'settings') { closeOverlay(); } else { setSettingsTab(undefined); openOverlay('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />
         </A10Group>
       </nav>
@@ -707,22 +704,24 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 // hooks/__tests__/useCanvasHost.test.ts.)
 
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId, settingsTab, openModal, setSettingsTab } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId, setSettingsTab } = useLayout();
+  const { openOverlay } = useOverlay();
 
   // CredentialBanner is mounted at the app root (outside LayoutProvider), so its
   // "Open Settings" deep-link can't call setSettingsTab directly — it dispatches
-  // OPEN_SETTINGS_EVENT, which we handle here (inside the provider that owns the
-  // settings modal). Harmless no-op if this shell isn't mounted (onboarding).
+  // OPEN_SETTINGS_EVENT, which we handle here (inside the providers that own the
+  // settings surface). Harmless no-op if this shell isn't mounted (onboarding).
+  // Settings is now a host overlay (M3-tail): set the deep-link tab, then openOverlay
+  // (which fires the efferent BACK_TO_CHAT so any legacy overlay closes too).
   useEffect(() => {
     const onOpenSettings = (e: Event) => {
       const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
-      closeOpenOverlays(); // deep-link (CredentialBanner) — close any open overlay so Settings doesn't stack on it
       setSettingsTab(tab);
-      openModal('settings');
+      openOverlay('settings');
     };
     window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings);
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings);
-  }, [openModal, setSettingsTab]);
+  }, [openOverlay, setSettingsTab]);
 
   // Integrated terminal: global Ctrl/Cmd-` toggle (AC5). The panel is now always
   // mounted and self-hides on panelOpen, so this scope no longer needs the
@@ -858,14 +857,16 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       />
 
       {/* Management Page Modals */}
-      {/* Skills and MCP now integrated into Settings tabs — standalone modals removed */}
-      <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} initialTab={settingsTab} />
+      {/* Settings + OS Eval migrated to the OverlayHost registry (M3-tail,
+          overlaySurfaces.tsx) — they open via openOverlay('settings'|'eval') and
+          render through the single host (no more Modal-fullscreen / activeModal for
+          these two). WorkspaceSettings stays on activeModal (non-fullscreen, no
+          legacy geometry). Skills/MCP are Settings tabs (settingsTab deep-link). */}
       <WorkspaceSettingsModal
         isOpen={activeModal === 'workspace-settings'}
         onClose={closeModal}
         workspaceId={workspaceSettingsId}
       />
-      <EvalModal isOpen={activeModal === 'eval'} onClose={closeModal} />
       {/* Brain Hub migrated to the OverlayHost registry (M2 pilot, overlaySurfaces.tsx).
           The legacy BrainHubDemoOverlay + its useExclusiveOverlay wiring are retired;
           the nav-brain-hub card now calls openOverlay('brain-hub'). */}

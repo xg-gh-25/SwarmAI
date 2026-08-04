@@ -60,11 +60,14 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   writeTextFile: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Mock modal components to prevent HTTP requests from their internal pages
-// Note: SkillsModal and MCPSettingsModal removed — now integrated into Settings tabs
-vi.mock('../modals/SettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
+// Settings + OS Eval migrated to the OverlayHost registry (M3-tail) — they render
+// through overlaySurfaces (SettingsPage / EvalDashboard), not a Modal wrapper. Mock the
+// heavy page content so the layout tests don't fire the pages' internal HTTP.
+vi.mock('../../pages/SettingsPage', () => ({
+  default: () => <div data-testid="settings-page" />,
+}));
+vi.mock('../../pages/EvalDashboard', () => ({
+  default: () => <div data-testid="eval-dashboard" />,
 }));
 
 // swarmWorkspacesService removed — singleton workspace model (task 12.9)

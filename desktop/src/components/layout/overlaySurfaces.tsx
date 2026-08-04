@@ -21,12 +21,24 @@ import { ToDoContent } from './ToDoOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { PipelineContent } from './PipelineOverlay';
 import { PollinateContent } from './PollinateOverlay';
+import SettingsPage from '../../pages/SettingsPage';
+import EvalDashboard from '../../pages/EvalDashboard';
+import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
 
 // Region tints (mirror ThreeColumnLayout A10_GROUP) — the workbench surfaces spout
 // with their card's zone accent (work = 青蓝, system = slate).
 const TINT_WORK = '#4a8fb0';
 const TINT_SYSTEM = '#7c8194';
+
+/** Settings surface content — reads the deep-link tab from LayoutContext (settingsTab
+ *  is still LayoutContext state: it's set by nav sub-cards / Capabilities / the
+ *  swarm:open-settings deep-link before openOverlay('settings')). OverlayHost renders
+ *  inside LayoutProvider, so this hook is valid. */
+function SettingsSurface() {
+  const { settingsTab } = useLayout();
+  return <SettingsPage initialTab={settingsTab} />;
+}
 
 // ── brain-hub (M2 pilot) ────────────────────────────────────────────────────────────
 // Was: BrainHubDemoOverlay + useExclusiveOverlay('swarm:show-brain-hub') + a bespoke
@@ -183,4 +195,33 @@ registerOverlay({
   render: ({ close, dispatchPrompt }) => (
     <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
+});
+
+// ── SYSTEM MODALS folded into the host (M3-tail) ──────────────────────────────────────
+// Settings + OS Eval were the LAST fullscreen surfaces on the legacy useLayout.activeModal
+// + Modal-fullscreen path (chatAreaBounds/navSource geometry — the D5 disease). Folding
+// them here makes activeOverlay the SOLE fullscreen authority, unblocking M5's deletion of
+// the legacy trio. settingsTab stays LayoutContext state (the deep-link contract);
+// EvalDashboard shows its own score header, so no dynamic title needed here.
+// (WorkspaceSettings + file-editor stay on activeModal — they are NOT fullscreen and carry
+// no legacy geometry.)
+
+registerOverlay({
+  id: 'settings',
+  title: 'Settings',
+  mode: 'SETTINGS',
+  width: 'xl',
+  sourceCardTestId: 'nav-settings',
+  tint: TINT_SYSTEM,
+  render: () => <SettingsSurface />,
+});
+
+registerOverlay({
+  id: 'eval',
+  title: 'OS Eval',
+  mode: 'EVAL',
+  width: 'xl',
+  sourceCardTestId: 'nav-eval',
+  tint: TINT_SYSTEM,
+  render: () => <EvalDashboard />,
 });
