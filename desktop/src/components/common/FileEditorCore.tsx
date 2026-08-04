@@ -553,6 +553,18 @@ export default function FileEditorCore({
   onSaveWithDiff,
   onContentChange,
 }: FileEditorCoreProps) {
+  // File-type flags — computed from fileName (a prop) ONLY, so they're stable
+  // across renders and safe to read at useState-init time. Hoisted above the
+  // useState block so BOTH the preview-default initializers (below) and the
+  // header toggles (further down) share ONE definition (Gate-1 Risk 2: avoid a
+  // duplicate `isMarkdown` binding).
+  const isMarkdown = /\.md$/i.test(fileName);
+  const isSvg = /\.svg$/i.test(fileName);
+  // Whether the initial content is small enough for the synchronous preview
+  // render (MarkdownRenderer full-parses via ReactMarkdown with no internal cap).
+  // A huge .md must NOT default to preview — it defaults to edit (Gate perf).
+  const canPreviewInitial = shouldProcessSync(initialContent.length);
+
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(committedContent ?? initialContent);
   // Tracks the last content successfully saved to disk, so hasUnsavedEdits
@@ -565,8 +577,15 @@ export default function FileEditorCore({
   // Distinguishes the modal's forward action: reload-from-disk vs revert-and-close.
   const [reloadPending, setReloadPending] = useState(false);
   const [showDiff, setShowDiff] = useState(initialShowDiff ?? false);
-  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
-  const [showSvgPreview, setShowSvgPreview] = useState(false);
+  // md/svg default to PREVIEW (view), not the raw edit textarea — a user opening
+  // a doc in Canvas sees rendered content first. Guards: (1) a file opened with
+  // autoDiff shows the diff, so preview must NOT also be on (Gate-1 Risk 4: else
+  // "Back to Edit" would land on preview, not edit) — hence `!(initialShowDiff)`;
+  // (2) a huge .md defaults to edit, never preview (perf — canPreviewInitial).
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState(
+    isMarkdown && canPreviewInitial && !initialShowDiff,
+  );
+  const [showSvgPreview, setShowSvgPreview] = useState(isSvg && canPreviewInitial && !initialShowDiff);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -627,8 +646,9 @@ export default function FileEditorCore({
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
-  const isMarkdown = /\.md$/i.test(fileName);
-  const isSvg = /\.svg$/i.test(fileName);
+  // isMarkdown / isSvg are declared once at the top of the component (above the
+  // useState block) so the preview-default initializers and these header toggles
+  // share a single definition.
 
   // ── AC2: Auto-refresh — poll file content every 3s when editor is open ──
   // Uses refs to avoid stale closures without re-creating the interval on every render.
@@ -908,8 +928,12 @@ export default function FileEditorCore({
     // (this effect's deps include filePath/committedContent). Switching to a
     // file opened WITHOUT autoDiff still resets to edit view (prop is false).
     setShowDiff(initialShowDiff ?? false);
-    setShowMarkdownPreview(false);
-    setShowSvgPreview(false);
+    // Re-apply the md/svg preview default on file-switch (same formula as the
+    // initializers). `!initialShowDiff` keeps preview OFF when the file opened on
+    // the diff, so toggling the diff off lands on EDIT, not a sticky preview
+    // (Gate-1 Risk 4). A huge .md re-defaults to edit via canPreviewInitial.
+    setShowMarkdownPreview(isMarkdown && canPreviewInitial && !initialShowDiff);
+    setShowSvgPreview(isSvg && canPreviewInitial && !initialShowDiff);
     setShowSearch(false);
     setSearchQuery('');
     setCurrentMatchIndex(0);
@@ -920,7 +944,10 @@ export default function FileEditorCore({
     // Clear diff comment state
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
-  }, [initialContent, committedContent, filePath, initialShowDiff, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
+    // fileName is a dep because the reset formula reads isMarkdown/isSvg (both
+    // derived from fileName); filePath already changes in lockstep with it, so
+    // this adds no extra fires but removes a latent stale-closure (Gate-2 MED).
+  }, [initialContent, committedContent, filePath, fileName, initialShowDiff, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
 
   // Syntax highlighting
   useEffect(() => {
@@ -1461,22 +1488,62 @@ export default function FileEditorCore({
               />
             </div>
           ) : showMarkdownPreview ? (
-            <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
-              <MarkdownRenderer
-                content={content}
-                className="max-w-4xl mx-auto"
-                basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
-              />
-            </div>
+            shouldProcessSync(content.length) ? (
+              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
+                <MarkdownRenderer
+                  content={content}
+                  className="max-w-4xl mx-auto"
+                  basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
+                />
+              </div>
+            ) : (
+              // Large-file guard: MarkdownRenderer full-parses via ReactMarkdown
+              // with no internal cap, so a >HIGHLIGHT_MAX_CHARS doc would jank the
+              // panel. Render the raw source in a plain <pre> + a notice instead
+              // (covers the MANUAL preview-click on a huge file; the default path
+              // never lands here because canPreviewInitial already routes big md
+              // to edit). Mirrors the edit path's syncDisabled degradation.
+              <div
+                className="flex-1 relative overflow-auto bg-[var(--color-background)]"
+                data-testid="large-md-preview-fallback"
+              >
+                <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
+                  <span className="material-symbols-outlined text-sm">info</span>
+                  <span>Large file — markdown preview disabled to keep the panel responsive. Showing raw source.</span>
+                </div>
+                <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
+                  {content}
+                </pre>
+              </div>
+            )
           ) : showSvgPreview ? (
-            <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center">
-              <img
-                className="max-w-full max-h-full w-auto h-auto"
-                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
-                alt="SVG preview"
-                data-testid="svg-preview"
-              />
-            </div>
+            shouldProcessSync(content.length) ? (
+              <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center">
+                <img
+                  className="max-w-full max-h-full w-auto h-auto"
+                  src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
+                  alt="SVG preview"
+                  data-testid="svg-preview"
+                />
+              </div>
+            ) : (
+              // Large-file guard (symmetric with markdown): a huge SVG source
+              // would pay encodeURIComponent over the whole string + risk the
+              // data-URI size ceiling. Show raw source instead (the default path
+              // never lands here — canPreviewInitial routes big svg to edit).
+              <div
+                className="flex-1 relative overflow-auto bg-[var(--color-background)]"
+                data-testid="large-svg-preview-fallback"
+              >
+                <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
+                  <span className="material-symbols-outlined text-sm">info</span>
+                  <span>Large file — SVG preview disabled to keep the panel responsive. Showing raw source.</span>
+                </div>
+                <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
+                  {content}
+                </pre>
+              </div>
+            )
           ) : (
             <>
               {review.isReviewMode ? (
