@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { JobsRunsOverlay } from '../JobsRunsOverlay';
+import { JobsRunsContent } from '../JobsRunsOverlay';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../../services/jobs';
 
 vi.mock('../../../services/jobs', () => ({
@@ -48,7 +48,7 @@ const RUNS: JobRunsResult = {
 };
 
 function openOverlay() {
-  window.dispatchEvent(new CustomEvent('swarm:show-jobs'));
+  /* no-op: host-owned open */
 }
 
 describe('JobsRunsOverlay interactions', () => {
@@ -61,7 +61,7 @@ describe('JobsRunsOverlay interactions', () => {
   });
 
   it('AC2: renders roster cards with health dots + real overview stats', async () => {
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -77,7 +77,7 @@ describe('JobsRunsOverlay interactions', () => {
   });
 
   it('AC3: clicking a job card opens the drawer with real last-output + recent runs', async () => {
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -93,7 +93,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('AC6: Run now calls runJob; Edit routes through chat dispatch', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    render(<JobsRunsContent onDispatch={onDispatch} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -111,7 +111,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('AC6: New Job form routes creation through chat dispatch (never writes yaml)', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    render(<JobsRunsContent onDispatch={onDispatch} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -136,7 +136,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('New Job form: script type surfaces the command as the command body + names the skill', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    render(<JobsRunsContent onDispatch={onDispatch} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -160,7 +160,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('New Job form: agent_task type does NOT mention config.command (only script needs it)', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<JobsRunsOverlay onDispatch={onDispatch} />);
+    render(<JobsRunsContent onDispatch={onDispatch} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -179,7 +179,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('AC6: system jobs hide pause/edit/delete (yaml-read-only)', async () => {
     fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'signal-fetch', name: 'Signal Fetch', source: 'system', category: 'system' })]);
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
 
@@ -199,7 +199,7 @@ describe('JobsRunsOverlay interactions', () => {
       mkRoster({ id: 'older', name: 'Older Job', lastRun: '2026-07-30T06:00:00Z', lastStatus: 'success' }),
       mkRoster({ id: 'newer', name: 'Newer Job', lastRun: '2026-07-31T06:00:00Z', lastStatus: 'failed' }),
     ]);
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click(screen.getByTestId('jobs-view-runs'));
@@ -219,7 +219,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('AC6: pause/resume label reflects enabled state; run-now disabled for a paused job', async () => {
     fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'brain-push', name: 'Brain Push', enabled: false, lastStatus: 'never', source: 'user' })]);
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
@@ -234,7 +234,7 @@ describe('JobsRunsOverlay interactions', () => {
   it('empty roster shows the guide empty-state, not a blank column', async () => {
     fn(jobsService.fetchRoster).mockResolvedValue([]);
     fn(jobsService.fetchOverview).mockResolvedValue({ total: 0, enabled: 0, healthy: 0, failing: 0, neverRun: 0, monthlySpendUsd: 0 });
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     expect(await screen.findByTestId('jobs-empty')).toBeTruthy();
@@ -243,7 +243,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('never-run drawer shows "No output captured", never crashes on empty runs', async () => {
     fn(jobsService.fetchJobRuns).mockResolvedValue({ jobId: 'stock-analysis', lastOutput: null, lastOutputDate: null, recent: [] });
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
@@ -256,7 +256,7 @@ describe('JobsRunsOverlay interactions', () => {
     // /jobs/status blips but /jobs/ succeeds — the roster must still render, not
     // fall to the false "no jobs" empty state.
     fn(jobsService.fetchOverview).mockRejectedValue(new Error('status 503'));
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     // Roster cards render despite the overview failure; no false empty-state.
@@ -272,7 +272,7 @@ describe('JobsRunsOverlay interactions', () => {
     const before = mkRoster({ id: 'stock-analysis', name: 'Stock Analysis', lastStatus: 'success', totalRuns: 42 });
     const after = mkRoster({ id: 'stock-analysis', name: 'Stock Analysis', lastStatus: 'running', totalRuns: 43 });
     fn(jobsService.fetchRoster).mockResolvedValueOnce([before]).mockResolvedValue([after]);
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click((await screen.findAllByTestId('job-card'))[0]);
@@ -286,7 +286,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('F3: run-now failure surfaces an error line (not silent)', async () => {
     fn(jobsService.runJob).mockRejectedValue(new Error('boom'));
-    render(<JobsRunsOverlay onDispatch={() => true} />);
+    render(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');
     fireEvent.click((await screen.findAllByTestId('job-card'))[0]);

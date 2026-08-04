@@ -9,22 +9,29 @@
  * state + the hybrid bridge with no behavior change (the old paths still drive
  * every existing overlay).
  *
- * ── The two-way hybrid bridge (Gate-1 WARN5, run_fdeaead8) ───────────────────────
- * During M2–M4 the app runs a HYBRID: some surfaces already migrated to this context,
- * the rest still on the legacy `useExclusiveOverlay` bus. Without a bridge BOTH could
- * be open at once (new `activeOverlay` non-null AND a legacy overlay open) → double
- * backdrop / double-Esc / the single-overlay invariant broken mid-migration. The
- * bridge enforces mutual exclusion ACROSS the two systems:
- *   • opening a NEW-host overlay → dispatch BACK_TO_CHAT_EVENT (closes ALL legacy
- *     overlays; every legacy overlay already listens for it — useExclusiveOverlay.ts).
- *   • any LEGACY show-event (ALL_SHOW_EVENTS) OR a BACK_TO_CHAT broadcast → null this
- *     context (closes the new-host overlay).
- * Net: at most one fullscreen surface — legacy OR new — is ever open, at every step
- * of the migration. When M5 deletes the legacy trio, the bridge listeners become
- * inert no-ops (no ALL_SHOW_EVENTS ever fire) and are removed with the same commit.
+ * ── The show-event bridge (afferent OPEN) + back-to-chat (close) ─────────────────
+ * The legacy `swarm:show-<id>` window events are NOT just a migration artifact — they
+ * are the agent's ACT vocabulary: `ui_action` (backend UI_COMMAND_ALLOWLIST, derived
+ * from ALL_SHOW_EVENTS) dispatches `swarm:show-<id>` to open a surface (SELF.md
+ * proprioception contract). Now that EVERY ALL_SHOW_EVENTS surface is registered in
+ * the OverlayHost, this context is the sole opener: a `swarm:show-<id>` event maps to
+ * `openOverlay(<id>)` (strip the `swarm:show-` prefix → registry id). This keeps the
+ * agent ACT contract intact through M5 (when the legacy `useExclusiveOverlay` HOOK +
+ * module singleton are deleted, the event NAMES survive as the command vocabulary and
+ * this bridge remains their only consumer).
+ *   • agent/card dispatch `swarm:show-<id>` → openOverlay(<id>)  [afferent OPEN]
+ *   • openOverlay itself dispatches BACK_TO_CHAT_EVENT           [efferent close-legacy]
+ *   • BACK_TO_CHAT_EVENT (not our own) → null activeOverlay      [close]
+ * Net: exactly one fullscreen surface open at any time; the agent can open every
+ * non-Library surface by its show-event (Library is deliberately absent from
+ * ALL_SHOW_EVENTS — nav-card-only, banned from the agent allowlist).
  */
 import { createContext, useContext, useState, useCallback, useMemo, useEffect, useRef, ReactNode } from 'react';
 import { BACK_TO_CHAT_EVENT, ALL_SHOW_EVENTS } from '../components/layout/useExclusiveOverlay';
+
+/** `swarm:show-brain-hub` → `brain-hub`. The registry id is the event suffix (verified
+ *  1:1 for every ALL_SHOW_EVENTS entry against overlaySurfaces registrations). */
+const SHOW_EVENT_PREFIX = 'swarm:show-';
 
 /**
  * The id of a registered fullscreen surface. Open-ended `string` in M1 (the registry
@@ -57,8 +64,9 @@ export function OverlayProvider({ children }: OverlayProviderProps) {
   const openingSelf = useRef(false);
 
   const openOverlay = useCallback((id: OverlayId) => {
-    // Hybrid bridge (efferent): close every legacy overlay before we open. Our own
-    // BACK_TO_CHAT listener below would otherwise null us — guard it for this tick.
+    // Close any still-mounted legacy overlay (SwarmWSOverlay/BrainHubDemoOverlay etc.,
+    // pending M5 deletion) before we open. Our OWN show-event/back-to-chat listeners
+    // below would otherwise re-enter — guard them for this synchronous tick.
     // No try/finally needed: per the DOM spec, dispatchEvent does NOT rethrow a
     // listener's exception to the caller (it reports to window.onerror and continues),
     // so `= false` always runs. Verified by mutation test (run_fdeaead8): behavior is
@@ -74,22 +82,28 @@ export function OverlayProvider({ children }: OverlayProviderProps) {
     setActiveOverlay(null);
   }, []);
 
-  // Hybrid bridge (afferent): a legacy overlay opening (any ALL_SHOW_EVENTS) OR a
-  // back-to-chat broadcast NOT originating from our own open() must close us.
+  // Show-event bridge: a `swarm:show-<id>` window event (from a nav card OR the agent's
+  // ui_action) OPENS the mapped surface — this context is the sole opener now that every
+  // ALL_SHOW_EVENTS surface is registered. BACK_TO_CHAT closes. `openingSelf` filters
+  // the BACK_TO_CHAT that openOverlay itself fires (targets legacy overlays only).
   useEffect(() => {
-    const closeFromLegacy = () => setActiveOverlay(null);
+    const openFromShow = (e: Event) => {
+      const id = e.type.slice(SHOW_EVENT_PREFIX.length); // 'swarm:show-todo' → 'todo'
+      // Reuse openOverlay so the efferent close-legacy broadcast + guard run uniformly.
+      openOverlay(id);
+    };
     const closeFromBackToChat = () => {
       // Ignore the broadcast our OWN openOverlay just fired (it targets legacy only).
       if (openingSelf.current) return;
       setActiveOverlay(null);
     };
-    ALL_SHOW_EVENTS.forEach((e) => window.addEventListener(e, closeFromLegacy));
+    ALL_SHOW_EVENTS.forEach((ev) => window.addEventListener(ev, openFromShow));
     window.addEventListener(BACK_TO_CHAT_EVENT, closeFromBackToChat);
     return () => {
-      ALL_SHOW_EVENTS.forEach((e) => window.removeEventListener(e, closeFromLegacy));
+      ALL_SHOW_EVENTS.forEach((ev) => window.removeEventListener(ev, openFromShow));
       window.removeEventListener(BACK_TO_CHAT_EVENT, closeFromBackToChat);
     };
-  }, []);
+  }, [openOverlay]);
 
   const value = useMemo<OverlayContextValue>(
     () => ({ activeOverlay, openOverlay, closeOverlay }),

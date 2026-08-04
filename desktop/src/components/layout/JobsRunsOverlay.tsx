@@ -33,28 +33,20 @@
  * @exports JobsRunsOverlay
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { jobsService, type JobRosterRow, type JobsOverview, type JobRunsResult } from '../../services/jobs';
+import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
-export interface JobsRunsOverlayProps {
+export interface JobsRunsContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
-   *  if it landed (→ overlay auto-closes) or false on needs-close (stays open).
+   *  if it landed (→ host closes the overlay) or false on needs-close (stays open).
    *  MUST mirror ChatPage.handleDispatchTodo's tab-landing — a bare inject no-ops
    *  with no active chat tab (Gate-1 #7). */
   onDispatch: (prompt: string) => boolean;
+  /** Host-owned close (called after a successful dispatch). */
+  close: () => void;
 }
 
 type ViewMode = 'jobs' | 'runs';
-
-/** Absolute timestamp (XG rule: no "1 hour ago"). Tolerates null/invalid → —. */
-function fmtTs(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '—';
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 
 /** Health dot color from a roster row: red = failing, grey = disabled, green = ok. */
 function healthColor(j: JobRosterRow): string {
@@ -64,8 +56,7 @@ function healthColor(j: JobRosterRow): string {
   return '#10b981';
 }
 
-export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-jobs');
+export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
   const [view, setView] = useState<ViewMode>('jobs');
   const [roster, setRoster] = useState<JobRosterRow[]>([]);
   const [overview, setOverview] = useState<JobsOverview | null>(null);
@@ -117,15 +108,13 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
     }
   }, []);
 
+  // Load on mount (host mounts fresh per open) + on view switch. The former
+  // reset-on-close effect is gone — the host unmounts/remounts, so view/selectedId/
+  // creating start fresh each open by construction.
   useEffect(() => {
-    if (!open) return;
     if (view === 'jobs') void refreshJobs();
     else void refreshRuns();
-  }, [open, view, refreshJobs, refreshRuns]);
-
-  useEffect(() => {
-    if (!open) { setView('jobs'); setSelectedId(null); setCreating(false); }
-  }, [open]);
+  }, [view, refreshJobs, refreshRuns]);
 
   // Route a chat prompt through the tab-landing dispatcher, then close on success.
   const dispatchToChat = useCallback((prompt: string) => {
@@ -148,11 +137,12 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
   const handleCreated = useCallback(() => { setCreating(false); }, []);
 
   return (
-    <Modal isOpen={open} onClose={close} title="Jobs & Runs" size="fullscreen" mode="JOBS" fullscreenWidth="xl">
-      <div className="flex-1 min-h-0 flex flex-col relative" data-testid="jobs-overlay">
-        {/* Header: Jobs | Runs toggle + New Job */}
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-[var(--color-border)]">
-          {(['jobs', 'runs'] as ViewMode[]).map((v) => (
+    <div className="flex-1 min-h-0 flex flex-col relative" data-testid="jobs-overlay">
+        {/* Sub-header: Jobs | Runs toggle + New Job (shared WorkbenchToolbar). */}
+        <WorkbenchToolbar
+          gap={1}
+          loading={loading}
+          left={(['jobs', 'runs'] as ViewMode[]).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -164,16 +154,16 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
               {v === 'jobs' ? 'Jobs' : 'Runs'}
             </button>
           ))}
-          {loading && <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
-          <div className="flex-1" />
-          <button
-            onClick={() => { setSelectedId(null); setCreating(true); }}
-            data-testid="jobs-new-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-          >
-            <span className="material-symbols-outlined text-[15px]">add</span>New Job
-          </button>
-        </div>
+          right={(
+            <button
+              onClick={() => { setSelectedId(null); setCreating(true); }}
+              data-testid="jobs-new-btn"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[15px]">add</span>New Job
+            </button>
+          )}
+        />
 
         <GuideBanner />
 
@@ -196,8 +186,7 @@ export function JobsRunsOverlay({ onDispatch }: JobsRunsOverlayProps) {
 
         {/* New Job inline form — absolute overlay */}
         {creating && <NewJobForm onDispatch={dispatchToChat} onCreated={handleCreated} onCancel={() => setCreating(false)} />}
-      </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -348,11 +337,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
   const isSystem = job.source === 'system';
 
   return (
-    <div
-      className="absolute inset-y-0 right-0 w-[420px] max-w-[75%] bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-2xl flex flex-col z-10"
-      data-testid="job-detail-drawer"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <OverlayDrawer widthPx={420} maxWidthPct={75} z={10} testid="job-detail-drawer">
       <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="mt-1 w-2 h-2 rounded-full shrink-0" style={{ background: healthColor(job) }} />
         <div className="flex-1 min-w-0">
@@ -428,7 +413,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
           </>
         )}
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }
 
@@ -507,11 +492,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
   }, [name, schedule, type, prompt, onDispatch, onCreated]);
 
   return (
-    <div
-      className="absolute inset-y-0 right-0 w-[420px] max-w-[75%] bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-2xl flex flex-col z-20"
-      data-testid="jobs-new-form"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <OverlayDrawer widthPx={420} maxWidthPct={75} z={20} testid="jobs-new-form">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">New Job</span>
         <button onClick={onCancel} data-testid="jobs-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
@@ -557,7 +538,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
         </button>
         <button onClick={onCancel} className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors">Cancel</button>
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }
 

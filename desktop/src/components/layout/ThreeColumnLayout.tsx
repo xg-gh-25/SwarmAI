@@ -18,7 +18,7 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // CMBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // LibraryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 import { setNavSource, clearNavSource } from './navSource';
-import { useActiveOverlayEvent, closeOpenOverlays } from './useExclusiveOverlay';
+import { closeOpenOverlays } from './useExclusiveOverlay';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { openExternal } from '../../utils/openExternal';
@@ -139,9 +139,6 @@ export function pickLatestDigest(children: Array<{ name?: string; path?: string 
 function LeftSidebar() {
   const { activeModal, openModal, closeModal, settingsTab, setSettingsTab } = useLayout();
   const { addToast } = useToast();
-  // Which window-event overlay is currently open (or null) — drives the
-  // active/selected highlight on the LEGACY window-event cards (run_ad7b32f6).
-  const activeOverlay = useActiveOverlayEvent();
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
   // legacy + new mutually exclusive until M5 retires the legacy path.
@@ -196,18 +193,6 @@ function LeftSidebar() {
   // clickable while a modal is open, so without this a window overlay would stack
   // on top of a still-open Settings/Eval modal (mirror of the Settings-clears-
   // window-highlight fix; run_ad7b32f6 Gate-1 Finding 2).
-  const showOverlay = (event: string) => {
-    if (activeModal) closeModal();
-    // Single mutual-exclusion chokepoint: close any OTHER open overlay before opening
-    // this one. Handles the overlay→overlay case uniformly INCLUDING Library
-    // (swarm:show-library isn't in ALL_SHOW_EVENTS, so peers' `others` sets can't
-    // close it — the back-to-chat broadcast can). dispatchEvent is synchronous, so
-    // all overlays close here before this event's own `show` handler re-opens the
-    // target and re-points the active highlight to it.
-    closeOpenOverlays();
-    window.dispatchEvent(new CustomEvent(event));
-  };
-
   // Capabilities overlay folds Skills + MCP + jobs (A10). Opening it lands on the
   // Settings modal's skills tab as the concrete surface (Run-2 wiring; a dedicated
   // Capabilities overlay is a later cycle). Engine Metrics → Settings tab (choice A).
@@ -303,7 +288,7 @@ function LeftSidebar() {
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label="Work" tint={A10_GROUP.work}>
-          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={activeOverlay === 'swarm:show-todo'} onClick={() => showOverlay('swarm:show-todo')} data-testid="nav-todo" />
+          <A10Card icon="todo" label="ToDo" tint={A10_GROUP.work} highlight isActive={newActiveOverlay === 'todo'} onClick={() => { if (activeModal) closeModal(); openOverlay('todo'); }} data-testid="nav-todo" />
           <A10Card icon="folder" label="Workspace" tint={A10_GROUP.work} highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => { if (activeModal) closeModal(); openOverlay('swarmws'); }} data-testid="nav-swarmws" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
@@ -311,12 +296,12 @@ function LeftSidebar() {
               manual nav entry that opened an often-empty Outputs panel contradicted
               that "products fly out to you" model. Mute-recovery lives in the Canvas
               header unmute toggle (FileViewerPanel), not a global nav button. */}
-          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pipeline'} onClick={() => showOverlay('swarm:show-pipeline')} data-testid="nav-pipeline" />
-          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={activeOverlay === 'swarm:show-pollinate'} onClick={() => showOverlay('swarm:show-pollinate')} data-testid="nav-pollinate" />
+          <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pipeline'} onClick={() => { if (activeModal) closeModal(); openOverlay('pipeline'); }} data-testid="nav-pipeline" />
+          <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pollinate'} onClick={() => { if (activeModal) closeModal(); openOverlay('pollinate'); }} data-testid="nav-pollinate" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
-          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={activeOverlay === 'swarm:show-jobs'} onClick={() => showOverlay('swarm:show-jobs')} data-testid="nav-jobs" />
+          <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={newActiveOverlay === 'jobs'} onClick={() => { if (activeModal) closeModal(); openOverlay('jobs'); }} data-testid="nav-jobs" />
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={activeModal === 'eval'} onClick={() => { if (activeModal === 'eval') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); openModal('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={activeModal === 'settings' && !settingsTab} onClick={() => { if (activeModal === 'settings') { clearNavSource(); closeModal(); } else { closeOpenOverlays(); setSettingsTab(undefined); openModal('settings'); } }} data-testid="nav-settings" />

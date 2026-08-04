@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { PipelineOverlay } from '../PipelineOverlay';
+import { PipelineContent } from '../PipelineOverlay';
 import { pipelinesService } from '../../../services/pipelines';
 import { ApiError } from '../../../services/api';
 
@@ -15,7 +15,7 @@ vi.mock('../../../services/pipelines', () => ({
 }));
 
 function openOverlay() {
-  window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
+  /* no-op: host-owned open */
 }
 
 describe('PipelineOverlay load-error classification', () => {
@@ -26,7 +26,7 @@ describe('PipelineOverlay load-error classification', () => {
     (pipelinesService.fetchAnalytics as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'VALIDATION_FAILED', message: 'bad window' }, 400),
     );
-    render(<PipelineOverlay onDispatch={() => true} />);
+    render(<PipelineContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('pipeline-load-error');
     expect(err.textContent).toContain('HTTP 400');
@@ -38,7 +38,7 @@ describe('PipelineOverlay load-error classification', () => {
     (pipelinesService.fetchAnalytics as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 503),
     );
-    render(<PipelineOverlay onDispatch={() => true} />);
+    render(<PipelineContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('pipeline-load-error');
     expect(err.textContent).toContain('backend may be unavailable');

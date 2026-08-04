@@ -23,8 +23,6 @@
  * @exports PollinateOverlay
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { classifyLoadError } from '../../services/api';
 import {
   pollinateService,
@@ -33,11 +31,14 @@ import {
   type PollinateContentCard,
   type PollinateAsset,
 } from '../../services/pollinate';
+import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
-export interface PollinateOverlayProps {
+export interface PollinateContentProps {
   /** Hand a prompt to a chat tab (land+activate, THEN inject). Mirrors ChatPage's
    *  dispatch — a bare inject no-ops with no active chat tab (Gate-1 #7). */
   onDispatch: (prompt: string) => boolean;
+  /** Host-owned close (called after a successful dispatch). */
+  close: () => void;
 }
 
 type View = 'gallery' | 'insights';
@@ -104,8 +105,7 @@ function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: stri
   );
 }
 
-export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-pollinate');
+export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
   const [data, setData] = useState<PollinateAssetsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadErr, setLoadErr] = useState<unknown>(null); // B3: fetch failed (was permanent Loading/blank). Stores the error so classifyLoadError can distinguish 4xx contract vs outage.
@@ -123,8 +123,10 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   // it survives open/close while the overlay is open → re-opening an asset is instant.
   const captionCache = useRef<Map<string, string | null>>(new Map());
 
+  // Fetch-once-on-mount (host mounts fresh per open) + on retry. The former
+  // reset-on-close effect is gone: the host unmounts/remounts, so view/filters/
+  // selection start fresh each open by construction.
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
     setLoading(true);
     setLoadErr(null);
@@ -134,14 +136,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
       .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [open, reloadTick]);
-
-  useEffect(() => {
-    if (!open) {
-      setView('gallery'); setQuery(''); setPlatform(''); setFormat('');
-      setDomain(''); setToPublishOnly(false); setSort('newest'); setSelected(null);
-    }
-  }, [open]);
+  }, [reloadTick]);
 
   const dispatchToChat = useCallback((prompt: string) => {
     const landed = onDispatch(prompt);
@@ -194,14 +189,12 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
   const o = data?.overall;
 
   return (
-    <Modal isOpen={open} onClose={close} title="Pollinate" size="fullscreen" mode="POLLINATE" fullscreenWidth="xl">
-      <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pollinate-overlay">
-        {/* Header: Gallery|Insights toggle */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)]">
-          <span className="text-xs font-medium text-[var(--color-text-muted)]">Content Assets</span>
-          {loading && <span className="text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
-          <div className="flex-1" />
-          {(['gallery', 'insights'] as View[]).map((v) => (
+    <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pollinate-overlay">
+        {/* Sub-header: label + Gallery|Insights toggle (shared WorkbenchToolbar). */}
+        <WorkbenchToolbar
+          loading={loading}
+          left={<span className="text-xs font-medium text-[var(--color-text-muted)]">Content Assets</span>}
+          right={(['gallery', 'insights'] as View[]).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -213,7 +206,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
               {v === 'gallery' ? 'Gallery' : 'Insights'}
             </button>
           ))}
-        </div>
+        />
 
         {/* Overall strip (both views) */}
         {o && (
@@ -336,8 +329,7 @@ export function PollinateOverlay({ onDispatch }: PollinateOverlayProps) {
               dispatchToChat(`Resume pollinate for "${selected.card.topic}" and produce the ${platform} asset (run dir ${selected.card.run}).`)}
           />
         )}
-      </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -524,10 +516,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   const missingPlatforms = knownChannels.filter((p) => !card.platforms.includes(p));
 
   return (
-    <div
-      className="absolute top-0 right-0 bottom-0 w-[460px] max-w-[92%] z-10 bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-xl flex flex-col"
-      data-testid="pollinate-asset-drawer"
-    >
+    <OverlayDrawer widthPx={460} maxWidthPct={92} z={10} testid="pollinate-asset-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="text-xs font-medium text-[var(--color-text)] truncate flex-1">{asset.platform || asset.format} · {asset.fileName}</span>
         <button onClick={onClose} className="material-symbols-outlined text-[18px] text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
@@ -621,7 +610,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
           </div>
         )}
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }
 

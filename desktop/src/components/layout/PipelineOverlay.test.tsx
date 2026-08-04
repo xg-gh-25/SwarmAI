@@ -27,7 +27,7 @@ vi.mock('../../services/api', () => ({
   default: { patch: (url: string) => apiPatch(url) },
 }));
 
-import { PipelineOverlay } from './PipelineOverlay';
+import { PipelineContent } from './PipelineOverlay';
 
 const ANALYTICS = {
   window: '30d',
@@ -86,8 +86,8 @@ beforeEach(() => {
 });
 
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
-  render(<PipelineOverlay onDispatch={onDispatch} />);
-  act(() => { window.dispatchEvent(new CustomEvent('swarm:show-pipeline')); });
+  // M4: PipelineContent renders immediately (host owns open + fresh mount per open).
+  render(<PipelineContent onDispatch={onDispatch} close={() => {}} />);
   return { onDispatch };
 }
 

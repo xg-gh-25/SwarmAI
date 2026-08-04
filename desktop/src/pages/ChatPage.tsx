@@ -39,7 +39,8 @@ import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../compon
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
 import { useSessionMeta } from '../contexts/LayoutContext';
-import { useActiveOverlayEvent, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
+import { BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
+import { useOverlay } from '../contexts/OverlayContext';
 import type { UiContextSnapshot, CanvasSnapshot } from '../utils/uiContext';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
@@ -54,12 +55,13 @@ import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
-import { ToDoOverlay, parseWorkPacket } from '../components/layout/ToDoOverlay';
+// parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
+// ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
+import { parseWorkPacket } from '../components/layout/ToDoOverlay';
 import { setOverlayCtxBridge } from '../components/layout/overlayRegistry';
-import { JobsRunsOverlay } from '../components/layout/JobsRunsOverlay';
-// NewBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
-import { PipelineOverlay } from '../components/layout/PipelineOverlay';
-import { PollinateOverlay } from '../components/layout/PollinateOverlay';
+// ToDo / Jobs & Runs / Pipeline / Pollinate + NewBrain overlays retired (M3+M4):
+// all migrated to the OverlayHost registry (overlaySurfaces.tsx); dispatch reaches
+// them via the ctx bridge (setOverlayCtxBridge below).
 import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
@@ -416,10 +418,14 @@ export default function ChatPage() {
     window.addEventListener('swarm:canvas-state', handler);
     return () => window.removeEventListener('swarm:canvas-state', handler);
   }, [mergeUiState]);
-  // (c) which fullscreen nav overlay is open — a hook (useState-backed), so read
-  //     it at top level and sync into the ref via an effect (Gate-1: cannot merge
-  //     a hook return value via a subscription callback).
-  const activeOverlay = useActiveOverlayEvent();
+  // (c) which fullscreen nav overlay is open — read from the OverlayHost state
+  //     authority (OverlayContext), NOT the legacy useActiveOverlayEvent singleton.
+  //     Since every ALL_SHOW_EVENTS surface migrated to the host (M2–M4), the legacy
+  //     singleton is only written by the now-unmounted legacy overlays → it is
+  //     permanently null, which silently blanked BOTH the agent's SENSE payload
+  //     (uiContext active_overlay) AND the AlertsPill/tab-switch BACK_TO_CHAT guard
+  //     below. useOverlay() is the live source (ChatPage renders inside OverlayProvider).
+  const activeOverlay = useOverlay().activeOverlay;
   useEffect(() => {
     mergeUiState({ activeOverlay });
   }, [activeOverlay, mergeUiState]);
@@ -3332,14 +3338,11 @@ export default function ChatPage() {
         {/* History migrated to OverlayHost registry (M3) — self-fetches its reactive
             session data; resume/delete/agentId reach it via the ctx bridge. */}
 
-        {/* ToDo flow-closure overlay (A2) — left-nav Work card. onDispatch owns
-            tab landing + inject + snapshot; overlay auto-closes on landed. */}
-        <ToDoOverlay onDispatch={handleDispatchTodo} />
-        <JobsRunsOverlay onDispatch={handleDispatchJobPrompt} />
-        <PipelineOverlay onDispatch={handleDispatchJobPrompt} />
-        <PollinateOverlay onDispatch={handleDispatchJobPrompt} />
-        {/* New Brain migrated to OverlayHost registry (M3, overlaySurfaces.tsx) —
-            dispatch reaches it via the ctx bridge (ChatPage owns handleDispatchJobPrompt). */}
+        {/* ToDo / Jobs & Runs / Pipeline / Pollinate migrated to the OverlayHost
+            registry (M4, overlaySurfaces.tsx). Dispatch reaches them via the ctx
+            bridge: ToDo uses dispatchTodo (work-packet), the other three use
+            dispatchPrompt — both ChatPage-owned (handleDispatchTodo /
+            handleDispatchJobPrompt), published through setOverlayCtxBridge. */}
       </div>
 
       {/* Modals */}

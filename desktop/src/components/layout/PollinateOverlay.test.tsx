@@ -25,7 +25,7 @@ vi.mock('../../services/pollinate', async () => {
   };
 });
 
-import { PollinateOverlay } from './PollinateOverlay';
+import { PollinateContent } from './PollinateOverlay';
 
 const ASSETS = {
   overall: {
@@ -86,8 +86,8 @@ beforeEach(() => {
 });
 
 function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true)) {
-  render(<PollinateOverlay onDispatch={onDispatch} />);
-  act(() => { window.dispatchEvent(new CustomEvent('swarm:show-pollinate')); });
+  // M4: PollinateContent renders immediately (host owns open + fresh mount per open).
+  render(<PollinateContent onDispatch={onDispatch} close={() => {}} />);
   return { onDispatch };
 }
 

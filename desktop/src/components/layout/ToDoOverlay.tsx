@@ -38,17 +38,18 @@
  * @exports ToDoOverlay
  */
 import { useCallback, useEffect, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import { todosService, type ToDoHistoryStats } from '../../services/todos';
 import { classifyLoadError } from '../../services/api';
 import type { ToDo, Priority } from '../../types/todo';
 import { deriveZones, type ZonedTodos } from './todoZones';
+import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
-export interface ToDoOverlayProps {
+export interface ToDoContentProps {
   /** Land a todo into a chat tab (inject + snapshot). Returns true if it landed
-   *  (→ overlay auto-closes) or false on needs-close (→ overlay stays open). */
+   *  (→ host closes the overlay) or false on needs-close (→ overlay stays open). */
   onDispatch: (todo: ToDo) => boolean;
+  /** Host-owned close (called after a successful dispatch). */
+  close: () => void;
 }
 
 type ViewMode = 'flow' | 'history';
@@ -80,8 +81,7 @@ export function parseWorkPacket(linkedContext: string | null): WorkPacket | null
   }
 }
 
-export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-todo');
+export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
   const [view, setView] = useState<ViewMode>('flow');
   const [zones, setZones] = useState<ZonedTodos>(EMPTY_ZONES);
   const [stats, setStats] = useState<ToDoHistoryStats | null>(null);
@@ -126,17 +126,14 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
     }
   }, []);
 
-  // Load on open + when switching views.
+  // Load on mount (host mounts fresh per open) + when switching views.
+  // The former reset-on-close effect is gone: OverlayHost UNMOUNTS this surface on
+  // close and MOUNTS it fresh on reopen, so transient UI (view/selected/creating)
+  // starts at its initial value every open by construction.
   useEffect(() => {
-    if (!open) return;
     if (view === 'flow') void refreshFlow();
     else void refreshHistory();
-  }, [open, view, refreshFlow, refreshHistory]);
-
-  // Reset transient UI when the overlay closes.
-  useEffect(() => {
-    if (!open) { setView('flow'); setSelected(null); setCreating(false); }
-  }, [open]);
+  }, [view, refreshFlow, refreshHistory]);
 
   const handleDispatch = useCallback((todo: ToDo) => {
     const landed = onDispatch(todo);
@@ -177,11 +174,12 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
   }, [refreshFlow]);
 
   return (
-    <Modal isOpen={open} onClose={close} title="ToDo" size="fullscreen" mode="TODO" fullscreenWidth="l">
-      <div className="flex-1 min-h-0 flex flex-col relative" data-testid="todo-overlay">
-        {/* Header: Flow | History toggle + New ToDo */}
-        <div className="flex items-center gap-1 px-4 py-2 border-b border-[var(--color-border)]">
-          {(['flow', 'history'] as ViewMode[]).map((v) => (
+    <div className="flex-1 min-h-0 flex flex-col relative" data-testid="todo-overlay">
+        {/* Sub-header: Flow | History toggle + New ToDo (shared WorkbenchToolbar). */}
+        <WorkbenchToolbar
+          gap={1}
+          loading={loading}
+          left={(['flow', 'history'] as ViewMode[]).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -193,16 +191,16 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
               {v === 'flow' ? 'Flow' : 'History'}
             </button>
           ))}
-          {loading && <span className="ml-2 text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
-          <div className="flex-1" />
-          <button
-            onClick={() => { setSelected(null); setCreating(true); }}
-            data-testid="todo-new-btn"
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-          >
-            <span className="material-symbols-outlined text-[15px]">add</span>New ToDo
-          </button>
-        </div>
+          right={(
+            <button
+              onClick={() => { setSelected(null); setCreating(true); }}
+              data-testid="todo-new-btn"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[15px]">add</span>New ToDo
+            </button>
+          )}
+        />
 
         {/* Persistent user-guide banner (both views) — AI-native first. */}
         <GuideBanner />
@@ -254,8 +252,7 @@ export function ToDoOverlay({ onDispatch }: ToDoOverlayProps) {
 
         {/* New ToDo inline form — absolute overlay */}
         {creating && <NewTodoForm onCreated={handleCreated} onCancel={() => setCreating(false)} />}
-      </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -411,11 +408,7 @@ function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
   const wp = parseWorkPacket(todo.linkedContext);
   const priColor = todo.priority === 'high' ? '#ef4444' : todo.priority === 'medium' ? '#f59e0b' : todo.priority === 'low' ? '#3b82f6' : 'var(--color-text-faint)';
   return (
-    <div
-      className="absolute inset-y-0 right-0 w-[360px] max-w-[70%] bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-2xl flex flex-col z-10"
-      data-testid="todo-detail-drawer"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <OverlayDrawer widthPx={360} maxWidthPct={70} z={10} testid="todo-detail-drawer">
       <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="mt-1 w-1.5 h-4 rounded-full shrink-0" style={{ background: priColor }} />
         <div className="flex-1 min-w-0">
@@ -469,7 +462,7 @@ function DetailDrawer({ todo, onClose }: { todo: ToDo; onClose: () => void }) {
           <div className="text-[11px] text-[var(--color-text-faint)] italic">No work-packet context attached.</div>
         )}
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }
 
@@ -541,11 +534,7 @@ function NewTodoForm({ onCreated, onCancel }: { onCreated: () => void; onCancel:
   }, [title, priority, description, nextStep, onCreated]);
 
   return (
-    <div
-      className="absolute inset-y-0 right-0 w-[360px] max-w-[70%] bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-2xl flex flex-col z-20"
-      data-testid="todo-new-form"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <OverlayDrawer widthPx={360} maxWidthPct={70} z={20} testid="todo-new-form">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
         <span className="flex-1 text-[13px] font-semibold text-[var(--color-text)]">New ToDo</span>
         <button onClick={onCancel} data-testid="todo-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
@@ -610,7 +599,7 @@ function NewTodoForm({ onCreated, onCancel }: { onCreated: () => void; onCancel:
           className="px-3 py-1.5 text-[12px] font-medium rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors"
         >Cancel</button>
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }
 
@@ -693,15 +682,6 @@ function outcomeLabel(t: ToDo): string {
   if (t.reviewState === 'rejected') return '✗ rejected';
   if (t.reviewState === 'completed') return '⋯ awaiting review';
   return t.status;
-}
-
-/** Absolute timestamp (XG: no "1 hour ago"). */
-function fmtTs(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '—';
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function StatBlock({ label, children }: { label: string; children: React.ReactNode }) {

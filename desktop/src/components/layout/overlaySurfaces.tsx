@@ -17,6 +17,16 @@ import { CMBrainContent } from './CMBrainOverlay';
 import { LibraryContent } from './LibraryOverlay';
 import { NewBrainContent } from './NewBrainOverlay';
 import { HistoryContent } from './HistoryOverlay';
+import { ToDoContent } from './ToDoOverlay';
+import { JobsRunsContent } from './JobsRunsOverlay';
+import { PipelineContent } from './PipelineOverlay';
+import { PollinateContent } from './PollinateOverlay';
+import type { ToDo } from '../../types/todo';
+
+// Region tints (mirror ThreeColumnLayout A10_GROUP) — the workbench surfaces spout
+// with their card's zone accent (work = 青蓝, system = slate).
+const TINT_WORK = '#4a8fb0';
+const TINT_SYSTEM = '#7c8194';
 
 // ── brain-hub (M2 pilot) ────────────────────────────────────────────────────────────
 // Was: BrainHubDemoOverlay + useExclusiveOverlay('swarm:show-brain-hub') + a bespoke
@@ -116,5 +126,61 @@ registerOverlay({
       onDeleteSession={(s) => deleteSession?.(s)}
       close={close}
     />
+  ),
+});
+
+// ── WORKBENCH FOUR (M4) ───────────────────────────────────────────────────────────────
+// The 4 D3 "mirror" overlays, migrated off useExclusiveOverlay+<Modal fullscreen> to the
+// registry. Each keeps its own views/board/drawer/forms; the shared frame (toolbar +
+// right-drawer + fmtTs) is overlayShell. All route writes through the ctx bridge:
+//   • ToDo dispatches a ToDo work-packet (dispatchTodo);
+//   • Jobs/Pipeline/Pollinate dispatch a chat prompt (dispatchPrompt).
+// Fresh-mount-per-open (host) gives them fetch-on-mount + clean transient state.
+
+registerOverlay({
+  id: 'todo',
+  title: 'ToDo',
+  mode: 'TODO',
+  width: 'l',
+  sourceCardTestId: 'nav-todo',
+  tint: TINT_WORK,
+  render: ({ close, dispatchTodo }) => (
+    <ToDoContent onDispatch={(t: ToDo) => (dispatchTodo ? dispatchTodo(t) : false)} close={close} />
+  ),
+});
+
+registerOverlay({
+  id: 'jobs',
+  title: 'Jobs & Runs',
+  mode: 'JOBS',
+  width: 'xl',
+  sourceCardTestId: 'nav-jobs',
+  tint: TINT_SYSTEM,
+  render: ({ close, dispatchPrompt }) => (
+    <JobsRunsContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+  ),
+});
+
+registerOverlay({
+  id: 'pipeline',
+  title: 'Pipeline',
+  mode: 'PIPELINE',
+  width: 'xl',
+  sourceCardTestId: 'nav-pipeline',
+  tint: TINT_WORK,
+  render: ({ close, dispatchPrompt }) => (
+    <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+  ),
+});
+
+registerOverlay({
+  id: 'pollinate',
+  title: 'Pollinate',
+  mode: 'POLLINATE',
+  width: 'xl',
+  sourceCardTestId: 'nav-pollinate',
+  tint: TINT_WORK,
+  render: ({ close, dispatchPrompt }) => (
+    <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
 });

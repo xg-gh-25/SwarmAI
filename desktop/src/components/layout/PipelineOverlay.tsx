@@ -28,8 +28,6 @@
  * @exports PipelineOverlay
  */
 import { useCallback, useEffect, useState } from 'react';
-import Modal from '../common/Modal';
-import { useExclusiveOverlay } from './useExclusiveOverlay';
 import api, { classifyLoadError } from '../../services/api';
 import {
   pipelinesService,
@@ -38,24 +36,18 @@ import {
   type PipelineRunSummary,
   type PipelineRunDetail,
 } from '../../services/pipelines';
+import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 
-export interface PipelineOverlayProps {
+export interface PipelineContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
-   *  if it landed (→ overlay auto-closes) or false on needs-close. MUST mirror
+   *  if it landed (→ host closes the overlay) or false on needs-close. MUST mirror
    *  ChatPage's dispatch — a bare inject no-ops with no active chat tab (Gate-1 #7). */
   onDispatch: (prompt: string) => boolean;
+  /** Host-owned close (called after a successful dispatch). */
+  close: () => void;
 }
 
 type Window = '30d' | 'ytd';
-
-/** Absolute timestamp (XG rule: no "1 hour ago"). Tolerates null/invalid → —. */
-function fmtTs(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '—';
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 
 function fmtCycle(min: number | null): string {
   if (min == null) return '—';
@@ -92,8 +84,7 @@ function detailPauseKind(status: string, checkpointReason: string | null): strin
   return checkpointReason === CRASH_ZOMBIE_REASON ? 'crash_residue' : 'decision';
 }
 
-export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
-  const { open, close } = useExclusiveOverlay('swarm:show-pipeline');
+export function PipelineContent({ onDispatch, close }: PipelineContentProps) {
   const [analytics, setAnalytics] = useState<PipelineAnalytics | null>(null);
   const [window, setWindow] = useState<Window>('30d');
   const [loading, setLoading] = useState(false);
@@ -103,9 +94,10 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // Fetch-once-on-open (+ on window toggle). NO polling — retro surface.
+  // Fetch-once-on-mount (host mounts fresh per open) + on window toggle/retry. NO
+  // polling — retro surface. The former reset-on-close effect is gone: the host
+  // unmounts/remounts, so selectedRunId/detail/window start fresh each open.
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
     setLoading(true);
     setLoadErr(null);
@@ -115,11 +107,7 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
       .then((a) => { if (!cancelled) { setAnalytics(a); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setLoadErr(e); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [open, window, reloadTick]);
-
-  useEffect(() => {
-    if (!open) { setSelectedRunId(null); setDetail(null); setWindow('30d'); }
-  }, [open]);
+  }, [window, reloadTick]);
 
   // Open the detail drawer → fetch that run's retrospective.
   const openRun = useCallback((runId: string) => {
@@ -166,14 +154,12 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
   const o = analytics?.overall;
 
   return (
-    <Modal isOpen={open} onClose={close} title="Pipeline" size="fullscreen" mode="PIPELINE" fullscreenWidth="xl">
-      <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
-        {/* Header: title + window toggle */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)]">
-          <span className="text-xs font-medium text-[var(--color-text-muted)]">Retro Analytics</span>
-          {loading && <span className="text-[11px] text-[var(--color-text-faint)]">Loading…</span>}
-          <div className="flex-1" />
-          {(['30d', 'ytd'] as Window[]).map((w) => (
+    <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
+        {/* Sub-header: label + window toggle (shared WorkbenchToolbar). */}
+        <WorkbenchToolbar
+          loading={loading}
+          left={<span className="text-xs font-medium text-[var(--color-text-muted)]">Retro Analytics</span>}
+          right={(['30d', 'ytd'] as Window[]).map((w) => (
             <button
               key={w}
               onClick={() => setWindow(w)}
@@ -185,7 +171,7 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
               {w === '30d' ? '30 days' : 'YTD'}
             </button>
           ))}
-        </div>
+        />
 
         {/* Body: scrollable — overall strip + trend + by-project groups (one screen) */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
@@ -258,8 +244,7 @@ export function PipelineOverlay({ onDispatch }: PipelineOverlayProps) {
             onCancel={handleCancel}
           />
         )}
-      </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -335,10 +320,7 @@ function RunDetailDrawer({
   const [cancelErr, setCancelErr] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   return (
-    <div
-      className="absolute top-0 right-0 bottom-0 w-[420px] max-w-[90%] z-10 bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-xl flex flex-col"
-      data-testid="pipeline-run-drawer"
-    >
+    <OverlayDrawer widthPx={420} maxWidthPct={90} z={10} testid="pipeline-run-drawer" stopPropagation={false}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="text-xs font-mono text-[var(--color-text-muted)] truncate flex-1">{runId}</span>
         <button onClick={onClose} className="material-symbols-outlined text-[18px] text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
@@ -454,6 +436,6 @@ function RunDetailDrawer({
           </>
         )}
       </div>
-    </div>
+    </OverlayDrawer>
   );
 }

@@ -1,7 +1,8 @@
 /**
- * OverlayContext tests — the single-overlay invariant + the two-way hybrid bridge
- * (Gate-1 WARN5, run_fdeaead8). These lock the M1 contract: at most one fullscreen
- * surface open across the legacy (useExclusiveOverlay) ↔ new (this context) systems.
+ * OverlayContext tests — the single-overlay invariant + the show-event bridge
+ * (run_fdeaead8, M4). These lock the contract: at most one fullscreen surface open,
+ * and `swarm:show-<id>` (nav card OR agent ui_action) OPENS the mapped surface —
+ * this context is the sole opener now every ALL_SHOW_EVENTS surface is registered.
  *
  * Methodology: drive the real provider via its hook (no mocks — the bridge IS the
  * behavior under test), assert `activeOverlay` transitions on real window events.
@@ -54,14 +55,21 @@ describe('OverlayContext — single-overlay state', () => {
   });
 });
 
-describe('OverlayContext — two-way hybrid bridge (mutual exclusion with legacy)', () => {
-  it('AFFERENT: a legacy show-event closes the new-host overlay', () => {
+describe('OverlayContext — show-event bridge + mutual exclusion', () => {
+  it('AFFERENT OPEN: a swarm:show-<id> event opens the mapped surface (agent ui_action path)', () => {
+    renderProbe();
+    // ALL_SHOW_EVENTS[0] is 'swarm:show-swarmws' → id 'swarmws'. This is exactly the
+    // event the agent's ui_action (or a nav card) dispatches to open a surface.
+    act(() => window.dispatchEvent(new CustomEvent(ALL_SHOW_EVENTS[0])));
+    expect(active()).toBe(ALL_SHOW_EVENTS[0].slice('swarm:show-'.length));
+  });
+
+  it('AFFERENT OPEN: a second show-event replaces the first (single slot preserved)', () => {
     renderProbe();
     act(() => screen.getByTestId('open-todo').click());
     expect(active()).toBe('todo');
-    // A legacy overlay opens via the old bus → new-host overlay must close.
-    act(() => window.dispatchEvent(new CustomEvent(ALL_SHOW_EVENTS[0])));
-    expect(active()).toBe('null');
+    act(() => window.dispatchEvent(new CustomEvent('swarm:show-jobs')));
+    expect(active()).toBe('jobs');
   });
 
   it('AFFERENT: an EXTERNAL back-to-chat broadcast closes the new-host overlay', () => {

@@ -6,12 +6,13 @@
  *      (stopPropagation on the action container).
  *   3. Clicking the card body (not an action) DOES open the drawer.
  *
- * The overlay renders inside a Modal gated on `swarm:show-todo`; we fire that
- * event to open it. todosService is mocked so we assert on the posted payload.
+ * M4: ToDoOverlay → ToDoContent (OverlayHost registry). Content renders immediately
+ * (host owns open + fresh mount per open); `close` is a prop (was useExclusiveOverlay).
+ * todosService is mocked so we assert on the posted payload.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { ToDoOverlay } from '../ToDoOverlay';
+import { ToDoContent } from '../ToDoOverlay';
 import { todosService } from '../../../services/todos';
 import { ApiError } from '../../../services/api';
 import type { ToDo } from '../../../types/todo';
@@ -41,9 +42,9 @@ function mkTodo(over: Partial<ToDo> = {}): ToDo {
   };
 }
 
-function openOverlay() {
-  window.dispatchEvent(new CustomEvent('swarm:show-todo'));
-}
+// Host owns open now — content renders immediately. Kept as a no-op so the existing
+// call sites read unchanged.
+function openOverlay() { /* no-op: ToDoContent renders immediately (host-owned open) */ }
 
 describe('ToDoOverlay interactions', () => {
   beforeEach(() => {
@@ -53,7 +54,7 @@ describe('ToDoOverlay interactions', () => {
   });
 
   it('New ToDo posts workspace_id=swarmws + encodes next_step (C1)', async () => {
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('todo-overlay');
 
@@ -71,7 +72,7 @@ describe('ToDoOverlay interactions', () => {
   });
 
   it('New ToDo blocks empty title (no create call)', async () => {
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('todo-overlay');
     fireEvent.click(screen.getByTestId('todo-new-btn'));
@@ -81,7 +82,7 @@ describe('ToDoOverlay interactions', () => {
   });
 
   it('clicking a card ACTION does NOT open the drawer (stopPropagation)', async () => {
-    render(<ToDoOverlay onDispatch={() => false} />);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('todo-overlay');
     // seeded todo is in ①To Do → has a Dispatch action
@@ -98,7 +99,7 @@ describe('ToDoOverlay interactions', () => {
       confirmVsAuto: { manual: 0, auto: 0 }, rejectRate: 0,
       totals: { created: 0, completed: 0, confirmed: 0, rejected: 0, reviewed: 0 },
     });
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('todo-overlay');
     // Flow view (default): banner present
@@ -116,7 +117,7 @@ describe('ToDoOverlay interactions', () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'VALIDATION_FAILED', message: 'bad limit' }, 400),
     );
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('HTTP 400');
@@ -129,7 +130,7 @@ describe('ToDoOverlay interactions', () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 503),
     );
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
@@ -144,7 +145,7 @@ describe('ToDoOverlay interactions', () => {
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'Service unavailable' }, 500),
     );
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
@@ -155,7 +156,7 @@ describe('ToDoOverlay interactions', () => {
     // A non-ApiError reaching the catch (isApiError=false) must fall to the
     // conservative outage branch, never the client-error branch.
     (todosService.list as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('boom'));
-    render(<ToDoOverlay onDispatch={() => true} />);
+    render(<ToDoContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     const err = await screen.findByTestId('todo-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
@@ -163,7 +164,7 @@ describe('ToDoOverlay interactions', () => {
   });
 
   it('clicking the card BODY opens the detail drawer', async () => {
-    render(<ToDoOverlay onDispatch={() => false} />);
+    render(<ToDoContent onDispatch={() => false} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('todo-overlay');
     const card = await screen.findByTestId('todo-card');
