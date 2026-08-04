@@ -45,6 +45,12 @@ const SWARM_PREFIX = 'swarm:';
 export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
   // Explicit non-overlay commands (NOT in ALL_SHOW_EVENTS):
   'open-canvas': { event: 'swarm:open-canvas', target: 'window' },
+  // open-canvas-file (run_c0550cc2): open a CURRENT-workspace file in Canvas. The
+  // ONLY path-carrying command — it rides the EXISTING document-target
+  // swarm:open-file, whose /workspace/file/resolve is the generic workspace-scoped
+  // filter (rejects abs/host paths + `..`). document-target per useCanvasHost's
+  // EVENT-TARGET CONTRACT (all open-file dispatchers listen on document).
+  'open-canvas-file': { event: 'swarm:open-file', target: 'document' },
   'back-to-chat': { event: BACK_TO_CHAT_EVENT, target: 'window' },
   // Derived from the LeftNav SSOT — one entry per overlay, auto-synced:
   ...Object.fromEntries(
@@ -61,15 +67,19 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
  * @param cmd the bare command id (from the ui_command SSE event's `cmd` field)
  * @returns true if dispatched, false if the cmd was not allowlisted (fail-closed).
  *
- * PAYLOAD-LESS BY DESIGN (Gate-2 LOW): Run 2's allowlisted commands are pure
- * navigation/display — none take a data argument. We deliberately do NOT forward
- * any wire `detail` to the CustomEvent: `detail` would originate only from the
- * SSE wire (i.e. a rogue/compromised backend), and forwarding it to a handler
- * that might one day read `event.detail` is an untrusted-input sink for zero
- * current benefit. Re-introduce a payload ONLY per-cmd, gated in the table, when
- * a specific command genuinely needs one.
+ * PAYLOAD POLICY (Gate-2 LOW): pure nav/display commands carry NO detail — the
+ * `detail` would originate only from the SSE wire (a rogue/compromised backend),
+ * and forwarding it to a handler that reads `event.detail` is an untrusted-input
+ * sink for zero benefit. A payload is re-introduced ONLY per-cmd (PATH_CARRYING_CMDS
+ * below): open-canvas-file forwards `{ path }` to swarm:open-file — a DATA path, not
+ * an event/target (the routing is STILL derived from UI_COMMAND_TABLE, never the
+ * wire), and the path is filtered downstream by the workspace-scoped
+ * /workspace/file/resolve. The security crux (backend can't pick the event/target)
+ * is unchanged.
  */
-export function dispatchUiCommand(cmd: unknown): boolean {
+const PATH_CARRYING_CMDS = new Set(['open-canvas-file']);
+
+export function dispatchUiCommand(cmd: unknown, path?: unknown): boolean {
   if (typeof cmd !== 'string' || !cmd) {
     console.warn('[ui_command] rejected non-string cmd:', cmd);
     return false;
@@ -81,6 +91,26 @@ export function dispatchUiCommand(cmd: unknown): boolean {
     return false;
   }
   const targetObj = entry.target === 'document' ? document : window;
+  if (PATH_CARRYING_CMDS.has(cmd)) {
+    // A path-carrying command NEEDS a non-empty string path to be meaningful.
+    if (typeof path !== 'string' || !path) {
+      console.warn(`[ui_command] '${cmd}' needs a path — dispatching nothing`);
+      return false;
+    }
+    // SECURITY (Gate-2 CRITICAL, run_c0550cc2) — defense in depth: the agent channel
+    // is workspace-RELATIVE only. The `path` arrives from the SSE wire (untrusted per
+    // this module's crux), and the downstream /workspace/file/resolve WILL resolve an
+    // absolute host path (/etc/passwd, ~/.aws/credentials). The backend
+    // build_ui_command_event already drops abs/`..` paths; we re-reject here so a
+    // crafted wire event can't reach open-file with a host path either.
+    if (path.startsWith('/') || path.startsWith('~') || path.includes('..')) {
+      console.warn(`[ui_command] '${cmd}' rejected non-workspace-relative path`);
+      return false;
+    }
+    targetObj.dispatchEvent(new CustomEvent(entry.event, { detail: { path } }));
+    return true;
+  }
+  // Pure-nav command: payload-less (a supplied path is ignored by design).
   targetObj.dispatchEvent(new CustomEvent(entry.event));
   return true;
 }

@@ -17,11 +17,13 @@ import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../../components/layout/use
 afterEach(() => vi.restoreAllMocks());
 
 describe('UI_COMMAND_TABLE', () => {
-  it('every command is window-target and a swarm:* event (Run 2 scope)', () => {
+  it('every command is a swarm:* event; targets are window except open-canvas-file (document)', () => {
     const cmds = Object.keys(UI_COMMAND_TABLE);
     expect(cmds.length).toBeGreaterThanOrEqual(10);
     for (const [cmd, entry] of Object.entries(UI_COMMAND_TABLE)) {
-      expect(entry.target).toBe('window');
+      // open-canvas-file rides the document-target swarm:open-file (all open-file
+      // dispatchers listen on document); every other command is window-target.
+      expect(entry.target).toBe(cmd === 'open-canvas-file' ? 'document' : 'window');
       expect(entry.event.startsWith('swarm:')).toBe(true);
       expect(cmd).not.toContain('swarm:'); // cmd id is bare, not the event name
     }
@@ -94,17 +96,60 @@ describe('dispatchUiCommand', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('derives event+target from its OWN table — signature accepts ONLY cmd (crux)', () => {
+  it('derives event+target from its OWN table — never trusts a wire event/target (crux)', () => {
     const spy = vi.spyOn(window, 'dispatchEvent');
-    // dispatchUiCommand takes cmd ONLY — there is no parameter through which a
-    // backend could supply an event name or target. It dispatches swarm:open-canvas
-    // on window, derived purely from UI_COMMAND_TABLE['open-canvas'].
+    // The security crux is UNCHANGED: dispatchUiCommand derives event+target purely
+    // from UI_COMMAND_TABLE keyed by cmd. The optional 2nd arg carries ONLY a data
+    // `path` (for open-canvas-file), never an event name or target — a backend still
+    // cannot pick the event or flip the target.
     dispatchUiCommand('open-canvas');
     expect(spy).toHaveBeenCalledTimes(1);
     const ev = spy.mock.calls[0][0] as CustomEvent;
     expect(ev.type).toBe('swarm:open-canvas');
-    // payload-less by design — no detail forwarded (Gate-2 LOW).
+    // payload-less for pure-nav commands — no detail forwarded (Gate-2 LOW).
     expect(ev.detail).toBeNull();
+  });
+
+  // ── open-canvas-file (run_c0550cc2): the ONE path-carrying command ──
+  it('open-canvas-file dispatches swarm:open-file on DOCUMENT with the path in detail', () => {
+    const winSpy = vi.spyOn(window, 'dispatchEvent');
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    const ok = dispatchUiCommand('open-canvas-file', 'Knowledge/Designs/x.md');
+    expect(ok).toBe(true);
+    // document-target (all open-file listeners are on document), NOT window.
+    expect(docSpy).toHaveBeenCalledTimes(1);
+    const ev = docSpy.mock.calls[0][0] as CustomEvent;
+    expect(ev.type).toBe('swarm:open-file');
+    expect(ev.detail).toEqual({ path: 'Knowledge/Designs/x.md' });
+    // NOT dispatched on window.
+    expect(winSpy).not.toHaveBeenCalled();
+  });
+
+  it('a pure-nav command IGNORES a supplied path (payload only per-cmd)', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    dispatchUiCommand('open-canvas', 'should/be/ignored.md');
+    const ev = spy.mock.calls[0][0] as CustomEvent;
+    expect(ev.detail).toBeNull(); // open-canvas never carries a path
+  });
+
+  it('open-canvas-file with NO path is a no-op fail (needs a target file)', () => {
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ok = dispatchUiCommand('open-canvas-file'); // no path
+    expect(ok).toBe(false);
+    expect(docSpy).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY: open-canvas-file rejects absolute / traversal paths (infoleak guard)', () => {
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const bad of ['/etc/passwd', '/Users/gawan/.aws/credentials', '~/.ssh/id_rsa', '../../etc/passwd']) {
+      expect(dispatchUiCommand('open-canvas-file', bad)).toBe(false);
+    }
+    expect(docSpy).not.toHaveBeenCalled();
+    // a workspace-relative path still opens
+    expect(dispatchUiCommand('open-canvas-file', 'Knowledge/Designs/x.md')).toBe(true);
+    expect(docSpy).toHaveBeenCalledTimes(1);
   });
 
   it('FAIL-CLOSED on a raw swarm:* string passed as cmd', () => {

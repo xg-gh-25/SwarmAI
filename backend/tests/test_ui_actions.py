@@ -23,11 +23,17 @@ from core.ui_actions import (
 
 # ── allowlist shape ─────────────────────────────────────────────────────────
 
-def test_allowlist_is_nonempty_and_window_only():
+def test_allowlist_is_nonempty_and_targets_valid():
     assert len(UI_COMMAND_ALLOWLIST) >= 10
-    # Run 2 scope: every command is a non-destructive nav/display action on window.
+    # Every command is a non-destructive nav/display action. Targets are window,
+    # EXCEPT open-canvas-file which rides the document-target swarm:open-file
+    # (run_c0550cc2 — the one deliberate document-target command; all open-file
+    # dispatchers listen on document per useCanvasHost's EVENT-TARGET CONTRACT).
     for cmd, entry in UI_COMMAND_ALLOWLIST.items():
-        assert entry["target"] == "window", f"{cmd} must target window in Run 2"
+        if cmd == "open-canvas-file":
+            assert entry["target"] == "document", "open-canvas-file rides document-target open-file"
+        else:
+            assert entry["target"] == "window", f"{cmd} must target window"
         assert entry["event"].startswith("swarm:"), cmd
 
 
@@ -95,7 +101,62 @@ def test_build_event_for_allowlisted_cmd():
 def test_build_event_fail_closed_for_bad_cmd():
     # A non-allowlisted cmd MUST NOT produce an event (fail-closed at the source).
     assert build_ui_command_event("open-terminal-here") is None
+    # The RAW open-file (arbitrary host path, no filter) STAYS excluded — the new
+    # open-canvas-file rides the workspace-scoped swarm:open-file resolver instead.
     assert build_ui_command_event("open-file") is None
+
+
+# ── open-canvas-file (run_c0550cc2): agent opens a CURRENT-workspace file in Canvas ──
+# Path PASSTHROUGH only — no new validation here. The existing swarm:open-file →
+# /workspace/file/resolve is the generic, workspace-scoped canvas file filter
+# (traversal/abs paths already rejected there). ui_action adds NO path logic.
+
+def test_open_canvas_file_is_allowlisted_and_maps_to_open_file():
+    entry = validate_ui_command("open-canvas-file")
+    assert entry is not None
+    assert entry["event"] == "swarm:open-file"
+    # open-file is DOCUMENT-target (all its dispatchers use document, per useCanvasHost).
+    assert entry["target"] == "document"
+
+
+def test_build_event_carries_path_for_open_canvas_file():
+    ev = build_ui_command_event("open-canvas-file", "Knowledge/Designs/x.md")
+    assert ev is not None
+    assert ev["cmd"] == "open-canvas-file"
+    assert ev["event"] == "swarm:open-file"
+    assert ev["path"] == "Knowledge/Designs/x.md"   # passthrough, verbatim
+
+
+def test_open_canvas_file_without_path_still_builds_but_no_path_key():
+    # NEGATIVE: no path → no crash. Event still builds (frontend open-file handler
+    # early-returns on empty path — same as a bare open-file dispatch).
+    ev = build_ui_command_event("open-canvas-file", None)
+    assert ev is not None
+    assert ev["cmd"] == "open-canvas-file"
+    assert ev.get("path") in (None, "")   # no path forwarded
+
+
+def test_open_canvas_file_rejects_absolute_paths_infoleak_guard():
+    # CRITICAL (Gate-2, run_c0550cc2): the agent efferent channel must be
+    # workspace-RELATIVE only. resolve_path_to_physical happily resolves an absolute
+    # host path (/etc/passwd, ~/.aws/credentials) — that branch exists for USER-CLICK
+    # opens of source-repo files, but the AGENT must not reach it (Gate-1 BLOCK 3
+    # infoleak by another name). build_ui_command_event drops an absolute-path
+    # open-canvas-file → no event (fail-closed).
+    assert build_ui_command_event("open-canvas-file", "/etc/passwd") is None
+    assert build_ui_command_event("open-canvas-file", "/Users/gawan/.aws/credentials") is None
+    # traversal likewise
+    assert build_ui_command_event("open-canvas-file", "../../../etc/passwd") is None
+    # a legit workspace-relative path still builds
+    ev = build_ui_command_event("open-canvas-file", "Knowledge/Designs/x.md")
+    assert ev is not None and ev["path"] == "Knowledge/Designs/x.md"
+
+
+def test_payload_less_commands_never_carry_a_path():
+    # A pure-nav command must NOT gain a path key even if one is (wrongly) supplied.
+    ev = build_ui_command_event("open-canvas", "should/be/ignored.md")
+    assert ev is not None
+    assert "path" not in ev
 
 
 # ── expected-post-state ack (proprioception feedback arc) ────────────────────
@@ -239,6 +300,7 @@ def test_backend_allowlist_is_bound_to_leftnav_ssot():
         ev[len("swarm:"):]: {"event": ev, "target": "window"} for ev in show_events
     }
     expected["open-canvas"] = {"event": "swarm:open-canvas", "target": "window"}
+    expected["open-canvas-file"] = {"event": "swarm:open-file", "target": "document"}
     expected["back-to-chat"] = {"event": "swarm:back-to-chat", "target": "window"}
 
     assert UI_COMMAND_ALLOWLIST == expected, (

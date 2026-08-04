@@ -974,7 +974,9 @@ class StreamingOrchestrator:
                         # own event+target from cmd; a non-allowlisted cmd yields None
                         # here → nothing emitted (fail-closed at the source).
                         if block.name == UI_ACTION_FULL_TOOL_NAME and isinstance(block.input, dict):
-                            _ui_ev = build_ui_command_event(block.input.get("cmd"))
+                            _ui_ev = build_ui_command_event(
+                                block.input.get("cmd"), block.input.get("path")
+                            )
                             if _ui_ev is not None:
                                 yield _ui_ev
                             # fall through: do NOT `continue` — the SDK runs the tool

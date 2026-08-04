@@ -38,6 +38,7 @@ SENSE snapshot → the agent verifies the effect took hold.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional, TypedDict
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,14 @@ class UiCommandEntry(TypedDict):
 # is NEVER added without an explicit human decision (STEERING / EVALUATE gate).
 UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     "open-canvas": {"event": "swarm:open-canvas", "target": "window"},
+    # open-canvas-file: open a CURRENT-workspace file in Canvas (run_c0550cc2). This
+    # is DISTINCT from the dropped raw `open-file`: it carries a `path` that rides the
+    # EXISTING generic swarm:open-file → /workspace/file/resolve filter, which is
+    # workspace-scoped and rejects abs/host paths + `..` traversal (returns 400 →
+    # frontend drops). So ui_action adds NO path validation of its own — the generic
+    # canvas file filter is the single authority. document-target (all open-file
+    # dispatchers listen on document, per useCanvasHost EVENT-TARGET CONTRACT).
+    "open-canvas-file": {"event": "swarm:open-file", "target": "document"},
     "back-to-chat": {"event": "swarm:back-to-chat", "target": "window"},
     "show-swarmws": {"event": "swarm:show-swarmws", "target": "window"},
     "show-brain-hub": {"event": "swarm:show-brain-hub", "target": "window"},
@@ -108,6 +117,13 @@ def _expected_post_state(cmd: str) -> str:
 
     Assumes *cmd* is already allowlist-validated (callers gate on validate_ui_command).
     """
+    if cmd == "open-canvas-file":
+        return (
+            "the 'Current UI State' section should show a 'Canvas (output panel): "
+            "… open …' line AND the 'Open file:' line should name the file you "
+            "opened (if it's absent, the path was outside the workspace or not found "
+            "→ the generic file filter dropped it)"
+        )
     if cmd == "open-canvas":
         return (
             "the 'Current UI State' section should show a "
@@ -129,7 +145,7 @@ def _expected_post_state(cmd: str) -> str:
     )
 
 
-def build_ui_ack(cmd: object) -> Optional[str]:
+def build_ui_ack(cmd: object, path: object = None) -> Optional[str]:
     """Build the SUCCESS ack text for an allowlisted *cmd*, or None if not
     allowlisted (fail-closed — the caller returns the rejection instead).
 
@@ -141,31 +157,66 @@ def build_ui_ack(cmd: object) -> Optional[str]:
     if validate_ui_command(cmd) is None:
         return None
     expected = _expected_post_state(cmd)  # type: ignore[arg-type]  # validated str
+    target = f"'{cmd}'"
+    if cmd in _PATH_CARRYING_CMDS and isinstance(path, str) and path:
+        target = f"'{cmd}' (path={path})"
     return (
-        f"Dispatched '{cmd}' to the UI. This is NOT synchronous confirmation — "
+        f"Dispatched {target} to the UI. This is NOT synchronous confirmation — "
         f"the frontend applies it after this turn. On your NEXT turn, verify: "
         f"{expected}. If it doesn't, the command did not reach the UI."
     )
 
 
-def build_ui_command_event(cmd: object) -> Optional[dict]:
+# Commands that carry a `path` payload (per-cmd opt-in, mirroring the frontend's
+# "re-introduce a payload ONLY per-cmd" rule). ONLY open-canvas-file: its path is
+# NOT validated here — it rides the generic workspace-scoped swarm:open-file filter
+# (/workspace/file/resolve), which is the single authority that rejects abs/host
+# paths + `..`. A pure-nav command never gains a path key even if one is supplied.
+_PATH_CARRYING_CMDS = frozenset({"open-canvas-file"})
+
+
+def build_ui_command_event(cmd: object, path: object = None) -> Optional[dict]:
     """Build the ``ui_command`` SSE payload for *cmd*, or None if not allowlisted.
 
     Fail-closed at the source: a non-allowlisted cmd yields no event. The payload
     carries the derived event/target for frontend cross-check + logging parity —
     but the frontend re-derives its own dispatch from its own table (never trusts
     these fields blindly).
+
+    ``path`` is PASSED THROUGH verbatim for the path-carrying commands
+    (open-canvas-file) and IGNORED for every other (pure-nav) command. No path
+    validation happens here by design — the generic swarm:open-file resolver is the
+    workspace-scoped filter (run_c0550cc2).
     """
     entry = validate_ui_command(cmd)
     if entry is None:
         logger.warning("ui_action: rejected non-allowlisted cmd %r (fail-closed)", cmd)
         return None
-    return {
+    ev = {
         "type": "ui_command",
         "cmd": cmd,
         "event": entry["event"],
         "target": entry["target"],
     }
+    # Attach path ONLY for a path-carrying cmd AND only when a non-empty str given.
+    if cmd in _PATH_CARRYING_CMDS and isinstance(path, str) and path:
+        # SECURITY (Gate-2 CRITICAL, run_c0550cc2): the AGENT efferent channel is
+        # workspace-RELATIVE only. The downstream /workspace/file/resolve HAPPILY
+        # resolves an ABSOLUTE host path (/etc/passwd, ~/.aws/credentials) — that
+        # branch exists for USER-CLICK opens of source-repo files, but the agent must
+        # NOT reach it (that is exactly the Gate-1 BLOCK 3 open-file infoleak, by
+        # another name). So we reject an absolute or `..`-traversal path HERE, at the
+        # agent's entry point, and fail-closed (drop the whole event → no open). This
+        # does NOT touch the generic resolver (user clicks keep their abs-path opens).
+        _norm = os.path.normpath(path)
+        if os.path.isabs(_norm) or _norm.startswith(".."):
+            logger.warning(
+                "ui_action: rejected open-canvas-file with non-workspace-relative "
+                "path %r (agent channel is workspace-relative only)", path
+            )
+            return None
+        ev["path"] = path
+    return ev
 
 
 # ── The SDK-MCP tool the agent calls ─────────────────────────────────────────
@@ -196,15 +247,20 @@ def get_ui_mcp_server():
     @tool(
         UI_ACTION_TOOL_NAME,
         (
-            "Act on your OWN UI in the SwarmAI desktop app: open a panel or switch "
-            "a navigation view for the user. Use when the user asks you to show/open "
-            f"something in the app. cmd MUST be one of: {_cmd_list}. Non-destructive "
-            "navigation only — this cannot write, delete, send, or run anything."
+            "Act on your OWN UI in the SwarmAI desktop app: open a panel, switch a "
+            "navigation view, or open one of THIS session's workspace files in Canvas. "
+            "Use when the user asks you to show/open something in the app. cmd MUST be "
+            f"one of: {_cmd_list}. For 'open-canvas-file', also pass `path` = the "
+            "workspace-relative file path to show in Canvas (e.g. "
+            "'Knowledge/Designs/foo.md'); it is resolved by the workspace file "
+            "filter, so only files inside the workspace open. Non-destructive only — "
+            "this cannot write, delete, send, or run anything."
         ),
-        {"cmd": str},
+        {"cmd": str, "path": str},
     )
     async def ui_action(args: dict) -> dict:
         cmd = args.get("cmd")
+        path = args.get("path")
         entry = validate_ui_command(cmd)
         if entry is None:
             return {
@@ -220,6 +276,6 @@ def get_ui_mcp_server():
         # The orchestrator emits the ui_command SSE event on observing this call.
         # The ack points the agent at the passive next-turn SENSE readback (what to
         # verify in "## Current UI State") — it is NOT synchronous confirmation.
-        return {"content": [{"type": "text", "text": build_ui_ack(cmd)}]}
+        return {"content": [{"type": "text", "text": build_ui_ack(cmd, path)}]}
 
     return create_sdk_mcp_server(name=UI_MCP_SERVER_NAME, tools=[ui_action])

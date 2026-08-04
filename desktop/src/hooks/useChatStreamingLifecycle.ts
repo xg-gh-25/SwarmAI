@@ -2583,10 +2583,13 @@ export function useChatStreamingLifecycle(
         // allowlist table; it IGNORES any event/target on the wire (crux: a buggy
         // backend can't name an arbitrary swarm:* event). Fail-closed on unknown. ──
         if (event.type === 'ui_command') {
-          // Pass ONLY the cmd — dispatchUiCommand derives event+target from its own
-          // table and dispatches payload-less (Run 2 cmds carry no data; forwarding
-          // wire `detail` would be an untrusted-input sink — Gate-2 LOW).
-          dispatchUiCommand((event as unknown as Record<string, unknown>).cmd);
+          // Pass cmd + (for the one path-carrying cmd, open-canvas-file) the DATA
+          // path. dispatchUiCommand still derives event+target from its OWN table
+          // (never the wire); the path is a data arg it forwards ONLY for a
+          // path-carrying cmd, then the workspace-scoped /workspace/file/resolve
+          // filters it. Pure-nav cmds stay payload-less (run_c0550cc2).
+          const _uev = event as unknown as Record<string, unknown>;
+          dispatchUiCommand(_uev.cmd, _uev.path);
         }
 
         if (event.type === 'session_start' && event.sessionId) {
