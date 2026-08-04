@@ -50,7 +50,9 @@ const DEFAULT_SEE_MORE_LIMIT = 3;
 const CARD_CLS =
   'flex w-full items-start gap-2 rounded px-2 py-1 text-left transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer';
 const TITLE_CLS = 'block truncate text-[12.5px] text-[var(--color-text)]';
-const ACTION_CLS = 'mt-0.5 block text-[10.5px] font-semibold text-[var(--color-accent)]';
+// --color-accent is not a defined theme token → falls back to --color-primary (the
+// theme-reactive accent). Without the fallback this text rendered with no color (DoD-D).
+const ACTION_CLS = 'mt-0.5 block text-[10.5px] font-semibold text-[var(--color-accent,var(--color-primary))]';
 
 /** Category tag pill per kind — same visual family as the Changes NEW/UPD pills. */
 const KIND_TAG: Record<AttentionItem['kind'], { label: string; cls: string }> = {

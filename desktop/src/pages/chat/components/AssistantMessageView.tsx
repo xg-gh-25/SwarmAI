@@ -364,7 +364,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               type="button"
               onClick={onContinue}
               className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
-                         hover:text-[var(--color-accent)] rounded transition-colors"
+                         hover:text-[var(--color-accent,var(--color-primary))] rounded transition-colors"
               title="Continue — ask the agent to continue its response"
               aria-label="Continue response"
               data-testid="continue-button"
