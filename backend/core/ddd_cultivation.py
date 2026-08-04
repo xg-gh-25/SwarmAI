@@ -82,6 +82,13 @@ def _record_auto_retire(project_dir: Path) -> None:
 # Minimum lesson length to be considered for DDD promotion
 MIN_LESSON_LENGTH = 30
 
+# The proposal statuses that are AWAITING A HUMAN DECISION — the single source of
+# truth for "can this proposal still be acted on (approved/rejected)". Terminal
+# states (applied/rejected/expired) are excluded. Reused by read_pending_proposals
+# (the list view) AND the router's _find_proposal (the by-id lookup) so the two can
+# never drift: a proposal hidden from the list must also be un-approvable (run_93594880).
+AWAITING_HUMAN_STATUSES = frozenset({"pending", "escalated"})
+
 # CJK codepoint detector — used by is_quality_lesson to apply a char-length floor
 # (not a whitespace-word floor) to Chinese/Japanese/Korean text, which has no
 # inter-word spaces. Ranges are kept byte-identical to context_directory_loader's
@@ -1573,14 +1580,13 @@ def read_pending_proposals(
     if not proposals_dir.exists():
         return []
 
-    _AWAITING_HUMAN = {"pending", "escalated"}
     pending = []
     for filepath in proposals_dir.glob("*.json"):
         try:
             data = json.loads(filepath.read_text())
             proposal = CultivationProposal.from_dict(data)
 
-            if proposal.status not in _AWAITING_HUMAN:
+            if proposal.status not in AWAITING_HUMAN_STATUSES:
                 continue
             if proposal.is_expired():
                 continue

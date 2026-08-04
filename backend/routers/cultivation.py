@@ -11,8 +11,10 @@ Endpoints:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from core.initialization_manager import initialization_manager
 from core.ddd_cultivation import (
+    AWAITING_HUMAN_STATUSES,
     CultivationProposal,
     read_pending_proposals,
     apply_to_ddd,
@@ -76,64 +79,68 @@ async def approve_proposal(
     root = Path(ws_path)
     project_dir = root / "Projects" / project
 
-    proposal = _find_proposal(project_dir, proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
+    # Serialize find→apply→mark for this id (run_93594880): a concurrent
+    # approve+reject must not interleave to a torn status. 409 on contention.
+    with _proposal_lock(project_dir, proposal_id):
+        proposal = _find_proposal(project_dir, proposal_id)
+        if not proposal:
+            raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
 
-    # Approve-time re-target: only override fields explicitly supplied (§9-D1).
-    if target_doc:
-        proposal.target_doc = target_doc
-    if target_section:
-        proposal.target_section = target_section
+        # Approve-time re-target: only override fields explicitly supplied (§9-D1).
+        if target_doc:
+            proposal.target_doc = target_doc
+        if target_section:
+            proposal.target_section = target_section
 
-    # Dispatch on change_type (run_b8f10185): append → apply_to_ddd (the additive
-    # path); retire/rewrite → apply_retire_proposal (reversible retire_entry:
-    # archive + dated .bak + identity-strip). This is the ONLY apply path for a
-    # destructive change reaching THIS router (an escalated retire the human is
-    # approving). Confident retires auto-apply upstream in _cultivate_proposals
-    # (run_ecc7a32b) and never reach here; this path is the human-gated remainder.
-    if proposal.change_type in ("retire", "rewrite"):
-        status = apply_retire_proposal(proposal, project_dir)
-        success_states = ("retired", "rewritten")
-    else:
-        # Apply to DDD document (returns a status string, not a bool).
-        # "applied" and "created_section" both mean the lesson landed successfully
-        # (created_section = the whitelisted heading was absent and auto-created).
-        status = apply_to_ddd(proposal, project_dir)
-        success_states = ("applied", "created_section")
-    if status not in success_states:
-        # Rich diagnostic goes to the SERVER log (includes doc/section names);
-        # the client gets a generic message so the API does not disclose the
-        # internal DDD filesystem structure / section taxonomy to callers — the
-        # cultivation router has no auth dependency (adversarial security MED).
-        logger.warning(
-            "Cultivation approve failed: proposal %s → %s#%s (change_type: %s, status: %s)",
-            proposal_id, proposal.target_doc, proposal.target_section,
-            proposal.change_type, status,
-        )
-        client_detail = {
-            "duplicate": "Proposal content is already present (duplicate).",
-            "no_target": "Retire proposal has no located target entry.",
-        }.get(status, f"Could not apply proposal (status: {status}).")
-        # Gate-2 LOW (run_b8f10185): client-correctable retire outcomes (fail-loud
-        # no-match / ambiguous / keep-class refused / missing target) are 422, not
-        # 500 — they reflect a bad proposal the caller can fix, not a server fault.
-        client_correctable = status == "no_target" or status.startswith("retire_failed:")
-        raise HTTPException(
-            status_code=422 if client_correctable else 500,
-            detail=client_detail,
-        )
-    if status == "created_section":
-        logger.warning(
-            "Cultivation approve auto-created missing section: %s#%s (proposal %s)",
-            proposal.target_doc, proposal.target_section, proposal_id,
-        )
+        # Dispatch on change_type (run_b8f10185): append → apply_to_ddd (the additive
+        # path); retire/rewrite → apply_retire_proposal (reversible retire_entry:
+        # archive + dated .bak + identity-strip). This is the ONLY apply path for a
+        # destructive change reaching THIS router (an escalated retire the human is
+        # approving). Confident retires auto-apply upstream in _cultivate_proposals
+        # (run_ecc7a32b) and never reach here; this path is the human-gated remainder.
+        if proposal.change_type in ("retire", "rewrite"):
+            status = apply_retire_proposal(proposal, project_dir)
+            success_states = ("retired", "rewritten")
+        else:
+            # Apply to DDD document (returns a status string, not a bool).
+            # "applied" and "created_section" both mean the lesson landed successfully
+            # (created_section = the whitelisted heading was absent and auto-created).
+            status = apply_to_ddd(proposal, project_dir)
+            success_states = ("applied", "created_section")
+        if status not in success_states:
+            # Rich diagnostic goes to the SERVER log (includes doc/section names);
+            # the client gets a generic message so the API does not disclose the
+            # internal DDD filesystem structure / section taxonomy to callers — the
+            # cultivation router has no auth dependency (adversarial security MED).
+            logger.warning(
+                "Cultivation approve failed: proposal %s → %s#%s (change_type: %s, status: %s)",
+                proposal_id, proposal.target_doc, proposal.target_section,
+                proposal.change_type, status,
+            )
+            client_detail = {
+                "duplicate": "Proposal content is already present (duplicate).",
+                "no_target": "Retire proposal has no located target entry.",
+            }.get(status, f"Could not apply proposal (status: {status}).")
+            # Gate-2 LOW (run_b8f10185): client-correctable retire outcomes (fail-loud
+            # no-match / ambiguous / keep-class refused / missing target) are 422, not
+            # 500 — they reflect a bad proposal the caller can fix, not a server fault.
+            client_correctable = status == "no_target" or status.startswith("retire_failed:")
+            raise HTTPException(
+                status_code=422 if client_correctable else 500,
+                detail=client_detail,
+            )
+        if status == "created_section":
+            logger.warning(
+                "Cultivation approve auto-created missing section: %s#%s (proposal %s)",
+                proposal.target_doc, proposal.target_section, proposal_id,
+            )
 
-    # Update status in file
-    _update_proposal_status(project_dir, proposal_id, "applied")
+        # Update status in file (inside the lock — the mark is part of the
+        # critical section, not a post-release write).
+        _update_proposal_status(project_dir, proposal_id, "applied")
 
-    # Log application
-    log_application(proposal, project_dir)
+        # Log application
+        log_application(proposal, project_dir)
 
     logger.info(
         "Cultivation proposal %s approved → %s#%s",
@@ -161,11 +168,14 @@ async def reject_proposal(
     root = Path(ws_path)
     project_dir = root / "Projects" / project
 
-    proposal = _find_proposal(project_dir, proposal_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
+    # Same per-proposal lock as approve (run_93594880): reject must not race a
+    # concurrent approve on the same id to a torn status.
+    with _proposal_lock(project_dir, proposal_id):
+        proposal = _find_proposal(project_dir, proposal_id)
+        if not proposal:
+            raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
 
-    _update_proposal_status(project_dir, proposal_id, "rejected", reason=reason)
+        _update_proposal_status(project_dir, proposal_id, "rejected", reason=reason)
 
     logger.info("Cultivation proposal %s rejected (reason: %s)", proposal_id, reason)
 
@@ -177,7 +187,16 @@ async def reject_proposal(
 
 
 def _find_proposal(project_dir: Path, proposal_id: str) -> Optional[CultivationProposal]:
-    """Find a proposal by ID in the project's proposals directory."""
+    """Find an ACTIONABLE proposal by ID in the project's proposals directory.
+
+    Returns the proposal ONLY when it is still awaiting a human decision — status
+    in AWAITING_HUMAN_STATUSES and not expired. A terminal (applied/rejected) or
+    expired proposal returns None → the approve/reject handlers 404 on it. This is
+    the by-id twin of read_pending_proposals' list-view filter, reusing the SAME
+    AWAITING_HUMAN_STATUSES constant so a proposal hidden from the list can never
+    be re-approved by id (run_93594880: without this, a rejected proposal was
+    re-approvable and an expired one was approvable though invisible to the list).
+    """
     proposals_dir = project_dir / ".artifacts" / "proposals"
     if not proposals_dir.exists():
         return None
@@ -186,11 +205,56 @@ def _find_proposal(project_dir: Path, proposal_id: str) -> Optional[CultivationP
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             if data.get("id") == proposal_id:
-                return CultivationProposal.from_dict(data)
+                proposal = CultivationProposal.from_dict(data)
+                if proposal.status not in AWAITING_HUMAN_STATUSES:
+                    return None  # terminal (applied/rejected) — not actionable
+                if proposal.is_expired():
+                    return None  # past TTL — parity with read_pending_proposals
+                return proposal
         except (json.JSONDecodeError, OSError, KeyError):
             continue
 
     return None
+
+
+@contextmanager
+def _proposal_lock(project_dir: Path, proposal_id: str):
+    """Serialize the find→apply→mark critical section for ONE proposal id.
+
+    Per-proposal advisory flock on .artifacts/proposals/{id}.lock (distinct ids
+    stay parallel). Non-blocking: a concurrent holder → HTTPException(409) rather
+    than an event-loop stall (LOCK_NB returns immediately, safe to call in an async
+    handler). Without this, two concurrent approve/reject on the same id both pass
+    _find_proposal (both see it actionable) and race the status write (run_93594880).
+
+    ⚠️ Deliberately does NOT unlink the .lock file on release — unlinking a flock'd
+    path is the inode-divergence race (run_edcfd0e5 / build.md MECHANISM note): a
+    waiter would re-create a NEW inode and both holders would "own the lock". The
+    stray .lock sidecar is harmless; leave it (matches ddd_orchestrator.py's
+    corrected pattern, NOT apply_to_ddd's latent unlink). Lock order is
+    proposal(outer) → doc(inner, taken by apply_to_ddd) — no cycle.
+    """
+    lock_path = project_dir / ".artifacts" / "proposals" / f"{proposal_id}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if lock_fd:
+            lock_fd.close()
+        raise HTTPException(
+            status_code=409,
+            detail="Proposal is being modified by another request.",
+        )
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fd.close()  # NO unlink — see docstring (inode race)
 
 
 def _update_proposal_status(
