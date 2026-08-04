@@ -242,19 +242,39 @@ export default function FileViewer({
 
       try {
         if (isBinaryType(tab.viewType) && tab.viewType !== 'unsupported') {
-          // Binary content (image, pdf, video, audio) — full fetch
-          const resp = await api.get<FileResponse>('/workspace/file', {
-            params: { path: tab.filePath },
-          });
-          if (cancelled) return;
-          const d = resp.data;
-          contentCache.current[tab.filePath] = {
-            content: d.content,
-            encoding: d.encoding,
-            size: d.size ?? 0,
-            mimeType: d.mime_type ?? d.mimeType,
-          };
-          setStatusBarInfo({ fileSize: d.size ?? 0, encoding: d.encoding });
+          // Media (image/pdf/video/audio) STREAM from /workspace/file/raw inside
+          // their renderers (Cycle C, run_b454ce39) — we no longer pull the whole
+          // file as base64-in-JSON (+33% over the wire, a decoded copy pinned in
+          // this cache until tab close). Fetch metadata ONLY for the status bar;
+          // the renderer builds its own raw URL from filePath. (video/audio already
+          // ignored the base64 content — this stops fetching it for them too.)
+          try {
+            const resp = await api.get<{ size: number; mime_type: string }>(
+              '/workspace/file/meta',
+              { params: { path: tab.filePath } },
+            );
+            if (cancelled) return;
+            contentCache.current[tab.filePath] = {
+              content: '',
+              size: resp.data.size ?? 0,
+              mimeType: resp.data.mime_type,
+            };
+            setStatusBarInfo({ fileSize: resp.data.size ?? 0 });
+          } catch (err) {
+            if (cancelled) return;
+            // /meta 413s an oversized file (>50 MB) — preserve the friendly
+            // "too large, open locally" message the base64 path used to show,
+            // instead of silently mounting a renderer that fails to stream.
+            const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status;
+            if (status === 413) {
+              const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+              setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+              return;
+            }
+            // Other metadata errors are best-effort — the renderer still streams via raw URL.
+            contentCache.current[tab.filePath] = { content: '', size: 0 };
+            setStatusBarInfo({ fileSize: 0 });
+          }
         } else if (tab.viewType === 'unsupported') {
           // Unsupported — metadata only
           try {

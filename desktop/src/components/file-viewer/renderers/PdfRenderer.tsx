@@ -41,6 +41,7 @@ type ZoomMode = 'fit-width' | 'fit-page' | 'manual';
  * smoother scrolling.
  */
 const PdfRenderer = memo(function PdfRenderer({
+  filePath,
   content,
   fileName,
   onStatusInfo,
@@ -68,8 +69,15 @@ const PdfRenderer = memo(function PdfRenderer({
     }
   }, [content]);
 
-  // Stable file prop object — only changes when pdfData changes
-  const fileSource = useMemo(() => (pdfData ? { data: pdfData } : null), [pdfData]);
+  // Stream from the raw endpoint (Cycle C, run_b454ce39) — react-pdf v10 accepts
+  // a URL string as `file`; avoids decoding a whole base64 PDF into a Uint8Array
+  // held in memory. Falls back to the in-memory bytes only if a caller still
+  // passes base64 `content` (backward-compat; FileViewer no longer does).
+  const fileSource = useMemo(
+    () => (content ? (pdfData ? { data: pdfData } : null)
+                   : `/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`),
+    [content, pdfData, filePath],
+  );
 
   // Report page info to parent
   const reportPageInfo = useCallback(
@@ -169,7 +177,9 @@ const PdfRenderer = memo(function PdfRenderer({
   }, [prevPage, nextPage]);
 
   // --- No content ---
-  if (!content || !fileSource) {
+  // fileSource is the /raw URL string (streaming path) OR {data} (base64 fallback).
+  // Only truly absent when neither content nor filePath produced a source.
+  if (!fileSource) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
         <span className="material-symbols-outlined text-4xl mb-2">picture_as_pdf</span>

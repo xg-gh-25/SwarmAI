@@ -27,6 +27,7 @@ const MAX_ZOOM = 10;
 const ZOOM_STEP = 0.1;
 
 export default function ImageRenderer({
+  filePath,
   fileName,
   content,
   mimeType,
@@ -119,20 +120,20 @@ export default function ImageRenderer({
     [onStatusInfo],
   );
 
-  /* Reset view when content changes */
+  /* Reset zoom/pan on file switch. Keyed on filePath (NOT content): the
+   * streaming path (Cycle C) makes content always '' , so a [content] dep would
+   * never fire on an image→image switch, carrying the prior image's zoom over
+   * (Gate-2 HIGH). filePath is the real "which image" signal. */
   useEffect(() => {
     resetToFit();
-  }, [content, resetToFit]);
+  }, [filePath, content, resetToFit]);
 
-  if (!content) {
-    return (
-      <div className="flex items-center justify-center h-full text-sm text-[var(--color-text-muted)]">
-        No image data available.
-      </div>
-    );
-  }
-
-  const dataUri = `data:${mimeType};base64,${content}`;
+  // Stream from the raw endpoint (Cycle C, run_b454ce39) — same pattern as
+  // Video/AudioRenderer. Avoids the +33% base64 bloat + a decoded copy pinned in
+  // the JS content cache until tab close. Falls back to a base64 data-URI only if
+  // a caller still passes `content` (backward-compat; FileViewer no longer does).
+  const rawUrl = `/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+  const imgSrc = content ? `data:${mimeType};base64,${content}` : rawUrl;
   const showCheckerboard = /png|webp|avif|gif|svg/i.test(mimeType);
   const canPan = scale > 1 || !fitMode;
 
@@ -203,7 +204,7 @@ export default function ImageRenderer({
         onMouseLeave={handleMouseUp}
       >
         <img
-          src={dataUri}
+          src={imgSrc}
           alt={fileName}
           onLoad={handleImageLoad}
           draggable={false}
