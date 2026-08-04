@@ -333,7 +333,21 @@ function FileViewerPanelImpl({
       {/* Canvas column: output rail (session deliverables) + the file surface.
           `canvas-content-fade` eases content opacity in behind the width grow so
           text doesn't smear while the panel is still widening (bug5). */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade">
+      {/* `contain: layout` bounds the chat textarea's auto-grow reflow so it can
+          NOT descend into this column's large un-virtualized Canvas DOM
+          (FileEditorCore renders one node per line). Root fix for the recurring
+          "Canvas 开着时 chat input 输入卡死" lag (run_1cb87e1a): a keystroke's
+          textarea `height='auto'` dirties document layout; without containment the
+          browser re-lays-out the whole Canvas subtree (O(lines)) every keypress.
+          MUST stay on this INNER content column, NOT the outer panel box — the outer
+          box holds the `.canvas-spout` at left:-10px, and `contain` there would
+          establish a containing block that clips the overhanging spout. The panel is
+          fixed-width (outer box: flex-shrink-0 + explicit style.width), so typing
+          never changes Canvas width → `layout` containment is both effective and
+          spout-safe. `contain:layout` (NOT paint/content/size) does not clip, so zero
+          visual change; absolute children inside the column are positioned relative to
+          ancestors inside it (no-op), and popovers are portaled/fixed (unaffected). */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade" style={{ contain: 'layout' }}>
         {/* Canvas header — output stream + gentle auto-surface controls.
             Rendered only when Canvas props are wired (sessionId provided).
             Layout: a min-w-0 truncating title/summary on the left + a

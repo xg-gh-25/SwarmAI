@@ -14,6 +14,43 @@ import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
 import { VoiceConversationIndicator } from '../../../components/chat/VoiceConversationIndicator';
 import type { VoiceConversationState } from '../../../hooks/useVoiceConversation';
 
+/** The (value, width, expanded) triple that the textarea's wrapped height is a
+ *  pure function of. applyHeight skips the forced-reflow measure when the current
+ *  triple equals the last measured one. Exported so the reflow-skip guard is tested
+ *  as a pure function (its width-key correctness — Gate-1 FLAW4 — is otherwise
+ *  hard to isolate in a component test without accidentally passing on a value-only
+ *  guard). run_1cb87e1a. */
+export interface HeightMeasureSig {
+  value: string;
+  width: number;
+  expanded: boolean;
+}
+
+/** True iff a height re-measure is unnecessary: same value AND same width AND same
+ *  expanded mode. WIDTH is load-bearing — a rewrap from a width change (Canvas
+ *  open/close, drag-resize) with the value unchanged MUST re-measure, so a
+ *  value-only comparison would wrongly return true and freeze the height. */
+export function heightMeasureUnchanged(
+  prev: HeightMeasureSig | null,
+  next: HeightMeasureSig,
+): boolean {
+  return (
+    prev !== null &&
+    prev.value === next.value &&
+    prev.width === next.width &&
+    prev.expanded === next.expanded
+  );
+}
+
+/** What to store as the last-measured signature after a measure. Returns the sig
+ *  ONLY when it was measured at a real (>0) width; at width 0 (a keep-mounted
+ *  BACKGROUND tab's textarea) returns null so the NEXT measure — once the element is
+ *  actually laid out — is never skipped by a stale 0-width signature match (Gate-2
+ *  correctness MED, run_1cb87e1a). */
+export function cacheableMeasureSig(sig: HeightMeasureSig): HeightMeasureSig | null {
+  return sig.width > 0 ? sig : null;
+}
+
 interface ChatInputProps {
   inputValue: string;
   onInputChange: (value: string) => void;
@@ -141,6 +178,13 @@ export function ChatInput({
   // rAF handle for the deferred height recalc — batches/coalesces the layout
   // read-write so keystrokes never force a synchronous reflow (input-lag fix).
   const heightFrameRef = useRef<number | null>(null);
+  // Signature of the last height measure: the (value, width, expanded) triple that
+  // wrapped height is a pure function of. applyHeight early-returns (skips the
+  // forced `height='auto'`→read-`scrollHeight` reflow) when this triple is unchanged.
+  // Width is part of the key so a width-driven rewrap (Canvas open/close, drag-resize)
+  // still re-measures even when the value is unchanged (run_1cb87e1a Gate-1 FLAW4).
+  // Reset to null on send-reset (height cleared to '') so the next measure recomputes.
+  const lastMeasureRef = useRef<{ value: string; width: number; expanded: boolean } | null>(null);
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
@@ -219,10 +263,31 @@ export function ChatInput({
     const el = textareaRef.current;
     if (!el) return;
     const maxHeight = isExpanded ? window.innerHeight * 0.6 : maxHeightRef.current;
+    // Skip the forced-reflow measure (`height='auto'` write → `scrollHeight` read)
+    // when NOTHING that can change the wrapped height changed since the last apply:
+    // same value AND same client width AND same expanded mode. Wrapped height is a
+    // pure function of (text, width, maxHeight-mode) — if all three are unchanged the
+    // measure would recompute the identical height, so the whole read-after-write
+    // reflow is pure waste. Guarding on WIDTH (not value alone) is REQUIRED: a
+    // width-driven rewrap (Canvas open/close, drag-resize, window resize) changes the
+    // height with the value unchanged, so a value-only skip would freeze the textarea
+    // at a stale height (run_1cb87e1a Gate-1 FLAW4). This removes redundant measures
+    // on non-value re-fires; the contain:layout on the Canvas column bounds the cost
+    // of the measures that DO run. (During active typing the value changes each key,
+    // so this never wrongly skips a real growth.)
+    const width = el.clientWidth;
+    const sig: HeightMeasureSig = { value: el.value, width, expanded: isExpanded };
+    if (heightMeasureUnchanged(lastMeasureRef.current, sig)) {
+      return;
+    }
     el.style.height = 'auto';
     const scrollH = el.scrollHeight;
     el.style.height = `${Math.min(scrollH, maxHeight)}px`;
     el.style.overflowY = scrollH > maxHeight ? 'auto' : 'hidden';
+    // Do NOT cache a signature measured at width 0 (keep-mounted background tab) —
+    // else a later width-only recovery with the value unchanged would match-and-skip,
+    // freezing the height (Gate-2 correctness MED, run_1cb87e1a). See cacheableMeasureSig.
+    lastMeasureRef.current = cacheableMeasureSig(sig);
     // Update line count — only trigger re-render when the value actually changes
     const lines = el.value.split('\n').length;
     setLineCount(prev => prev !== lines ? lines : prev);
@@ -582,6 +647,9 @@ export function ChatInput({
       el.style.height = '';       // clear inline style, rows={3} reasserts minimum
       el.style.overflowY = 'hidden';
     }
+    // Invalidate the measure cache: height was just reset to '' (native rows min),
+    // so the next applyHeight MUST re-measure rather than skip on a stale signature.
+    lastMeasureRef.current = null;
   }, [onSend, isExpanded, onExpandedChange, applyTransition]);
 
   const hasAttachments = attachments.some((a) => !a.error && !a.isLoading);
