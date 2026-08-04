@@ -995,6 +995,20 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
     # --- Stage 3 & 4: Bare filename → recursive search (depth-capped, pruned) ---
     _MAX_DEPTH = 8
     _EXCLUDED_DIRS = {'.git', 'node_modules', '__pycache__', '.pytest_cache', '.venv', '.mypy_cache'}
+    # G4 (run_5a7be540): a wall-time budget on the bare-name walk. Depth-8 + dir
+    # pruning already bound the DEPTH, but a very WIDE tree (many dirs, 100K files
+    # spread across them) could still take seconds — and this runs on the streaming
+    # file-change hot path (per emitted deliverable). The check fires BETWEEN os.walk
+    # yields (per-directory), so it bounds the common wide-tree-of-directories case.
+    # KNOWN RESIDUAL (Gate-2): a single PATHOLOGICAL directory with ~1M entries in ONE
+    # dir can still block inside a single listdir() past the budget before the next
+    # check — os.walk gives no mid-listdir hook, so bounding that would mean replacing
+    # os.walk (ceremony for an exotic case). Accepted: the common case is bounded; the
+    # exotic single-mega-dir case degrades to the pre-G4 behavior, never worse. On
+    # budget-exceed we bail to None = "not found" (safe: caller drops an unresolvable
+    # write). Never raises. monotonic() so a wall-clock change can't skew it.
+    _WALK_BUDGET_S = 2.0
+    _walk_deadline = time.monotonic() + _WALK_BUDGET_S
     if "/" not in path and "\\" not in path:
         # Stage 3: inside Projects/ (symlinked repos)
         if projects_dir.is_dir():
@@ -1003,6 +1017,8 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
                     continue
                 project_resolved = project.resolve()
                 for root, dirs, files in os.walk(project_resolved):
+                    if time.monotonic() > _walk_deadline:
+                        return None  # G4: walk budget exceeded → treat as not-found
                     dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED_DIRS)
                     try:
                         rel_root = Path(root).relative_to(project_resolved)
@@ -1019,6 +1035,8 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
         # Stage 4: workspace root (Knowledge/, .context/, Services/, …), excl Projects/
         _STAGE4_EXCLUDE = _EXCLUDED_DIRS | {'Projects'}
         for root, dirs, files in os.walk(workspace_root):
+            if time.monotonic() > _walk_deadline:
+                return None  # G4: walk budget exceeded → treat as not-found
             dirs[:] = sorted(d for d in dirs if d not in _STAGE4_EXCLUDE)
             try:
                 rel_root = Path(root).relative_to(workspace_root)

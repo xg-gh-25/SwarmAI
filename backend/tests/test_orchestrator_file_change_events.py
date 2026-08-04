@@ -93,6 +93,76 @@ def test_multiple_targets_from_one_bash(monkeypatch):
     assert all(e["relevance"] == "deliverable" for e in events)
 
 
+# ── G2 (run_5a7be540): concurrent build preserves order + is fail-safe per path ──
+
+def test_concurrent_build_preserves_order(monkeypatch):
+    monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
+                        lambda raw, ws: {"relative": raw, "absolute": "/abs/" + raw})
+    orch = _orch()
+    events = _run(orch._build_file_change_events(["a.md", "b.md", "c.md"], {}))
+    assert [e["path"] for e in events] == ["a.md", "b.md", "c.md"]  # gather keeps order
+
+
+def test_one_path_verdict_error_does_not_sink_batch(monkeypatch):
+    # G2c NEGATIVE: if needs_human_review raises for ONE path, the others still emit
+    # (that path falls back to kind=content, never drops the whole batch).
+    monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
+                        lambda raw, ws: {"relative": raw, "absolute": "/abs/" + raw})
+
+    def _boom(abs_path, op):
+        if abs_path == "/abs/b.md":
+            raise RuntimeError("git check-ignore blew up")
+        class V:  # minimal verdict stub
+            kind = "content"
+        return V()
+
+    monkeypatch.setattr("core.needs_human_review.needs_human_review", _boom)
+    orch = _orch()
+    events = _run(orch._build_file_change_events(["a.md", "b.md", "c.md"], {}))
+    # all three still emit; b.md fell back to kind=content
+    assert [e["path"] for e in events] == ["a.md", "b.md", "c.md"]
+    assert all(e["kind"] == "content" for e in events)
+
+
+# ── G1 (run_5a7be540): _build_file_delete_events → operation=deleted ──
+
+def test_delete_event_emitted_with_operation_deleted(monkeypatch):
+    # A deleted file that STILL resolves (rare — e.g. abs path structurally under a
+    # Projects symlink) carries the resolved forms; operation is 'deleted'.
+    monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
+                        lambda raw, ws: {"relative": "Projects/SwarmAI/old.md",
+                                         "absolute": "/abs/old.md"})
+    orch = _orch()
+    events = _run(orch._build_file_delete_events(["old.md"], {}))
+    assert len(events) == 1
+    assert events[0]["operation"] == "deleted"
+    assert events[0]["path"] == "Projects/SwarmAI/old.md"
+
+
+def test_delete_event_falls_back_to_raw_when_unresolvable(monkeypatch):
+    # A deleted file usually can't be resolved (it's gone — resolve requires is_file).
+    # Unlike a WRITE (dropped on resolve=None), a delete still emits, carrying the raw
+    # path for BOTH path and absolutePath so the frontend can anchor-match + remove.
+    monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
+                        lambda raw, ws: None)
+    orch = _orch()
+    events = _run(orch._build_file_delete_events(["src/gone.ts"], {}))
+    assert len(events) == 1
+    assert events[0]["operation"] == "deleted"
+    assert events[0]["path"] == "src/gone.ts"
+    assert events[0]["absolutePath"] == "src/gone.ts"
+
+
+def test_delete_bookkeeping_path_not_emitted(monkeypatch):
+    # A deleted .artifacts/.git/dotfile must NOT emit delete churn.
+    monkeypatch.setattr("routers.workspace_api.resolve_path_to_physical",
+                        lambda raw, ws: None)
+    orch = _orch()
+    events = _run(orch._build_file_delete_events(
+        ["Projects/SwarmAI/.artifacts/x.json"], {}))
+    assert events == []
+
+
 # ── run_0520a394: the agent's OWN Edit/Write must emit file_changed even though
 #    its tool_result arrives in a UserMessage (Anthropic protocol), not the
 #    AssistantMessage branch. These drive the REAL _read_formatted_response

@@ -299,11 +299,98 @@ class StreamingOrchestrator:
         from routers.workspace_api import resolve_path_to_physical
 
         ws_root = get_swarmws()
+
+        # Filter bookkeeping FIRST (never pays resolution — perf); keep the surviving
+        # (raw, relevance) pairs in ORDER so the emitted events preserve path order.
+        candidates = [
+            (raw, classify_relevance(raw, "written"))
+            for raw in raw_paths
+        ]
+        candidates = [(raw, rel) for (raw, rel) in candidates if rel != "bookkeeping"]
+
+        # G2 (run_5a7be540): resolve + verdict PER PATH concurrently instead of the old
+        # serial `for raw: await resolve; await verdict`, which spawned N git check-ignore
+        # subprocesses one-at-a-time on the streaming hot path. gather preserves order.
+        # We deliberately do NOT cache the verdict (Gate-1): needs_human_review runs
+        # `git check-ignore`, whose result depends on the MUTABLE .gitignore (an agent can
+        # rewrite it mid-session) — a cached verdict would go stale. Only resolve is cached
+        # (path→physical is stable within a turn). Each path's work is independently
+        # fail-safe: an exception in one never drops the batch.
+        async def _resolve_one(raw: str) -> "dict | None":
+            if raw in resolve_cache:
+                return resolve_cache[raw]
+            try:
+                r = await asyncio.to_thread(resolve_path_to_physical, raw, ws_root)
+            except Exception:
+                r = None
+            resolve_cache[raw] = r
+            return r
+
+        async def _build_one(raw: str, relevance: str) -> "dict | None":
+            resolved = await _resolve_one(raw)
+            # Layer 1 emit-gate (run_6ebe2d09): a WRITTEN path that fails to resolve is
+            # NOT a real file (a just-written deliverable always exists on disk), so
+            # resolve=None means garbage (e.g. a mis-parsed Bash `>` fragment) → DROP.
+            if not resolved:
+                return None
+            # Unified review verdict (run_dcce7023). needs_human_review does its own
+            # owning-tree resolution on the ABSOLUTE path; runs a `git check-ignore`
+            # subprocess → off-loop via to_thread. Fail-safe: on any error, fall back
+            # to kind="content" so a resolved deliverable still surfaces.
+            try:
+                verdict = await asyncio.to_thread(
+                    needs_human_review, resolved["absolute"], "written"
+                )
+                kind = verdict.kind
+            except Exception:
+                kind = "content"
+            return {
+                "type": "file_changed",
+                "path": resolved["relative"],
+                "absolutePath": resolved["absolute"],
+                "relevance": relevance,
+                "kind": kind,
+                "operation": "written",
+            }
+
+        built = await asyncio.gather(
+            *(_build_one(raw, rel) for (raw, rel) in candidates),
+            return_exceptions=True,
+        )
+        # Drop None (unresolvable) AND any Exception (a single path's failure must not
+        # sink the batch — G2c negative). gather preserves input order.
+        events: list[dict] = [
+            ev for ev in built if isinstance(ev, dict)
+        ]
+        return events
+
+    async def _build_file_delete_events(
+        self, raw_paths: list[str], resolve_cache: "dict[str, dict | None]"
+    ) -> list[dict]:
+        """Turn a tool's DELETED raw path(s) into unified file_changed(operation=deleted)
+        events so the frontend can REMOVE stale rail rows (G1, run_5a7be540).
+
+        Unlike a write, a deleted file no longer exists on disk, so
+        resolve_path_to_physical (which requires is_file) usually returns None — a
+        relative path or a plain-name delete can't be stat-relativized after the
+        fact. That is fine: the delete event carries the BEST path form we have
+        (resolved relative if the resolve happened to succeed — e.g. an absolute
+        path still structurally under a Projects/ symlink — else the raw path for
+        BOTH path and absolutePath). The FRONTEND removes conservatively (anchored
+        match on path/absolutePath), so a delete that matches nothing is a harmless
+        no-op (a stale row lingers == today's behavior; safe direction). We never
+        run needs_human_review here (can't stat a gone file); bookkeeping paths are
+        still filtered so we don't emit delete churn for .artifacts/.git/dotfiles.
+        """
+        from core.file_change_classifier import classify_relevance
+        from core.project_registry import get_swarmws
+        from routers.workspace_api import resolve_path_to_physical
+
+        ws_root = get_swarmws()
         events: list[dict] = []
         for raw in raw_paths:
-            relevance = classify_relevance(raw, "written")
-            if relevance == "bookkeeping":
-                continue  # never surface .artifacts/.git/.context/dotfile/tmp
+            if classify_relevance(raw, "written") == "bookkeeping":
+                continue
             if raw in resolve_cache:
                 resolved = resolve_cache[raw]
             else:
@@ -312,36 +399,15 @@ class StreamingOrchestrator:
                 except Exception:
                     resolved = None
                 resolve_cache[raw] = resolved
-            # Layer 1 emit-gate (run_6ebe2d09): a WRITTEN path that fails to resolve
-            # is NOT a real file. A just-written deliverable always exists on disk,
-            # so resolve=None means the "path" is garbage — e.g. `L4(top-right)` /
-            # `bottom` mis-parsed from a Bash `>` operator. Emitting it produced a
-            # broken Canvas row → "Resource not found". Drop it (was: fail-open emit
-            # with path==raw, which surfaced the garbage). Under-surfacing a truly
-            # unresolvable write is the design's safe direction (a miss ≫ a false pop).
-            if not resolved:
-                continue
-            # Enrich with the unified review verdict (run_dcce7023). needs_human_review
-            # does its OWN owning-tree resolution + relativization on the resolved
-            # ABSOLUTE path (never trusts resolved["relative"], which is the absolute
-            # string in the no-project-match branch — the F-NEW-2 seam trap). Runs a
-            # `git check-ignore` subprocess, so off-loop via to_thread. Fail-safe: it
-            # never raises; `kind` is additive — `relevance` is KEPT for the 4 existing
-            # consumers during the migration window (single-writer safety).
-            try:
-                verdict = await asyncio.to_thread(
-                    needs_human_review, resolved["absolute"], "written"
-                )
-                kind = verdict.kind
-            except Exception:
-                kind = "content"  # fail-open: a resolved deliverable surfaces
+            path = resolved["relative"] if resolved else raw
+            abs_path = resolved["absolute"] if resolved else raw
             events.append({
                 "type": "file_changed",
-                "path": resolved["relative"],
-                "absolutePath": resolved["absolute"],
-                "relevance": relevance,
-                "kind": kind,
-                "operation": "written",
+                "path": path,
+                "absolutePath": abs_path,
+                "relevance": "incidental",
+                "kind": "content",
+                "operation": "deleted",
             })
         return events
 
@@ -422,6 +488,11 @@ class StreamingOrchestrator:
         # tool_use_id → list[raw_path] written by that tool (Write/Edit/NotebookEdit
         # or a parsed Bash command). Resolved + classified at the ToolResult point.
         _pending_file_changes: dict[str, list[str]] = {}
+        # tool_use_id → list[raw_path] DELETED by that tool (Bash rm / mv-SRC). Emits
+        # operation=deleted at the ToolResult point so the rail drops stale rows (G1,
+        # run_5a7be540). Separate from _pending_file_changes because one Bash command
+        # can both write and delete.
+        _pending_file_deletes: dict[str, list[str]] = {}
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -726,14 +797,23 @@ class StreamingOrchestrator:
                         _tuid = getattr(_blk, "tool_use_id", None)
                         # only the parent's own tracked writes; is_error mirrors the
                         # AssistantMessage branch idiom (line ~915).
-                        if _tuid in _pending_file_changes and not getattr(_blk, "is_error", False):
-                            _um_paths = _pending_file_changes.pop(_tuid, None)
-                            if _um_paths:
-                                _um_events = await self._build_file_change_events(
-                                    _um_paths, _resolve_cache
-                                )
-                                for _ev in _um_events:
-                                    yield _ev
+                        if not getattr(_blk, "is_error", False):
+                            if _tuid in _pending_file_changes:
+                                _um_paths = _pending_file_changes.pop(_tuid, None)
+                                if _um_paths:
+                                    _um_events = await self._build_file_change_events(
+                                        _um_paths, _resolve_cache
+                                    )
+                                    for _ev in _um_events:
+                                        yield _ev
+                            if _tuid in _pending_file_deletes:
+                                _um_dels = _pending_file_deletes.pop(_tuid, None)
+                                if _um_dels:
+                                    _del_events = await self._build_file_delete_events(
+                                        _um_dels, _resolve_cache
+                                    )
+                                    for _ev in _del_events:
+                                        yield _ev
                 continue
 
             # ── AssistantMessage: full content blocks ─────────────
@@ -870,10 +950,21 @@ class StreamingOrchestrator:
                             if _fp:
                                 _pending_file_changes[block.id] = [_fp]
                         elif block.name == "Bash" and isinstance(block.input, dict):
-                            from core.file_change_classifier import parse_bash_write_targets
-                            _targets = parse_bash_write_targets(block.input.get("command", ""))
+                            from core.file_change_classifier import (
+                                parse_bash_write_targets,
+                                parse_bash_delete_targets,
+                            )
+                            _cmd = block.input.get("command", "")
+                            _targets = parse_bash_write_targets(_cmd)
                             if _targets:
                                 _pending_file_changes[block.id] = _targets
+                            # G1 (run_5a7be540): a Bash rm/mv-SRC deletes files → track
+                            # them so the ToolResult(success) emits operation=deleted and
+                            # the rail drops the stale row. Same tool_use_id may carry BOTH
+                            # (e.g. a script that writes X and rm's Y) — separate dicts.
+                            _del_targets = parse_bash_delete_targets(_cmd)
+                            if _del_targets:
+                                _pending_file_deletes[block.id] = _del_targets
                         # ── UI-action (ACT): agent drives its own UI (Run 2) ──
                         # The agent calls the ui_action tool; we observe it here,
                         # validate cmd against the fail-closed allowlist, and yield
@@ -970,10 +1061,19 @@ class StreamingOrchestrator:
                         # SINGLE authority the frontend consumes (auto-surface + rail +
                         # highlight) — the old frontend summary-parse trigger is gone.
                         _changed_paths = _pending_file_changes.pop(block.tool_use_id, None)
-                        if _changed_paths and not getattr(block, "is_error", False):
-                            _events = await self._build_file_change_events(
-                                _changed_paths, _resolve_cache
-                            )
+                        _deleted_paths = _pending_file_deletes.pop(block.tool_use_id, None)
+                        if (_changed_paths or _deleted_paths) and not getattr(block, "is_error", False):
+                            _events = []
+                            if _changed_paths:
+                                _events += await self._build_file_change_events(
+                                    _changed_paths, _resolve_cache
+                                )
+                            # G1 (run_5a7be540): deleted paths → operation=deleted so the
+                            # rail drops the stale row (a script can write AND rm in one Bash).
+                            if _deleted_paths:
+                                _events += await self._build_file_delete_events(
+                                    _deleted_paths, _resolve_cache
+                                )
                             if _events:
                                 # Flush accumulated content blocks first (ordering:
                                 # the tool_result must precede its file_changed).

@@ -171,6 +171,20 @@ describe('useCanvasAutoSurface', () => {
     expect(opened).toEqual([]); // no session baseline → don't surface
   });
 
+  it('G3: a live write during the session-resolving window FIRES once the session resolves (not dropped)', () => {
+    // Startup window: isStreaming=true but activeSessionId not yet resolved. The
+    // write must be HELD by the debounce and fire once the session resolves within
+    // the window — NOT permanently dropped at arrival.
+    const { rerender } = renderHook(
+      ({ sid }) => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: sid, isStreaming: true, debounceMs: DEBOUNCE }),
+      { initialProps: { sid: undefined as string | undefined } },
+    );
+    writeFile('Knowledge/live.md', 'written'); // unstamped (session not resolved yet)
+    rerender({ sid: 'tab-A' });                // session resolves during the window
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/live.md']);
+  });
+
   it('re-fires after the user closes their file (suppression is live, not latched)', () => {
     renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
     setPanelOpen(true);

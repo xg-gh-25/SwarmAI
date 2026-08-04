@@ -41,7 +41,14 @@ export interface CanvasAutoSurfaceOptions {
    *  writes don't surface in the tab you're looking at. Absent stamp → fail
    *  open (surface anyway; no regression for un-updated dispatchers). */
   activeSessionId?: string;
-  /** Whether the active tab is CURRENTLY streaming a response. This is the
+  /** Whether the active tab is CURRENTLY streaming a response.
+   *  CONTRACT (Gate-2, run_5a7be540): this MUST be kept in sync with the real SDK
+   *  streaming state by the caller (ChatPage wires it from useUnifiedTabState's
+   *  setIsStreaming, driven by the SSE start/stop events). The bug1 historical-replay
+   *  suppression depends on it: a stale MergedToolBlock re-dispatch arrives with
+   *  isStreaming===false and is dropped AT ARRIVAL (below). If a caller passed a
+   *  desynced/stale `true` during a replay, that suppression would weaken — so the
+   *  boolean's freshness is load-bearing, not advisory. This is the
    *  discriminator between a LIVE agent write (surface it) and a HISTORICAL
    *  MergedToolBlock re-dispatch on restart/remount (must NOT surface — bug1).
    *  The gate activates ONLY when this is explicitly provided (a boolean):
@@ -119,18 +126,20 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       // `deliverable` auto-surfaces. Fail OPEN for an older backend that doesn't send
       // `relevance` (undefined → treat a write as deliverable, no regression).
       if (relevance !== undefined && relevance !== 'deliverable') return;
-      // Streaming gate (bug1) — checked at WRITE-ARRIVAL, not debounce-fire,
-      // because a historical MergedToolBlock re-dispatch arrives while the tab
-      // is idle. Active ONLY when isStreaming was explicitly provided:
-      //   - not streaming → the write is not live output → SUPPRESS.
-      //   - gate active + no resolved activeSessionId → fail CLOSED (restart:
-      //     the tab has no session baseline yet, so don't surface history).
+      // Streaming gate (bug1) — the isStreaming half is checked at WRITE-ARRIVAL,
+      // because a historical MergedToolBlock re-dispatch arrives while the tab is
+      // idle (isStreaming===false) and must be suppressed at the source. Active
+      // ONLY when isStreaming was explicitly provided:
+      //   - not streaming → the write is not live output → SUPPRESS (at arrival).
       // When isStreaming is undefined the gate is off (legacy behavior).
+      // NOTE: the `!activeSessionId` fail-closed check moved to DEBOUNCE-FIRE (G3,
+      // run_5a7be540) — a LIVE write during the brief session-resolving startup
+      // window used to be dropped at arrival; now the debounce HOLDS it and the
+      // session-baseline check runs at fire time, so a session that resolves within
+      // the window surfaces the write. A session that NEVER resolves still fails
+      // closed (checked below), preserving the restart-history suppression.
       const streamingGate = isStreamingRef.current;
-      if (streamingGate !== undefined) {
-        if (streamingGate === false) return;  // not live output → historical re-dispatch
-        if (!activeSessionIdRef.current) return;  // gated but no session baseline → fail closed
-      }
+      if (streamingGate === false) return;  // not live output → historical re-dispatch
       // Tab-scope: ignore a background (keep-mounted) tab's write. Fail open
       // when the event is unstamped (evtSessionId absent) or we have no active
       // id yet — surface anyway rather than regress (legacy path, gate off).
@@ -148,6 +157,12 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
         const target = pendingPath;
         pendingPath = null;
         if (!target) return;
+        // Streaming-gate fail-closed, re-checked HERE at fire time (G3): if the gate
+        // is active (isStreaming provided) but the tab STILL has no resolved session,
+        // suppress — a genuine restart-history replay never gets a baseline, so it
+        // stays closed. A live write whose session resolved during the debounce window
+        // now passes (the window's transient undefined is gone by fire time).
+        if (isStreamingRef.current !== undefined && !activeSessionIdRef.current) return;
         // Gentle: user pin / session mute always win.
         if (pinnedRef.current || mutedRef.current) return;
         // Yield only if the user is viewing a file THEY opened — i.e. the panel

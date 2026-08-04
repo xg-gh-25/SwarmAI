@@ -27,7 +27,12 @@ from __future__ import annotations
 import re
 import shlex
 
-__all__ = ["classify_relevance", "parse_bash_write_targets", "Relevance"]
+__all__ = [
+    "classify_relevance",
+    "parse_bash_write_targets",
+    "parse_bash_delete_targets",
+    "Relevance",
+]
 
 Relevance = str  # 'deliverable' | 'incidental' | 'bookkeeping'
 
@@ -152,6 +157,90 @@ def parse_bash_write_targets(command: str) -> list[str]:
                 t = _clean_target(args[-1])
                 if t and t not in targets:
                     targets.append(t)
+
+    return targets
+
+
+def parse_bash_delete_targets(command: str) -> list[str]:
+    """Return the files a Bash command DELETES — conservatively (G1, run_5a7be540).
+
+    Safe-direction, under-match HARD: a MISSED delete only leaves a stale rail row
+    (== current behavior, no regression); a FALSE delete REMOVES a file from the
+    rail that still exists on disk — strictly worse. So we reject anything we
+    cannot resolve to a concrete, existing-file delete:
+
+      - `rm FILE...`      → each plain filename arg (the SRC set)
+      - `mv A B`          → A (the SRC of a 2-arg rename; the DEST B is caught as a
+                            WRITE by parse_bash_write_targets, so rail shows B added
+                            + A removed = the correct rename UI)
+
+    REJECTED (return nothing for that command token):
+      - `git rm` / `npm rm` / any `rm` that is NOT the command token (subcommand)
+      - `rm -r` / `rm -rf` (recursive DIR delete — can't enumerate the files)
+      - globs (`rm *.tmp`) — the real files are unknown at parse time
+      - `mv` with >2 non-flag args or a `-t` target-dir flag (multi-source/dir dest)
+      - anything inside a quoted span / heredoc body (blanked first, like the write parser)
+      - shell-illegal target tokens (subshells, metachars) via _clean_target
+
+    Pure, no I/O. Never raises.
+    """
+    if not command or not command.strip():
+        return []
+
+    # Same defence as the write parser: blank heredoc bodies + quoted spans so a
+    # `rm` inside them is never treated as a command.
+    unquoted = _blank_quoted(_blank_heredocs(command))
+    try:
+        tokens = shlex.split(unquoted)
+    except ValueError:
+        return []  # unbalanced quotes → refuse to guess
+
+    targets: list[str] = []
+    # Split into command segments on shell separators, so we only treat a token as
+    # `rm`/`mv` when it is the COMMAND (segment head), never a subcommand
+    # (`git rm`) or a bare word (`cat rmfile`).
+    _SEPARATORS = {"&&", "||", "|", ";", "&"}
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in _SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+
+    for seg in segments:
+        if not seg:
+            continue
+        cmd0 = seg[0]
+        rest = seg[1:]
+        if cmd0 == "rm":
+            # Reject recursive (dir) deletes — we can't enumerate the files.
+            flags = [a for a in rest if a.startswith("-")]
+            if any(("r" in f) or ("R" in f) for f in flags):
+                continue
+            for a in rest:
+                if a.startswith("-"):
+                    continue
+                if "*" in a or "?" in a or "[" in a:  # glob → unknown files, reject
+                    continue
+                t = _clean_target(a)
+                if t and t not in targets:
+                    targets.append(t)
+        elif cmd0 == "mv":
+            # Only a simple 2-arg `mv A B` rename: A is the SRC (deleted). Reject a
+            # `-t` flag (target-dir reordering) or a dir dest or >2 args (ambiguous).
+            if any(a.startswith("-") for a in rest):
+                continue
+            args = [a for a in rest if not a.startswith("-")]
+            if len(args) != 2:
+                continue
+            src, dest = args
+            if dest.endswith("/"):  # dir dest → not a plain rename we track
+                continue
+            if any(g in src for g in ("*", "?", "[")):
+                continue
+            t = _clean_target(src)
+            if t and t not in targets:
+                targets.append(t)
 
     return targets
 

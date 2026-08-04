@@ -357,8 +357,25 @@ export default function FileViewer({
   // FileViewer's own contentCache renderers (image/pdf/video/audio/csv/html/unsupported).
   useEffect(() => {
     const handler = (e: Event) => {
-      const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
+      const detail = (e as CustomEvent<{ path: string; operation?: string }>).detail;
+      const changedPath = detail?.path;
       if (!changedPath) return;
+      // G1 (run_5a7be540): a DELETE of the file open here → don't keep showing stale
+      // content (or spin forever trying to refetch a gone file). Drop its cache and
+      // surface a clear "deleted" notice. Anchored match (exact / event-abs endsWith
+      // stored-rel), never bare basename. Non-active matches are just cache-dropped.
+      if (detail?.operation === 'deleted') {
+        const isActiveMatch =
+          activeTab != null &&
+          (changedPath === activeTab.filePath || changedPath.endsWith(`/${activeTab.filePath}`));
+        for (const cp of Object.keys(contentCache.current)) {
+          if (cp === changedPath || changedPath.endsWith(`/${cp}`)) delete contentCache.current[cp];
+        }
+        if (isActiveMatch) {
+          setContentError('This file was deleted. Close this tab or open another file.');
+        }
+        return;
+      }
       // The ACTIVE tab, if it's a FileEditorCore type (text/md/svg), self-refreshes
       // via FileEditorCore's own listener — AND its cache entry must NOT be deleted
       // here: FileViewer renders <LoadingFallback> on a cache miss (renderActiveContent

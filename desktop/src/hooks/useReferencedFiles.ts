@@ -22,7 +22,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 // no read/grep/list tracking, so 'read'/'searched' were never-populated dead values; the
 // type is narrowed to what is actually emitted. FileRelevance below is SEPARATE and
 // load-bearing (incidental = the SSE bridge's fail-closed default for an older backend).
+// 'written' is the only op STORED in the rail; 'deleted' is a transient SIGNAL
+// (G1, run_5a7be540) that REMOVES a stored row — it is never itself stored.
 export type FileOperation = 'written';
+export type FileChangeOperation = 'written' | 'deleted';
 export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
 
 /** Unified review-verdict kind (backend needs_human_review, run_dcce7023):
@@ -52,7 +55,8 @@ export interface FileChangedDetail {
   path: string;
   /** Resolved physical absolute path (backend-resolved once). */
   absolutePath?: string;
-  operation: FileOperation;
+  /** 'written' adds/updates a row; 'deleted' (G1) REMOVES the matching row. */
+  operation: FileChangeOperation;
   /** Backend whitelist classification; bookkeeping is pre-filtered server-side. */
   relevance?: FileRelevance;
   /** Unified review verdict kind (run_dcce7023): content|knowledge → rail; source →
@@ -142,6 +146,32 @@ export function useReferencedFiles(sessionId: string | undefined) {
       // events stamped with a DIFFERENT session. Fail OPEN when unstamped
       // (evtSessionId absent) — no regression for any un-updated dispatcher.
       if (evtSessionId && evtSessionId !== sessionId) return;
+
+      // G1 (run_5a7be540): a delete event REMOVES the matching row (never adds).
+      // Match CONSERVATIVELY/anchored — exact display path, exact absolutePath, or
+      // an absolute delete-path ending with the stored relative path (the resolved
+      // vs raw asymmetry). NEVER bare-basename (would false-remove an unrelated
+      // same-named file). A delete matching nothing is a harmless no-op (a lingering
+      // row == pre-G1 behavior; safe direction).
+      if (operation === 'deleted') {
+        setFiles((prev) => {
+          let hit = false;
+          const next = new Map<string, ReferencedFile>();
+          for (const [key, f] of prev) {
+            const match =
+              f.path === path ||
+              f.absolutePath === path ||
+              (absolutePath !== undefined && f.absolutePath === absolutePath) ||
+              path.endsWith(`/${f.path}`);
+            if (match) { hit = true; continue; } // drop it
+            next.set(key, f);
+          }
+          if (!hit) return prev; // no-op — don't churn state/storage
+          saveToStorage(sessionId, next);
+          return next;
+        });
+        return;
+      }
 
       setFiles((prev) => {
         const next = new Map(prev);
