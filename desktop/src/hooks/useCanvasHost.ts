@@ -39,6 +39,13 @@ export interface CanvasFile {
   gitStatus?: GitStatus;
   workspaceId?: string;
   autoDiff?: boolean;
+  /** RESERVED (run_b8ea6d5c, PR-review surface): the git ref to diff the file
+   *  AGAINST (e.g. a pipeline run's base commit) instead of the default HEAD. Threaded
+   *  end-to-end but NOT yet wired to the git baseline — the diff is still
+   *  working-tree-vs-HEAD (KNOWN ISSUE: a committed file shows an empty diff until this
+   *  is honored by FileViewer's committed-content fetch). Present so the follow-up is a
+   *  single-spot wire, not another cross-boundary thread. */
+  baseRef?: string;
 }
 
 interface CanvasTabState {
@@ -175,7 +182,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string }>).detail ?? {};
       if (!filePath) return;
       let resolvedPath = filePath;
       try {
@@ -195,7 +202,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const landingTab = activeTabIdRef.current;
       const k = keyFor(landingTab);
       const cur = mapRef.current.get(k) ?? EMPTY;
-      const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId } };
+      const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef } };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
     };

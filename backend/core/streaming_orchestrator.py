@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from .compaction_guard import EscalationLevel
 from .session_healing import get_process_rss_mb
-from .ui_actions import build_ui_command_event, UI_ACTION_FULL_TOOL_NAME
+from .ui_actions import (
+    build_ui_command_event,
+    build_surface_events,
+    UI_ACTION_FULL_TOOL_NAME,
+    SURFACE_OUTPUTS_FULL_TOOL_NAME,
+)
 
 if TYPE_CHECKING:
     from .session_unit import SessionUnit
@@ -981,6 +986,17 @@ class StreamingOrchestrator:
                                 yield _ui_ev
                             # fall through: do NOT `continue` — the SDK runs the tool
                             # and returns its ack result to the agent normally.
+                        # ── Finish-time PR-review batch (run_b8ea6d5c, CHANNEL A) ──
+                        # The agent calls surface_run_outputs(run_id) at pipeline
+                        # COMPLETE; we observe it here (same pattern as ui_action) and
+                        # yield N additive file_changed events — one per committed
+                        # source file, kind=source-final — so N persistent OUTPUTS rows
+                        # appear at once. The SDK still delivers the tool's ack. This is
+                        # the ONLY way N rows reach the rail (run-commit CLI can't emit).
+                        if block.name == SURFACE_OUTPUTS_FULL_TOOL_NAME and isinstance(block.input, dict):
+                            for _sf_ev in build_surface_events(block.input.get("run_id")):
+                                yield _sf_ev
+                            # fall through: SDK runs the tool, returns its ack normally.
                         if block.name == "AskUserQuestion":
                             # The ask_question_gate PreToolUse hook intercepts this
                             # tool call BEFORE the CLI self-resolves it: it enqueues

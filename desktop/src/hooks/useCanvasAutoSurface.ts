@@ -117,10 +117,13 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
     const onWritten = (e: Event) => {
       const { path, operation, relevance, kind, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; kind?: string; sessionId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
-      // Unified-verdict gate (run_dcce7023, PRIMARY): only content|knowledge auto-pop.
-      // `source` is aggregated into the pipeline-finish local PR (never mid-run pop);
-      // `process` is machine noise (also dropped server-side). Undefined kind (older
-      // backend) → fall through to the legacy `relevance` gate below (no regression).
+      // Unified-verdict gate (PRIMARY): only content|knowledge auto-pop.
+      // `source` = a mid-run coding edit (never pops; suppressed). `source-final`
+      // (run_b8ea6d5c) = the pipeline-finish coding batch — it DOES get rail rows
+      // (useReferencedFiles) but DELIBERATELY does NOT auto-pop here: a finish batch
+      // of N files must not hijack the Canvas; the user clicks a row to review it.
+      // `process` is machine noise. Undefined kind (older backend) → fall through to
+      // the legacy `relevance` gate below (no regression).
       if (kind !== undefined && kind !== 'content' && kind !== 'knowledge') return;
       // WHITELIST gate (run_e626e121, legacy/migration): only a backend-classified
       // `deliverable` auto-surfaces. Fail OPEN for an older backend that doesn't send

@@ -85,17 +85,31 @@ function badgeRank(s: ChangeStatus | undefined): number {
 /**
  * Build the swarm:open-file event detail for an output row. Pure — unit-tested.
  *
- * AC3: outputs open on SOURCE (single line-number gutter), NEVER auto-diff. The
- * diff view renders two before|after gutters which reads as "double line numbers";
- * a user who wants the diff toggles it via the editor's Show Changes button. The
- * `badge` arg is retained for signature stability / future per-status behavior but
- * no longer forces the diff view open.
+ * PR-review surface (run_b8ea6d5c): a row opens on its DIFF (this file's changes) —
+ * that IS the review experience the OUTPUTS list exists for. `autoDiff:true` opens
+ * the FileEditorCore diff view; FileViewer soft-falls-back to source when no baseline
+ * exists (FileViewer.tsx:580 — so a brand-new file still opens cleanly, not an empty
+ * diff panel). `baseRef` is RESERVED here and threaded end-to-end but its git wiring
+ * is a KNOWN ISSUE deferred this run: the diff baseline is still working-tree-vs-HEAD,
+ * so a file already committed by run-commit shows an empty diff until a follow-up run
+ * makes the baseline ref-aware (git diff <run_base>..<head>). For the immediate
+ * (uncommitted) content/knowledge rows the working-tree-vs-HEAD diff is correct today.
+ * (Supersedes the old AC3 "outputs open on SOURCE, never auto-diff" decision — the
+ * user explicitly wants a per-file changes/PR-review view.)
  */
 export function outputRowOpenDetail(
   path: string,
   _badge: ChangeStatus | undefined,
-): { path: string; autoDiff: boolean } {
-  return { path, autoDiff: false };
+  absolutePath?: string,
+): { path: string; autoDiff: boolean; baseRef?: string } {
+  // Resolve anchor: prefer the ABSOLUTE path when present. A source-final row
+  // (run_b8ea6d5c) carries a repo-relative display `path` (e.g. `backend/foo.py`)
+  // for a file whose git repo ≠ the SwarmWS workspace — that bare relative path would
+  // 404 at /workspace/file/resolve. The absolutePath resolves for BOTH workspace files
+  // and source-repo files (the resolver accepts absolute paths — the user-click-source
+  // path). Content/knowledge rows have absolutePath === the workspace file, so this is
+  // a no-op for them. baseRef omitted until the ref-aware diff lands (Known Issue).
+  return { path: absolutePath || path, autoDiff: true };
 }
 
 /** Directory portion of a path (everything before the basename), for the dim
@@ -126,12 +140,13 @@ const OutputRow = memo(function OutputRow({
   fresh: boolean;
 }) {
   const handleClick = useCallback(() => {
-    // Always open on source (single gutter). Diff is reached via the editor's
-    // Show Changes toggle — auto-diff-on-open showed a doubled old|new gutter.
+    // PR-review surface (run_b8ea6d5c): open the row on its DIFF (this file's changes).
+    // Pass absolutePath as the resolve anchor so a source-final row (repo-relative
+    // display path, repo ≠ workspace) still resolves + opens.
     document.dispatchEvent(
-      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge) }),
+      new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(file.path, badge, file.absolutePath) }),
     );
-  }, [file.path, badge]);
+  }, [file.path, file.absolutePath, badge]);
 
   const handleCopy = useCallback(
     async (e: React.MouseEvent) => {

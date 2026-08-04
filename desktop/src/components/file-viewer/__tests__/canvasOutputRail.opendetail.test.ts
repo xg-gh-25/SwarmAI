@@ -2,28 +2,52 @@
  * Tests for outputRowOpenDetail — the pure helper that builds the swarm:open-file
  * event detail for a CanvasOutputRail row.
  *
- * AC3 (single-gutter default): a modified ('upd') output must NOT auto-open on the
- * diff view (which renders TWO before|after line-number columns → reads as "double
- * line numbers"). It opens on SOURCE (single gutter); the user reaches the diff via
- * the editor's Show Changes toggle. This test is the RED→GREEN guard for that fix —
- * it fails against the pre-fix behavior (autoDiff: badge==='upd').
+ * PR-review surface (run_b8ea6d5c): a row opens on its DIFF (this file's changes) —
+ * that IS the review experience the OUTPUTS list exists for. This SUPERSEDES the old
+ * AC3 "outputs open on SOURCE, never auto-diff" decision (the user explicitly wants a
+ * per-file changes/PR-review view). `baseRef` is RESERVED (threaded end-to-end) but
+ * its ref-aware git wiring is a KNOWN ISSUE deferred this run — so the helper emits
+ * `autoDiff:true` and omits baseRef (undefined) for now.
  */
 import { describe, it, expect } from 'vitest';
 import { outputRowOpenDetail } from '../CanvasOutputRail';
 
-describe('outputRowOpenDetail (AC3 — single-gutter default)', () => {
-  it('opens a MODIFIED (upd) output on SOURCE, not auto-diff', () => {
+describe('outputRowOpenDetail (PR-review — opens on diff)', () => {
+  it('opens a MODIFIED (upd) output on its DIFF (this file\'s changes)', () => {
     const d = outputRowOpenDetail('src/pages/index.tsx', 'upd');
     expect(d.path).toBe('src/pages/index.tsx');
-    // The whole point: no auto-diff → single gutter. Diff is reached via the toggle.
-    expect(d.autoDiff).toBe(false);
+    // The whole point of the PR-review surface: rows open on the diff view.
+    expect(d.autoDiff).toBe(true);
   });
 
-  it('opens a NEW output on source (no diff to show)', () => {
-    expect(outputRowOpenDetail('src/hooks/useLayout.ts', 'new').autoDiff).toBe(false);
+  it('opens a NEW output with autoDiff too (FileViewer soft-falls-back to source when no baseline)', () => {
+    // autoDiff:true is safe even for a new file — FileViewer only opens the diff when
+    // a committed baseline exists, else it shows source (no empty-diff panel).
+    expect(outputRowOpenDetail('src/hooks/useLayout.ts', 'new').autoDiff).toBe(true);
   });
 
-  it('opens an unbadged output on source', () => {
-    expect(outputRowOpenDetail('a/b.md', undefined).autoDiff).toBe(false);
+  it('opens an unbadged output on diff', () => {
+    expect(outputRowOpenDetail('a/b.md', undefined).autoDiff).toBe(true);
+  });
+
+  it('RESERVES baseRef (deferred Known Issue) — omitted for now, param slot exists', () => {
+    // baseRef is part of the return TYPE (threaded to useCanvasHost→FileViewer) but is
+    // not yet populated — the diff baseline stays working-tree-vs-HEAD until a follow-up
+    // makes it ref-aware. Assert we don't accidentally ship a bogus ref.
+    const d = outputRowOpenDetail('src/x.ts', 'upd');
+    expect(d.baseRef).toBeUndefined();
+  });
+
+  it('uses absolutePath as the resolve anchor when present (source-final row fix)', () => {
+    // A source-final row's display path is repo-relative (repo ≠ workspace) → the bare
+    // path 404s at /workspace/file/resolve. The absolutePath resolves for both workspace
+    // and source-repo files, so it is the anchor the click must send (run_b8ea6d5c MED).
+    const d = outputRowOpenDetail('backend/core/foo.py', 'upd', '/repo/backend/core/foo.py');
+    expect(d.path).toBe('/repo/backend/core/foo.py');
+  });
+
+  it('falls back to the display path when no absolutePath (content/knowledge rows)', () => {
+    const d = outputRowOpenDetail('Knowledge/foo.md', 'new');
+    expect(d.path).toBe('Knowledge/foo.md');
   });
 });

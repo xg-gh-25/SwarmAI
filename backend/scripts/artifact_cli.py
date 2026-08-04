@@ -1536,20 +1536,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 }))
                 return
 
-            # ── Local-PR Surface Gate (run_608a6217, AC4 — BLOCKING) ──
+            # ── Outputs-Surface Gate (run_608a6217 → run_b8ea6d5c, BLOCKING) ──
             # If this run COMMITTED source (run.json.commits) AND those committed
             # files intersect THIS run's files_touched (run-scoped — F3, so a
             # sibling session's commits on shared main never false-block us), the
-            # source changes MUST have been surfaced to Canvas as the aggregated
-            # LOCAL_PR at COMPLETE. We enforce the agent RECORDED that surface
-            # (deliver.local_pr_surfaced=true).
+            # source changes MUST have been surfaced to the Canvas OUTPUTS rail as a
+            # PR-review batch at COMPLETE via the `surface_run_outputs` tool. We
+            # enforce the agent RECORDED that surface (deliver.outputs_surfaced=true).
+            # (Was local_pr_surfaced + a LOCAL_PR.md doc — replaced run_b8ea6d5c: the
+            # aggregated doc had no review value; per-file rail rows are the deliverable.)
             #
             # HONEST SCOPE — this is SELF-ATTESTATION, not verification: the CLI
-            # subprocess cannot observe whether the frontend actually dispatched
-            # swarm:open-file. The flag is agent-set. It is a defense against
-            # SILENTLY skipping the surface step, not proof Canvas opened. A run
-            # with NO run-scoped source commits (knowledge/docs-only, OR commits
-            # that are all sibling-session files) is NOT gated (no false-block).
+            # subprocess cannot observe whether the frontend actually rendered the
+            # rows. The flag is agent-set. It is a defense against SILENTLY skipping
+            # the surface step, not proof the rail populated. A run with NO run-scoped
+            # source commits (knowledge/docs-only, OR commits that are all
+            # sibling-session files) is NOT gated (no false-block).
             _commits = run_state.get("commits") or []
             _committed_files: set[str] = set()
             for _c in _commits:
@@ -1585,34 +1587,38 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # --stage-json in THIS same call (Gate-2 MEDIUM 1): the stage_json
                 # write is applied later (below), so without this a single
                 # `run-update --status completed --stage-json '{deliver...
-                # local_pr_surfaced:true}'` would read the STALE record and
+                # outputs_surfaced:true}'` would read the STALE record and
                 # false-block. Merge the incoming deliver ack into the gate's view.
+                # Back-compat: accept the legacy local_pr_surfaced key too, so an
+                # in-flight run recorded before run_b8ea6d5c still completes.
                 _deliver = next(
                     (s for s in run_state.get("stages", [])
                      if s.get("stage", s.get("name", "")) == "deliver"
                      and s.get("status") in ("completed", "done")),
                     None,
                 )
-                _surfaced = bool(_deliver and _deliver.get("local_pr_surfaced"))
+                def _ack(d: "dict | None") -> bool:
+                    return bool(d and (d.get("outputs_surfaced") or d.get("local_pr_surfaced")))
+                _surfaced = _ack(_deliver)
                 if not _surfaced and getattr(args, "stage_json", None):
                     try:
                         _incoming = json.loads(args.stage_json)
                         if (_incoming.get("stage", _incoming.get("name")) == "deliver"
-                                and _incoming.get("local_pr_surfaced")):
+                                and _ack(_incoming)):
                             _surfaced = True
                     except (ValueError, TypeError):
                         pass
                 if not _surfaced:
                     print(json.dumps({
                         "error": "Cannot mark completed: this run committed source "
-                                 "changes but the aggregated LOCAL_PR was not surfaced "
-                                 "to Canvas. At COMPLETE you MUST open it via "
-                                 "`ui_action open-canvas-file` with the run-scoped path "
-                                 f".artifacts/runs/{args.run_id}/LOCAL_PR.md, then record "
-                                 "it on the deliver stage.",
+                                 "changes but they were not surfaced to the Canvas "
+                                 "OUTPUTS rail. At COMPLETE you MUST call the "
+                                 "`surface_run_outputs` tool with this run_id (it emits "
+                                 "the committed files as PR-review rows), then record it "
+                                 "on the deliver stage.",
                         "pipeline_id": args.run_id,
                         "fix": 'run-update --stage-json \'{"stage":"deliver",'
-                               '"status":"completed","local_pr_surfaced":true,'
+                               '"status":"completed","outputs_surfaced":true,'
                                '"stage_doc_consumed":true}\'',
                         "committed_source_files": sorted(_committed_files),
                     }))
@@ -1805,8 +1811,9 @@ def cmd_run_surface_changes(args, reg: ArtifactRegistry) -> None:
     filtering makes blind to sub-agent writes). Classifies every changed path via
     needs_human_review and prints the four buckets as JSON:
       {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
-    The COMPLETE step surfaces content+knowledge to Canvas (file_changed) and
-    aggregates source into the LOCAL_PR. Never mutates any tree.
+    The COMPLETE step surfaces content+knowledge to Canvas immediately (file_changed)
+    and batch-emits source as PR-review rows via the surface_run_outputs tool
+    (run_b8ea6d5c — the LOCAL_PR aggregate was removed). Never mutates any tree.
     """
     from core.run_surface_changes import sweep_run_changes
 
@@ -1982,69 +1989,25 @@ def cmd_run_commit(args, reg: ArtifactRegistry) -> None:
     # Files come from `committed[].files` = `git diff --cached --name-only` — the
     # ACTUALLY-committed set (git diff ∩ files_touched), never a bare base..HEAD
     # range (which would bleed in a parallel session's commits — F-NEW-3 / R29).
-    local_pr_path = None
-    try:
-        if committed:
-            local_pr_path = _write_local_pr(
-                _run_dir(args.project, args.run_id), args.run_id,
-                requirement, committed, warnings,
-            )
-    except Exception as e:  # noqa: BLE001 — never let PR-gen fail the commit
-        warnings.append(f"local PR not generated: {e}")
-
+    # LOCAL_PR.md generation REMOVED (run_b8ea6d5c): the aggregated doc had no review
+    # value (it never enters the codebase, it is not what the user delivers). The
+    # review deliverable is now per-file PR-review ROWS in the Canvas OUTPUTS rail,
+    # emitted at COMPLETE by the `surface_run_outputs` tool (channel A). run-commit
+    # only records the commits; surfacing happens on the live COMPLETE turn.
     print(json.dumps({
         "committed": committed,
         "warnings": warnings,
         "pushed": False,  # NEVER — push is user-initiated (STEERING #5)
-        "local_pr": str(local_pr_path) if local_pr_path else None,
-        "note": "Local commit only. To push: `git push origin main` (user decision).",
+        "note": ("Local commit only. At COMPLETE, call surface_run_outputs(run_id) to "
+                 "show these files as PR-review rows in Canvas. To push: "
+                 "`git push origin main` (user decision)."),
     }, indent=2))
 
 
-def _write_local_pr(run_dir: Path, run_id: str, requirement: str,
-                    committed: list[dict], warnings: list[str]) -> Path:
-    """Write LOCAL_PR.md — the finish-time aggregate of a run's SOURCE changes.
-
-    Content (AC7): TL;DR + this-run commits + files-changed (from committed[].files,
-    i.e. git diff ∩ files_touched) + a REPORT link + PUSH-READY state. Returns the
-    written path. Pure-ish: only writes the one file into the run dir.
-
-    ⚠️ This file does NOT auto-surface to Canvas. It's written by this CLI subprocess
-    (no streaming `file_changed` event fires for it) and lives under `.artifacts/`
-    (a `process` path per needs_human_review). The path is returned as `local_pr` in
-    run-commit's JSON; the AGENT surfaces it explicitly at pipeline COMPLETE — presents
-    the contents inline + opens Canvas via `ui_action open-canvas` (deliver.md). This
-    is the design's "knowing party declares the deliverable", not an auto-sniff.
-    """
-    total_files = sum(len(c.get("files", [])) for c in committed)
-    lines = [
-        f"# Local PR — {run_id}",
-        "",
-        f"**TL;DR** — {requirement}",
-        "",
-        f"**State: PUSH-READY** — committed locally, NOT pushed "
-        f"(push is your call: `git push origin main`).",
-        "",
-        f"## Commits ({len(committed)}) · {total_files} file(s)",
-    ]
-    for c in committed:
-        repo = c.get("repo", "?")
-        sha = c.get("sha", "?")
-        files = c.get("files", [])
-        lines.append(f"\n### `{sha}` — {repo}")
-        for f in files:
-            lines.append(f"- {f}")
-    if warnings:
-        lines.append("\n## ⚠️ Warnings")
-        for w in warnings:
-            lines.append(f"- {w}")
-    lines.append(f"\n## Report")
-    lines.append(f"See `REPORT.md` in this run dir for the quality verdict "
-                 f"(tests / adversarial / gate status).")
-    lines.append("")
-    pr_path = run_dir / "LOCAL_PR.md"
-    pr_path.write_text("\n".join(lines), encoding="utf-8")
-    return pr_path
+# _write_local_pr REMOVED (run_b8ea6d5c): LOCAL_PR.md aggregation deleted. The
+# review deliverable is now per-file PR-review rows in the Canvas OUTPUTS rail,
+# emitted at COMPLETE by the surface_run_outputs tool (ui_actions.build_surface_events
+# → orchestrator observe-emit). run-commit records commits; it no longer writes a doc.
 
 
 # ── release-gate: the code-enforced CI-green gate for s_swarm-release 7b ──────

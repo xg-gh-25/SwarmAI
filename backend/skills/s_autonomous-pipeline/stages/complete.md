@@ -29,16 +29,19 @@ python backend/scripts/artifact_cli.py run-surface-changes
 # → {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
 ```
 
-1. **content + knowledge** (DDD / design docs / MEMORY / KNOWLEDGE) → surface each to
-   Canvas (`ui_action open-canvas-file` per path, or they auto-popped if written live).
-   Normal workflow — NOT aggregated into the PR.
-2. **source** (code) → open the aggregated `LOCAL_PR.md` (written by `run-commit`) via
-   the run-scoped **workspace-relative** path — full form, never the short `.artifacts/…`:
+1. **content + knowledge** (DDD / design docs / MEMORY / KNOWLEDGE) → these already
+   surfaced IMMEDIATELY as they were written (per-change rail rows — no action needed;
+   `run-surface-changes` just confirms them). This is the immediate-trigger regime.
+2. **source** (code) → surface the run's committed coding files as a PR-review BATCH of
+   rail rows (run_b8ea6d5c). Call the `surface_run_outputs` tool ONCE with this run_id;
+   the backend emits one OUTPUTS row per committed file (kind=source-final), each
+   openable as that file's changes (a local-PR review experience):
    ```
-   ui_action  cmd=open-canvas-file  path=Projects/<project>/.artifacts/runs/<run_id>/LOCAL_PR.md
+   ui_action-style tool:  surface_run_outputs   run_id=<run_id>
    ```
-   then present its contents inline in chat (STEERING #13, visible channel).
-3. **Record it** — `run-update --stage-json '{"stage":"deliver","status":"completed","local_pr_surfaced":true,...}'`.
+   (Mid-run coding edits are NOT displayed; only this finish batch. There is NO
+   LOCAL_PR.md — removed run_b8ea6d5c; the per-file rows ARE the deliverable.)
+3. **Record it** — `run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
 
 **GATED:** if this run committed run-scoped source (commits ∩ files_touched) and you
 skip step 2/3, `run-update --status completed` BLOCKS. A knowledge/docs-only run (no

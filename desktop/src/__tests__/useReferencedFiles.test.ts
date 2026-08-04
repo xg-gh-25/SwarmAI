@@ -61,11 +61,20 @@ describe('useReferencedFiles', () => {
     expect(result.current.files.written[0].fileName).toBe('file.py');
   });
 
-  // ── AC5 (run_dcce7023): the unified review `kind` gates rail membership ──
-  it('EXCLUDES kind=source from the rail (aggregated into the local PR instead)', () => {
+  // ── the unified review `kind` gates rail membership ──
+  it('EXCLUDES kind=source from the rail (a mid-run coding edit — suppressed)', () => {
     const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
     act(() => dispatchWithKind('backend/core/foo.py', 'source'));
     expect(result.current.totalCount).toBe(0);
+  });
+
+  it('ADMITS kind=source-final (the pipeline-finish PR-review batch, run_b8ea6d5c)', () => {
+    // source is dropped mid-run; source-final is the DISTINCT finish-batch kind the
+    // surface_run_outputs tool emits — it MUST land as a persistent rail row.
+    const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
+    act(() => dispatchWithKind('backend/core/foo.py', 'source-final'));
+    expect(result.current.totalCount).toBe(1);
+    expect(result.current.files.written[0].path).toBe('backend/core/foo.py');
   });
 
   it('EXCLUDES kind=process from the rail (machine noise)', () => {

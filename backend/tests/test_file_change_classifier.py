@@ -71,9 +71,10 @@ def test_write_to_real_file_is_deliverable(path):
 
 
 @pytest.mark.parametrize("path", [
-    "Projects/SwarmAI/.artifacts/runs/run_x/REPORT.md",  # .artifacts anywhere
+    "Projects/SwarmAI/.artifacts/runs/run_x/run.json",    # .artifacts machine-state
     "Projects/SwarmAI/.git/config",                       # .git
-    ".context/USER.md",                                   # .context
+    ".context/USER.md",                                   # .context, NOT allowlisted
+    ".context/.eval-canary.json",                         # .context dot-basename
     "Knowledge/.DS_Store",                                # dotfile basename
     "/tmp/scratch.txt",                                   # tmp
     "/private/tmp/x",                                     # macos tmp
@@ -81,6 +82,30 @@ def test_write_to_real_file_is_deliverable(path):
     "backup~",                                            # ~ backup
 ])
 def test_bookkeeping_paths_filtered(path):
+    assert classify_relevance(path, "written") == "bookkeeping"
+
+
+# ── PR-review surface allowlist (run_b8ea6d5c): a NARROW set of knowledge/report ──
+# docs escape the dot-dir bookkeeping drop and surface as deliverables.
+@pytest.mark.parametrize("path", [
+    ".context/MEMORY.md",
+    ".context/EVOLUTION.md",
+    ".context/KNOWLEDGE.md",
+    ".context/PROJECTS.md",
+    "Projects/SwarmAI/.artifacts/runs/run_x/REPORT.md",   # run REPORT escapes .artifacts
+])
+def test_prreview_allowlist_escapes_bookkeeping(path):
+    assert classify_relevance(path, "written") == "deliverable"
+
+
+@pytest.mark.parametrize("path", [
+    ".context/USER.md",                                   # not in the knowledge basenames
+    "Projects/SwarmAI/.artifacts/runs/run_x/run.json",    # not REPORT.md
+    "Projects/SwarmAI/.artifacts/manifest.json",          # .artifacts but no runs/ + not REPORT
+])
+def test_prreview_allowlist_is_narrow(path):
+    # The allowlist must NOT over-reach: sibling machine-state under the same dot-dirs
+    # stays bookkeeping (else it re-poisons the rail with noise).
     assert classify_relevance(path, "written") == "bookkeeping"
 
 

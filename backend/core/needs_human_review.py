@@ -60,7 +60,12 @@ from typing import Literal, Optional
 
 __all__ = ["needs_human_review", "ReviewVerdict", "Kind"]
 
-Kind = Literal["content", "knowledge", "source", "process"]
+# `source-final` (run_b8ea6d5c): the finish-time PR-review batch kind. Minted ONLY
+# by the orchestrator's surface_run_outputs observe-emit path (never by this
+# classifier), so a mid-run source edit is still `source` (suppressed) — this kind
+# exists so the frontend rail can ACCEPT the finish batch while keeping mid-run
+# `source` dropped. It never appears as a _classify_kind return.
+Kind = Literal["content", "knowledge", "source", "source-final", "process"]
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,21 @@ class ReviewVerdict:
 # the sibling `.json/.jsonl` machine-state is already killed by the dot-segment /
 # check-ignore layers.
 _KNOWLEDGE_BASENAMES = {"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md"}
+
+
+def _is_surfaceable_knowledge(rel_path: str) -> bool:
+    """PR-review surface allowlist (run_b8ea6d5c): a dot-dir-resident file that IS a
+    user-facing deliverable. Whole-path rule, checked AHEAD of the dot-segment +
+    check-ignore blocks. Kept in lockstep with
+    file_change_classifier._is_surfaceable_knowledge (that copy is the load-bearing
+    one — it runs at the earlier streaming_orchestrator.py:309 relevance gate)."""
+    parts = [p for p in Path(rel_path).parts if p not in (".", "")]
+    base = parts[-1] if parts else ""
+    if base in _KNOWLEDGE_BASENAMES and ".context" in parts:
+        return True
+    if base == "REPORT.md" and ".artifacts" in parts and "runs" in parts:
+        return True
+    return False
 
 
 def _has_dot_segment(rel_path: str) -> bool:
@@ -246,6 +266,17 @@ def needs_human_review(
             # Outside every known tree — not our concern (NOT fail-open junk).
             return ReviewVerdict(False, "process")
         tree_root, rel_path, repo = owning
+
+        # PR-review surface allowlist (run_b8ea6d5c): a few knowledge/report docs
+        # live UNDER dot-dirs (.context/, .artifacts/runs/) but ARE user-facing
+        # deliverables reviewed on every change. They must escape BOTH the
+        # dot-segment (Layer 2) and check-ignore (Layer 1) blocks below. Whole-path
+        # rule, mirrored in file_change_classifier._is_surfaceable_knowledge (the
+        # EARLIER gate at streaming_orchestrator.py:309 — that one is load-bearing;
+        # this keeps the two classifiers in lockstep so a direct needs_human_review
+        # caller agrees). Narrow: exact basenames + REPORT.md under a run dir only.
+        if _is_surfaceable_knowledge(rel_path):
+            return ReviewVerdict(True, "knowledge", repo)
 
         # Layer 2: dot-segment on the TREE-RELATIVE path (the seam trap fix).
         if _has_dot_segment(rel_path):

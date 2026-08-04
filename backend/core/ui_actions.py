@@ -219,12 +219,83 @@ def build_ui_command_event(cmd: object, path: object = None) -> Optional[dict]:
     return ev
 
 
+# ── Finish-time PR-review batch: surface a run's coding files (run_b8ea6d5c) ──
+#
+# CHANNEL A. Coding/source files are suppressed mid-run (needs_human_review →
+# kind=source → dropped at useReferencedFiles.ts). At pipeline COMPLETE the agent
+# calls the `surface_run_outputs` tool with the run_id; the streaming orchestrator
+# observes that ToolUseBlock BY NAME (exactly like ui_action) and yields N
+# `file_changed` SSE events built HERE — one per file this run committed — carrying
+# kind="source-final", the ONE kind the rail accepts for a finish batch (mid-run
+# `source` stays dropped). This reuses the rail-is-a-projection-of-the-tool-stream
+# invariant, so persistence + tab-scope are automatically correct; run-commit (a
+# CLI subprocess) structurally cannot push rows, which is why this rides the live
+# COMPLETE turn instead. The tool reads run.json.commits (populated by run-commit),
+# NOT agent-supplied paths — so it cannot fabricate rows for arbitrary files.
+
+# Files that are surfaced immediately per-change (knowledge/report) must NOT be
+# re-emitted in the finish batch (they already have a row). The batch is source only.
+def build_surface_events(run_id: object, workspace_root: object = None) -> list[dict]:
+    """Build the finish-time batch of file_changed SSE events for a run's committed
+    source files. Returns [] on any problem (fail-safe — never crashes the turn).
+
+    Reads ``run.json.commits[].files`` (repo-relative paths the run actually
+    committed) for ``run_id``, resolves each to a workspace-relative display path,
+    and emits one ``file_changed`` event per file with ``kind="source-final"`` +
+    ``operation="written"``. The frontend rail accepts source-final and persists it.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return []
+    try:
+        import json
+        from pathlib import Path
+        if workspace_root is not None:
+            ws = Path(str(workspace_root))
+        else:
+            from core.project_registry import get_swarmws
+            ws = Path(get_swarmws())
+        ws = ws.resolve()
+        # Locate the run dir across projects (run ids are unique).
+        run_json = None
+        for proj in (ws / "Projects").glob("*/.artifacts/runs/" + run_id + "/run.json"):
+            run_json = proj
+            break
+        if run_json is None or not run_json.exists():
+            return []
+        data = json.loads(run_json.read_text())
+        events: list[dict] = []
+        seen: set[str] = set()
+        for commit in data.get("commits", []) or []:
+            repo = commit.get("repo", "")
+            for f in commit.get("files", []) or []:
+                if not f or f in seen:
+                    continue
+                seen.add(f)
+                # Absolute physical path (repo root + repo-relative file). Display
+                # path stays repo-relative (what the user recognizes in a PR).
+                abs_path = str(Path(repo) / f) if repo else f
+                events.append({
+                    "type": "file_changed",
+                    "path": f,
+                    "absolutePath": abs_path,
+                    "operation": "written",
+                    "relevance": "deliverable",
+                    "kind": "source-final",
+                })
+        return events
+    except Exception as e:  # noqa: BLE001 — hot-path fail-safe
+        logger.warning("build_surface_events failed for run %r: %s", run_id, e)
+        return []
+
+
 # ── The SDK-MCP tool the agent calls ─────────────────────────────────────────
 
 # Tool name as the agent sees it (SDK-MCP convention: mcp__<server>__<tool>).
 UI_MCP_SERVER_NAME = "swarm_ui"
 UI_ACTION_TOOL_NAME = "ui_action"
 UI_ACTION_FULL_TOOL_NAME = f"mcp__{UI_MCP_SERVER_NAME}__{UI_ACTION_TOOL_NAME}"
+SURFACE_OUTPUTS_TOOL_NAME = "surface_run_outputs"
+SURFACE_OUTPUTS_FULL_TOOL_NAME = f"mcp__{UI_MCP_SERVER_NAME}__{SURFACE_OUTPUTS_TOOL_NAME}"
 
 
 def get_ui_mcp_server():
@@ -278,4 +349,36 @@ def get_ui_mcp_server():
         # verify in "## Current UI State") — it is NOT synchronous confirmation.
         return {"content": [{"type": "text", "text": build_ui_ack(cmd, path)}]}
 
-    return create_sdk_mcp_server(name=UI_MCP_SERVER_NAME, tools=[ui_action])
+    @tool(
+        SURFACE_OUTPUTS_TOOL_NAME,
+        (
+            "At pipeline COMPLETE, surface THIS run's committed coding files as a "
+            "batch of review rows in the Canvas OUTPUTS list — a local-PR review "
+            "experience. Call this ONCE at the end of a pipeline run that committed "
+            "source, after run-commit has recorded the commits. Pass `run_id` = the "
+            "pipeline run id (e.g. 'run_b8ea6d5c'). The rows are read from the run's "
+            "recorded commits (not from you) — non-destructive, display only."
+        ),
+        {"run_id": str},
+    )
+    async def surface_run_outputs(args: dict) -> dict:
+        run_id = args.get("run_id")
+        # The orchestrator observes this call and emits the batch of file_changed
+        # events (build_surface_events). The tool body just acks + points at the
+        # SENSE readback, mirroring ui_action (it cannot see the frontend).
+        n = len(build_surface_events(run_id))
+        if n == 0:
+            return {"content": [{"type": "text", "text": (
+                f"No committed source files found for run {run_id!r} — nothing to "
+                "surface. (Did run-commit record commits for this run yet?)"
+            )}]}
+        return {"content": [{"type": "text", "text": (
+            f"Surfacing {n} committed file(s) from run {run_id!r} to the Canvas "
+            "OUTPUTS list. This is NOT synchronous — the frontend adds the rows "
+            "after this turn. On your NEXT turn, verify the 'Current UI State' Canvas "
+            "outputs count reflects them; click a row to review that file's changes."
+        )}]}
+
+    return create_sdk_mcp_server(
+        name=UI_MCP_SERVER_NAME, tools=[ui_action, surface_run_outputs]
+    )

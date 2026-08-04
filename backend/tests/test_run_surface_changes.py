@@ -389,13 +389,20 @@ class TestStageDocsWiring:
         base = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
         return (base / "deliver.md").read_text(), (base / "complete.md").read_text()
 
-    def test_docs_use_open_canvas_file_and_sweep(self):
+    def test_docs_use_surface_run_outputs_batch(self):
+        # run_b8ea6d5c: the finish source deliverable is a batch of PR-review rail
+        # rows via surface_run_outputs — NOT an aggregated LOCAL_PR.md (removed).
         deliver, complete = self._docs()
         for doc, name in ((deliver, "deliver.md"), (complete, "complete.md")):
-            assert "open-canvas-file" in doc, f"{name} must instruct ui_action open-canvas-file"
-            assert "run-surface-changes" in doc, f"{name} must run the git sweep"
-            # full run-scoped path form, not the short .artifacts/ that misses resolve
-            assert "runs/<run_id>/LOCAL_PR.md" in doc, f"{name} must use the full run-scoped path"
+            assert "surface_run_outputs" in doc, f"{name} must instruct the surface_run_outputs batch tool"
+            assert "outputs_surfaced" in doc, f"{name} must record outputs_surfaced (the repurposed gate flag)"
+            # LOCAL_PR must not be an INSTRUCTION anymore (a "removed run_b8ea6d5c" note is
+            # fine). The stale instruction was `open-canvas-file` pointed at a LOCAL_PR.md
+            # path — assert THAT specific pattern is gone, not the mere word.
+            assert "runs/<run_id>/LOCAL_PR.md" not in doc, (
+                f"{name} must not INSTRUCT opening the removed LOCAL_PR.md path")
+            assert "local_pr_surfaced" not in doc, (
+                f"{name} must use outputs_surfaced, not the old local_pr_surfaced flag")
 
     def test_docs_drop_stale_open_canvas_instruction(self):
         deliver, _ = self._docs()

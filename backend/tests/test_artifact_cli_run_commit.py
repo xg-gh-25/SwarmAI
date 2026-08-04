@@ -272,41 +272,51 @@ class TestRunCommitPersistsCommits:
         assert len(data.get("commits", [])) == 1, "commits still persisted"
 
 
-# ── AC7 (run_dcce7023): the pipeline-finish local PR ──────────────────────────
-class TestLocalPR:
-    """_write_local_pr aggregates a run's SOURCE changes into LOCAL_PR.md at finish.
+# ── PR-review surface (run_b8ea6d5c): LOCAL_PR.md REMOVED; finish batch = rail rows ──
+class TestNoLocalPR:
+    """LOCAL_PR.md generation was removed (run_b8ea6d5c): the aggregated doc had no
+    review value. The finish deliverable is per-file PR-review ROWS in the Canvas
+    OUTPUTS rail, emitted by the surface_run_outputs tool (build_surface_events →
+    orchestrator observe-emit), NOT a doc written by the run-commit CLI subprocess."""
 
-    The file list comes from committed[].files (= git diff ∩ files_touched, the
-    actually-committed set), NOT a bare base..HEAD range (F-NEW-3 / R29).
-    """
+    def test_write_local_pr_is_gone(self):
+        import scripts.artifact_cli as ac
+        assert not hasattr(ac, "_write_local_pr"), (
+            "LOCAL_PR.md generation must be removed; the finish deliverable is now "
+            "Canvas OUTPUTS rows via surface_run_outputs"
+        )
 
-    def test_writes_local_pr_with_commits_and_files(self, tmp_path):
-        from scripts.artifact_cli import _write_local_pr
+    def test_build_surface_events_emits_source_final_rows_from_commits(self, tmp_path):
+        """The replacement: build_surface_events reads a run's committed files and
+        yields one file_changed(kind=source-final) event per file (deduped)."""
+        import json
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
 
-        run_dir = tmp_path / "runs" / "run_x"
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_z"
         run_dir.mkdir(parents=True)
-        committed = [
-            {"repo": "/repo/swarmai", "sha": "abc1234",
-             "files": ["backend/core/needs_human_review.py", "backend/core/nhr_test.py"]},
-        ]
-        p = _write_local_pr(run_dir, "run_x", "Unify review trigger", committed, [])
-        assert p.exists()
-        body = p.read_text(encoding="utf-8")
-        assert "# Local PR — run_x" in body
-        assert "Unify review trigger" in body            # TL;DR
-        assert "PUSH-READY" in body                       # state
-        assert "abc1234" in body                          # commit sha
-        assert "backend/core/needs_human_review.py" in body  # a committed file
-        assert "2 file(s)" in body                        # count
+        (run_dir / "run.json").write_text(json.dumps({
+            "commits": [
+                {"repo": "/repo", "files": ["desktop/src/a.tsx", "backend/b.py"]},
+                {"repo": "/repo", "files": ["desktop/src/a.tsx", "c.md"]},  # a.tsx dup
+            ]
+        }))
+        events = build_surface_events("run_z", workspace_root=str(tmp_path))
+        assert len(events) == 3, "deduped across commits (a.tsx once)"
+        assert all(e["type"] == "file_changed" for e in events)
+        assert all(e["kind"] == "source-final" for e in events)
+        assert all(e["operation"] == "written" for e in events)
+        paths = {e["path"] for e in events}
+        assert paths == {"desktop/src/a.tsx", "backend/b.py", "c.md"}
 
-    def test_local_pr_includes_warnings(self, tmp_path):
-        from scripts.artifact_cli import _write_local_pr
+    def test_build_surface_events_empty_when_no_commits(self, tmp_path):
+        import json
+        import sys
+        sys.path.insert(0, "backend")
+        from core.ui_actions import build_surface_events
 
-        run_dir = tmp_path / "runs" / "run_y"
+        run_dir = tmp_path / "Projects" / "P" / ".artifacts" / "runs" / "run_none"
         run_dir.mkdir(parents=True)
-        committed = [{"repo": "/r", "sha": "def5678", "files": ["a.py"]}]
-        p = _write_local_pr(run_dir, "run_y", "req", committed,
-                            ["[/r] working tree has 1 change NOT tracked by this run"])
-        body = p.read_text(encoding="utf-8")
-        assert "⚠️ Warnings" in body
-        assert "NOT tracked by this run" in body
+        (run_dir / "run.json").write_text(json.dumps({"commits": []}))
+        assert build_surface_events("run_none", workspace_root=str(tmp_path)) == []

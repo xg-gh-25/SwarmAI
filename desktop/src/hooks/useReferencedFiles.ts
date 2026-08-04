@@ -28,10 +28,15 @@ export type FileOperation = 'written';
 export type FileChangeOperation = 'written' | 'deleted';
 export type FileRelevance = 'deliverable' | 'incidental' | 'bookkeeping';
 
-/** Unified review-verdict kind (backend needs_human_review, run_dcce7023):
- *  content|knowledge → surface in the rail (+pop); source → aggregated into the
- *  pipeline-finish local PR, NOT the rail; process → never (dropped server-side). */
-export type ReviewKind = 'content' | 'knowledge' | 'source' | 'process';
+/** Unified review-verdict kind (backend needs_human_review):
+ *  - content|knowledge → surface in the rail (+auto-pop) — immediate, per change.
+ *  - source → mid-run coding edit; DROPPED from the rail (suppressed mid-run).
+ *  - source-final → the pipeline-FINISH PR-review batch (run_b8ea6d5c): coding
+ *    files a run committed, emitted once at COMPLETE via surface_run_outputs.
+ *    ACCEPTED into the rail (persistent rows) but does NOT auto-pop (a finish batch
+ *    of N files must not hijack the Canvas — the user clicks a row to review it).
+ *  - process → never (dropped server-side). */
+export type ReviewKind = 'content' | 'knowledge' | 'source' | 'source-final' | 'process';
 
 export interface ReferencedFile {
   /** File path as emitted (workspace-relative for display) */
@@ -59,8 +64,9 @@ export interface FileChangedDetail {
   operation: FileChangeOperation;
   /** Backend whitelist classification; bookkeeping is pre-filtered server-side. */
   relevance?: FileRelevance;
-  /** Unified review verdict kind (run_dcce7023): content|knowledge → rail; source →
-   *  local PR (not rail); process → never. Undefined from an older backend → the
+  /** Unified review verdict kind: content|knowledge → rail (immediate); source →
+   *  dropped (mid-run coding edit); source-final → rail (the pipeline-finish PR-review
+   *  batch, run_b8ea6d5c); process → never. Undefined from an older backend → the
    *  consumer falls back to `relevance` (migration window). */
   kind?: ReviewKind;
   /** Owning tab's session id (stamped by the SSE bridge). Consumers filter on it
@@ -134,10 +140,13 @@ export function useReferencedFiles(sessionId: string | undefined) {
       // Bookkeeping is dropped server-side, but guard defensively (an older
       // backend without relevance fails open → treated as listable).
       if (relevance === 'bookkeeping') return;
-      // AC5 (run_dcce7023): the unified verdict decides rail membership.
+      // The unified verdict decides rail membership.
       //  - process → never in the rail (machine noise; also dropped server-side).
-      //  - source  → aggregated into the pipeline-finish local PR, NOT per-file in
-      //              the rail (XG: 真实 repo 改动中途不 display, 收尾聚成 PR).
+      //  - source  → a mid-run coding edit; DROPPED here (真实 repo 改动中途不 display).
+      //              The finish batch re-emits the run's committed files as
+      //              `source-final` (run_b8ea6d5c) — a DISTINCT kind that is NOT
+      //              dropped below, so it lands as a persistent PR-review row.
+      //  - source-final → the pipeline-finish coding batch → RAIL (via surface_run_outputs).
       //  - content|knowledge (or undefined from an older backend) → rail.
       // Undefined kind falls through to the rail (migration: relevance still gates pop).
       if (kind === 'process' || kind === 'source') return;

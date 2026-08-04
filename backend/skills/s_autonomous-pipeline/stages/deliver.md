@@ -1064,35 +1064,35 @@ python backend/scripts/artifact_cli.py run-surface-changes
 # → {"content":[...], "knowledge":[...], "source":[...], "process":[...]}
 ```
 
-1. **content + knowledge (DDD / design docs / MEMORY / KNOWLEDGE)** — the "normal
-   workflow, surface if present" default. For each, emit its surface so it pops to
-   Canvas (these are workspace-relative paths — hand each to `ui_action open-canvas-file`
-   with its path, OR they auto-pop if written live during the turn). Do NOT aggregate
-   these into the PR — they go the normal route (XG: DDD/memory/knowledge 变动 走正常
-   workflow,有就 trigger).
-2. **source (code)** — the ONE special case: NOT popped per-file mid-run, aggregated
-   into ONE `LOCAL_PR.md`. When there are source-repo commits, `run-commit` writes it
-   (TL;DR + this-run commits + files-changed + REPORT link + PUSH-READY state) and
-   returns `local_pr` in its JSON. **Surface it EXPLICITLY** — it does NOT auto-pop (it's
-   written by a CLI subprocess under `.artifacts/` = a `process` path, so no
-   `file_changed` fires). Open it in Canvas with the run-scoped **workspace-relative**
-   path (NOT the short `.artifacts/…` form — that misses the resolver; use the full
-   `Projects/<project>/…` form):
+1. **content + knowledge (DDD / design docs / MEMORY / KNOWLEDGE)** — the IMMEDIATE
+   regime: these surfaced as rail rows the moment they were written (per-change,
+   auto-popped if live). `run-surface-changes` just confirms them; no explicit action
+   needed (XG: DDD/memory/knowledge 变动 走正常 workflow,有改动就 trigger). NOTE
+   (run_b8ea6d5c): the canonical context files under `.context/` (MEMORY/EVOLUTION/
+   KNOWLEDGE/PROJECTS) and a run's `REPORT.md` under `.artifacts/runs/<id>/` are on a
+   NARROW allowlist that lets them escape the bookkeeping/dot-dir/gitignore drop, so
+   they too surface immediately.
+2. **source (code)** — the finish BATCH (run_b8ea6d5c): NOT popped per-file mid-run;
+   at COMPLETE, surfaced as a batch of PR-review rail ROWS (one per committed file,
+   each openable as that file's changes — a local-PR experience). There is NO
+   `LOCAL_PR.md` (removed run_b8ea6d5c — the aggregated doc had no review value). After
+   `run-commit` records the commits, call the `surface_run_outputs` tool ONCE with this
+   run_id:
 
    ```
-   ui_action  cmd=open-canvas-file  path=Projects/<project>/.artifacts/runs/<run_id>/LOCAL_PR.md
+   surface_run_outputs   run_id=<run_id>
    ```
 
-   `open-canvas-file` rides the generic workspace-scoped `swarm:open-file` resolver
-   (rejects abs/host paths + `..`; the agent hands a workspace-relative path, never a
-   host path — that's why the raw `open-file` stays excluded). Then present the
-   LOCAL_PR.md contents **inline in the chat** too (the visible channel, STEERING #13).
+   The orchestrator observes that tool call (same mechanism as `ui_action`) and emits
+   one `file_changed(kind=source-final)` event per committed file → N persistent
+   OUTPUTS rows. Mid-run `kind=source` stays suppressed; only this finish batch (a
+   DISTINCT `source-final` kind) reaches the rail.
 
 **MANDATORY + gated:** record the surface on the deliver stage —
-`run-update --stage-json '{"stage":"deliver","status":"completed","local_pr_surfaced":true,...}'`.
+`run-update --stage-json '{"stage":"deliver","status":"completed","outputs_surfaced":true,...}'`.
 The completion gate (`run-update --status completed`) BLOCKS if this run committed
-run-scoped source (commits ∩ files_touched) but `local_pr_surfaced` is not set — so the
-source PR can't be silently skipped. (Honest scope: this is self-attestation — the CLI
+run-scoped source (commits ∩ files_touched) but `outputs_surfaced` is not set — so the
+source batch can't be silently skipped. (Honest scope: this is self-attestation — the CLI
 can't observe the frontend dispatch; the flag proves the agent RAN the surface step, not
 that Canvas rendered. A knowledge/docs-only run, or one whose commits are all a sibling
 session's files, is NOT gated — no false-block.)
