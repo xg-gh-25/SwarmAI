@@ -3,21 +3,44 @@
  *
  * Modes:
  *   - Rendered (default): inline via <iframe sandbox="allow-scripts allow-popups"
- *     srcDoc={content}> — scripts RUN (charts/tabs work) but the frame is a
- *     null/opaque origin that cannot reach the parent (never combine allow-scripts
- *     WITH allow-same-origin). FilePreviewModal renders html-preview inline too
- *     (though script-inert), so inline render is a proven pattern here. A
- *     bottom-right "Open in browser" FALLBACK (opens /workspace/file/raw in the
- *     system browser) covers two residual risks the inline frame can't: (a) the
- *     packaged WebKit rendering a blank srcDoc frame — historically worried about,
- *     NOT yet verified in a packaged .app, so QA the build; (b) reports needing
- *     real same-origin network/fetch (blocked by the opaque-origin sandbox).
+ *     src={rawUrl}> — real navigation to the raw endpoint (srcDoc renders BLANK in
+ *     packaged WKWebView, falsified twice, commit 496bbd7c). scripts RUN
+ *     (charts/tabs work) but the frame is a null/opaque origin that cannot reach the
+ *     parent (never combine allow-scripts WITH allow-same-origin). A bottom-right
+ *     "Open in browser" FALLBACK (opens /workspace/file/raw in the system browser)
+ *     covers reports needing real same-origin network/fetch (blocked by the sandbox).
  *   - Source: raw HTML in a syntax-highlighted <pre><code> block.
  *   - Toggle button top-right switches [Source] / [Rendered]. Size via onStatusInfo.
+ *
+ * FIT-WIDTH (run_732236aa): agent HTML reports use fixed-width containers
+ * (width:1140/1180/1200px, wide tables) that force a HORIZONTAL scrollbar inside
+ * the narrow Canvas panel (~320-900px). The rendered view has a Fit/Actual toggle
+ * (default Fit):
+ *   - FIT: the iframe sits in a SIZER div laid out at a fixed LOGICAL_WIDTH (1200px),
+ *     which is transform:scale(s) where s = min(1, wrapperClientWidth / 1200). The
+ *     sizer is position:absolute (out of flow, so its transform cannot feed back into
+ *     the wrapper size — no ResizeObserver thrash) with an EXPLICIT height = H/s (H =
+ *     wrapperClientHeight), so after scaling the visible box is exactly W × H and fills
+ *     the panel; the iframe document lays out at 1200px and scrolls VERTICALLY inside
+ *     (normal), with NO horizontal scroll. Content wider than 1200 still scrolls → use
+ *     Actual / Open-in-browser.
+ *   - ACTUAL: no transform, iframe width:100% height:100% (prior behavior — responsive
+ *     reports reflow; fixed-width ones scroll as before).
+ *
+ * ⚠️ Measurement uses clientWidth/clientHeight (LAYOUT px), NEVER getBoundingClientRect:
+ * the app applies a CSS zoom on <html> (useZoom.ts), and gBCR returns POST-zoom px →
+ * scaling by a ratio of gBCR values double-counts the zoom (IMPROVEMENT.md:1596).
+ * clientWidth is zoom-independent, so s is correct and the whole subtree then zooms
+ * uniformly with the app. We transform a plain DIV (WKWebView-proven, MarkdownRenderer),
+ * never the <iframe> element itself.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { openExternal } from '../../../utils/openExternal';
 import { getApiBaseUrl } from '../../../services/tauri';
+
+/** Logical desktop layout width the Fit mode lays the iframe out at, before scaling
+ *  down to the panel. 1200 covers the observed report containers (1140/1180/1200). */
+const LOGICAL_WIDTH = 1200;
 
 interface RendererProps {
   filePath: string;
@@ -76,10 +99,48 @@ export default function HtmlRenderer({
   onStatusInfo,
 }: RendererProps) {
   const [mode, setMode] = useState<'rendered' | 'source'>('rendered');
+  // Fit-width: default ON. Fit scales a sizer down to the panel width; Actual = 100%.
+  const [fitMode, setFitMode] = useState(true);
+  // Wrapper (measured) + the computed scale and the explicit sizer height (H/s).
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = useState<{ scale: number; frameH: number }>({ scale: 1, frameH: 0 });
 
   useEffect(() => {
     onStatusInfo?.({ customInfo: formatFileSize(fileSize) });
   }, [fileSize, onStatusInfo]);
+
+  // Measure the wrapper (LAYOUT px, zoom-safe — see file docstring) and derive the
+  // fit scale + sizer height. Runs synchronously (useLayoutEffect = no flash) and on
+  // every panel resize via ResizeObserver.
+  // Keyed on [mode]: the measured wrapper only mounts in RENDERED mode, so a
+  // source→rendered re-entry remounts the wrapper — the effect must re-run to
+  // re-measure + RE-ATTACH the observer (a [] dep would leave the re-entered view
+  // with no resize tracking). In source mode wrapperRef is null → early return, no
+  // observer (correct — nothing to measure).
+  useLayoutEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const measure = () => {
+      const W = el.clientWidth;
+      const H = el.clientHeight;
+      // 0-width trap (mid width-reveal animation / pre-layout): keep the last good
+      // scale rather than collapsing to scale(0) which would vanish the iframe.
+      if (W < 1) return;
+      const s = Math.min(1, W / LOGICAL_WIDTH); // W>=1 ⇒ s ≥ 1/1200 > 0 (never 0)
+      // Explicit sizer height = H/s so that after scale(s) the visible box is exactly
+      // W × H and fills the panel; the iframe document scrolls vertically inside.
+      const frameH = H / s;
+      // Change-detecting: the observer keeps firing on resize in BOTH modes (kept
+      // alive so `fit` is already-correct on an Actual→Fit toggle-back — no observer
+      // teardown per toggle). Bail on an unchanged measurement so a same-size resize
+      // event (or an Actual-mode resize the sizer doesn't consume) does NOT rerender.
+      setFit((prev) => (prev.scale === s && prev.frameH === frameH ? prev : { scale: s, frameH }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mode]);
 
   // The backend raw endpoint URL for this file. Serves Content-Type: text/html
   // with NO Content-Disposition:attachment (verified live) → a browser/WebView
@@ -105,8 +166,24 @@ export default function HtmlRenderer({
 
   return (
     <div className="flex flex-col h-full w-full relative">
-      {/* Toggle button */}
-      <div className="absolute top-2 right-2 z-10">
+      {/* Toolbar (top-right): Fit/Actual (rendered mode only) + Source/Rendered. */}
+      <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+        {mode === 'rendered' && (
+          <button
+            onClick={() => setFitMode((f) => !f)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium
+              text-[var(--color-text-muted)] hover:text-[var(--color-text)]
+              bg-[var(--color-card)] border border-[var(--color-border)]
+              hover:bg-[var(--color-hover)] transition-colors shadow-sm"
+            title={fitMode ? 'Actual size (no fit-scaling)' : 'Fit width to panel'}
+            aria-pressed={fitMode}
+          >
+            <span className="material-symbols-outlined text-sm">
+              {fitMode ? 'width_normal' : 'fit_screen'}
+            </span>
+            {fitMode ? 'Actual' : 'Fit'}
+          </button>
+        )}
         <button
           onClick={() => setMode((prev) => (prev === 'rendered' ? 'source' : 'rendered'))}
           className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium
@@ -125,13 +202,19 @@ export default function HtmlRenderer({
       {/* Content area */}
       {mode === 'rendered' ? (
         /* Inline render via REAL NAVIGATION: the iframe loads src={rawUrl} (the
-           backend raw endpoint, Content-Type: text/html). This replaces the old
-           srcDoc={content} string-injection, which rendered a BLANK frame in the
-           packaged Tauri WKWebView (two prior srcDoc fixes — sandbox, height —
-           were both falsified, commit 496bbd7c). WKWebView renders a navigated
-           document reliably; a srcDoc string it does not. An 'Open in browser'
-           fallback stays bottom-right for anything the sandbox blocks. */
-        <div className="flex-1 relative min-h-0">
+           backend raw endpoint, Content-Type: text/html). srcDoc={content} rendered a
+           BLANK frame in the packaged Tauri WKWebView (two prior fixes falsified,
+           commit 496bbd7c). An 'Open in browser' fallback stays bottom-right.
+
+           FIT mode wraps the iframe in a SIZER div laid out at LOGICAL_WIDTH and
+           transform:scale(s)-ed down to the measured panel width (see file docstring).
+           The wrapper (measured, overflow-hidden) clips the scaled box; the sizer is
+           position:absolute so its transform can't feed back into the wrapper size. */
+        <div
+          ref={wrapperRef}
+          className="flex-1 relative min-h-0 overflow-hidden"
+          data-testid="html-fit-wrapper"
+        >
           {/* sandbox="allow-scripts" WITHOUT allow-same-origin: agent HTML reports
               rely on inline <script> (Chart.js/Plotly/D3, tabs) — scripts must run.
               Omitting allow-same-origin forces a null/OPAQUE origin EVEN THOUGH
@@ -140,13 +223,34 @@ export default function HtmlRenderer({
               dangerous combo is allow-scripts + allow-same-origin together (lets the
               frame drop its own sandbox). Anything needing real network → the
               "Open in browser" fallback (fully-isolated system browser). */}
-          <iframe
-            sandbox="allow-scripts allow-popups"
-            src={rawUrl}
-            className="w-full h-full border-0 bg-white"
-            title={fileName}
-            data-testid="html-preview-iframe"
-          />
+          {fitMode ? (
+            <div
+              data-testid="html-fit-sizer"
+              className="absolute top-0 left-0"
+              style={{
+                width: `${LOGICAL_WIDTH}px`,
+                height: `${fit.frameH}px`,
+                transform: `scale(${fit.scale})`,
+                transformOrigin: 'top left',
+              }}
+            >
+              <iframe
+                sandbox="allow-scripts allow-popups"
+                src={rawUrl}
+                className="w-full h-full border-0 bg-white"
+                title={fileName}
+                data-testid="html-preview-iframe"
+              />
+            </div>
+          ) : (
+            <iframe
+              sandbox="allow-scripts allow-popups"
+              src={rawUrl}
+              className="w-full h-full border-0 bg-white"
+              title={fileName}
+              data-testid="html-preview-iframe"
+            />
+          )}
           <button
             onClick={openInBrowser}
             className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium

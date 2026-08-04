@@ -23,14 +23,52 @@
  *  - "Open in browser" fallback still calls openExternal with the same URL
  *  - the Source toggle shows the raw HTML markup in-app (no iframe)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import HtmlRenderer from '../HtmlRenderer';
 
 const mockOpenExternal = vi.fn();
 vi.mock('../../../../utils/openExternal', () => ({
   openExternal: (...a: unknown[]) => mockOpenExternal(...a),
 }));
+
+/* ------------------------------------------------------------------ *
+ *  Fake ResizeObserver (jsdom has none). Captures the latest instance
+ *  + its callback so a test can drive a resize and assert disconnect.
+ * ------------------------------------------------------------------ */
+interface FakeRO {
+  cb: ResizeObserverCallback;
+  observe: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+}
+let lastRO: FakeRO | null = null;
+class FakeResizeObserver {
+  observe = vi.fn();
+  disconnect = vi.fn();
+  unobserve = vi.fn();
+  constructor(public cb: ResizeObserverCallback) {
+    lastRO = this as unknown as FakeRO;
+  }
+}
+
+/** Stub the wrapper element's layout dims so the fit-scale math is deterministic. */
+function stubWrapperDims(container: HTMLElement, width: number, height: number) {
+  const wrapper = container.querySelector('[data-testid="html-fit-wrapper"]') as HTMLElement | null;
+  if (!wrapper) return null;
+  Object.defineProperty(wrapper, 'clientWidth', { configurable: true, value: width });
+  Object.defineProperty(wrapper, 'clientHeight', { configurable: true, value: height });
+  return wrapper;
+}
+
+/** Fire the captured ResizeObserver callback (simulates a panel resize). */
+function fireResize(wrapper: HTMLElement) {
+  act(() => {
+    lastRO?.cb(
+      [{ target: wrapper, contentRect: {} as DOMRectReadOnly }] as unknown as ResizeObserverEntry[],
+      lastRO as unknown as ResizeObserver,
+    );
+  });
+}
 
 // Dynamic api base — mock to a known value so we can assert the exact URL.
 vi.mock('../../../../services/tauri', () => ({
@@ -46,8 +84,14 @@ const PROPS = {
   fileSize: 1234,
 };
 
+const origRO = globalThis.ResizeObserver;
 beforeEach(() => {
+  lastRO = null;
+  globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
   vi.clearAllMocks();
+});
+afterEach(() => {
+  globalThis.ResizeObserver = origRO;
 });
 
 const EXPECTED_RAW_URL = `http://localhost:18321/api/workspace/file/raw?path=${encodeURIComponent(PROPS.filePath)}`;
@@ -101,5 +145,119 @@ describe('HtmlRenderer renders HTML inline via src=<raw endpoint URL>', () => {
   it('shows a graceful message when content is null', () => {
     render(<HtmlRenderer {...PROPS} content={null} />);
     expect(screen.getByText(/No HTML content available/i)).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ *  Fit-width mode (run_732236aa) — wide reports fit the panel, no
+ *  horizontal scroll. Scale a SIZER div (not the iframe element) at a
+ *  fixed logical width; measure with clientWidth (zoom-safe), never
+ *  getBoundingClientRect (app <html> CSS-zoom double-count).
+ * ------------------------------------------------------------------ */
+describe('HtmlRenderer Fit-width mode', () => {
+  const LOGICAL_WIDTH = 1200;
+
+  it('Fit is the DEFAULT: a sizer wraps the iframe with a transform: scale(<1) for a narrow panel', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const wrapper = stubWrapperDims(container, 500, 600)!;
+    expect(wrapper).not.toBeNull();
+    fireResize(wrapper); // first real measurement (clientWidth=500)
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    expect(sizer).not.toBeNull();
+    // scale = 500/1200 = 0.4167 — the transform must be present and <1
+    expect(sizer.style.transform).toMatch(/scale\(0\.41/);
+    expect(sizer.style.transformOrigin).toBe('top left');
+    // sizer laid out at the logical width; height = H/s so scaled box = panel H
+    expect(sizer.style.width).toBe(`${LOGICAL_WIDTH}px`);
+    // the iframe still exists inside the sizer (rendered path preserved)
+    expect(sizer.querySelector('iframe')).not.toBeNull();
+  });
+
+  it('scale caps at 1 (never upscale) when the panel is wider than the logical width', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const wrapper = stubWrapperDims(container, 2000, 800)!;
+    fireResize(wrapper);
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    // 2000/1200 = 1.67 → capped to 1 → scale(1)
+    expect(sizer.style.transform).toMatch(/scale\(1\)/);
+  });
+
+  it('W<1 is skipped (0-width trap): a zero-width measurement does NOT set scale(0)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const wrapper = stubWrapperDims(container, 500, 600)!;
+    fireResize(wrapper); // establishes scale(0.41…)
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    const before = sizer.style.transform;
+    // now a spurious 0-width measurement (mid width-reveal animation)
+    Object.defineProperty(wrapper, 'clientWidth', { configurable: true, value: 0 });
+    fireResize(wrapper);
+    // scale unchanged — never scale(0) (which would vanish the iframe)
+    expect(sizer.style.transform).toBe(before);
+    expect(sizer.style.transform).not.toMatch(/scale\(0\)/);
+  });
+
+  it('Actual toggle removes the transform (iframe fills width:100%, prior behavior)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const wrapper = stubWrapperDims(container, 500, 600)!;
+    fireResize(wrapper);
+    // toggle Fit → Actual
+    fireEvent.click(screen.getByTitle('Actual size (no fit-scaling)'));
+    // no sizer transform in Actual mode
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement | null;
+    expect(sizer).toBeNull();
+    // iframe is a direct fill child again
+    expect(container.querySelector('iframe')).not.toBeNull();
+  });
+
+  it('disconnects the ResizeObserver on unmount (no leak)', () => {
+    const { container, unmount } = render(<HtmlRenderer {...PROPS} />);
+    stubWrapperDims(container, 500, 600);
+    expect(lastRO).not.toBeNull();
+    unmount();
+    expect(lastRO!.disconnect).toHaveBeenCalled();
+  });
+
+  it('Source toggle still works from Fit mode (no iframe, shows markup)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    fireEvent.click(screen.getByTitle('Show HTML source'));
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.querySelector('[data-testid="html-fit-sizer"]')).toBeNull();
+    expect(container.textContent).toContain('DOCTYPE html');
+  });
+
+  it('does NOT set state on a same-size resize (change-detecting bail avoids rerender churn)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    const wrapper = stubWrapperDims(container, 500, 600)!;
+    fireResize(wrapper); // establishes scale(0.41…)
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    const transformBefore = sizer.style.transform;
+    // fire an identical-dimension resize (observer fires but dims unchanged)
+    fireResize(wrapper);
+    fireResize(wrapper);
+    const sizerAfter = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    // same DOM node (no remount) + unchanged transform: the bail returned prev state
+    expect(sizerAfter).toBe(sizer);
+    expect(sizerAfter.style.transform).toBe(transformBefore);
+    // a CHANGED dimension still updates
+    Object.defineProperty(wrapper, 'clientWidth', { configurable: true, value: 900 });
+    fireResize(wrapper);
+    expect(sizerAfter.style.transform).toMatch(/scale\(0\.75\)/); // 900/1200
+  });
+
+  it('re-attaches the ResizeObserver after source→rendered re-entry (fit still tracks resize)', () => {
+    const { container } = render(<HtmlRenderer {...PROPS} />);
+    // rendered → source: the measured wrapper unmounts, observer disconnects
+    fireEvent.click(screen.getByTitle('Show HTML source'));
+    const roAfterSource = lastRO;
+    expect(roAfterSource!.disconnect).toHaveBeenCalled();
+    // source → rendered: wrapper remounts. Effect keyed on [mode] must re-run and
+    // create a NEW observer (a [] dep would leave the re-entered view untracked).
+    fireEvent.click(screen.getByTitle('Show rendered view'));
+    expect(lastRO).not.toBe(roAfterSource); // a fresh observer was created
+    // and it actually tracks a resize on the re-entered wrapper
+    const wrapper = stubWrapperDims(container, 600, 400)!;
+    fireResize(wrapper);
+    const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
+    expect(sizer.style.transform).toMatch(/scale\(0\.5\)/); // 600/1200
   });
 });
