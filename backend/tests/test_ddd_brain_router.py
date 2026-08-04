@@ -449,6 +449,35 @@ class TestHealthBlockInBrainDetail:
                   "diagnostics", "computedAt"):
             assert k in h, f"missing health key {k}: {h}"
 
+    def test_cultivation_health_surfaced(self, tmp_path):
+        """run_abf49550 M0 (AC2): the learning-organ health (write_failed +
+        silent_learning_failure) is READ from the durable per-project sink and
+        surfaced in _brain_health — no more write-only counters. A recorded write
+        failure must make it visible here."""
+        from routers import ddd_brain as m
+        from core.ddd_cultivation import record_cultivation_outcome
+        pd = tmp_path / "P"
+        pd.mkdir()
+        # a real write failure was recorded for this project
+        record_cultivation_outcome(pd, {
+            "applied": 1, "rejected": 0, "write_failed": 1, "escalated": 0,
+        })
+        h = m._brain_detail(pd)["health"]
+        assert "cultivation" in h, f"cultivation health must be surfaced: {h}"
+        c = h["cultivation"]
+        assert c["write_failed"] == 1
+        assert c["silent_learning_failure"] is True
+
+    def test_cultivation_health_clean_when_no_outcomes(self, tmp_path):
+        """No recorded outcomes → cultivation block present, not flagged (honest
+        zero, never fabricated)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        pd.mkdir()
+        h = m._brain_detail(pd)["health"]
+        assert "cultivation" in h
+        assert h["cultivation"]["silent_learning_failure"] is False
+
     def test_recall_is_experimental_null(self, tmp_path):
         """recall carries no fabricated value — {value:None, experimental:True}
         (no cheap per-DDD recall metric exists; recall_suite is pinned-corpus)."""

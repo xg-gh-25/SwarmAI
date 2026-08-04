@@ -1608,6 +1608,174 @@ def read_pending_proposals(
     return deduped
 
 
+# ── Learning-fidelity observability (run_abf49550 M0) ──────────────────────
+# The cultivation subsystem is the agent's LEARNING ORGAN. Before M0 its failure
+# modes were invisible: a write failure (locked/doc_missing) was bucketed with
+# healthy rejects, and nothing surfaced whether the brain had silently stopped
+# learning. These two functions make per-project outcomes DURABLE (survive daemon
+# restart) and computable into a learning-fidelity baseline. Deliberately a
+# DEDICATED sink — NOT ddd-changelog.jsonl, whose consumers (_read_changelog,
+# _build_changelog_index) count EVERY entry with no action filter (Gate-1 verified),
+# so failure records there would pollute the weekly report + usage-health.
+
+_CULTIVATION_OUTCOMES_FILE = "cultivation-outcomes.jsonl"
+
+
+def record_cultivation_outcome(project_dir: Path, result: dict) -> None:
+    """Append a per-project cultivation OUTCOME record to the durable sink.
+
+    result is a _cultivate_proposals() return dict (applied/rejected/write_failed/
+    escalated). Best-effort append-only JSONL — a recording failure must NEVER
+    break cultivation itself (the learning organ keeps working even if we can't
+    log its health). run_abf49550 M0 / AC2.
+    """
+    try:
+        sink = project_dir / ".artifacts" / _CULTIVATION_OUTCOMES_FILE
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "applied": int(result.get("applied", 0)),
+            "rejected": int(result.get("rejected", 0)),
+            "write_failed": int(result.get("write_failed", 0)),
+            "escalated": int(result.get("escalated", 0)),
+            "retired": int(result.get("retired", 0)),
+        }
+        with open(sink, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except (OSError, ValueError, TypeError) as exc:
+        # Observability must never break the organ it observes (STEERING #2 /
+        # O030 family). A failed record is logged loud but non-fatal.
+        logger.warning("record_cultivation_outcome failed (non-fatal): %s", exc)
+
+
+def read_cultivation_health(project_dir: Path, window_days: int = 7) -> dict:
+    """Aggregate per-project cultivation outcomes over a window into a health block.
+
+    Read-only. Returns the learning-fidelity baseline + the single north-star flag
+    `silent_learning_failure` = (write_failed > 0 in the window). window_days=7
+    matches the weekly-report cadence. run_abf49550 M0 / AC1+AC2.
+    """
+    health = {
+        "window_days": window_days,
+        "applied": 0,
+        "healthy_reject": 0,
+        "write_failed": 0,
+        "escalated": 0,
+        "silent_learning_failure": False,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sink = project_dir / ".artifacts" / _CULTIVATION_OUTCOMES_FILE
+    if not sink.exists():
+        return health
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    try:
+        for line in sink.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                ts = datetime.fromisoformat(rec.get("timestamp", ""))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue  # skip a corrupt/undated line, never crash the read
+            if ts < cutoff:
+                continue
+            health["applied"] += int(rec.get("applied", 0))
+            health["healthy_reject"] += int(rec.get("rejected", 0))
+            health["write_failed"] += int(rec.get("write_failed", 0))
+            health["escalated"] += int(rec.get("escalated", 0))
+    except OSError as exc:
+        logger.warning("read_cultivation_health failed (non-fatal): %s", exc)
+        return health
+    health["silent_learning_failure"] = health["write_failed"] > 0
+    return health
+
+
+# Workspace-GLOBAL cultivation health (run_abf49550 M0, Gate-1 two-grain fix).
+# drops/channel-timeouts/channel-errors happen at the workspace-level drain
+# (lifecycle_manager._process_cultivation_events), NOT per-project — so they persist
+# to a workspace-level sink, never mis-attributed to a project's health.
+_WORKSPACE_CULTIVATION_FILE = "cultivation-workspace-health.jsonl"
+
+
+def record_workspace_cultivation_health(
+    root: Path, *, findings: list[str] | None = None, dropped: int = 0
+) -> None:
+    """Append a workspace-level drain outcome (parsed from executor findings +
+    dispatcher.dropped_count) to the durable workspace sink. Best-effort; never
+    breaks the maintenance loop (the except-swallow at the drain still stands —
+    this only ADDS a surfaced record). run_abf49550 M0 / AC2.
+
+    Restart limitation (documented, M0): dropped_count is in-memory in the
+    dispatcher singleton; a daemon restart between 30-min drains loses the
+    interim count before it is recorded here. Restart-safe capture is deferred
+    to M1.
+    """
+    try:
+        findings = findings or []
+        # Prefix-anchored (Gate-2 MED): the executor emits "CHANNEL_TIMEOUT: …" /
+        # "CHANNEL_ERROR: …" at the START of a finding (cultivation_dispatcher.py:257-273).
+        # A substring test would double-count a finding that merely MENTIONS both tokens.
+        timeouts = sum(1 for f in findings if f.startswith("CHANNEL_TIMEOUT"))
+        errors = sum(1 for f in findings if f.startswith("CHANNEL_ERROR"))
+        sink = root / ".artifacts" / _WORKSPACE_CULTIVATION_FILE
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "channel_timeouts": timeouts,
+            "channel_errors": errors,
+            "dropped_events": int(dropped),
+        }
+        with open(sink, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("record_workspace_cultivation_health failed (non-fatal): %s", exc)
+
+
+def read_workspace_cultivation_health(root: Path, window_days: int = 7) -> dict:
+    """Aggregate workspace-level drain health over a window. Read-only.
+    silent_learning_failure = any drop / timeout / channel-error in-window.
+    run_abf49550 M0 / AC1+AC2."""
+    health = {
+        "window_days": window_days,
+        "channel_timeouts": 0,
+        "channel_errors": 0,
+        "dropped_events": 0,
+        "silent_learning_failure": False,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sink = root / ".artifacts" / _WORKSPACE_CULTIVATION_FILE
+    if not sink.exists():
+        return health
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    try:
+        for line in sink.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                ts = datetime.fromisoformat(rec.get("timestamp", ""))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue
+            if ts < cutoff:
+                continue
+            health["channel_timeouts"] += int(rec.get("channel_timeouts", 0))
+            health["channel_errors"] += int(rec.get("channel_errors", 0))
+            health["dropped_events"] += int(rec.get("dropped_events", 0))
+    except OSError as exc:
+        logger.warning("read_workspace_cultivation_health failed (non-fatal): %s", exc)
+        return health
+    health["silent_learning_failure"] = (
+        health["channel_timeouts"] > 0
+        or health["channel_errors"] > 0
+        or health["dropped_events"] > 0
+    )
+    return health
+
+
 def _cultivate_proposals(
     proposals: List[CultivationProposal], project_dir: Path
 ) -> dict:
@@ -1617,7 +1785,14 @@ def _cultivate_proposals(
     circuit breaker, and conflict checks on top of is_safe_append().
 
     Returns:
-        {"applied": N, "escalated": M, "rejected": K, "retired": R, "drift_errors": [...]}
+        {"applied": N, "escalated": M, "rejected": K, "write_failed": W,
+         "retired": R, "drift_errors": [...]}
+
+    write_failed (run_abf49550 M0): apply_to_ddd returned "locked"/"doc_missing" —
+    a genuine WRITE FAILURE (learning organ could not write), kept DISTINCT from
+    "rejected" (healthy discern: duplicate/low_value/not_safe). Pre-M0 both
+    collapsed into "rejected", making a broken write indistinguishable from a
+    discerning one — the exact learning-fidelity blind spot M0 exists to remove.
 
     drift_errors surfaces section-name drift LOUDLY (a config bug where a
     allowlisted routing section has no matching heading in the doc) instead of
@@ -1631,6 +1806,7 @@ def _cultivate_proposals(
     applied = 0
     escalated = 0
     rejected = 0
+    write_failed = 0
     retired = 0
     drift_errors: List[str] = []
 
@@ -1773,22 +1949,37 @@ def _cultivate_proposals(
                 proposal.status = "applied"
                 log_application(proposal, project_dir, created_section=True)
                 applied += 1
+            elif status in ("locked", "doc_missing"):
+                # WRITE FAILURE (run_abf49550 M0 / AC3) — the lesson was NOT
+                # applied because cultivation COULD NOT WRITE: another writer held
+                # the lock ("locked"), or the target doc is missing ("doc_missing").
+                # This is the learning organ FAILING, categorically distinct from a
+                # HEALTHY reject below. Counting it as "rejected" (the pre-M0 bug)
+                # made a broken brain indistinguishable from a discerning one.
+                write_failed += 1
             else:
-                # Benign no-op: "duplicate", "rejected_low_value", "doc_missing",
-                # "locked", "not_safe" — none landed, count as rejected.
+                # Healthy reject: "duplicate", "rejected_low_value", "not_safe" —
+                # the brain DISCERNED and declined to write. Nothing failed.
                 rejected += 1
         else:
             proposal.status = "escalated"
             write_proposal(proposal, project_dir)
             escalated += 1
 
-    return {
+    result = {
         "applied": applied,
         "escalated": escalated,
         "rejected": rejected,
+        "write_failed": write_failed,
         "retired": retired,
         "drift_errors": drift_errors,
     }
+    # M0 (run_abf49550): persist this batch's outcome to the durable per-project
+    # sink so learning-fidelity is observable (AC2). Best-effort — never breaks
+    # cultivation. Skip a fully-empty batch (nothing to observe).
+    if applied or escalated or rejected or write_failed or retired:
+        record_cultivation_outcome(project_dir, result)
+    return result
 
 
 def cultivate_from_reflect(

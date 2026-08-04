@@ -890,7 +890,7 @@ class TestCultivateFromCorrections:
             result = cultivate_from_corrections(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "retired": 0, "drift_errors": []}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "drift_errors": []}
 
 
 class TestCultivateFromDecisions:
@@ -950,7 +950,7 @@ class TestCultivateFromDecisions:
             result = cultivate_from_decisions(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "retired": 0, "drift_errors": []}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0, "retired": 0, "drift_errors": []}
 
     def test_real_corrections_without_keywords_still_classify(self):
         """PE-1: Real production corrections lack keywords but should still classify."""
@@ -2377,3 +2377,220 @@ class TestSupersedeTiering:
         recs = [_json.loads(l) for l in changelog.read_text().splitlines() if l.strip()]
         dels = [r for r in recs if r.get("action") == "auto-supersede-delete"]
         assert dels and dels[-1]["stripped_title"] == "Never trust the cache blindly here"
+
+
+class TestCultivateWriteFailedDistinction:
+    """run_abf49550 M0 (AC3): _cultivate_proposals MUST separate a genuine WRITE
+    FAILURE (apply_to_ddd → 'locked'/'doc_missing') from a HEALTHY REJECT
+    ('duplicate'/'rejected_low_value'/'not_safe'). Before M0 both collapse into
+    the single 'rejected' bucket (ddd_cultivation.py:1777), so the learning-organ
+    health surface cannot tell 'my brain couldn't write' from 'my brain discerned'.
+    """
+
+    def _safe_proposal(self, content: str):
+        from core.ddd_cultivation import CultivationProposal
+        return CultivationProposal(
+            target_doc="IMPROVEMENT.md",
+            target_section="What Worked",
+            content=content,
+            source_run_id="run_wf_test",
+            confidence=0.7,
+        )
+
+    def test_write_failure_is_distinct_from_healthy_reject(self, monkeypatch):
+        """A proposal that passes the auto-approval gate but whose apply_to_ddd
+        returns 'locked' (write contention) must be counted as write_failed, NOT
+        folded into the healthy 'rejected' bucket."""
+        import core.ddd_cultivation as ddc
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text(
+                "# Lessons\n\n## What Worked\n\n- existing entry\n\n"
+                "## What Failed\n\n- old failure\n"
+            )
+            # Force the WRITE-FAILURE outcome at the apply site (a real lock
+            # contention returns 'locked'). The proposal still passes the gate;
+            # only the final write fails.
+            monkeypatch.setattr(ddc, "apply_to_ddd", lambda p, d: "locked")
+
+            result = ddc._cultivate_proposals(
+                [self._safe_proposal("A genuinely new load-bearing lesson worth keeping")],
+                project_dir,
+            )
+
+        # THE distinction M0 exists to make:
+        assert result.get("write_failed", 0) == 1, (
+            "a 'locked' apply outcome must be recorded as write_failed, not hidden "
+            f"in rejected — got {result}"
+        )
+        assert result.get("rejected", 0) == 0, (
+            "a write failure must NOT be counted as a healthy reject — got {result}"
+        )
+
+    def test_healthy_reject_stays_rejected(self, monkeypatch):
+        """A 'duplicate'/'rejected_low_value' outcome is a HEALTHY reject — it must
+        stay in 'rejected' and NOT be miscounted as write_failed."""
+        import core.ddd_cultivation as ddc
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text(
+                "# Lessons\n\n## What Worked\n\n- existing entry\n\n"
+                "## What Failed\n\n- old failure\n"
+            )
+            monkeypatch.setattr(ddc, "apply_to_ddd", lambda p, d: "duplicate")
+
+            result = ddc._cultivate_proposals(
+                [self._safe_proposal("Another distinct lesson about caching invariants")],
+                project_dir,
+            )
+
+        assert result.get("rejected", 0) == 1, (
+            f"a 'duplicate' is a healthy reject — must stay in rejected, got {result}"
+        )
+        assert result.get("write_failed", 0) == 0, (
+            f"a healthy reject must NOT be counted as write_failed — got {result}"
+        )
+
+
+class TestCultivationOutcomeSink:
+    """run_abf49550 M0 (AC1+AC2): per-project cultivation outcomes are PERSISTED
+    durably (survive daemon restart) and a windowed aggregator computes the
+    learning-fidelity baseline + the single silent_learning_failure flag. Reuses a
+    dedicated sink (.artifacts/cultivation-outcomes.jsonl), NOT the ddd-changelog
+    (whose consumers take every entry unfiltered — Gate-1 verified)."""
+
+    def test_record_then_aggregate_roundtrip(self):
+        from core.ddd_cultivation import (
+            record_cultivation_outcome, read_cultivation_health,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            # two batches: one healthy, one with a real write failure
+            record_cultivation_outcome(project_dir, {
+                "applied": 2, "rejected": 1, "write_failed": 0, "escalated": 0,
+            })
+            record_cultivation_outcome(project_dir, {
+                "applied": 0, "rejected": 0, "write_failed": 1, "escalated": 1,
+            })
+
+            sink = project_dir / ".artifacts" / "cultivation-outcomes.jsonl"
+            assert sink.exists(), "outcomes must be persisted to a durable sink"
+
+            health = read_cultivation_health(project_dir, window_days=7)
+            assert health["applied"] == 2
+            assert health["healthy_reject"] == 1
+            assert health["write_failed"] == 1
+            assert health["escalated"] == 1
+            # THE north-star flag: a write failure occurred → brain silently failing
+            assert health["silent_learning_failure"] is True
+
+    def test_clean_history_is_not_flagged(self):
+        from core.ddd_cultivation import (
+            record_cultivation_outcome, read_cultivation_health,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            record_cultivation_outcome(project_dir, {
+                "applied": 3, "rejected": 2, "write_failed": 0, "escalated": 0,
+            })
+            health = read_cultivation_health(project_dir, window_days=7)
+            assert health["write_failed"] == 0
+            assert health["silent_learning_failure"] is False, (
+                "a brain that only applied + healthily-rejected is NOT failing"
+            )
+
+    def test_window_excludes_old_records(self):
+        import json as _j
+        from datetime import datetime, timezone, timedelta
+        from core.ddd_cultivation import read_cultivation_health
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sink = project_dir / ".artifacts" / "cultivation-outcomes.jsonl"
+            sink.parent.mkdir(parents=True, exist_ok=True)
+            old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            # an OLD write-failure must NOT flag the 7d window
+            sink.write_text(_j.dumps({
+                "timestamp": old_ts, "applied": 0, "rejected": 0,
+                "write_failed": 5, "escalated": 0,
+            }) + "\n")
+            health = read_cultivation_health(project_dir, window_days=7)
+            assert health["write_failed"] == 0, "30d-old failure must be outside the 7d window"
+            assert health["silent_learning_failure"] is False
+
+
+class TestWorkspaceCultivationHealth:
+    """run_abf49550 M0 (AC2, workspace grain): drops/channel-timeouts/channel-errors
+    are WORKSPACE-GLOBAL (the dispatcher + drain operate on one workspace, not a
+    project), so they persist to a workspace-level sink — NOT per-project (Gate-1
+    two-grain fix). From the drain's findings + dispatcher.dropped_count."""
+
+    def test_record_and_read_workspace_health(self):
+        from core.ddd_cultivation import (
+            record_workspace_cultivation_health, read_workspace_cultivation_health,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            findings = [
+                "CHANNEL_TIMEOUT: mechanical_refresh exceeded 5.0s budget",
+                "CHANNEL_ERROR: llm_refresh — ValueError: boom",
+                "some benign finding",
+            ]
+            record_workspace_cultivation_health(root, findings=findings, dropped=3)
+
+            h = read_workspace_cultivation_health(root, window_days=7)
+            assert h["channel_timeouts"] == 1
+            assert h["channel_errors"] == 1
+            assert h["dropped_events"] == 3
+            assert h["silent_learning_failure"] is True
+
+    def test_clean_drain_not_flagged(self):
+        from core.ddd_cultivation import (
+            record_workspace_cultivation_health, read_workspace_cultivation_health,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            record_workspace_cultivation_health(
+                root, findings=["processed cleanly"], dropped=0)
+            h = read_workspace_cultivation_health(root, window_days=7)
+            assert h["channel_timeouts"] == 0
+            assert h["channel_errors"] == 0
+            assert h["dropped_events"] == 0
+            assert h["silent_learning_failure"] is False
+
+    def test_cumulative_dropped_recorded_as_delta_not_running_total(self):
+        """Gate-2 HIGH (run_abf49550): dispatcher.dropped_count is CUMULATIVE
+        (only ever +=). The drain records the DELTA then resets; two drains of
+        delta 3 then 2 must aggregate to 5 — NOT 3+5=8 (the running-total bug)."""
+        from core.ddd_cultivation import (
+            record_workspace_cultivation_health, read_workspace_cultivation_health,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            record_workspace_cultivation_health(root, findings=[], dropped=3)
+            record_workspace_cultivation_health(root, findings=[], dropped=2)
+            h = read_workspace_cultivation_health(root, window_days=7)
+            assert h["dropped_events"] == 5, (
+                "deltas 3+2 must sum to 5; a running-total caller (3 then 5) "
+                f"would give 8 — got {h['dropped_events']}"
+            )
+
+    def test_channel_token_counts_as_prefix_not_substring(self):
+        """Gate-2 MED: a benign finding merely MENTIONING the token mid-string
+        must NOT count — only a prefix-anchored CHANNEL_TIMEOUT/ERROR."""
+        from core.ddd_cultivation import (
+            record_workspace_cultivation_health, read_workspace_cultivation_health,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            record_workspace_cultivation_health(root, findings=[
+                "processed ok; note: watch for CHANNEL_TIMEOUT next cycle",
+            ], dropped=0)
+            h = read_workspace_cultivation_health(root, window_days=7)
+            assert h["channel_timeouts"] == 0, "a mid-string mention must not count"
+            assert h["silent_learning_failure"] is False

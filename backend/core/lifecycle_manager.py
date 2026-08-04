@@ -1369,6 +1369,28 @@ class LifecycleManager:
                     if "CHANNEL_ERROR" in f or "CHANNEL_TIMEOUT" in f:
                         logger.warning("cultivation: %s", f)
 
+            # M0 (run_abf49550): persist workspace-level drain health durably so a
+            # channel timeout/error or a queue overflow is VISIBLE, not just a debug
+            # log nobody reads. The except-swallow below STILL stands (correct-by-
+            # design: cultivation must never crash the maintenance loop) — this only
+            # ADDS a surfaced record. Best-effort inside the recorder itself.
+            try:
+                from core.ddd_cultivation import record_workspace_cultivation_health
+                # dropped_count is CUMULATIVE (only ever += , never reset —
+                # cultivation_dispatcher.py:130/157/170). Record the DELTA since the
+                # last drain, then reset, else read_workspace_cultivation_health would
+                # SUM the running total across every drain → massive over-count
+                # (Gate-2 HIGH). Safe to reset: the ONLY readers are this recorder +
+                # a log line (verified — no other consumer relies on the cumulative).
+                dropped_delta = getattr(dispatcher, "dropped_count", 0)
+                record_workspace_cultivation_health(
+                    root, findings=findings, dropped=dropped_delta
+                )
+                if dropped_delta:
+                    dispatcher.dropped_count = 0
+            except Exception:  # observability must never break the organ (O030)
+                pass
+
         except Exception as exc:
             logger.debug("lifecycle_manager.cultivation_events failed: %s", exc)
 

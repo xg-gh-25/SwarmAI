@@ -430,11 +430,23 @@ def _brain_health(project_dir: Path) -> dict:
         diagnostics = None
         computed_at = None
 
+    # cultivation — learning-fidelity health (run_abf49550 M0). READ-ONLY: aggregates
+    # the durable per-project outcomes sink over a 7d window (no write in the GET path
+    # — Gate-1 CRITICAL). silent_learning_failure is the north-star flag: True iff a
+    # genuine write failure (locked/doc_missing) occurred in-window. Never fabricated —
+    # absent sink → honest all-zero, unflagged.
+    try:
+        from core.ddd_cultivation import read_cultivation_health
+        cultivation = read_cultivation_health(project_dir, window_days=7)
+    except (OSError, ValueError, ImportError):  # never 500 a brain view on health read
+        cultivation = None
+
     return {
         "noise": noise,
         "trust": trust,
         "escalationPending": _pending_count(project_dir.name),
         "recall": {"value": None, "experimental": True},
+        "cultivation": cultivation,
         "diagnostics": diagnostics,
         "computedAt": computed_at,
     }
