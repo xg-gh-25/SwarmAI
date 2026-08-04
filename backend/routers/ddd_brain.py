@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -61,6 +62,7 @@ from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import (
     MEMORY_EVERGREEN_SECTIONS,
+    EntryMetadata,
     compute_reclaimable_noise,
     parse_entries,
 )
@@ -343,7 +345,7 @@ def _entry_count(project_dir: Path) -> int:
     return total
 
 
-def _parse_all_knowledge_entries(project_dir: Path) -> list:
+def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
     """All parsed entries across the ② canonical docs (shared by health metrics).
 
     One parse pass per canonical doc — the same per-doc loop _sinking_count /
@@ -351,7 +353,7 @@ def _parse_all_knowledge_entries(project_dir: Path) -> list:
     unreadable doc degrades to zero contribution (never a 500), matching the
     sibling helpers' fault tolerance.
     """
-    entries: list = []
+    entries: list[EntryMetadata] = []
     for doc in _KNOWLEDGE_DOCS:
         p = ddd_path(project_dir, doc)
         if not p.exists():
@@ -373,57 +375,59 @@ def _brain_health(project_dir: Path) -> dict:
 
     - noise: {reclaimable, rate} — computed LIVE via compute_reclaimable_noise over
       the ② docs (owner action: >threshold → reclaim-strip). No side effect.
-    - trust / diagnostics / computedAt: READ from the stored section_health.json via
-      the read-only _load_last_scores (written by the scheduled health path). The GET
-      path NEVER calls compute_section_health — that function WRITES the file, and a
-      disk write in a read handler is forbidden (Gate-1 CRITICAL, run_d7146171). Absent
-      score → None (honest: no scheduled computation yet; never fabricated, never a
-      write). No project-composite is invented (Gate-1 MAJOR — that would be a vanity
-      metric); the per-doc scores are surfaced verbatim.
+    - trust / diagnostics / computedAt: READ from the stored section_health.json in a
+      SINGLE parse (written by the scheduled health path). The GET path NEVER calls
+      compute_section_health — that function WRITES the file, and a disk write in a
+      read handler is forbidden (Gate-1 CRITICAL, run_d7146171). All three derive from
+      one snapshot so trust/diagnostics can't go stale relative to computedAt (Gate-2
+      HIGH: a two-read version risked a TOCTOU mismatch). Absent/corrupt score → None
+      (honest: no scheduled computation yet; never fabricated, never a write). No
+      project-composite is invented (Gate-1 MAJOR — vanity); per-doc scores verbatim.
     - escalationPending: reuse _pending_count (same source as the gallery — no divergence).
     - recall: {value:None, experimental:True} — recall_suite is a pinned-corpus
       benchmark with no cheap per-DDD value; the tile is shown but labeled experimental
       (design §4), never fabricated.
     """
-    # noise — live, no side effect
+    # noise — live, no side effect. Narrow except (Gate-2 MED, GUI19): catch the
+    # real failure modes (bad file / bad data shape) so an accidental future write
+    # or a genuine logic bug surfaces instead of being swallowed to a silent zero.
     try:
         entries = _parse_all_knowledge_entries(project_dir)
         nr = compute_reclaimable_noise(
             entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
         )
         noise = {"reclaimable": nr.noisy, "rate": round(nr.noise_rate, 4)}
-    except Exception:  # pragma: no cover - defensive: noise never 500s a brain view
+    except (OSError, ValueError, UnicodeError):  # noise never 500s a brain view
         noise = {"reclaimable": 0, "rate": 0.0}
 
-    # trust / diagnostics — READ-ONLY from the stored scheduled score (no write)
+    # trust / diagnostics / computedAt — READ-ONLY from the stored scheduled score.
+    # ONE read of section_health.json (Gate-2 HIGH: reading it twice risked a TOCTOU
+    # where trust came from the old file and computedAt from a mid-write new one; and
+    # Gate-2 MED: it parsed the same file twice). We parse once here and derive all
+    # three from that single snapshot. The GET path NEVER calls compute_section_health
+    # (the writer) — only this read (Gate-1 CRITICAL). Absent/corrupt → all None.
     trust = None
     diagnostics = None
     computed_at = None
+    sh = project_dir / ".artifacts" / "section_health.json"
     try:
-        from core.ddd_health import _load_last_scores
-
-        stored = _load_last_scores(project_dir)  # {} when section_health.json absent
-        if stored:
-            # per-doc trust (as stored — no invented rollup, Gate-1 MAJOR)
-            trust = {
-                doc: {
-                    sec: s.get("trust")
-                    for sec, s in doc_data.get("sections", {}).items()
+        if sh.is_file():
+            snapshot = json.loads(sh.read_text(encoding="utf-8"))
+            docs = snapshot.get("docs", {})
+            computed_at = snapshot.get("computed_at")
+            if docs:
+                # per-doc trust (as stored — no invented rollup, Gate-1 MAJOR)
+                trust = {
+                    doc: {
+                        sec: s.get("trust")
+                        for sec, s in doc_data.get("sections", {}).items()
+                    }
+                    for doc, doc_data in docs.items()
                 }
-                for doc, doc_data in stored.items()
-            }
-            diagnostics = stored  # the 5-dim per-section scores, verbatim
-    except Exception:  # pragma: no cover - defensive
+                diagnostics = docs  # the 5-dim per-section scores, verbatim
+    except (OSError, ValueError, KeyError):  # bad file / shape → honest None, no write
         trust = None
         diagnostics = None
-    # computedAt lives on the state file, not inside `docs` — read it read-only.
-    try:
-        import json as _json
-
-        sh = project_dir / ".artifacts" / "section_health.json"
-        if sh.is_file():
-            computed_at = _json.loads(sh.read_text(encoding="utf-8")).get("computed_at")
-    except (OSError, ValueError):
         computed_at = None
 
     return {
