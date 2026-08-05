@@ -1,12 +1,18 @@
 /**
- * Tests for FileViewerPanel window/content control redesign (Cycle 3, bug6).
+ * Tests for FileViewerPanel window/content control redesign (Cycle 3, bug6;
+ * window-model updated run_26aa6caa).
  *
  * The redesign (business rules under test):
- *  - Window states collapse to Panel/Expanded (ONE toggle) + Close. The old
- *    200px COLLAPSED_WIDTH narrow dock is GONE — no [data-testid=
+ *  - Window states collapse to Panel/Expanded (ONE toggle) + a dismiss button.
+ *    The old 200px COLLAPSED_WIDTH narrow dock is GONE — no [data-testid=
  *    file-viewer-panel-collapsed] can ever render.
+ *  - run_26aa6caa (XG directive "close 不是关闭 而是 collapse"): the header dismiss
+ *    button COLLAPSES the Canvas to the side rail (collapseToRail) — it does NOT
+ *    unmount. So the RIGHT group is [expand toggle] + [collapse-to-rail]; there is
+ *    no "close/unmount" header button anymore (true unmount survives only via the
+ *    intrinsic last-file-tab-closed path inside FileViewer).
  *  - Controls are semantically grouped: pin+mute (content controls) on the LEFT
- *    beside "Outputs"; expand+close (window controls) on the RIGHT; a divider
+ *    beside "Outputs"; expand+collapse (window controls) on the RIGHT; a divider
  *    between the two groups.
  *
  * FileViewer + CanvasOutputRail are mocked to leaf stubs — this test asserts the
@@ -24,7 +30,7 @@ vi.mock('../CanvasOutputRail', () => ({
 }));
 
 const baseProps = {
-  sessionId: 'sess-1',
+  tabScopeKey: 'tab-1',
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),
@@ -40,24 +46,25 @@ describe('FileViewerPanel — control redesign (bug6)', () => {
     expect(screen.queryByTestId('file-viewer-panel-collapsed')).toBeNull();
   });
 
-  it('exposes exactly the 2-state window model: Expand toggle + Close (no Collapse-to-dock)', () => {
+  it('exposes exactly the 2-state window model: Expand toggle + Collapse-to-rail (no unmount/Close button)', () => {
     render(<FileViewerPanel {...baseProps} />);
     expect(screen.getByLabelText(/expand/i)).toBeTruthy();
-    expect(screen.getByLabelText(/close canvas/i)).toBeTruthy();
-    // The old "collapse to outputs dock" control is gone.
-    expect(screen.queryByLabelText(/collapse canvas to outputs dock/i)).toBeNull();
+    // run_26aa6caa: the dismiss button collapses to the rail, it does NOT close/unmount.
+    expect(screen.getByLabelText(/collapse canvas to a side rail/i)).toBeTruthy();
+    // There is no header button that unmounts the Canvas anymore.
+    expect(screen.queryByLabelText(/^close canvas$/i)).toBeNull();
   });
 
-  it('groups content controls (pin+mute) LEFT and window controls (expand+close) RIGHT, divided', () => {
+  it('groups content controls (pin+mute) LEFT and window controls (expand+collapse) RIGHT, divided', () => {
     render(<FileViewerPanel {...baseProps} />);
     const left = screen.getByTestId('canvas-content-controls');
     const right = screen.getByTestId('canvas-window-controls');
     // pin + mute live in the LEFT (content) group
     expect(within(left).getByLabelText(/pin/i)).toBeTruthy();
     expect(within(left).getByLabelText(/mute/i)).toBeTruthy();
-    // expand + close live in the RIGHT (window) group
+    // expand + collapse-to-rail live in the RIGHT (window) group
     expect(within(right).getByLabelText(/expand/i)).toBeTruthy();
-    expect(within(right).getByLabelText(/close canvas/i)).toBeTruthy();
+    expect(within(right).getByLabelText(/collapse canvas to a side rail/i)).toBeTruthy();
     // a divider separates the two groups
     expect(screen.getByTestId('canvas-controls-divider')).toBeTruthy();
   });

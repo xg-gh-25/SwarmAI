@@ -66,8 +66,9 @@ function setStoredBool(key: string, val: boolean): void {
 }
 
 type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
-  /** Canvas output rail: active-tab session id (from useSessionMeta). */
-  sessionId?: string;
+  // Canvas output rail scope = props.tabScopeKey (the owning tab id, inherited
+  // from FileViewerProps). The former `sessionId` prop is REMOVED (run_26aa6caa) —
+  // the rail keys on the stable tabId now, not the volatile session id.
   /** Canvas gentle auto-surface controls. */
   pinned?: boolean;
   onTogglePin?: () => void;
@@ -81,7 +82,6 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
 };
 
 function FileViewerPanelImpl({
-  sessionId,
   pinned,
   onTogglePin,
   muted,
@@ -89,19 +89,13 @@ function FileViewerPanelImpl({
   onCanvasMeta,
   ...props
 }: FileViewerPanelProps) {
-  // Stable session id for the Outputs rail (BUG1, run_26981f66). The `sessionId`
-  // prop briefly flips to undefined during tab-switch / canvas-open (ChatPage
-  // sets it undefined transiently). Gating the rail on the raw prop made the
-  // whole Outputs block unmount+remount across that flicker — the visible half
-  // of the "outputs slower than file-open" bug (the data half is fixed in
-  // useReferencedFiles). Remember the last DEFINED id and drive the rail from it,
-  // so a transient undefined keeps the rail mounted showing the same session's
-  // outputs. Cross-session safety: a real switch delivers a NEW defined id, which
-  // overwrites this ref and reloads (per-tab canvas.isOpen already prevents a
-  // fresh tab from mounting the rail at all — Gate-2 Attack 1).
-  const lastDefinedSessionIdRef = useRef<string | undefined>(sessionId);
-  if (sessionId !== undefined) lastDefinedSessionIdRef.current = sessionId;
-  const stableSessionId = sessionId ?? lastDefinedSessionIdRef.current;
+  // Rail scope key = the owning TAB id (run_26aa6caa). props.tabScopeKey (the same
+  // activeTabId ChatPage already passes to clear FileViewer's internal tab list) is
+  // stable from tab creation — it has NO unresolved window — so the former
+  // `lastDefinedSessionIdRef` stable-hack (which existed ONLY to paper over
+  // sessionId's undefined flicker, BUG1/run_26981f66) is now dead code and DELETED.
+  // A stable key means the rail neither flashes empty on the flicker NOR bleeds.
+  const railTabId = props.tabScopeKey;
 
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
@@ -291,9 +285,9 @@ function FileViewerPanelImpl({
             collapsed still bumps the strip's "N files" — otherwise the count
             freezes at the pre-rail value (the self-suppressing-count class,
             IMPROVEMENT.md:7). Zero-size, no visual footprint. */}
-        {stableSessionId !== undefined && (
+        {railTabId !== undefined && (
           <div className="hidden" aria-hidden="true">
-            <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} selectedPath={selectedPath} />
+            <CanvasOutputRail tabId={railTabId} onCounts={setCounts} selectedPath={selectedPath} />
           </div>
         )}
       </div>
@@ -349,11 +343,11 @@ function FileViewerPanelImpl({
           ancestors inside it (no-op), and popovers are portaled/fixed (unaffected). */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade" style={{ contain: 'layout' }}>
         {/* Canvas header — output stream + gentle auto-surface controls.
-            Rendered only when Canvas props are wired (sessionId provided).
+            Rendered only when Canvas props are wired (tabScopeKey provided).
             Layout: a min-w-0 truncating title/summary on the left + a
             flex-shrink-0 action cluster on the right, so buttons never get
             occluded on narrow widths (item 3). */}
-        {stableSessionId !== undefined && (
+        {railTabId !== undefined && (
           <div
             className="flex-shrink-0 border-b border-[var(--color-primary)] canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
@@ -417,18 +411,17 @@ function FileViewerPanelImpl({
               {/* Divider between the two semantic groups (content | window). */}
               <div className="w-px h-4 bg-[var(--color-border)] shrink-0" data-testid="canvas-controls-divider" aria-hidden="true" />
               {/* WINDOW controls (expand + close) — act on the PANEL itself,
-                  grouped right. Two-state window model: Panel ⇄ Expanded (one
-                  toggle) + Close. No collapse-to-dock (removed, bug6). */}
+                  grouped right. Window model: Panel ⇄ Expanded (one toggle) + the
+                  × button. run_26aa6caa: the × now COLLAPSES to the side rail
+                  (collapseToRail) instead of UNMOUNTING — XG directive "close 不是
+                  关闭 而是 collapse". The Canvas is thus never destroyed by the user's
+                  dismiss gesture; it stays one click away on the rail (its outputs +
+                  file survive). True unmount (props.onClose) remains reachable ONLY
+                  via the intrinsic "last file tab closed" path inside FileViewer
+                  (FileViewer.tsx:489/500) — not a header button. The former separate
+                  right_panel_close button is REMOVED (it duplicated this action —
+                  R25 merge, don't duplicate). */}
               <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-window-controls">
-                <button
-                  onClick={collapseToRail}
-                  className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
-                  title="Collapse Canvas to a side rail"
-                  aria-label="Collapse Canvas to a side rail"
-                  data-testid="canvas-collapse-rail-btn"
-                >
-                  <span className="material-symbols-outlined text-[14px]">right_panel_close</span>
-                </button>
                 <button
                   onClick={toggleExpand}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
@@ -439,10 +432,11 @@ function FileViewerPanelImpl({
                   <span className="material-symbols-outlined text-[14px]">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
                 </button>
                 <button
-                  onClick={props.onClose}
+                  onClick={collapseToRail}
                   className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors"
-                  title="Close Canvas"
-                  aria-label="Close Canvas"
+                  title="Collapse Canvas to a side rail"
+                  aria-label="Collapse Canvas to a side rail"
+                  data-testid="canvas-collapse-rail-btn"
                 >
                   <span className="material-symbols-outlined text-[14px]">close</span>
                 </button>
@@ -456,7 +450,7 @@ function FileViewerPanelImpl({
               className={outputsCollapsed ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
-              <CanvasOutputRail sessionId={stableSessionId} onCounts={setCounts} selectedPath={selectedPath} />
+              <CanvasOutputRail tabId={railTabId} onCounts={setCounts} selectedPath={selectedPath} />
             </div>
           </div>
         )}

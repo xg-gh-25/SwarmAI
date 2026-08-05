@@ -35,10 +35,17 @@ export interface CanvasAutoSurfaceOptions {
   pinned: boolean;
   /** User muted auto-surface for this session. */
   muted: boolean;
-  /** The ACTIVE tab's session id. A file-referenced event stamped with a
-   *  DIFFERENT session (a background keep-mounted tab) is ignored, so its
-   *  writes don't surface in the tab you're looking at. Absent stamp → fail
-   *  open (surface anyway; no regression for un-updated dispatchers). */
+  /** The ACTIVE tab id — the tab-scope key (run_26aa6caa). A file-changed event
+   *  stamped with a DIFFERENT tabId (a background keep-mounted tab) is ignored, so
+   *  its writes don't auto-pop in the tab you're looking at. tabId is stable and
+   *  always present, so the old "unstamped → fail open → cross-tab bleed" window is
+   *  gone. Absent stamp → fail open (older-backend migration only). */
+  activeTabId?: string;
+  /** The ACTIVE tab's session id — kept ONLY for the fire-time restart fail-closed
+   *  (a streaming-gated write whose session never resolves is a restart-history
+   *  replay; suppress it). This is a SEPARATE concern from tab-scoping (now on
+   *  activeTabId) — do NOT fold the two; the session-resolved signal is the restart
+   *  discriminator, unchanged from run_5a7be540. */
   activeSessionId?: string;
   /** Whether the active tab is CURRENTLY streaming a response.
    *  CONTRACT (Gate-2, run_5a7be540): this MUST be kept in sync with the real SDK
@@ -63,13 +70,15 @@ export interface CanvasAutoSurfaceOptions {
   debounceMs?: number;
 }
 
-export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreaming, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
+export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSessionId, isStreaming, debounceMs = 600 }: CanvasAutoSurfaceOptions): void {
   // Keep suppression flags in a ref so the long-lived listener reads live
   // values without re-subscribing on every flag change.
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
   const isStreamingRef = useRef(isStreaming);
@@ -114,7 +123,7 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
     let pendingPath: string | null = null;
 
     const onWritten = (e: Event) => {
-      const { path, operation, relevance, kind, sessionId: evtSessionId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; kind?: string; sessionId?: string }>).detail ?? {};
+      const { path, operation, relevance, kind, tabId: evtTabId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; kind?: string; tabId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
       // Unified-verdict gate (PRIMARY): only content|knowledge auto-pop.
       // `source` = a mid-run coding edit (never pops; suppressed). `source-final`
@@ -142,11 +151,12 @@ export function useCanvasAutoSurface({ pinned, muted, activeSessionId, isStreami
       // closed (checked below), preserving the restart-history suppression.
       const streamingGate = isStreamingRef.current;
       if (streamingGate === false) return;  // not live output → historical re-dispatch
-      // Tab-scope: ignore a background (keep-mounted) tab's write. Fail open
-      // when the event is unstamped (evtSessionId absent) or we have no active
-      // id yet — surface anyway rather than regress (legacy path, gate off).
-      const activeId = activeSessionIdRef.current;
-      if (evtSessionId && activeId && evtSessionId !== activeId) return;  // background tab's write
+      // Tab-scope (run_26aa6caa): ignore a background (keep-mounted) tab's write.
+      // Keyed on tabId now (was sessionId) — stable + always-stamped, so a live
+      // write is never mis-scoped. Fail open only when truly unstamped (evtTabId
+      // absent — older backend) or no active tab id yet.
+      const activeTab = activeTabIdRef.current;
+      if (evtTabId && activeTab && evtTabId !== activeTab) return;  // background tab's write
       // run_4de279ca: the frontend isBookkeepingPath fallback is REMOVED. The
       // backend git verdict (`kind`, gated above at the PRIMARY check) is the sole
       // authority — process/source are never emitted for live surfacing, so a

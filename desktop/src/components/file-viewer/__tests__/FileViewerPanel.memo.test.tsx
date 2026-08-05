@@ -41,7 +41,6 @@ vi.mock('../CanvasOutputRail', () => ({
 // exact same references on every render (mirrors useCanvasHost's dep-stable
 // useCallbacks + slice-state values — the real call site's stability contract).
 const STABLE = {
-  sessionId: 'sess-1',
   onClose: () => {},
   pinned: false,
   onTogglePin: () => {},

@@ -2557,7 +2557,25 @@ export function useChatStreamingLifecycle(
           const e = event as unknown as Record<string, unknown>;
           const path = e.path as string;
           if (path) {
-            const _stampSession = capturedTabId ? tabMapRef.current.get(capturedTabId)?.sessionId : undefined;
+            // Tab-scope stamp: use capturedTabId DIRECTLY, not the tab's sessionId
+            // (run_26aa6caa). sessionId is undefined during the "session-not-yet-
+            // resolved" window — a new tab's FIRST turn, which is exactly when files
+            // get written — so a sessionId stamp went out UNDEFINED and the consumers'
+            // fail-open filter bled the write into EVERY mounted rail (empirically
+            // reproduced in useReferencedFiles.test.ts "BLEED PROBE"). capturedTabId
+            // is the SAME stable key useCanvasHost uses → one key across the Canvas.
+            //
+            // HONEST EDGE (Gate-2, run_26aa6caa): capturedTabId is `tabId ??
+            // activeTabIdRef.current` (line ~2227) — it is NOT literally always
+            // present; it can be null in ONE window — the very FIRST tab, before
+            // initTabState registers it (see the null note at line ~2443). In that
+            // window `_stampTab` is undefined and the event ships unstamped → the
+            // consumers fail OPEN. That is SAFE here, not a bleed: pre-registration
+            // only ONE tab's rail is mounted, so a fail-open write lands in that
+            // single tab (correct) — there is no second rail to bleed into. So the
+            // cross-tab bleed is closed for every MULTI-tab case (≥2 tabs always have
+            // registered ids); the lone unstamped case is single-tab and harmless.
+            const _stampTab = capturedTabId ?? undefined;
             window.dispatchEvent(new CustomEvent('swarm:file-changed', {
               detail: {
                 path,
@@ -2575,7 +2593,10 @@ export function useChatStreamingLifecycle(
                 // carries `<sha>^` so the row opens on this-run's diff, not empty.
                 baseRef: (e.baseRef as string) ?? undefined,
                 operation: (e.operation as string) ?? 'written',
-                sessionId: _stampSession,
+                // Owning-tab stamp (run_26aa6caa; renamed sessionId→tabId). Consumers
+                // (useReferencedFiles, useCanvasAutoSurface) filter on the ACTIVE
+                // tabId — a stable key with no unresolved window.
+                tabId: _stampTab,
               },
             }));
           }

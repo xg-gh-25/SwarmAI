@@ -77,17 +77,25 @@ export interface FileChangedDetail {
   /** Git ref to diff against (run_030dc98e) — a source-final row's `<sha>^`. Threaded
    *  onto the stored ReferencedFile so the row's click carries it to the diff baseline. */
   baseRef?: string;
-  /** Owning tab's session id (stamped by the SSE bridge). Consumers filter on it
-   *  to ignore background-tab writes; absent → treated as current (fail-open). */
-  sessionId?: string;
+  /** Owning TAB id (stamped by the SSE bridge, run_26aa6caa — was sessionId). The
+   *  consumer filters on it to ignore background-tab writes. tabId is stable and
+   *  always present (unlike sessionId, which is undefined during a new tab's first
+   *  turn — the unstamped fail-open window that bled writes across tabs). Absent →
+   *  treated as current (fail-open, older-backend migration only). */
+  tabId?: string;
 }
 
 const MAX_FILES = 100;
 const STORAGE_PREFIX = 'swarm:referenced-files:';
 const EVENT_NAME = 'swarm:file-changed';
 
-function getStorageKey(sessionId: string): string {
-  return `${STORAGE_PREFIX}${sessionId}`;
+// run_26aa6caa: the rail is keyed by the owning TAB id, not the volatile session
+// id. tabId is stable from tab creation and never has an "unresolved" window, so
+// (a) storage never collapses to a shared '' bucket and (b) the SSE stamp is
+// always present → the fail-open cross-tab bleed is structurally gone. This is the
+// SAME key useCanvasHost uses, unifying the whole Canvas surface on one key.
+function getStorageKey(tabId: string): string {
+  return `${STORAGE_PREFIX}${tabId}`;
 }
 
 function basename(path: string): string {
@@ -95,9 +103,9 @@ function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-function loadFromStorage(sessionId: string): Map<string, ReferencedFile> {
+function loadFromStorage(tabId: string): Map<string, ReferencedFile> {
   try {
-    const raw = sessionStorage.getItem(getStorageKey(sessionId));
+    const raw = sessionStorage.getItem(getStorageKey(tabId));
     if (raw) {
       const arr: ReferencedFile[] = JSON.parse(raw);
       const map = new Map<string, ReferencedFile>();
@@ -110,39 +118,38 @@ function loadFromStorage(sessionId: string): Map<string, ReferencedFile> {
   return new Map();
 }
 
-function saveToStorage(sessionId: string, files: Map<string, ReferencedFile>): void {
+function saveToStorage(tabId: string, files: Map<string, ReferencedFile>): void {
   try {
     const arr = Array.from(files.values());
-    sessionStorage.setItem(getStorageKey(sessionId), JSON.stringify(arr));
+    sessionStorage.setItem(getStorageKey(tabId), JSON.stringify(arr));
   } catch { /* quota exceeded — no-op */ }
 }
 
-export function useReferencedFiles(sessionId: string | undefined) {
+export function useReferencedFiles(tabId: string | undefined) {
   const [files, setFiles] = useState<Map<string, ReferencedFile>>(new Map());
   const filesRef = useRef<Map<string, ReferencedFile>>(files);
   filesRef.current = files;
 
-  // Load from sessionStorage on mount / session change.
+  // Load from sessionStorage on mount / tab change (run_26aa6caa: keyed by tabId).
   //
-  // BUG1 (run_26981f66): a transient sessionId=undefined during tab-switch /
-  // canvas-open used to WIPE the map, so the Canvas outputs rail flashed empty
-  // and had to rebuild (slower than file-open). Fix: treat undefined as
-  // TRANSIENT — retain the current list and do NOT reload. Only a NEW, DEFINED
-  // sessionId (different from the last one we loaded) triggers a reload. This
-  // keeps the list stable across the flicker while still preventing cross-session
-  // leakage: a genuinely different session id reloads from ITS OWN storage key.
+  // BUG1 (run_26981f66): a transient key=undefined during tab-switch / canvas-open
+  // used to WIPE the map, so the Canvas outputs rail flashed empty and had to
+  // rebuild. Fix retained: treat undefined as TRANSIENT — keep the current list,
+  // do NOT reload. Only a NEW, DEFINED tabId triggers a reload from ITS OWN key.
+  // (tabId is far more stable than the old sessionId — it has no unresolved
+  // window — so this transient-guard now fires only on a genuine tab switch.)
   useEffect(() => {
-    if (!sessionId) return; // transient undefined → keep showing current list
-    const loaded = loadFromStorage(sessionId);
+    if (!tabId) return; // transient undefined → keep showing current list
+    const loaded = loadFromStorage(tabId);
     setFiles(loaded);
-  }, [sessionId]);
+  }, [tabId]);
 
   // Listen for file-referenced events
   useEffect(() => {
-    if (!sessionId) return;
+    if (!tabId) return;
 
     const handler = (e: Event) => {
-      const { path, absolutePath, operation, relevance, kind, baseRef, sessionId: evtSessionId } =
+      const { path, absolutePath, operation, relevance, kind, baseRef, tabId: evtTabId } =
         (e as CustomEvent<FileChangedDetail>).detail ?? ({} as FileChangedDetail);
       if (!path) return;
       // Bookkeeping is dropped server-side, but guard defensively (an older
@@ -158,11 +165,16 @@ export function useReferencedFiles(sessionId: string | undefined) {
       //  - content|knowledge (or undefined from an older backend) → rail.
       // Undefined kind falls through to the rail (migration: relevance still gates pop).
       if (kind === 'process' || kind === 'source') return;
-      // Tab-scope: all tabs are keep-mounted, so a background tab's dispatch
-      // would otherwise be recorded into THIS (active) session's store. Ignore
-      // events stamped with a DIFFERENT session. Fail OPEN when unstamped
-      // (evtSessionId absent) — no regression for any un-updated dispatcher.
-      if (evtSessionId && evtSessionId !== sessionId) return;
+      // Tab-scope (run_26aa6caa): all tabs are keep-mounted, so a background tab's
+      // dispatch would otherwise be recorded into THIS tab's store. Ignore events
+      // stamped with a DIFFERENT tabId. Fail OPEN only when truly unstamped
+      // (evtTabId absent). The stamp is now capturedTabId — present for every write
+      // in a MULTI-tab session (≥2 tabs always have registered ids), so the
+      // cross-tab bleed is closed there. The ONE unstamped case is the very first
+      // tab pre-registration (capturedTabId null, see useChatStreamingLifecycle
+      // ~2443): only one rail is mounted then, so fail-open lands the write in that
+      // single tab — correct, no second rail to bleed into.
+      if (evtTabId && evtTabId !== tabId) return;
 
       // G1 (run_5a7be540): a delete event REMOVES the matching row (never adds).
       // Match CONSERVATIVELY/anchored — exact display path, exact absolutePath, or
@@ -184,7 +196,7 @@ export function useReferencedFiles(sessionId: string | undefined) {
             next.set(key, f);
           }
           if (!hit) return prev; // no-op — don't churn state/storage
-          saveToStorage(sessionId, next);
+          saveToStorage(tabId, next);
           return next;
         });
         return;
@@ -234,14 +246,14 @@ export function useReferencedFiles(sessionId: string | undefined) {
         }
 
         // Persist
-        saveToStorage(sessionId, next);
+        saveToStorage(tabId, next);
         return next;
       });
     };
 
     window.addEventListener(EVENT_NAME, handler);
     return () => window.removeEventListener(EVENT_NAME, handler);
-  }, [sessionId]);
+  }, [tabId]);
 
   // Group files by operation (memoized to avoid unnecessary re-renders).
   // Only 'written' is ever emitted (see FileOperation), so the group is a single
@@ -260,11 +272,11 @@ export function useReferencedFiles(sessionId: string | undefined) {
   }, [files]);
 
   const clear = useCallback(() => {
-    if (sessionId) {
-      sessionStorage.removeItem(getStorageKey(sessionId));
+    if (tabId) {
+      sessionStorage.removeItem(getStorageKey(tabId));
     }
     setFiles(new Map());
-  }, [sessionId]);
+  }, [tabId]);
 
   return { files: grouped, totalCount, clear };
 }

@@ -213,16 +213,18 @@ export interface OutputCounts {
 }
 
 export interface CanvasOutputRailProps {
-  /** Active-tab session id (from useSessionMeta) — undefined before a session exists. */
-  sessionId: string | undefined;
+  /** Active TAB id — the rail's scope key (run_26aa6caa; was sessionId). Stable
+   *  from tab creation, so the rail no longer collapses to a shared '' bucket
+   *  during the session-unresolved window. */
+  tabId: string | undefined;
   /** Reports the current counts up to the header (for the summary line). */
   onCounts?: (counts: OutputCounts) => void;
   /** Path of the file currently shown in Region B — gets the accent left-bar. */
   selectedPath?: string;
 }
 
-export const CanvasOutputRail = memo(function CanvasOutputRail({ sessionId, onCounts, selectedPath }: CanvasOutputRailProps) {
-  const { files: grouped } = useReferencedFiles(sessionId ?? '');
+export const CanvasOutputRail = memo(function CanvasOutputRail({ tabId, onCounts, selectedPath }: CanvasOutputRailProps) {
+  const { files: grouped } = useReferencedFiles(tabId);
 
   // Mount timestamp — an output whose firstSeen is AFTER this arrived while the
   // user was watching → it gets one land-pulse (§v6 #4). Outputs already present

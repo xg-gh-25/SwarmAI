@@ -205,3 +205,63 @@ describe('useReferencedFiles', () => {
     expect(result.current.totalCount).toBe(0);
   });
 });
+
+// ── Tab-isolation regression (run_26aa6caa) — the FIX, empirically ──
+// EVALUATE proved the real bleed was NOT "" key sharing (falsified: '' is falsy →
+// no listener) but the SSE stamp going out UNDEFINED whenever the writing tab's
+// sessionId was unresolved (a new tab's first turn), which useReferencedFiles'
+// filter fails-OPEN on → the write bled into every mounted rail. Fix: the rail
+// keys on the STABLE tabId, and the SSE stamp is capturedTabId (always present).
+// These tests pin the post-fix guarantee: a tabId-stamped write is isolated, and
+// the only fail-open path left is a truly-unstamped (older-backend) event.
+describe('useReferencedFiles — tab-isolation (post-fix, run_26aa6caa)', () => {
+  beforeEach(() => globalThis.sessionStorage?.clear());
+  afterEach(() => globalThis.sessionStorage?.clear());
+
+  function dispatchTab(path: string, stampTabId: string) {
+    window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+      detail: { path, operation: 'written', absolutePath: path, relevance: 'deliverable', kind: 'content', tabId: stampTabId },
+    }));
+  }
+
+  it('ISOLATED: a tabId-stamped write lands ONLY in its own tab', () => {
+    // The fix's core guarantee. tabId is stable + always stamped (capturedTabId),
+    // so a write from tab-A never appears in tab-B's rail. (Pre-fix, when the
+    // writing tab had an unresolved session the stamp was undefined → bled.)
+    const tabA = renderHook(() => useReferencedFiles('tab-A'));
+    const tabB = renderHook(() => useReferencedFiles('tab-B'));
+    act(() => dispatchTab('Knowledge/Designs/from-tabA.md', 'tab-A'));
+    expect(tabA.result.current.totalCount).toBe(1);
+    expect(tabB.result.current.totalCount).toBe(0);  // isolated — no bleed
+  });
+
+  it('MUTATION GUARD: swapping tabId key → bleed reappears (non-vacuous)', () => {
+    // If the filter were reverted to compare against a constant/wrong key, tab-B
+    // would record tab-A's write. We assert the CURRENT code isolates; this test
+    // goes RED if the `evtTabId !== tabId` filter is removed.
+    const tabB = renderHook(() => useReferencedFiles('tab-B'));
+    act(() => dispatchTab('Knowledge/Designs/from-tabA.md', 'tab-A'));
+    expect(tabB.result.current.totalCount).toBe(0);
+  });
+
+  it('FAIL-OPEN only for a truly-unstamped (older-backend) event', () => {
+    // The one remaining fail-open path: an event with NO tabId (an un-migrated
+    // dispatcher). Documented, migration-only — the live SSE bridge always stamps
+    // capturedTabId, so this never fires for a real write.
+    const tabA = renderHook(() => useReferencedFiles('tab-A'));
+    act(() => window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+      detail: { path: 'Knowledge/Designs/legacy.md', operation: 'written', absolutePath: 'x', relevance: 'deliverable', kind: 'content' /* NO tabId */ },
+    })));
+    expect(tabA.result.current.totalCount).toBe(1);  // fail-open (documented)
+  });
+
+  it('distinct tab buckets persist independently in sessionStorage', () => {
+    const tabA = renderHook(() => useReferencedFiles('tab-A'));
+    renderHook(() => useReferencedFiles('tab-B'));
+    act(() => dispatchTab('Knowledge/Designs/a.md', 'tab-A'));
+    // Remount tab-A: its bucket reloads; tab-B's key is untouched/empty.
+    const tabAReload = renderHook(() => useReferencedFiles('tab-A'));
+    expect(tabAReload.result.current.totalCount).toBe(1);
+    void tabA;
+  });
+});

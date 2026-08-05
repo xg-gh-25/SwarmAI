@@ -26,7 +26,8 @@ vi.mock('../CanvasOutputRail', () => ({
 }));
 
 const baseProps = {
-  sessionId: 'sess-1',
+  // run_26aa6caa: rail scope key is the owning tabId (tabScopeKey), not sessionId.
+  tabScopeKey: 'tab-1',
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),

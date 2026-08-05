@@ -13,10 +13,12 @@ import { OPEN_FILE_EVENT } from '../../components/common/MarkdownRenderer';
 
 const DEBOUNCE = 20;
 
-function writeFile(path: string, operation = 'written', sessionId?: string, relevance = 'deliverable') {
+function writeFile(path: string, operation = 'written', tabId?: string, relevance = 'deliverable', kind?: string) {
   // Unified backend event (run_e626e121): swarm:file-changed on window, carries
-  // the whitelist `relevance` (only 'deliverable' auto-surfaces).
-  window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path, operation, relevance, sessionId } }));
+  // the whitelist `relevance` (only 'deliverable' auto-surfaces) and (run_26aa6caa)
+  // the owning `tabId` stamp used for tab-scope isolation. `kind` (run_4de279ca) is
+  // the git-verdict authority — process/source never auto-pop.
+  window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path, operation, relevance, tabId, kind } }));
 }
 function setPanelOpen(open: boolean) {
   window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', { detail: { open } }));
@@ -115,30 +117,33 @@ describe('useCanvasAutoSurface', () => {
     expect(opened).toEqual([]);
   });
 
-  it('tab-scope: IGNORES a write stamped with a foreign session (background tab)', () => {
-    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
+  it('tab-scope: IGNORES a write stamped with a foreign tab (background tab)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeTabId: 'tab-A', debounceMs: DEBOUNCE }));
     writeFile('Knowledge/from-B.md', 'written', 'tab-B'); // a background tab's write
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual([]); // must not leak into the active tab
   });
 
-  it('tab-scope: FIRES for a write stamped with the active session', () => {
-    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
+  it('tab-scope: FIRES for a write stamped with the active tab', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeTabId: 'tab-A', debounceMs: DEBOUNCE }));
     writeFile('Knowledge/from-A.md', 'written', 'tab-A');
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual(['Knowledge/from-A.md']);
   });
 
-  it('tab-scope: FAILS OPEN when the event is unstamped (no sessionId)', () => {
-    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeSessionId: 'tab-A', debounceMs: DEBOUNCE }));
-    writeFile('Knowledge/legacy.md'); // no sessionId stamp
+  it('tab-scope: FAILS OPEN when the event is unstamped (no tabId)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeTabId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/legacy.md'); // no tabId stamp
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual(['Knowledge/legacy.md']); // no regression for un-updated dispatchers
   });
 
-  it('skips bookkeeping paths (.artifacts/)', () => {
+  it('skips bookkeeping writes (kind=process — git-verdict authority)', () => {
+    // run_4de279ca: the frontend .artifacts/ path denylist was REMOVED; the backend
+    // git verdict `kind` is now the sole authority. A bookkeeping write arrives
+    // stamped kind='process' → suppressed by the PRIMARY kind gate (never auto-pops).
     renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
-    writeFile('Projects/P/.artifacts/runs/x/run.json');
+    writeFile('Projects/P/.artifacts/runs/x/run.json', 'written', undefined, 'deliverable', 'process');
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual([]);
   });

@@ -214,7 +214,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, []);
 
   // ── Auto-surface (streaming-gated, fail-closed) ─────────────────────────────
-  useCanvasAutoSurface({ pinned: slice.pinned, muted: slice.muted, activeSessionId: sessionId ?? undefined, isStreaming });
+  // activeTabId = the tab-scope key (run_26aa6caa) — the same stable key the rest
+  // of this hook uses. activeSessionId stays wired ONLY for the fire-time restart
+  // fail-closed (a separate concern from tab-scoping).
+  useCanvasAutoSurface({ pinned: slice.pinned, muted: slice.muted, activeTabId: activeTabId ?? undefined, activeSessionId: sessionId ?? undefined, isStreaming });
 
   // ── Proprioception emits (WINDOW) — mirror the file + canvas snapshot ───────
   // editor-file-changed: the open file (or null). canvas-state: the full snapshot.

@@ -22,7 +22,7 @@ vi.mock('../CanvasOutputRail', () => ({
 }));
 
 const baseProps = {
-  sessionId: 'sess-1',
+  tabScopeKey: 'tab-1',
   onClose: vi.fn(),
   pinned: false,
   onTogglePin: vi.fn(),

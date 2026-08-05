@@ -3326,7 +3326,6 @@ export default function ChatPage() {
             tabScopeKey={activeTabId ?? undefined}
             initialFile={canvas.file ?? undefined}
             onClose={canvas.close}
-            sessionId={sessionId ?? undefined}
             pinned={canvas.pinned}
             onTogglePin={canvas.togglePin}
             muted={canvas.muted}
