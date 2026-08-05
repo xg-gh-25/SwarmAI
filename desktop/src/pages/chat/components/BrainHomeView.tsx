@@ -62,7 +62,7 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
   const openBrain = (name: string) => onOpenBrain?.(name);
 
   return (
-    <div className="w-full max-w-3xl mt-2" data-testid="brain-home">
+    <div className="w-full mt-2" data-testid="brain-home">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">Your Brains · Top 3</span>
         <button
@@ -75,8 +75,17 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
         </button>
       </div>
 
-      {/* Top-3 bento: primary full card (left) + up to 2 pinned small stacked (right) */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0, 1fr) 260px' }} data-testid="brain-home-top3">
+      {/* Top-3 bento: primary full card (left) + up to 2 pinned small stacked (right).
+          run_b4d3eeeb:
+          • ≥2 pins → 2-col grid, items-stretch so the right cell matches the hero
+            height and the pins fill it (flex-1 + h-full button), no bottom-right gap.
+          • <2 pins → collapse to a single 1fr column (no reserved 260px empty gap),
+            and items-start so a lone pin sits at natural height (no over-stretch). */}
+      <div
+        className={`grid gap-3 ${rightPins.length >= 2 ? 'items-stretch' : 'items-start'}`}
+        style={{ gridTemplateColumns: rightPins.length > 0 ? 'minmax(0, 1fr) 260px' : 'minmax(0, 1fr)' }}
+        data-testid="brain-home-top3"
+      >
         <div data-testid="brain-home-hero">
           <DddCard
             density="full"
@@ -90,19 +99,20 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
           />
         </div>
         {rightPins.length > 0 && (
-          <div data-testid="brain-home-pins" className="flex flex-col gap-3">
+          <div data-testid="brain-home-pins" className="flex flex-col gap-3 h-full">
             {rightPins.map((b) => (
-              <DddCard
-                key={b.name}
-                density="compact"
-                name={b.name}
-                kind={b.kind}
-                sectionsPresent={b.sectionsPresent}
-                lifecycleStage={b.lifecycleStage}
-                health={b.health}
-                typeCounts={b.typeCounts}
-                onOpen={openBrain}
-              />
+              <div key={b.name} className="flex-1 min-h-0">
+                <DddCard
+                  density="compact"
+                  name={b.name}
+                  kind={b.kind}
+                  sectionsPresent={b.sectionsPresent}
+                  lifecycleStage={b.lifecycleStage}
+                  health={b.health}
+                  typeCounts={b.typeCounts}
+                  onOpen={openBrain}
+                />
+              </div>
             ))}
           </div>
         )}

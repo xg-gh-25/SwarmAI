@@ -190,6 +190,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
         Welcome to SwarmAI
       </h1>
 
+      {/* Shared-width column (run_b4d3eeeb): BrainHome + the briefing below it live in
+          ONE max-w-3xl container so their left/right edges align vertically. w-full so
+          the outer `items-center` still centers the whole column. */}
+      <div className="w-full max-w-3xl flex flex-col">
       {/* Durable Brain Home layer (design 2026-08-04) — an INDEPENDENT read from the
           session-briefing below: an empty/failed briefing must not blank the brains,
           and an empty/failed brain read must not blank the briefing. Renders nothing
@@ -201,7 +205,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
 
       {/* Briefing content */}
       {!loaded ? null : hasAnyBriefing ? (
-        <div className="w-full max-w-2xl space-y-3 mt-2">
+        <div className="w-full space-y-3 mt-2">
           {/* Focus bar (full width) */}
           {hasFocus && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] px-2 py-1.5">
@@ -234,7 +238,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
           <p className="text-base text-[var(--color-text)]">
             Work smarter. Move faster. Stress less.
           </p>
-          <p className="text-sm text-[var(--color-text-secondary)] max-w-sm">
+          <p className="text-sm text-[var(--color-text-secondary)] max-w-sm mx-auto">
             Remembers everything. Learns every session. Gets better every time.
           </p>
           <div className="flex items-center gap-4 mt-4 text-[var(--color-text-secondary)] justify-center">
@@ -244,6 +248,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
           </div>
         </div>
       )}
+      </div>
 
       {/* Bottom spacer */}
       <div className="flex-1 min-h-6" />

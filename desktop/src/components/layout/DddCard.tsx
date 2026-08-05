@@ -197,7 +197,7 @@ export function DddCard(props: DddCardProps) {
     const onOpen = props.onOpen;
     return (
       <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
-        className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full">
+        className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full">
         <CardHeader name={name} kind={kind} verdict={<VerdictDot pending={props.health.pending} />} />
         <PresenceBar name={name} sectionsPresent={props.sectionsPresent} />
         <LifecycleBar lifecycleStage={props.lifecycleStage} />
@@ -222,13 +222,37 @@ export function DddCard(props: DddCardProps) {
 
 /**
  * The full-density judgment body: ontology (hero) + needs-you + 2 facts.
- * Density-scoped guard: no metrics.noise → render nothing (card body survives).
+ *
+ * run_b4d3eeeb — SPLIT to kill the on-load height jump. Two independent visibility
+ * sources with different arrival times:
+ *   • Ontology ← `typeCounts` (from the summary, available on FIRST PAINT). Renders
+ *     immediately, does NOT wait for the metrics fetch.
+ *   • needs-you + facts ← `metrics.noise` (from the 2nd getBrainDetail fetch, arrives
+ *     late). While metrics is pending BUT ontology is showing, a skeleton reserves the
+ *     metrics-block height so its later arrival causes NO layout shift.
+ * Density-scoped guard (O023 daemon-skew): the metrics-block still renders only on
+ * `metrics.noise`. With NEITHER typeCounts NOR metrics → render nothing (card survives).
  */
 function FullBody(
   { metrics, health, typeCounts }:
   { metrics?: DetailHealth; health?: BrainHealth; typeCounts?: Record<EntryType, number> },
 ) {
-  if (!metrics || !metrics.noise) return null;
+  const hasMetrics = !!(metrics && metrics.noise);
+  const hasOntology = !!typeCounts;
+  // Nothing to show at all (no summary ontology AND no metrics) → body renders nothing.
+  if (!hasOntology && !hasMetrics) return null;
+
+  // Ontology-only first paint: show the hero ontology now + reserve the metrics-block
+  // height with a skeleton so the real block's later arrival doesn't jump the layout.
+  if (!hasMetrics) {
+    return (
+      <div className="mt-2 flex flex-col gap-2.5">
+        {typeCounts && <Ontology typeCounts={typeCounts} />}
+        <MetricsSkeleton />
+      </div>
+    );
+  }
+
   const { below, total } = _trustBelowHigh(metrics.trust);
   const trustStale = metrics.computedAt === null;
   const pct = total === 0 ? null : Math.round(((total - below) / total) * 100);
@@ -278,6 +302,29 @@ function FullBody(
             {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} sediments / 30d
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Placeholder that reserves the height of the metrics-block (needs-you + 2 facts)
+ * while `getBrainDetail` is still in flight. STRUCTURAL, not a magic pixel height:
+ * it mirrors the real block's layout — a needs-you card box + two fact lines — so
+ * the swap to real content on arrival is close to zero-shift. Muted, non-interactive.
+ */
+function MetricsSkeleton() {
+  return (
+    <div data-testid="ddd-metrics-skeleton" aria-hidden className="flex flex-col gap-2.5 animate-pulse">
+      {/* needs-you box placeholder */}
+      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2">
+        <div className="h-2 w-24 rounded bg-[var(--color-hover)] mb-2" />
+        <div className="h-2.5 w-40 rounded bg-[var(--color-hover)]" />
+      </div>
+      {/* two fact-line placeholders */}
+      <div className="flex flex-col gap-1">
+        <div className="h-2.5 w-full rounded bg-[var(--color-hover)]" />
+        <div className="h-2.5 w-3/4 rounded bg-[var(--color-hover)]" />
       </div>
     </div>
   );

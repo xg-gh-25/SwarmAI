@@ -66,6 +66,24 @@ describe('BrainHomeView — Top-3 locked render', () => {
     expect(screen.queryByTestId('dddcard-Other')).toBeNull();
   });
 
+  it('zero right-pins → grid collapses to single column (no reserved 260px empty gap)', async () => {
+    // only the primary is pinned → rightPins is empty
+    mockGetBrainsWithPinned.mockResolvedValue({ brains: [mk('SwarmAI'), mk('Other')], pinned: ['SwarmAI'] });
+    render(<BrainHomeView />);
+    await waitFor(() => expect(screen.getByTestId('brain-home-top3')).toBeTruthy());
+    const grid = screen.getByTestId('brain-home-top3');
+    // single 1fr column, not the 2-col template that leaves a 260px empty gap
+    expect(grid.style.gridTemplateColumns).toBe('minmax(0, 1fr)');
+    expect(screen.queryByTestId('brain-home-pins')).toBeNull();
+  });
+
+  it('with pins → 2-col template reserved for the right stack', async () => {
+    mockGetBrainsWithPinned.mockResolvedValue({ brains: [mk('SwarmAI'), mk('AIDLC')], pinned: ['SwarmAI', 'AIDLC'] });
+    render(<BrainHomeView />);
+    await waitFor(() => expect(screen.getByTestId('brain-home-pins')).toBeTruthy());
+    expect(screen.getByTestId('brain-home-top3').style.gridTemplateColumns).toBe('minmax(0, 1fr) 260px');
+  });
+
   it('view-all affordance calls onOpenHub; a pinned small calls onOpenBrain', async () => {
     mockGetBrainsWithPinned.mockResolvedValue({
       brains: [mk('SwarmAI'), mk('AIDLC')],

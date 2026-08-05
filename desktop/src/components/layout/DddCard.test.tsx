@@ -105,6 +105,35 @@ describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () =
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
     expect(screen.queryByTestId('ddd-ontology')).toBeNull();
   });
+
+  // run_b4d3eeeb: kill the load-shift. Ontology comes from summary.typeCounts
+  // (available first paint), so it must render BEFORE metrics arrive — not gated
+  // on the 2nd fetch. The metrics-block (needs-you/facts) is what arrives late,
+  // and a skeleton must reserve its height so its arrival causes no jump.
+  it('ontology renders on FIRST PAINT from typeCounts WITHOUT metrics (no load shift)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" typeCounts={TYPE_COUNTS} />);
+    // ontology visible before metrics resolve
+    expect(screen.getByTestId('ddd-ontology')).toBeTruthy();
+    expect(screen.getByTestId('ddd-layer-operational').textContent).toContain('20');
+    // metrics-dependent blocks are NOT shown yet (no metrics)
+    expect(screen.queryByTestId('ddd-needs-you')).toBeNull();
+    expect(screen.queryByTestId('ddd-fact-trust')).toBeNull();
+    // a skeleton reserves the metrics-block height (prevents the jump on arrival)
+    expect(screen.getByTestId('ddd-metrics-skeleton')).toBeTruthy();
+  });
+
+  it('no skeleton once metrics have arrived (real metrics-block replaces it)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} />);
+    expect(screen.queryByTestId('ddd-metrics-skeleton')).toBeNull();
+    expect(screen.getByTestId('ddd-needs-you')).toBeTruthy();
+  });
+
+  it('with NEITHER metrics NOR typeCounts → body renders nothing (container survives)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" />);
+    expect(screen.queryByTestId('ddd-ontology')).toBeNull();
+    expect(screen.queryByTestId('ddd-metrics-skeleton')).toBeNull();
+    expect(screen.getByTestId('dddcard-S')).toBeTruthy();
+  });
 });
 
 describe('DddCard — full: needs-you block', () => {
