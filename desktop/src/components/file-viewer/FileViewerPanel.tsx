@@ -14,6 +14,7 @@ import { memo, useState, useCallback, useEffect, useRef, type CSSProperties } fr
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
+import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 
 export const PANEL_CONSTANTS = {
   DEFAULT_WIDTH: 500,
@@ -29,13 +30,45 @@ export const PANEL_CONSTANTS = {
    *  Canvas never sits flush against the frame (the docked panel is flex-shrink-0
    *  at the chat container's right edge → this margin is its only right gutter). */
   RIGHT_GAP: 12,
+  /** SOFT target for the chat column's remaining width. The Canvas width is capped
+   *  (availableCanvasMax) so the chat pane keeps at least this many px on a normal
+   *  window — the fix for "Canvas too wide, chat starved". This is a SOFT target,
+   *  NOT a hard floor: MIN_WIDTH (the Canvas's own hard minimum) WINS below
+   *  ~962px (150 sidebar + 480 chat + 320 canvas + 12 gap), where chat yields
+   *  first — that is intentional physical reality, not a bug. Kept ≥ the layout's
+   *  hard MIN_MAIN_CHAT_PANEL_WIDTH (300, ThreeColumnLayout) so the two never fight. */
+  CHAT_MIN_HEALTHY: 480,
 } as const;
 
-/** clamp(MIN, fraction×viewport, MAX) — the responsive default before any drag. */
+/** The viewport-aware ceiling for the Canvas panel width: never so wide that the
+ *  chat pane drops below CHAT_MIN_HEALTHY. Subtracts the left sidebar + the chat
+ *  reserve + the right gap from the window width, then bounds to [MIN_WIDTH, MAX_WIDTH].
+ *  clamp order is `max(MIN_WIDTH, min(MAX_WIDTH, available))` — MIN_WIDTH is the HARD
+ *  floor (Canvas must stay usable), so on a narrow window (<~962px) the chat reserve
+ *  yields and chat gets < CHAT_MIN_HEALTHY. That is deliberate (physical reality); do
+ *  NOT assert "chat ≥ CHAT_MIN_HEALTHY unconditionally". */
+export function availableCanvasMax(innerWidth: number): number {
+  const available =
+    innerWidth -
+    LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH -
+    PANEL_CONSTANTS.CHAT_MIN_HEALTHY -
+    PANEL_CONSTANTS.RIGHT_GAP;
+  return Math.max(
+    PANEL_CONSTANTS.MIN_WIDTH,
+    Math.min(PANEL_CONSTANTS.MAX_WIDTH, available),
+  );
+}
+
+/** clamp(MIN, fraction×viewport, availableCanvasMax) — the responsive default before
+ *  any drag. The ceiling is availableCanvasMax (viewport-aware), NOT raw MAX_WIDTH, so
+ *  the default never starves chat. */
 function responsiveDefaultWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const raw = Math.round(PANEL_CONSTANTS.DEFAULT_FRACTION * window.innerWidth);
-  return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, raw));
+  return Math.max(
+    PANEL_CONSTANTS.MIN_WIDTH,
+    Math.min(availableCanvasMax(window.innerWidth), raw),
+  );
 }
 
 /** Width of the collapsed vertical rail (whole panel → a thin clickable strip). */
@@ -47,11 +80,18 @@ function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
   // No manual drag on record → responsive default (fraction of viewport). A stored
-  // value means the user dragged (updateWidth is the ONLY writer) → honor it verbatim.
+  // value means the user dragged (updateWidth is the ONLY writer) → honor it, but
+  // clamped AT READ TIME to what currently fits (availableCanvasMax). A width dragged
+  // wide on a big monitor must not starve chat when reopened on a smaller window; we
+  // clamp only here (read time), NOT on a live resize — the resize-recompute effect
+  // stays gated on "no stored value", so a dragged width remains immune to live resize.
   if (!stored) return responsiveDefaultWidth();
   const parsed = parseInt(stored, 10);
   if (isNaN(parsed)) return responsiveDefaultWidth();
-  return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, parsed));
+  return Math.max(
+    PANEL_CONSTANTS.MIN_WIDTH,
+    Math.min(availableCanvasMax(window.innerWidth), parsed),
+  );
 }
 
 function getStoredBool(key: string): boolean {
@@ -113,6 +153,15 @@ function FileViewerPanelImpl({
     return () => cancelAnimationFrame(id);
   }, []);
   const revealWidth = entered ? width : Math.min(PANEL_CONSTANTS.MIN_WIDTH, width);
+  // The live drag ceiling (viewport-aware) — exposed as aria-valuemax so a
+  // screen-reader user hears the REACHABLE max, not the raw MAX_WIDTH (which
+  // updateWidth will never let the width reach on a normal window). Read at
+  // render time; refreshes on any re-render (good enough — the panel is not a
+  // frequently-resized target, and it is strictly more honest than a fixed 900).
+  const dragCeiling =
+    typeof window === 'undefined'
+      ? PANEL_CONSTANTS.MAX_WIDTH
+      : availableCanvasMax(window.innerWidth);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   // Accent tint for the spout + divider = the primary accent. (Earlier this read
@@ -129,7 +178,9 @@ function FileViewerPanelImpl({
   const toggleExpand = useCallback(() => {
     if (!expanded) {
       preExpandWidthRef.current = width;
-      setWidth(PANEL_CONSTANTS.MAX_WIDTH);
+      // Expand snaps to the WIDEST width that still keeps chat healthy, NOT raw
+      // MAX_WIDTH — otherwise "expand for review" starves chat on a normal window.
+      setWidth(availableCanvasMax(window.innerWidth));
       setExpanded(true);
     } else {
       setWidth(preExpandWidthRef.current);
@@ -182,9 +233,13 @@ function FileViewerPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [counts.total]);
 
-  // Persist width changes
+  // Persist width changes. Clamp to the viewport-aware ceiling (availableCanvasMax),
+  // NOT raw MAX_WIDTH, so a drag can't pull the Canvas wide enough to starve chat.
   const updateWidth = useCallback((newWidth: number) => {
-    const clamped = Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, newWidth));
+    const clamped = Math.max(
+      PANEL_CONSTANTS.MIN_WIDTH,
+      Math.min(availableCanvasMax(window.innerWidth), newWidth),
+    );
     setWidth(clamped);
     localStorage.setItem(PANEL_CONSTANTS.STORAGE_KEY, String(clamped));
   }, []);
@@ -306,22 +361,27 @@ function FileViewerPanelImpl({
           session accent. Vertically centered on the chat window (CSS top:50%
           translateY(-50%)), not pinned to the header row. */}
       <div className="canvas-spout" aria-hidden="true" data-testid="canvas-spout" />
-      {/* Resize handle — left edge, doubles as the colorful Canvas↔chat divider */}
+      {/* Resize handle — left edge, doubles as the colorful Canvas↔chat divider.
+          `.canvas-divider` is `position:relative` (index.css) so its `::after` grip
+          bar centers on the seam; `.canvas-grip-active` shows the grip while dragging
+          (the hover state alone can't cover a drag once the cursor leaves the 2px seam). */}
       <div
         className={`canvas-divider w-0.5 cursor-col-resize transition-colors flex-shrink-0 ${
-          isDragging ? 'opacity-100' : 'hover:opacity-100'
+          isDragging ? 'opacity-100 canvas-grip-active' : 'hover:opacity-100'
         }`}
         onMouseDown={handleMouseDown}
         role="separator"
         aria-orientation="vertical"
         aria-valuenow={width}
         aria-valuemin={PANEL_CONSTANTS.MIN_WIDTH}
-        aria-valuemax={PANEL_CONSTANTS.MAX_WIDTH}
+        aria-valuemax={dragCeiling}
         aria-label="Resize file viewer panel"
         data-testid="panel-resize-handle"
       >
-        {/* Wider hit area for easier drag start */}
-        <div className="absolute top-0 -left-1 w-3 h-full" aria-hidden="true" />
+        {/* Wider, reliably-grabbable hit area (11px straddling the seam) for
+            easy drag start — invisible; the visible affordance is the grip bar
+            rendered by `.canvas-divider::after` (index.css). */}
+        <div className="absolute top-0 -left-1.5 w-[11px] h-full" aria-hidden="true" />
       </div>
 
       {/* Canvas column: output rail (session deliverables) + the file surface.
@@ -341,7 +401,19 @@ function FileViewerPanelImpl({
           spout-safe. `contain:layout` (NOT paint/content/size) does not clip, so zero
           visual change; absolute children inside the column are positioned relative to
           ancestors inside it (no-op), and popovers are portaled/fixed (unaffected). */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade" style={{ contain: 'layout' }}>
+      {/* `pointer-events:none` ONLY while dragging (drag-shield): the content column
+          hosts HtmlRenderer's sandboxed opaque-origin iframe (w-full h-full). A drag
+          started on the seam moves the cursor OVER that iframe, and the document-level
+          mousemove listener STOPS firing over an opaque-origin iframe → the drag stalls.
+          Making the whole content column inert for the duration of the drag lets the
+          document listener keep receiving mousemove. Scoped strictly to isDragging (zero
+          effect at rest); the resize handle is a SIBLING of this column, so it stays
+          live. `contain:layout` is orthogonal (layout containment, not hit-testing). */}
+      <div
+        className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade"
+        style={{ contain: 'layout', pointerEvents: isDragging ? 'none' : undefined }}
+        data-testid="canvas-content-column"
+      >
         {/* Canvas header — output stream + gentle auto-surface controls.
             Rendered only when Canvas props are wired (tabScopeKey provided).
             Layout: a min-w-0 truncating title/summary on the left + a
