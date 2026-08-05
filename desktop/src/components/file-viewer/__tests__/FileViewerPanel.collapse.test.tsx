@@ -98,9 +98,12 @@ describe('FileViewerPanel — two-level collapse (v6)', () => {
   const FILE_B = { filePath: '/ws/b.md', fileName: 'b.md' };
 
   it('un-rails when a NEW file arrives while railed (the reported bug)', () => {
-    localStorage.setItem('canvasRailed', '1');
+    // Reach `railed` via a MANUAL collapse, NOT localStorage+mount-with-file — the
+    // latter setup depended on the run_ca6ae4e7 seed bug (mount-with-file used to
+    // stay railed), which is now fixed, so that setup would un-rail on mount and
+    // never establish the railed precondition (PIT21: a setup encoding old behavior).
     const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
-    // Starts railed (restored from localStorage).
+    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
     // A DIFFERENT file arrives → Canvas auto-expands.
     rerender(<FileViewerPanel {...baseProps} initialFile={FILE_B} />);
@@ -110,11 +113,35 @@ describe('FileViewerPanel — two-level collapse (v6)', () => {
     expect(localStorage.getItem('canvasRailed')).toBe('0');
   });
 
-  it('does NOT un-rail on a re-render with the SAME file (no false-trigger)', () => {
+  it('un-rails on a FRESH mount that ALREADY has a file while railed=1 (the cold-mount seed bug)', () => {
+    // run_ca6ae4e7: the panel unmounts when isOpen goes false (canvas.close /
+    // nav away) while canvasRailed=1 persists. A later swarm:open-file flips
+    // isOpen true → the panel remounts FRESH with initialFile ALREADY set. The
+    // un-rail effect must still fire — but with prevFileRef seeded to the current
+    // file it saw selectedPath===prev on mount and no-op'd, leaving the just-
+    // opened file stranded as a 38px strip (observed live via ui_action open).
+    // Seeding prevFileRef=undefined makes undefined→file a real transition → un-rail.
     localStorage.setItem('canvasRailed', '1');
+    render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+    // Opening a file IS the intent to see it — must reveal, not strip.
+    expect(screen.queryByTestId('canvas-rail')).toBeNull();
+    expect(screen.getByTestId('canvas-content-column')).toBeTruthy();
+    expect(localStorage.getItem('canvasRailed')).toBe('0');
+  });
+
+  it('STAYS railed on a fresh mount with NO file (manual-open-no-file preference honored)', () => {
+    // The undefined-seed fix must NOT over-fire: mounting railed with no file
+    // (a manual rail with no open document) has selectedPath===undefined, so the
+    // `selectedPath && ...` guard is falsy → it must NOT auto-un-rail.
+    localStorage.setItem('canvasRailed', '1');
+    render(<FileViewerPanel {...baseProps} />);
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+  });
+
+  it('does NOT un-rail on a re-render with the SAME file (no false-trigger)', () => {
+    // Reach railed via manual collapse while viewing FILE_A (not the old
+    // localStorage+mount-with-file setup — see PIT21 note above).
     const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
-    // User manually rails while viewing FILE_A.
-    fireEvent.click(screen.getByTestId('canvas-rail')); // expand
     fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn')); // re-rail deliberately
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
     // A re-render with the SAME file (e.g. parent re-render) must NOT pop it open.

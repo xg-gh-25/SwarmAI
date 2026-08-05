@@ -252,8 +252,26 @@ function FileViewerPanelImpl({
   // per-tab rail memory to regress), and this only ever REVEALS content (never hides
   // it) — so an extra click to re-rail is the worst case. Gating on a tab-switch-vs-
   // -new-file signal would add a mechanism to guard a benign edge (C042); not worth it.
-  const prevFileRef = useRef<string | undefined>(selectedPath);
+  // Seed UNDEFINED, not selectedPath (run_ca6ae4e7 root fix). The panel unmounts
+  // when isOpen goes false (canvas.close / nav away) while canvasRailed=1 persists;
+  // a later swarm:open-file flips isOpen true → the panel REMOUNTS FRESH with
+  // initialFile ALREADY set. Seeding prevFileRef=selectedPath made that mount see
+  // selectedPath===prev on the first effect run → no-op → the just-opened file was
+  // stranded as a railed strip (observed live). Undefined makes undefined→file a
+  // real transition, so opening a file (the "I want to see this" intent) always
+  // reveals. A fresh mount with NO file has selectedPath===undefined → the
+  // `selectedPath && …` guard stays falsy → a manual rail-with-no-file is honored.
+  const prevFileRef = useRef<string | undefined>(undefined);
   useEffect(() => {
+    // PRIMARY gate: the `[selectedPath]` dep — a primitive-string dep means this
+    // effect only runs when the path actually CHANGES, so a same-file parent
+    // re-render never reaches here (that is what protects a deliberate manual
+    // re-rail from being popped open; Gate-2 adversarial confirmed the dep, not
+    // the `!==` below, is what the same-file-re-render test exercises).
+    // DEFENSE (kept intentionally, not redundant-to-delete): the `!== prevFileRef`
+    // check fails-safe if this effect is ever re-run for an UNCHANGED path (a future
+    // added dep, a StrictMode/remount edge) — without it, such a re-run would wrongly
+    // un-rail a Canvas the user just collapsed. Cheap, self-documenting, zero-cost.
     if (selectedPath && selectedPath !== prevFileRef.current) {
       setRailed(false);
       setStoredBool(RAILED_KEY, false);
