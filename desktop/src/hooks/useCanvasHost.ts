@@ -231,11 +231,25 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // paths may be source-repo-relative, so resolve to a workspace path first.
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  // Per-tab open generation (run_a9806ea0 adversarial B): each open-file bumps its
+  // tab's counter; a resolve that completes AFTER a newer open on the SAME tab is
+  // stale and discards itself, so out-of-order /resolve completions can't clobber
+  // the most-recently-clicked file with an older one.
+  const openGenRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
       const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string }>).detail ?? {};
       if (!filePath) return;
+      // CAPTURE the ORIGIN tab BEFORE the await (run_a9806ea0 bleed fix). The click
+      // targets whatever tab is active NOW; the async /resolve below may complete
+      // AFTER the user switches tabs, and reading activeTabIdRef *after* the await
+      // would land the file on the DESTINATION tab (the observed cross-tab bleed —
+      // a file opened on tab A appeared on tab B when the switch raced the resolve).
+      const landingTab = activeTabIdRef.current;
+      const k = keyFor(landingTab);
+      const gen = (openGenRef.current.get(k) ?? 0) + 1;
+      openGenRef.current.set(k, gen);
       let resolvedPath = filePath;
       try {
         const resp = await api.get<{ resolved_path: string }>('/workspace/file/resolve', { params: { path: filePath } });
@@ -247,12 +261,14 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         if (status === 400) return; // path traversal / invalid — drop
         // 404 → fall through to raw path; other errors just use the raw path.
       }
+      // Stale-resolve guard (B): a newer open on the SAME origin tab superseded us.
+      if (openGenRef.current.get(k) !== gen) return;
       const fileName = resolvedPath.split('/').pop() || resolvedPath;
-      // Route into the ACTIVE tab's slice (read the ref, not the closure — the
-      // async resolve may land after a tab switch; patch() reads activeTabId too,
-      // but we guard here so a late resolve never lands in the wrong tab).
-      const landingTab = activeTabIdRef.current;
-      const k = keyFor(landingTab);
+      // Land the file on its ORIGIN tab's slice (captured pre-await), and only push
+      // it into the live React mirror if that ORIGIN tab is STILL active — a switch
+      // during the resolve routes the file to A's map (restored when A is revisited)
+      // and never disturbs B. `cur` is re-read HERE (post-await) so any patch() that
+      // ran during the resolve (pin/mute toggle) is preserved, not clobbered (C).
       const cur = mapRef.current.get(k) ?? EMPTY;
       const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef } };
       mapRef.current.set(k, next);
