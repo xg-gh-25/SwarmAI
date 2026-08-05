@@ -1308,6 +1308,19 @@ class SessionUnit:
 
     # ── Tool-hang helpers (run_fb6e94a9) ─────────────────────────
 
+    def has_open_tools(self) -> bool:
+        """True if this session currently has ≥1 tool_use open (executing).
+
+        Public accessor over the internal ``_open_tool_uses`` tracker (populated
+        on ToolUseBlock start, popped on its ToolResultBlock). Used by Canvas
+        Layer-2 live-surfacing (surface_injection) to gate: only surface a
+        workspace write LIVE while the active session's agent is actually running
+        a tool — so a background-job write during an idle-tool chat is not
+        mis-attributed. Covers ALL tools (Bash/Write/Agent); for a sub-agent the
+        parent's Agent-tool stays open across the whole sub-agent run. Fail-safe:
+        never raises (a missing tracker reads as no open tools)."""
+        return bool(getattr(self, "_open_tool_uses", None))
+
     def _oldest_open_tool(self) -> Optional[tuple[float, str, str]]:
         """(age_seconds, tool_name, tool_id) of the oldest open tool_use.
 

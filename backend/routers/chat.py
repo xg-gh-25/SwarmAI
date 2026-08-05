@@ -572,6 +572,17 @@ async def chat_stream(request: Request):
                 if _injection_registered is not None:
                     for _inj in surface_injection.drain_nowait(_injection_registered):
                         yield _inj
+            # Final drain (fix3, run_bfbbe0fd): the async-for has ended (all SDK
+            # messages consumed) but a watcher event enqueued AFTER the last
+            # in-loop drain would otherwise be dropped by the finally's
+            # unregister — an end-of-turn write (tool closed, so the in-flight
+            # gate no longer surfaces it live) is caught HERE, the ungated
+            # end-of-turn catch-up. This is the NORMAL-completion path (safe to
+            # yield); it is deliberately NOT in the CancelledError branch below
+            # (a generator cannot yield during GeneratorExit).
+            if _injection_registered is not None:
+                for _inj in surface_injection.drain_nowait(_injection_registered):
+                    yield _inj
         except asyncio.CancelledError:
             logger.info("Chat stream cancelled (client disconnected)")
             # Transition session STREAMING → IDLE so the next send()

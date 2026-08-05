@@ -13,19 +13,33 @@ is per-turn; the workspace explorer is a 30s poll). This module bridges the gap:
 it lets the watcher hand a ``file_changed`` event to an ALREADY-OPEN per-turn SSE
 stream, which then carries it to the frontend.
 
-THE ATTRIBUTION RULE (bleed-proof by construction)
---------------------------------------------------
+THE ATTRIBUTION RULE (prevents simultaneous ambiguity + in-flight gate)
+-----------------------------------------------------------------------
 A watcher event carries no writer identity (the kernel gives path + event only).
 Rather than GUESS which tab a write belongs to by wall-clock/time-window
 correlation — which is exactly the run_4de279ca cross-tab bleed — we attribute an
-event ONLY when there is exactly ONE non-channel session STREAMING. With 0 or 2+
-streaming, we DROP the event (the pipeline-finish sweep_run_changes remains the
-author-agnostic fallback). This makes cross-tab bleed *structurally impossible*:
-there is never a choice between two candidate tabs to get wrong.
+event ONLY when (a) there is exactly ONE non-channel session STREAMING, AND (b)
+that session currently has an in-flight tool (unit.has_open_tools()). With 0 or 2+
+streaming, or an idle-tool streaming session, we DROP the event (the
+pipeline-finish sweep_run_changes remains the author-agnostic fallback).
 
-This is intentional Option-A fail-safe: a write that lands when no single session
-is streaming is not surfaced live (it still surfaces at pipeline finish). Losing a
-live pop is strictly better than leaking a write into the wrong tab.
+This PREVENTS SIMULTANEOUS AMBIGUITY (two candidate tabs at once → never chosen).
+It is NOT literally "structurally impossible": a residual TIME-SHIFT window remains
+— A's tool-run write is enqueued, A ends, B starts streaming within the ~2s
+watchfiles debounce, and the event could then resolve to B. The window is narrow
+(A-ends → B-starts → batch-fires all inside ~2s) and the in-flight gate shrinks it
+further (B must ALSO have a tool open), but it is a residual, not zero. Do not
+re-inflate this to "impossible" (run_bfbbe0fd corrected the overclaim).
+
+The in-flight gate (run_bfbbe0fd) narrows attribution to writes plausibly caused by
+the active agent: only surface LIVE while the sole streaming session is running a
+tool. For a sub-agent the parent's Agent-tool stays open across the whole sub-agent
+run (its result arrives at sub-agent completion), so a mid-run write is surfaced;
+a background-job write during an idle-tool chat is NOT. A write whose tool has
+already closed (end-of-turn) is not surfaced live by this gate — it is caught by
+the SSE handler's final drain at normal turn completion (the ungated end-of-turn
+catch-up). Losing a live pop is strictly better than leaking a write into the
+wrong tab.
 
 DESIGN
 ------
@@ -99,12 +113,15 @@ def drain_nowait(session_id: str) -> list[dict]:
 
 
 def resolve_sole_streaming_session(router: Any) -> Optional[str]:
-    """Return the session_id of the ONE non-channel STREAMING session, else None.
+    """Return the session_id of the ONE eligible STREAMING session, else None.
 
-    The bleed-proof gate: returns a session_id ONLY when exactly one non-channel
-    unit is STREAMING. 0 or 2+ streaming → None (never guess between tabs). Reads
-    ``unit.state``/``unit.is_channel_session``/``unit.session_id`` — the stable
-    SessionUnit attributes. Fail-safe: any error → None (do not surface).
+    Two conditions (both required): exactly one non-channel unit is STREAMING
+    AND that unit has an in-flight tool (unit.has_open_tools()). 0 or 2+ streaming
+    → None (never guess between tabs — prevents simultaneous ambiguity, though a
+    narrow ~2s time-shift residual remains; see module docstring). Idle-tool sole
+    streaming → None (in-flight gate — a background write is not mis-attributed).
+    Reads ``unit.state``/``unit.is_channel_session``/``unit.session_id``/
+    ``unit.has_open_tools()``. Fail-safe: any error → None (do not surface).
     """
     # Import here (not module-top) to avoid a heavy import at daemon boot and to
     # keep this module unit-testable with a fake router.
@@ -125,7 +142,16 @@ def resolve_sole_streaming_session(router: Any) -> Optional[str]:
 
     if len(streaming) != 1:
         return None
-    return getattr(streaming[0], "session_id", None)
+    unit = streaming[0]
+    # In-flight gate (run_bfbbe0fd): only surface LIVE while the sole streaming
+    # session is running a tool — so a background-job write during an idle-tool
+    # chat is not mis-attributed. A sub-agent write is covered because the
+    # parent's Agent-tool stays open across the whole sub-agent run. Fail-safe:
+    # a missing accessor reads as "no open tool" → do not surface.
+    has_open = getattr(unit, "has_open_tools", None)
+    if not callable(has_open) or not has_open():
+        return None
+    return getattr(unit, "session_id", None)
 
 
 def publish_file_event(event: dict, router: Any = None) -> int:

@@ -171,7 +171,11 @@ class WorkspaceSurfaceWatcher:
                 continue
             abs_path = str(Path(raw_path).resolve())
             try:
-                rel = str(Path(abs_path).relative_to(self._root.resolve()))
+                # Normalize separators to '/' (fix4, run_bfbbe0fd): on Windows a
+                # WindowsPath str has backslashes, but Layer-1 + the frontend
+                # path-key dedup Map use forward slashes — a mismatch double-pops
+                # the same file. Match the codebase convention (.replace).
+                rel = str(Path(abs_path).relative_to(self._root.resolve())).replace("\\", "/")
             except ValueError:
                 # Path is outside SwarmWS — should not happen (awatch is rooted
                 # there), but if it does, DO NOT publish an absolute string as the
