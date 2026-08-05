@@ -253,8 +253,17 @@ def _get_section_age_days(
     return 999  # Unknown → very stale
 
 
-def compute_section_health(project_dir: Path) -> dict:
+def compute_section_health(project_dir: Path, *, persist: bool = True) -> dict:
     """Compute per-section health scores for all DDD docs in a project.
+
+    persist (kw-only, default True): whether to write section_health.json (the
+    decay snapshot that the next run's decay dimension reads). The SCHEDULED path
+    (ddd_refresh job) keeps the default True — it OWNS the snapshot cadence. READ
+    paths (engine-metrics GET dashboard, `ddd-health` CLI) MUST pass persist=False:
+    a read handler writing to disk on every hit is the anti-pattern the DddCard
+    brain-detail path forbids (run_d1e933aa Gate-1), and it adds a synchronous-write
+    latency jitter to a GET. Default True keeps every unlisted/legacy caller's
+    behavior unchanged (back-compat). #5 fix, run_e90535ea.
 
     Returns:
         {
@@ -359,24 +368,26 @@ def compute_section_health(project_dir: Path) -> dict:
 
         result["docs"][doc_name] = {"sections": doc_sections}
 
-    # Persist scores for next decay calculation (atomic write)
-    state_path = project_dir / ".artifacts" / "section_health.json"
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_path = _tempfile.mkstemp(
-        dir=str(state_path.parent), suffix=".tmp"
-    )
-    try:
-        os.write(tmp_fd, json.dumps(result, indent=2, ensure_ascii=False).encode())
-        os.close(tmp_fd)
-        os.replace(tmp_path, str(state_path))
-    except Exception:
+    # Persist scores for next decay calculation (atomic write). Gated on persist=:
+    # read paths pass persist=False (compute-only, no disk write) — see the docstring.
+    if persist:
+        state_path = project_dir / ".artifacts" / "section_health.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_path = _tempfile.mkstemp(
+            dir=str(state_path.parent), suffix=".tmp"
+        )
         try:
+            os.write(tmp_fd, json.dumps(result, indent=2, ensure_ascii=False).encode())
             os.close(tmp_fd)
-        except OSError:
+            os.replace(tmp_path, str(state_path))
+        except Exception:
+            try:
+                os.close(tmp_fd)
+            except OSError:
+                pass
+            if Path(tmp_path).exists():
+                os.unlink(tmp_path)
+            # Don't fail the scoring — state persistence is best-effort
             pass
-        if Path(tmp_path).exists():
-            os.unlink(tmp_path)
-        # Don't fail the scoring — state persistence is best-effort
-        pass
 
     return result

@@ -222,3 +222,48 @@ class TestComputeSectionHealth:
             # Conventions: short content → lower completeness
             conv = tech_sections["Conventions"]
             assert conv["completeness"] < arch["completeness"]
+
+
+class TestPersistFlag:
+    """#5 fix (run_e90535ea): compute_section_health writes section_health.json for
+    the scheduled decay snapshot — but READ paths (engine-metrics GET, ddd-health
+    CLI) must NOT write on every hit (read-handler-writes anti-pattern + sync-write
+    latency). The write is gated on persist= (default True = back-compat)."""
+
+    def _mk_project(self, tmpdir):
+        project_dir = Path(tmpdir)
+        (project_dir / "TECH.md").write_text(
+            "# Tech\n\n## Architecture\n\n" + ("word " * 60) + "\n"
+        )
+        (project_dir / ".artifacts").mkdir(parents=True)
+        return project_dir
+
+    def test_persist_false_writes_no_file(self):
+        """persist=False → identical scores computed, section_health.json NOT written."""
+        from core.ddd_health import compute_section_health
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pd = self._mk_project(tmpdir)
+            sh = pd / ".artifacts" / "section_health.json"
+            assert not sh.exists()
+            result = compute_section_health(pd, persist=False)
+            assert "TECH.md" in result["docs"]          # scores still computed
+            assert not sh.exists(), "read path must NOT write section_health.json"
+
+    def test_persist_true_default_writes(self):
+        """Default (persist=True) still writes atomically — scheduled snapshot path."""
+        from core.ddd_health import compute_section_health
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pd = self._mk_project(tmpdir)
+            sh = pd / ".artifacts" / "section_health.json"
+            compute_section_health(pd)  # default
+            assert sh.exists(), "default must write the snapshot (back-compat)"
+
+    def test_persist_false_and_true_scores_identical(self):
+        """persist only gates the WRITE — the returned scores are byte-identical."""
+        from core.ddd_health import compute_section_health
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pd = self._mk_project(tmpdir)
+            r_no = compute_section_health(pd, persist=False)
+            r_yes = compute_section_health(pd, persist=True)
+            # computed_at differs by design; compare the scored docs only
+            assert r_no["docs"] == r_yes["docs"]

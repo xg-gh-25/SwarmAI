@@ -4102,7 +4102,10 @@ def cmd_ddd_health(args, reg) -> None:
 
     from core.ddd_health import compute_section_health
 
-    result = compute_section_health(project_dir)
+    # persist=False: this CLI just PRINTS the scores (a read/inspect command) —
+    # it must not write section_health.json as a side effect; the scheduled
+    # ddd_refresh job owns the snapshot. #5 fix, run_e90535ea.
+    result = compute_section_health(project_dir, persist=False)
     print(json.dumps(result, indent=2, default=str))
 
 

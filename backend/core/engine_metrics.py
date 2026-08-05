@@ -491,7 +491,11 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
-            result = compute_section_health(project_dir)
+            # persist=False: this is the /engine-metrics GET dashboard READ path —
+            # compute-only, no disk write (a read handler must not write
+            # section_health.json on every hit; the scheduled ddd_refresh job owns
+            # the snapshot cadence). #5 fix, run_e90535ea.
+            result = compute_section_health(project_dir, persist=False)
             # Ensure all 4 standard docs appear with at least an "exists" key
             # (compute_section_health only includes docs with parseable sections)
             raw_docs = result.get("docs", {})
