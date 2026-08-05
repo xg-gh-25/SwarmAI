@@ -148,3 +148,16 @@ class TestUnexpectedErrorRetriable:
             "ValidationException: The provided model identifier is invalid."
         )
         assert _is_retriable_error(permanent) is False
+
+    def test_pattern_is_not_over_broad(self):
+        # AC3 boundary guard: this test goes RED if the pattern is ever
+        # loosened to a bare "unexpected error" (or "try again"). A permanent
+        # error can contain the words "unexpected error" WITHOUT the full
+        # transient phrase — it must stay non-retriable. This exercises the
+        # exact over-match risk the code comment at session_utils.py warns
+        # against (specific noun phrase ONLY, not a broad match).
+        broad_but_permanent = (
+            "ValidationException: unexpected error — the input schema is "
+            "malformed, fix it and try again."
+        )
+        assert _is_retriable_error(broad_but_permanent) is False
