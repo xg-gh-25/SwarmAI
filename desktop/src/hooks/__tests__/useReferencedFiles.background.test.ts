@@ -19,7 +19,6 @@ import {
   useReferencedFiles,
   applyWrite,
   applyDelete,
-  __resetBackgroundStagingForTest,
   type ReferencedFile,
 } from '../useReferencedFiles';
 
@@ -93,7 +92,7 @@ describe('applyDelete (pure SSOT helper)', () => {
 });
 
 describe('useReferencedFiles — BACKGROUND-tab capture (the core fix)', () => {
-  beforeEach(() => { sessionStorage.clear(); __resetBackgroundStagingForTest(); });
+  beforeEach(() => { sessionStorage.clear(); });
 
   it('persists a background tab write to the OWNING tab storage, NOT the active in-memory rail', () => {
     const { result } = renderHook(() => useReferencedFiles('A')); // active tab = A
@@ -144,5 +143,27 @@ describe('useReferencedFiles — BACKGROUND-tab capture (the core fix)', () => {
     act(() => { fileChanged('active.py', 'A'); });
     expect(result.current.files.written.map((f) => f.path)).toContain('active.py');
     expect(bucket('A')).toHaveLength(1);
+  });
+
+  it('active→background CYCLE does NOT lose the active-cycle writes (Gate-2 HIGH regression)', () => {
+    // The staging-map design lost data here: B bg-writes → B active (writes to storage
+    // only) → B background again used the STALE staging as base and full-overwrote
+    // storage, discarding B's active-cycle writes. Storage-direct has no stale copy.
+    let tab = 'X'; // start on some other active tab
+    const { rerender } = renderHook(() => useReferencedFiles(tab));
+    // (1) B is background, receives a write.
+    act(() => { fileChanged('b-bg-1.py', 'B'); });
+    expect(bucket('B').map((f) => f.path)).toEqual(['b-bg-1.py']);
+    // (2) B becomes active; (3) user acts in B while active → goes to storage.
+    tab = 'B';
+    rerender();
+    act(() => { fileChanged('b-active.py', 'B'); }); // active path (evtTabId==tab)
+    expect(bucket('B').map((f) => f.path).sort()).toEqual(['b-active.py', 'b-bg-1.py']);
+    // (4) B backgrounds again (switch to X), receives another bg write.
+    tab = 'X';
+    rerender();
+    act(() => { fileChanged('b-bg-2.py', 'B'); });
+    // All THREE must survive — the active-cycle write (b-active.py) is NOT discarded.
+    expect(bucket('B').map((f) => f.path).sort()).toEqual(['b-active.py', 'b-bg-1.py', 'b-bg-2.py']);
   });
 });

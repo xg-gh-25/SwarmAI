@@ -222,23 +222,6 @@ export function applyDelete(
   return { map: next, hit };
 }
 
-// Per-tab in-memory staging for BACKGROUND-tab writes (run_9dd59523, Gate-1 #2b).
-// A background tab has NO live useReferencedFiles instance (the sole one is keyed on
-// the ACTIVE tab), so its only state is sessionStorage. Rather than a raw
-// load→apply→save RMW (which a future deferred-write refactor could turn into a
-// lost-update race), we keep an authoritative in-memory map per background tab here
-// and mirror it to storage — unifying the write discipline with the active path's
-// functional-updater serialization. Module-level (survives re-renders); an active tab
-// switching in reloads from storage (the durable mirror), so a stale staging entry is
-// harmless. applyWrite already caps at MAX_FILES, so this needs no separate eviction.
-const _bgStaging = new Map<string, Map<string, ReferencedFile>>();
-
-/** Test-only: clear the background staging map so cases don't bleed into each other.
- *  Not used in production (the map is intentionally session-lived there). */
-export function __resetBackgroundStagingForTest(): void {
-  _bgStaging.clear();
-}
-
 export function useReferencedFiles(tabId: string | undefined) {
   const [files, setFiles] = useState<Map<string, ReferencedFile>>(new Map());
   const filesRef = useRef<Map<string, ReferencedFile>>(files);
@@ -291,17 +274,25 @@ export function useReferencedFiles(tabId: string | undefined) {
       const isBackground = !!(evtTabId && evtTabId !== tabId);
 
       if (isBackground) {
+        // Read the owning tab's DURABLE store (sessionStorage), apply, write back.
+        // sessionStorage IS the single source of truth for a non-active tab (it has no
+        // live hook instance), and this whole handler runs SYNCHRONOUSLY (window
+        // dispatch blocks; storage read+write are sync), so consecutive events for the
+        // same tab serialize correctly — event B's load() sees event A's save().
+        // (run_9dd59523 first used an in-memory staging map here to pre-empt a
+        // hypothetical deferred-write race; Gate-2 proved that map INTRODUCED a real
+        // data-loss bug — it went stale after a tab cycled active→background and then
+        // full-overwrote storage with the stale copy, discarding the active-cycle
+        // writes. Storage-direct has no such staleness: there is no second copy to go
+        // stale. Real bug > hypothetical bug — the staging map was removed.)
         const ownTab = evtTabId as string;
-        const base = _bgStaging.get(ownTab) ?? loadFromStorage(ownTab);
+        const base = loadFromStorage(ownTab);
         if (operation === 'deleted') {
           const { map, hit } = applyDelete(base, { path, absolutePath });
           if (!hit) return; // no-op — don't churn storage
-          _bgStaging.set(ownTab, map);
           saveToStorage(ownTab, map);
         } else {
-          const next = applyWrite(base, { path, absolutePath, operation, kind, baseRef });
-          _bgStaging.set(ownTab, next);
-          saveToStorage(ownTab, next);
+          saveToStorage(ownTab, applyWrite(base, { path, absolutePath, operation, kind, baseRef }));
         }
         return;
       }
