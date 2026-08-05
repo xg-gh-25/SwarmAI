@@ -179,7 +179,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7);
   });
 
-  it('getCanvasSnapshot() returns null after close (no stale open)', () => {
+  it('getCanvasSnapshot() returns null after close (no stale open) — when there are NO outputs', () => {
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
@@ -187,6 +187,31 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.getCanvasSnapshot()).not.toBeNull();
     act(() => result.current.close());
     expect(result.current.getCanvasSnapshot()).toBeNull();
+  });
+
+  it('SENSE gap fix (run_9e42c066): closed Canvas WITH pending outputs still reports a snapshot (open=false, outputCount>0)', () => {
+    // The ChatHeader pill shows the user "N outputs" on a closed Canvas; the agent
+    // must SENSE the same. Before the fix getCanvasSnapshot returned null when closed,
+    // hiding pending outputs from the agent even as the pill advertised them.
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    // Never open Canvas; a finish batch arrives while closed.
+    act(() => emitOutputs('A', 4));
+    expect(result.current.isOpen).toBe(false);
+    const snap = result.current.getCanvasSnapshot();
+    expect(snap).not.toBeNull();          // NOT hidden from SENSE anymore
+    expect(snap!.open).toBe(false);        // honestly reports closed
+    expect(snap!.outputCount).toBe(4);     // …but the count reaches the agent
+  });
+
+  it('SENSE: a pristine tab (closed, zero outputs) still reports null (no noise)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'PRISTINE', sessionId: 's-P', isStreaming: false }),
+    );
+    expect(result.current.isOpen).toBe(false);
+    expect(result.current.outputCount).toBe(0);
+    expect(result.current.getCanvasSnapshot()).toBeNull(); // truly-empty-and-closed → null
   });
 
   it('close clears the active tab Canvas (file + manuallyOpen) without touching other tabs', () => {

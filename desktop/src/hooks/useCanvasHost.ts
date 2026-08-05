@@ -168,9 +168,16 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const getCanvasSnapshot = useCallback((): CanvasSnapshot | null => {
     const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
     const openNow = !!(cur.file || cur.manuallyOpen);
-    if (!openNow) return null;
+    // Report a snapshot when the panel is open OR there are pending outputs while
+    // CLOSED (run_9e42c066 meta-review): the ChatHeader pill shows the user "N
+    // outputs" on a closed Canvas, so the agent must be able to SENSE the same —
+    // prompt_builder already renders "Canvas: closed, N outputs listed" from
+    // output_count alone. Returning null here (the old open-only contract) hid the
+    // pending outputs from the agent's SENSE payload even as the pill advertised
+    // them. Only truly-empty-and-closed reports null.
+    if (!openNow && outputCount === 0) return null;
     return {
-      open: true,
+      open: openNow,
       // outputCount comes from the resident store (SSOT), NOT a per-slice mirror.
       outputCount,
       pinned: cur.pinned,
@@ -247,8 +254,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
 
   const lastCanvasEmit = useRef<string>('');
   useEffect(() => {
-    const detail = isOpen
-      ? { open: true, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
+    // Emit when open OR there are pending outputs while closed (parity with
+    // getCanvasSnapshot, run_9e42c066): a closed Canvas with N outputs must still
+    // reach the agent's SENSE payload, matching the ChatHeader pill the user sees.
+    const detail = (isOpen || outputCount > 0)
+      ? { open: isOpen, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
       : null;
     const sig = JSON.stringify(detail);
     if (sig === lastCanvasEmit.current) return;
