@@ -25,6 +25,8 @@ import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
+import { isDesktop } from '../../services/tauri';
+import { hiveService, TRANSITIONAL_STATUSES } from '../../services/hive';
 
 
 // Left sidebar width constant
@@ -39,6 +41,58 @@ const A10_GROUP = {
 
 // Minimum width for main chat panel to ensure usability
 const MIN_MAIN_CHAT_PANEL_WIDTH = 300;
+
+export type HiveStatusDot = { color: string; pulse?: boolean; title?: string };
+
+/**
+ * Pure decision for the Hive nav-card status dot — a CALM, signal-driven indicator
+ * (never a static literal; the 2026-08-03 Y/R alarm-fatigue removal is the standing
+ * lesson). Exported for direct testing (no render needed). Priority error > provisioning
+ * > running; returns `undefined` (NO dot) for 0 instances or an all-stopped fleet.
+ */
+export function deriveHiveStatusDot(instances: { status: string }[] | undefined): HiveStatusDot | undefined {
+  if (!instances || instances.length === 0) return undefined;
+  if (instances.some((i) => i.status === 'error')) {
+    return { color: '#ef4444', title: 'A Hive needs attention (error)' };
+  }
+  if (instances.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) {
+    return { color: '#3b82f6', pulse: true, title: 'A Hive is provisioning' };
+  }
+  if (instances.some((i) => i.status === 'running')) {
+    const n = instances.filter((i) => i.status === 'running').length;
+    return { color: '#10b981', title: `${n} Hive${n > 1 ? 's' : ''} running` };
+  }
+  return undefined;  // all stopped → silent
+}
+
+/**
+ * Live status dot for the Hive nav card. Cost discipline (Gate-1 D2): desktop-only +
+ * polls every 30s at rest, escalating to 5s ONLY while an instance is transitional. On
+ * a fresh workspace listInstances() returns [] (cheap local-DB read) → no dot.
+ */
+function useHiveStatusDot(): HiveStatusDot | undefined {
+  const desktop = isDesktop();
+  const { data: instances } = useQuery({
+    queryKey: ['hive', 'nav-status'],
+    queryFn: () => hiveService.listInstances(),
+    enabled: desktop,
+    staleTime: 30_000,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!Array.isArray(data)) return 30_000;              // pre-first-fetch
+      if (data.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) return 5_000;  // deploy in flight
+      // No fleet at all (the common case for a desktop user who never uses Hive) →
+      // relax to 2min so we don't hammer a localhost read every 30s forever for a dot
+      // that will never show (adversarial MED: 0-account poll waste). A newly-deployed
+      // Hive still surfaces — the deploy happens in the overlay's own live poll, and
+      // react-query refetch-on-focus re-checks the nav dot on the next window focus.
+      if (data.length === 0) return 120_000;
+      return 30_000;                                        // has fleet → watch for state changes
+    },
+    retry: false,
+  });
+  return deriveHiveStatusDot(instances);
+}
 
 interface ThreeColumnLayoutProps {
   children: ReactNode;
@@ -144,6 +198,14 @@ function LeftSidebar() {
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
   const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal } = useTerminal();
+  // Live Hive fleet status → a calm dot on the Hive nav card (signal-driven, silent at 0).
+  const hiveStatusDot = useHiveStatusDot();
+  // Hive is desktop-ONLY (mirrors the old Settings hive tab's desktopOnly:true): a
+  // deployed Hive-served frontend has isDesktop()===false and the backend _require_desktop()
+  // blocks every hive op there — so rendering the card on a Hive would be a broken
+  // affordance (clickable card, all actions 403). Gate the card, not just the poll
+  // (meta-review HIGH, run_b450108e).
+  const hiveEnabled = isDesktop();
 
   // Skills and MCP now open Settings with the corresponding tab pre-selected
   // Toggle: if already on that tab, close the modal
@@ -297,6 +359,9 @@ function LeftSidebar() {
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
           <A10Card icon="schedule" label="Jobs & Runs" tint={A10_GROUP.system} highlight isActive={newActiveOverlay === 'jobs'} onClick={() => { if (activeModal) closeModal(); openOverlay('jobs'); }} data-testid="nav-jobs" />
+          {hiveEnabled && (
+            <A10Card icon="cloud" label="Hive" tint={A10_GROUP.system} statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => { if (activeModal) closeModal(); openOverlay('hive'); }} data-testid="nav-hive" />
+          )}
           <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={newActiveOverlay === 'eval'} onClick={() => { if (newActiveOverlay === 'eval') { closeOverlay(); } else { openOverlay('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={newActiveOverlay === 'settings' && !settingsTab} onClick={() => { if (newActiveOverlay === 'settings') { closeOverlay(); } else { setSettingsTab(undefined); openOverlay('settings'); } }} data-testid="nav-settings" />
@@ -520,6 +585,13 @@ function NavSvgIcon({ name }: { name: string }) {
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
         </svg>
       );
+    case 'cloud':
+      // Hive — a cloud (the fleet of remote AI clones deployed to your own AWS).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6 9.5 3.5 3.5 0 0 0 7 18z" />
+        </svg>
+      );
     case 'extension':
       // Capabilities — puzzle/extension piece (skills + MCP + jobs).
       return (
@@ -608,13 +680,20 @@ interface A10CardProps {
   /** Highlight the card in its resting state (brighter than siblings) — marks a
    *  primary entry like Brain Hub within the cognition zone. */
   highlight?: boolean;
+  /** A CALM live-status dot on the chip's top-right corner. MUST be driven by a REAL
+   *  live signal (a count/query), NEVER a static literal — the 2026-08-03 Y/R-flag
+   *  removal (alarm fatigue) is the standing lesson. `undefined` = no dot (the default
+   *  for all cards). Currently: the Hive card, from a listInstances poll. Additive —
+   *  every existing card omits it and is visually unchanged. */
+  statusDot?: { color: string; pulse?: boolean; title?: string };
   onClick?: () => void;
   'data-testid'?: string;
 }
 
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
- *  the attention flag is a corner badge (never eats the title). */
-function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-testid': testId }: A10CardProps) {
+ *  the attention flag is a corner badge (never eats the title). An optional live
+ *  statusDot sits on the chip's top-right corner (signal-driven only). */
+function A10Card({ icon, label, tint, flag, isActive, highlight, statusDot, onClick, 'data-testid': testId }: A10CardProps) {
   // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
   // its data-testid — sourceCardTestId — at open time, so the spout origin no longer
   // needs a mutable singleton pushed on click.)
@@ -627,8 +706,17 @@ function A10Card({ icon, label, tint, flag, isActive, highlight, onClick, 'data-
       style={{ '--ac': tint } as CSSProperties}
       className={`a10-card${isActive ? ' a10-card--active' : ''}${highlight ? ' a10-card--hilite' : ''} relative w-full flex items-center gap-2.5 rounded-[11px] pl-2 pr-2.5 py-1.5`}
     >
-      <span className="a10-chip flex-shrink-0 w-[27px] h-[27px] rounded-[8px] flex items-center justify-center">
+      <span className="a10-chip relative flex-shrink-0 w-[27px] h-[27px] rounded-[8px] flex items-center justify-center">
         <NavSvgIcon name={icon} />
+        {statusDot && (
+          <span
+            data-testid={testId ? `${testId}-status-dot` : 'a10-status-dot'}
+            title={statusDot.title}
+            aria-label={statusDot.title}
+            className={`absolute -top-0.5 -right-0.5 w-[8px] h-[8px] rounded-full ring-2 ring-[var(--color-bg-chrome)]${statusDot.pulse ? ' animate-pulse' : ''}`}
+            style={{ background: statusDot.color }}
+          />
+        )}
       </span>
       <span className="flex-1 text-left text-[12.5px] font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap">{label}</span>
       {flag === 'y' && (

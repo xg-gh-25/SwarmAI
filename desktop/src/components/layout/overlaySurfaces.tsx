@@ -21,6 +21,7 @@ import { ToDoContent } from './ToDoOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { PipelineContent } from './PipelineOverlay';
 import { PollinateContent } from './PollinateOverlay';
+import { HiveFleetContent } from './HiveFleetOverlay';
 import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
 
@@ -233,4 +234,24 @@ registerOverlay({
   sourceCardTestId: 'nav-eval',
   tint: TINT_SYSTEM,
   render: () => <EvalDashboard />,
+});
+
+// ── hive (Fleet) — nav-card-only, NOT in ALL_SHOW_EVENTS ──────────────────────────────
+// Elevates Hive from a buried Settings tab to a first-class SYSTEM-zone workbench
+// (run_b450108e). The fleet of remote AI clones (deploy the Agent OS to your own AWS).
+// Deliberately NOT agent-openable (controls AWS credentials + live cloud infra) — same
+// security boundary as settings/eval/library. Mutates via hiveService directly, so the
+// content takes only `close` (no dispatchPrompt bridge — Gate-1 D5).
+registerOverlay({
+  id: 'hive',
+  title: 'Hive · Fleet',
+  mode: 'HIVE',
+  width: 'xl',
+  sourceCardTestId: 'nav-hive',
+  tint: TINT_SYSTEM,
+  render: ({ close }) => (
+    <div className="flex-1 overflow-hidden" data-testid="hive-overlay-wrap">
+      <HiveFleetContent close={close} />
+    </div>
+  ),
 });

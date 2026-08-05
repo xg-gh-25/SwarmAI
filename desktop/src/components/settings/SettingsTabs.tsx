@@ -1,8 +1,11 @@
 /**
  * Settings page tab layout wrapper.
  *
- * 11 tabs (10 in non-desktop builds — Hive is desktop-only): General, AI & Models,
- * Channels, Skills, MCP Servers, Hive, Backup, Core Engine, System, Capabilities, About.
+ * 11 tabs (10 in non-desktop builds — Hive Accounts is desktop-only): General, AI &
+ * Models, Channels, Skills, MCP Servers, Hive Accounts, Backup, Core Engine, System,
+ * Capabilities, About. The Hive Accounts tab is the slim AWS-account-config surface;
+ * fleet/instance MANAGEMENT lives in the first-class "Hive" nav card (HiveFleetOverlay,
+ * run_b450108e) — R27 dual-entry convergence, shared components (settings/hiveComponents).
  * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -31,7 +34,7 @@ const ALL_TABS = [
   { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
   { id: 'skills', label: 'Skills', icon: 'extension', width: 'full' as const },
   { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub', width: '6xl' as const },
-  { id: 'hive', label: 'Hive', icon: 'cloud', desktopOnly: true, width: '6xl' as const },
+  { id: 'hive', label: 'Hive Accounts', icon: 'cloud', desktopOnly: true, width: '4xl' as const },
   { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
   { id: 'engine', label: 'Core Engine', icon: 'psychology', width: '6xl' as const },
   { id: 'system', label: 'System', icon: 'dns', width: '4xl' as const },

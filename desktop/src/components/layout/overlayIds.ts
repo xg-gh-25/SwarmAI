@@ -15,11 +15,13 @@
  *     tuple cannot silently drift from the actual registered surfaces.
  *
  * Relationship to ALL_SHOW_EVENTS (useExclusiveOverlay.ts): that list is the
- * agent-openable SUBSET (9 of these 12 — library/settings/eval are deliberately
- * nav-card/deep-link only, a security boundary, banned from the agent ui_action
- * allowlist). overlayIds.test.ts also asserts every ALL_SHOW_EVENTS suffix ∈
- * OVERLAY_IDS (the events⊆ids seam the union alone cannot cover, since
- * ALL_SHOW_EVENTS is a separate literal).
+ * agent-openable SUBSET (library/settings/eval/hive are deliberately nav-card/
+ * deep-link only, a security boundary, banned from the agent ui_action allowlist —
+ * hive because it controls AWS credentials + live cloud infra). overlayIds.test.ts
+ * asserts the subset is STRICTLY smaller than OVERLAY_IDS and that every
+ * ALL_SHOW_EVENTS suffix ∈ OVERLAY_IDS (the events⊆ids seam the union alone cannot
+ * cover, since ALL_SHOW_EVENTS is a separate literal). (Counts are asserted by the
+ * test, not stated here — a hardcoded number in prose only goes stale.)
  */
 
 /** Every registered fullscreen-surface id. THE source of the OverlayId union +
@@ -39,6 +41,7 @@ export const OVERLAY_IDS = [
   'pipeline',
   'pollinate',
   // SYSTEM region
+  'hive',
   'settings',
   'eval',
 ] as const;

@@ -16,7 +16,9 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LayoutProvider } from '../../contexts/LayoutContext';
+import { OverlayProvider } from '../../contexts/OverlayContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
 import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
@@ -35,14 +37,22 @@ vi.mock('../../services/pty', () => ({
 }));
 
 function renderSidebar() {
+  // QueryClientProvider: LeftSidebar polls Hive fleet status via useQuery
+  // (useHiveStatusDot, run_b450108e); disabled in jsdom (isDesktop()=false) but the
+  // hook still needs a client in scope.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <ToastProvider>
-      <LayoutProvider>
-        <TerminalProvider>
-          <LeftSidebar />
-        </TerminalProvider>
-      </LayoutProvider>
-    </ToastProvider>,
+    <QueryClientProvider client={qc}>
+      <ToastProvider>
+        <LayoutProvider>
+          <OverlayProvider>
+            <TerminalProvider>
+              <LeftSidebar />
+            </TerminalProvider>
+          </OverlayProvider>
+        </LayoutProvider>
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 }
 

@@ -18,11 +18,19 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, within, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LayoutProvider } from '../../contexts/LayoutContext';
 import { OverlayProvider } from '../../contexts/OverlayContext';
 import { TerminalProvider } from '../../contexts/TerminalContext';
 import { ToastProvider } from '../../contexts/ToastContext';
 import { LeftSidebar } from './ThreeColumnLayout';
+
+// The Hive nav card is desktop-only (isDesktop() gate). jsdom's isDesktop() is false,
+// which would hide nav-hive and break the DOMAIN_ORDER assertion below — force desktop.
+vi.mock('../../services/tauri', async () => {
+  const actual = await vi.importActual<typeof import('../../services/tauri')>('../../services/tauri');
+  return { ...actual, isDesktop: () => true };
+});
 
 vi.mock('../../services/pty', () => ({
   spawn: vi.fn(() => ({
@@ -36,16 +44,22 @@ vi.mock('../../services/pty', () => ({
 }));
 
 function renderSidebar() {
+  // QueryClientProvider: LeftSidebar polls Hive fleet status via useQuery
+  // (useHiveStatusDot, run_b450108e). isDesktop() is false in jsdom so the query is
+  // disabled (never fires), but the hook still calls useQuery → needs a client in scope.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <ToastProvider>
-      <LayoutProvider>
-        <OverlayProvider>
-          <TerminalProvider>
-            <LeftSidebar />
-          </TerminalProvider>
-        </OverlayProvider>
-      </LayoutProvider>
-    </ToastProvider>,
+    <QueryClientProvider client={qc}>
+      <ToastProvider>
+        <LayoutProvider>
+          <OverlayProvider>
+            <TerminalProvider>
+              <LeftSidebar />
+            </TerminalProvider>
+          </OverlayProvider>
+        </LayoutProvider>
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -66,6 +80,7 @@ const DOMAIN_ORDER = [
   'nav-pipeline',
   'nav-pollinate',
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
+  'nav-hive',      // System: Hive Fleet, directly below Jobs & Runs (run_b450108e)
   'nav-capabilities',
   'nav-eval',
   'nav-settings',

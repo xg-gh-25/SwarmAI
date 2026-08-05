@@ -32,6 +32,13 @@ vi.stubGlobal('XMLHttpRequest', vi.fn().mockImplementation(() => ({
   responseText: '{}',
 })));
 
+// The Hive nav card is desktop-only (isDesktop() gate). jsdom's isDesktop() is false,
+// which would hide nav-hive and break the expectedNavOrder assertion — force desktop.
+vi.mock('../../services/tauri', async () => {
+  const actual = await vi.importActual<typeof import('../../services/tauri')>('../../services/tauri');
+  return { ...actual, isDesktop: () => true };
+});
+
 // Settings + OS Eval migrated to the OverlayHost registry (M3-tail) — render via
 // overlaySurfaces (SettingsPage / EvalDashboard). Mock the heavy page content.
 vi.mock('../../pages/SettingsPage', () => ({
@@ -1089,6 +1096,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
+      { testId: 'nav-hive', label: 'Hive' },
       { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },
