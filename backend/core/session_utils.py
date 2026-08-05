@@ -388,6 +388,15 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
         # failure where Bedrock/Anthropic accepted the request but returned
         # nothing (429 converted to empty response, connection drop, etc.)
         r"API returned empty response",
+        # Bedrock transient internal-5xx surfaced as an is_error ResultMessage
+        # with the literal text "The system encountered an unexpected error
+        # during processing. Try your request again." Semantically identical to
+        # internal.?server.?error above; Bedrock just uses this wording for a
+        # generic transient internal failure. Almost always succeeds on the next
+        # --resume attempt (prod: session 9d00e432, 2026-08-05). Match the
+        # durable noun phrase ONLY (not a broad "unexpected error"/"try again")
+        # so a genuinely permanent error is never swept into auto-retry.
+        r"unexpected error during processing",
         # Bedrock API timeout — cross-region latency + cache miss can
         # exceed the API gateway timeout.  Retry succeeds because prompt
         # cache was created on the first attempt (5min TTL); the second

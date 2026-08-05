@@ -104,3 +104,47 @@ class TestBlankResultRouting:
             "likely transient 429/503/timeout (session_id=2e87b27f)"
         )
         assert _is_retriable_error(msg) is True
+
+
+class TestUnexpectedErrorRetriable:
+    """Bedrock transient-500 ("unexpected error during processing") must
+    auto-retry, not surface to the user (run_2a41d2d3).
+
+    Prod evidence (backend-daemon.log:38723, 2026-08-05 22:09:19): session
+    9d00e432 got is_error=True subtype=success error_text="API Error: The
+    system encountered an unexpected error during processing. Try your request
+    again." — a Bedrock transient internal-5xx, semantically identical to the
+    already-whitelisted internal.?server.?error. It was NOT in the whitelist, so
+    streaming_orchestrator classified it non-retriable, yielded the error, and
+    the user had to manually resend (which almost always succeeded → transient).
+    """
+
+    # The exact string Bedrock returns (from the live daemon log).
+    RAW = (
+        "API Error: The system encountered an unexpected error during "
+        "processing. Try your request again."
+    )
+
+    def test_raw_bedrock_string_is_retriable(self):
+        # AC1: the raw error must classify as retriable.
+        assert _is_retriable_error(self.RAW) is True
+
+    def test_wrapped_string_is_retriable(self):
+        # AC2 (the no-op guard): streaming_orchestrator wraps the retriable
+        # error as RuntimeError("Retriable SDK error: <text>") and send()
+        # (session_unit.py:2253) RE-classifies that WRAPPED string. If the
+        # pattern only matched the raw form, the re-check would flip it to
+        # non-retriable and crash to DEAD — making the fix a no-op. The
+        # pattern is a plain substring, so it must survive the prefix.
+        wrapped = f"Retriable SDK error: {self.RAW}"
+        assert _is_retriable_error(wrapped) is True
+
+    def test_permanent_error_still_not_retriable(self):
+        # AC3 (over-match guard, PIT46): a genuinely permanent Bedrock error
+        # (bad model id / validation) must NOT be swept into auto-retry — the
+        # pattern is specific to the transient "unexpected error during
+        # processing" phrase, not a broad "unexpected error" / "try again".
+        permanent = (
+            "ValidationException: The provided model identifier is invalid."
+        )
+        assert _is_retriable_error(permanent) is False
