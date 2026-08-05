@@ -119,25 +119,6 @@ export interface BriefingFocusItem {
   momentum: boolean;
 }
 
-export interface BriefingJob {
-  name: string;
-  status: string;  // "success", "failed", etc.
-  duration: number;
-  summary?: string;      // Truncated summary from job output
-  resultFile?: string;   // Workspace-relative path to result markdown
-}
-
-export interface BriefingTodo {
-  id: string;        // 8-char prefix
-  title: string;
-  priority: string;  // "high", "medium", "low", "none"
-  status: string;    // "pending", "overdue"
-  dueDate?: string;
-  nextStep?: string;
-  files?: string[];
-  description?: string;
-}
-
 // ============== Briefing Hub v2 Types ==============
 
 export interface WorkingItem {
@@ -151,42 +132,14 @@ export interface WorkingItem {
   timestamp: string;
 }
 
-export interface HotNewsItem {
-  title: string;
-  platform: string;
-  rank: number;
-  url: string;
-  region: "cn" | "intl";
-  lang: "en" | "zh";
-}
-
-export interface JobStatusItem {
-  id: string;
-  name: string;
-  status: "healthy" | "failed" | "disabled" | "running";
-  lastRun: string | null;
-  lastStatus: "success" | "failed" | "skipped" | null;
-  schedule: string;
-}
-
-export interface JobsSummary {
-  total: number;
-  healthy: number;
-  failed: number;
-  disabled: number;
-  lastRun: string | null;
-  jobs: JobStatusItem[];
-}
-
+// The Welcome Screen consumes only focus + working + learning. Other briefing
+// fields (hotNews / stocks / signals / output / jobs / jobsSummary / todos)
+// were removed 2026-08-05: no UI reads them (Jobs&Runs uses useJobsRuns; ToDos
+// use the /todos endpoint).
 export interface SessionBriefing {
   focus: BriefingFocusItem[];
-  hotNews: HotNewsItem[];
   working: WorkingItem[];
-  jobsSummary: JobsSummary;
-  jobs: BriefingJob[];        // backward compat
-  todos: BriefingTodo[];
   learning: string | null;
-  generatedAt: string | null;
 }
 
 const STATUS_TIMEOUT_MS = 5000;
@@ -288,45 +241,14 @@ export const systemService = {
   /**
    * Get session briefing data for the Welcome Screen.
    *
-   * Returns focus suggestions, working items, job results, and learning
-   * insights from the proactive intelligence engine. (signals/stocks/output
-   * fields removed 2026-08-05 with their Welcome Screen sections.)
+   * Returns focus suggestions, working items, and a learning insight from the
+   * proactive intelligence engine. The backend payload may carry more fields
+   * (hotNews/jobs/todos/etc.) but the Welcome Screen consumes only these three.
    */
   async getBriefing(): Promise<SessionBriefing> {
     try {
       const response = await api.get<Record<string, unknown>>('/system/briefing');
       const d = response.data;
-
-      // Parse jobs (backward compat)
-      const jobs: BriefingJob[] = ((d.jobs as Record<string, unknown>[]) ?? []).map((j) => ({
-        name: j.name as string,
-        status: j.status as string,
-        duration: j.duration as number,
-        summary: (j.summary as string) || undefined,
-        resultFile: (j.result_file as string) || undefined,
-      }));
-
-      // Parse todos with new fields
-      const todos: BriefingTodo[] = ((d.todos as Record<string, unknown>[]) ?? []).map((t) => ({
-        id: t.id as string,
-        title: t.title as string,
-        priority: t.priority as string,
-        status: t.status as string,
-        dueDate: (t.due_date as string) || undefined,
-        nextStep: (t.next_step as string) || undefined,
-        files: (t.files as string[]) || undefined,
-        description: (t.description as string) || undefined,
-      }));
-
-      // Parse hotNews
-      const hotNews: HotNewsItem[] = ((d.hotNews as Record<string, unknown>[]) ?? []).map((h) => ({
-        title: h.title as string,
-        platform: (h.platform as string) ?? '',
-        rank: (h.rank as number) ?? 0,
-        url: (h.url as string) ?? '',
-        region: ((h.region as string) ?? 'cn') as HotNewsItem['region'],
-        lang: ((h.lang as string) ?? 'zh') as HotNewsItem['lang'],
-      }));
 
       // Parse working items
       const working: WorkingItem[] = ((d.working as Record<string, unknown>[]) ?? []).map((w) => ({
@@ -340,40 +262,13 @@ export const systemService = {
         timestamp: (w.timestamp as string) ?? '',
       }));
 
-      // Parse jobsSummary
-      const rawJobs = (d.jobsSummary as Record<string, unknown>) ?? {};
-      const jobsSummary: JobsSummary = {
-        total: (rawJobs.total as number) ?? 0,
-        healthy: (rawJobs.healthy as number) ?? 0,
-        failed: (rawJobs.failed as number) ?? 0,
-        disabled: (rawJobs.disabled as number) ?? 0,
-        lastRun: (rawJobs.lastRun ?? rawJobs.last_run) as string | null ?? null,
-        jobs: ((rawJobs.jobs as Record<string, unknown>[]) ?? []).map((j) => ({
-          id: j.id as string,
-          name: j.name as string,
-          status: (j.status as JobStatusItem['status']) ?? 'healthy',
-          lastRun: (j.lastRun ?? j.last_run) as string | null ?? null,
-          lastStatus: (j.lastStatus ?? j.last_status) as JobStatusItem['lastStatus'] ?? null,
-          schedule: (j.schedule as string) ?? '',
-        })),
-      };
-
       return {
         focus: (d.focus as BriefingFocusItem[]) ?? [],
-        hotNews,
         working,
-        jobsSummary,
-        jobs,
-        todos,
         learning: (d.learning as string) ?? null,
-        generatedAt: (d.generated_at as string) ?? null,
       };
     } catch {
-      return {
-        focus: [], hotNews: [], working: [],
-        jobsSummary: { total: 0, healthy: 0, failed: 0, disabled: 0, lastRun: null, jobs: [] },
-        jobs: [], todos: [], learning: null, generatedAt: null,
-      };
+      return { focus: [], working: [], learning: null };
     }
   },
 
