@@ -187,7 +187,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
           WebkitTextFillColor: 'transparent',
         }}
       >
-        Welcome to SwarmAI
+        SwarmAI — Grow your Brain. Deliver Anything.
       </h1>
 
       {/* Shared-width column (run_b4d3eeeb): BrainHome + the briefing below it live in

@@ -63,8 +63,7 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
 
   return (
     <div className="w-full mt-2" data-testid="brain-home">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] uppercase tracking-wide text-[var(--color-text-faint)]">Your Brains · Top 3</span>
+      <div className="flex items-center justify-end mb-2">
         <button
           data-testid="brain-home-batch-review"
           onClick={() => onOpenHub?.()}
