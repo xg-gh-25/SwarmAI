@@ -100,6 +100,20 @@ function getStoredBool(key: string): boolean {
   return localStorage.getItem(key) === '1';
 }
 
+/**
+ * Build the count tooltip / expanded-count words from the new/modified split.
+ * Pure — unit-tested. Omits a zero part; returns "" when both are 0 so an
+ * unbadged batch (total>0, neu=upd=0) shows no misleading "0 new, 0 modified".
+ * Single source for BOTH the shell-bar header count tooltip AND the collapsed
+ * rail count, so the two never drift (Gate-1 F1).
+ */
+export function canvasCountTitle(neu: number, upd: number): string {
+  const parts: string[] = [];
+  if (neu > 0) parts.push(`${neu} new`);
+  if (upd > 0) parts.push(`${upd} modified`);
+  return parts.join(', ');
+}
+
 function setStoredBool(key: string, val: boolean): void {
   try {
     localStorage.setItem(key, val ? '1' : '0');
@@ -396,9 +410,16 @@ function FileViewerPanelImpl({
           <span className="material-symbols-outlined text-[18px] text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
           <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Outputs</span>
           {counts.total > 0 && (
-            <span className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]">
+            // Consistent with the expanded-header count (Gate-1 F1): git-semantic
+            // color vars (not literal green/yellow), both new AND mod, shared
+            // canvasCountTitle tooltip. Each part gated on >0 (F2).
+            <span
+              className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]"
+              title={canvasCountTitle(counts.neu, counts.upd) || undefined}
+            >
               {counts.total} file{counts.total !== 1 ? 's' : ''}
-              {counts.neu > 0 && <span className="text-green-400"> · {counts.neu} new</span>}
+              {counts.neu > 0 && <span className="text-[var(--color-git-added)]"> · {counts.neu} new</span>}
+              {counts.upd > 0 && <span className="text-[var(--color-git-modified)]"> · {counts.upd} mod</span>}
             </span>
           )}
         </button>
@@ -492,7 +513,7 @@ function FileViewerPanelImpl({
             className="flex-shrink-0 border-b border-[var(--color-primary)] canvas-outputs-navbar"
             data-testid="canvas-region-outputs"
           >
-            <div className="flex items-center gap-2 px-2 h-9 text-[11px] text-[var(--color-text-muted)]">
+            <div className="flex items-center gap-2 px-2 h-8 text-[11px] text-[var(--color-text-muted)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)]">
               {/* Caret — folds ONLY the output list (panel keeps full width). */}
               <button
                 onClick={toggleOutputs}
@@ -510,15 +531,33 @@ function FileViewerPanelImpl({
                   Canvas<span className="text-[color-mix(in_srgb,var(--color-primary)_60%,var(--color-text-muted))]"> · Outputs</span>
                 </span>
                 {counts.total > 0 && (
-                  <span className="truncate text-[var(--color-text-muted)]">
+                  // Compact git-colored count: total, then new(green)/mod(yellow)
+                  // split. When narrow → "N a·b" with the words in the tooltip;
+                  // when expanded → the words inline. Each part gated on >0 so an
+                  // unbadged batch (neu=upd=0) shows just the total (Gate-1 F2).
+                  // Git SEMANTIC color vars only (never --color-primary — the accent
+                  // is header-identity-only; counts carry git meaning). SSOT tooltip
+                  // via canvasCountTitle so it never drifts from the rail (F1).
+                  <span
+                    className="truncate text-[var(--color-text-muted)]"
+                    title={canvasCountTitle(counts.neu, counts.upd) || undefined}
+                  >
                     {counts.total}
                     {(counts.neu > 0 || counts.upd > 0) && (
-                      <span className="text-[var(--color-text-faint,var(--color-text-muted))]">
-                        {' ('}
-                        {counts.neu > 0 && <span className="text-green-400">{counts.neu} new</span>}
-                        {counts.neu > 0 && counts.upd > 0 && ', '}
-                        {counts.upd > 0 && <span className="text-yellow-500">{counts.upd} mod</span>}
-                        {')'}
+                      <span className="ml-1">
+                        {counts.neu > 0 && (
+                          <span className="text-[var(--color-git-added)]">
+                            {expanded ? `${counts.neu} new` : counts.neu}
+                          </span>
+                        )}
+                        {counts.neu > 0 && counts.upd > 0 && (
+                          <span className="text-[var(--color-text-dim)]">{expanded ? ' · ' : '·'}</span>
+                        )}
+                        {counts.upd > 0 && (
+                          <span className="text-[var(--color-git-modified)]">
+                            {expanded ? `${counts.upd} mod` : counts.upd}
+                          </span>
+                        )}
                       </span>
                     )}
                   </span>
@@ -531,7 +570,13 @@ function FileViewerPanelImpl({
               <div className="flex items-center gap-0.5 shrink-0" data-testid="canvas-content-controls">
                 <button
                   onClick={onTogglePin}
-                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : ''}`}
+                  // Idle vs active are MUTUALLY EXCLUSIVE in one color slot (NOT two
+                  // stacked text-* utilities): Tailwind resolves same-property utility
+                  // conflicts by generated-CSS source order, not className string order,
+                  // so a trailing `${pinned ? 'text-primary'}` would LOSE to a leading
+                  // idle color and the active accent would never show (Gate-2 CRITICAL).
+                  // --color-text-dim is a real, defined token (fainter than muted).
+                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
                   title={pinned ? 'Pinned — this file won’t be auto-replaced (click to unpin)' : 'Pin this file — keep it open; a new output won’t replace your view'}
                   aria-label="Toggle pin — keep this file open"
                   aria-pressed={!!pinned}
@@ -540,7 +585,9 @@ function FileViewerPanelImpl({
                 </button>
                 <button
                   onClick={onToggleMute}
-                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors ${muted ? 'text-[var(--color-primary)]' : ''}`}
+                  // Mutually-exclusive color slot — see the pin button above (Gate-2 CRITICAL:
+                  // stacked text-* utilities let the idle color override the active accent).
+                  className={`p-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${muted ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`}
                   title={muted ? 'Auto-surface muted for this session (click to unmute)' : 'Mute auto-surface — stop opening new outputs this session (they still list here)'}
                   aria-label="Toggle auto-surface mute for this session"
                   aria-pressed={!!muted}
@@ -578,7 +625,7 @@ function FileViewerPanelImpl({
                   aria-label="Collapse Canvas to a side rail"
                   data-testid="canvas-collapse-rail-btn"
                 >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
+                  <span className="material-symbols-outlined text-[14px]">right_panel_close</span>
                 </button>
               </div>
             </div>
