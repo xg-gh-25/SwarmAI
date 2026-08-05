@@ -2591,9 +2591,13 @@ export function useChatStreamingLifecycle(
                 // carries `<sha>^` so the row opens on this-run's diff, not empty.
                 baseRef: (e.baseRef as string) ?? undefined,
                 operation: (e.operation as string) ?? 'written',
-                // Owning-tab stamp (run_26aa6caa; renamed sessionId→tabId). Consumers
-                // (useReferencedFiles, useCanvasAutoSurface) filter on the ACTIVE
-                // tabId — a stable key with no unresolved window.
+                // Owning-tab stamp (run_26aa6caa; renamed sessionId→tabId) = THIS
+                // handler's captured tab (capturedTabId, line ~2227), NOT whatever tab
+                // is active at dispatch time. Consumers (useReferencedFiles,
+                // useCanvasAutoSurface) keep the event only when this owning tabId
+                // matches the tab their rail is mounted for → a background tab's write
+                // never lands in the foreground rail. tabId is stable (no unresolved
+                // window), so the stamp is reliable for every multi-tab turn.
                 tabId: _stampTab,
               },
             }));

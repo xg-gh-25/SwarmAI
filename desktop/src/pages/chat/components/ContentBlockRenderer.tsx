@@ -113,8 +113,9 @@ interface ContentBlockRendererProps {
   readOnly?: boolean;
   /** @deprecated (run_e626e121) Forwarded to MergedToolBlock but no longer used —
    *  file-change tab-scoping moved to the backend-authoritative
-   *  `swarm:file-changed` signal (stamped with sessionId by the SSE bridge). Kept
-   *  to avoid a caller ripple; MergedToolBlock no longer dispatches a file event. */
+   *  `swarm:file-changed` signal (stamped with the owning tabId by the SSE bridge —
+   *  run_26aa6caa; was sessionId). Kept to avoid a caller ripple; MergedToolBlock no
+   *  longer dispatches a file event. */
   sessionId?: string;
 }
 

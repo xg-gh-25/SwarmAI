@@ -113,9 +113,9 @@ interface MergedToolBlockProps {
   isStreaming?: boolean;
   /** @deprecated (run_e626e121) No longer used. Tab-scoping of file-change
    *  events moved to the backend-authoritative `swarm:file-changed` signal
-   *  (stamped with sessionId by the SSE bridge). Kept on the interface so the
-   *  caller (ContentBlockRenderer) still typechecks without a ripple change;
-   *  MergedToolBlock itself no longer dispatches any file event. */
+   *  (stamped with the owning tabId by the SSE bridge — run_26aa6caa; was sessionId).
+   *  Kept on the interface so the caller (ContentBlockRenderer) still typechecks
+   *  without a ripple change; MergedToolBlock itself no longer dispatches any file event. */
   sessionId?: string;
 }
 
