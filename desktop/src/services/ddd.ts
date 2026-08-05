@@ -78,6 +78,10 @@ export interface BrainSummary {
   sectionsPresent: Record<SectionKey, boolean>;
   lifecycleStage: 'CREATE' | 'GROW' | 'REVIEW' | 'DISTRIBUTE';
   health: BrainHealth;
+  /** 7-type histogram for the compact card's 3-layer ontology bar. Rides the
+   *  gallery's existing single parse (zero extra glob). OPTIONAL for daemon skew:
+   *  an old daemon omits it → the compact bar just doesn't render. */
+  typeCounts?: Record<EntryType, number>;
 }
 
 export interface SectionMember {
@@ -193,6 +197,14 @@ export interface DistributionState {
 export async function getBrains(): Promise<BrainSummary[]> {
   const resp = await api.get<{ brains: BrainSummary[] }>('/ddd/brains');
   return resp.data.brains ?? [];
+}
+
+/** Gallery + Welcome Top-N need BOTH the summaries AND the pinned order (SwarmAI
+ *  first + focus projects, existence-guarded, from the backend registry). One
+ *  round-trip: `pinned` is a sibling field on /ddd/brains. */
+export async function getBrainsWithPinned(): Promise<{ brains: BrainSummary[]; pinned: string[] }> {
+  const resp = await api.get<{ brains: BrainSummary[]; pinned?: string[] }>('/ddd/brains');
+  return { brains: resp.data.brains ?? [], pinned: resp.data.pinned ?? [] };
 }
 
 /** GET /api/ddd/brains/{name} — Brain view: six-section breakdown. */

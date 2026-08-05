@@ -1,65 +1,64 @@
 /**
  * DddCard.tsx — the unified, density-driven DDD card.
  *
- * run_6924b463 c2-3: SSOT replacing BrainHub's BrainCard (gallery) + HealthStrip
- * (detail). Two densities:
- *   • compact — clickable gallery / Home-calm card: name·kind + six-section
- *     presence bar + lifecycle + 4 CHEAP health signals (from BrainSummary).
- *   • full    — a static, metrics-bearing card whose SUMMARY decorations are
- *     CONDITIONAL (detail view carries only DetailHealth; Home hero carries both).
+ * run_9ada46ae (final mockup design): a brain card answers "what is this brain,
+ * and does it need me?" — verdict-first, ontology as the hero visual, only the
+ * actionable surfaced, and NO diagnostics dump.
  *
- * run_d1e933aa c2: the full-density metrics are organized into USER JUDGMENT
- * LANGUAGE — the 4 questions a user actually asks when opening a brain, plus a
- * 7-type×3-layer "type mix" bar. This is NOT new data; it re-groups the existing
- * DetailHealth fields (+ recentActivity) into decisions:
- *   Q1 healthy?  → trust distribution (below/total, NOT a rollup verdict) + how
- *                  fresh the score is (computedAt age — honest, never a naked pass)
- *   Q2 fresh?    → lastChangeRelative (hero) or the score's computedAt age (detail)
- *   Q3 growing?  → recentActivity (30d changelog — value≠size) + escalationPending
- *   Q4 prune?    → noise.reclaimable (+ the gallery's sinking, shown on the hero)
- * Type-mix bar → aggregates entries[].entryType into 3 layers, DETAIL-ONLY,
- *   labeled "知识文档类型分布" (honest: it covers the ② canonical docs, not "the
- *   whole brain"). The layer counts come from a `typeCounts` prop the CONSUMER
- *   aggregates from detail.sections[].entries — DddCard never touches sections.
+ *   • compact — clickable gallery / calm card: name·kind + six-section presence +
+ *     lifecycle + 4 cheap health signals + a SLIM 3-layer ontology proportion bar
+ *     (from summary.typeCounts — NO detail fetch; the gallery already parsed once).
+ *   • full    — verdict dot (pending>0 = "needs decision", else "nothing queued" —
+ *     NEVER "healthy/unhealthy": that would be the trust rollup the backend Gate-1
+ *     refused) + the FULL 3-layer × 7-type ontology (each layer count AND each type
+ *     count — the hero visual) + a "Needs you" block (non-zero actionable only;
+ *     clean brain → "Nothing needs you") + two fact lines (trust distribution /
+ *     activity). Summary decorations (header/presence/lifecycle/cheap) render iff
+ *     provided (detail view has none; Home hero has all).
  *
- * DELIBERATELY ABSENT (Principle-1 + dead-input): entry-count / "size", and
- * last-referenced / ref-count. A bigger brain is not a better one; ref_count is a
- * dead engine input. Neither earns a place on a judgment card.
+ * DELETED vs the prior design: the 4-question tiles and the per-section diagnostics
+ * WALL (a 40-line score dump nobody reads — drill into per-section scores via
+ * BrainView's section nav instead). DELIBERATELY ABSENT (Principle-1 + dead-input):
+ * entry-count / "size", last-referenced / ref-count.
  *
- * GATE-1 CORRECTION (load-bearing invariant): the guard is density-scoped, NOT a
- * whole-card `if(!health?.noise) return null`. compact has no `noise` and MUST
- * always render. full guards ONLY the question blocks on `metrics?.noise` (O023
- * daemon-skew), so a partial payload degrades the blocks to nothing WITHOUT
- * blanking the card body.
+ * GATE-1 invariant: density-scoped guard — compact ALWAYS renders (no metrics);
+ * full guards the judgment body on `metrics?.noise` (O023 daemon-skew) so a partial
+ * payload degrades the body to nothing WITHOUT blanking the card.
  */
 import type { BrainHealth, DetailHealth, SectionKey, EntryType } from '../../services/ddd';
 
-// ── Shared constants (SSOT — the old BrainHub local copies are gone; DddCard owns them) ──
+// ── Shared constants ─────────────────────────────────────────────────────────
 const SECTION_ORDER: SectionKey[] = ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
 export type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
 
 const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
 
-/** The 7-type → 3-layer map (authoritative: backend MEMORY_SECTIONS[*].layer,
- *  ddd_entry_lifecycle.py:52-61). Pure classification, no rollup. */
-const LAYER_OF_TYPE: Record<EntryType, 'meta' | 'cognitive' | 'operational'> = {
+type Layer = 'meta' | 'cognitive' | 'operational';
+/** 7-type → 3-layer map (authoritative: backend MEMORY_SECTIONS[*].layer). */
+const LAYER_OF_TYPE: Record<EntryType, Layer> = {
   principle: 'meta', correction: 'meta',
   decision: 'cognitive', model: 'cognitive',
   guideline: 'operational', pitfall: 'operational', process: 'operational',
 };
-const LAYER_META: { key: 'meta' | 'cognitive' | 'operational'; label: string; color: string }[] = [
-  { key: 'meta', label: 'Meta-cognitive', color: '#a371f7' },
-  { key: 'cognitive', label: 'Cognitive', color: '#58a6ff' },
-  { key: 'operational', label: 'Operational', color: '#3fb950' },
+/** Layer display + which types sit under each (fixed cognitive order, not by count). */
+const LAYERS: { key: Layer; label: string; color: string; types: EntryType[] }[] = [
+  { key: 'meta', label: 'Meta-cognitive', color: '#a371f7', types: ['principle', 'correction'] },
+  { key: 'cognitive', label: 'Cognitive', color: '#58a6ff', types: ['decision', 'model'] },
+  { key: 'operational', label: 'Operational', color: '#3fb950', types: ['guideline', 'pitfall', 'process'] },
 ];
 
-/** Count sections whose trust is BELOW `high`. Factual distribution count, NOT a
- *  collapsed rollup verdict (backend Gate-1 MAJOR refused a project trust rollup). */
+function _layerTotals(tc: Record<EntryType, number>): Record<Layer, number> {
+  const t: Record<Layer, number> = { meta: 0, cognitive: 0, operational: 0 };
+  for (const [k, n] of Object.entries(tc) as [EntryType, number][]) t[LAYER_OF_TYPE[k]] += n;
+  return t;
+}
+
+/** Count sections whose trust is BELOW `high`. A DISTRIBUTION count, NOT a
+ *  collapsed rollup verdict (backend Gate-1 refused a project trust rollup). */
 function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: number } {
   if (!trust) return { below: 0, total: 0 };
-  let below = 0;
-  let total = 0;
+  let below = 0, total = 0;
   for (const sections of Object.values(trust)) {
     for (const level of Object.values(sections)) {
       total += 1;
@@ -70,7 +69,6 @@ function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: 
   return { below, total };
 }
 
-/** Human "N ago" from an ISO timestamp — for the trust score's freshness. */
 function _ageOf(iso: string | null): string {
   if (!iso) return 'never';
   const then = new Date(iso).getTime();
@@ -82,39 +80,36 @@ function _ageOf(iso: string | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-// ── Props: a discriminated union on `density` ────────────────────────────────
-interface CommonProps {
-  name: string;
-  kind: string;
-}
+// ── Props ──────────────────────────────────────────────────────────────────
+interface CommonProps { name: string; kind: string }
 interface CompactProps extends CommonProps {
   density: 'compact';
   sectionsPresent: Record<SectionKey, boolean>;
   lifecycleStage: LifecycleStage;
-  health: BrainHealth;          // cheap signals, always present in a gallery summary
+  health: BrainHealth;
+  /** 3-layer proportion bar source — from BrainSummary (cheap, one gallery parse).
+   *  Optional for daemon-skew: an old daemon omits it → no bar. */
+  typeCounts?: Record<EntryType, number>;
   onOpen: (name: string) => void;
 }
 interface FullProps extends CommonProps {
   density: 'full';
-  /** summary decorations — present on the Home hero, ABSENT on the bare detail
-   *  view (BrainDetail has no lifecycle/cheap-health). Rendered iff provided. */
   sectionsPresent?: Record<SectionKey, boolean>;
   lifecycleStage?: LifecycleStage;
   health?: BrainHealth;
-  metrics?: DetailHealth;       // expensive question blocks; OPTIONAL (daemon-skew) — guarded
-  /** 7-type → 3-layer distribution, aggregated by the CONSUMER from
-   *  detail.sections[].entries. Absent on a consumer that has no entries. */
+  metrics?: DetailHealth;
   typeCounts?: Record<EntryType, number>;
 }
 type DddCardProps = CompactProps | FullProps;
 
-/** name·kind header (compact always; full only when it's a hero i.e. has summary). */
-function CardHeader({ name, kind }: { name: string; kind: string }) {
+// ── Shared sub-components ────────────────────────────────────────────────────
+function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdict?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 mb-2">
       <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
       <span className="text-[13px] font-semibold">{name}</span>
-      <span className="ml-auto text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+      <span className="text-[10px] font-mono text-[var(--color-text-faint)] px-1.5 py-0.5 rounded bg-[var(--color-bg)]">{kind}</span>
+      {verdict != null && <span className="ml-auto">{verdict}</span>}
     </div>
   );
 }
@@ -123,22 +118,19 @@ function PresenceBar({ name, sectionsPresent }: { name: string; sectionsPresent:
   return (
     <div className="flex gap-0.5 mb-2" title="six-section presence">
       {SECTION_ORDER.map((k) => (
-        <span
-          key={k}
-          data-testid={`presence-${name}-${k}`}
-          className={`flex-1 h-1.5 rounded-sm ${sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`}
-        />
+        <span key={k} data-testid={`presence-${name}-${k}`}
+          className={`flex-1 h-1.5 rounded-sm ${sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`} />
       ))}
     </div>
   );
 }
 
 function LifecycleBar({ lifecycleStage }: { lifecycleStage: LifecycleStage }) {
-  const activeStep = LIFECYCLE_STEPS.indexOf(lifecycleStage);
+  const active = LIFECYCLE_STEPS.indexOf(lifecycleStage);
   return (
     <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
       {LIFECYCLE_STEPS.map((s, i) => (
-        <span key={s} className={i <= activeStep ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
+        <span key={s} className={i <= active ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
           {s}{i < LIFECYCLE_STEPS.length - 1 ? ' ›' : ''}
         </span>
       ))}
@@ -146,47 +138,20 @@ function LifecycleBar({ lifecycleStage }: { lifecycleStage: LifecycleStage }) {
   );
 }
 
-export function DddCard(props: DddCardProps) {
-  const { name, kind } = props;
-
-  // Summary decorations render iff their data is present: always for compact;
-  // for full only when it's a hero (detail view omits lifecycle/cheap-health).
-  const { sectionsPresent, lifecycleStage, health } = props;
-
-  const body = (
-    <>
-      {sectionsPresent != null && <CardHeader name={name} kind={kind} />}
-      {sectionsPresent != null && <PresenceBar name={name} sectionsPresent={sectionsPresent} />}
-      {lifecycleStage != null && <LifecycleBar lifecycleStage={lifecycleStage} />}
-      {health != null && <CheapHealth health={health} />}
-      {props.density === 'full' && (
-        <JudgmentBlocks metrics={props.metrics} health={props.health} typeCounts={props.typeCounts} />
-      )}
-    </>
-  );
-
-  // compact = clickable open-button; full = static. The guard is density-scoped in
-  // the sub-blocks above — the card body ALWAYS renders (Gate-1 invariant).
-  if (props.density === 'compact') {
-    const onOpen = props.onOpen;
-    return (
-      <button
-        onClick={() => onOpen(name)}
-        data-testid={`dddcard-${name}`}
-        className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors"
-      >
-        {body}
-      </button>
-    );
-  }
+/** Verdict dot — reads ONLY pending (a decision queue), never trust or sinking.
+ *  So it can't reintroduce the refused trust rollup: pending>0 = needs a human
+ *  decision; =0 = nothing queued. NOT "healthy/unhealthy". */
+function VerdictDot({ pending }: { pending: number }) {
+  const needs = pending > 0;
   return (
-    <div data-testid={`dddcard-${name}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-      {body}
-    </div>
+    <span data-testid="ddd-verdict" className="flex items-center gap-1.5 text-[11px] font-medium"
+      style={{ color: needs ? '#f0a500' : '#3fb950' }}>
+      <span className="w-2 h-2 rounded-full" style={{ background: needs ? '#f0a500' : '#3fb950' }} />
+      {needs ? 'Needs decision' : 'Nothing queued'}
+    </span>
   );
 }
 
-/** 4 cheap health signals — cloned from BrainHub `Health` grid. */
 function CheapHealth({ health }: { health: BrainHealth }) {
   return (
     <div className="grid grid-cols-2 gap-1 text-[10px]">
@@ -197,7 +162,6 @@ function CheapHealth({ health }: { health: BrainHealth }) {
     </div>
   );
 }
-
 function Cheap({ testid, label, value, warn }: { testid: string; label: string; value: string; warn?: boolean }) {
   return (
     <div data-testid={testid} className="flex items-center justify-between px-1.5 py-0.5 rounded bg-[var(--color-bg)]">
@@ -207,159 +171,156 @@ function Cheap({ testid, label, value, warn }: { testid: string; label: string; 
   );
 }
 
+/** Slim 3-layer proportion bar for the COMPACT card — proportion only, no per-type
+ *  breakdown (that's the full card). From summary.typeCounts, no fetch. */
+function CompactLayerBar({ typeCounts }: { typeCounts?: Record<EntryType, number> }) {
+  if (!typeCounts) return null;
+  const t = _layerTotals(typeCounts);
+  const total = t.meta + t.cognitive + t.operational;
+  if (total === 0) return null;
+  const tip = LAYERS.map((l) => `${l.label}: ${t[l.key]}`).join(' · ');
+  return (
+    <div data-testid="ddd-compact-layerbar" className="flex h-1 rounded-sm overflow-hidden mt-1.5" title={tip}>
+      {LAYERS.map((l) => {
+        const w = (t[l.key] / total) * 100;
+        return w === 0 ? null : <span key={l.key} style={{ width: `${w}%`, background: l.color }} />;
+      })}
+    </div>
+  );
+}
+
+export function DddCard(props: DddCardProps) {
+  const { name, kind } = props;
+  const { sectionsPresent, lifecycleStage, health } = props;
+
+  if (props.density === 'compact') {
+    const onOpen = props.onOpen;
+    return (
+      <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
+        className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full">
+        <CardHeader name={name} kind={kind} verdict={<VerdictDot pending={props.health.pending} />} />
+        <PresenceBar name={name} sectionsPresent={props.sectionsPresent} />
+        <LifecycleBar lifecycleStage={props.lifecycleStage} />
+        <CheapHealth health={props.health} />
+        <CompactLayerBar typeCounts={props.typeCounts} />
+      </button>
+    );
+  }
+
+  // full — verdict in the header when we have pending (from metrics OR cheap health)
+  const pending = props.metrics?.escalationPending ?? health?.pending;
+  return (
+    <div data-testid={`dddcard-${name}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+      <CardHeader name={name} kind={kind} verdict={pending != null ? <VerdictDot pending={pending} /> : undefined} />
+      {sectionsPresent != null && <PresenceBar name={name} sectionsPresent={sectionsPresent} />}
+      {lifecycleStage != null && <LifecycleBar lifecycleStage={lifecycleStage} />}
+      {health != null && <CheapHealth health={health} />}
+      <FullBody metrics={props.metrics} health={props.health} typeCounts={props.typeCounts} />
+    </div>
+  );
+}
+
 /**
- * The 4 user-judgment questions + type-mix bar + diagnostics — the full-density
- * body. Density-scoped guard: `metrics?.noise` missing → render nothing (the card
- * body is unaffected — Gate-1 correction). `health` (cheap, hero-only) feeds Q2's
- * lastChangeRelative + Q4's sinking; absent on the bare detail consumer.
+ * The full-density judgment body: ontology (hero) + needs-you + 2 facts.
+ * Density-scoped guard: no metrics.noise → render nothing (card body survives).
  */
-function JudgmentBlocks(
+function FullBody(
   { metrics, health, typeCounts }:
   { metrics?: DetailHealth; health?: BrainHealth; typeCounts?: Record<EntryType, number> },
 ) {
   if (!metrics || !metrics.noise) return null;
   const { below, total } = _trustBelowHigh(metrics.trust);
-  const trustValue = total === 0 ? '—' : `${below}/${total}`;
   const trustStale = metrics.computedAt === null;
+  const pct = total === 0 ? null : Math.round(((total - below) / total) * 100);
 
-  // Q2 freshness: hero has lastChangeRelative (git); the bare detail view only has
-  // the score's computedAt age. Prefer the git signal when present.
+  // needs-you: only non-zero actionable items
+  const needs: { n: number; label: string }[] = [];
+  if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: 'proposals awaiting review' });
+  if (metrics.noise.reclaimable > 0) needs.push({ n: metrics.noise.reclaimable, label: 'reclaimable (run reclaim)' });
+  if (health && health.sinking > 0) needs.push({ n: health.sinking, label: 'entries sinking (decaying)' });
+
   const freshText = health?.lastChangeRelative ?? _ageOf(metrics.computedAt);
 
-  const diagFlat: { key: string; composite?: number; trust?: string }[] = [];
-  if (metrics.diagnostics) {
-    for (const [doc, docData] of Object.entries(metrics.diagnostics)) {
-      for (const [sec, s] of Object.entries(docData?.sections ?? {})) {
-        diagFlat.push({ key: `${doc}·${sec}`, composite: s?.composite, trust: s?.trust });
-      }
-    }
-  }
-
   return (
-    <div className="mt-1.5 flex flex-col gap-2">
-      {/* ── The 4 judgment questions ── */}
-      <div className="grid grid-cols-2 gap-2">
-        {/* Q1 — healthy? trust distribution + honest freshness of the score */}
-        <Question testid="ddd-q1-healthy" q="Healthy?" >
+    <div className="mt-2 flex flex-col gap-2.5">
+      {/* ── Ontology — the hero visual: 3 layers × 7 types with counts ── */}
+      {typeCounts && <Ontology typeCounts={typeCounts} />}
+
+      {/* ── Needs you ── */}
+      <div data-testid="ddd-needs-you"
+        className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[#1e1a0e] border-[#5a4a20]' : 'bg-[#0f1a10] border-[#1f3d24]'}`}>
+        <div className={`text-[9px] uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[#f0a500]' : 'text-[#3fb950]'}`}>
+          {needs.length ? 'Needs you' : '✓ Nothing needs you'}
+        </div>
+        {needs.map((it) => (
+          <div key={it.label} className="flex items-center gap-2 text-[11px] py-0.5">
+            <span className="font-semibold text-[#f0a500] min-w-[28px]">{it.n}</span>
+            <span className="text-[var(--color-text-muted)]">{it.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Two fact lines: trust distribution + activity ── */}
+      <div className="flex flex-col gap-1 text-[11px]">
+        <div data-testid="ddd-fact-trust" className="flex items-baseline gap-2">
+          <span className="text-[var(--color-text-faint)] w-[52px]">Trust</span>
           <span className={below > 0 ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}>
-            {trustStale ? 'not computed' : `${trustValue} below high`}
+            {trustStale ? 'not computed' : `${pct}% sections ≥ high`}
           </span>
-          <span data-testid="ddd-trust-computedat" className="text-[9px] text-[var(--color-text-faint)]">
+          <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
             {trustStale ? 'no scheduled score' : `scored ${_ageOf(metrics.computedAt)}`}
           </span>
-        </Question>
-
-        {/* Q2 — fresh? last real change */}
-        <Question testid="ddd-q2-fresh" q="Fresh?">
-          <span className="text-[var(--color-text)]">{freshText}</span>
-          <span className="text-[9px] text-[var(--color-text-faint)]">last change</span>
-        </Question>
-
-        {/* Q3 — growing? 30d sedimentation activity + escalations awaiting review.
-            recentActivity counts ALL ddd-changelog writes in 30d — dominantly
-            AUTO-APPLIED cultivation (E2E audit: ~820/851 on SwarmAI carry
-            action:"applied", i.e. the engine sedimenting, not a human editing). So
-            the label is "sediments / 30d", NOT "edits" — it honestly reads as
-            "is the brain being actively written to (by the engine + humans)",
-            never claiming human authorship. undefined (old daemon) → "—", not a
-            confident "0". */}
-        <Question testid="ddd-q3-growing" q="Growing?">
-          <span className="text-[var(--color-text)]">
-            {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} <span className="text-[9px] text-[var(--color-text-faint)]">sediments / 30d</span>
-          </span>
-          <span className={metrics.escalationPending > 0 ? 'text-[9px] text-[#f0a500]' : 'text-[9px] text-[var(--color-text-faint)]'}>
-            {metrics.escalationPending} awaiting review
-          </span>
-        </Question>
-
-        {/* Q4 — prune? reclaimable noise (+ sinking when the hero provides it) */}
-        <Question testid="ddd-q4-prune" q="Prune?">
-          <span className={metrics.noise.reclaimable > 0 ? 'text-[#f0a500]' : 'text-[var(--color-text)]'}>
-            {metrics.noise.reclaimable} <span className="text-[9px] text-[var(--color-text-faint)]">reclaimable</span>
-          </span>
-          {health != null && (
-            <span className="text-[9px] text-[var(--color-text-faint)]">{health.sinking} sinking</span>
-          )}
-        </Question>
-      </div>
-
-      {/* Recall — experimental, kept but clearly labeled (not one of the 4; a lab signal) */}
-      <div className="flex items-center gap-1 text-[9px] text-[var(--color-text-faint)]">
-        <span>Recall</span>
-        <span
-          data-testid="recall-experimental-chip"
-          title="Benchmark口径 not yet validated against real usage — trend, not a grade"
-          className="text-[8px] px-1 rounded bg-[#3a2f12] text-[#e0b050] uppercase"
-        >
-          exp
-        </span>
-        <span>{metrics.recall.value === null ? '—' : String(metrics.recall.value)}</span>
-      </div>
-
-      {/* ── 7-type × 3-layer type mix (detail-only; needs consumer-aggregated counts) ── */}
-      <TypeMixBar typeCounts={typeCounts} />
-
-      {/* ── DIAGNOSTICS row (demoted: smaller, muted, no action-hint, no status color) ── */}
-      {diagFlat.length > 0 && (
-        <div data-testid="health-diagnostics" className="flex flex-wrap gap-x-3 gap-y-0.5">
-          {diagFlat.map((r) => (
-            <span key={r.key} className="text-[9px] text-[var(--color-text-faint)]">
-              {r.key}: {r.composite ?? '?'}{r.trust ? ` (${r.trust})` : ''}
-            </span>
-          ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-function Question({ testid, q, children }: { testid: string; q: string; children: React.ReactNode }) {
-  return (
-    <div data-testid={testid} className="flex flex-col gap-0.5 px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)]">
-      <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">{q}</span>
-      {children}
+        <div data-testid="ddd-fact-activity" className="flex items-baseline gap-2">
+          <span className="text-[var(--color-text-faint)] w-[52px]">Activity</span>
+          <span className="text-[var(--color-text)]">edited {freshText}</span>
+          <span className="ml-auto text-[9px] text-[var(--color-text-faint)]">
+            {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} sediments / 30d
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
 /**
- * The brain's "judgment personality" — how its ② knowledge distributes across the
- * 3 cognitive layers (meta / cognitive / operational). Honest label: it covers the
- * canonical knowledge docs, NOT "the whole brain". Omitted entirely when there are
- * no entries (no vanity empty bar — an all-zero distribution says nothing).
+ * The FULL 3-layer × 7-type ontology — the hero visual. Each layer: name + count +
+ * proportion bar; under it, each type's count as a chip. This is what makes the
+ * brain's cognitive "shape" legible (the whole reason the redesign exists). Honest
+ * label: covers the ② canonical docs, not "the whole brain". Omitted if empty.
  */
-function TypeMixBar({ typeCounts }: { typeCounts?: Record<EntryType, number> }) {
-  if (!typeCounts) return null;
-  const layerTotals = { meta: 0, cognitive: 0, operational: 0 };
-  for (const [t, n] of Object.entries(typeCounts) as [EntryType, number][]) {
-    layerTotals[LAYER_OF_TYPE[t]] += n;
-  }
-  const total = layerTotals.meta + layerTotals.cognitive + layerTotals.operational;
+function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number> }) {
+  const t = _layerTotals(typeCounts);
+  const total = t.meta + t.cognitive + t.operational;
   if (total === 0) return null;
-
-  const tip = (Object.entries(typeCounts) as [EntryType, number][])
-    .filter(([, n]) => n > 0)
-    .map(([t, n]) => `${t}: ${n}`)
-    .join(' · ');
-
   return (
-    <div data-testid="ddd-typebar" className="flex flex-col gap-1" title={tip}>
-      <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-faint)]">知识文档类型分布</span>
-      <div className="flex h-1.5 rounded-sm overflow-hidden">
-        {LAYER_META.map((l) => {
-          const w = (layerTotals[l.key] / total) * 100;
-          if (w === 0) return null;
-          return <span key={l.key} style={{ width: `${w}%`, background: l.color }} />;
-        })}
+    <div data-testid="ddd-ontology" className="flex flex-col gap-2">
+      {/* NO total-entry-count header — Principle-1: a bigger brain is not a better
+          one. The per-layer + per-type counts convey the cognitive SHAPE without a
+          headline "size" number (the shape is the signal, not the volume). */}
+      <div className="text-[9px] uppercase tracking-wide text-[var(--color-text-faint)]">
+        Knowledge ontology · 3 layers × 7 types
       </div>
-      <div className="flex flex-wrap gap-x-3 text-[9px]">
-        {LAYER_META.map((l) => (
-          <span key={l.key} data-testid={`ddd-typelayer-${l.key}`} className="flex items-center gap-1 text-[var(--color-text-faint)]">
-            <span className="w-1.5 h-1.5 rounded-sm" style={{ background: l.color }} />
-            {l.label} {layerTotals[l.key]}
-          </span>
-        ))}
-      </div>
+      {LAYERS.map((l) => (
+        <div key={l.key} data-testid={`ddd-layer-${l.key}`} className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-sm" style={{ background: l.color }} />
+            <span className="text-[11px] font-semibold" style={{ color: l.color }}>{l.label}</span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">{t[l.key]}</span>
+            <span className="flex-1 h-1.5 rounded-sm bg-[var(--color-bg)] overflow-hidden ml-1">
+              <span className="block h-full" style={{ width: `${(t[l.key] / total) * 100}%`, background: l.color }} />
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1 pl-[17px]">
+            {l.types.map((ty) => (
+              <span key={ty} data-testid={`ddd-type-${ty}`}
+                className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] ${typeCounts[ty] ? 'text-[var(--color-text-muted)]' : 'opacity-40 text-[var(--color-text-faint)]'}`}>
+                <span className="font-semibold text-[var(--color-text)]">{typeCounts[ty] ?? 0}</span> {ty}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

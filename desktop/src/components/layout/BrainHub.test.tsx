@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BrainSummary, BrainDetail } from '../../services/ddd';
 
 const mockGetBrains = vi.fn();
+const mockGetPinned = vi.fn<[], string[]>(() => []);  // default: no pins → flat-grid fallback
 const mockGetBrainDetail = vi.fn();
 const mockGetReview = vi.fn();
 const mockApproveReview = vi.fn();
@@ -27,6 +28,13 @@ const mockRejectProposal = vi.fn();
 const mockGetDistribution = vi.fn();
 vi.mock('../../services/ddd', () => ({
   getBrains: (...a: unknown[]) => mockGetBrains(...a),
+  // getBrainsWithPinned derives from the same mockGetBrains fixture + a pinned list
+  // (mockGetPinned lets a test override; default = SwarmAI first, no others resolvable
+  // in the small fixtures → flat-grid fallback, preserving the existing assertions).
+  getBrainsWithPinned: async (...a: unknown[]) => ({
+    brains: await mockGetBrains(...a),
+    pinned: mockGetPinned(),
+  }),
   getBrainDetail: (...a: unknown[]) => mockGetBrainDetail(...a),
   getReview: (...a: unknown[]) => mockGetReview(...a),
   approveReview: (...a: unknown[]) => mockApproveReview(...a),
@@ -151,6 +159,7 @@ const REVIEW = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetBrains.mockResolvedValue(GALLERY);
+  mockGetPinned.mockReturnValue([]);  // default: flat-grid fallback (existing assertions)
   mockGetBrainDetail.mockResolvedValue(DETAIL);
   mockGetReview.mockResolvedValue(REVIEW);
   mockApproveReview.mockResolvedValue({ last_reviewed_sha: REVIEW.head_sha });
@@ -678,45 +687,44 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
-  it('renders the 4 judgment questions as the headline (healthy/fresh/growing/prune)', async () => {
+  it('renders the redesigned body: verdict + full ontology + needs-you + facts', async () => {
     await openBrain();
     await waitFor(() => expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy());
-    expect(screen.getByTestId('ddd-q1-healthy')).toBeTruthy();
-    expect(screen.getByTestId('ddd-q2-fresh')).toBeTruthy();
-    expect(screen.getByTestId('ddd-q3-growing')).toBeTruthy();
-    expect(screen.getByTestId('ddd-q4-prune')).toBeTruthy();
+    const strip = screen.getByTestId('brainhub-healthstrip');
+    expect(strip.querySelector('[data-testid="ddd-verdict"]')).toBeTruthy();
+    expect(strip.querySelector('[data-testid="ddd-needs-you"]')).toBeTruthy();
+    expect(strip.querySelector('[data-testid="ddd-fact-trust"]')).toBeTruthy();
+    expect(strip.querySelector('[data-testid="ddd-fact-activity"]')).toBeTruthy();
   });
 
-  it('Q4 prune shows the reclaimable noise count when > 0', async () => {
+  it('verdict dot reads pending only (needs decision when escalations > 0), NOT "healthy"', async () => {
     await openBrain();
-    const prune = await screen.findByTestId('ddd-q4-prune');
-    expect(prune.textContent).toContain('3');
-    expect(prune.textContent?.toLowerCase()).toContain('reclaimable');
+    const strip = await screen.findByTestId('brainhub-healthstrip');
+    const v = strip.querySelector('[data-testid="ddd-verdict"]');
+    // DETAIL fixture has escalationPending=2 → needs decision
+    expect(v?.textContent?.toLowerCase()).toMatch(/needs decision|decision/i);
+    expect(v?.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('Q1 healthy reports the trust DISTRIBUTION (sections below high), NOT an invented rollup verdict', async () => {
+  it('needs-you lists the reclaimable + escalation actionables', async () => {
     await openBrain();
-    const q1 = await screen.findByTestId('ddd-q1-healthy');
-    // fixture: 4 sections, moderate + low are below `high` → 2/4
-    expect(q1.textContent).toContain('2/4');
-    // must NOT collapse to a single verdict word like "moderate"/"low" (that = the
-    // vanity rollup backend Gate-1 refused)
-    expect(q1.textContent).not.toContain('moderate');
+    const needs = await screen.findByTestId('ddd-needs-you');
+    // fixture: escalationPending=2, noise.reclaimable=3
+    expect(needs.textContent).toMatch(/2|3/);
+    expect(needs.textContent?.toLowerCase()).toMatch(/review|reclaim/);
   });
 
-  it('recall carries an experimental chip and is NOT one of the 4 action questions (design §4)', async () => {
+  it('trust fact is a DISTRIBUTION (% ≥ high), NOT a collapsed rollup verdict word', async () => {
     await openBrain();
-    expect(await screen.findByTestId('recall-experimental-chip')).toBeTruthy();
-    // recall is a labeled lab-signal line, not a judgment question with an action-hint
-    const q3 = screen.getByTestId('ddd-q3-growing');
-    expect(q3.textContent?.toLowerCase()).not.toContain('recall');
+    const f = await screen.findByTestId('ddd-fact-trust');
+    expect(f.textContent).toMatch(/%|≥ high|not computed/);
+    expect(f.textContent).not.toContain('moderate');  // no rollup verdict
   });
 
-  it('renders the DEMOTED 5-dim diagnostics row', async () => {
+  it('diagnostics WALL is deleted (no per-section score dump)', async () => {
     await openBrain();
-    const diag = await screen.findByTestId('health-diagnostics');
-    expect(diag.textContent).toContain('Architecture');
-    expect(diag.textContent).toContain('88');
+    await waitFor(() => expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy());
+    expect(screen.queryByTestId('health-diagnostics')).toBeNull();
   });
 
   it('renders NOTHING when health is undefined (daemon-skew guard)', async () => {

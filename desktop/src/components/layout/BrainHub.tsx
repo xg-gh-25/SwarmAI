@@ -16,9 +16,9 @@
  *
  * Reuses: FilePreviewModal (read-only file viewer). No new tree/editor built.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getBrains, getBrainDetail, getReview, approveReview, rejectReviewHunk,
+  getBrainsWithPinned, getBrainDetail, getReview, approveReview, rejectReviewHunk,
   approveProposal, rejectProposal, getDistribution, aggregateTypeCounts,
 } from '../../services/ddd';
 import type {
@@ -77,6 +77,11 @@ type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
 export function BrainHub() {
   const [tab, setTab] = useState<Tab>('gallery');
   const [brains, setBrains] = useState<BrainSummary[] | null>(null);
+  const [pinned, setPinned] = useState<string[]>([]);
+  // The pinned primary (SwarmAI) renders as a FULL card in the gallery top row →
+  // one lazy detail fetch (mirrors the Welcome hero pattern; the only detail the
+  // gallery pays for — the rest stay cheap compact cards).
+  const [primaryDetail, setPrimaryDetail] = useState<BrainDetail | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0); // B10: retry trigger for getBrains
   const [selected, setSelected] = useState<string | null>(null);
@@ -85,8 +90,21 @@ export function BrainHub() {
   useEffect(() => {
     let alive = true;
     setError(null);
-    getBrains().then(
-      (b) => alive && setBrains(b),
+    setPrimaryDetail(undefined);  // reset so a retry never shows the prior primary's detail (stale-render)
+    getBrainsWithPinned().then(
+      ({ brains: b, pinned: p }) => {
+        if (!alive) return;
+        setBrains(b);
+        setPinned(p);
+        // lazily fetch the primary (first pinned) as a full card
+        const primary = p[0];
+        if (primary) {
+          getBrainDetail(primary).then(
+            (d) => alive && setPrimaryDetail(d),
+            () => alive && setPrimaryDetail(undefined),  // degrade to cheap card
+          );
+        }
+      },
       (e) => alive && setError(String(e?.message ?? e)),
     );
     agentsService.getDefault().then(
@@ -143,7 +161,7 @@ export function BrainHub() {
             </button>
           </div>
         )}
-        {!error && tab === 'gallery' && <Gallery brains={brains} onOpen={openBrain} />}
+        {!error && tab === 'gallery' && <Gallery brains={brains} pinned={pinned} primaryDetail={primaryDetail} onOpen={openBrain} />}
         {/* key={selected} ties BrainView's identity to the brain — DEFENSIVE (Gate-2
             MED, verified NOT-currently-reachable): today every `selected` change is a
             gallery-card click, and the gallery tab only renders when tab==='gallery',
@@ -180,23 +198,77 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
 
 // ── Gallery ──────────────────────────────────────────────────────────────────
 
-function Gallery({ brains, onOpen }: { brains: BrainSummary[] | null; onOpen: (n: string) => void }) {
+/** A compact card straight from a BrainSummary (cheap — includes the 3-layer bar
+ *  via summary.typeCounts, no detail fetch). */
+function CompactBrain({ b, onOpen }: { b: BrainSummary; onOpen: (n: string) => void }) {
+  return (
+    <DddCard density="compact" name={b.name} kind={b.kind}
+      sectionsPresent={b.sectionsPresent} lifecycleStage={b.lifecycleStage}
+      health={b.health} typeCounts={b.typeCounts} onOpen={onOpen} />
+  );
+}
+
+/**
+ * Bento gallery: pinned top row = the primary (SwarmAI) as a FULL ontology card on
+ * the left + up to 2 pinned brains as small cards stacked on the right; then the
+ * REST of the brains 3-per-row. Pinned order + primary detail come from the parent
+ * (backend-driven, existence-guarded). Degrades: if primaryDetail hasn't loaded,
+ * the big card shows its cheap summary + fills in (DddCard full-body guards on
+ * metrics). If pinned is empty (old daemon), falls back to a flat compact grid.
+ */
+function Gallery(
+  { brains, pinned, primaryDetail, onOpen }:
+  { brains: BrainSummary[] | null; pinned: string[]; primaryDetail?: BrainDetail; onOpen: (n: string) => void },
+) {
   if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading brains…</div>;
   if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">No DDD brains found.</div>;
+
+  const byName = new Map(brains.map((b) => [b.name, b]));
+  const primaryName = pinned[0];
+  const primary = primaryName ? byName.get(primaryName) : undefined;
+  const rightPins = pinned.slice(1).map((n) => byName.get(n)).filter((b): b is BrainSummary => !!b);
+  const pinnedSet = new Set([primaryName, ...rightPins.map((b) => b.name)].filter(Boolean));
+  const rest = brains.filter((b) => !pinnedSet.has(b.name));
+
+  // Memoize the O(entries) type aggregation so it doesn't re-scan ~1000 entries on
+  // every unrelated re-render (hover/selection) — recompute only when the detail
+  // (or the primary summary fallback) changes. Computed before any early return
+  // (hooks rule). Falls back to the summary's cheap typeCounts until detail loads.
+  const primaryTypeCounts = useMemo(
+    () => (primaryDetail ? aggregateTypeCounts(primaryDetail.sections) : primary?.typeCounts),
+    [primaryDetail, primary?.typeCounts],
+  );
+
+  // Fallback: no pinned resolved → flat compact grid (old behavior).
+  if (!primary) {
+    return (
+      <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }} data-testid="brainhub-gallery">
+        {brains.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} data-testid="brainhub-gallery">
-      {brains.map((b) => (
-        <DddCard
-          key={b.name}
-          density="compact"
-          name={b.name}
-          kind={b.kind}
-          sectionsPresent={b.sectionsPresent}
-          lifecycleStage={b.lifecycleStage}
-          health={b.health}
-          onOpen={onOpen}
-        />
-      ))}
+    <div className="p-4 flex flex-col gap-3" data-testid="brainhub-gallery">
+      {/* top row: primary full card (left) + 2 pinned small stacked (right) */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0, 1fr) 300px' }} data-testid="brainhub-pinned-row">
+        <DddCard density="full" name={primary.name} kind={primary.kind}
+          sectionsPresent={primary.sectionsPresent} lifecycleStage={primary.lifecycleStage}
+          health={primary.health}
+          metrics={primaryDetail?.health}
+          typeCounts={primaryTypeCounts} />
+        {rightPins.length > 0 && (
+          <div className="flex flex-col gap-3">
+            {rightPins.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+          </div>
+        )}
+      </div>
+      {/* rest: 3 per row */}
+      {rest.length > 0 && (
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-rest">
+          {rest.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+        </div>
+      )}
     </div>
   );
 }

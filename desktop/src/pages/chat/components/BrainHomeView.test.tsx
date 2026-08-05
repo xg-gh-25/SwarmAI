@@ -1,13 +1,14 @@
 /**
- * BrainHomeView.test.tsx — the durable Brain Home layer (run_6924b463 cycle 3).
+ * BrainHomeView.test.tsx — the durable Brain Home layer (run_9ada46ae Top-3).
  *
- * Covers: hero selection (attention weight), bento render (hero full + calm compact),
- * the single hero detail-fetch, the batch-review affordance, and the AC5 DURABILITY
- * invariant (independent read: zero brains → renders nothing, never throws/blanks).
+ * Covers: Top-3 locked render (primary full + pinned smalls stacked), the single
+ * primary detail-fetch, the "view all" affordance, and the durability invariant
+ * (independent read: zero brains / reject → renders nothing, never throws/blanks).
+ * pickHero/attentionScore retired (pinned is backend-driven, not attention-picked).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { BrainHomeView, pickHero, attentionScore } from './BrainHomeView';
+import { BrainHomeView } from './BrainHomeView';
 import type { BrainSummary, BrainDetail, SectionKey } from '../../../services/ddd';
 
 const SECTIONS: Record<SectionKey, boolean> = {
@@ -18,100 +19,103 @@ const mk = (name: string, over: Partial<BrainSummary['health']> = {}): BrainSumm
   health: { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '1d ago', ...over },
 });
 
-const HERO_DETAIL: BrainDetail = {
-  name: 'Needy', kind: 'knowledge', sections: [],
+const PRIMARY_DETAIL: BrainDetail = {
+  name: 'SwarmAI', kind: 'knowledge', sections: [],
   health: {
     noise: { reclaimable: 7, rate: 0.2 },
     trust: null, escalationPending: 2,
     recall: { value: null, experimental: true },
-    diagnostics: null, computedAt: null,
+    recentActivity: 40, diagnostics: null, computedAt: null,
   },
 };
 
-const mockGetBrains = vi.fn();
+const mockGetBrainsWithPinned = vi.fn();
 const mockGetBrainDetail = vi.fn();
 vi.mock('../../../services/ddd', async (orig) => ({
   ...(await orig<typeof import('../../../services/ddd')>()),
-  getBrains: () => mockGetBrains(),
+  getBrainsWithPinned: () => mockGetBrainsWithPinned(),
   getBrainDetail: (n: string) => mockGetBrainDetail(n),
 }));
 
 beforeEach(() => {
-  mockGetBrains.mockReset();
+  mockGetBrainsWithPinned.mockReset();
   mockGetBrainDetail.mockReset();
-  mockGetBrainDetail.mockResolvedValue(HERO_DETAIL);
+  mockGetBrainDetail.mockResolvedValue(PRIMARY_DETAIL);
 });
 
-describe('BrainHomeView — hero selection (pure)', () => {
-  it('attentionScore: uncommitted weighs 2, plus sinking + pending', () => {
-    expect(attentionScore({ sinking: 1, pending: 2, uncommitted: true, lastChangeRelative: '' })).toBe(5);
-    expect(attentionScore({ sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '' })).toBe(0);
-  });
-  it('pickHero picks the max-attention brain; ties broken by name (stable, no RNG)', () => {
-    const hero = pickHero([mk('Calm'), mk('Needy', { sinking: 3, uncommitted: true }), mk('Mild', { pending: 1 })]);
-    expect(hero?.name).toBe('Needy');
-    // tie → alphabetical
-    expect(pickHero([mk('Zebra'), mk('Apple')])?.name).toBe('Apple');
-    expect(pickHero([])).toBeNull();
-  });
-});
-
-describe('BrainHomeView — bento render', () => {
-  it('renders hero (full, with metric tiles from the single detail fetch) + calm compact grid', async () => {
-    mockGetBrains.mockResolvedValue([mk('Needy', { sinking: 4, uncommitted: true }), mk('Calm'), mk('Mild', { pending: 1 })]);
+describe('BrainHomeView — Top-3 locked render', () => {
+  it('renders primary (full) + pinned smalls stacked; ONE detail fetch (primary only)', async () => {
+    mockGetBrainsWithPinned.mockResolvedValue({
+      brains: [mk('SwarmAI', { pending: 3 }), mk('AIDLC', { sinking: 2 }), mk('CMHK_SalesIntel'), mk('Other')],
+      pinned: ['SwarmAI', 'AIDLC', 'CMHK_SalesIntel'],
+    });
     render(<BrainHomeView />);
     await waitFor(() => expect(screen.getByTestId('brain-home')).toBeTruthy());
-    // hero is the needy one, rendered full → its judgment questions appear (after detail fetch)
-    await waitFor(() => expect(screen.getByTestId('ddd-q4-prune')).toBeTruthy());
+    // primary rendered full → verdict in the hero (scope: pins also carry a verdict dot)
+    const heroEl = screen.getByTestId('brain-home-hero');
+    await waitFor(() => expect(heroEl.querySelector('[data-testid="ddd-verdict"]')).toBeTruthy());
     expect(screen.getByTestId('brain-home-hero')).toBeTruthy();
-    // exactly ONE hero detail fetch, for the hero
+    // exactly ONE detail fetch, for the primary (SwarmAI)
     expect(mockGetBrainDetail).toHaveBeenCalledTimes(1);
-    expect(mockGetBrainDetail).toHaveBeenCalledWith('Needy');
-    // calm brains present as compact cards (clickable buttons)
-    expect(screen.getByTestId('brain-home-calm')).toBeTruthy();
-    expect(screen.getByTestId('dddcard-Calm').tagName).toBe('BUTTON');
-    expect(screen.getByTestId('dddcard-Mild').tagName).toBe('BUTTON');
-    // hero is NOT duplicated in the calm grid
-    expect(screen.queryByTestId('brain-home-calm')?.querySelector('[data-testid="dddcard-Needy"]')).toBeNull();
+    expect(mockGetBrainDetail).toHaveBeenCalledWith('SwarmAI');
+    // the 2 right pins render as compact clickable cards
+    expect(screen.getByTestId('brain-home-pins')).toBeTruthy();
+    expect(screen.getByTestId('dddcard-AIDLC').tagName).toBe('BUTTON');
+    expect(screen.getByTestId('dddcard-CMHK_SalesIntel').tagName).toBe('BUTTON');
+    // NON-pinned brain (Other) is NOT shown here — it lives in Brain Hub
+    expect(screen.queryByTestId('dddcard-Other')).toBeNull();
   });
 
-  it('batch-review affordance calls onOpenHub; compact card calls onOpenBrain', async () => {
-    mockGetBrains.mockResolvedValue([mk('Needy', { sinking: 4 }), mk('Calm')]);
+  it('view-all affordance calls onOpenHub; a pinned small calls onOpenBrain', async () => {
+    mockGetBrainsWithPinned.mockResolvedValue({
+      brains: [mk('SwarmAI'), mk('AIDLC')],
+      pinned: ['SwarmAI', 'AIDLC'],
+    });
     const onOpenHub = vi.fn();
     const onOpenBrain = vi.fn();
     render(<BrainHomeView onOpenHub={onOpenHub} onOpenBrain={onOpenBrain} />);
     await waitFor(() => expect(screen.getByTestId('brain-home')).toBeTruthy());
     fireEvent.click(screen.getByTestId('brain-home-batch-review'));
     expect(onOpenHub).toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('dddcard-Calm'));
-    expect(onOpenBrain).toHaveBeenCalledWith('Calm');
+    fireEvent.click(screen.getByTestId('dddcard-AIDLC'));
+    expect(onOpenBrain).toHaveBeenCalledWith('AIDLC');
   });
 });
 
-describe('BrainHomeView — AC5 durability (independent read)', () => {
+describe('BrainHomeView — durability (independent read)', () => {
   it('zero brains → renders nothing (never a blank box), no detail fetch', async () => {
-    mockGetBrains.mockResolvedValue([]);
+    mockGetBrainsWithPinned.mockResolvedValue({ brains: [], pinned: [] });
     const { container } = render(<BrainHomeView />);
-    await waitFor(() => expect(mockGetBrains).toHaveBeenCalled());
+    await waitFor(() => expect(mockGetBrainsWithPinned).toHaveBeenCalled());
     expect(screen.queryByTestId('brain-home')).toBeNull();
     expect(container.textContent).toBe('');
     expect(mockGetBrainDetail).not.toHaveBeenCalled();
   });
 
-  it('getBrains REJECTS → renders nothing, does not throw (briefing survives)', async () => {
-    mockGetBrains.mockRejectedValue(new Error('backend down'));
+  it('read REJECTS → renders nothing, does not throw (briefing survives)', async () => {
+    mockGetBrainsWithPinned.mockRejectedValue(new Error('backend down'));
     render(<BrainHomeView />);
-    await waitFor(() => expect(mockGetBrains).toHaveBeenCalled());
+    await waitFor(() => expect(mockGetBrainsWithPinned).toHaveBeenCalled());
     expect(screen.queryByTestId('brain-home')).toBeNull();
   });
 
-  it('hero detail fetch REJECTS → hero still renders (summary), just no metric tiles', async () => {
-    mockGetBrains.mockResolvedValue([mk('Needy', { sinking: 4 }), mk('Calm')]);
+  it('no resolvable primary (pinned name absent from brains) → renders nothing', async () => {
+    mockGetBrainsWithPinned.mockResolvedValue({ brains: [mk('Other')], pinned: ['SwarmAI'] });
+    render(<BrainHomeView />);
+    await waitFor(() => expect(mockGetBrainsWithPinned).toHaveBeenCalled());
+    expect(screen.queryByTestId('brain-home')).toBeNull();
+  });
+
+  it('primary detail fetch REJECTS → primary still renders (summary), just no judgment body', async () => {
+    mockGetBrainsWithPinned.mockResolvedValue({ brains: [mk('SwarmAI', { pending: 1 }), mk('AIDLC')], pinned: ['SwarmAI', 'AIDLC'] });
     mockGetBrainDetail.mockRejectedValue(new Error('detail down'));
     render(<BrainHomeView />);
     await waitFor(() => expect(screen.getByTestId('brain-home-hero')).toBeTruthy());
-    // hero summary (presence bar) renders even though tiles don't
-    expect(screen.getByTestId('presence-Needy-knowledge')).toBeTruthy();
-    expect(screen.queryByTestId('health-tile-noise')).toBeNull();
+    // primary summary (presence bar + verdict from cheap pending) renders even without detail
+    expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
+    const heroEl = screen.getByTestId('brain-home-hero');
+    expect(heroEl.querySelector('[data-testid="ddd-verdict"]')).toBeTruthy();
+    // no judgment body (ontology/needs-you) without metrics
+    expect(heroEl.querySelector('[data-testid="ddd-needs-you"]')).toBeNull();
   });
 });

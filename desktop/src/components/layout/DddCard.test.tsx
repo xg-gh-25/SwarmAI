@@ -1,23 +1,17 @@
 /**
  * DddCard.test.tsx — the unified density-driven DDD card.
  *
- * run_6924b463 c2-3: created the SSOT card (compact gallery + full detail/hero).
- * run_d1e933aa c2:   restructured full-density metrics into USER JUDGMENT LANGUAGE
- *                    — 4 questions + a 7-type×3-layer "type mix" bar.
+ * run_9ada46ae: final mockup-driven design.
+ *   full   → verdict dot (pending>0 = "needs decision", NEVER "healthy" — no trust
+ *            rollup) + the FULL 3-layer×7-type ontology (each layer count + each
+ *            type count) as the hero visual + a "needs you" block (non-zero
+ *            actionable only; clean brain → "nothing needs you") + 2 fact lines
+ *            (trust distribution / activity). Diagnostics wall DELETED.
+ *   compact→ presence + lifecycle + cheap health + a slim 3-LAYER proportion bar
+ *            (from summary.typeCounts, NO detail fetch).
  *
- * The 4 questions (a user opening a brain actually asks these, not "what are the
- * 7 raw fields"):
- *   Q1 healthy? → trust badge (distribution, NOT a rollup verdict) + computedAt age
- *   Q2 fresh?   → lastChangeRelative (hero) / computedAt age (detail)
- *   Q3 growing? → recentActivity (30d changelog) + escalationPending
- *   Q4 prune?   → noise.reclaimable + sinking
- * Type-mix bar: aggregates entries[].entryType → 3 layers (meta/cognitive/
- * operational), detail-only, labeled honestly as "知识文档类型分布".
- *
- * Load-bearing invariants preserved from c2-3:
- *   • density-scoped guard (compact ALWAYS renders; full guards only the tiles block)
- *   • trust is a DISTRIBUTION count (below/total), never a collapsed rollup verdict
- *   • Principle-1: NO size / entry-count / ref-count anywhere on the card
+ * Invariants preserved: density-scoped guard (compact always renders); trust is a
+ * DISTRIBUTION count, never a collapsed rollup; NO size/entry-count/ref-count.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -28,14 +22,8 @@ const SECTIONS: Record<SectionKey, boolean> = {
   identity: true, knowledge: true, gates: false,
   capabilities: true, delivery: false, refresher: true,
 };
-
-const CHEAP: BrainHealth = {
-  sinking: 2,
-  pending: 1,
-  uncommitted: true,
-  lastChangeRelative: '3h ago',
-};
-
+const CHEAP: BrainHealth = { sinking: 2, pending: 1, uncommitted: true, lastChangeRelative: '3h ago' };
+const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
   noise: { reclaimable: 5, rate: 0.1 },
   trust: { 'PRODUCT.md': { identity: 'high', knowledge: 'moderate' } },
@@ -45,140 +33,140 @@ const METRICS: DetailHealth = {
   diagnostics: { 'PRODUCT.md': { sections: { identity: { composite: 88, trust: 'high' } } } },
   computedAt: '2026-08-04T00:00:00Z',
 };
-
 const TYPE_COUNTS: Record<EntryType, number> = {
-  principle: 2, correction: 1,           // meta-cognitive = 3
+  principle: 2, correction: 1,           // meta = 3
   decision: 4, model: 1,                 // cognitive = 5
   guideline: 10, pitfall: 8, process: 2, // operational = 20
 };
 
-describe('DddCard — compact density (gallery)', () => {
-  it('renders presence bar + lifecycle + 4 cheap health, is a clickable button', () => {
+describe('DddCard — compact (gallery)', () => {
+  it('renders presence + cheap health, clickable, and a 3-layer proportion bar from typeCounts', () => {
     const onOpen = vi.fn();
     render(
       <DddCard density="compact" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="GROW" health={CHEAP} onOpen={onOpen} />,
+        sectionsPresent={SECTIONS} lifecycleStage="GROW" health={CHEAP}
+        typeCounts={TYPE_COUNTS} onOpen={onOpen} />,
     );
     expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
     expect(screen.getByTestId('dddcard-cheap-sinking')).toBeTruthy();
+    // compact gets the slim 3-layer bar (no per-type breakdown, no fetch)
+    expect(screen.getByTestId('ddd-compact-layerbar')).toBeTruthy();
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     expect(onOpen).toHaveBeenCalledWith('SwarmAI');
-    // compact NEVER shows the expensive judgment blocks or the type bar
-    expect(screen.queryByTestId('ddd-q4-prune')).toBeNull();
-    expect(screen.queryByTestId('ddd-typebar')).toBeNull();
+    // compact NEVER shows the full ontology (per-type) or the needs-you block
+    expect(screen.queryByTestId('ddd-ontology')).toBeNull();
+    expect(screen.queryByTestId('ddd-needs-you')).toBeNull();
   });
 
-  it('GATE-1 INVARIANT: compact card renders fully even though it carries NO metrics', () => {
+  it('compact with NO typeCounts (daemon skew) still renders, just no bar', () => {
     render(
-      <DddCard density="compact" name="IVTHub" kind="knowledge"
+      <DddCard density="compact" name="X" kind="knowledge"
         sectionsPresent={SECTIONS} lifecycleStage="CREATE" health={CHEAP} onOpen={vi.fn()} />,
     );
-    expect(screen.getByTestId('dddcard-IVTHub')).toBeTruthy();
-    expect(screen.getByTestId('presence-IVTHub-identity')).toBeTruthy();
+    expect(screen.getByTestId('dddcard-X')).toBeTruthy();
+    expect(screen.queryByTestId('ddd-compact-layerbar')).toBeNull();
   });
 });
 
-describe('DddCard — full density: the 4 judgment questions', () => {
-  it('renders all 4 question blocks (healthy/fresh/growing/prune) with real signals', () => {
-    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={METRICS} />);
-    // Q1 healthy — trust badge (distribution 1/2 below-high, NOT a rollup verdict)
-    expect(screen.getByTestId('ddd-q1-healthy').textContent).toContain('1/2');
-    // Q3 growing — recentActivity surfaced
-    expect(screen.getByTestId('ddd-q3-growing').textContent).toContain('12');
-    // Q4 prune — noise reclaimable
-    expect(screen.getByTestId('ddd-q4-prune').textContent).toContain('5');
-    // recall experimental chip preserved
-    expect(screen.getByTestId('recall-experimental-chip')).toBeTruthy();
+describe('DddCard — full: verdict dot', () => {
+  it('pending>0 → "needs decision" verdict (amber), NOT "healthy"', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} health={CHEAP} />);
+    const v = screen.getByTestId('ddd-verdict');
+    expect(v.textContent?.toLowerCase()).toMatch(/needs decision|待决策|decision/i);
+    // MUST NOT claim healthy (no trust rollup verdict)
+    expect(v.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('Q1 trust badge shows computedAt AGE (honest staleness), not a bare pass', () => {
-    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={METRICS} />);
-    const q1 = screen.getByTestId('ddd-q1-healthy');
-    expect(q1.textContent && q1.textContent.length > 0).toBe(true);
-    expect(screen.getByTestId('ddd-trust-computedat')).toBeTruthy();
+  it('pending=0 → "nothing queued" verdict, and it does NOT consult trust (0% trust ≠ unhealthy)', () => {
+    const clean = { ...METRICS, escalationPending: 0, trust: null, computedAt: null };
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={clean} health={CHEAP_CLEAN} />);
+    const v = screen.getByTestId('ddd-verdict');
+    expect(v.textContent?.toLowerCase()).toMatch(/nothing|无待|queued|clear/i);
+    expect(v.textContent?.toLowerCase()).not.toContain('unhealthy');
+  });
+});
+
+describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () => {
+  it('renders every layer with its count AND every type with its count', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} />);
+    const onto = screen.getByTestId('ddd-ontology');
+    expect(onto).toBeTruthy();
+    // layer totals
+    expect(screen.getByTestId('ddd-layer-meta').textContent).toContain('3');
+    expect(screen.getByTestId('ddd-layer-cognitive').textContent).toContain('5');
+    expect(screen.getByTestId('ddd-layer-operational').textContent).toContain('20');
+    // per-type counts must be visible (the whole point — "nobody could tell the ontology")
+    expect(screen.getByTestId('ddd-type-principle').textContent).toContain('2');
+    expect(screen.getByTestId('ddd-type-decision').textContent).toContain('4');
+    expect(screen.getByTestId('ddd-type-pitfall').textContent).toContain('8');
   });
 
-  it('Q3 recentActivity undefined (old daemon) → honest "—", not a confident "0"', () => {
-    render(<DddCard density="full" name="X" kind="knowledge"
-      metrics={{ ...METRICS, recentActivity: undefined }} />);
-    expect(screen.getByTestId('ddd-q3-growing').textContent).toContain('—');
+  it('ontology omitted when no typeCounts (detail fetch pending / daemon skew)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
+    expect(screen.queryByTestId('ddd-ontology')).toBeNull();
+  });
+});
+
+describe('DddCard — full: needs-you block', () => {
+  it('lists non-zero actionable items (pending + sinking) when present', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} health={CHEAP} />);
+    const n = screen.getByTestId('ddd-needs-you');
+    expect(n.textContent).toContain('3');  // escalationPending
+    expect(n.textContent?.toLowerCase()).toMatch(/review|裁决|proposal/i);
   });
 
-  it('Q1 trust null (no scheduled score) → honest "not computed", never fabricated', () => {
-    render(<DddCard density="full" name="X" kind="knowledge"
-      metrics={{ ...METRICS, trust: null, computedAt: null }} />);
-    const q1 = screen.getByTestId('ddd-q1-healthy');
-    expect(q1.textContent?.toLowerCase()).toMatch(/not computed|—|no scheduled/);
+  it('clean brain → "nothing needs you" (0 pending, 0 reclaimable, 0 sinking)', () => {
+    const clean = { ...METRICS, escalationPending: 0, noise: { reclaimable: 0, rate: 0 } };
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={clean} health={CHEAP_CLEAN} />);
+    const n = screen.getByTestId('ddd-needs-you');
+    expect(n.textContent?.toLowerCase()).toMatch(/nothing|✓|无/i);
+  });
+});
+
+describe('DddCard — full: facts + deletions', () => {
+  it('trust fact is a DISTRIBUTION (below/total), never a rollup verdict word', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
+    const f = screen.getByTestId('ddd-fact-trust');
+    expect(f.textContent).toMatch(/1\/2|50%|below|≥ high/);
+    expect(f.textContent).not.toContain('moderate');  // no collapsed verdict
   });
 
-  it('diagnostics row still available under the questions, omitted when null', () => {
-    const { rerender } = render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
-    expect(screen.getByTestId('health-diagnostics').textContent).toContain('PRODUCT.md·identity');
-    rerender(<DddCard density="full" name="S" kind="knowledge" metrics={{ ...METRICS, diagnostics: null }} />);
+  it('diagnostics wall is DELETED (no per-section score dump)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
     expect(screen.queryByTestId('health-diagnostics')).toBeNull();
   });
 
-  it('PRINCIPLE-1: no size / entry-count / ref-count anywhere on the card', () => {
+  it('PRINCIPLE-1: no size / entry-count / ref-count anywhere', () => {
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} />);
     const txt = screen.getByTestId('dddcard-S').textContent ?? '';
     expect(txt.toLowerCase()).not.toContain('last referenced');
     expect(txt.toLowerCase()).not.toContain('ref count');
-    expect(txt).not.toMatch(/\b\d+\s+entries\b/i);
+    // hardened: the ontology header must NOT carry a total "entries" count (a size
+    // number). Check the ontology subtree's text directly for the word "entries"
+    // — the old \b\d+\s+entries pattern was silently defeated by "types28" (no
+    // word-boundary between adjacent spans), a false-negative the adversary caught.
+    const onto = screen.getByTestId('ddd-ontology');
+    expect(onto.textContent?.toLowerCase()).not.toContain('entries');
   });
 
-  it('GATE-1 GUARD: metrics undefined → question blocks render nothing, container still renders', () => {
-    render(<DddCard density="full" name="SwarmAI" kind="knowledge" />);
-    expect(screen.queryByTestId('ddd-q1-healthy')).toBeNull();
-    expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy();
-  });
-
-  it('GATE-1 GUARD: metrics present but noise missing (partial daemon) → no blocks, no crash', () => {
-    const partial = { ...METRICS, noise: undefined } as unknown as DetailHealth;
-    render(<DddCard density="full" name="SwarmAI" kind="knowledge" metrics={partial} />);
-    expect(screen.queryByTestId('ddd-q4-prune')).toBeNull();
-    expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy();
+  it('GATE-1 GUARD: metrics undefined → judgment body renders nothing, container survives', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" />);
+    expect(screen.queryByTestId('ddd-verdict')).toBeNull();
+    expect(screen.getByTestId('dddcard-S')).toBeTruthy();
   });
 });
 
-describe('DddCard — 7-type × 3-layer type-mix bar', () => {
-  it('renders the 3 layers with correct aggregated counts from typeCounts', () => {
-    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} />);
-    expect(screen.getByTestId('ddd-typebar')).toBeTruthy();
-    expect(screen.getByTestId('ddd-typelayer-meta').textContent).toContain('3');
-    expect(screen.getByTestId('ddd-typelayer-cognitive').textContent).toContain('5');
-    expect(screen.getByTestId('ddd-typelayer-operational').textContent).toContain('20');
-  });
-
-  it('type bar omitted when typeCounts not provided (detail consumer without entries)', () => {
-    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
-    expect(screen.queryByTestId('ddd-typebar')).toBeNull();
-  });
-
-  it('type bar omitted on an all-zero distribution (no vanity empty bar)', () => {
-    const zero = { principle: 0, correction: 0, decision: 0, model: 0, guideline: 0, pitfall: 0, process: 0 } as Record<EntryType, number>;
-    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={zero} />);
-    expect(screen.queryByTestId('ddd-typebar')).toBeNull();
-  });
-});
-
-describe('DddCard — full density, HOME-HERO consumer (summary + metrics + types)', () => {
-  it('renders header + presence + lifecycle + cheap health + 4 questions + type bar together', () => {
+describe('DddCard — full HERO (summary + metrics + types)', () => {
+  it('renders header + presence + verdict + ontology + needs-you together, static (not a button)', () => {
     render(
       <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" health={CHEAP} metrics={METRICS} typeCounts={TYPE_COUNTS} />,
+        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" health={CHEAP}
+        metrics={METRICS} typeCounts={TYPE_COUNTS} />,
     );
     expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
-    expect(screen.getByTestId('dddcard-cheap-sinking')).toBeTruthy();
-    expect(screen.getByTestId('ddd-q1-healthy')).toBeTruthy();
-    expect(screen.getByTestId('ddd-typebar')).toBeTruthy();
+    expect(screen.getByTestId('ddd-verdict')).toBeTruthy();
+    expect(screen.getByTestId('ddd-ontology')).toBeTruthy();
+    expect(screen.getByTestId('ddd-needs-you')).toBeTruthy();
     expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
-  });
-
-  it('Q2 fresh uses lastChangeRelative when hero cheap-health is present', () => {
-    render(
-      <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" health={CHEAP} metrics={METRICS} />,
-    );
-    expect(screen.getByTestId('ddd-q2-fresh').textContent).toContain('3h ago');
   });
 });
