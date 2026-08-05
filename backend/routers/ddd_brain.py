@@ -62,12 +62,13 @@ from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import (
     MEMORY_EVERGREEN_SECTIONS,
+    VALID_TYPES,
     EntryMetadata,
     compute_reclaimable_noise,
     parse_entries,
 )
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
-from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR
+from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
 
 logger = logging.getLogger(__name__)
 
@@ -315,9 +316,26 @@ def _rel(project_dir: Path, p: Path) -> str:
 
 # ─── Summary + detail builders ───────────────────────────────────────────────
 
-def _sinking_count(project_dir: Path) -> int:
-    """dormant + archived entries across the ② canonical docs (live)."""
-    total = 0
+# The 7 knowledge types — imported from the SSOT (ddd_entry_lifecycle.VALID_TYPES),
+# NOT re-declared, so a future 8th type can't be silently under-counted here.
+_TYPE_KEYS = VALID_TYPES
+
+
+def _gallery_entry_stats(project_dir: Path) -> dict:
+    """ONE parse pass over the ② canonical docs → {sinking, typeCounts}.
+
+    Both signals are derived from the SAME parse_entries walk that the gallery
+    already pays for `sinking` — folding the per-entry_type tally into that loop
+    adds a dict-increment per entry, NOT a second glob (so the compact card's
+    3-layer ontology bar costs nothing beyond the sinking count that was always
+    computed). typeCounts is keyed by the 7 VALID_TYPES; parse_entries clamps any
+    unknown type to 'guideline', so an 8th key can never appear (run_9ada46ae).
+
+    Corrects the old `_sinking_count` docstring that claimed the gallery does "no
+    parse_entries" — it always parsed; this just also buckets the type.
+    """
+    sinking = 0
+    type_counts = {k: 0 for k in _TYPE_KEYS}
     for doc in _KNOWLEDGE_DOCS:
         p = ddd_path(project_dir, doc)
         if not p.exists():
@@ -325,12 +343,24 @@ def _sinking_count(project_dir: Path) -> int:
         try:
             for e in parse_entries(p.read_text(encoding="utf-8")):
                 if e.decay_state in ("dormant", "archived"):
-                    total += 1
+                    sinking += 1
+                # entry_type is guaranteed ∈ VALID_TYPES (clamped in parse_entries);
+                # .get guard is belt-and-suspenders against a future new type.
+                if e.entry_type in type_counts:
+                    type_counts[e.entry_type] += 1
         # UnicodeError (a ValueError) on a non-UTF-8 doc must NOT crash the
         # gallery — a single bad file degrades to 0, never a 500 (PIT44 class).
         except (OSError, ValueError, UnicodeError):
             continue
-    return total
+    return {"sinking": sinking, "typeCounts": type_counts}
+
+
+def _sinking_count(project_dir: Path) -> int:
+    """dormant + archived entries across the ② canonical docs (live).
+
+    Thin wrapper over _gallery_entry_stats for callers that only need sinking.
+    """
+    return _gallery_entry_stats(project_dir)["sinking"]
 
 
 def _entry_count(project_dir: Path) -> int:
@@ -365,16 +395,17 @@ def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
     return entries
 
 
-def _brain_health_base(project_dir: Path, present: dict, pending: int) -> dict:
+def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinking: int) -> dict:
     """The CHEAP health fields present at EVERY density (gallery + detail).
 
-    No parse_entries, no section_health read — just git status + cheap counts.
-    This is the gallery's entire health payload and the base of the detail's.
-    Split out (Cycle-1 unify) so build_brain_state composes base + optional
-    detail-metrics from ONE source, killing the _brain_summary/_brain_health fork.
+    `sinking` is passed in (computed once by build_brain_state via
+    _gallery_entry_stats, alongside typeCounts) so this doesn't re-parse. The only
+    work here is git status + the pre-computed counts — no section_health read, no
+    detail-metrics N-glob. (Correction: the gallery DOES parse ② docs once for
+    sinking/typeCounts; it just avoids the expensive noise/section_health block.)
     """
     return {
-        "sinking": _sinking_count(project_dir),
+        "sinking": sinking,
         "pending": pending,
         "uncommitted": _git_status_dirty(project_dir),
         "lastChangeRelative": _relative_time(_git_last_commit_iso(project_dir)),
@@ -386,14 +417,17 @@ def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
 
     ONE builder feeds BOTH routes; the ONLY axis is `with_noise` (a.k.a. detail):
       - with_noise=False → gallery projection: identity + sectionsPresent +
-        lifecycleStage + the CHEAP health base. Provably never calls
-        compute_reclaimable_noise / parse_entries (perf: no N-glob on the gallery).
+        lifecycleStage + the CHEAP health base + typeCounts. The ONE cheap parse
+        pass (_gallery_entry_stats) yields BOTH sinking and the 7-type histogram;
+        it does NOT call compute_reclaimable_noise / section_health (the truly
+        expensive detail-only block). (The gallery ALWAYS parsed for `sinking` —
+        the old "no parse_entries" claim was wrong; typeCounts rides that pass.)
       - with_noise=True  → detail superset: the same base PLUS the admission-passing
         detail metrics (noise/trust/escalation/recall/cultivation/diagnostics).
 
     The health shape is a SUPERSET, not two different shapes: detail = base ∪ metrics.
-    A consumer that only reads the 4 base keys works on both; the DddCard renders the
-    metric tiles only when they are present (the daemon-skew guard, preserved).
+    typeCounts is a top-level SIBLING of health (like lifecycleStage), NOT nested in
+    health — so the gallery's exact 4-key health contract is preserved.
 
     Callers (_brain_summary, _brain_detail) delegate here — there is no second,
     independent health builder. `_brain_detail` layers sections/entries/specs on top.
@@ -401,7 +435,8 @@ def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
     name = project_dir.name
     present = _sections_present(project_dir)
     pending = _pending_count(name)
-    health = _brain_health_base(project_dir, present, pending)
+    stats = _gallery_entry_stats(project_dir)  # ONE parse → sinking + typeCounts
+    health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"])
     if with_noise:
         health.update(_brain_detail_metrics(project_dir))
     return {
@@ -410,6 +445,7 @@ def build_brain_state(project_dir: Path, *, with_noise: bool) -> dict:
         "sectionsPresent": present,
         "lifecycleStage": _lifecycle_stage(project_dir, present, pending),
         "health": health,
+        "typeCounts": stats["typeCounts"],
     }
 
 
@@ -711,7 +747,11 @@ async def list_brains() -> dict:
             logger.warning("brain summary failed for %s: %s", d.name, r)
             continue
         brains.append(r)
-    return {"brains": brains}
+    # pinned: SwarmAI-first ordered focus projects (existence-guarded). A field on
+    # this response, NOT a separate endpoint (Gate-1: one fewer round-trip). The
+    # frontend renders these as the top-row bento (SwarmAI big + 2 small stacked)
+    # and the Welcome Top-N; the rest fall into the 3-per-row grid.
+    return {"brains": brains, "pinned": get_pinned_projects()}
 
 
 @router.get("/brains/{name}")

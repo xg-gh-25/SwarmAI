@@ -640,6 +640,54 @@ class TestUnifiedBrainStateBuilder:
         h = m.build_brain_state(pd, with_noise=False)["health"]
         assert "recentActivity" not in h
 
+    def _mk_typed_doc(self, pd):
+        """A ② canonical doc with typed entries spanning all 3 layers. Canonical
+        docs resolve under 2-understanding/ (ddd_path), so write there."""
+        from core.ddd_paths import ddd_path
+        (pd / ".artifacts").mkdir(parents=True, exist_ok=True)
+        tech = ddd_path(pd, "TECH.md")
+        tech.parent.mkdir(parents=True, exist_ok=True)
+        tech.write_text(
+            "# T\n\n## Principles\n"
+            "- [principle] **P one** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            "- [correction] **C one** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            "## Decisions\n"
+            "- [decision] **D one** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            "- [model] **M one** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            "## Guidelines\n"
+            "- [guideline] **G one** — text\n  <!-- ref:0 | last:none | decay:active -->\n"
+            "- [pitfall] **PIT one** — text\n  <!-- ref:0 | last:none | decay:active -->\n",
+            encoding="utf-8",
+        )
+
+    def test_typecounts_is_sibling_of_health_both_densities(self, monkeypatch, tmp_path):
+        """typeCounts (7-type histogram for the ontology bar) is a SIBLING of health
+        (like lifecycleStage), NOT nested inside health — so the gallery's exact
+        4-key health shape is preserved. Present on BOTH densities."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        self._mk_typed_doc(pd)
+        for wn in (False, True):
+            st = m.build_brain_state(pd, with_noise=wn)
+            assert "typeCounts" in st, f"typeCounts must be a top-level sibling (with_noise={wn})"
+            assert "typeCounts" not in st["health"], "must NOT be nested in health (breaks exact-key test)"
+            tc = st["typeCounts"]
+            # all 7 keys present, real counts from the doc above
+            assert set(tc.keys()) == {"guideline", "pitfall", "decision", "model", "process", "principle", "correction"}
+            assert tc["principle"] == 1 and tc["correction"] == 1
+            assert tc["decision"] == 1 and tc["model"] == 1
+            assert tc["guideline"] == 1 and tc["pitfall"] == 1
+            assert tc["process"] == 0
+
+    def test_gallery_health_still_exactly_four_keys(self, monkeypatch, tmp_path):
+        """Regression guard for the sibling decision: adding typeCounts must NOT
+        leak into health — the gallery health stays exactly the 4 cheap keys."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        self._mk_typed_doc(pd)
+        h = m.build_brain_state(pd, with_noise=False)["health"]
+        assert set(h.keys()) == {"sinking", "pending", "uncommitted", "lastChangeRelative"}
+
     def test_recent_activity_excludes_undated_and_old(self, monkeypatch, tmp_path):
         """A '30d activity' number must count ONLY entries STAMPED within 30d.
         Undated (ts missing/malformed) and >30d-old entries are NOT counted —

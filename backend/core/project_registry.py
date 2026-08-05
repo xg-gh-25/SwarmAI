@@ -131,6 +131,27 @@ def project_exists(name: str) -> bool:
     return (get_projects_dir() / name).is_dir()
 
 
+# ─── Pinned gallery / Welcome-Top-N order ────────────────────────────────────
+# SwarmAI is ALWAYS first (the protected primary brain — the OS's own DDD). The
+# rest is a mutable config list: the focus projects that get a pinned slot on the
+# gallery top row + the Welcome Top-N. Existence-guarded — a name whose dir is
+# absent (deleted, or a local-only project like CMHK on a public checkout) is
+# silently dropped, never emitted as a broken pin (run_9ada46ae, Gate-1).
+#
+# FOLLOW-UP (recorded, not this run): make this user-configurable via a `pinned`
+# tag in each .project.json instead of a code const — then changing focus projects
+# needs no code edit. For now it's a one-line const in the SSOT registry (still
+# beats a hardcoded frontend list: one place, backend-owned, test-covered).
+_PINNED_AFTER_SWARMAI = ("AIDLC", "CMHK_SalesIntel")
+
+
+def get_pinned_projects() -> list[str]:
+    """Ordered pinned project names: SwarmAI first, then the configured focus
+    projects — each filtered to those that actually exist on disk."""
+    ordered = [SWARMAI, *_PINNED_AFTER_SWARMAI]
+    return [n for n in ordered if project_exists(n)]
+
+
 # ─── Auto-Discovered Aliases ─────────────────────────────────────────────────
 # These resolve from filesystem at import time. On project rename, just `mv`
 # the directory — next import auto-discovers the new name. Zero manual updates.
