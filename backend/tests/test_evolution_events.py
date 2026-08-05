@@ -11,7 +11,7 @@ Requirements: self-evolution E2E pipeline
 import json
 
 # Import the private helper directly from the chat module.
-from routers.chat import _extract_evolution_events
+from routers.chat import _extract_evolution_events, _should_scan_for_evolution
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,55 @@ class TestExtractEvolutionEvents:
         assert len(events) == 2
         assert events[0]["type"] == "evolution_start"
         assert events[1]["type"] == "evolution_result"
+
+
+# ---------------------------------------------------------------------------
+# Tests: hot-path scan gate (_should_scan_for_evolution)
+# ---------------------------------------------------------------------------
+
+
+class TestShouldScanForEvolution:
+    """The per-event gate that skips the marker scan on per-token fragments.
+
+    A complete ``<!-- EVOLUTION_EVENT: {...} -->`` marker can only arrive whole,
+    inside an ``assistant`` message's content blocks — never inside a single
+    text_delta/thinking_delta token. The gate is a DENYLIST so any unknown/future
+    type is scanned by default (fail-open toward correctness, not toward speed).
+    """
+
+    def test_per_token_deltas_are_skipped(self):
+        """The two proven fragment types must be skipped (the whole point)."""
+        assert _should_scan_for_evolution("text_delta") is False
+        assert _should_scan_for_evolution("thinking_delta") is False
+
+    def test_complete_block_types_are_scanned(self):
+        """Every type that can carry a WHOLE marker MUST still be scanned.
+
+        Adversarial guarantee (pipeline rule 23): no message type that
+        legitimately carries a complete marker is excluded by the gate.
+        `assistant` (complete content blocks — the only real emitter) is the
+        load-bearing case; the rest must also pass through unfiltered.
+        """
+        for mt in (
+            "assistant",       # complete content blocks — the real marker carrier
+            "result",          # turn-end event
+            "text",            # complete text block (non-delta)
+            "text_start",
+            "content_block_stop",
+            "tool_use",
+            "tool_result",
+            "user",
+            "session_start",
+        ):
+            assert _should_scan_for_evolution(mt) is True, mt
+
+    def test_unknown_type_scanned_by_default(self):
+        """A future/unknown type is scanned (denylist fails open to correctness)."""
+        assert _should_scan_for_evolution("some_future_event") is True
+
+    def test_empty_type_scanned(self):
+        """Absent type ('' from .get default) is scanned, not skipped."""
+        assert _should_scan_for_evolution("") is True
 
 
 # ---------------------------------------------------------------------------

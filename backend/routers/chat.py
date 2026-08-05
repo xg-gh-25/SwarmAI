@@ -168,6 +168,33 @@ _EVOLUTION_MARKER_RE = _re.compile(
     _re.DOTALL,
 )
 
+# Per-token streaming fragments — a complete `<!-- EVOLUTION_EVENT: {...} -->`
+# marker can NEVER appear in one of these (the SDK splits text across many
+# text_delta events, one token each; thinking_delta carries redacted thinking).
+# Scanning them with `_EVOLUTION_MARKER_RE.finditer` on EVERY token is pure dead
+# cost on the hottest path in the stream — the marker only ever arrives whole,
+# inside an `assistant` message's complete `content` blocks. A DENYLIST (not an
+# allowlist) is deliberate: it excludes ONLY proven-fragment types, so a future
+# marker-bearing message type is scanned by default rather than silently dropped.
+_EVOLUTION_SKIP_TYPES = frozenset({"text_delta", "thinking_delta"})
+
+
+def _should_scan_for_evolution(msg_type: str) -> bool:
+    """Whether an SSE event of ``msg_type`` can carry a complete evolution marker.
+
+    Returns False for per-token streaming fragments (text_delta / thinking_delta)
+    whose payload is a single token — a full HTML-comment marker cannot fit in one.
+    Returns True for every other type (assistant content blocks, result, etc.) so
+    the scan is never skipped for a type that might legitimately carry a marker.
+
+    Args:
+        msg_type: the ``type`` field of the SSE event dict ("" if absent).
+
+    Returns:
+        True to run the marker scan, False to skip it (hot-path fragment).
+    """
+    return msg_type not in _EVOLUTION_SKIP_TYPES
+
 
 def _extract_evolution_events(message: dict) -> list[dict]:
     """Extract evolution event markers from a message's text content.
@@ -392,12 +419,16 @@ async def sse_with_heartbeat(
                         if msg_type in ("text_start", "text_delta", "result", "assistant"):
                             thinking_active = False
 
-                    # Check for evolution event markers embedded in agent output
-                    for evo_event in _extract_evolution_events(item):
-                        try:
-                            yield f"data: {json.dumps(evo_event)}\n\n"
-                        except (TypeError, ValueError):
-                            pass  # Skip non-serializable evolution events
+                    # Check for evolution event markers embedded in agent output.
+                    # Skip per-token fragments (text_delta/thinking_delta) — a
+                    # complete marker cannot fit in one token, so scanning every
+                    # delta is dead cost on the hottest path (reuses msg_type above).
+                    if _should_scan_for_evolution(msg_type):
+                        for evo_event in _extract_evolution_events(item):
+                            try:
+                                yield f"data: {json.dumps(evo_event)}\n\n"
+                            except (TypeError, ValueError):
+                                pass  # Skip non-serializable evolution events
                 elif item_type == "error":
                     raise item
 
