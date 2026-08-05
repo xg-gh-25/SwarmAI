@@ -1,31 +1,27 @@
 /**
- * WelcomeScreen — 2-column briefing hub landing view.
+ * WelcomeScreen — briefing hub landing view.
  *
- * Displays a branded welcome with live session briefing data organized in
- * a 2-column card grid. Each section auto-hides when data is empty (D3).
+ * Displays a branded welcome with live session briefing data as full-width
+ * cards. Each section auto-hides when data is empty (D3).
  *
  * Section order follows action priority gradient (D8):
- * Focus (full width) → Working | Signals → Hot News → Swarm Output (full width) → Stocks (full width, collapsed)
+ * Focus (full width) → Working → Learning insight
+ * (Signals / Swarm Output / Stocks sections removed 2026-08-05 per XG.)
  *
- * Click behavior (D12): all chat-bound clicks populate ChatInput with
- * rich blockquote context — no auto-send. Stock/Output clicks open files.
+ * Click behavior (D12): chat-bound clicks populate ChatInput with
+ * rich blockquote context — no auto-send.
  *
  * @exports WelcomeScreen, WelcomeScreenProps
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   systemService,
   type SessionBriefing,
   type BriefingFocusItem,
 } from '../../../services/system';
 import type { ItemClickHandler } from './RightSidebar/types';
-import {
-  WorkingSection,
-  SignalsSection,
-  StocksSection,
-  SwarmOutputSection,
-} from './briefing';
+import { WorkingSection } from './briefing';
 import { BrainHomeView } from './BrainHomeView';
 
 // ---------------------------------------------------------------------------
@@ -122,35 +118,6 @@ function SectionCard({
 }
 
 // ---------------------------------------------------------------------------
-// Container width hook — responsive to actual panel width, not viewport
-// ---------------------------------------------------------------------------
-
-/** Minimum container width (px) to render 2-column layout. */
-const TWO_COL_MIN_WIDTH = 560;
-
-function useContainerWidth() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setWidth(entry.contentRect.width);
-      }
-    });
-    ro.observe(el);
-    // Set initial width
-    setWidth(el.getBoundingClientRect().width);
-    return () => ro.disconnect();
-  }, []);
-
-  return { ref, width };
-}
-
-// ---------------------------------------------------------------------------
 // Main Component
 // ---------------------------------------------------------------------------
 
@@ -164,7 +131,6 @@ export interface WelcomeScreenProps {
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onItemClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const { ref: containerRef, width: containerWidth } = useContainerWidth();
 
   useEffect(() => {
     let cancelled = false;
@@ -196,18 +162,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
 
   const hasFocus = briefing && briefing.focus.length > 0;
   const hasWorking = briefing && briefing.working.length > 0;
-  const hasSignals = briefing && briefing.signals.length > 0;
-  const hasStocks = briefing && briefing.stocks.length > 0;
-  const hasOutput = briefing && (
-    briefing.output.builds.length > 0 ||
-    briefing.output.content.length > 0 ||
-    briefing.output.files.length > 0
-  );
-  const hasAnyBriefing = hasFocus || hasWorking || hasSignals ||
-    hasStocks || hasOutput || briefing?.learning;
+  const hasAnyBriefing = hasFocus || hasWorking || briefing?.learning;
 
   return (
-    <div ref={containerRef} className="flex flex-col items-center h-full px-4 overflow-y-auto">
+    <div className="flex flex-col items-center h-full px-4 overflow-y-auto">
       {/* Top spacer */}
       <div className="flex-1 min-h-6" />
 
@@ -253,51 +211,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
             </div>
           )}
 
-          {/* Two-column grid — collapses to single column when one side is empty */}
-          {(() => {
-            const leftCards = [];
-            if (hasWorking) leftCards.push(
-              <SectionCard key="working" icon="📋" title="Working" count={briefing!.working.length} accent="rgba(251,191,36,0.6)">
-                <WorkingSection items={briefing!.working} onItemClick={handleItemClick} />
-              </SectionCard>
-            );
-
-            const rightCards = [];
-            if (hasSignals) rightCards.push(
-              <SectionCard key="signals" icon="📡" title="Signals" count={briefing!.signals.length} accent="rgba(59,130,246,0.5)">
-                <SignalsSection items={briefing!.signals} onItemClick={handleItemClick} />
-              </SectionCard>
-            );
-
-            const hasLeft = leftCards.length > 0;
-            const hasRight = rightCards.length > 0;
-            const useTwoCol = hasLeft && hasRight && containerWidth >= TWO_COL_MIN_WIDTH;
-
-            return (
-              <div className={useTwoCol ? 'grid grid-cols-2 gap-3' : 'space-y-3'}>
-                {useTwoCol ? (
-                  <>
-                    <div className="space-y-3">{leftCards}</div>
-                    <div className="space-y-3">{rightCards}</div>
-                  </>
-                ) : (
-                  [...leftCards, ...rightCards]
-                )}
-              </div>
-            );
-          })()}
-
-          {/* Swarm Output (full width) */}
-          {hasOutput && (
-            <SectionCard icon="🐝" title="Swarm Output" accent="rgba(168,85,247,0.45)">
-              <SwarmOutputSection output={briefing!.output} />
-            </SectionCard>
-          )}
-
-          {/* Stocks (full width, collapsed — personal info, kept low-profile) */}
-          {hasStocks && (
-            <SectionCard icon="📈" title="Stocks" count={briefing!.stocks.length} accent="rgba(34,197,94,0.45)">
-              <StocksSection items={briefing!.stocks} defaultVisible={4} />
+          {/* Working (full width) */}
+          {hasWorking && (
+            <SectionCard icon="📋" title="Working" count={briefing!.working.length} accent="rgba(251,191,36,0.6)">
+              <WorkingSection items={briefing!.working} onItemClick={handleItemClick} />
             </SectionCard>
           )}
 
