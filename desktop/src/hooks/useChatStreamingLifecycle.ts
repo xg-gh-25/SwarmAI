@@ -2241,15 +2241,13 @@ export function useChatStreamingLifecycle(
       // lost → UI frozen until the next send. Mirrors createCompleteHandler's
       // latestCompleteGen fix (run_6adee7d5) for the stream-event path.
       //
-      // KNOWN UNCOVERED SIBLING (Gate-2, run_f9adee1e — do NOT read this as "all
-      // paths covered"): the background-resend/reconnect retry path (ChatPage
-      // resendTabOnRecovery → retryStreamFn → wrappedCreateStreamHandler) creates
-      // the handler off activeTabIdRef.current, NOT the captured retry tab — so for
-      // a BACKGROUND tab's resend the stamp lands on the ACTIVE tab. That is a
-      // PRE-EXISTING wrong-tab split (its error/complete/disconnect handlers already
-      // used the captured tab); this fix neither introduces nor worsens the freeze,
-      // but the retry path is the next sibling in this half-migration (R27), tracked
-      // separately — not fixed here (R25 surgical; no reproduction for the retry path).
+      // SIBLING NOW CLOSED (run_26aa6caa): the background-resend/reconnect retry path
+      // (ChatPage resendTabOnRecovery → retryStreamFn) used to build its stream
+      // handler via wrappedCreateStreamHandler (which reads activeTabIdRef.current),
+      // so a BACKGROUND tab's resend stamped this tab's events onto the ACTIVE tab.
+      // Both retryStreamFn sites now call createStreamHandler(id, capturedTabIdForRetry)
+      // directly — symmetric with their already-correct error/complete/disconnect
+      // handlers. The half-migration (R27) this note tracked is closed.
       if (capturedTabId) {
         const stampTab = tabMapRef.current.get(capturedTabId);
         if (stampTab) stampTab.latestStreamGen = capturedStreamGen;

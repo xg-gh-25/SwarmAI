@@ -2356,7 +2356,13 @@ export default function ChatPage() {
       const retryStreamFn = () => {
         return chatService.streamChat(
           { ...streamRequest, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? streamRequest.sessionId },
-          wrappedCreateStreamHandler(assistantMessageId),
+          // run_26aa6caa (R27 half-migration close): use the CAPTURED retry tab, NOT
+          // wrappedCreateStreamHandler (which reads activeTabIdRef.current). On a
+          // background tab's reconnect/resend the active tab has changed, so the
+          // wrapped form stamped this tab's stream events (incl. the file_changed
+          // tabId) onto the ACTIVE tab → cross-tab bleed. The other 3 handlers here
+          // already use capturedTabIdForRetry; this makes all 4 symmetric.
+          createStreamHandler(assistantMessageId, capturedTabIdForRetry),
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),
@@ -2377,7 +2383,7 @@ export default function ChatPage() {
         _pendingResendAttempts: 0,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2685,7 +2691,10 @@ export default function ChatPage() {
       const retryStreamFn = () => {
         return chatService.streamAnswerQuestion(
           { agentId: selectedAgentId, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? tabSessionId, toolUseId, answers, enableSkills, enableMCP },
-          wrappedCreateStreamHandler(assistantMessageId),
+          // run_26aa6caa (R27 half-migration close): CAPTURED retry tab, not
+          // wrappedCreateStreamHandler (reads activeTabIdRef.current) — see the
+          // streamChat retryStreamFn for the full rationale. All 4 handlers symmetric.
+          createStreamHandler(assistantMessageId, capturedTabIdForRetry),
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
           createDisconnectHandler(capturedTabIdForRetry),

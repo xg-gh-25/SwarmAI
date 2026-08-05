@@ -694,6 +694,81 @@ describe('useChatStreamingLifecycle', () => {
       // But the bg tab's OWN tabState carries the pending id (so switch-back shows it).
       expect(testTabMap.get('tab-bg-perm')?.pendingPermissionRequestId).toBe('perm-bg-1');
     });
+
+    it('P0 retry-stamp cross-tab: a stream handler bound to a BACKGROUND tab writes to ITS OWN store, not the active tab (run_26aa6caa)', () => {
+      // Context for the R27 half-migration close: ChatPage's retryStreamFn used to
+      // build its stream handler via wrappedCreateStreamHandler (reads
+      // activeTabIdRef.current). On a BACKGROUND tab's reconnect/resend the active tab
+      // has changed, so the retry's stream content (and its file_changed tabId stamp)
+      // landed on the ACTIVE tab → cross-tab bleed. The fix makes retryStreamFn call
+      // createStreamHandler(id, capturedTabIdForRetry) — the captured retry tab.
+      //
+      // HONEST SCOPE (not test-theater): this asserts the HANDLER-LAYER guarantee the
+      // fix RELIES ON — a handler bound to tab X writes to X's store even when active
+      // is Y. It does NOT drive ChatPage's retryStreamFn wiring itself (ChatPage has
+      // no test harness for that closure — reverting the ChatPage lines would NOT turn
+      // this RED). The ChatPage fix's correctness is a 1-line symmetry change
+      // (the other 3 handlers already used capturedTabIdForRetry) verified by reading
+      // the code + tsc, not by this test. This test guards the layer beneath it.
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      const bgMsgId = 'bg-retry-msg';
+      const bgMsg = makeMessage({ id: bgMsgId, role: 'assistant', content: [] });
+      const fgMsgId = 'fg-active-msg';
+      const fgMsg = makeMessage({ id: fgMsgId, role: 'assistant', content: [] });
+      act(() => {
+        testTabMap.set('tab-bg-retry', {
+          id: 'tab-bg-retry', title: 'BG', agentId: 'default', isNew: false,
+          messages: [bgMsg], sessionId: 'sess-bg-retry', pendingQuestion: null,
+          abortController: null, isStreaming: true,
+          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamGen: 0, status: 'streaming',
+        });
+        testTabMap.set('tab-fg-active', {
+          id: 'tab-fg-active', title: 'FG', agentId: 'default', isNew: false,
+          messages: [fgMsg], sessionId: 'sess-fg-active', pendingQuestion: null,
+          abortController: null, isStreaming: true,
+          streamState: { mode: 'streaming', streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamGen: 0, status: 'streaming',
+        });
+        // Active tab is the FOREGROUND one — the background tab is mid-reconnect.
+        testActiveTabIdRef.current = 'tab-fg-active';
+        messageStoreRegistry.getOrCreate('tab-bg-retry', { sessionId: 'sess-bg-retry' }).replace([bgMsg]);
+        messageStoreRegistry.getOrCreate('tab-fg-active', { sessionId: 'sess-fg-active' }).replace([fgMsg]);
+        result.current.setMessages([fgMsg]); // React state shows the active (fg) tab
+      });
+
+      // The FIXED retryStreamFn shape: createStreamHandler bound to the CAPTURED
+      // background tab, executed while active === the foreground tab.
+      const bgRetryHandler = result.current.createStreamHandler(bgMsgId, 'tab-bg-retry');
+      act(() => {
+        bgRetryHandler({
+          type: 'assistant',
+          content: [{ type: 'text', text: 'Background retry content' }],
+        });
+      });
+
+      // Background tab's OWN store got the retry content.
+      const bgStoreContent = messageStoreRegistry.getOrCreate('tab-bg-retry').getSnapshot()
+        .flatMap((m) => m.content)
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(bgStoreContent).toContain('Background retry content');
+
+      // The ACTIVE (foreground) tab's store + React state must be UNTOUCHED — the
+      // pre-fix bug would have stamped the background retry onto this active tab.
+      const fgStoreContent = messageStoreRegistry.getOrCreate('tab-fg-active').getSnapshot()
+        .flatMap((m) => m.content)
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(fgStoreContent).not.toContain('Background retry content');
+      const reactContent = result.current.messages
+        .flatMap((m) => m.content)
+        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+        .map((b) => b.text);
+      expect(reactContent).not.toContain('Background retry content');
+    });
   });
 
   describe('createCompleteHandler', () => {
