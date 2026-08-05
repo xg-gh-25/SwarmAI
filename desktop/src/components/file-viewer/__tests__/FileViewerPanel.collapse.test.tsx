@@ -28,6 +28,7 @@ const baseProps = {
   onTogglePin: vi.fn(),
   muted: false,
   onToggleMute: vi.fn(),
+  referencedFiles: { written: [] },
 };
 
 beforeEach(() => localStorage.clear());

@@ -46,7 +46,7 @@ const STABLE = {
   onTogglePin: () => {},
   muted: false,
   onToggleMute: () => {},
-  onCanvasMeta: () => {},
+  referencedFiles: { written: [] },
   tabScopeKey: 'tab-1',
 };
 

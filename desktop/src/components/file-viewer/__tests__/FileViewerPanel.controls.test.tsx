@@ -36,6 +36,7 @@ const baseProps = {
   onTogglePin: vi.fn(),
   muted: false,
   onToggleMute: vi.fn(),
+  referencedFiles: { written: [] },
 };
 
 describe('FileViewerPanel — control redesign (bug6)', () => {

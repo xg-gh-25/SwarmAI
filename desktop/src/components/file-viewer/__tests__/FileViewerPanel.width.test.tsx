@@ -28,6 +28,7 @@ const baseProps = {
   onTogglePin: vi.fn(),
   muted: false,
   onToggleMute: vi.fn(),
+  referencedFiles: { written: [] },
 };
 
 const { MIN_WIDTH, MAX_WIDTH, STORAGE_KEY, DEFAULT_FRACTION } = PANEL_CONSTANTS;

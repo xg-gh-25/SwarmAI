@@ -71,7 +71,7 @@ const STABLE = {
   onTogglePin: () => {},
   muted: false,
   onToggleMute: () => {},
-  onCanvasMeta: () => {},
+  referencedFiles: { written: [] },
 };
 
 function setInnerWidth(px: number) {
