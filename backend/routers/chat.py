@@ -573,13 +573,17 @@ async def chat_stream(request: Request):
                     for _inj in surface_injection.drain_nowait(_injection_registered):
                         yield _inj
             # Final drain (fix3, run_bfbbe0fd): the async-for has ended (all SDK
-            # messages consumed) but a watcher event enqueued AFTER the last
-            # in-loop drain would otherwise be dropped by the finally's
-            # unregister — an end-of-turn write (tool closed, so the in-flight
-            # gate no longer surfaces it live) is caught HERE, the ungated
-            # end-of-turn catch-up. This is the NORMAL-completion path (safe to
-            # yield); it is deliberately NOT in the CancelledError branch below
-            # (a generator cannot yield during GeneratorExit).
+            # messages consumed). This catches an event that PASSED the in-flight
+            # gate (a tool was open when the watcher published it) and was
+            # enqueued AFTER the last in-loop drain — otherwise the finally's
+            # unregister would drop it. SCOPE (important, do not overclaim — this
+            # comment was corrected in an integration audit): it does NOT rescue a
+            # tool-CLOSED write — the in-flight gate in publish_file_event drops
+            # those BEFORE they ever enter the queue, so there is nothing here to
+            # drain; a tool-closed end-of-turn write is surfaced only by the
+            # pipeline-finish sweep_run_changes. This is the NORMAL-completion
+            # path (safe to yield); deliberately NOT in the CancelledError branch
+            # below (a generator cannot yield during GeneratorExit).
             if _injection_registered is not None:
                 for _inj in surface_injection.drain_nowait(_injection_registered):
                     yield _inj

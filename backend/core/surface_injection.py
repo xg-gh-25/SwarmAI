@@ -36,10 +36,13 @@ the active agent: only surface LIVE while the sole streaming session is running 
 tool. For a sub-agent the parent's Agent-tool stays open across the whole sub-agent
 run (its result arrives at sub-agent completion), so a mid-run write is surfaced;
 a background-job write during an idle-tool chat is NOT. A write whose tool has
-already closed (end-of-turn) is not surfaced live by this gate — it is caught by
-the SSE handler's final drain at normal turn completion (the ungated end-of-turn
-catch-up). Losing a live pop is strictly better than leaking a write into the
-wrong tab.
+already CLOSED is dropped HERE at publish (gate → None) and never enters the
+queue — so it is surfaced only by the pipeline-finish sweep_run_changes, NOT by
+the SSE handler's final drain (the final drain only re-delivers events that
+already PASSED this gate but landed after the last in-loop drain; do not
+overclaim it as an end-of-turn catch-up for tool-closed writes — corrected in an
+integration audit). Losing a live pop is strictly better than leaking a write
+into the wrong tab.
 
 DESIGN
 ------

@@ -304,10 +304,12 @@ async def test_watcher_normalizes_path_separators(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_final_drain_delivers_trailing_event_through_real_generator():
     """AC3, driven through the REAL chat_stream message_generator (not
-    drain_nowait in isolation — RP47). run_conversation yields ONE message, and
-    a watcher event is enqueued AFTER that (i.e. after the last in-loop drain,
-    simulating an end-of-turn write). The chat.py FINAL DRAIN (after the
-    async-for, before the excepts) must surface it in the response body.
+    drain_nowait in isolation — RP47). run_conversation yields ONE message, then
+    an event is placed directly on the queue AFTER the last in-loop drain (i.e.
+    an event that already PASSED the in-flight gate — this is precisely the
+    narrow case the final drain exists for; a tool-CLOSED write never reaches the
+    queue, see surface_injection). The chat.py FINAL DRAIN (after the async-for,
+    before the excepts) must surface it in the response body.
 
     Mutation: delete the final-drain block in chat.py → the trailing event is
     dropped by the finally's unregister → this test goes RED. (The prior version
