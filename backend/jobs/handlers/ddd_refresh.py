@@ -55,16 +55,27 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
 
         projects_checked += 1
 
-        # Scheme A (run_d1e933aa, Gate-0): this scheduled job is the SOLE writer of
-        # section_health.json — the GET brain path deliberately never writes it
-        # (a disk write in a read handler is forbidden), so without this refresh the
-        # trust/diagnostics scores freeze at whenever /engine-metrics was last hit
-        # and silently rot (Principle-1 drift). Health refresh is UNCONDITIONAL and
-        # runs BEFORE the staleness `continue` — a brain's HEALTH is independent of
-        # whether its docs are "stale vs code". Per-project try/except (resilient-
-        # lens): one project's failure must never abort the whole refresh. Not
-        # gated on dry_run — recomputing a health snapshot is idempotent and has no
-        # external side effect (unlike an LLM proposal write).
+        # Scheme A (run_d1e933aa, Gate-0): this scheduled job is the SCHEDULED writer
+        # of section_health.json — the ONE refresh that runs on a timer and does NOT
+        # depend on any UI traffic. (It is NOT the only writer: GET
+        # /api/system/engine-metrics → _collect_ddd_health also calls
+        # compute_section_health and writes the file. That GET-path write is a
+        # pre-existing wrinkle — a disk write inside a read handler, the very thing
+        # the DddCard brain-detail path forbids — and it means trust also refreshes
+        # whenever the engine-metrics dashboard is hit; it is NOT this run's concern
+        # to fix. What this job guarantees is that trust/diagnostics get recomputed
+        # on a cadence even if that endpoint is never hit — otherwise the scores
+        # freeze at the last engine-metrics load and silently rot, Principle-1 drift.)
+        # NOTE: still no deploy-time warm compute — a fresh deploy with no
+        # engine-metrics traffic can show a "scored Nd ago" badge until the first
+        # Monday run or the first dashboard load; the badge is always honest about
+        # its age, so this is acceptable, not a bug.
+        # Health refresh is UNCONDITIONAL and runs BEFORE the staleness `continue` —
+        # a brain's HEALTH is independent of whether its docs are "stale vs code".
+        # Per-project try/except (resilient-lens): one project's failure must never
+        # abort the whole refresh. Not gated on dry_run — recomputing a health
+        # snapshot is idempotent (the write is atomic; unlike an LLM proposal write
+        # it has no irreversible external effect).
         try:
             compute_section_health(project_dir)
             health_refreshed += 1

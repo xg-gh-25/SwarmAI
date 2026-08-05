@@ -255,13 +255,17 @@ function JudgmentBlocks(
           <span className="text-[9px] text-[var(--color-text-faint)]">last change</span>
         </Question>
 
-        {/* Q3 — growing? 30d activity + escalations awaiting review. recentActivity
-            undefined = an old daemon that doesn't emit it → honest "—" (unknown),
-            NOT a confident "0" that would falsely read as "no activity". Consistent
-            with the trust/recall "—" treatment. */}
+        {/* Q3 — growing? 30d sedimentation activity + escalations awaiting review.
+            recentActivity counts ALL ddd-changelog writes in 30d — dominantly
+            AUTO-APPLIED cultivation (E2E audit: ~820/851 on SwarmAI carry
+            action:"applied", i.e. the engine sedimenting, not a human editing). So
+            the label is "sediments / 30d", NOT "edits" — it honestly reads as
+            "is the brain being actively written to (by the engine + humans)",
+            never claiming human authorship. undefined (old daemon) → "—", not a
+            confident "0". */}
         <Question testid="ddd-q3-growing" q="Growing?">
           <span className="text-[var(--color-text)]">
-            {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} <span className="text-[9px] text-[var(--color-text-faint)]">edits / 30d</span>
+            {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} <span className="text-[9px] text-[var(--color-text-faint)]">sediments / 30d</span>
           </span>
           <span className={metrics.escalationPending > 0 ? 'text-[9px] text-[#f0a500]' : 'text-[9px] text-[var(--color-text-faint)]'}>
             {metrics.escalationPending} awaiting review

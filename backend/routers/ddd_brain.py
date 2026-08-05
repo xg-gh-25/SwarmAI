@@ -492,10 +492,13 @@ def _brain_detail_metrics(project_dir: Path) -> dict:
         cultivation = None
 
     # recentActivity — Q3 "is it growing?" (value≠size). Count of ddd-changelog
-    # entries STAMPED within the last 30d. This is a MAINTENANCE signal (is the
-    # brain being actively sedimented into?), NOT a size/entry_count (Principle-1:
-    # a bigger brain is not a better one; an ACTIVELY-CULTIVATED one is). Absent
-    # changelog → honest 0, never fabricated, never None.
+    # entries STAMPED within the last 30d. This is a SEDIMENTATION signal (is the
+    # brain being actively written to?), NOT a size/entry_count (Principle-1: a
+    # bigger brain is not a better one; an ACTIVELY-CULTIVATED one is). NOTE: this
+    # is DOMINANTLY auto-applied cultivation, not human edits (E2E audit run_d1e933aa:
+    # ~820/851 on SwarmAI carry action:"applied") — so the UI labels it "sediments",
+    # never "edits", to avoid overstating human authorship. Absent changelog →
+    # honest 0, never fabricated, never None.
     #
     # Deliberately NOT via _build_changelog_index: that helper counts UNDATED
     # entries as in-window (ts is None → counted), which would let timestamp-less
