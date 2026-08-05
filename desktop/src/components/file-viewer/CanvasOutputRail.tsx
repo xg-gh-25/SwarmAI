@@ -27,7 +27,7 @@
  * @exports outputRowOpenDetail — pure builder for the open-file event detail (unit-tested)
  */
 import { memo, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useReferencedFiles, type ReferencedFile } from '../../hooks/useReferencedFiles';
+import { type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import { useChangeStatus, type ChangeStatus } from '../../hooks/useChangeStatus';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -213,18 +213,20 @@ export interface OutputCounts {
 }
 
 export interface CanvasOutputRailProps {
-  /** Active TAB id — the rail's scope key (run_26aa6caa; was sessionId). Stable
-   *  from tab creation, so the rail no longer collapses to a shared '' bucket
-   *  during the session-unresolved window. */
-  tabId: string | undefined;
+  /** The referenced-files (rail rows), supplied by the RESIDENT owner
+   *  (useCanvasHost via FileViewerPanel — run_9e42c066). The rail is now PURE
+   *  PRESENTATIONAL: it does NOT run its own swarm:file-changed listener (that
+   *  would be a SECOND listener writing the same per-tab sessionStorage key —
+   *  Gate-1 Defect 2). The single listener lives in useCanvasHost so a write is
+   *  captured even when this panel is unmounted (Canvas closed). */
+  files: GroupedReferencedFiles;
   /** Reports the current counts up to the header (for the summary line). */
   onCounts?: (counts: OutputCounts) => void;
   /** Path of the file currently shown in Region B — gets the accent left-bar. */
   selectedPath?: string;
 }
 
-export const CanvasOutputRail = memo(function CanvasOutputRail({ tabId, onCounts, selectedPath }: CanvasOutputRailProps) {
-  const { files: grouped } = useReferencedFiles(tabId);
+export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped, onCounts, selectedPath }: CanvasOutputRailProps) {
 
   // Mount timestamp — an output whose firstSeen is AFTER this arrived while the
   // user was watching → it gets one land-pulse (§v6 #4). Outputs already present
@@ -239,8 +241,11 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ tabId, onCounts
   // undefined kind (older backend) falls through to keep (no regression — server
   // already dropped bookkeeping upstream).
   const outputs = useMemo(
-    () => (grouped.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source'),
-    [grouped.written],
+    // `grouped?.written` — defensive against a caller passing an undefined files prop
+    // (O023: runtime-guard a boundary value; TS requires it, but a stubbed/legacy
+    // caller could still omit it — fail to empty, never crash).
+    () => (grouped?.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source'),
+    [grouped?.written],
   );
 
   const paths = useMemo(() => outputs.map((f) => f.path), [outputs]);

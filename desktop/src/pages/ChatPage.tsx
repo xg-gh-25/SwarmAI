@@ -3142,6 +3142,9 @@ export default function ChatPage() {
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
         isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
+        outputCount={canvas.outputCount}
+        canvasOpen={canvas.isOpen}
+        onOpenCanvas={() => window.dispatchEvent(new CustomEvent('swarm:open-canvas'))}
       />
 
       {/* 🔔 Alerts pill — portaled into the left-sidebar slot (run_2bdc68ad).
@@ -3339,7 +3342,7 @@ export default function ChatPage() {
             onTogglePin={canvas.togglePin}
             muted={canvas.muted}
             onToggleMute={canvas.toggleMute}
-            onCanvasMeta={canvas.onCanvasMeta}
+            referencedFiles={canvas.referencedFiles}
           />
         )}
 

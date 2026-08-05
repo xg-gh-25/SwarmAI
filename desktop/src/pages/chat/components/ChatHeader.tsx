@@ -18,6 +18,16 @@ interface ChatHeaderProps {
   // Dynamic tab scaling — disabled "+" button when at limit
   /** True when open tab count >= dynamic max tabs (disables the "+" button). */
   isNewTabDisabled?: boolean;
+
+  // Canvas outputs affordance (run_9e42c066) — when the active tab has produced
+  // outputs but Canvas is CLOSED, show an unobtrusive "N outputs" pill so a run's
+  // deliverables are visible without the Canvas being open. Clicking opens Canvas.
+  /** Number of output rows for the active tab (from the resident useCanvasHost store). */
+  outputCount?: number;
+  /** Whether Canvas is currently open (pill only shows when it is NOT). */
+  canvasOpen?: boolean;
+  /** Open Canvas on the active tab (dispatches swarm:open-canvas). */
+  onOpenCanvas?: () => void;
 }
 
 /**
@@ -45,9 +55,13 @@ export function ChatHeader({
   onNewSession,
   tabStatuses,
   isNewTabDisabled,
+  outputCount = 0,
+  canvasOpen = false,
+  onOpenCanvas,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
+  const showOutputsPill = outputCount > 0 && !canvasOpen;
 
   return (
     <div className="h-10 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)]">
@@ -63,8 +77,25 @@ export function ChatHeader({
         isNewTabDisabled={isNewTabDisabled}
       />
 
-      {/* Right Section: Health Warning + Header Actions */}
+      {/* Right Section: Outputs pill + Health Warning + Header Actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
+        {/* Canvas outputs pill (run_9e42c066) — shown ONLY when the active tab has
+            outputs AND Canvas is closed, so a run's deliverables are never invisible.
+            Click opens Canvas in the current tab (in-band, mirrors the AlertsPill
+            pattern — NOT a separate notification surface). */}
+        {showOutputsPill && (
+          <button
+            type="button"
+            onClick={onOpenCanvas}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-primary)]/10 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/20 text-xs font-medium mr-2 transition-colors"
+            title={t('canvas.openOutputs', 'Open Canvas to review outputs')}
+            aria-label={`${outputCount} output${outputCount !== 1 ? 's' : ''} — open Canvas`}
+            data-testid="chat-header-outputs-pill"
+          >
+            <span className="material-symbols-outlined text-[14px]">draft</span>
+            {outputCount} output{outputCount !== 1 ? 's' : ''}
+          </button>
+        )}
         {/* Health warning — only shown for non-connected states (BottomBar handles normal status) */}
         {health.status === 'disconnected' && (
           <div

@@ -42,7 +42,7 @@ describe('CanvasOutputRail — land-pulse freshness', () => {
   it('does NOT pulse outputs that existed at mount (firstSeen in the past)', () => {
     const past = Date.now() - 10_000;
     mockFiles = [mkFile('old.ts', past)];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const row = screen.getByText('old.ts').closest('[data-testid="canvas-output-row"]')!;
     expect(row.className).not.toContain('canvas-output-fresh');
   });
@@ -51,7 +51,7 @@ describe('CanvasOutputRail — land-pulse freshness', () => {
     // A firstSeen after the rail mounts = it landed while the user was watching.
     const future = Date.now() + 60_000;
     mockFiles = [mkFile('brand-new.ts', future)];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const row = screen.getByText('brand-new.ts').closest('[data-testid="canvas-output-row"]')!;
     expect(row.className).toContain('canvas-output-fresh');
   });

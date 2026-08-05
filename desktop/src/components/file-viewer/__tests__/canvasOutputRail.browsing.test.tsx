@@ -47,13 +47,13 @@ beforeEach(() => { mockFiles = []; });
 describe('CanvasOutputRail — browsing row + empty guard', () => {
   it('shows the bee empty-state when NO outputs AND no selectedPath', () => {
     mockFiles = [];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     expect(screen.getByTestId('canvas-output-rail-empty')).toBeTruthy();
   });
 
   it('does NOT show the bee empty-state when a file is being browsed (selectedPath set, no outputs)', () => {
     mockFiles = [];
-    render(<CanvasOutputRail tabId="s1" selectedPath="/some/where/deck.html" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
     expect(screen.queryByTestId('canvas-output-rail-empty')).toBeNull();
     // The browsed file appears as a row.
     expect(screen.getByText('deck.html')).toBeTruthy();
@@ -62,14 +62,14 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
 
   it('always labels the Browsing row (even with NO written outputs — a lone row needs context)', () => {
     mockFiles = [];
-    render(<CanvasOutputRail tabId="s1" selectedPath="/some/where/deck.html" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
     expect(screen.getByText('Browsing')).toBeTruthy();
     expect(screen.getByTestId('canvas-browsing-row')).toBeTruthy();
   });
 
   it('injects the browsed file as a Browsing row when it is NOT a written output', () => {
     mockFiles = [mkFile('written.ts')];
-    render(<CanvasOutputRail tabId="s1" selectedPath="/some/where/deck.html" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
     expect(screen.getByText('written.ts')).toBeTruthy();     // written row
     expect(screen.getByText('deck.html')).toBeTruthy();       // browsing row
     expect(screen.getByTestId('canvas-browsing-row')).toBeTruthy();
@@ -77,7 +77,7 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
 
   it('does NOT duplicate: a selectedPath matching a written row (by display path) is not re-injected', () => {
     mockFiles = [mkFile('written.ts')];
-    render(<CanvasOutputRail tabId="s1" selectedPath="src/written.ts" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="src/written.ts" />);
     expect(screen.queryByTestId('canvas-browsing-row')).toBeNull();
     // only one row for written.ts
     expect(screen.getAllByText('written.ts')).toHaveLength(1);
@@ -85,7 +85,7 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
 
   it('does NOT duplicate: a selectedPath matching a written row by resolved absolutePath is not re-injected', () => {
     mockFiles = [mkFile('written.ts')]; // absolutePath = /ws/src/written.ts
-    render(<CanvasOutputRail tabId="s1" selectedPath="/ws/src/written.ts" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/ws/src/written.ts" />);
     expect(screen.queryByTestId('canvas-browsing-row')).toBeNull();
     expect(screen.getAllByText('written.ts')).toHaveLength(1);
   });
@@ -93,7 +93,7 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
   it('does NOT inflate onCounts with the browsing row (counts stay written-only)', () => {
     mockFiles = [mkFile('written.ts')];
     const onCounts = vi.fn();
-    render(<CanvasOutputRail tabId="s1" selectedPath="/some/where/deck.html" onCounts={onCounts} />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" onCounts={onCounts} />);
     // last call reflects written outputs only (total=1), browsing excluded
     const last = onCounts.mock.calls.at(-1)?.[0];
     expect(last).toEqual({ total: 1, neu: 0, upd: 0 });
@@ -105,7 +105,7 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
   // "region A is also accented", which the header-only rule forbids.
   it('selected output row carries NO primary accent, and its fill differs from hover', () => {
     mockFiles = [mkFile('written.ts')];
-    render(<CanvasOutputRail tabId="s1" selectedPath="src/written.ts" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="src/written.ts" />);
     const row = screen.getByTestId('canvas-output-row');
     expect(row.className).not.toContain('color-primary');
     // Selected fill = --color-border (a STRONGER neutral than the --color-hover the
@@ -119,7 +119,7 @@ describe('CanvasOutputRail — browsing row + empty guard', () => {
 
   it('browsing row carries NO primary accent (neutral fill + neutral bar)', () => {
     mockFiles = [];
-    render(<CanvasOutputRail tabId="s1" selectedPath="/some/where/deck.html" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} selectedPath="/some/where/deck.html" />);
     const row = screen.getByTestId('canvas-browsing-row');
     expect(row.className).not.toContain('color-primary');
     expect(row.className).toContain('bg-[var(--color-border)]');

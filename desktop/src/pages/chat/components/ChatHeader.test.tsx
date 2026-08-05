@@ -22,7 +22,10 @@ function makeHealth(status: HealthContextValue['health']['status']): HealthConte
   };
 }
 
-function renderHeader(healthStatus: HealthContextValue['health']['status'] = 'connected') {
+function renderHeader(
+  healthStatus: HealthContextValue['health']['status'] = 'connected',
+  extra: { outputCount?: number; canvasOpen?: boolean; onOpenCanvas?: () => void } = {},
+) {
   const tabs: OpenTab[] = [
     { id: 'tab-0', title: 'One', agentId: 'a1', isNew: false },
   ];
@@ -34,6 +37,9 @@ function renderHeader(healthStatus: HealthContextValue['health']['status'] = 'co
         onTabSelect={vi.fn()}
         onTabClose={vi.fn()}
         onNewSession={vi.fn()}
+        outputCount={extra.outputCount}
+        canvasOpen={extra.canvasOpen}
+        onOpenCanvas={extra.onOpenCanvas}
       />
     </HealthContext.Provider>,
   );
@@ -56,5 +62,36 @@ describe('ChatHeader — Alerts pill relocated to sidebar (run_2bdc68ad)', () =>
   it('keeps the health warning in the right cluster when disconnected', () => {
     renderHeader('disconnected');
     expect(screen.getByLabelText(/Backend Offline/i)).toBeInTheDocument();
+  });
+});
+
+describe('ChatHeader — Canvas outputs pill (run_9e42c066)', () => {
+  it('shows the "N outputs" pill when outputCount>0 AND Canvas is CLOSED', () => {
+    renderHeader('connected', { outputCount: 3, canvasOpen: false });
+    const pill = screen.getByTestId('chat-header-outputs-pill');
+    expect(pill).toBeInTheDocument();
+    expect(pill).toHaveTextContent('3 outputs');
+  });
+
+  it('does NOT show the pill when Canvas is OPEN (rail is already visible)', () => {
+    renderHeader('connected', { outputCount: 3, canvasOpen: true });
+    expect(screen.queryByTestId('chat-header-outputs-pill')).toBeNull();
+  });
+
+  it('does NOT show the pill when there are zero outputs', () => {
+    renderHeader('connected', { outputCount: 0, canvasOpen: false });
+    expect(screen.queryByTestId('chat-header-outputs-pill')).toBeNull();
+  });
+
+  it('singularizes the label for exactly one output', () => {
+    renderHeader('connected', { outputCount: 1, canvasOpen: false });
+    expect(screen.getByTestId('chat-header-outputs-pill')).toHaveTextContent('1 output');
+  });
+
+  it('clicking the pill invokes onOpenCanvas (opens Canvas in-band)', () => {
+    const onOpenCanvas = vi.fn();
+    renderHeader('connected', { outputCount: 2, canvasOpen: false, onOpenCanvas });
+    screen.getByTestId('chat-header-outputs-pill').click();
+    expect(onOpenCanvas).toHaveBeenCalledTimes(1);
   });
 });

@@ -14,6 +14,7 @@ import { memo, useState, useCallback, useEffect, useRef, type CSSProperties } fr
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
+import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 
 export const PANEL_CONSTANTS = {
@@ -114,11 +115,11 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
   onTogglePin?: () => void;
   muted?: boolean;
   onToggleMute?: () => void;
-  /** Report panel-internal Canvas state (collapsed + output count) UP to the
-   *  parent so it can include them in the swarm:canvas-state proprioception
-   *  event. Only these two live inside the panel; pin/mute/open are parent state.
-   *  The parent zeroes them when the panel unmounts (Canvas closed). */
-  onCanvasMeta?: (meta: { collapsed: boolean; outputCount: number }) => void;
+  /** The referenced-files (rail rows), owned by the RESIDENT useCanvasHost
+   *  (run_9e42c066) and passed down. The rail is now pure presentational — the
+   *  panel no longer hosts the swarm:file-changed listener, so a write that lands
+   *  while this panel is unmounted (Canvas closed) is still captured upstream. */
+  referencedFiles: GroupedReferencedFiles;
 };
 
 function FileViewerPanelImpl({
@@ -126,7 +127,7 @@ function FileViewerPanelImpl({
   onTogglePin,
   muted,
   onToggleMute,
-  onCanvasMeta,
+  referencedFiles,
   ...props
 }: FileViewerPanelProps) {
   // Rail scope key = the owning TAB id (run_26aa6caa). props.tabScopeKey (the same
@@ -246,26 +247,14 @@ function FileViewerPanelImpl({
     prevFileRef.current = selectedPath;
   }, [selectedPath]);
 
-  // Output counts published by the rail — drives the header summary.
+  // Panel-local output counts (neu/upd BREAKDOWN) published by the rail — drives the
+  // header summary line + the collapsed-rail "N files · M new" display. This is
+  // DISTINCT from the resident outputCount (useCanvasHost, SSOT): that single total
+  // feeds proprioception + the ChatHeader pill; this carries the new-vs-modified
+  // split for in-panel display only. The onCanvasMeta→outputCount round-trip was
+  // REMOVED (run_9e42c066): outputCount now derives from the resident store, so the
+  // panel no longer feeds the count up (that was Gate-1 Defect 3, a second writer).
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
-
-  // Report panel-internal state (outputCount) UP so the parent can fold it into
-  // the swarm:canvas-state proprioception event. `collapsed` is always false now
-  // (kept in the payload for a stable contract with the parent + proprioception
-  // schema; the dock that set it true is gone). Fires on change; the parent
-  // equality-guards the actual DOM dispatch. Stale-count safety does NOT rely on
-  // an unmount reset here (this effect has no cleanup): the parent's close()
-  // clears outputCount and the count is per-tab slice state, so switching/closing
-  // a tab restores/zeroes it at the source.
-  useEffect(() => {
-    onCanvasMeta?.({ collapsed: false, outputCount: counts.total });
-    // Deps: only counts.total. onCanvasMeta is called SYNCHRONOUSLY (not a
-    // subscription that must re-bind), and the parent does not always memoize
-    // it — including it here re-fired the effect on every parent render, causing
-    // a redundant swarm:canvas-state emit (REVIEW F1). The parent value-guards
-    // the actual DOM dispatch, but we avoid the wasteful call at the source.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [counts.total]);
 
   // Clamp helper — the viewport-aware ceiling (availableCanvasMax, NOT raw
   // MAX_WIDTH) so a width can never starve chat. innerWidth is read LIVE (per call,
@@ -421,7 +410,7 @@ function FileViewerPanelImpl({
             IMPROVEMENT.md:7). Zero-size, no visual footprint. */}
         {railTabId !== undefined && (
           <div className="hidden" aria-hidden="true">
-            <CanvasOutputRail tabId={railTabId} onCounts={setCounts} selectedPath={selectedPath} />
+            <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} />
           </div>
         )}
       </div>
@@ -601,7 +590,7 @@ function FileViewerPanelImpl({
               className={outputsCollapsed ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
               data-testid="canvas-outputs-list"
             >
-              <CanvasOutputRail tabId={railTabId} onCounts={setCounts} selectedPath={selectedPath} />
+              <CanvasOutputRail files={referencedFiles} onCounts={setCounts} selectedPath={selectedPath} />
             </div>
           </div>
         )}

@@ -52,7 +52,7 @@ beforeEach(() => {
 describe('CanvasOutputRail — tree-list row style', () => {
   it('renders a file-type icon for each output row', () => {
     mockFiles = [mkFile('foo.ts')];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const row = screen.getByText('foo.ts').closest('[data-testid="canvas-output-row"]')!;
     // A material-symbols file icon element must be present in the row.
     const icon = row.querySelector('[data-testid="canvas-output-icon"]');
@@ -65,7 +65,7 @@ describe('CanvasOutputRail — tree-list row style', () => {
       ['src/components/added.ts', 'new'],
       ['src/components/mod.ts', 'upd'],
     ]);
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     // Word-tags must be gone.
     expect(screen.queryByText('NEW')).toBeNull();
     expect(screen.queryByText('UPD')).toBeNull();
@@ -78,7 +78,7 @@ describe('CanvasOutputRail — tree-list row style', () => {
   it('the status chip uses the git SEMANTIC color, not the primary accent', () => {
     mockFiles = [mkFile('added.ts')];
     mockStatus = new Map([['src/components/added.ts', 'new']]);
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const chip = screen.getByTestId('canvas-output-badge');
     // green (git-added) semantic color — NOT --color-primary
     expect(chip.getAttribute('style') || '').not.toContain('--color-primary');
@@ -87,14 +87,14 @@ describe('CanvasOutputRail — tree-list row style', () => {
 
   it('displays the relative file.path locator, not a re-shortened path', () => {
     mockFiles = [mkFile('foo.ts')];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     // dir locator = dirname of file.path (relative) — proves no new path logic.
     expect(screen.getByText('src/components')).toBeTruthy();
   });
 
   it('exposes list semantics (role=list wrapping role=listitem rows) for a11y', () => {
     mockFiles = [mkFile('a.ts', 2000), mkFile('b.ts', 1000)];
-    render(<CanvasOutputRail tabId="s1" />);
+    render(<CanvasOutputRail files={{ written: mockFiles }} />);
     const list = screen.getByRole('list');
     expect(list).toBeTruthy();
     // Each output row is a listitem within the list.
