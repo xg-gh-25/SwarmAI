@@ -80,7 +80,7 @@ function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const stored = localStorage.getItem(PANEL_CONSTANTS.STORAGE_KEY);
   // No manual drag on record → responsive default (fraction of viewport). A stored
-  // value means the user dragged (updateWidth is the ONLY writer) → honor it, but
+  // value means the user dragged (persistWidth is the ONLY writer) → honor it, but
   // clamped AT READ TIME to what currently fits (availableCanvasMax). A width dragged
   // wide on a big monitor must not starve chat when reopened on a smaller window; we
   // clamp only here (read time), NOT on a live resize — the resize-recompute effect
@@ -155,7 +155,7 @@ function FileViewerPanelImpl({
   const revealWidth = entered ? width : Math.min(PANEL_CONSTANTS.MIN_WIDTH, width);
   // The live drag ceiling (viewport-aware) — exposed as aria-valuemax so a
   // screen-reader user hears the REACHABLE max, not the raw MAX_WIDTH (which
-  // updateWidth will never let the width reach on a normal window). Read at
+  // setLiveWidth's clamp will never let the width reach on a normal window). Read at
   // render time; refreshes on any re-render (good enough — the panel is not a
   // frequently-resized target, and it is strictly more honest than a fixed 900).
   const dragCeiling =
@@ -164,6 +164,14 @@ function FileViewerPanelImpl({
       : availableCanvasMax(window.innerWidth);
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
+  // rAF-throttle state (run_4b67c510): a mousemove writes the latest requested
+  // width to pendingWidthRef and schedules ONE animation frame; the frame applies
+  // it (setWidth only). This coalesces 100+Hz mousemove events to ≤1 setWidth per
+  // paint, so the (memoized) FileViewer subtree reconciles at most once per frame,
+  // not once per mouse event. localStorage is NOT written per frame — only on
+  // drag-end (mouseup + cleanup flush), so the drag path has zero synchronous I/O.
+  const rafIdRef = useRef<number | null>(null);
+  const pendingWidthRef = useRef(0);
   // Accent tint for the spout + divider = the primary accent. (Earlier this read
   // navSource, but navSource is only set by nav-CARD clicks — the auto-surface
   // path never sets it, so it would show a stale, unrelated region color. A
@@ -233,17 +241,28 @@ function FileViewerPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [counts.total]);
 
-  // Persist width changes. Clamp to the viewport-aware ceiling (availableCanvasMax),
-  // NOT raw MAX_WIDTH, so a drag can't pull the Canvas wide enough to starve chat.
-  const updateWidth = useCallback((newWidth: number) => {
-    const clamped = Math.max(
-      PANEL_CONSTANTS.MIN_WIDTH,
-      Math.min(availableCanvasMax(window.innerWidth), newWidth),
-    );
-    setWidth(clamped);
-    localStorage.setItem(PANEL_CONSTANTS.STORAGE_KEY, String(clamped));
-  }, []);
-
+  // Clamp helper — the viewport-aware ceiling (availableCanvasMax, NOT raw
+  // MAX_WIDTH) so a width can never starve chat. innerWidth is read LIVE (per call,
+  // never cached) so the ceiling stays correct if the window resizes mid-drag.
+  const clampWidth = useCallback(
+    (w: number) =>
+      Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(availableCanvasMax(window.innerWidth), w)),
+    [],
+  );
+  // setLiveWidth — the per-FRAME path: update the visual width ONLY, no persist.
+  // Called from the rAF callback during a drag (≤1/frame) and from the mouseup/
+  // cleanup flush. NO localStorage here — the drag path must stay free of
+  // synchronous main-thread I/O (run_4b67c510).
+  const setLiveWidth = useCallback((newWidth: number) => {
+    setWidth(clampWidth(newWidth));
+  }, [clampWidth]);
+  // persistWidth — writes localStorage ONCE, at drag-end (mouseup / cleanup). This
+  // is the SOLE localStorage writer for width, so a user-dragged width is the only
+  // thing that turns the panel "user-sized"; expand (setWidth-direct) still never
+  // persists (keeps the resize-recompute effect live). Clamps before persisting.
+  const persistWidth = useCallback((newWidth: number) => {
+    localStorage.setItem(PANEL_CONSTANTS.STORAGE_KEY, String(clampWidth(newWidth)));
+  }, [clampWidth]);
   // Resize drag handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -254,18 +273,41 @@ function FileViewerPanelImpl({
     setIsDragging(true);
     startXRef.current = e.clientX;
     startWidthRef.current = width;
+    // Seed pendingWidthRef to the CURRENT width so a click-without-move (mousedown
+    // then mouseup, no mousemove) flushes the unchanged width (idempotent no-op) —
+    // NOT a stale value from a prior drag, and NOT 0 (which clamps to MIN_WIDTH and
+    // would snap+persist a 320px panel on a stray click). Every mousemove overwrites
+    // this immediately; it only matters for the zero-move case.
+    pendingWidthRef.current = width;
   }, [width]);
 
   useEffect(() => {
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Dragging the left edge: moving left = wider, right = narrower
-      const delta = startXRef.current - e.clientX;
-      updateWidth(startWidthRef.current + delta);
+      // Dragging the left edge: moving left = wider, right = narrower.
+      // Record the latest requested width; schedule ONE rAF that applies it
+      // (setLiveWidth only — NO persist). Extra mousemoves within the same frame
+      // just overwrite pendingWidthRef, coalescing to ≤1 setWidth per paint.
+      pendingWidthRef.current = startWidthRef.current + (startXRef.current - e.clientX);
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          setLiveWidth(pendingWidthRef.current);
+        });
+      }
     };
 
     const handleMouseUp = () => {
+      // Flush the final frame synchronously, THEN persist ONCE. Order = cancel →
+      // flush → null, so the pending rAF cannot also fire (no double-apply), and
+      // the last requested width is always the one committed + persisted.
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      setLiveWidth(pendingWidthRef.current);
+      persistWidth(pendingWidthRef.current);
       setIsDragging(false);
     };
 
@@ -279,18 +321,29 @@ function FileViewerPanelImpl({
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
+      // Drag-end via ANY path other than mouseup (unmount, isDragging flipped
+      // elsewhere): flush + persist the pending width so a drag is never lost.
+      // On a normal mouseup this is a no-op (rafIdRef already null). This effect
+      // only binds while isDragging, so a non-drag unmount has rafIdRef===null and
+      // does nothing.
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+        setLiveWidth(pendingWidthRef.current);
+        persistWidth(pendingWidthRef.current);
+      }
     };
-  }, [isDragging, updateWidth]);
+  }, [isDragging, setLiveWidth, persistWidth]);
 
   // Responsive default follows the viewport — recompute on window resize, but ONLY
   // when the user has NOT manually sized the panel (no localStorage) — a dragged
   // width is authoritative and immune to resize. Gate-1 CRITICAL fixes:
-  //  · `!expanded`  — expand snaps width to MAX_WIDTH via setWidth (NOT updateWidth,
+  //  · `!expanded`  — expand snaps width to MAX_WIDTH via setWidth (NOT persistWidth,
   //    so it never persists); recomputing during expand would clobber MAX_WIDTH and
   //    leave a stale preExpandWidthRef.
   //  · `entered`    — the mount reveal eases MIN→width via a CSS width transition;
   //    a mid-animation setWidth restarts/janks it.
-  // NOT persisted here (setWidth, not updateWidth): a resize is not a manual choice,
+  // NOT persisted here (setWidth, not persistWidth): a resize is not a manual choice,
   // so it must not turn the panel into a "user-sized" one and lock out future resizes.
   useEffect(() => {
     if (typeof window === 'undefined') return;

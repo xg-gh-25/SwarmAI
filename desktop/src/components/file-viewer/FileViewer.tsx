@@ -19,6 +19,7 @@
  */
 
 import {
+  memo,
   useState,
   useEffect,
   useCallback,
@@ -117,7 +118,7 @@ function LoadingFallback() {
 /*  FileViewer                                                         */
 /* ------------------------------------------------------------------ */
 
-export default function FileViewer({
+function FileViewerImpl({
   initialFile,
   onClose,
   onAttachToChat,
@@ -713,3 +714,15 @@ export default function FileViewer({
     </div>
   );
 }
+
+// LOAD-BEARING memo (run_4b67c510): during a Canvas resize DRAG, the parent
+// FileViewerPanel calls setWidth once per animation frame (rAF-throttled). Without
+// this memo, each of those re-renders reconciles the entire FileViewer subtree
+// (FileEditorCore ~1847 lines + xterm + HTML iframe renderers) every frame, causing
+// visible drag jank with a large file / HTML artifact open. All props from the
+// FileViewerPanel call site are referentially stable across a width-only re-render
+// (initialFile = useCanvasHost slice.file — a stable ref during a drag, only patch()
+// mutates it; onClose = useCallback; tabScopeKey primitive; variant literal), so the
+// default shallow compare correctly skips the subtree. Do NOT remove without
+// eliminating the per-frame width re-render at its source.
+export default memo(FileViewerImpl);
