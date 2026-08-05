@@ -61,8 +61,8 @@ describe('BrainHomeView — bento render', () => {
     mockGetBrains.mockResolvedValue([mk('Needy', { sinking: 4, uncommitted: true }), mk('Calm'), mk('Mild', { pending: 1 })]);
     render(<BrainHomeView />);
     await waitFor(() => expect(screen.getByTestId('brain-home')).toBeTruthy());
-    // hero is the needy one, rendered full → its metric tiles appear (after detail fetch)
-    await waitFor(() => expect(screen.getByTestId('health-tile-noise')).toBeTruthy());
+    // hero is the needy one, rendered full → its judgment questions appear (after detail fetch)
+    await waitFor(() => expect(screen.getByTestId('ddd-q4-prune')).toBeTruthy());
     expect(screen.getByTestId('brain-home-hero')).toBeTruthy();
     // exactly ONE hero detail fetch, for the hero
     expect(mockGetBrainDetail).toHaveBeenCalledTimes(1);

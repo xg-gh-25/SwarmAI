@@ -60,6 +60,11 @@ export interface DetailHealth {
    *  value is null today; typed number|null so a future score fits without a
    *  breaking change. `experimental` gates the UI chip. */
   recall: { value: number | null; experimental: boolean };
+  /** Q3 "is it growing?" — count of ddd-changelog entries STAMPED within 30d.
+   *  A MAINTENANCE signal (value≠size: an actively-cultivated brain, NOT a big
+   *  one). Undated/old rows excluded (honest under-count). Present (0 when no
+   *  changelog); OPTIONAL in the type only for pre-deploy daemon skew. */
+  recentActivity?: number;
   /** the 5-dim per-section scores verbatim (doc → {sections: {sec: SectionDiagnostic}}).
    *  null when no scheduled score. Display-only diagnostic detail. */
   diagnostics: Record<string, { sections?: Record<string, SectionDiagnostic> }> | null;
@@ -194,6 +199,25 @@ export async function getBrains(): Promise<BrainSummary[]> {
 export async function getBrainDetail(name: string): Promise<BrainDetail> {
   const resp = await api.get<BrainDetail>(`/ddd/brains/${encodeURIComponent(name)}`);
   return resp.data;
+}
+
+/** Aggregate a brain's ② knowledge entries into a per-type count for the DddCard
+ *  type-mix bar. The CONSUMER computes this (DddCard never touches sections) — it's
+ *  the data-plumbing fix for the 7-type×3-layer bar (Gate-1: entries live on
+ *  detail.sections[].entries, not on DetailHealth). Returns undefined when there
+ *  are no entries, so the card omits the bar entirely (no vanity empty bar). */
+export function aggregateTypeCounts(sections: BrainSection[]): Record<EntryType, number> | undefined {
+  const counts: Record<EntryType, number> = {
+    guideline: 0, pitfall: 0, decision: 0, model: 0, process: 0, principle: 0, correction: 0,
+  };
+  let total = 0;
+  for (const s of sections) {
+    for (const e of s.entries) {
+      counts[e.entryType] = (counts[e.entryType] ?? 0) + 1;
+      total += 1;
+    }
+  }
+  return total > 0 ? counts : undefined;
 }
 
 // ── Review API (Run 2) ────────────────────────────────────────────────────────

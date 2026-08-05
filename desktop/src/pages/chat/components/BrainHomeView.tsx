@@ -19,8 +19,8 @@
  * (2) + sinking + pending. Ties broken by name for stable ordering (no Math.random).
  */
 import { useEffect, useState } from 'react';
-import { getBrains, getBrainDetail } from '../../../services/ddd';
-import type { BrainSummary, DetailHealth } from '../../../services/ddd';
+import { getBrains, getBrainDetail, aggregateTypeCounts } from '../../../services/ddd';
+import type { BrainSummary, DetailHealth, EntryType } from '../../../services/ddd';
 import { DddCard } from '../../../components/layout/DddCard';
 
 export function attentionScore(h: BrainSummary['health']): number {
@@ -44,6 +44,7 @@ export interface BrainHomeViewProps {
 export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
   const [brains, setBrains] = useState<BrainSummary[] | null>(null);
   const [heroMetrics, setHeroMetrics] = useState<DetailHealth | undefined>(undefined);
+  const [heroTypeCounts, setHeroTypeCounts] = useState<Record<EntryType, number> | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
@@ -61,8 +62,12 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
     if (!hero) return;
     let alive = true;
     getBrainDetail(hero.name).then(
-      (d) => { if (alive) setHeroMetrics(d.health); },
-      () => { if (alive) setHeroMetrics(undefined); },  // tiles just won't render
+      (d) => {
+        if (!alive) return;
+        setHeroMetrics(d.health);
+        setHeroTypeCounts(aggregateTypeCounts(d.sections));  // type-mix bar (Gate-1 data path)
+      },
+      () => { if (alive) { setHeroMetrics(undefined); setHeroTypeCounts(undefined); } },  // tiles just won't render
     );
     return () => { alive = false; };
   }, [hero?.name]);
@@ -98,6 +103,7 @@ export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
           lifecycleStage={hero.lifecycleStage}
           health={hero.health}
           metrics={heroMetrics}
+          typeCounts={heroTypeCounts}
         />
       </div>
 

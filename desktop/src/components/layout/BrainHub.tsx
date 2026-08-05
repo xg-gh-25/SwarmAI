@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   getBrains, getBrainDetail, getReview, approveReview, rejectReviewHunk,
-  approveProposal, rejectProposal, getDistribution,
+  approveProposal, rejectProposal, getDistribution, aggregateTypeCounts,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, BrainSection, KnowledgeEntry, EntryType, DecayState, SectionKey,
@@ -309,7 +309,8 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
           daemon-skew guard inside DddCard/MetricTiles, O023). */}
       {detail.health?.noise && (
         <div className="px-4 pb-3 flex-shrink-0" data-testid="brainhub-healthstrip">
-          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health} />
+          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
+            typeCounts={aggregateTypeCounts(detail.sections)} />
         </div>
       )}
 

@@ -34,6 +34,15 @@ vi.mock('../../services/ddd', () => ({
   approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
   rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
   getDistribution: (...a: unknown[]) => mockGetDistribution(...a),
+  // pure aggregation helper — real impl (no spy needed; contract-new export, R27)
+  aggregateTypeCounts: (sections: { entries: { entryType: string }[] }[]) => {
+    const c: Record<string, number> = {
+      guideline: 0, pitfall: 0, decision: 0, model: 0, process: 0, principle: 0, correction: 0,
+    };
+    let total = 0;
+    for (const s of sections) for (const e of s.entries) { c[e.entryType] = (c[e.entryType] ?? 0) + 1; total += 1; }
+    return total > 0 ? c : undefined;
+  },
 }));
 
 vi.mock('../../services/agents', () => ({
@@ -669,40 +678,38 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   }
 
-  it('renders the 4 action tiles as the headline', async () => {
+  it('renders the 4 judgment questions as the headline (healthy/fresh/growing/prune)', async () => {
     await openBrain();
     await waitFor(() => expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy());
-    expect(screen.getByTestId('health-tile-noise')).toBeTruthy();
-    expect(screen.getByTestId('health-tile-trust')).toBeTruthy();
-    expect(screen.getByTestId('health-tile-escalation')).toBeTruthy();
-    expect(screen.getByTestId('health-tile-recall')).toBeTruthy();
+    expect(screen.getByTestId('ddd-q1-healthy')).toBeTruthy();
+    expect(screen.getByTestId('ddd-q2-fresh')).toBeTruthy();
+    expect(screen.getByTestId('ddd-q3-growing')).toBeTruthy();
+    expect(screen.getByTestId('ddd-q4-prune')).toBeTruthy();
   });
 
-  it('noise tile shows the reclaimable count + a reclaim action-hint when > 0', async () => {
+  it('Q4 prune shows the reclaimable noise count when > 0', async () => {
     await openBrain();
-    const noise = await screen.findByTestId('health-tile-noise');
-    expect(noise.textContent).toContain('3');
-    expect(noise.textContent?.toLowerCase()).toContain('reclaim');
+    const prune = await screen.findByTestId('ddd-q4-prune');
+    expect(prune.textContent).toContain('3');
+    expect(prune.textContent?.toLowerCase()).toContain('reclaimable');
   });
 
-  it('trust tile reports the DISTRIBUTION (sections below high), NOT an invented rollup verdict', async () => {
+  it('Q1 healthy reports the trust DISTRIBUTION (sections below high), NOT an invented rollup verdict', async () => {
     await openBrain();
-    const trust = await screen.findByTestId('health-tile-trust');
+    const q1 = await screen.findByTestId('ddd-q1-healthy');
     // fixture: 4 sections, moderate + low are below `high` → 2/4
-    expect(trust.textContent).toContain('2/4');
+    expect(q1.textContent).toContain('2/4');
     // must NOT collapse to a single verdict word like "moderate"/"low" (that = the
     // vanity rollup backend Gate-1 refused)
-    expect(trust.textContent).not.toContain('moderate');
+    expect(q1.textContent).not.toContain('moderate');
   });
 
-  it('recall tile carries an experimental chip and NO action-hint (design §4)', async () => {
+  it('recall carries an experimental chip and is NOT one of the 4 action questions (design §4)', async () => {
     await openBrain();
     expect(await screen.findByTestId('recall-experimental-chip')).toBeTruthy();
-    const recall = screen.getByTestId('health-tile-recall');
-    // null value renders as em-dash, never a fabricated number
-    expect(recall.textContent).toContain('—');
-    expect(recall.textContent?.toLowerCase()).not.toContain('reclaim');
-    expect(recall.textContent?.toLowerCase()).not.toContain('awaiting');
+    // recall is a labeled lab-signal line, not a judgment question with an action-hint
+    const q3 = screen.getByTestId('ddd-q3-growing');
+    expect(q3.textContent?.toLowerCase()).not.toContain('recall');
   });
 
   it('renders the DEMOTED 5-dim diagnostics row', async () => {
