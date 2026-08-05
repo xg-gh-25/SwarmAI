@@ -1,121 +1,231 @@
 /**
- * BrainHomeView.tsx — the durable "Brain Home" layer on the empty-state landing.
+ * BrainHomeView.tsx — the "Deliver-first" Welcome landing (Variant A, run_fc7078c4).
  *
- * run_9ada46ae (Top-3 layout): the Welcome screen shows ONLY the pinned Top-3 —
- * the primary (SwarmAI) as a full ontology card on the left + up to 2 pinned focus
- * brains as small cards stacked on the right. Everything else lives in Brain Hub
- * (a "view all" link). Pinned order is backend-driven (getBrainsWithPinned →
- * project_registry.get_pinned_projects: SwarmAI first, existence-guarded).
+ * REPLACES the brain-data-dump hero (run_9ada46ae Top-3 / big DddCard) with a
+ * 3-tier information hierarchy that answers the real question on open — "what needs
+ * me / what's in flight" — and demotes brain health to a single pulse strip:
  *
- * REPLACES the old attention-picked hero (pickHero/attentionScore, retired) — the
- * pinned set is a deliberate product choice (the focus projects), not "the noisiest
- * brain". A non-pinned brain that needs attention is surfaced in Brain Hub, not here.
+ *   TIER 1  Needs your decision — brains with health.pending>0 (amber rows).
+ *   TIER 2  In flight          — active pipeline runs (running / paused-decision;
+ *                                crash_residue paused runs are FILTERED, they are
+ *                                not decisions). Focus items stay in WelcomeScreen.
+ *   TIER 3  Brain pulse        — a demoted one-line strip: brain count + the 3-layer
+ *                                ontology proportion bar (from summary.typeCounts,
+ *                                FIRST-PAINT, no getBrainDetail) + the primary brain's
+ *                                last change + a Brain Hub button.
  *
- * DURABILITY INVARIANT: this layer reads brains INDEPENDENTLY of the session
- * briefing. On its own read failure / zero brains, it renders nothing (never throws,
- * never blanks the briefing). ONE lazy detail fetch for the primary full card only.
+ * DURABILITY INVARIANT (hardened run_fc7078c4): the two reads — brains
+ * (getBrainsWithPinned) and runs (fetchActivePipelines) — are INDEPENDENT. One
+ * failing/empty renders only its tier absent; siblings survive. Neither read throws
+ * to the caller (each catches to empty). The view hides itself only once BOTH reads
+ * have resolved empty (during the brief initial load it renders nothing, then fills —
+ * the same progressive paint as the rest of the Welcome landing).
  */
 import { useEffect, useState } from 'react';
-import { getBrainsWithPinned, getBrainDetail, aggregateTypeCounts } from '../../../services/ddd';
-import type { BrainSummary, DetailHealth, EntryType } from '../../../services/ddd';
-import { DddCard } from '../../../components/layout/DddCard';
+import { getBrainsWithPinned } from '../../../services/ddd';
+import type { BrainSummary, EntryType } from '../../../services/ddd';
+import { pipelinesService, type PipelineRun } from '../../../services/pipelines';
+import { LAYERS, layerTotals } from '../../../components/layout/dddLayers';
 
 export interface BrainHomeViewProps {
   onOpenHub?: () => void;
   onOpenBrain?: (name: string) => void;
 }
 
+// Cap the in-flight list so a busy multi-project workspace doesn't wall the screen.
+const MAX_INFLIGHT = 6;
+
 export function BrainHomeView({ onOpenHub, onOpenBrain }: BrainHomeViewProps) {
+  // Two INDEPENDENT reads — a failure in one must not blank the other (durability).
   const [brains, setBrains] = useState<BrainSummary[] | null>(null);
   const [pinned, setPinned] = useState<string[]>([]);
-  const [primaryMetrics, setPrimaryMetrics] = useState<DetailHealth | undefined>(undefined);
-  const [primaryTypeCounts, setPrimaryTypeCounts] = useState<Record<EntryType, number> | undefined>(undefined);
+  const [runs, setRuns] = useState<PipelineRun[]>([]);
 
   useEffect(() => {
     let alive = true;
     getBrainsWithPinned().then(
-      ({ brains: b, pinned: p }) => {
-        if (!alive) return;
-        setBrains(b);
-        setPinned(p);
-        const primary = p[0];
-        if (primary) {
-          getBrainDetail(primary).then(
-            (d) => { if (alive) { setPrimaryMetrics(d.health); setPrimaryTypeCounts(aggregateTypeCounts(d.sections)); } },
-            () => { if (alive) { setPrimaryMetrics(undefined); setPrimaryTypeCounts(undefined); } },
-          );
-        }
-      },
-      () => { if (alive) setBrains([]); },   // own-read failure → render nothing, never blank
+      ({ brains: b, pinned: p }) => { if (alive) { setBrains(b); setPinned(p); } },
+      () => { if (alive) setBrains([]); },   // brains read fails → tier 1/3 hide, tier 2 survives
+    );
+    pipelinesService.fetchActivePipelines().then(
+      (r) => { if (alive) setRuns(r); },
+      () => { if (alive) setRuns([]); },      // runs read fails → tier 2 hides, tier 1/3 survive
     );
     return () => { alive = false; };
   }, []);
 
-  // loading / zero brains → render nothing (never a blank box)
-  if (brains === null || brains.length === 0) return null;
+  // ── Tier 1 data: brains with a pending decision ──
+  const decisionBrains = (brains ?? []).filter((b) => b.health.pending > 0);
 
-  const byName = new Map(brains.map((b) => [b.name, b]));
-  const primary = pinned[0] ? byName.get(pinned[0]) : undefined;
-  const rightPins = pinned.slice(1).map((n) => byName.get(n)).filter((b): b is BrainSummary => !!b);
-  if (!primary) return null;  // no resolvable primary → nothing (rest is in Brain Hub)
+  // ── Tier 2 data: active runs that are RUNNING or a genuine paused DECISION.
+  //    crash_residue paused runs are NOT decisions (the same noise Radar drops). ──
+  const activeInFlight = runs.filter(
+    (r) => r.status === 'running' || (r.status === 'paused' && r.pauseKind === 'decision'),
+  );
+  const inFlight = activeInFlight.slice(0, MAX_INFLIGHT);
+  const inFlightOverflow = activeInFlight.length - inFlight.length;  // >0 → "+N more" (no silent cap)
 
-  const openBrain = (name: string) => onOpenBrain?.(name);
+  // ── Tier 3 data: the brain pulse (aggregate ontology + primary's last change) ──
+  const allBrains = brains ?? [];
+  // pinned[0] is the primary; fall back to the first brain if the pin is stale
+  // (names a deleted brain) so the "edited X" signal doesn't silently vanish.
+  const primary = (pinned[0] ? allBrains.find((b) => b.name === pinned[0]) : undefined) ?? allBrains[0];
+  const aggTypeCounts = aggregateTypeCounts(allBrains);
+  const hasPulse = allBrains.length > 0;
+
+  const hasTier1 = decisionBrains.length > 0;
+  const hasTier2 = inFlight.length > 0;
+
+  // Whole view hides only when EVERY tier is empty (never throws / blanks siblings).
+  if (!hasTier1 && !hasTier2 && !hasPulse) return null;
 
   return (
-    <div className="w-full mt-2" data-testid="brain-home">
-      <div className="flex items-center justify-end mb-2">
-        <button
-          data-testid="brain-home-batch-review"
-          onClick={() => onOpenHub?.()}
-          className="text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-0.5 hover:bg-[#12233a]"
-          title="Open Brain Hub — view all brains"
-        >
-          View all in Brain Hub →
-        </button>
-      </div>
+    <div className="w-full mt-2 flex flex-col gap-3" data-testid="brain-home">
+      {hasTier1 && <DecisionBlock brains={decisionBrains} onOpenBrain={onOpenBrain} />}
+      {hasTier2 && <InFlightBlock runs={inFlight} total={activeInFlight.length} overflow={inFlightOverflow} onOpenHub={onOpenHub} />}
+      {hasPulse && (
+        <BrainPulse
+          count={allBrains.length}
+          typeCounts={aggTypeCounts}
+          lastChange={primary?.health.lastChangeRelative}
+          onOpenHub={onOpenHub}
+        />
+      )}
+    </div>
+  );
+}
 
-      {/* Top-3 bento: primary full card (left) + up to 2 pinned small stacked (right).
-          run_b4d3eeeb:
-          • ≥2 pins → 2-col grid, items-stretch so the right cell matches the hero
-            height and the pins fill it (flex-1 + h-full button), no bottom-right gap.
-          • <2 pins → collapse to a single 1fr column (no reserved 260px empty gap),
-            and items-start so a lone pin sits at natural height (no over-stretch). */}
-      <div
-        className={`grid gap-3 ${rightPins.length >= 2 ? 'items-stretch' : 'items-start'}`}
-        style={{ gridTemplateColumns: rightPins.length > 0 ? 'minmax(0, 1fr) 260px' : 'minmax(0, 1fr)' }}
-        data-testid="brain-home-top3"
-      >
-        <div data-testid="brain-home-hero">
-          <DddCard
-            density="full"
-            name={primary.name}
-            kind={primary.kind}
-            sectionsPresent={primary.sectionsPresent}
-            lifecycleStage={primary.lifecycleStage}
-            health={primary.health}
-            metrics={primaryMetrics}
-            typeCounts={primaryTypeCounts ?? primary.typeCounts}
-          />
-        </div>
-        {rightPins.length > 0 && (
-          <div data-testid="brain-home-pins" className="flex flex-col gap-3 h-full">
-            {rightPins.map((b) => (
-              <div key={b.name} className="flex-1 min-h-0">
-                <DddCard
-                  density="compact"
-                  name={b.name}
-                  kind={b.kind}
-                  sectionsPresent={b.sectionsPresent}
-                  lifecycleStage={b.lifecycleStage}
-                  health={b.health}
-                  typeCounts={b.typeCounts}
-                  onOpen={openBrain}
-                />
-              </div>
-            ))}
-          </div>
+/** Sum every brain's 7-type histogram into one workspace-wide histogram (for the
+ *  pulse bar). Brains without typeCounts (daemon skew) contribute nothing. */
+function aggregateTypeCounts(brains: BrainSummary[]): Record<EntryType, number> | undefined {
+  const acc: Record<EntryType, number> = {
+    principle: 0, correction: 0, decision: 0, model: 0, guideline: 0, pitfall: 0, process: 0,
+  };
+  let any = false;
+  for (const b of brains) {
+    if (!b.typeCounts) continue;
+    any = true;
+    for (const [k, n] of Object.entries(b.typeCounts) as [EntryType, number][]) acc[k] += n;
+  }
+  return any ? acc : undefined;
+}
+
+// ── TIER 1 ───────────────────────────────────────────────────────────────────
+function DecisionBlock({ brains, onOpenBrain }: { brains: BrainSummary[]; onOpenBrain?: (n: string) => void }) {
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] overflow-hidden" data-testid="tier-decision">
+      <div className="flex items-center gap-2 px-3.5 pt-3 pb-1.5">
+        <span className="w-2 h-2 rounded-full" style={{ background: '#f0a500' }} />
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[#f0a500]">Needs your decision</span>
+        <span className="ml-auto text-[10px] text-[var(--color-text-faint)]">{brains.length} brain{brains.length > 1 ? 's' : ''}</span>
+      </div>
+      <div className="pb-1.5">
+        {brains.map((b) => (
+          <button
+            key={b.name}
+            data-testid={`decision-${b.name}`}
+            onClick={() => onOpenBrain?.(b.name)}
+            className="w-full flex items-center gap-2.5 px-3.5 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors text-left"
+          >
+            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: '#f0a500' }} />
+            <span className="text-sm text-[var(--color-text)] flex-1 min-w-0 truncate">{b.name}</span>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(240,165,0,.14)', color: '#f0a500' }}>
+              {b.health.pending} pending
+            </span>
+            {b.health.sinking > 0 && (
+              <span className="text-[11px] text-[var(--color-text-faint)] shrink-0">{b.health.sinking} sinking</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── TIER 2 ───────────────────────────────────────────────────────────────────
+function InFlightBlock({
+  runs, total, overflow, onOpenHub,
+}: { runs: PipelineRun[]; total: number; overflow: number; onOpenHub?: () => void }) {
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] overflow-hidden" data-testid="tier-inflight">
+      <div className="flex items-center gap-2 px-3.5 pt-3 pb-1.5">
+        <span className="text-[#58a6ff] text-[11px]">▸</span>
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[#58a6ff]">In flight</span>
+        <span className="ml-auto text-[10px] text-[var(--color-text-faint)]">{total} run{total > 1 ? 's' : ''}</span>
+      </div>
+      <div className="pb-1.5">
+        {runs.map((r) => {
+          const isDecision = r.pauseKind === 'decision';
+          return (
+            <div key={r.id} data-testid={`inflight-${r.id}`} className="flex items-center gap-2.5 px-3.5 py-1.5">
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: isDecision ? '#f0a500' : '#3fb950' }} />
+              <span className="text-[13px] text-[var(--color-text-secondary)] flex-1 min-w-0 truncate" title={r.requirement}>
+                {r.requirement || r.project}
+              </span>
+              <span className="text-[9px] font-mono text-[var(--color-text-faint)] shrink-0">{r.project}</span>
+              <span
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0"
+                style={isDecision
+                  ? { background: 'rgba(240,165,0,.14)', color: '#f0a500' }
+                  : { background: 'rgba(88,166,255,.14)', color: '#58a6ff' }}
+              >
+                {isDecision ? 'needs decision' : 'running'}
+              </span>
+            </div>
+          );
+        })}
+        {overflow > 0 && (
+          <button
+            data-testid="inflight-overflow"
+            onClick={() => onOpenHub?.()}
+            className="w-full text-left px-3.5 py-1.5 text-[11px] text-[#58a6ff] hover:bg-[var(--color-bg-hover)] transition-colors"
+            title="Open Brain Hub / Jobs & Runs to see all"
+          >
+            +{overflow} more →
+          </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── TIER 3 ───────────────────────────────────────────────────────────────────
+function BrainPulse({
+  count, typeCounts, lastChange, onOpenHub,
+}: {
+  count: number;
+  typeCounts?: Record<EntryType, number>;
+  lastChange?: string;
+  onOpenHub?: () => void;
+}) {
+  const totals = typeCounts ? layerTotals(typeCounts) : null;
+  const grand = totals ? totals.meta + totals.cognitive + totals.operational : 0;
+  return (
+    <div data-testid="tier-pulse" className="flex items-center gap-3.5 px-4 py-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))]">
+      <span className="material-symbols-outlined text-[16px] text-[#f0a500]">psychology</span>
+      <span className="text-[13px] font-semibold text-[var(--color-text)]">{count}</span>
+      <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-faint)]">brain{count > 1 ? 's' : ''}</span>
+      {totals && grand > 0 && (
+        <div className="flex h-1.5 rounded-sm overflow-hidden flex-1 min-w-[80px] max-w-[220px]"
+          title={LAYERS.map((l) => `${l.label}: ${totals[l.key]}`).join(' · ')}
+          data-testid="pulse-layerbar">
+          {LAYERS.map((l) => {
+            const w = (totals[l.key] / grand) * 100;
+            return w === 0 ? null : <span key={l.key} style={{ width: `${w}%`, background: l.color }} />;
+          })}
+        </div>
+      )}
+      {lastChange && (
+        <span className="text-[10px] text-[var(--color-text-faint)] shrink-0">edited {lastChange}</span>
+      )}
+      <button
+        data-testid="brain-home-batch-review"
+        onClick={() => onOpenHub?.()}
+        className="ml-auto text-[11px] text-[#58a6ff] border border-[#1f3a5a] rounded-md px-2 py-0.5 hover:bg-[#12233a] shrink-0"
+        title="Open Brain Hub — view all brains"
+      >
+        Brain Hub →
+      </button>
     </div>
   );
 }

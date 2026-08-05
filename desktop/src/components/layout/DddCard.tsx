@@ -26,6 +26,7 @@
  * payload degrades the body to nothing WITHOUT blanking the card.
  */
 import type { BrainHealth, DetailHealth, SectionKey, EntryType } from '../../services/ddd';
+import { LAYERS, layerTotals } from './dddLayers';
 
 // ── Shared constants ─────────────────────────────────────────────────────────
 const SECTION_ORDER: SectionKey[] = ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
@@ -34,25 +35,8 @@ export type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
 
 const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
 
-type Layer = 'meta' | 'cognitive' | 'operational';
-/** 7-type → 3-layer map (authoritative: backend MEMORY_SECTIONS[*].layer). */
-const LAYER_OF_TYPE: Record<EntryType, Layer> = {
-  principle: 'meta', correction: 'meta',
-  decision: 'cognitive', model: 'cognitive',
-  guideline: 'operational', pitfall: 'operational', process: 'operational',
-};
-/** Layer display + which types sit under each (fixed cognitive order, not by count). */
-const LAYERS: { key: Layer; label: string; color: string; types: EntryType[] }[] = [
-  { key: 'meta', label: 'Meta-cognitive', color: '#a371f7', types: ['principle', 'correction'] },
-  { key: 'cognitive', label: 'Cognitive', color: '#58a6ff', types: ['decision', 'model'] },
-  { key: 'operational', label: 'Operational', color: '#3fb950', types: ['guideline', 'pitfall', 'process'] },
-];
-
-function _layerTotals(tc: Record<EntryType, number>): Record<Layer, number> {
-  const t: Record<Layer, number> = { meta: 0, cognitive: 0, operational: 0 };
-  for (const [k, n] of Object.entries(tc) as [EntryType, number][]) t[LAYER_OF_TYPE[k]] += n;
-  return t;
-}
+// The 3-layer ontology model now lives in ./dddLayers.ts (LAYERS + layerTotals,
+// imported above) — shared with the Welcome BrainPulse strip (R25).
 
 /** Count sections whose trust is BELOW `high`. A DISTRIBUTION count, NOT a
  *  collapsed rollup verdict (backend Gate-1 refused a project trust rollup). */
@@ -175,7 +159,7 @@ function Cheap({ testid, label, value, warn }: { testid: string; label: string; 
  *  breakdown (that's the full card). From summary.typeCounts, no fetch. */
 function CompactLayerBar({ typeCounts }: { typeCounts?: Record<EntryType, number> }) {
   if (!typeCounts) return null;
-  const t = _layerTotals(typeCounts);
+  const t = layerTotals(typeCounts);
   const total = t.meta + t.cognitive + t.operational;
   if (total === 0) return null;
   const tip = LAYERS.map((l) => `${l.label}: ${t[l.key]}`).join(' · ');
@@ -337,7 +321,7 @@ function MetricsSkeleton() {
  * label: covers the ② canonical docs, not "the whole brain". Omitted if empty.
  */
 function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number> }) {
-  const t = _layerTotals(typeCounts);
+  const t = layerTotals(typeCounts);
   const total = t.meta + t.cognitive + t.operational;
   if (total === 0) return null;
   return (
