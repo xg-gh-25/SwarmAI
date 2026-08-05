@@ -88,4 +88,44 @@ describe('FileViewerPanel — two-level collapse (v6)', () => {
     render(<FileViewerPanel {...baseProps} />);
     expect(screen.queryByTestId('file-viewer-panel-collapsed')).toBeNull();
   });
+
+  // ── un-rail on new file arrival (run_83bc289d) ──
+  // Bug: user rails Canvas to a strip, then clicks a new file → Canvas stayed
+  // railed (railed is panel-local + localStorage-persisted, nothing reset it on
+  // a new file). A new file arriving IS the "I want to see this" intent → un-rail.
+  const FILE_A = { filePath: '/ws/a.md', fileName: 'a.md' };
+  const FILE_B = { filePath: '/ws/b.md', fileName: 'b.md' };
+
+  it('un-rails when a NEW file arrives while railed (the reported bug)', () => {
+    localStorage.setItem('canvasRailed', '1');
+    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+    // Starts railed (restored from localStorage).
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+    // A DIFFERENT file arrives → Canvas auto-expands.
+    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_B} />);
+    expect(screen.queryByTestId('canvas-rail')).toBeNull();
+    expect(screen.getByTestId('canvas-content-column')).toBeTruthy();
+    // localStorage cleared too, so a cold reload isn't stuck railed.
+    expect(localStorage.getItem('canvasRailed')).toBe('0');
+  });
+
+  it('does NOT un-rail on a re-render with the SAME file (no false-trigger)', () => {
+    localStorage.setItem('canvasRailed', '1');
+    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+    // User manually rails while viewing FILE_A.
+    fireEvent.click(screen.getByTestId('canvas-rail')); // expand
+    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn')); // re-rail deliberately
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+    // A re-render with the SAME file (e.g. parent re-render) must NOT pop it open.
+    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+  });
+
+  it('un-rails after the user manually rails, then opens a different file', () => {
+    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_B} />);
+    expect(screen.queryByTestId('canvas-rail')).toBeNull();
+  });
 });

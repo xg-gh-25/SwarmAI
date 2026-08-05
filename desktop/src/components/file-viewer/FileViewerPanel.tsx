@@ -220,6 +220,32 @@ function FileViewerPanelImpl({
   // The file shown in Region B — drives the accent left-bar on its output row.
   const selectedPath = props.initialFile?.filePath;
 
+  // ── Un-rail on new file arrival (run_83bc289d) ──
+  // A new file reaching Canvas — user click (swarm:open-file) OR agent auto-surface
+  // — is an explicit "I want to see this" intent, so a railed (collapsed-to-strip)
+  // Canvas must expand to show it. `railed` is panel-local + localStorage-persisted
+  // and nothing reset it on a new file, so a collapsed Canvas stayed a strip and the
+  // file landed MOUNTED-but-hidden (the reported bug). Guard with prevFileRef so this
+  // fires ONLY on a transition to a DIFFERENT non-empty path — never on a re-render
+  // with the same file (which would fight a deliberate manual re-rail). Clear the
+  // localStorage flag too, else a cold reload restores the strip. (Mirrors the
+  // prevInitialFileRef pattern in FileViewer.tsx.)
+  // BENIGN EXTRA TRIGGER (adversarial review, run_83bc289d): `railed` is panel-local
+  // + a single global localStorage key (NOT per-tab — same as `expanded`), so a
+  // TAB SWITCH also changes selectedPath (useCanvasHost restores the incoming tab's
+  // file) and thus un-rails. Accepted, not fixed: railed was ALWAYS global (no
+  // per-tab rail memory to regress), and this only ever REVEALS content (never hides
+  // it) — so an extra click to re-rail is the worst case. Gating on a tab-switch-vs-
+  // -new-file signal would add a mechanism to guard a benign edge (C042); not worth it.
+  const prevFileRef = useRef<string | undefined>(selectedPath);
+  useEffect(() => {
+    if (selectedPath && selectedPath !== prevFileRef.current) {
+      setRailed(false);
+      setStoredBool(RAILED_KEY, false);
+    }
+    prevFileRef.current = selectedPath;
+  }, [selectedPath]);
+
   // Output counts published by the rail — drives the header summary.
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
