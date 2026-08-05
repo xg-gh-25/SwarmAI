@@ -44,15 +44,16 @@ synonyms — they cause confusion across the 69-skill ecosystem.
   _Avoid:_ "cron" (implementation detail — jobs use launchd, not cron),
   "scheduled task" (use "job" for the schedule, "task" for the execution).
 
-- **todo** — A Radar sidebar work packet managed by `s_radar-todo`. Self-contained:
-  includes title, description, linked files, commits, and acceptance criteria.
-  Dragging into chat gives the agent full context to execute.
-  _Avoid:_ "task" (that's the job system), "ticket" (that's Taskei/external),
-  "issue" (that's GitHub/Linear).
+- **todo** — A left-nav **ToDo card/overlay** work packet managed by `s_radar-todo`
+  (skill NAME is legacy; the surface is the left-nav ToDo card → `swarm:show-todo` →
+  `ToDoOverlay`, NOT a "Radar sidebar"). Self-contained: title, description, linked
+  files, commits, acceptance criteria. Dragging into chat gives the agent full context.
+  _Avoid:_ "Radar" (retired surface name), "task" (that's the job system),
+  "ticket" (that's Taskei/external), "issue" (that's GitHub/Linear).
 
 - **ticket** — An external work item in Taskei, GitHub Issues, or Linear.
   Not managed by SwarmAI — queried via MCP tools.
-  _Avoid:_ "issue" (when referring to Taskei), "todo" (that's Radar).
+  _Avoid:_ "issue" (when referring to Taskei), "todo" (that's the ToDo card).
 
 ## Skills & Evolution
 

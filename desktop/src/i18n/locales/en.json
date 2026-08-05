@@ -150,7 +150,6 @@
     "defaultAgentError": "Failed to load the default agent. Please restart the application or check the backend service.",
     "newChat": "New Chat",
     "newSession": "New Session",
-    "todoRadar": "ToDo Radar",
     "history": "Chat History",
     "noHistory": "No history yet",
     "today": "Today",

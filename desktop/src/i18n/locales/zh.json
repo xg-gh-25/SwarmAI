@@ -148,7 +148,6 @@
     "defaultAgentError": "无法加载默认 Agent。请重启应用或检查后端服务。",
     "newChat": "新对话",
     "newSession": "新会话",
-    "todoRadar": "待办雷达",
     "history": "聊天记录",
     "noHistory": "暂无历史记录",
     "today": "今天",

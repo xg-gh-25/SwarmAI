@@ -1,16 +1,20 @@
 ---
 name: radar-todo
-description: "Manage SwarmAI Radar ToDos — add, list, edit, complete, and delete items that appear in the Radar sidebar. Each todo is a self-contained work packet: when dragged into a chat tab, the agent\
+description: "Manage SwarmAI ToDos — add, list, edit, complete, and delete items that appear in the left-nav ToDo card/overlay. Each todo is a self-contained work packet: when dragged into a chat tab, the agent\
   \ has all context to start executing immediately. Also proactively creates todos from detected action items and blockers.\n  TRIGGER: \"add todo\", \"create todo\", \"new todo\", \"my todos\".\n  NOT\
   \ FOR: apple-reminders, outlook-assistant use cases."
 input_type: text
 output_type: text
 tier: always
 ---
-# Radar ToDo Skill
+# ToDo Skill
 
-Manage ToDo items in the SwarmAI Radar sidebar. ToDos are stored in SQLite
-(`~/.swarm-ai/data.db`) and displayed in the Radar → TODO section.
+> Skill NAME (`s_radar-todo`) is a legacy identifier — kept stable. The SURFACE is
+> the left-nav **ToDo card** (`nav-todo` → `swarm:show-todo` → `ToDoOverlay`, a
+> fullscreen Flow|History workbench). There is NO "Radar sidebar" anymore.
+
+Manage ToDo items surfaced in the left-nav ToDo card/overlay. ToDos are stored in
+SQLite (`~/.swarm-ai/data.db`) and displayed in the ToDo overlay's Flow board.
 
 **Core principle:** Every todo is a **self-contained work packet**. When a user
 drags a todo into a chat tab or says "work on this todo", the agent must be able
@@ -267,10 +271,10 @@ If you're not confident the answer is yes → don't create it.
 
 - **Max 2 proactive todos per session.** Scarcity forces prioritization. If you can
   only create 2, you'll pick the ones that actually matter. Todo fatigue kills the
-  entire system — a noisy Radar gets ignored.
+  entire system — a noisy ToDo list gets ignored.
 - **Always announce in chat.** Never create silently. Show the user what you added:
   ```
-  📌 Added to Radar: "Test SSE disconnect with real network kill" (🔴 high)
+  📌 Added to ToDo: "Test SSE disconnect with real network kill" (🔴 high)
   ```
   User can immediately say "remove that" if it's noise. Silent creation = shadow
   decisions = trust violation.
@@ -291,7 +295,7 @@ If you're not confident the answer is yes → don't create it.
 - **Vague observations** — "might want to look at X" is not a todo. If you can't fill
   `next_step` with a concrete action, it's not ready.
 - **Things already tracked** — If it's in MEMORY.md Open Threads, don't duplicate as
-  a Radar todo. Those are agent-level tracking; Radar todos are user-facing.
+  a ToDo. Those are agent-level tracking; ToDos are user-facing.
 - **Minor improvements** — "could refactor this function" is not worth a todo slot.
   Note it in the session, move on.
 - **More than 2 per session** — If you've already created 2, the 3rd one isn't
@@ -341,8 +345,8 @@ Active todos (pending, overdue, in_discussion) are **NEVER purged** regardless o
 
 - **DB location**: `~/.swarm-ai/data.db` (SQLite, WAL mode)
 - **Workspace ID**: Always `swarmws` (single-workspace model)
-- **Frontend refresh**: TodoSection polls on mount/tab-switch. New todos appear
-  when user navigates to Radar or switches tabs.
+- **Frontend refresh**: the ToDo overlay polls on open/tab-switch. New todos appear
+  when the user opens the ToDo card or switches tabs.
 - **No API needed**: Direct SQLite writes — avoids sandbox network restrictions.
 - **Concurrent safety**: SQLite WAL mode handles concurrent reads from backend +
   writes from agent. Single-writer serialization is automatic.
