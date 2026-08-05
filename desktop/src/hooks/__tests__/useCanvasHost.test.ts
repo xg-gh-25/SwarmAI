@@ -20,8 +20,25 @@ vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: { resolved_path: 'resolved.md' } }) },
 }));
 
+// outputCount now derives from the RESIDENT useReferencedFiles store (run_9e42c066),
+// not the removed onCanvasMeta round-trip. Drive it via the real swarm:file-changed
+// event — this exercises the actual production capture path. Each event = one output
+// row (kind defaults to source-final = a counted output) for the given tab.
+function emitOutputs(tabId: string, n: number) {
+  for (let i = 0; i < n; i++) {
+    window.dispatchEvent(
+      new CustomEvent('swarm:file-changed', {
+        detail: { path: `out-${tabId}-${i}.py`, tabId, operation: 'written', relevance: 'deliverable', kind: 'source-final' },
+      }),
+    );
+  }
+}
+
 describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear(); // the resident referenced-files store persists per-tab in sessionStorage
+  });
 
   it('keeps Canvas state independent per tab and restores on switch-back', () => {
     let tabId = 'A';
@@ -78,7 +95,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' })); // isOpen → emit
-    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 3 })); // count → must re-emit
+    act(() => emitOutputs('A', 3)); // 3 outputs land → count → must re-emit
     window.removeEventListener('swarm:canvas-state', onState);
     const counts = events.filter(Boolean).map((d) => d!.outputCount);
     expect(counts).toContain(3); // the updated count reached a fresh emit (not frozen)
@@ -110,7 +127,7 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
-    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 5 }));
+    act(() => emitOutputs('A', 5));
     const snap = result.current.getCanvasSnapshot();
     expect(snap!.outputCount).toBe(5); // Gate-1 BLOCK1: not a frozen closure value
     expect(snap!.open).toBe(true);
@@ -124,33 +141,42 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     );
     // Tab A: open + 5 outputs
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
-    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 5 }));
+    act(() => emitOutputs('A', 5));
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
 
-    // Switch to tab B: fresh Canvas → its count must NOT be A's 5
+    // Switch to tab B: fresh Canvas → its count must NOT be A's 5 (resident store
+    // is keyed by tabId, so B loads its own — empty — sessionStorage bucket)
     tabId = 'B';
     rerender({ t: tabId });
     act(() => result.current.setFile({ filePath: 'b.md', fileName: 'b.md' }));
     const snapB = result.current.getCanvasSnapshot();
     expect(snapB!.outputCount).toBe(0); // B has its own count, not A's stale 5
 
-    // Switch back to A: its 5 is restored
+    // Switch back to A: its 5 is restored (re-loaded from A's sessionStorage bucket)
     tabId = 'A';
     rerender({ t: tabId });
     expect(result.current.getCanvasSnapshot()!.outputCount).toBe(5);
   });
 
-  it('close() resets outputCount to 0 (no stale count on reopen)', () => {
+  it('close() does NOT discard outputCount — outputs persist so the pill still shows them (run_9e42c066)', () => {
+    // Behavior change from the pre-resident design: outputCount now derives from the
+    // RESIDENT store (useReferencedFiles, per-tab sessionStorage), which must SURVIVE a
+    // Canvas close — otherwise closing the panel would erase the knowledge that N
+    // outputs exist, and the ChatHeader "N outputs" pill (shown when !isOpen) would be
+    // wrong. So a run's outputs are retained across close; they clear only on a new tab
+    // / new session (a fresh sessionStorage bucket), not on close.
     const { result } = renderHook(() =>
       useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
     );
     act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
-    act(() => result.current.onCanvasMeta({ collapsed: false, outputCount: 7 }));
-    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7);
+    act(() => emitOutputs('A', 7));
+    expect(result.current.outputCount).toBe(7);
     act(() => result.current.close());
-    // Reopen manually — count must have been cleared, not linger at 7
+    // Closed → outputs still counted (the pill relies on this), NOT wiped to 0.
+    expect(result.current.outputCount).toBe(7);
+    // Reopen manually — still 7 (never lost).
     act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); });
-    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(0);
+    expect(result.current.getCanvasSnapshot()!.outputCount).toBe(7);
   });
 
   it('getCanvasSnapshot() returns null after close (no stale open)', () => {

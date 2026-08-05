@@ -85,6 +85,22 @@ export interface FileChangedDetail {
   tabId?: string;
 }
 
+/** The grouped shape this hook returns (and that CanvasOutputRail consumes). Only
+ *  the 'written' key is ever populated (see FileOperation). Exported so the resident
+ *  owner (useCanvasHost) can type the value it lifts + passes down to the rail. */
+export type GroupedReferencedFiles = Record<FileOperation, ReferencedFile[]>;
+
+/** SSOT for "which referenced files count as OUTPUTS" — the rail's visible rows and
+ *  the ChatHeader output-count pill MUST agree, so both derive from THIS one predicate
+ *  (mirrors CanvasOutputRail's `outputs` filter): drop process/source machine-noise +
+ *  mid-run coding edits; keep content/knowledge/source-final (and undefined kind from an
+ *  older backend → keep, no regression). A single definition prevents the pill count and
+ *  the rail row count from drifting apart. */
+export function countOutputs(grouped: GroupedReferencedFiles | undefined): number {
+  if (!grouped) return 0;
+  return (grouped.written ?? []).filter((f) => f.kind !== 'process' && f.kind !== 'source').length;
+}
+
 const MAX_FILES = 100;
 const STORAGE_PREFIX = 'swarm:referenced-files:';
 const EVENT_NAME = 'swarm:file-changed';

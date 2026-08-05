@@ -30,6 +30,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
+import { useReferencedFiles, countOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
 import type { GitStatus } from '../types';
 import type { CanvasSnapshot } from '../utils/uiContext';
 
@@ -53,9 +54,6 @@ interface CanvasTabState {
   pinned: boolean;
   muted: boolean;
   manuallyOpen: boolean;
-  /** Panel-internal output count, PER TAB (like the rest of the slice) — so it
-   *  restores on tab-switch and clears on close, never bleeding across tabs. */
-  outputCount: number;
 }
 
 const EMPTY: CanvasTabState = {
@@ -63,7 +61,6 @@ const EMPTY: CanvasTabState = {
   pinned: false,
   muted: false,
   manuallyOpen: false,
-  outputCount: 0,
 };
 
 export interface UseCanvasHostArgs {
@@ -85,6 +82,14 @@ export interface CanvasHostApi {
   muted: boolean;
   /** Canvas is visible when a file is open OR it was manually opened. */
   isOpen: boolean;
+  /** The active tab's referenced-files (the output rail's rows), captured by the
+   *  RESIDENT listener here so a write lands even when Canvas is closed. Passed
+   *  down to CanvasOutputRail as a prop — the rail no longer runs its own listener. */
+  referencedFiles: GroupedReferencedFiles;
+  /** Count of OUTPUT rows (content/knowledge/source-final; process/source excluded)
+   *  for the active tab — the single source of truth for the ChatHeader pill.
+   *  Live even when Canvas is closed (that is the whole point). */
+  outputCount: number;
   setFile: (f: CanvasFile | null) => void;
   setPinned: (v: boolean) => void;
   setMuted: (v: boolean) => void;
@@ -92,8 +97,6 @@ export interface CanvasHostApi {
   toggleMute: () => void;
   /** Close Canvas on the active tab (clear file + manuallyOpen). */
   close: () => void;
-  /** Report panel-internal meta (outputCount) up for proprioception. */
-  onCanvasMeta: (meta: { collapsed: boolean; outputCount: number }) => void;
   /** Live, synchronous snapshot of Canvas state for the send-time SENSE read
    *  (beats the async canvas-state emit race). Null when nothing to report. */
   getCanvasSnapshot: () => CanvasSnapshot | null;
@@ -109,6 +112,18 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // straight from mapRef (the synchronous source of truth) with no stale-closure
   // mirror to keep in sync.
   const [slice, setSlice] = useState<CanvasTabState>(EMPTY);
+
+  // ── RESIDENT output-rail store (run_9e42c066) ───────────────────────────────
+  // useCanvasHost is mounted UNCONDITIONALLY in ChatPage, so calling
+  // useReferencedFiles HERE (keyed on the active tab) makes it the SOLE
+  // swarm:file-changed rail listener — always alive, even when Canvas is closed.
+  // This is the fix for "pipeline 跑完看不到输出": a source-final finish batch that
+  // arrives with the panel unmounted is now captured + persisted here, and the
+  // panel's CanvasOutputRail receives these rows via a prop instead of running a
+  // second (panel-gated) listener. outputCount is derived via the shared SSOT
+  // predicate so the ChatHeader pill and the rail rows can never drift apart.
+  const { files: referencedFiles } = useReferencedFiles(activeTabId ?? undefined);
+  const outputCount = countOutputs(referencedFiles);
 
   const keyFor = (id: string | null | undefined) => id ?? '__no_tab__';
 
@@ -132,15 +147,11 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
   const togglePin = useCallback(() => patch({ pinned: !(mapRef.current.get(keyFor(activeTabId))?.pinned) }), [patch, activeTabId]);
   const toggleMute = useCallback(() => patch({ muted: !(mapRef.current.get(keyFor(activeTabId))?.muted) }), [patch, activeTabId]);
-  // close clears the tab's Canvas INCLUDING its output count (no stale count on
-  // reopen — the count is now per-tab slice state).
-  const close = useCallback(() => patch({ file: null, manuallyOpen: false, outputCount: 0 }), [patch]);
-  const onCanvasMeta = useCallback((meta: { collapsed: boolean; outputCount: number }) => {
-    // Write the count into the per-tab slice via patch → mapRef (synchronous
-    // source of truth) + setSlice (re-fires the canvas-state emit effect below).
-    // No separate state/ref: getCanvasSnapshot reads cur.outputCount from mapRef.
-    patch({ outputCount: meta.outputCount });
-  }, [patch]);
+  // close clears the tab's Canvas (file + manuallyOpen). outputCount is NOT reset
+  // here — it now derives from the RESIDENT store (useReferencedFiles), which is
+  // intentionally per-tab-persistent: closing the panel must not discard the
+  // knowledge that N outputs were produced (the ChatHeader pill still shows them).
+  const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
 
@@ -160,12 +171,13 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     if (!openNow) return null;
     return {
       open: true,
-      outputCount: cur.outputCount,
+      // outputCount comes from the resident store (SSOT), NOT a per-slice mirror.
+      outputCount,
       pinned: cur.pinned,
       muted: cur.muted,
       collapsed: false,
     };
-  }, [activeTabId]);
+  }, [activeTabId, outputCount]);
 
   // ── swarm:open-canvas (window) — manual open on the ACTIVE tab ──────────────
   useEffect(() => {
@@ -236,26 +248,27 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const lastCanvasEmit = useRef<string>('');
   useEffect(() => {
     const detail = isOpen
-      ? { open: true, outputCount: slice.outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
+      ? { open: true, outputCount, pinned: slice.pinned, muted: slice.muted, collapsed: false }
       : null;
     const sig = JSON.stringify(detail);
     if (sig === lastCanvasEmit.current) return;
     lastCanvasEmit.current = sig;
     window.dispatchEvent(new CustomEvent('swarm:canvas-state', { detail }));
-  }, [isOpen, slice.outputCount, slice.pinned, slice.muted]);
+  }, [isOpen, outputCount, slice.pinned, slice.muted]);
 
   return {
     file: slice.file,
     pinned: slice.pinned,
     muted: slice.muted,
     isOpen,
+    referencedFiles,
+    outputCount,
     setFile,
     setPinned,
     setMuted,
     togglePin,
     toggleMute,
     close,
-    onCanvasMeta,
     getCanvasSnapshot,
   };
 }
