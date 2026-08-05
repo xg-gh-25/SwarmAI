@@ -276,6 +276,30 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
     expect(result.current.lastSeenOutputCount).toBe(2); // 3 > 2 → pill shows again
   });
 
+  it('SHRINK clamp: outputCount dropping below lastSeen while CLOSED pulls lastSeen down (REVIEW MED)', () => {
+    // Without the clamp, a shrink-while-closed (clear() / cap eviction) would leave
+    // lastSeen stuck HIGH, so a later new output at/below the stale mark would never
+    // re-show the pill. The clamp pulls lastSeen down to outputCount.
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    // 3 distinct tracked files (out-A-0/1/2.py from emitOutputs), Canvas opened → seen=3.
+    act(() => emitOutputs('A', 3));
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // seen=3
+    act(() => result.current.close());
+    expect(result.current.lastSeenOutputCount).toBe(3);
+    // While CLOSED, delete 2 of the 3 tracked files → outputCount shrinks 3→1.
+    act(() => {
+      for (const p of ['out-A-0.py', 'out-A-1.py']) {
+        window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+          detail: { path: p, tabId: 'A', operation: 'deleted' },
+        }));
+      }
+    });
+    expect(result.current.outputCount).toBe(1);           // genuinely shrank
+    expect(result.current.lastSeenOutputCount).toBe(1);   // clamp pulled it down from 3 (not stuck high)
+  });
+
   it('lastSeen is PER-TAB — opening tab A does not mark tab B outputs seen', () => {
     let tabId = 'A';
     const { result, rerender } = renderHook(

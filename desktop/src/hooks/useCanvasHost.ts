@@ -168,16 +168,22 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const isOpen = !!(slice.file || slice.manuallyOpen);
 
   // ── Mark outputs "seen" while Canvas is open (run_9dd59523, Gate-1 #3) ────────
-  // The ChatHeader pill shows only when outputCount > lastSeenOutputCount. Fires on
-  // BOTH [isOpen, outputCount] (NOT the false→true transition only): while Canvas is
-  // open, every new output that arrives is immediately marked seen — because the pill
-  // is already hidden by its own `!canvasOpen` guard while open, and tracking the
-  // latest count here is what prevents a STALE pill from flashing the moment the user
-  // closes Canvas. On close, lastSeen == the count they last saw, so the pill stays
-  // hidden until a genuinely NEW output pushes outputCount higher. Only writes when the
-  // value actually changes (patch would otherwise re-fire needlessly).
+  // The ChatHeader pill shows only when outputCount > lastSeenOutputCount. Two rules:
+  //  (1) While OPEN: mark lastSeen = outputCount on every [isOpen, outputCount] (NOT
+  //      the false→true transition only) — the pill is already hidden by its own
+  //      `!canvasOpen` guard while open, and tracking the latest count here is what
+  //      prevents a STALE pill from flashing the moment the user closes Canvas.
+  //  (2) SHRINK clamp (open OR closed): if outputCount drops BELOW lastSeen (cap
+  //      eviction at MAX_FILES, or clear() on a new session), pull lastSeen down to
+  //      outputCount. Without this, a shrink-while-closed leaves lastSeen stuck HIGH,
+  //      and a later genuinely-new output at/below that stale mark would never re-show
+  //      the pill (REVIEW MED, run_9dd59523). The clamp can only LOWER lastSeen, so it
+  //      never marks a real new output as already-seen.
+  // Only writes when the value actually changes (patch would otherwise re-fire).
   useEffect(() => {
-    if (isOpen && slice.lastSeenOutputCount !== outputCount) {
+    const shouldMarkSeen = isOpen && slice.lastSeenOutputCount !== outputCount;
+    const shouldClampDown = slice.lastSeenOutputCount > outputCount;
+    if (shouldMarkSeen || shouldClampDown) {
       patch({ lastSeenOutputCount: outputCount });
     }
   }, [isOpen, outputCount, slice.lastSeenOutputCount, patch]);
