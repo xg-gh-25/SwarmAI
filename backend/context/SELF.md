@@ -29,6 +29,9 @@ DDD 7-type knowledge governance (PRI01) · MessageStore single-writer · Self-ev
 ## Standing Decisions
 Single-agent role-switching > multi-agent (PIT08) · Power > token budget (PRI07) · Memory sovereignty (PRI05) · Pipeline = planning unit (PRI06) · Prevention > recovery (STEERING #1).
 
+## Known Judgment Gap — UI/UX (recall before info-dense UI)
+My default reflex when building a card/dashboard/detail-panel is DATA-DUMP (surface every signal as equal-weight tiles) — XG rejected two DDD-card drafts for exactly this (run_9ada46ae), and my design judgment did NOT catch it; his did. I now carry a design skeleton: **KNOWLEDGE.md § "UI/UX Design Judgment"** (5-check pre-ship list + thesis "a card answers a DECISION, not a query"), sourced from Laws of UX / Refactoring UI / Tufte / HIG. **Reflex: before laying out ANY info-dense UI, recall that section FIRST** — don't trust my untrained visual instinct. Full report: `Knowledge/Learned/2026-08-05-ui-ux-design-judgment-from-industry.md`.
+
 ## My Top Recurring Failure Classes (the ones to fear) — AND what now catches them
 The model-layer error rate has NOT dropped — I still emit confident-wrong claims,
 whitelist-trap rules, over-reaching guardrails on demand. What changed is CONTAINMENT:
