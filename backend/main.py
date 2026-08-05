@@ -750,6 +750,34 @@ async def _start_code_intel_watchers() -> None:
         logger.debug("Code Intelligence watcher startup failed (non-fatal)", exc_info=True)
 
 
+# Module-level handle so the watcher isn't garbage-collected + is stoppable.
+_workspace_surface_watcher = None
+
+
+async def _start_workspace_surface_watcher() -> None:
+    """Start the Canvas Layer-2 workspace surface watcher (daemon/hive only).
+
+    Watches SwarmWS for author-agnostic writes (sub-agent/CLI/hook) that the SDK
+    sidechain filter hides from Layer-1, and routes review-worthy content/knowledge
+    writes onto the sole streaming session's live SSE stream. Non-fatal on any
+    failure — surfacing is best-effort, never load-bearing.
+    """
+    global _workspace_surface_watcher
+    await asyncio.sleep(10)  # Let startup settle (mirror code-intel watcher)
+    try:
+        from core.project_registry import get_swarmws
+        from core.workspace_surface_watcher import WorkspaceSurfaceWatcher
+
+        root = Path(get_swarmws())
+        if not root.is_dir():
+            logger.debug("WorkspaceSurfaceWatcher: SwarmWS root missing — skipping")
+            return
+        _workspace_surface_watcher = WorkspaceSurfaceWatcher(root)
+        await _workspace_surface_watcher.start()
+    except Exception:
+        logger.debug("WorkspaceSurfaceWatcher startup failed (non-fatal)", exc_info=True)
+
+
 async def _run_inprocess_scheduler() -> None:
     """In-process job scheduler loop (daemon/hive only).
 
@@ -1229,6 +1257,13 @@ async def lifespan(app: FastAPI):
     if backend_mode in ("daemon", "hive"):
         asyncio.create_task(_start_code_intel_watchers())
 
+    # ── Canvas Layer-2 workspace surface watcher (daemon/hive only) ───
+    # Surfaces author-agnostic writes (sub-agent/CLI/hook — SDK-sidechain-
+    # filtered from Layer-1) onto the sole streaming session's live SSE stream.
+    # Additive to Layer-1 per-tool emit + pipeline-finish sweep_run_changes.
+    if backend_mode in ("daemon", "hive"):
+        asyncio.create_task(_start_workspace_surface_watcher())
+
     # Readiness sampler (run_7e8a2030): samples DB + auth health OFF the /health
     # request path so liveness never blocks on a slow dependency. See
     # core/readiness_sampler.py + the health_check liveness/readiness split.
@@ -1286,6 +1321,14 @@ async def lifespan(app: FastAPI):
         logger.info("Code Intelligence watchers stopped")
     except Exception:
         logger.debug("Code Intel watcher shutdown skipped", exc_info=True)
+
+    # Stop Canvas Layer-2 workspace surface watcher (mirror the code-intel stop)
+    try:
+        if _workspace_surface_watcher is not None:
+            await _workspace_surface_watcher.stop()
+            logger.info("Workspace surface watcher stopped")
+    except Exception:
+        logger.debug("Workspace surface watcher shutdown skipped", exc_info=True)
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         try:

@@ -33,6 +33,7 @@ from core.session_utils import _build_error_event
 from core.permission_manager import permission_manager as _pm
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
+from core import surface_injection
 
 # ── Multi-session architecture ────────────────────────────────────
 import logging as _logging
@@ -532,6 +533,18 @@ async def chat_stream(request: Request):
         # emitted its id yet). Follow-up: router-owned recovery keyed off the
         # uuid it generates, so no caller ever passes None.
         captured_session_id = chat_request.session_id
+        # Layer-2 Canvas live-surfacing (surface_injection): register an injection
+        # queue for this turn so the daemon fs-watcher can push author-agnostic
+        # writes (sub-agent/CLI/hook — SDK-sidechain-filtered from Layer-1) onto
+        # this ALREADY-OPEN SSE stream. Drained after each SDK message below;
+        # unregistered in finally (fires on completion AND CancelledError, so a
+        # dropped turn never leaks a queue). No-op unless this session ends up the
+        # sole streaming one (the bleed-proof attribution gate lives in
+        # surface_injection.resolve_sole_streaming_session).
+        _injection_registered: Optional[str] = None
+        if captured_session_id is not None:
+            surface_injection.register(captured_session_id)
+            _injection_registered = captured_session_id
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
             async for msg in _get_router().run_conversation(
@@ -547,8 +560,18 @@ async def chat_stream(request: Request):
             ):
                 if captured_session_id is None:
                     captured_session_id = msg.get("sessionId") or msg.get("session_id")
+                    # A NEW session's id first arrives here — register now so the
+                    # watcher can attribute to it for the rest of this turn.
+                    if captured_session_id is not None and _injection_registered is None:
+                        surface_injection.register(captured_session_id)
+                        _injection_registered = captured_session_id
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
+                # Interleave any watcher-surfaced file_changed events into the
+                # live stream (non-blocking; [] when none pending).
+                if _injection_registered is not None:
+                    for _inj in surface_injection.drain_nowait(_injection_registered):
+                        yield _inj
         except asyncio.CancelledError:
             logger.info("Chat stream cancelled (client disconnected)")
             # Transition session STREAMING → IDLE so the next send()
@@ -611,6 +634,11 @@ async def chat_stream(request: Request):
                     detail=error_traceback,
                     suggested_action="Please try again or contact support",
                 )
+        finally:
+            # Drop the Layer-2 injection queue (fires on normal completion AND
+            # CancelledError) so a dropped/crashed turn never leaks a queue.
+            if _injection_registered is not None:
+                surface_injection.unregister(_injection_registered)
 
     # Get unit's stop event for SSE notification
     _unit = _get_router().get_unit(chat_request.session_id) if chat_request.session_id else None
