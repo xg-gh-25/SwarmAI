@@ -119,17 +119,6 @@ export interface BriefingFocusItem {
   momentum: boolean;
 }
 
-export interface BriefingSignal {
-  title: string;
-  summary: string;
-  source: string;
-  sourceUrl: string;
-  urgency: string;   // "high", "medium", "low"
-  relevance: number;
-  lang: string;      // "en", "zh"
-  feedId: string;    // "github-trending", "ai-engineering", "reference-commits", etc.
-}
-
 export interface BriefingJob {
   name: string;
   status: string;  // "success", "failed", etc.
@@ -171,44 +160,6 @@ export interface HotNewsItem {
   lang: "en" | "zh";
 }
 
-export interface StockItem {
-  ticker: string;
-  name: string;
-  status: "success" | "partial" | "failed";
-  reportFile: string;
-}
-
-export interface BuildItem {
-  runId: string;
-  project: string;
-  title: string;
-  confidence: number | null;
-  status: "complete" | "partial" | "in-progress";
-  date: string;
-  reportFile: string;
-}
-
-export interface ContentItem {
-  slug: string;
-  title: string;
-  type: "video" | "poster" | "podcast" | "article";
-  contentPackage: string;
-  date: string;
-}
-
-export interface ArtifactItem {
-  path: string;
-  title: string;
-  type: string;
-  modifiedAt: string;
-}
-
-export interface SwarmOutput {
-  builds: BuildItem[];
-  content: ContentItem[];
-  files: ArtifactItem[];
-}
-
 export interface JobStatusItem {
   id: string;
   name: string;
@@ -229,11 +180,8 @@ export interface JobsSummary {
 
 export interface SessionBriefing {
   focus: BriefingFocusItem[];
-  signals: BriefingSignal[];
   hotNews: HotNewsItem[];
   working: WorkingItem[];
-  stocks: StockItem[];
-  output: SwarmOutput;
   jobsSummary: JobsSummary;
   jobs: BriefingJob[];        // backward compat
   todos: BriefingTodo[];
@@ -340,25 +288,14 @@ export const systemService = {
   /**
    * Get session briefing data for the Welcome Screen.
    *
-   * Returns focus suggestions, external signals, job results, and
-   * learning insights from the proactive intelligence engine.
+   * Returns focus suggestions, working items, job results, and learning
+   * insights from the proactive intelligence engine. (signals/stocks/output
+   * fields removed 2026-08-05 with their Welcome Screen sections.)
    */
   async getBriefing(): Promise<SessionBriefing> {
     try {
       const response = await api.get<Record<string, unknown>>('/system/briefing');
       const d = response.data;
-
-      // Parse signals with new sourceUrl/lang fields
-      const signals: BriefingSignal[] = ((d.signals as Record<string, unknown>[]) ?? []).map((s) => ({
-        title: s.title as string,
-        summary: (s.summary as string) ?? '',
-        source: (s.source as string) ?? '',
-        sourceUrl: (s.sourceUrl as string) ?? (s.source_url as string) ?? (s.url as string) ?? '',
-        urgency: (s.urgency as string) ?? 'medium',
-        relevance: (s.relevance as number) ?? (s.relevance_score as number) ?? 0,
-        lang: (s.lang as string) ?? 'en',
-        feedId: (s.feedId as string) ?? (s.feed_id as string) ?? '',
-      }));
 
       // Parse jobs (backward compat)
       const jobs: BriefingJob[] = ((d.jobs as Record<string, unknown>[]) ?? []).map((j) => ({
@@ -403,41 +340,6 @@ export const systemService = {
         timestamp: (w.timestamp as string) ?? '',
       }));
 
-      // Parse stocks
-      const stocks: StockItem[] = ((d.stocks as Record<string, unknown>[]) ?? []).map((s) => ({
-        ticker: s.ticker as string,
-        name: s.name as string,
-        status: (s.status as StockItem['status']) ?? 'success',
-        reportFile: (s.reportFile ?? s.report_file ?? '') as string,
-      }));
-
-      // Parse output
-      const rawOutput = (d.output as Record<string, unknown>) ?? {};
-      const output: SwarmOutput = {
-        builds: ((rawOutput.builds as Record<string, unknown>[]) ?? []).map((b) => ({
-          runId: (b.runId ?? b.run_id) as string,
-          project: b.project as string,
-          title: b.title as string,
-          confidence: (b.confidence as number) ?? null,
-          status: (b.status as BuildItem['status']) ?? 'complete',
-          date: b.date as string,
-          reportFile: (b.reportFile ?? b.report_file) as string,
-        })),
-        content: ((rawOutput.content as Record<string, unknown>[]) ?? []).map((c) => ({
-          slug: c.slug as string,
-          title: c.title as string,
-          type: (c.type as ContentItem['type']) ?? 'article',
-          contentPackage: (c.contentPackage ?? c.content_package) as string,
-          date: c.date as string,
-        })),
-        files: ((rawOutput.files as Record<string, unknown>[]) ?? []).map((f) => ({
-          path: f.path as string,
-          title: f.title as string,
-          type: (f.type as string) ?? 'other',
-          modifiedAt: (f.modifiedAt ?? f.modified_at) as string,
-        })),
-      };
-
       // Parse jobsSummary
       const rawJobs = (d.jobsSummary as Record<string, unknown>) ?? {};
       const jobsSummary: JobsSummary = {
@@ -458,11 +360,8 @@ export const systemService = {
 
       return {
         focus: (d.focus as BriefingFocusItem[]) ?? [],
-        signals,
         hotNews,
         working,
-        stocks,
-        output,
         jobsSummary,
         jobs,
         todos,
@@ -471,8 +370,7 @@ export const systemService = {
       };
     } catch {
       return {
-        focus: [], signals: [], hotNews: [], working: [], stocks: [],
-        output: { builds: [], content: [], files: [] },
+        focus: [], hotNews: [], working: [],
         jobsSummary: { total: 0, healthy: 0, failed: 0, disabled: 0, lastRun: null, jobs: [] },
         jobs: [], todos: [], learning: null, generatedAt: null,
       };
