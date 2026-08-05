@@ -24,7 +24,7 @@ function makeHealth(status: HealthContextValue['health']['status']): HealthConte
 
 function renderHeader(
   healthStatus: HealthContextValue['health']['status'] = 'connected',
-  extra: { outputCount?: number; canvasOpen?: boolean; onOpenCanvas?: () => void } = {},
+  extra: { outputCount?: number; lastSeenOutputCount?: number; canvasOpen?: boolean; onOpenCanvas?: () => void } = {},
 ) {
   const tabs: OpenTab[] = [
     { id: 'tab-0', title: 'One', agentId: 'a1', isNew: false },
@@ -38,6 +38,7 @@ function renderHeader(
         onTabClose={vi.fn()}
         onNewSession={vi.fn()}
         outputCount={extra.outputCount}
+        lastSeenOutputCount={extra.lastSeenOutputCount}
         canvasOpen={extra.canvasOpen}
         onOpenCanvas={extra.onOpenCanvas}
       />
@@ -93,5 +94,22 @@ describe('ChatHeader — Canvas outputs pill (run_9e42c066)', () => {
     renderHeader('connected', { outputCount: 2, canvasOpen: false, onOpenCanvas });
     screen.getByTestId('chat-header-outputs-pill').click();
     expect(onOpenCanvas).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatHeader — pill respects lastSeenOutputCount (run_9dd59523, no nagging)', () => {
+  it('HIDES the pill when all outputs have been seen (outputCount == lastSeen)', () => {
+    renderHeader('connected', { outputCount: 3, lastSeenOutputCount: 3, canvasOpen: false });
+    expect(screen.queryByTestId('chat-header-outputs-pill')).toBeNull();
+  });
+
+  it('SHOWS the pill only for NEW outputs beyond what was seen (outputCount > lastSeen)', () => {
+    renderHeader('connected', { outputCount: 5, lastSeenOutputCount: 3, canvasOpen: false });
+    expect(screen.getByTestId('chat-header-outputs-pill')).toBeInTheDocument();
+  });
+
+  it('defaults lastSeen to 0 (an older caller not passing it) → pill still shows for any output', () => {
+    renderHeader('connected', { outputCount: 2, canvasOpen: false });
+    expect(screen.getByTestId('chat-header-outputs-pill')).toBeInTheDocument();
   });
 });

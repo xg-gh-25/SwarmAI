@@ -24,6 +24,9 @@ interface ChatHeaderProps {
   // deliverables are visible without the Canvas being open. Clicking opens Canvas.
   /** Number of output rows for the active tab (from the resident useCanvasHost store). */
   outputCount?: number;
+  /** outputCount at the last time this tab's Canvas was open (run_9dd59523). The pill
+   *  shows only when outputCount > this, so it stops nagging once outputs are reviewed. */
+  lastSeenOutputCount?: number;
   /** Whether Canvas is currently open (pill only shows when it is NOT). */
   canvasOpen?: boolean;
   /** Open Canvas on the active tab (dispatches swarm:open-canvas). */
@@ -56,12 +59,17 @@ export function ChatHeader({
   tabStatuses,
   isNewTabDisabled,
   outputCount = 0,
+  lastSeenOutputCount = 0,
   canvasOpen = false,
   onOpenCanvas,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
-  const showOutputsPill = outputCount > 0 && !canvasOpen;
+  // Show only UNSEEN outputs (run_9dd59523): once the user opened Canvas and reviewed,
+  // lastSeenOutputCount caught up to outputCount → pill hides; it reappears only when a
+  // NEW output pushes outputCount above what was last seen. (Was `outputCount > 0`, which
+  // nagged for the whole session.)
+  const showOutputsPill = outputCount > lastSeenOutputCount && !canvasOpen;
 
   return (
     <div className="h-10 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)]">

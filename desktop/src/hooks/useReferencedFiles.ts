@@ -141,6 +141,104 @@ function saveToStorage(tabId: string, files: Map<string, ReferencedFile>): void 
   } catch { /* quota exceeded — no-op */ }
 }
 
+/** Fields of a `written` event the map-mutation logic reads. */
+export interface WriteEvent {
+  path: string;
+  absolutePath?: string;
+  operation: FileOperation;
+  kind?: ReviewKind;
+  baseRef?: string;
+}
+
+/** PURE add/dedup/cap logic (SSOT, run_9dd59523). Extracted from the setFiles updater
+ *  so BOTH the active-tab path (via setState) AND the background-tab path (load→apply→
+ *  save to the owning tab's storage) run IDENTICAL semantics — no duplication/drift.
+ *  Returns a NEW map; never mutates the input. `now` is injectable for deterministic
+ *  ordering tests (defaults to Date.now()). */
+export function applyWrite(
+  prev: Map<string, ReferencedFile>,
+  e: WriteEvent,
+  now: number = Date.now(),
+): Map<string, ReferencedFile> {
+  const next = new Map(prev);
+  const existing = next.get(e.path);
+  if (existing) {
+    // Dedup: bump count + refresh the resolved absolutePath/kind/baseRef if a later
+    // event carried one the first lacked. operation is always 'written'.
+    next.set(e.path, {
+      ...existing,
+      absolutePath: e.absolutePath || existing.absolutePath,
+      count: existing.count + 1,
+      kind: e.kind ?? existing.kind,
+      baseRef: e.baseRef ?? existing.baseRef,
+    });
+  } else {
+    // Enforce cap — evict oldest if at limit.
+    if (next.size >= MAX_FILES) {
+      let oldestKey = '';
+      let oldestTime = Infinity;
+      for (const [key, file] of next) {
+        if (file.firstSeen < oldestTime) {
+          oldestTime = file.firstSeen;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey) next.delete(oldestKey);
+    }
+    next.set(e.path, {
+      path: e.path,
+      absolutePath: e.absolutePath || e.path,
+      fileName: basename(e.path),
+      operation: e.operation,
+      firstSeen: now,
+      count: 1,
+      kind: e.kind,
+      baseRef: e.baseRef,
+    });
+  }
+  return next;
+}
+
+/** PURE delete-anchored-match logic (SSOT, run_9dd59523). Returns the new map + whether
+ *  anything was removed (`hit`) so the caller can no-op on a miss (avoid churn). Match
+ *  CONSERVATIVELY/anchored — exact display path, exact absolutePath, or an absolute
+ *  delete-path ending with the stored relative path (resolved-vs-raw asymmetry). NEVER
+ *  bare-basename (would false-remove an unrelated same-named file). */
+export function applyDelete(
+  prev: Map<string, ReferencedFile>,
+  e: { path: string; absolutePath?: string },
+): { map: Map<string, ReferencedFile>; hit: boolean } {
+  let hit = false;
+  const next = new Map<string, ReferencedFile>();
+  for (const [key, f] of prev) {
+    const match =
+      f.path === e.path ||
+      f.absolutePath === e.path ||
+      (e.absolutePath !== undefined && f.absolutePath === e.absolutePath) ||
+      e.path.endsWith(`/${f.path}`);
+    if (match) { hit = true; continue; } // drop it
+    next.set(key, f);
+  }
+  return { map: next, hit };
+}
+
+// Per-tab in-memory staging for BACKGROUND-tab writes (run_9dd59523, Gate-1 #2b).
+// A background tab has NO live useReferencedFiles instance (the sole one is keyed on
+// the ACTIVE tab), so its only state is sessionStorage. Rather than a raw
+// load→apply→save RMW (which a future deferred-write refactor could turn into a
+// lost-update race), we keep an authoritative in-memory map per background tab here
+// and mirror it to storage — unifying the write discipline with the active path's
+// functional-updater serialization. Module-level (survives re-renders); an active tab
+// switching in reloads from storage (the durable mirror), so a stale staging entry is
+// harmless. applyWrite already caps at MAX_FILES, so this needs no separate eviction.
+const _bgStaging = new Map<string, Map<string, ReferencedFile>>();
+
+/** Test-only: clear the background staging map so cases don't bleed into each other.
+ *  Not used in production (the map is intentionally session-lived there). */
+export function __resetBackgroundStagingForTest(): void {
+  _bgStaging.clear();
+}
+
 export function useReferencedFiles(tabId: string | undefined) {
   const [files, setFiles] = useState<Map<string, ReferencedFile>>(new Map());
   const filesRef = useRef<Map<string, ReferencedFile>>(files);
@@ -181,87 +279,46 @@ export function useReferencedFiles(tabId: string | undefined) {
       //  - content|knowledge (or undefined from an older backend) → rail.
       // Undefined kind falls through to the rail (migration: relevance still gates pop).
       if (kind === 'process' || kind === 'source') return;
-      // Tab-scope (run_26aa6caa): all tabs are keep-mounted, so a background tab's
-      // dispatch would otherwise be recorded into THIS tab's store. Ignore events
-      // stamped with a DIFFERENT tabId. Fail OPEN only when truly unstamped
-      // (evtTabId absent). The stamp is now capturedTabId — present for every write
-      // in a MULTI-tab session (≥2 tabs always have registered ids), so the
-      // cross-tab bleed is closed there. The ONE unstamped case is the very first
-      // tab pre-registration (capturedTabId null, see useChatStreamingLifecycle
-      // ~2443): only one rail is mounted then, so fail-open lands the write in that
-      // single tab — correct, no second rail to bleed into.
-      if (evtTabId && evtTabId !== tabId) return;
 
-      // G1 (run_5a7be540): a delete event REMOVES the matching row (never adds).
-      // Match CONSERVATIVELY/anchored — exact display path, exact absolutePath, or
-      // an absolute delete-path ending with the stored relative path (the resolved
-      // vs raw asymmetry). NEVER bare-basename (would false-remove an unrelated
-      // same-named file). A delete matching nothing is a harmless no-op (a lingering
-      // row == pre-G1 behavior; safe direction).
+      // ── Active vs BACKGROUND routing (run_9dd59523) ──────────────────────────
+      // The event is stamped with its OWNING tabId (capturedTabId). Previously a
+      // background-tab event (evtTabId != this hook's active tabId) was DROPPED, so
+      // that tab's outputs were never persisted ('跑完看不到输出' on switch-in). Now:
+      //  - ACTIVE tab (evtTabId absent OR == tabId) → setState + save [unchanged].
+      //  - BACKGROUND tab (evtTabId && != tabId)    → persist to the OWNING tab's
+      //    storage via the staging map, NO setState (that tab isn't rendered here).
+      // Both paths run the SAME pure applyWrite/applyDelete (SSOT — no drift).
+      const isBackground = !!(evtTabId && evtTabId !== tabId);
+
+      if (isBackground) {
+        const ownTab = evtTabId as string;
+        const base = _bgStaging.get(ownTab) ?? loadFromStorage(ownTab);
+        if (operation === 'deleted') {
+          const { map, hit } = applyDelete(base, { path, absolutePath });
+          if (!hit) return; // no-op — don't churn storage
+          _bgStaging.set(ownTab, map);
+          saveToStorage(ownTab, map);
+        } else {
+          const next = applyWrite(base, { path, absolutePath, operation, kind, baseRef });
+          _bgStaging.set(ownTab, next);
+          saveToStorage(ownTab, next);
+        }
+        return;
+      }
+
+      // ── ACTIVE tab (unchanged behavior, now via the shared pure helpers) ──────
       if (operation === 'deleted') {
         setFiles((prev) => {
-          let hit = false;
-          const next = new Map<string, ReferencedFile>();
-          for (const [key, f] of prev) {
-            const match =
-              f.path === path ||
-              f.absolutePath === path ||
-              (absolutePath !== undefined && f.absolutePath === absolutePath) ||
-              path.endsWith(`/${f.path}`);
-            if (match) { hit = true; continue; } // drop it
-            next.set(key, f);
-          }
+          const { map, hit } = applyDelete(prev, { path, absolutePath });
           if (!hit) return prev; // no-op — don't churn state/storage
-          saveToStorage(tabId, next);
-          return next;
+          saveToStorage(tabId, map);
+          return map;
         });
         return;
       }
 
       setFiles((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(path);
-
-        if (existing) {
-          // Dedup: bump count. operation is always 'written' (the only emitted op),
-          // so there is nothing to promote — just refresh the resolved absolutePath if
-          // a later event carried one the first lacked.
-          next.set(path, {
-            ...existing,
-            absolutePath: absolutePath || existing.absolutePath,
-            count: existing.count + 1,
-            kind: kind ?? existing.kind,
-            baseRef: baseRef ?? existing.baseRef,
-          });
-        } else {
-          // Enforce cap — evict oldest if at limit
-          if (next.size >= MAX_FILES) {
-            let oldestKey = '';
-            let oldestTime = Infinity;
-            for (const [key, file] of next) {
-              if (file.firstSeen < oldestTime) {
-                oldestTime = file.firstSeen;
-                oldestKey = key;
-              }
-            }
-            if (oldestKey) next.delete(oldestKey);
-          }
-
-          next.set(path, {
-            path,
-            // Backend-resolved PHYSICAL absolute path (copy-path uses this). Falls
-            // back to the display path only if the backend couldn't resolve it.
-            absolutePath: absolutePath || path,
-            fileName: basename(path),
-            operation,
-            firstSeen: Date.now(),
-            count: 1,
-            kind,
-            baseRef,
-          });
-        }
-
-        // Persist
+        const next = applyWrite(prev, { path, absolutePath, operation, kind, baseRef });
         saveToStorage(tabId, next);
         return next;
       });

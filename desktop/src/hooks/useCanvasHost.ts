@@ -54,6 +54,14 @@ interface CanvasTabState {
   pinned: boolean;
   muted: boolean;
   manuallyOpen: boolean;
+  /** The outputCount value at the last time the user had this tab's Canvas OPEN
+   *  (run_9dd59523). The ChatHeader pill shows only when outputCount > this — so once
+   *  the user opens Canvas and reviews, the pill hides and does NOT re-nag for the
+   *  SAME outputs; it reappears only when a NEW output pushes outputCount higher.
+   *  Per-tab (in the slice) so opening tab A's Canvas never marks tab B's outputs seen.
+   *  In-memory per session (NOT persisted) — outputCount itself is session-scoped, and a
+   *  reload legitimately re-surfaces "here's what this tab produced" (lastSeen resets to 0). */
+  lastSeenOutputCount: number;
 }
 
 const EMPTY: CanvasTabState = {
@@ -61,6 +69,7 @@ const EMPTY: CanvasTabState = {
   pinned: false,
   muted: false,
   manuallyOpen: false,
+  lastSeenOutputCount: 0,
 };
 
 export interface UseCanvasHostArgs {
@@ -90,6 +99,9 @@ export interface CanvasHostApi {
    *  for the active tab — the single source of truth for the ChatHeader pill.
    *  Live even when Canvas is closed (that is the whole point). */
   outputCount: number;
+  /** outputCount at the last time this tab's Canvas was open (run_9dd59523). The pill
+   *  shows only when outputCount > this, so it stops nagging once outputs are reviewed. */
+  lastSeenOutputCount: number;
   setFile: (f: CanvasFile | null) => void;
   setPinned: (v: boolean) => void;
   setMuted: (v: boolean) => void;
@@ -154,6 +166,21 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
+
+  // ── Mark outputs "seen" while Canvas is open (run_9dd59523, Gate-1 #3) ────────
+  // The ChatHeader pill shows only when outputCount > lastSeenOutputCount. Fires on
+  // BOTH [isOpen, outputCount] (NOT the false→true transition only): while Canvas is
+  // open, every new output that arrives is immediately marked seen — because the pill
+  // is already hidden by its own `!canvasOpen` guard while open, and tracking the
+  // latest count here is what prevents a STALE pill from flashing the moment the user
+  // closes Canvas. On close, lastSeen == the count they last saw, so the pill stays
+  // hidden until a genuinely NEW output pushes outputCount higher. Only writes when the
+  // value actually changes (patch would otherwise re-fire needlessly).
+  useEffect(() => {
+    if (isOpen && slice.lastSeenOutputCount !== outputCount) {
+      patch({ lastSeenOutputCount: outputCount });
+    }
+  }, [isOpen, outputCount, slice.lastSeenOutputCount, patch]);
 
   // ── Synchronous, send-time proprioception read (race fix, run_e45a04d3) ──────
   // The agent's SENSE snapshot reads canvas.open at chat-SEND time. The async
@@ -273,6 +300,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     isOpen,
     referencedFiles,
     outputCount,
+    lastSeenOutputCount: slice.lastSeenOutputCount,
     setFile,
     setPinned,
     setMuted,

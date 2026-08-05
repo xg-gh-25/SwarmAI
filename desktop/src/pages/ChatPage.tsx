@@ -3143,6 +3143,7 @@ export default function ChatPage() {
         tabStatuses={tabStatuses}
         isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
         outputCount={canvas.outputCount}
+        lastSeenOutputCount={canvas.lastSeenOutputCount}
         canvasOpen={canvas.isOpen}
         onOpenCanvas={() => window.dispatchEvent(new CustomEvent('swarm:open-canvas'))}
       />

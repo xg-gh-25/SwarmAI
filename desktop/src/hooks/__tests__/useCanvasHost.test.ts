@@ -230,3 +230,66 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.file?.filePath).toBe('a.md');
   });
 });
+
+describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)', () => {
+  beforeEach(() => { vi.clearAllMocks(); sessionStorage.clear(); });
+
+  it('opening Canvas marks the current outputs as seen (lastSeen catches up to outputCount)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => emitOutputs('A', 3));       // 3 outputs while closed
+    expect(result.current.outputCount).toBe(3);
+    expect(result.current.lastSeenOutputCount).toBe(0); // not seen yet → pill would show
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // user opens
+    expect(result.current.lastSeenOutputCount).toBe(3); // now seen → pill hides
+  });
+
+  it('outputs arriving WHILE open are marked seen immediately (no stale pill on close)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // open first
+    act(() => emitOutputs('A', 2));       // outputs arrive while open
+    // lastSeen tracked them (fires on [isOpen,outputCount]) → on close the pill won't flash.
+    expect(result.current.outputCount).toBe(2);
+    expect(result.current.lastSeenOutputCount).toBe(2);
+    act(() => result.current.close());
+    // closed, but everything was seen → outputCount == lastSeen → pill stays hidden.
+    expect(result.current.lastSeenOutputCount).toBe(2);
+  });
+
+  it('a NEW output after review pushes outputCount above lastSeen (pill reappears)', () => {
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'A', sessionId: 's-A', isStreaming: false }),
+    );
+    act(() => emitOutputs('A', 2));
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // seen=2
+    act(() => result.current.close());
+    // a DISTINCT new file (emitOutputs reuses out-A-0.. which would dedup) → outputCount 2→3
+    act(() => {
+      window.dispatchEvent(new CustomEvent('swarm:file-changed', {
+        detail: { path: 'brand-new.py', tabId: 'A', operation: 'written', relevance: 'deliverable', kind: 'source-final' },
+      }));
+    });
+    expect(result.current.outputCount).toBe(3);
+    expect(result.current.lastSeenOutputCount).toBe(2); // 3 > 2 → pill shows again
+  });
+
+  it('lastSeen is PER-TAB — opening tab A does not mark tab B outputs seen', () => {
+    let tabId = 'A';
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: tabId } },
+    );
+    act(() => emitOutputs('A', 2));
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); }); // A seen=2
+    expect(result.current.lastSeenOutputCount).toBe(2);
+    // Switch to B (its own outputs, never opened)
+    tabId = 'B';
+    rerender({ t: tabId });
+    act(() => emitOutputs('B', 1));
+    expect(result.current.outputCount).toBe(1);
+    expect(result.current.lastSeenOutputCount).toBe(0); // B not seen — A's open didn't bleed
+  });
+});
