@@ -134,3 +134,39 @@ class TestRunDddRefresh:
         result = run_ddd_refresh(dry_run=True)
         assert result["status"] == "success"
         assert result["proposals_written"] == 0  # dry run doesn't write
+
+
+class TestSectionHealthRefresh:
+    """Scheme A: the ddd-refresh job is the SCHEDULED writer of section_health.json
+    (Gate-0: the GET brain path never writes it; without this, trust freezes stale
+    forever — Principle-1 drift). Health refresh is UNCONDITIONAL — it must run for
+    every project regardless of doc staleness (health ≠ doc-staleness)."""
+
+    def test_refresh_writes_section_health_for_fresh_project(self, project_dir, monkeypatch):
+        """A FRESH project (which `continue`s before proposal generation) must STILL
+        get its section_health.json (re)computed — health refresh is unconditional."""
+        monkeypatch.setattr(
+            "jobs.handlers.ddd_refresh._check_staleness",
+            lambda d: {"stale": False, "age_days": 1, "commit_count": 0},
+        )
+        sh = project_dir / ".artifacts" / "section_health.json"
+        assert not sh.exists()
+        result = run_ddd_refresh()
+        assert result["status"] == "success"
+        assert sh.exists(), "section_health.json must be written even for a fresh project"
+        assert result["health_refreshed"] == 1, "counter must reflect the refresh"
+
+    def test_health_refresh_failure_does_not_abort_run(self, project_dir, monkeypatch):
+        """One project's health computation raising must NOT abort the whole refresh
+        (resilient-lens: per-project try/except, log+continue)."""
+        monkeypatch.setattr(
+            "jobs.handlers.ddd_refresh._check_staleness",
+            lambda d: {"stale": False, "age_days": 1, "commit_count": 0},
+        )
+
+        def _boom(project_dir):
+            raise RuntimeError("health computation exploded")
+
+        monkeypatch.setattr("jobs.handlers.ddd_refresh.compute_section_health", _boom)
+        result = run_ddd_refresh()
+        assert result["status"] == "success"  # did not abort

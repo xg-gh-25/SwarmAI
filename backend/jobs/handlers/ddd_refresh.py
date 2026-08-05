@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..paths import SWARMWS, PROJECTS_DIR
 from core.ddd_paths import ddd_path
+from core.ddd_health import compute_section_health
 
 logger = logging.getLogger("swarm.jobs.ddd_refresh")
 
@@ -42,6 +43,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
 
     proposals_written = 0
     projects_checked = 0
+    health_refreshed = 0
 
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
         if not project_dir.is_dir() or project_dir.name.startswith("."):
@@ -52,6 +54,25 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
             continue
 
         projects_checked += 1
+
+        # Scheme A (run_d1e933aa, Gate-0): this scheduled job is the SOLE writer of
+        # section_health.json — the GET brain path deliberately never writes it
+        # (a disk write in a read handler is forbidden), so without this refresh the
+        # trust/diagnostics scores freeze at whenever /engine-metrics was last hit
+        # and silently rot (Principle-1 drift). Health refresh is UNCONDITIONAL and
+        # runs BEFORE the staleness `continue` — a brain's HEALTH is independent of
+        # whether its docs are "stale vs code". Per-project try/except (resilient-
+        # lens): one project's failure must never abort the whole refresh. Not
+        # gated on dry_run — recomputing a health snapshot is idempotent and has no
+        # external side effect (unlike an LLM proposal write).
+        try:
+            compute_section_health(project_dir)
+            health_refreshed += 1
+        except Exception as e:  # noqa: BLE001 — never abort the batch on one brain
+            logger.error(
+                "section_health refresh failed for %s: %s: %s",
+                project_dir.name, type(e).__name__, e,
+            )
 
         # Check if TECH.md is stale (>7 days old with recent code commits)
         stale_info = _check_staleness(project_dir)
@@ -84,7 +105,8 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
             proposals_written += 1
 
     summary = (
-        f"Checked {projects_checked} projects, wrote {proposals_written} proposals"
+        f"Checked {projects_checked} projects, refreshed {health_refreshed} health, "
+        f"wrote {proposals_written} proposals"
         if projects_checked > 0
         else "No projects with DDD docs found"
     )
@@ -93,6 +115,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
     return {
         "status": "success",
         "projects_checked": projects_checked,
+        "health_refreshed": health_refreshed,
         "proposals_written": proposals_written,
         "summary": summary,
     }

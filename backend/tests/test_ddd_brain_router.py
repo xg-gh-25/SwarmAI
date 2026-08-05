@@ -598,3 +598,67 @@ class TestUnifiedBrainStateBuilder:
         assert {"sinking", "pending", "uncommitted", "lastChangeRelative"} <= set(h.keys())
         # detail metrics added
         assert "noise" in h and "trust" in h and "escalationPending" in h and "recall" in h
+
+    def test_detail_includes_recent_activity(self, monkeypatch, tmp_path):
+        """Q3 'is it growing?' — detail exposes recentActivity = count of
+        ddd-changelog entries in the last 30d (value≠size). A real per-brain
+        maintenance signal, summed from the SAME changelog compute_section_health
+        already reads (near-zero cost). Absent changelog → honest 0."""
+        from routers import ddd_brain as m
+        import json as _json
+        from datetime import datetime, timezone
+
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        cl = pd / ".artifacts" / "ddd-changelog.jsonl"
+        now = datetime.now(timezone.utc).isoformat()
+        cl.write_text(
+            "\n".join(
+                _json.dumps({"target_doc": "TECH.md", "target_section": "s", "timestamp": now})
+                for _ in range(3)
+            ),
+            encoding="utf-8",
+        )
+        h = m.build_brain_state(pd, with_noise=True)["health"]
+        assert "recentActivity" in h, "Q3 growing signal must be exposed"
+        assert h["recentActivity"] == 3
+
+    def test_recent_activity_absent_changelog_is_zero(self, monkeypatch, tmp_path):
+        """No changelog → recentActivity is honest 0, never fabricated, never None."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        h = m.build_brain_state(pd, with_noise=True)["health"]
+        assert h["recentActivity"] == 0
+
+    def test_gallery_omits_recent_activity(self, monkeypatch, tmp_path):
+        """recentActivity is a DETAIL metric — gallery (with_noise=False) stays the
+        cheap 4-key base, never gains it (Principle-1 / perf: gallery is minimal)."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        h = m.build_brain_state(pd, with_noise=False)["health"]
+        assert "recentActivity" not in h
+
+    def test_recent_activity_excludes_undated_and_old(self, monkeypatch, tmp_path):
+        """A '30d activity' number must count ONLY entries STAMPED within 30d.
+        Undated (ts missing/malformed) and >30d-old entries are NOT counted —
+        honest under-count beats dishonest inflation (adversarial review Point 1)."""
+        from routers import ddd_brain as m
+        import json as _json
+        from datetime import datetime, timezone, timedelta
+
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(days=60)).isoformat()
+        lines = [
+            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": now.isoformat()}),  # in
+            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": now.isoformat()}),  # in
+            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": old}),              # old → out
+            _json.dumps({"target_doc": "T", "target_section": "s"}),                                # undated → out
+            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": "garbage"}),        # malformed → out
+        ]
+        (pd / ".artifacts" / "ddd-changelog.jsonl").write_text("\n".join(lines), encoding="utf-8")
+        h = m.build_brain_state(pd, with_noise=True)["health"]
+        assert h["recentActivity"] == 2, "only the 2 in-window stamped entries count"
