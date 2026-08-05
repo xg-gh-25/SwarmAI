@@ -160,10 +160,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // swarm:canvas-state emit (effect below) could lag a fast send, leaving the
   // snapshot stale (the observed race). getCanvasSnapshot() reads the LIVE
   // source instead — mapRef (the synchronous source of truth, written in patch()
-  // BEFORE React commits; outputCount now lives in the slice too) — so a send after
-  // swarm:open-canvas reports the true state. Mirrors the CanvasSnapshot shape
-  // exactly (uiContext.ts); collapsed stays false to match the emit effect
-  // — onCanvasMeta's real collapsed is not persisted (pre-existing, unchanged).
+  // BEFORE React commits) for open/pinned/muted, plus the resident `outputCount`
+  // (from useReferencedFiles, run_9e42c066) — so a send after swarm:open-canvas
+  // reports the true state. Mirrors the CanvasSnapshot shape exactly
+  // (uiContext.ts); collapsed stays false (the dock that could set it true is gone).
   // Returns null when there is nothing reportable (parity with the effect's null).
   const getCanvasSnapshot = useCallback((): CanvasSnapshot | null => {
     const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;

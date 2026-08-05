@@ -584,8 +584,9 @@ function FileViewerPanelImpl({
             </div>
             {/* Output list — the caret folds ONLY the list (panel keeps full
                 width; space goes to the Region-B file). Kept MOUNTED-but-hidden
-                when collapsed (not unmounted) so counts + onCanvasMeta stay live
-                — the bar's "N files" summary keeps updating while folded. */}
+                when collapsed (not unmounted) so the panel-local counts (onCounts→
+                setCounts) stay live — the bar's "N files · M new" summary keeps
+                updating while folded. */}
             <div
               className={outputsCollapsed ? 'hidden' : 'max-h-[140px] overflow-y-auto px-1.5 pb-1.5'}
               data-testid="canvas-outputs-list"
