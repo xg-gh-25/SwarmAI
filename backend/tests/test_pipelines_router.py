@@ -121,6 +121,25 @@ class TestPipelinesEndpoint:
         assert data["count"] == 1
         assert data["pipelines"][0]["id"] == "run_active"
 
+    def test_aged_paused_decision_run_still_active(self, client, workspace):
+        """run_2568c3fb: a paused-decision run whose FILE MTIME is old (paused runs
+        are never re-touched and never auto-abandoned) MUST still appear in
+        ?active=true. A mtime pre-filter was rejected precisely because it would
+        silently drop this run from the 🔔 attention queue — the one item that most
+        needs to stay surfaced. The `active` filter is a pure status filter, not an
+        mtime heuristic."""
+        import os
+        old = _create_run(workspace, "Proj", "run_old_paused", status="paused",
+                          updated_at="2026-01-01T00:00:00+00:00",
+                          checkpoint={"reason": "Gate BLOCK", "stage": "build"})
+        old_epoch = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+        os.utime(old, (old_epoch, old_epoch))  # freeze mtime far in the past
+
+        active = client.get("/api/pipelines?active=true").json()
+        ids_active = {p["id"] for p in active["pipelines"]}
+        assert "run_old_paused" in ids_active, \
+            "an aged paused-decision run must remain in the active/attention queue"
+
     def test_multi_project(self, client, workspace):
         _create_run(workspace, "ProjectA", "run_a1")
         _create_run(workspace, "ProjectB", "run_b1")
@@ -224,20 +243,22 @@ class TestPipelinesEndpoint:
         resp = client.get("/api/pipelines")
         assert resp.json()["pipelines"][0]["taste_decisions"] == 2
 
-    def test_stale_running_auto_marked_failed(self, client, workspace):
-        """A run stuck in 'running' with no update for >60min is auto-failed."""
+    def test_stale_running_presented_failed_disk_untouched(self, client, workspace):
+        """A run stuck 'running' >60min is PRESENTED as failed — but the GET path is
+        READ-ONLY (run_2568c3fb): it must NOT rewrite the file. The real on-disk
+        stale→failed transition is owned by the reaper (artifact_cli), never a GET."""
         stale_time = "2026-01-01T00:00:00+00:00"  # definitely stale
         run_file = _create_run(workspace, "Proj", "run_stale",
                                status="running", updated_at=stale_time)
 
         resp = client.get("/api/pipelines")
         pipeline = resp.json()["pipelines"][0]
-        assert pipeline["status"] == "failed"
+        assert pipeline["status"] == "failed"  # presentation coercion
 
-        # Verify it was persisted to disk
+        # A GET must NOT write disk — on-disk status is preserved as 'running'.
         on_disk = json.loads(run_file.read_text())
-        assert on_disk["status"] == "failed"
-        assert "auto-detected stale" in on_disk.get("failure_reason", "")
+        assert on_disk["status"] == "running", "GET must not mutate the run file"
+        assert "failure_reason" not in on_disk, "GET must not stamp failure_reason"
 
     def test_stale_detection_ignores_non_running(self, client, workspace):
         """Completed and paused runs are not affected by stale detection."""
@@ -296,10 +317,11 @@ class TestPipelinesEndpoint:
         # No spurious failure_reason written
         assert "failure_reason" not in on_disk
 
-    def test_stale_nonterminal_run_still_marked_failed(self, client, workspace):
+    def test_stale_nonterminal_run_presented_failed(self, client, workspace):
         """Regression guard: a genuinely mid-pipeline stale run (no reflect/deliver
-        completed) is a real orphan and MUST still be marked failed — the fix must
-        not over-broaden and hide real failures."""
+        completed) is a real orphan and MUST still be PRESENTED as failed — the fix
+        must not over-broaden and hide real failures. READ-ONLY: disk preserved
+        (run_2568c3fb — the reaper owns the on-disk transition, not the GET path)."""
         stale_time = "2026-01-01T00:00:00+00:00"
         run_file = _create_run(
             workspace, "Proj", "run_nonterminal_stale",
@@ -309,10 +331,11 @@ class TestPipelinesEndpoint:
                 {"stage": "think", "status": "completed", "token_cost": 5000},
             ],
         )
-        client.get("/api/pipelines")
+        resp = client.get("/api/pipelines")
+        pipeline = next(p for p in resp.json()["pipelines"] if p["id"] == "run_nonterminal_stale")
+        assert pipeline["status"] == "failed"  # presentation coercion
         on_disk = json.loads(run_file.read_text())
-        assert on_disk["status"] == "failed"
-        assert "auto-detected stale" in on_disk.get("failure_reason", "")
+        assert on_disk["status"] == "running", "GET must not mutate the run file"
 
     def test_stale_terminal_run_excluded_from_default_active(self, client, workspace):
         """A terminal-but-running run must not render as an active 'running' run in

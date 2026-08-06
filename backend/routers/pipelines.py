@@ -13,6 +13,7 @@ The router is registered in main.py with prefix ``/api/pipelines``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -61,10 +62,14 @@ try:
 except (ValueError, TypeError):
     _STALE_THRESHOLD_MINUTES = 60
 
-# The exact failure_reason the stale-detector stamps on an auto-failed run. Named
-# so the one-time reconciliation script (scripts/reconcile_mislabeled_runs.py) can
-# import + match it byte-for-byte instead of hardcoding a copy that silently drifts
-# if this string is ever edited. Single writer: _mark_failed below.
+# The exact failure_reason the FORMER write-on-read stale-detector (_mark_failed,
+# removed run_2568c3fb) stamped on disk. NO code writes it anymore — it is retained
+# ONLY so the one-time reconciliation script (scripts/reconcile_mislabeled_runs.py)
+# can import + match it byte-for-byte to rewrite the legacy runs that old writer
+# mislabeled. Nothing in this router writes it. (Today's on-disk terminal transition
+# for a dead/stale run is the reaper's `abandoned` verdict — a DIFFERENT status +
+# reason; and the GET path presents a stale running run as `failed` read-only. The
+# three states are intentionally distinct — see _to_response.)
 _STALE_FAILURE_REASON = "session ended without completion (auto-detected stale)"
 
 
@@ -87,9 +92,9 @@ def _is_stale(state: dict) -> bool:
     `artifact_cli._abandon_verdict` (before its abandon verdict) and
     `proactive_intelligence` (before auto-resume) already apply — so all three
     consumers of on-disk run state agree: terminal runs are skipped, never
-    re-labeled. Without this, `_mark_failed` flipped delivered-but-crashed runs
-    to "failed" on every dashboard poll (run_aad474c7: 9/9 stages completed,
-    status=failed).
+    re-labeled. Without this, the stale→failed presentation coercion in
+    _to_response would flip delivered-but-crashed runs to "failed" (run_aad474c7:
+    9/9 stages completed must present as completed, not failed).
     """
     if state.get("status") != "running":
         return False
@@ -106,26 +111,30 @@ def _is_stale(state: dict) -> bool:
         return True
 
 
-def _mark_failed(run_file: Path, state: dict) -> None:
-    """Atomically mark a stale run as failed on disk."""
-    state["status"] = "failed"
-    state["failure_reason"] = _STALE_FAILURE_REASON
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    try:
-        tmp = run_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        tmp.replace(run_file)
-        logger.info("Auto-marked stale pipeline %s as failed", state.get("id"))
-    except OSError as e:
-        logger.warning("Failed to mark stale pipeline %s: %s", state.get("id"), e)
-
-
 def _load_pipeline_runs() -> list[dict]:
     """Scan all projects for pipeline run files.
 
-    Returns raw dicts sorted by updated_at (newest first).
-    Automatically marks stale "running" pipelines as "failed".
-    Never raises — returns empty list on any error.
+    Returns raw dicts sorted by updated_at (newest first). Never raises —
+    returns empty list on any error. Read-only: this function NEVER writes disk
+    (a GET handler writing disk is forbidden, Gate-1 CRITICAL run_d7146171). A
+    dead/stale run is handled in TWO independent places, neither of them here:
+    (1) the GET path PRESENTS a stale `running` run as `failed` — read-only
+    coercion in _to_response; (2) the reaper (artifact_cli._auto_abandon_stale_runs
+    / cleanup_orphans) writes the real on-disk terminal verdict, which is
+    `abandoned` (reason orphaned_no_resume / crash_zombie) — NOT `failed`. The
+    presented status and the on-disk status intentionally differ.
+
+    NOTE (run_2568c3fb): callers MUST offload this to a thread
+    (`await asyncio.to_thread(_load_pipeline_runs)`) — it stat()s + json.loads
+    every run file, which blocks the event loop (and every parallel request) if
+    run inline. A mtime read-boundary "active fast path" was considered and
+    REJECTED: file mtime freezes for BOTH terminal and paused runs, so it cannot
+    distinguish them — any mtime cutoff would silently drop a genuinely paused-
+    decision run (the exact item the 🔔 attention queue exists to surface) once it
+    ages past the window. The `active` filter therefore stays a pure in-memory
+    status filter in list_pipelines (correct), and the scan cost is bounded by
+    to_thread, not by a lossy pre-filter. If the full scan ever becomes a real
+    (measured) cost, add a proper active-run index — not an mtime heuristic.
     """
     projects_dir = _get_swarmws() / "Projects"
     if not projects_dir.exists():
@@ -149,9 +158,6 @@ def _load_pipeline_runs() -> list[dict]:
                 if rf.exists():
                     try:
                         state = json.loads(rf.read_text(encoding="utf-8"))
-                        # Auto-fail stale runs
-                        if _is_stale(state):
-                            _mark_failed(rf, state)
                         state["_project"] = project_dir.name
                         seen_ids.add(state.get("id", ""))
                         runs.append(state)
@@ -164,8 +170,6 @@ def _load_pipeline_runs() -> list[dict]:
                 state = json.loads(run_file.read_text(encoding="utf-8"))
                 if state.get("id") in seen_ids:
                     continue
-                if _is_stale(state):
-                    _mark_failed(run_file, state)
                 state["_project"] = project_dir.name
                 runs.append(state)
             except (json.JSONDecodeError, OSError, KeyError) as e:
@@ -209,6 +213,18 @@ def _to_response(raw: dict) -> PipelineRunResponse:
     # (failed/cancelled/abandoned) is never overridden.
     if status in (PipelineRunStatus.RUNNING, PipelineRunStatus.PAUSED) and is_terminal_run(raw):
         status = PipelineRunStatus.COMPLETED
+
+    # Stale-running presentation (run_2568c3fb): a run stuck "running" past the
+    # stale threshold with no terminal stages is a dead session's orphan — present
+    # it as failed so it doesn't masquerade as active forever. READ-ONLY coercion
+    # (replaces the former write-on-read _mark_failed — a GET must not write disk).
+    # NOTE: this is only the PRESENTATION; the reaper independently writes a
+    # DIFFERENT on-disk verdict (`abandoned`, not `failed`) — the two intentionally
+    # differ. Ordered AFTER the terminal→completed coercion so a
+    # delivered-but-crashed run is presented completed, never failed (_is_stale
+    # already skips terminal runs, so this only catches genuine no-progress orphans).
+    if status == PipelineRunStatus.RUNNING and _is_stale(raw):
+        status = PipelineRunStatus.FAILED
 
     # Classify a paused run for attention-queue consumers (Radar "NEEDS YOU").
     # Only a genuine decision-pause should demand the user's attention; a pause
@@ -284,7 +300,11 @@ async def list_pipelines(
 
     Always returns HTTP 200 — empty dashboard if no pipelines exist.
     """
-    all_runs = _load_pipeline_runs()
+    # to_thread: the scan stat()s + json.loads many files — never run it inline on
+    # the event loop (it blocks /health + every parallel request). The `active`
+    # filter is a pure in-memory status filter below (run_2568c3fb — a mtime
+    # pre-filter was rejected as it silently drops aged paused-decision runs).
+    all_runs = await asyncio.to_thread(_load_pipeline_runs)
     if not all_runs:
         return PipelineDashboard()
 
@@ -406,7 +426,9 @@ async def pipeline_analytics(
     if window not in ("30d", "ytd"):
         window = "30d"
     cutoff = _window_cutoff(window)
-    all_runs = _load_pipeline_runs()
+    # Retro analytics genuinely needs the FULL set (terminal runs included).
+    # Off-loop (to_thread): the full scan stat()s + json.loads every run file.
+    all_runs = await asyncio.to_thread(_load_pipeline_runs)
 
     def _in_window(raw: dict) -> bool:
         if cutoff is None:
