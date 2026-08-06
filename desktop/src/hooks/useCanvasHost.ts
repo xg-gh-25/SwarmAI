@@ -183,7 +183,16 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, [activeTabId]);
 
   const setCollapse = useCallback((p: Partial<CanvasCollapse>) => patch(p), [patch]);
-  const setFile = useCallback((f: CanvasFile | null) => patch({ file: f }), [patch]);
+  // setFile also un-rails on a NEW non-null file (Bug 2 root fix — no bypass): the
+  // swarm:open-file handler is the primary write chokepoint, but setFile is a public
+  // CanvasHostApi method, so it carries the SAME un-rail invariant to close the bypass
+  // a future direct caller could open. Only un-rail on a real path change to a file
+  // (null/same-path never fights a deliberate manual re-rail). Meta-review closed this.
+  const setFile = useCallback((f: CanvasFile | null) => {
+    const cur = mapRef.current.get(keyFor(activeTabId)) ?? EMPTY;
+    const unrail = f && cur.file?.filePath !== f.filePath ? { railed: false } : {};
+    patch({ file: f, ...unrail });
+  }, [patch, activeTabId]);
   const setPinned = useCallback((v: boolean) => patch({ pinned: v }), [patch]);
   const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
   const togglePin = useCallback(() => patch({ pinned: !(mapRef.current.get(keyFor(activeTabId))?.pinned) }), [patch, activeTabId]);

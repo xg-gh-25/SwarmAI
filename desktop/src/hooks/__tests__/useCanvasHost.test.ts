@@ -100,6 +100,35 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.collapse.outputsCollapsed).toBe(true);
   });
 
+  it('setFile un-rails on a new file (no-bypass — the public API carries the write-side invariant)', () => {
+    const { result } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'A' } },
+    );
+    act(() => result.current.setCollapse({ railed: true }));
+    // Opening a file via setFile (the public method, distinct from the event handler)
+    // must ALSO un-rail — closes the bypass a future direct caller could open.
+    act(() => result.current.setFile({ filePath: 'x.md', fileName: 'x.md' }));
+    expect(result.current.collapse.railed).toBe(false);
+  });
+
+  it('reopen-after-close on a previously-railed tab renders un-railed (cross-fix composition)', () => {
+    // Meta-review invariant lock: rail → open F1 (un-rails) → close (file=null, railed
+    // stays false because close only clears file) → open F2 → still un-railed. The
+    // 'railed:true + closed' state is unreachable, so a reopened tab is never a stuck rail.
+    const { result } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'A' } },
+    );
+    act(() => result.current.setCollapse({ railed: true }));
+    act(() => result.current.setFile({ filePath: 'f1.md', fileName: 'f1.md' })); // un-rails
+    expect(result.current.collapse.railed).toBe(false);
+    act(() => result.current.close()); // file=null, railed unchanged (false)
+    act(() => result.current.setFile({ filePath: 'f2.md', fileName: 'f2.md' }));
+    expect(result.current.collapse.railed).toBe(false);
+    expect(result.current.file?.fileName).toBe('f2.md');
+  });
+
   it('setCollapse is a referentially stable callback (memo-safe for FileViewerPanel)', () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
