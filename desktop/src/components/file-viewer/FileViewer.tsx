@@ -729,7 +729,9 @@ function FileViewerImpl({
             {fileIcon(activeTab.fileName)}
           </span>
           <span className="text-[13px] font-medium truncate min-w-0 flex-1 text-[var(--color-text)]" title={activeTab.filePath}>
-            {activeTab.fileName}
+            {/* Fallback for a nameless / dir-like path so the header never shows an empty
+                label (Gate-2 LOW): fileName can be '' for a trailing-slash path. */}
+            {activeTab.fileName || activeTab.filePath || 'Untitled'}
           </span>
           {activeTab.isDirty && (
             <span
