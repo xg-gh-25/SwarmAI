@@ -14,8 +14,8 @@
  * owned by a parallel session; Canvas must not touch it).
  *
  * Click → dispatch swarm:open-file so the file opens in the same Canvas panel.
- * `autoDiff` is set for modified files (git 'upd') so they land on their diff;
- * new files open on source; renderable types default to preview in the viewer.
+ * Rows open on the file's CONTENT (autoDiff:false, run_d3cc1f2c); the diff is a
+ * per-file "Show Changes" toggle in FileEditorCore, not the open default.
  *
  * Browsing row (run_5b330415): Canvas is also used to BROWSE a file opened from a
  * chat link that was NOT written this session. Such a file (the `selectedPath`
@@ -58,17 +58,17 @@ function badgeRank(s: ChangeStatus | undefined): number {
 /**
  * Build the swarm:open-file event detail for an output row. Pure — unit-tested.
  *
- * PR-review surface (run_b8ea6d5c): a row opens on its DIFF (this file's changes) —
- * that IS the review experience the OUTPUTS list exists for. `autoDiff:true` opens
- * the FileEditorCore diff view; FileViewer soft-falls-back to source when no baseline
- * exists (FileViewer.tsx:580 — so a brand-new file still opens cleanly, not an empty
- * diff panel). `baseRef` is RESERVED here and threaded end-to-end but its git wiring
- * is a KNOWN ISSUE deferred this run: the diff baseline is still working-tree-vs-HEAD,
- * so a file already committed by run-commit shows an empty diff until a follow-up run
- * makes the baseline ref-aware (git diff <run_base>..<head>). For the immediate
- * (uncommitted) content/knowledge rows the working-tree-vs-HEAD diff is correct today.
- * (Supersedes the old AC3 "outputs open on SOURCE, never auto-diff" decision — the
- * user explicitly wants a per-file changes/PR-review view.)
+ * CONTENT-DEFAULT (run_d3cc1f2c, XG directive): a row (and the pipeline-finish
+ * auto-open) renders the file's CONTENT — `autoDiff:false`. The diff is NOT the open
+ * default; it is a per-file "Show Changes" TOGGLE inside FileEditorCore. XG: "Canvas
+ * 看的是 changes list; diff 是文件上的一个操作,不是 canvas 要不要渲染的判断."
+ * This REVERSES run_b8ea6d5c's PR-review-on-open default, and structurally eliminates
+ * the empty-diff BLANK render (a committed file whose working-tree-vs-HEAD diff is
+ * empty no longer opens into an empty DiffView) — WITHOUT a DiffView empty-state layer
+ * (the wrong-layer patch XG rejected: rendering is the file's concern, not Canvas's).
+ * `baseRef` is STILL threaded end-to-end (unchanged): FileViewer fetches the committed
+ * baseline regardless of autoDiff, so the Show Changes toggle diffs against the correct
+ * pre-run parent (<sha>^ for a source-final row, HEAD for uncommitted content/knowledge).
  */
 export function outputRowOpenDetail(
   path: string,
@@ -86,7 +86,7 @@ export function outputRowOpenDetail(
   // baseRef (run_030dc98e): a source-final row's `<sha>^` — the diff baseline so a
   // just-committed file opens on this-run's changes, not an empty HEAD diff. Undefined
   // for content/knowledge rows → they diff against HEAD (correct, still uncommitted).
-  return { path: absolutePath || path, autoDiff: true, baseRef };
+  return { path: absolutePath || path, autoDiff: false, baseRef };
 }
 
 /** Directory portion of a path (everything before the basename), for the dim
@@ -117,7 +117,7 @@ const OutputRow = memo(function OutputRow({
   fresh: boolean;
 }) {
   const handleClick = useCallback(() => {
-    // PR-review surface (run_b8ea6d5c): open the row on its DIFF (this file's changes).
+    // Open the row on its CONTENT (run_d3cc1f2c — autoDiff:false; diff is a toggle).
     // Pass absolutePath as the resolve anchor so a source-final row (repo-relative
     // display path, repo ≠ workspace) still resolves + opens.
     document.dispatchEvent(

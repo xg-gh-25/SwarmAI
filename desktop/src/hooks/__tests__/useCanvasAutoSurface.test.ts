@@ -31,12 +31,18 @@ function setCurrentFile(filePath: string | null) {
 
 describe('useCanvasAutoSurface', () => {
   let opened: string[];
+  let openedDetails: Array<{ path: string; tabId?: string }>;
   let onOpen: (e: Event) => void;
 
   beforeEach(() => {
     vi.useFakeTimers();
     opened = [];
-    onOpen = (e: Event) => opened.push((e as CustomEvent<{ path: string }>).detail.path);
+    openedDetails = [];
+    onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ path: string; tabId?: string }>).detail;
+      opened.push(d.path);
+      openedDetails.push({ path: d.path, tabId: d.tabId });
+    };
     document.addEventListener(OPEN_FILE_EVENT, onOpen);
   });
   afterEach(() => {
@@ -136,6 +142,66 @@ describe('useCanvasAutoSurface', () => {
     writeFile('Knowledge/legacy.md'); // no tabId stamp
     vi.advanceTimersByTime(DEBOUNCE + 5);
     expect(opened).toEqual(['Knowledge/legacy.md']); // no regression for un-updated dispatchers
+  });
+
+  it('source-final AUTO-POPS at pipeline finish (run_d3cc1f2c — Option A)', () => {
+    // The pipeline-finish batch (surface_run_outputs → kind=source-final) must now
+    // auto-open Canvas, subject to the SAME gentle suppression as content/knowledge
+    // (NOT a bypass). Mutation-provable: remove source-final from the kind-gate → RED.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('backend/core/x.py', 'written', undefined, 'deliverable', 'source-final');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['backend/core/x.py']);
+  });
+
+  it('source-final coalesces to the LAST changed file (renders the last, per Option A)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('backend/a.py', 'written', undefined, 'deliverable', 'source-final');
+    writeFile('backend/b.py', 'written', undefined, 'deliverable', 'source-final');
+    writeFile('backend/c.py', 'written', undefined, 'deliverable', 'source-final');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['backend/c.py']); // the last changed file
+  });
+
+  it('source-final still RESPECTS pin/mute/user-viewing (gentle-suppression parity, NOT bypass)', () => {
+    // XG: user intent always wins. A finish batch must NOT steal a file the user is
+    // actively viewing — it goes to the rail + pill instead. This is the discriminator
+    // from the skeptic's rejected "bypass suppression" suggestion.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    setPanelOpen(true);
+    setCurrentFile('src/user-picked.ts');
+    writeFile('backend/core/x.py', 'written', undefined, 'deliverable', 'source-final');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]); // suppressed while viewing user's choice — pill will show
+  });
+
+  it('still DROPS mid-run source (only source-FINAL pops, not source)', () => {
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, debounceMs: DEBOUNCE }));
+    writeFile('backend/mid.py', 'written', undefined, 'deliverable', 'source');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]); // mid-run coding edits never auto-pop
+  });
+
+  it('stamps the origin tabId on the dispatched open-file (run_d3cc1f2c edit3)', () => {
+    // The dispatched OPEN_FILE_EVENT must carry the WRITE's origin tab so useCanvasHost
+    // lands it on that tab even if the active tab changed during the debounce window
+    // (the run_48a29fc2 class). Captured from the event's own tabId, not activeTabIdRef.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeTabId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('Knowledge/out.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(openedDetails).toEqual([{ path: 'Knowledge/out.md', tabId: 'tab-A' }]);
+  });
+
+  it('source-final ALSO stamps the origin tab (Gate-2: backend omits tabId but the frontend re-stamps every file_changed with capturedTabId before dispatch)', () => {
+    // Gate-2 adversarial doubted EDIT 3 helps source-final because build_surface_events
+    // (backend) emits no tabId. But useChatStreamingLifecycle re-stamps EVERY file_changed
+    // SSE event (incl. source-final) with capturedTabId (the stream's origin tab) before
+    // dispatching swarm:file-changed — so evtTabId IS populated here. This pins that: a
+    // source-final write stamped tab-A lands on tab-A, not the active tab.
+    renderHook(() => useCanvasAutoSurface({ pinned: false, muted: false, activeTabId: 'tab-A', debounceMs: DEBOUNCE }));
+    writeFile('backend/core/x.py', 'written', 'tab-A', 'deliverable', 'source-final');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(openedDetails).toEqual([{ path: 'backend/core/x.py', tabId: 'tab-A' }]);
   });
 
   it('skips bookkeeping writes (kind=process — git-verdict authority)', () => {

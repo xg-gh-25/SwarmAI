@@ -121,18 +121,26 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pendingPath: string | null = null;
+    // The origin tab of the pending write (the event's own stamp). Captured at
+    // ARRIVAL and stamped onto the dispatched open-file so useCanvasHost lands the
+    // file on the tab that PRODUCED it — immune to a tab switch during the debounce
+    // window (the run_48a29fc2 origin-tab class). Null when the event is unstamped
+    // (older backend) → the dispatch omits tabId → useCanvasHost falls back to active.
+    let pendingTabId: string | undefined;
 
     const onWritten = (e: Event) => {
       const { path, operation, relevance, kind, tabId: evtTabId } = (e as CustomEvent<{ path: string; operation: string; relevance?: string; kind?: string; tabId?: string }>).detail ?? {};
       if (operation !== 'written' || !path) return;
-      // Unified-verdict gate (PRIMARY): only content|knowledge auto-pop.
-      // `source` = a mid-run coding edit (never pops; suppressed). `source-final`
-      // (run_b8ea6d5c) = the pipeline-finish coding batch — it DOES get rail rows
-      // (useReferencedFiles) but DELIBERATELY does NOT auto-pop here: a finish batch
-      // of N files must not hijack the Canvas; the user clicks a row to review it.
+      // Unified-verdict gate (PRIMARY): content|knowledge|source-final auto-pop.
+      // `source-final` (run_d3cc1f2c — Option A, reversing run_b8ea6d5c): the
+      // pipeline-finish coding batch NOW auto-pops (Canvas opens on the last changed
+      // file), subject to the SAME gentle suppression as content/knowledge below
+      // (pin/mute/user-viewing) — NOT a bypass. XG: N files = list + 1 render, no
+      // hijack/perf concern justified compromising the auto-pop behavior.
+      // `source` = a MID-run coding edit — still never pops (noise while working).
       // `process` is machine noise. Undefined kind (older backend) → fall through to
       // the legacy `relevance` gate below (no regression).
-      if (kind !== undefined && kind !== 'content' && kind !== 'knowledge') return;
+      if (kind !== undefined && kind !== 'content' && kind !== 'knowledge' && kind !== 'source-final') return;
       // WHITELIST gate (run_e626e121, legacy/migration): only a backend-classified
       // `deliverable` auto-surfaces. Fail OPEN for an older backend that doesn't send
       // `relevance` (undefined → treat a write as deliverable, no regression).
@@ -161,13 +169,16 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
       // backend git verdict (`kind`, gated above at the PRIMARY check) is the sole
       // authority — process/source are never emitted for live surfacing, so a
       // second frontend denylist is redundant (and drifted from the real boundary).
-      // Coalesce a burst → last written path wins.
+      // Coalesce a burst → last written path wins. Its origin tab travels with it.
       pendingPath = path;
+      pendingTabId = evtTabId;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         const target = pendingPath;
+        const targetTabId = pendingTabId;
         pendingPath = null;
+        pendingTabId = undefined;
         if (!target) return;
         // Streaming-gate fail-closed, re-checked HERE at fire time (G3): if the gate
         // is active (isStreaming provided) but the tab STILL has no resolved session,
@@ -190,7 +201,12 @@ export function useCanvasAutoSurface({ pinned, muted, activeTabId, activeSession
           if (viewingUserChoice) return;
         }
         lastAutoOpenedRef.current = target;
-        document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: target } }));
+        // Stamp the write's ORIGIN tab (run_d3cc1f2c edit3) so useCanvasHost lands the
+        // file on the producing tab — closes the debounce-window tab-switch gap
+        // (run_48a29fc2 class). Omit when unstamped → useCanvasHost falls back to active.
+        document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, {
+          detail: targetTabId ? { path: target, tabId: targetTabId } : { path: target },
+        }));
       }, debounceMs);
     };
 

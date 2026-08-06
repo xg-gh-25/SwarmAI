@@ -2,32 +2,34 @@
  * Tests for outputRowOpenDetail — the pure helper that builds the swarm:open-file
  * event detail for a CanvasOutputRail row.
  *
- * PR-review surface (run_b8ea6d5c): a row opens on its DIFF (this file's changes) —
- * that IS the review experience the OUTPUTS list exists for. This SUPERSEDES the old
- * AC3 "outputs open on SOURCE, never auto-diff" decision (the user explicitly wants a
- * per-file changes/PR-review view). `baseRef` is RESERVED (threaded end-to-end) but
- * its ref-aware git wiring is a KNOWN ISSUE deferred this run — so the helper emits
- * `autoDiff:true` and omits baseRef (undefined) for now.
+ * CONTENT-DEFAULT (run_d3cc1f2c, XG directive reversing run_b8ea6d5c's PR-review
+ * default): a row (and pipeline-finish auto-open) renders the file's CONTENT, NOT a
+ * diff. Rationale (XG): "Canvas 看的是 changes list; diff 是文件上的一个操作,不是
+ * canvas 要不要渲染的判断" — the diff is a per-file Show-Changes TOGGLE inside
+ * FileEditorCore, never the open-default. This also structurally eliminates the
+ * empty-diff BLANK render (a committed file whose diff is empty no longer opens into
+ * an empty DiffView) WITHOUT adding a DiffView empty-state layer — the wrong-layer
+ * patch XG explicitly rejected. `baseRef` is STILL threaded end-to-end so the Show
+ * Changes toggle diffs against the correct pre-run baseline; only the OPEN default
+ * changed (autoDiff:false).
  */
 import { describe, it, expect } from 'vitest';
 import { outputRowOpenDetail } from '../CanvasOutputRail';
 
-describe('outputRowOpenDetail (PR-review — opens on diff)', () => {
-  it('opens a MODIFIED (upd) output on its DIFF (this file\'s changes)', () => {
+describe('outputRowOpenDetail (content-default — diff is a toggle, not the open default)', () => {
+  it('opens a MODIFIED (upd) output on its CONTENT, not a diff', () => {
     const d = outputRowOpenDetail('src/pages/index.tsx', 'upd');
     expect(d.path).toBe('src/pages/index.tsx');
-    // The whole point of the PR-review surface: rows open on the diff view.
-    expect(d.autoDiff).toBe(true);
+    // XG directive: rows render content; the diff is the Show Changes toggle.
+    expect(d.autoDiff).toBe(false);
   });
 
-  it('opens a NEW output with autoDiff too (FileViewer soft-falls-back to source when no baseline)', () => {
-    // autoDiff:true is safe even for a new file — FileViewer only opens the diff when
-    // a committed baseline exists, else it shows source (no empty-diff panel).
-    expect(outputRowOpenDetail('src/hooks/useLayout.ts', 'new').autoDiff).toBe(true);
+  it('opens a NEW output on content (never a blank/empty diff)', () => {
+    expect(outputRowOpenDetail('src/hooks/useLayout.ts', 'new').autoDiff).toBe(false);
   });
 
-  it('opens an unbadged output on diff', () => {
-    expect(outputRowOpenDetail('a/b.md', undefined).autoDiff).toBe(true);
+  it('opens an unbadged output on content', () => {
+    expect(outputRowOpenDetail('a/b.md', undefined).autoDiff).toBe(false);
   });
 
   it('omits baseRef when none is given (content/knowledge rows → HEAD baseline)', () => {
