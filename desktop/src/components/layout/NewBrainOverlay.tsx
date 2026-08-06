@@ -84,6 +84,9 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
   const [governs, setGoverns] = useState<GovernsKind>('codebase');
   const [items, setItems] = useState<RowItem[]>([]);
   const [draft, setDraft] = useState('');
+  // Guards against a second native dialog opening while one is already pending
+  // (rapid double-click). Mirrors LibraryOverlay.AddFolderButton's `busy` flag.
+  const [picking, setPicking] = useState(false);
 
   const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
     const value = raw.trim();
@@ -101,6 +104,45 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
     draft.split('\n').forEach((line) => addItem(line));
     setDraft('');
   }, [draft, addItem]);
+
+  // The REAL upload affordance: open the native OS file browser via the Tauri
+  // dialog plugin, which returns ABSOLUTE paths (unlike an OS drag, whose `.path`
+  // is undefined in the webview → only a basename the agent can't resolve). This
+  // clones LibraryOverlay.AddFolderButton: dynamic import + try/catch → toast
+  // fallback so a non-Tauri/dev environment (where the import rejects) degrades
+  // gracefully instead of dead-ending the click.
+  //   - mode 'file'   → open({ multiple:true })            → string[]
+  //   - mode 'folder' → open({ directory:true })           → string
+  //   - cancel        → null (nothing added)
+  // Each picked path feeds the SAME addItem() with a kind hint, so classification
+  // (file→DISTILL, folder→SHELF) and dispatch are identical to a pasted path.
+  const pickAndAdd = useCallback(
+    async (mode: 'file' | 'folder') => {
+      if (picking) return; // a dialog is already open — ignore the double-click
+      setPicking(true);
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const picked = await open({
+          multiple: mode === 'file',
+          directory: mode === 'folder',
+          title: mode === 'file' ? 'Add files to this brain' : 'Add a folder to this brain',
+        });
+        // Normalize string | string[] | null → a path array (cancel = []).
+        const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+        paths.forEach((p) => addItem(p, mode));
+      } catch {
+        // dialog unavailable (non-Tauri/dev) — fall back to the type/paste route.
+        document.dispatchEvent(
+          new CustomEvent('swarm:toast', {
+            detail: { message: 'File browser unavailable here — paste a full path into the field instead.' },
+          }),
+        );
+      } finally {
+        setPicking(false);
+      }
+    },
+    [addItem, picking],
+  );
 
   const removeItem = useCallback((id: number) => {
     setItems((prev) => prev.filter((it) => it.id !== id));
@@ -239,32 +281,73 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
           <div className="p-5 flex flex-col min-w-0">
             <div className="flex items-baseline justify-between mb-2">
               <span className="text-[11px] font-semibold tracking-wide text-[var(--color-text-muted)]">STARTER MATERIAL</span>
-              <span className="text-[10px] text-[var(--color-text-faint)]">files · links · local paths · repos — all mixed, optional</span>
+              <span className="text-[10px] text-[var(--color-text-faint)]">optional</span>
             </div>
+
+            {/* Acquisition zone — two DISTINCT input methods, not one box (a local
+                file and a URL are different acquisition modes). Local: native OS
+                file browser → absolute paths. Link: a free-text field (paste a
+                URL / repo / path, or type). */}
+            <div className="flex flex-col gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
+                <button
+                  type="button"
+                  data-testid="new-brain-add-files"
+                  onClick={() => pickAndAdd('file')}
+                  disabled={picking}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12.5px] font-medium text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="text-sm leading-none">📄</span> Add files…
+                </button>
+                <button
+                  type="button"
+                  data-testid="new-brain-add-folder"
+                  onClick={() => pickAndAdd('folder')}
+                  disabled={picking}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12.5px] font-medium text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="text-sm leading-none">📁</span> Add folder…
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
+                <input
+                  data-testid="new-brain-material-input"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
+                  onBlur={commitDraft}
+                  placeholder="https://…  ·  git@…  ·  or paste a path"
+                  className="flex-1 min-w-0 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
+                />
+                <button
+                  type="button"
+                  data-testid="new-brain-material-add"
+                  onClick={commitDraft}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-card)] text-[12px] font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] transition-colors shrink-0"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* Collected list — also a drop target (internal Explorer drag = the
+                reliable path; OS drag is best-effort). The drag cue lives in the
+                empty state, where it's contextual, not a permanent shout. */}
             <div
               data-testid="new-brain-dropzone"
               onDragOver={(e) => e.preventDefault()}
               onDrop={onDropZoneDrop}
-              className="flex-1 border border-dashed border-[var(--color-border-strong)] rounded-xl bg-[var(--color-bg)] p-3 flex flex-col min-h-[240px]"
+              className="flex-1 border border-dashed border-[var(--color-border-strong)] rounded-xl bg-[var(--color-bg)] p-3 flex flex-col min-h-[220px]"
             >
-              {/* Input FIRST — the primary thing the user acts on sits at the top,
-                  where the eye lands; added chips accumulate BELOW it (#2). */}
-              <input
-                data-testid="new-brain-material-input"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
-                onBlur={commitDraft}
-                placeholder="paste a link / path / repo, or type — Enter to add (or drag files here)"
-                className="w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-[12px] text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
-              />
-              <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto mt-2">
+              <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto">
                 {items.length === 0 && (
                   <div className="flex-1 grid place-items-center text-center text-[var(--color-text-faint)]">
                     <div>
                       <div className="text-2xl opacity-60 mb-1.5">⤵</div>
-                      <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Drop files, or add links above</div>
-                      <div className="text-[10.5px] mt-1">sorted by type — click a pill to change the role</div>
+                      <div className="text-[12px] text-[var(--color-text-muted)] font-medium">Add files, a folder, or a link above</div>
+                      <div className="text-[10.5px] mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
                     </div>
                   </div>
                 )}

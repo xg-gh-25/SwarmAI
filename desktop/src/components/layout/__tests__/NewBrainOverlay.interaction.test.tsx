@@ -14,6 +14,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { NewBrainContent } from '../NewBrainOverlay';
 
+// Native file-picker mock. NewBrainOverlay dynamic-imports @tauri-apps/plugin-dialog
+// (mirrors LibraryOverlay.AddFolderButton) — mock `open` so the picker buttons are
+// testable without a real Tauri webview. Each test overrides mockOpen's impl.
+const mockOpen = vi.fn();
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: (...args: unknown[]) => mockOpen(...args),
+}));
+
 // M3: NewBrainOverlay → NewBrainContent (OverlayHost registry). Content renders
 // immediately (host-owned open + fresh mount per open); `close` is now a prop (was
 // useExclusiveOverlay). Helper renders it with a stub close + the given onDispatch.
@@ -28,6 +36,7 @@ beforeEach(() => {
     cb(0);
     return 0;
   });
+  mockOpen.mockReset();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -185,5 +194,79 @@ describe('NewBrainOverlay', () => {
     const pill = await screen.findByText('GOVERN ▾');
     fireEvent.click(pill);
     expect(await screen.findByText('DISTILL ▾')).toBeTruthy();
+  });
+
+  // ── Native file picker (AC1/AC2/AC4) — the "real upload" affordance ──
+
+  it('AC1: "Add files…" opens the native picker (multiple) and adds each ABSOLUTE path as a file item (DISTILL)', async () => {
+    // multiple:true → open() resolves to string[]
+    mockOpen.mockResolvedValue(['/Users/me/work/runbook.pdf', '/Users/me/work/notes.txt']);
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+
+    fireEvent.click(screen.getByTestId('new-brain-add-files'));
+
+    // both absolute paths land as items…
+    expect(await screen.findByText('/Users/me/work/runbook.pdf')).toBeTruthy();
+    expect(await screen.findByText('/Users/me/work/notes.txt')).toBeTruthy();
+    // …a doc file → DISTILL (file kind, not a basename)
+    expect(screen.getAllByText('DISTILL ▾').length).toBeGreaterThanOrEqual(2);
+    // picker was asked for FILES, not a directory
+    expect(mockOpen).toHaveBeenCalledWith(expect.objectContaining({ multiple: true, directory: false }));
+  });
+
+  it('AC2: "Add folder…" opens the native picker (directory) and adds the ABSOLUTE folder path as a folder item (SHELF)', async () => {
+    // directory:true, multiple:false → open() resolves to a single string
+    mockOpen.mockResolvedValue('/Users/me/work/acme-infra');
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+
+    expect(await screen.findByText('/Users/me/work/acme-infra')).toBeTruthy();
+    expect(await screen.findByText('SHELF ▾')).toBeTruthy();
+    expect(mockOpen).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+  });
+
+  it('AC2: a cancelled picker (open→null) adds nothing and does not crash', async () => {
+    mockOpen.mockResolvedValue(null);
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+    await waitFor(() => expect(mockOpen).toHaveBeenCalled());
+    // empty-state prompt is still shown — nothing was added
+    expect(screen.getByTestId('new-brain-overlay')).toBeTruthy();
+    expect(screen.queryByText(/^\//)).toBeNull(); // no absolute-path item rendered
+  });
+
+  it('busy-guard: a second click while the picker is still open does NOT open a second dialog', async () => {
+    // open() never resolves → the first pick stays pending, buttons disabled.
+    let resolveOpen!: (v: string[]) => void;
+    mockOpen.mockReturnValue(new Promise<string[]>((r) => { resolveOpen = r; }));
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+
+    const addFiles = screen.getByTestId('new-brain-add-files') as HTMLButtonElement;
+    fireEvent.click(addFiles);
+    await waitFor(() => expect(addFiles.disabled).toBe(true)); // in-flight → disabled
+    // a second click (and the folder button) must not spawn another open()
+    fireEvent.click(addFiles);
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+    expect(mockOpen).toHaveBeenCalledTimes(1);
+    // resolving frees the guard
+    resolveOpen(['/abs/x.md']);
+    await waitFor(() => expect(addFiles.disabled).toBe(false));
+  });
+
+  it('AC4: a rejected picker import/open (non-Tauri/dev) does NOT crash and surfaces a toast', async () => {
+    mockOpen.mockRejectedValue(new Error('dialog unavailable'));
+    const toastSpy = vi.fn();
+    document.addEventListener('swarm:toast', toastSpy as EventListener);
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+
+    expect(() => fireEvent.click(screen.getByTestId('new-brain-add-files'))).not.toThrow();
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled());
+    document.removeEventListener('swarm:toast', toastSpy as EventListener);
   });
 });
