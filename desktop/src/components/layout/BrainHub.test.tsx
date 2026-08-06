@@ -185,22 +185,27 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy();
   });
 
-  it('shows six-section presence bar (present vs absent styled differently)', async () => {
+  it('partitions non-pinned brains into a NEEDS-YOU zone (pending>0) above a CALM zone (pending==0)', async () => {
+    // flat-grid fallback (no pinned) still splits by pending: AIDLC pending=2 → needs, SwarmAI pending=0 → calm
     render(<BrainHub />);
-    await waitFor(() => expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy());
-    const present = screen.getByTestId('presence-SwarmAI-knowledge').className;
-    const absent = screen.getByTestId('presence-SwarmAI-gates').className;
-    expect(present).not.toBe(absent); // present=green, absent=grey
+    await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
+    const needs = screen.getByTestId('brainhub-needs-zone');
+    const calm = screen.getByTestId('brainhub-calm-zone');
+    // AIDLC (pending=2) lives in needs; SwarmAI (pending=0) lives in calm
+    expect(needs.querySelector('[data-testid="dddcard-AIDLC"]')).toBeTruthy();
+    expect(calm.querySelector('[data-testid="dddcard-SwarmAI"]')).toBeTruthy();
+    // and NOT vice-versa
+    expect(needs.querySelector('[data-testid="dddcard-SwarmAI"]')).toBeNull();
   });
 
-  it('shows the 4 live health signals', async () => {
+  it('a CALM gallery card no longer shows the redundant-ink widgets (presence / 2×2 cheap grid)', async () => {
     render(<BrainHub />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    const card = screen.getByTestId('dddcard-SwarmAI');
-    expect(card.textContent).toContain('Sinking');
-    expect(card.textContent).toContain('Pending');
-    expect(card.textContent).toContain('Uncommitted');
-    expect(card.textContent).toContain('2h ago');
+    // SwarmAI is pending==0 → calm card → presence bar + boxed cheap grid are GONE
+    expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
+    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
+    // calm card keeps its muted meta line (lifecycle · last-change) and stays clickable
+    expect(screen.getByTestId('dddcard-SwarmAI').textContent).toContain('2h ago');
   });
 
   it('renders NO recall-heat / crown / ref_count number anywhere (R30#4)', async () => {

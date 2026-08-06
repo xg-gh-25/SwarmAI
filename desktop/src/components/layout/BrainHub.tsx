@@ -203,7 +203,7 @@ function TabBtn({ active, disabled, onClick, testid, children }: {
 function CompactBrain({ b, onOpen }: { b: BrainSummary; onOpen: (n: string) => void }) {
   return (
     <DddCard density="compact" name={b.name} kind={b.kind}
-      sectionsPresent={b.sectionsPresent} lifecycleStage={b.lifecycleStage}
+      lifecycleStage={b.lifecycleStage}
       health={b.health} typeCounts={b.typeCounts} onOpen={onOpen} />
   );
 }
@@ -239,23 +239,26 @@ function Gallery(
     [primaryDetail, primary?.typeCounts],
   );
 
-  // Fallback: no pinned resolved → flat compact grid (old behavior).
+  // Fallback: no pinned resolved → still verdict-first two zones (old flat grid
+  // was the data-dump). Partition ALL brains by pending.
   if (!primary) {
     return (
-      <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }} data-testid="brainhub-gallery">
-        {brains.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+      <div className="p-4 flex flex-col gap-3" data-testid="brainhub-gallery">
+        <ZonedGrid brains={brains} onOpen={onOpen} />
       </div>
     );
   }
 
   return (
     <div className="p-4 flex flex-col gap-3" data-testid="brainhub-gallery">
-      {/* top row: primary full card (left) + 2 pinned small stacked (right) */}
+      {/* top row: primary full card (left) + 2 pinned small stacked (right).
+          The primary hero is verdict-first — NO presence/lifecycle/cheap widgets
+          (its FullBody ontology+needs-you+facts IS the signal); metrics is the
+          only detail-derived prop (lazy). */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0, 1fr) 300px' }} data-testid="brainhub-pinned-row">
         <DddCard density="full" name={primary.name} kind={primary.kind}
-          sectionsPresent={primary.sectionsPresent} lifecycleStage={primary.lifecycleStage}
-          health={primary.health}
           metrics={primaryDetail?.health}
+          health={primary.health}
           typeCounts={primaryTypeCounts} />
         {rightPins.length > 0 && (
           <div className="flex flex-col gap-3">
@@ -263,13 +266,46 @@ function Gallery(
           </div>
         )}
       </div>
-      {/* rest: 3 per row */}
-      {rest.length > 0 && (
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-rest">
-          {rest.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+      {/* rest: verdict-first two zones (needs-you above calm) */}
+      {rest.length > 0 && <ZonedGrid brains={rest} onOpen={onOpen} />}
+    </div>
+  );
+}
+
+/**
+ * Verdict-first partition of a brain list into a NEEDS-YOU zone (health.pending>0,
+ * amber, above) and a CALM zone (pending==0, muted, below). The whole answer to
+ * "which brains need me?" is the zone split — pending is the ONLY gate (sinking/
+ * uncommitted are facts on the card, never zone gates: gating on them would pull
+ * most brains up). Pure O(N) filter on the already-loaded cheap summaries — ZERO
+ * getBrainDetail. A zone with no members is omitted (no empty-zone noise).
+ */
+function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: string) => void }) {
+  const needs = brains.filter((b) => b.health.pending > 0);
+  const calm = brains.filter((b) => b.health.pending === 0);
+  return (
+    <>
+      {needs.length > 0 && (
+        <div data-testid="brainhub-needs-zone">
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-[#f0a500] mb-2">
+            ▲ Needs you · {needs.length} of {brains.length}
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            {needs.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+          </div>
         </div>
       )}
-    </div>
+      {calm.length > 0 && (
+        <div data-testid="brainhub-calm-zone" className={needs.length > 0 ? 'mt-3' : ''}>
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-[var(--color-text-faint)] mb-2">
+            Calm · nothing queued
+          </div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+            {calm.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

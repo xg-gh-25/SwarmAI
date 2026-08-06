@@ -1,35 +1,41 @@
 /**
  * DddCard.tsx — the unified, density-driven DDD card.
  *
- * run_9ada46ae (final mockup design): a brain card answers "what is this brain,
- * and does it need me?" — verdict-first, ontology as the hero visual, only the
- * actionable surfaced, and NO diagnostics dump.
+ * run_9ada46ae + run_ee179ca1 (verdict-first two-zone gallery): a brain card
+ * answers ONE decision — "does this brain need me?" — and NOTHING else. Both
+ * densities are verdict-first and shed the redundant-ink widgets (six-section
+ * presence bar, lifecycle chain, 2×2 cheap-health grid) that carried no signal on
+ * a mature brain and produced the "密集恐惧症" data-dump.
  *
- *   • compact — clickable gallery / calm card: name·kind + six-section presence +
- *     lifecycle + 4 cheap health signals + a SLIM 3-layer ontology proportion bar
- *     (from summary.typeCounts — NO detail fetch; the gallery already parsed once).
- *   • full    — verdict dot (pending>0 = "needs decision", else "nothing queued" —
- *     NEVER "healthy/unhealthy": that would be the trust rollup the backend Gate-1
- *     refused) + the FULL 3-layer × 7-type ontology (each layer count AND each type
- *     count — the hero visual) + a "Needs you" block (non-zero actionable only;
- *     clean brain → "Nothing needs you") + two fact lines (trust distribution /
- *     activity). Summary decorations (header/presence/lifecycle/cheap) render iff
- *     provided (detail view has none; Home hero has all).
+ *   • compact (gallery) — SELF-SELECTS by health.pending:
+ *       NEEDS (pending>0) → amber-accented; header verdict + slim 3-layer ontology
+ *         bar + NeedsActionable (the few actionable counts spelled out: N proposals
+ *         / N sinking / uncommitted). NOT the boxed 2×2 grid.
+ *       CALM (pending==0) → header verdict + ontology bar + ONE muted CalmMeta line
+ *         (lifecycle · N sinking · last-change). No presence/lifecycle/cheap widgets.
+ *     Both from the cheap BrainSummary — NO detail fetch — and stay click-to-open.
+ *   • full (Gallery primary hero + detail health-strip) — verdict dot (pending>0 =
+ *     "needs decision", else "nothing queued" — NEVER "healthy/unhealthy": the trust
+ *     rollup backend Gate-1 refused) + FULL 3-layer × 7-type ontology (hero visual) +
+ *     a "Needs you" block (non-zero actionable only; clean → "Nothing needs you") +
+ *     two fact lines (trust distribution / activity). The hero ALSO drops the
+ *     redundant presence/lifecycle/cheap widgets — its FullBody IS the signal.
  *
- * DELETED vs the prior design: the 4-question tiles and the per-section diagnostics
- * WALL (a 40-line score dump nobody reads — drill into per-section scores via
- * BrainView's section nav instead). DELIBERATELY ABSENT (Principle-1 + dead-input):
- * entry-count / "size", last-referenced / ref-count.
+ * DELETED vs the prior design: the 4-question tiles + per-section diagnostics WALL
+ * (drill into per-section scores via BrainView's section nav instead); AND the
+ * PresenceBar / LifecycleBar / CheapHealth widgets (run_ee179ca1 — redundant ink).
+ * DELIBERATELY ABSENT (Principle-1 + dead-input): entry-count / "size",
+ * last-referenced / ref-count.
  *
- * GATE-1 invariant: density-scoped guard — compact ALWAYS renders (no metrics);
- * full guards the judgment body on `metrics?.noise` (O023 daemon-skew) so a partial
- * payload degrades the body to nothing WITHOUT blanking the card.
+ * GATE-1 invariant: density-scoped guard — compact ALWAYS renders (needs only the
+ * cheap BrainSummary.health); full guards the judgment body on `metrics?.noise`
+ * (O023 daemon-skew) so a partial payload degrades the body to nothing WITHOUT
+ * blanking the card.
  */
-import type { BrainHealth, DetailHealth, SectionKey, EntryType } from '../../services/ddd';
+import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 import { LAYERS, layerTotals } from './dddLayers';
 
 // ── Shared constants ─────────────────────────────────────────────────────────
-const SECTION_ORDER: SectionKey[] = ['identity', 'knowledge', 'gates', 'capabilities', 'delivery', 'refresher'];
 const LIFECYCLE_STEPS = ['CREATE', 'GROW', 'REVIEW', 'DISTRIBUTE'] as const;
 export type LifecycleStage = (typeof LIFECYCLE_STEPS)[number];
 
@@ -68,7 +74,8 @@ function _ageOf(iso: string | null): string {
 interface CommonProps { name: string; kind: string }
 interface CompactProps extends CommonProps {
   density: 'compact';
-  sectionsPresent: Record<SectionKey, boolean>;
+  // NOTE (run_ee179ca1): sectionsPresent was dropped — the presence bar it fed is
+  // gone (redundant ink). health + lifecycleStage still drive the verdict/CalmMeta.
   lifecycleStage: LifecycleStage;
   health: BrainHealth;
   /** 3-layer proportion bar source — from BrainSummary (cheap, one gallery parse).
@@ -78,8 +85,8 @@ interface CompactProps extends CommonProps {
 }
 interface FullProps extends CommonProps {
   density: 'full';
-  sectionsPresent?: Record<SectionKey, boolean>;
-  lifecycleStage?: LifecycleStage;
+  // health carries pending for the verdict dot; metrics/typeCounts drive FullBody.
+  // (sectionsPresent/lifecycleStage dropped — the hero no longer renders those widgets.)
   health?: BrainHealth;
   metrics?: DetailHealth;
   typeCounts?: Record<EntryType, number>;
@@ -98,30 +105,6 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
   );
 }
 
-function PresenceBar({ name, sectionsPresent }: { name: string; sectionsPresent: Record<SectionKey, boolean> }) {
-  return (
-    <div className="flex gap-0.5 mb-2" title="six-section presence">
-      {SECTION_ORDER.map((k) => (
-        <span key={k} data-testid={`presence-${name}-${k}`}
-          className={`flex-1 h-1.5 rounded-sm ${sectionsPresent[k] ? 'bg-[#3fb950]' : 'bg-[var(--color-hover)]'}`} />
-      ))}
-    </div>
-  );
-}
-
-function LifecycleBar({ lifecycleStage }: { lifecycleStage: LifecycleStage }) {
-  const active = LIFECYCLE_STEPS.indexOf(lifecycleStage);
-  return (
-    <div className="flex items-center gap-1 mb-2 text-[9px] font-mono">
-      {LIFECYCLE_STEPS.map((s, i) => (
-        <span key={s} className={i <= active ? 'text-[#3fb950]' : 'text-[#3b4552]'}>
-          {s}{i < LIFECYCLE_STEPS.length - 1 ? ' ›' : ''}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 /** Verdict dot — reads ONLY pending (a decision queue), never trust or sinking.
  *  So it can't reintroduce the refused trust rollup: pending>0 = needs a human
  *  decision; =0 = nothing queued. NOT "healthy/unhealthy". */
@@ -136,21 +119,37 @@ function VerdictDot({ pending }: { pending: number }) {
   );
 }
 
-function CheapHealth({ health }: { health: BrainHealth }) {
+/** The actionable list for a NEEDS card — the 2×2 boxed cheap grid is REPLACED by
+ *  the few things that actually need a human, spelled out. Only non-zero items
+ *  render (pending is the verdict; sinking/uncommitted are supporting facts).
+ *  All from the cheap BrainSummary — no fetch. */
+function NeedsActionable({ health }: { health: BrainHealth }) {
+  const items: { key: string; n: string; label: string }[] = [];
+  if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'proposals awaiting review' });
+  if (health.sinking > 0) items.push({ key: 'sinking', n: String(health.sinking), label: 'entries sinking (decaying)' });
+  if (health.uncommitted) items.push({ key: 'uncommitted', n: '•', label: 'uncommitted changes' });
   return (
-    <div className="grid grid-cols-2 gap-1 text-[10px]">
-      <Cheap testid="dddcard-cheap-sinking" label="Sinking" value={String(health.sinking)} warn={health.sinking > 0} />
-      <Cheap testid="dddcard-cheap-pending" label="Pending" value={String(health.pending)} warn={health.pending > 0} />
-      <Cheap testid="dddcard-cheap-uncommitted" label="Uncommitted" value={health.uncommitted ? 'yes' : 'no'} warn={health.uncommitted} />
-      <Cheap testid="dddcard-cheap-lastchange" label="Last change" value={health.lastChangeRelative} />
+    <div data-testid="dddcard-needs-actionable" className="flex flex-col gap-1 mt-1.5">
+      {items.map((it) => (
+        <div key={it.key} className="flex items-baseline gap-2 text-[11px]">
+          <span className="font-semibold text-[#f0a500] min-w-[22px]">{it.n}</span>
+          <span className="text-[var(--color-text-muted)]">{it.label}</span>
+        </div>
+      ))}
     </div>
   );
 }
-function Cheap({ testid, label, value, warn }: { testid: string; label: string; value: string; warn?: boolean }) {
+
+/** The single muted meta line for a CALM card — lifecycle stage · last change.
+ *  Replaces the whole presence/lifecycle/2×2-grid stack (all no-signal on a calm
+ *  brain). Sinking>0 is surfaced quietly here as a fact, never promoted to a zone. */
+function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; health: BrainHealth }) {
+  const bits = [lifecycleStage, `${health.sinking} sinking`, health.lastChangeRelative];
   return (
-    <div data-testid={testid} className="flex items-center justify-between px-1.5 py-0.5 rounded bg-[var(--color-bg)]">
-      <span className="text-[var(--color-text-faint)]">{label}</span>
-      <span className={warn ? 'text-[#f0a500]' : 'text-[var(--color-text-muted)]'}>{value}</span>
+    <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-faint)] mt-1.5 font-mono">
+      {bits.map((b, i) => (
+        <span key={i}>{i > 0 ? '· ' : ''}{b}</span>
+      ))}
     </div>
   );
 }
@@ -175,30 +174,41 @@ function CompactLayerBar({ typeCounts }: { typeCounts?: Record<EntryType, number
 
 export function DddCard(props: DddCardProps) {
   const { name, kind } = props;
-  const { sectionsPresent, lifecycleStage, health } = props;
 
   if (props.density === 'compact') {
     const onOpen = props.onOpen;
+    const h = props.health;
+    // Verdict-first: the card SELF-SELECTS by health.pending. Both variants shed the
+    // redundant-ink widgets (presence bar / lifecycle chain / 2×2 cheap grid) — they
+    // carry no signal on a mature brain and were the "密集恐惧症" data-dump. A NEEDS
+    // card spells out the few actionable counts; a CALM card is a quiet meta line.
+    const needs = h.pending > 0;
+    // NO per-card verdict dot: the ZONE ("▲ Needs you" / "Calm · nothing queued")
+    // carries the verdict for every card inside it, so a per-card dot is redundant
+    // ink (Tufte) — and a green "nothing queued" dot on every calm card was the
+    // "全凭绿" wall the user rejected. Freeing green from a status role leaves it to
+    // mean exactly ONE thing in the gallery: the operational ontology layer. A needs
+    // card still signals via the amber left accent + amber actionable counts.
     return (
       <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
-        className="text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full">
-        <CardHeader name={name} kind={kind} verdict={<VerdictDot pending={props.health.pending} />} />
-        <PresenceBar name={name} sectionsPresent={props.sectionsPresent} />
-        <LifecycleBar lifecycleStage={props.lifecycleStage} />
-        <CheapHealth health={props.health} />
+        className={`text-left rounded-lg bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors w-full h-full ${
+          needs ? 'border-l-[3px] border-l-[#f0a500] border-y border-r border-[#4a3a12]' : 'border border-[var(--color-border)]'
+        }`}>
+        <CardHeader name={name} kind={kind} />
         <CompactLayerBar typeCounts={props.typeCounts} />
+        {needs ? <NeedsActionable health={h} /> : <CalmMeta lifecycleStage={props.lifecycleStage} health={h} />}
       </button>
     );
   }
 
-  // full — verdict in the header when we have pending (from metrics OR cheap health)
-  const pending = props.metrics?.escalationPending ?? health?.pending;
+  // full (hero / detail health-strip) — verdict-first. Like the compact card, the
+  // hero drops the redundant presence/lifecycle/cheap widgets: its FullBody
+  // (ontology + needs-you + facts) IS the signal. pending comes from metrics OR
+  // cheap health, whichever the caller supplied.
+  const pending = props.metrics?.escalationPending ?? props.health?.pending;
   return (
     <div data-testid={`dddcard-${name}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
       <CardHeader name={name} kind={kind} verdict={pending != null ? <VerdictDot pending={pending} /> : undefined} />
-      {sectionsPresent != null && <PresenceBar name={name} sectionsPresent={sectionsPresent} />}
-      {lifecycleStage != null && <LifecycleBar lifecycleStage={lifecycleStage} />}
-      {health != null && <CheapHealth health={health} />}
       <FullBody metrics={props.metrics} health={props.health} typeCounts={props.typeCounts} />
     </div>
   );

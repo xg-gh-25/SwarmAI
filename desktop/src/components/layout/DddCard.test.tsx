@@ -1,14 +1,15 @@
 /**
  * DddCard.test.tsx — the unified density-driven DDD card.
  *
- * run_9ada46ae: final mockup-driven design.
+ * run_9ada46ae + run_ee179ca1 (verdict-first two-zone gallery):
  *   full   → verdict dot (pending>0 = "needs decision", NEVER "healthy" — no trust
  *            rollup) + the FULL 3-layer×7-type ontology (each layer count + each
- *            type count) as the hero visual + a "needs you" block (non-zero
- *            actionable only; clean brain → "nothing needs you") + 2 fact lines
- *            (trust distribution / activity). Diagnostics wall DELETED.
- *   compact→ presence + lifecycle + cheap health + a slim 3-LAYER proportion bar
- *            (from summary.typeCounts, NO detail fetch).
+ *            type count) as the hero visual + a "needs you" block + 2 fact lines.
+ *            Drops the redundant presence/lifecycle/cheap widgets.
+ *   compact→ SELF-SELECTS by health.pending: NEEDS (pending>0) shows the actionable
+ *            counts spelled out; CALM (pending==0) shows one muted meta line. Both
+ *            keep verdict + slim 3-layer bar + click-to-open, and BOTH drop the
+ *            presence bar / lifecycle chain / 2×2 cheap grid (redundant ink).
  *
  * Invariants preserved: density-scoped guard (compact always renders); trust is a
  * DISTRIBUTION count, never a collapsed rollup; NO size/entry-count/ref-count.
@@ -16,12 +17,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DddCard } from './DddCard';
-import type { BrainHealth, DetailHealth, SectionKey, EntryType } from '../../services/ddd';
+import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 
-const SECTIONS: Record<SectionKey, boolean> = {
-  identity: true, knowledge: true, gates: false,
-  capabilities: true, delivery: false, refresher: true,
-};
 const CHEAP: BrainHealth = { sinking: 2, pending: 1, uncommitted: true, lastChangeRelative: '3h ago' };
 const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, uncommitted: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
@@ -39,29 +36,58 @@ const TYPE_COUNTS: Record<EntryType, number> = {
   guideline: 10, pitfall: 8, process: 2, // operational = 20
 };
 
-describe('DddCard — compact (gallery)', () => {
-  it('renders presence + cheap health, clickable, and a 3-layer proportion bar from typeCounts', () => {
+describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
+  // run_ee179ca1: the compact card is now VERDICT-FIRST and self-selects by
+  // health.pending. BOTH variants shed the redundant-ink widgets (presence bar,
+  // lifecycle chain, 2×2 cheap-health grid) — they carry no signal on a mature
+  // brain. A NEEDS card (pending>0) shows the actionable counts spelled out; a
+  // CALM card (pending==0) shows only a muted meta line. Both keep the header
+  // (verdict) + the slim 3-layer ontology bar + the click-to-open.
+
+  it('CALM card (pending==0) STRUCTURALLY omits presence, lifecycle chain, and the 2×2 cheap grid', () => {
+    const onOpen = vi.fn();
+    render(
+      <DddCard density="compact" name="X" kind="knowledge"
+        lifecycleStage="GROW" health={CHEAP_CLEAN}
+        typeCounts={TYPE_COUNTS} onOpen={onOpen} />,
+    );
+    // the redundant-ink CLASS is GONE from the calm path (not CSS-hidden — absent)
+    expect(screen.queryByTestId('presence-X-knowledge')).toBeNull();
+    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
+    expect(screen.queryByTestId('dddcard-cheap-pending')).toBeNull();
+    // calm keeps: the muted meta line + the slim ontology bar + click-to-open
+    expect(screen.getByTestId('dddcard-calm-meta')).toBeTruthy();
+    expect(screen.getByTestId('ddd-compact-layerbar')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('dddcard-X'));
+    expect(onOpen).toHaveBeenCalledWith('X');
+    // compact NEVER shows the full per-type ontology or the full needs-you block
+    expect(screen.queryByTestId('ddd-ontology')).toBeNull();
+  });
+
+  it('NEEDS card (pending>0) shows the actionable counts spelled out, NOT the 2×2 grid', () => {
     const onOpen = vi.fn();
     render(
       <DddCard density="compact" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="GROW" health={CHEAP}
+        lifecycleStage="GROW" health={CHEAP}
         typeCounts={TYPE_COUNTS} onOpen={onOpen} />,
     );
-    expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
-    expect(screen.getByTestId('dddcard-cheap-sinking')).toBeTruthy();
-    // compact gets the slim 3-layer bar (no per-type breakdown, no fetch)
-    expect(screen.getByTestId('ddd-compact-layerbar')).toBeTruthy();
+    const card = screen.getByTestId('dddcard-SwarmAI');
+    // actionable list present, boxed cheap grid absent
+    expect(screen.getByTestId('dddcard-needs-actionable')).toBeTruthy();
+    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
+    expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
+    // CHEAP = { sinking:2, pending:1, uncommitted:true } → all three surfaced
+    expect(card.textContent).toContain('proposals awaiting review');
+    expect(card.textContent).toContain('sinking');
+    expect(card.textContent).toContain('uncommitted');
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     expect(onOpen).toHaveBeenCalledWith('SwarmAI');
-    // compact NEVER shows the full ontology (per-type) or the needs-you block
-    expect(screen.queryByTestId('ddd-ontology')).toBeNull();
-    expect(screen.queryByTestId('ddd-needs-you')).toBeNull();
   });
 
   it('compact with NO typeCounts (daemon skew) still renders, just no bar', () => {
     render(
       <DddCard density="compact" name="X" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="CREATE" health={CHEAP} onOpen={vi.fn()} />,
+        lifecycleStage="CREATE" health={CHEAP_CLEAN} onOpen={vi.fn()} />,
     );
     expect(screen.getByTestId('dddcard-X')).toBeTruthy();
     expect(screen.queryByTestId('ddd-compact-layerbar')).toBeNull();
@@ -185,17 +211,19 @@ describe('DddCard — full: facts + deletions', () => {
   });
 });
 
-describe('DddCard — full HERO (summary + metrics + types)', () => {
-  it('renders header + presence + verdict + ontology + needs-you together, static (not a button)', () => {
+describe('DddCard — full HERO (verdict + ontology + needs-you, no redundant-ink)', () => {
+  it('renders header + verdict + ontology + needs-you together, static (not a button); the hero drops the redundant presence/lifecycle/cheap widgets', () => {
     render(
       <DddCard density="full" name="SwarmAI" kind="knowledge"
-        sectionsPresent={SECTIONS} lifecycleStage="REVIEW" health={CHEAP}
         metrics={METRICS} typeCounts={TYPE_COUNTS} />,
     );
-    expect(screen.getByTestId('presence-SwarmAI-knowledge')).toBeTruthy();
     expect(screen.getByTestId('ddd-verdict')).toBeTruthy();
     expect(screen.getByTestId('ddd-ontology')).toBeTruthy();
     expect(screen.getByTestId('ddd-needs-you')).toBeTruthy();
+    // the hero is verdict-first — the redundant-ink widgets are NOT rendered even
+    // if a caller passes them (the full card's body IS the signal now)
+    expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
+    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
   });
 });
