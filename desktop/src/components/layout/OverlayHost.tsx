@@ -15,12 +15,22 @@
  * scales parent+child uniformly. There is no measured px to double-count, so the bug
  * is STRUCTURALLY impossible, not patched. `chatAreaBounds` is deleted (M5).
  *
- * ── Spout geometry (zoom-safe) ──────────────────────────────────────────────────────
+ * ── Spout geometry (zoom-corrected) ─────────────────────────────────────────────────
  * The spout points at the LeftNav card that opened the surface — a card OUTSIDE the
- * host. Both the card rect and the host rect are read via getBoundingClientRect at open
- * (SAME post-zoom coordinate space), and the spout's panel-local Y is their DIFFERENCE
- * (hostRect.top − cardCenterY), so the zoom factor cancels in the subtraction. No
- * `--app-zoom-inv` math needed — the cancellation is inherent to same-space subtraction.
+ * host. Both the card rect and the host rect are read via getBoundingClientRect, which
+ * under `<html style.zoom=Z>` returns ZOOM-SCALED (visual) px. The spout-local Y is
+ * their difference — but that difference is then applied as a CSS `top` (a LAYOUT value
+ * the browser re-scales by Z at paint). A raw visual-px difference therefore lands at
+ * distance×Z → the spout drifts from the card by the zoom factor whenever Z≠1.
+ * (An earlier version of this comment wrongly claimed "same-space subtraction makes zoom
+ * cancel, no --app-zoom-inv needed" — the subtraction cancels the OFFSET, but the result
+ * is still re-scaled when used as a CSS coordinate. XG reproduced the drift live at ≠100%.)
+ * FIX: multiply EVERY getBoundingClientRect-derived value (card centerY, scrim top,
+ * scrim height→panelHeight clamp) by `--app-zoom-inv` (=1/Z, published inline on <html>
+ * by useZoom.applyZoom) to convert visual px → layout px BEFORE the math, so the CSS
+ * `top` + `transformOrigin` land correctly inside the zoomed subtree. All three reads
+ * must be converted or the clamp compares mixed coordinate spaces (Gate-1 finding). Same
+ * class of fix as TerminalPanel's `zoom: var(--app-zoom-inv)` counter-zoom.
  *
  * Chrome (enter/exit state machine, Esc, ref-counted scroll-lock, header, spout nub) is
  * ported faithfully from Modal's fullscreen branch — only the POSITIONING model changes.
@@ -131,10 +141,15 @@ export function OverlayHost() {
 
   useEffect(() => () => { if (unmountTimer.current) clearTimeout(unmountTimer.current); }, []);
 
-  // Spout panel-local Y: (source card center-y) − (host/scrim top). Both are
-  // getBoundingClientRect reads in the SAME post-zoom space, so their difference is
-  // zoom-invariant — no --app-zoom-inv needed. The scrim IS the panel's positioning
-  // parent and the panel is top:0 inside it, so scrim.top == panel.top.
+  // Spout panel-local Y: (source card center-y) − (host/scrim top). Both spoutCenterY
+  // and the scrim rect are getBoundingClientRect reads = ZOOM-SCALED (visual) px under
+  // `<html style.zoom=Z>`. The result is applied as a CSS `top` (a layout value re-scaled
+  // by Z at paint), so we must convert visual→layout px (×invZoom) FIRST or the spout
+  // drifts by the zoom factor. ALL THREE grBCR-derived values are converted (centerY,
+  // scrim top, scrim height) so the clamp bound stays in the same coordinate space as
+  // `local` (Gate-1: converting only some would clamp layout-px against visual-px). The
+  // scrim IS the panel's positioning parent and the panel is top:0 inside it, so
+  // scrim.top == panel.top.
   useLayoutEffect(() => {
     if (!isOpen || spoutCenterY == null) {
       if (spoutCenterY == null) setSpoutY(null);
@@ -142,9 +157,16 @@ export function OverlayHost() {
     }
     const scrim = scrimRef.current;
     if (!scrim) return;
+    // invZoom = 1/Z, published inline on <html> by useZoom.applyZoom (default "1").
+    // Zoom is NOT a dep on purpose: spoutY is a LAYOUT-px value (grBCR÷Z), and layout px
+    // is zoom-INVARIANT (zoom rescales rendering, not layout-box positions). So a zoom
+    // change while the overlay is open needs no recompute — the frozen spoutY still paints
+    // aligned to the card at the new Z (verified: nub center = cardCenter_layout×Z for any Z).
+    const invZoom = parseFloat(document.documentElement.style.getPropertyValue('--app-zoom-inv')) || 1;
     const scrimRect = scrim.getBoundingClientRect();
-    const panelHeight = Math.max(0, scrimRect.height - PANEL_GAP);
-    const local = spoutCenterY - scrimRect.top - NUB / 2;
+    const scrimTop = scrimRect.top * invZoom;
+    const panelHeight = Math.max(0, scrimRect.height * invZoom - PANEL_GAP);
+    const local = spoutCenterY * invZoom - scrimTop - NUB / 2;
     setSpoutY(Math.max(8, Math.min(local, panelHeight - NUB - 8)));
   }, [isOpen, spoutCenterY, renderedId]);
 

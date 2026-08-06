@@ -59,6 +59,7 @@ import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
 import { parseWorkPacket } from '../components/layout/ToDoOverlay';
 import { setOverlayCtxBridge } from '../components/layout/overlayRegistry';
+import { OverlayHost } from '../components/layout/OverlayHost';
 // ToDo / Jobs & Runs / Pipeline / Pollinate + NewBrain overlays retired (M3+M4):
 // all migrated to the OverlayHost registry (overlaySurfaces.tsx); dispatch reaches
 // them via the ctx bridge (setOverlayCtxBridge below).
@@ -425,6 +426,10 @@ export default function ChatPage() {
   //     (uiContext active_overlay) AND the AlertsPill/tab-switch BACK_TO_CHAT guard
   //     below. useOverlay() is the live source (ChatPage renders inside OverlayProvider).
   const { activeOverlay, setAgentId: setOverlayAgentId } = useOverlay();
+  // Ref mirror for synchronous reads in handleTabSelect's overlay-close guard (avoids
+  // dep-array churn on that hot path — same pattern as isExpandedRef).
+  const activeOverlayRef = useRef(activeOverlay);
+  activeOverlayRef.current = activeOverlay;
   useEffect(() => {
     mergeUiState({ activeOverlay });
   }, [activeOverlay, mergeUiState]);
@@ -883,7 +888,14 @@ export default function ChatPage() {
   const handleTabSelect = useCallback(async (tabId: string) => {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
-    
+
+    // Overlay-close guard (the "tab-switch BACK_TO_CHAT guard" the comment at the
+    // activeOverlay effect names): with the overlay now mounted BELOW the tab strip
+    // (2026-08-06 relocate), the tab strip is clickable under an open overlay — so a
+    // tab click must first return to chat, else the tab switches invisibly UNDER the
+    // scrim. Mirrors the AlertsPill guard. Ref read = no dep-array churn on this path.
+    if (activeOverlayRef.current) window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
+
     // Save current React state into the active tab's map entry before switching.
     // IMPORTANT: messages and sessionId are NOT written back — the stream handler
     // updates tabMapRef synchronously (authoritative), while messagesRef lags
@@ -3212,7 +3224,11 @@ export default function ChatPage() {
         alertsSlot,
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* `relative` makes this content row (chat body + Canvas, BELOW ChatHeader) the
+          OverlayHost's positioning parent — so the host's `absolute inset:0` scrim covers
+          only the chat body and NOT the tab strip above it (2026-08-06 relocate: the host
+          used to fill MainChatPanel and occlude ChatHeader). */}
+      <div className="relative flex flex-1 overflow-hidden">
         {/* Delete Confirmation Dialog */}
         <ConfirmDialog
           isOpen={!!deleteConfirmSession}
@@ -3411,6 +3427,14 @@ export default function ChatPage() {
             bridge: ToDo uses dispatchTodo (work-packet), the other three use
             dispatchPrompt — both ChatPage-owned (handleDispatchTodo /
             handleDispatchJobPrompt), published through setOverlayCtxBridge. */}
+
+        {/* OverlayHost — the single fullscreen-surface host. Mounted HERE (inside the
+            content row, below ChatHeader) rather than in MainChatPanel, so its
+            `absolute inset:0` scrim is scoped to the chat body and the tab strip stays
+            visible + clickable under an open overlay (2026-08-06). Logically decoupled:
+            reads only OverlayContext + ExplorerContext (both wrap ChatPage), no ChatPage
+            state — a DOM descendant, never a state child. */}
+        <OverlayHost />
       </div>
 
       {/* Modals */}

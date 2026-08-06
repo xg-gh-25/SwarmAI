@@ -7,7 +7,6 @@ import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts/TerminalContext';
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
-import { OverlayHost } from './OverlayHost';
 import './overlaySurfaces'; // side-effect: registers fullscreen surfaces with the registry
 import TerminalPanel from '../terminal/TerminalPanel';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
@@ -750,22 +749,19 @@ interface MainChatPanelProps {
 
 function MainChatPanel({ children }: MainChatPanelProps) {
   return (
-    // `relative` promotes this to the MainContentArea — the positioning parent the
-    // OverlayHost fills with `absolute inset:0` (M2+, OverlayHost subsystem design
-    // 2026-08-04). In M1 this is inert: nothing absolute-positions against it yet, so
-    // it is a zero-behavior-change anchor. `overflow-hidden` does NOT clip an
-    // absolute inset:0 child's own shadow (the child renders its shadow inside its
-    // box + gap, like the current fullscreen scrim) — Gate-1 verified.
+    // `flex-1 overflow-hidden` sizes the chat column. The OverlayHost is NO LONGER a
+    // child here (moved into ChatPage's content row, below ChatHeader — 2026-08-06):
+    // when the host filled this panel with `absolute inset:0`, its scrim also covered
+    // the chat tab strip (ChatHeader renders inside `children`). Mounting it below the
+    // tab chrome instead scopes the scrim to the chat body, so the tab strip stays
+    // visible + clickable under an open overlay. `relative` was only the host's
+    // positioning parent, so it moves with the host (the new parent is ChatPage's
+    // content row) — this panel no longer needs it.
     <main
-      className="relative flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
+      className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
       {children}
-      {/* OverlayHost — the single fullscreen-surface host, absolute inset:0 of this
-          relative MainContentArea (OverlayHost subsystem, M2+). Renders nothing until
-          a registered surface is active. Sibling of children (chat) = a chat SIBLING,
-          never a chat child (not coupled into chat). */}
-      <OverlayHost />
     </main>
   );
 }

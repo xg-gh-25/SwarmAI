@@ -132,3 +132,93 @@ describe('OverlayHost — the zoom-safe geometry contract (D5 killed)', () => {
     expect(panel.style.top).toBe('0px');
   });
 });
+
+describe('OverlayHost — spout Y is corrected for app zoom (the ×invZoom conversion)', () => {
+  // getBoundingClientRect returns ZOOM-SCALED (visual) px under `<html style.zoom=Z>`
+  // (verified: TerminalPanel.tsx counter-zoom comment — the rect is scaled, layout px
+  // is not). The spout `top` is a CSS layout value re-scaled by that same zoom at paint,
+  // so a raw visual-px difference lands at distance×Z. These tests lock the fix: every
+  // grBCR-derived value (card center, scrim top, scrim height→panelHeight) is multiplied
+  // by --app-zoom-inv (=1/Z, published inline on <html> by useZoom.applyZoom) to convert
+  // visual px → layout px BEFORE computing spoutY, so the CSS top lands correctly.
+  const origRect = Element.prototype.getBoundingClientRect;
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = origRect;
+    document.documentElement.style.removeProperty('--app-zoom-inv');
+    cleanup();
+  });
+
+  registerOverlay({
+    id: '__spout_surface__',
+    title: 'Spout Surface',
+    sourceCardTestId: 'nav-spout-card',
+    render: () => <div data-testid="spout-content" />,
+  });
+
+  function mkRect(top: number, height: number): DOMRect {
+    return { top, height, left: 0, right: 0, bottom: top + height, width: 0, x: 0, y: top, toJSON() {} } as DOMRect;
+  }
+
+  function SpoutHarness() {
+    const { openOverlay } = useOverlay();
+    return (
+      <div>
+        <div data-testid="nav-spout-card" />
+        <button data-testid="open-spout" onClick={() => openOverlay('__spout_surface__')}>o</button>
+        <OverlayHost />
+      </div>
+    );
+  }
+
+  it('converts the visual-px card/scrim reads to layout px (uncapped case)', () => {
+    // zoom 0.8 → invZoom 1.25. Card center visual = 80 + 40/2 = 100; scrim top visual = 40.
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const tid = this.getAttribute?.('data-testid');
+      if (tid === 'nav-spout-card') return mkRect(80, 40);
+      if (tid === 'overlay-host-scrim') return mkRect(40, 800);
+      return mkRect(0, 0);
+    };
+    document.documentElement.style.setProperty('--app-zoom-inv', '1.25');
+    render(<OverlayProvider><SpoutHarness /></OverlayProvider>);
+    act(() => screen.getByTestId('open-spout').click());
+    const spout = screen.getByTestId('overlay-host-spout');
+    // corrected: centerY 100×1.25=125, scrimTop 40×1.25=50, local = 125−50−NUB/2(10) = 65.
+    // panelHeight = 800×1.25−20 = 980; clamp[8, 980−20−8=952] → 65 (uncapped).
+    // (WITHOUT the fix, current code = 100−40−10 = 50 → this test is RED on HEAD.)
+    expect(spout.style.top).toBe('65px');
+  });
+
+  it('clamps against an invZoom-corrected panelHeight (same coordinate space)', () => {
+    // zoom 2.0 → invZoom 0.5. Forces the upper clamp; proves scrim HEIGHT is also converted.
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const tid = this.getAttribute?.('data-testid');
+      if (tid === 'nav-spout-card') return mkRect(2000, 0);
+      if (tid === 'overlay-host-scrim') return mkRect(40, 400);
+      return mkRect(0, 0);
+    };
+    document.documentElement.style.setProperty('--app-zoom-inv', '0.5');
+    render(<OverlayProvider><SpoutHarness /></OverlayProvider>);
+    act(() => screen.getByTestId('open-spout').click());
+    const spout = screen.getByTestId('overlay-host-spout');
+    // corrected: center 2000×0.5=1000, scrimTop 40×0.5=20, local = 1000−20−10 = 970.
+    // panelHeight = 400×0.5−20 = 180; upper = 180−20−8 = 152 → clamp → 152.
+    // (If panelHeight were left in visual px: 400−20=380, upper 352 → would be 352 — the
+    //  mixed-space clamp bug Gate-1 caught. This asserts height is corrected too.)
+    expect(spout.style.top).toBe('152px');
+  });
+
+  it('is a no-op at zoom=100% (invZoom=1) — no regression at default zoom', () => {
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const tid = this.getAttribute?.('data-testid');
+      if (tid === 'nav-spout-card') return mkRect(80, 40);
+      if (tid === 'overlay-host-scrim') return mkRect(40, 800);
+      return mkRect(0, 0);
+    };
+    document.documentElement.style.setProperty('--app-zoom-inv', '1');
+    render(<OverlayProvider><SpoutHarness /></OverlayProvider>);
+    act(() => screen.getByTestId('open-spout').click());
+    const spout = screen.getByTestId('overlay-host-spout');
+    // invZoom=1 → local = 100−40−10 = 50 (identical to pre-fix behaviour at zoom 1).
+    expect(spout.style.top).toBe('50px');
+  });
+});
