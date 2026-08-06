@@ -786,19 +786,35 @@ export class MessageStore {
     const dbIds = new Set(dbConverted.map(m => m.id));
 
     // clientId correlation map: for DB messages that have metadata.client_id,
-    // build a reverse lookup so we can match optimistic messages (whose .id IS
-    // the clientId) against their DB counterparts. This eliminates R2/R4
-    // duplication where optimistic ID !== DB UUID.
+    // build a reverse lookup so we can match optimistic messages against their DB
+    // counterparts. This eliminates R2/R4 duplication where optimistic ID !== DB
+    // UUID. Two key sources, BOTH required (run_f62f4b80):
+    //   (1) the optimistic id itself (`local-{ts}-{rand}` / `local-{cid}-asst`) —
+    //       the pre-reconcile placeholder whose id IS the clientId.
+    //   (2) a message's CARRIED `metadata.client_id` — the post-reconcile case: a
+    //       bubble already RENAMED to a DB id on a prior reconcile no longer has a
+    //       `local-*` id, but it retains its client_id here so a later mid-turn-cut
+    //       reconcile (whose merged DB row id differs, e.g. A1→A3) still correlates.
+    //       Without (2) the client_id fallback is a one-shot: consumed by the first
+    //       rename, then a second cut duplicates the bubble.
     const clientIdToLocalIdx = new Map<string, number>();
     for (let i = 0; i < this._messages.length; i++) {
       const m = this._messages[i];
-      // Optimistic messages have IDs like "local-{ts}-{rand}"
       if (m.id.startsWith('local-')) {
-        clientIdToLocalIdx.set(m.id, i);
+        clientIdToLocalIdx.set(m.id, i);            // (1) optimistic id
+      }
+      const carried = m.metadata?.client_id;
+      // (2) carried key — do NOT clobber an existing (1) mapping for the same key.
+      if (carried && !clientIdToLocalIdx.has(carried)) {
+        clientIdToLocalIdx.set(carried, i);
       }
     }
-    // Track which local messages were matched by clientId (to exclude from Pass 2)
+    // Track which local messages were matched by clientId (to exclude from Pass 2).
+    // Keyed by the local message's ARRAY INDEX (stable across id-rename), not its
+    // id — a renamed bubble matched via its carried client_id must still be
+    // excluded from Pass-2 re-insertion even though its id is no longer local-*.
     const matchedByClientId = new Set<string>();
+    const matchedLocalIdx = new Set<number>();
 
     const merged: Message[] = [];
 
@@ -807,6 +823,14 @@ export class MessageStore {
     // so the streaming guard below is for future safety only.
     for (let dbIdx = 0; dbIdx < dbConverted.length; dbIdx++) {
       const dbMsg = dbConverted[dbIdx];
+      // The raw DB row's client_id — carried onto the merged message as a stable
+      // correlation key so a FUTURE mid-turn-cut reconcile (different merged id)
+      // still matches this bubble (run_f62f4b80). Applies to BOTH match branches:
+      // the id-match branch too — else a no-cut reconcile (A1==A1) re-drops the
+      // key via {...dbMsg}, re-arming the duplicate for the next cut.
+      const dbClientId = dbMessages[dbIdx]?.metadata?.client_id;
+      const carryCid = (m: Message): Message =>
+        dbClientId ? { ...m, metadata: { ...(m.metadata ?? {}), client_id: dbClientId } } : m;
       const localMatch = localById.get(dbMsg.id);
       if (localMatch) {
         // Streaming message always wins (defensive — normally null here)
@@ -816,20 +840,20 @@ export class MessageStore {
           // DB is source of truth for completed messages (server-side edits propagate),
           // but carry forward local-only interactive blocks the DB never persisted
           // (ask_user_question / cmd_permission_request / escalation).
-          merged.push(MessageStore._mergePreservingInteractive(dbMsg, localMatch));
+          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, localMatch)));
         }
       } else {
-        // No direct ID match — try clientId correlation (AC4).
-        // The raw DB message has metadata.client_id matching a local
-        // optimistic message's .id (format: "local-{ts}-{rand}").
-        const dbClientId = dbMessages[dbIdx]?.metadata?.client_id;
+        // No direct ID match — try clientId correlation (AC4). The DB row's
+        // client_id matches either a local optimistic id (`local-*`) OR a prior
+        // bubble's CARRIED client_id (already renamed to a DB id) — both indexed.
         if (dbClientId && clientIdToLocalIdx.has(dbClientId)) {
-          // Match found — DB message replaces the optimistic local message.
+          // Match found — DB message replaces the optimistic/renamed local message.
           // DB wins (has real ID, persisted content), but carry forward any
-          // local-only interactive blocks the DB never persisted.
+          // local-only interactive blocks the DB never persisted + the client_id.
           matchedByClientId.add(dbClientId);
           const localIdx = clientIdToLocalIdx.get(dbClientId)!;
-          merged.push(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx]));
+          matchedLocalIdx.add(localIdx);
+          merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx])));
         } else {
           // New from DB — but skip if it belongs to pre-boundary content
           // (prevents old messages from "leaking" into current view after resume)
@@ -855,9 +879,17 @@ export class MessageStore {
 
     // Pass 2: Preserve local-only messages not in DB
     // (queued messages, synthetic boundaries, resume markers)
-    // Skip messages already matched by clientId (they were replaced by DB version in Pass 1)
-    for (const local of this._messages) {
-      if (!dbIds.has(local.id) && !matchedByClientId.has(local.id)) {
+    // Skip messages already matched in Pass 1: by clientId-as-id (matchedByClientId)
+    // OR by carried client_id (matchedLocalIdx — a bubble already renamed to a DB
+    // id whose `local.id` is no longer in matchedByClientId; without this index
+    // check the renamed bubble is re-inserted → duplicate, run_f62f4b80).
+    for (let localArrIdx = 0; localArrIdx < this._messages.length; localArrIdx++) {
+      const local = this._messages[localArrIdx];
+      if (
+        !dbIds.has(local.id) &&
+        !matchedByClientId.has(local.id) &&
+        !matchedLocalIdx.has(localArrIdx)
+      ) {
         // H2: drop a STALE assistant placeholder once a real DB assistant row
         // exists, so the turn-end reconcile finalizes to a single bubble.
         // Two cases — both gated on hasRealAssistant (never blank an in-flight

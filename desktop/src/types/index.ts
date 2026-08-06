@@ -283,6 +283,14 @@ export interface Message {
     eventType: string;
     data: Record<string, unknown>;
   };
+  /** Backend correlation metadata — carries `client_id` so a reconcile can match
+   *  this message to its DB counterpart EVEN AFTER its display `id` has been
+   *  renamed from the optimistic `local-*` id to the canonical DB id. This is a
+   *  hidden correlation key (never rendered); the display id remains the DB id.
+   *  Without it, the client_id fallback (which indexes only `local-*` ids) is
+   *  consumed on the first reconcile and a later mid-turn-cut reconcile
+   *  duplicates the bubble (run_f62f4b80). */
+  metadata?: { client_id?: string; [key: string]: unknown };
 }
 
 export interface ChatRequest {

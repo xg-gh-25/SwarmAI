@@ -156,6 +156,63 @@ describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wi
     expect(assistants[0].id).toBe('A7'); // the canonical DB row is the surviving bubble
   });
 
+  it('reconcile-tail SECOND mid-turn-cut (run_f62f4b80): rename on #1 must NOT consume the correlation key — #2 cut still matches, ONE bubble', () => {
+    // THE BUG two prior test-passes missed (both stopped at ONE reconcile): the
+    // client_id fallback is one-shot unless the correlation key SURVIVES the
+    // rename. Reconcile #1 (full group in tail) matches local-XYZ-asst and
+    // _mergePreservingInteractive renames the bubble to the DB id A1. If A1 does
+    // not RETAIN client_id, the clientId index (which held only local-*) no longer
+    // has it → reconcile #2 (mid-turn cut, merged id A3, same client_id) matches
+    // nothing (id≠, client_id-gone, A3 is a UUID so H2 skips) → A3 added new + A1
+    // kept = TWO bubbles. Fix: carry client_id onto the merged msg + index by
+    // carried client_id + exclude-from-Pass2 by matched index.
+    const localId = 'local-XYZ-asst';
+    const withCid = (id: string, text: string): ChatMessage => ({
+      id, sessionId: 'sess-1', role: 'assistant',
+      content: [{ type: 'text', text }] as any, createdAt: new Date().toISOString(),
+      metadata: { client_id: localId } as any,
+    });
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg(localId, 'assistant', 'the full turn answer'));
+
+    // #1: full group in tail → renames local-XYZ-asst → A1
+    store.reconcile([withCid('A1', 'the full turn answer')]);
+    const afterFirst = store.messages.filter((m) => m.role === 'assistant');
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].id).toBe('A1');            // renamed to DB id (display id stays canonical)
+    expect(afterFirst[0].metadata?.client_id).toBe(localId); // but client_id RETAINED as correlation key
+
+    // #2: tail cuts mid-turn → merged id A3 (≠A1), same client_id
+    store.reconcile([withCid('A3', 'answer tail only')]);
+    const afterSecond = store.messages.filter((m) => m.role === 'assistant');
+    expect(afterSecond).toHaveLength(1);            // ONE bubble — the residual duplicate is closed
+  });
+
+  // Coverage map (run_f62f4b80 fix has 4 coordinated changes): the test ABOVE
+  // ("SECOND mid-turn-cut") guards change-2 (index by carried client_id) — RED if
+  // disabled. The test BELOW guards change-3 (carryCid on the id-match branch) —
+  // a no-op id-match reconcile must not re-drop the key. Change-4 (matchedLocalIdx
+  // Pass-2 exclusion) is exercised by BOTH (a renamed bubble must not re-insert).
+  it('reconcile-tail cut after a NO-OP id-match reconcile (skeptic ordering, guards change-3): clientid→id-match→cut still ONE bubble', () => {
+    // The ordering that defeated the plan's literal 2-change version: after #1
+    // renames to A1, a #2 no-cut reconcile hits the ID-MATCH branch (A1==A1) which
+    // ALSO returns {...dbMsg} — if that branch drops client_id, the key is
+    // re-armed-then-lost and #3's cut duplicates. The fix carries client_id in the
+    // id-match branch too.
+    const localId = 'local-QRS-asst';
+    const withCid = (id: string, text: string): ChatMessage => ({
+      id, sessionId: 'sess-1', role: 'assistant',
+      content: [{ type: 'text', text }] as any, createdAt: new Date().toISOString(),
+      metadata: { client_id: localId } as any,
+    });
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg(localId, 'assistant', 'full turn'));
+    store.reconcile([withCid('B1', 'full turn')]);   // #1 clientid → rename to B1
+    store.reconcile([withCid('B1', 'full turn')]);   // #2 id-match no-op (must keep client_id)
+    store.reconcile([withCid('B4', 'turn tail')]);   // #3 mid-turn cut
+    expect(store.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+
   it('churn across an async in-flight fetch: stale read loses, drained re-run with full DB lands (drive real _fetchAndReconcile)', async () => {
     // Couples the churn with the async fetch path: the first (in-flight) fetch
     // returns a STALE shorter row; a reconcile re-queues behind it; the drained
