@@ -156,3 +156,44 @@ class TestHealthEndpointFailSafe:
             assert not folder_name.startswith(("s_cmhk-", "s_ivt-", "s_internal-")), (
                 f"{folder_name} internal skill leaked to non-owner via health map"
             )
+
+
+class TestCrossBoundaryContractBinding:
+    """Layer-4 cross-boundary E2E (cross_boundary=true, frontend↔backend contract).
+
+    The seam: the backend status enum (SKILL_HEALTH_STATUSES) and the frontend dot map
+    (HEALTH_DOT in CapabilitiesOverlay.tsx) MUST stay in lockstep — a backend status with
+    no frontend dot (or vice-versa) is a silent contract break no unit test on either side
+    catches. This binds the frontend table to the backend SSOT so a divergence goes RED.
+
+    Mutation-verified non-vacuous: add/remove a value on either side → this test fails.
+    (This is the "frontend table DERIVED-FROM/BOUND-TO backend SSOT" Layer-4 pattern.)
+    """
+
+    def _frontend_health_dot_keys(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        tsx = (
+            Path(__file__).resolve().parents[2]
+            / "desktop/src/components/layout/CapabilitiesOverlay.tsx"
+        ).read_text(encoding="utf-8")
+        # Extract the HEALTH_DOT object body and pull its top-level keys.
+        m = re.search(r"const HEALTH_DOT[^{]*\{(.*?)\n\};", tsx, re.DOTALL)
+        assert m, "HEALTH_DOT map not found in CapabilitiesOverlay.tsx (contract moved?)"
+        body = m.group(1)
+        # keys look like `  healthy: { ... }` — first identifier before ':' on each entry line.
+        return set(re.findall(r"^\s*([a-z_]+):\s*\{", body, re.MULTILINE))
+
+    def test_frontend_dot_map_matches_backend_status_enum(self):
+        from core.skill_health import SKILL_HEALTH_STATUSES
+
+        backend = set(SKILL_HEALTH_STATUSES)
+        frontend = self._frontend_health_dot_keys()
+        assert frontend == backend, (
+            "Skill-health status contract DIVERGED between backend and frontend.\n"
+            f"  backend SKILL_HEALTH_STATUSES: {sorted(backend)}\n"
+            f"  frontend HEALTH_DOT keys:      {sorted(frontend)}\n"
+            f"  backend-only (no frontend dot): {sorted(backend - frontend)}\n"
+            f"  frontend-only (no backend status): {sorted(frontend - backend)}"
+        )
