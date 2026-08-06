@@ -78,6 +78,8 @@ export interface Skill {
   sourceTier: 'built-in' | 'user' | 'plugin';
   readOnly: boolean;        // true for built-in and plugin
   content?: string;         // only present in detail endpoint
+  category: string;         // user-facing group (Capabilities domain); 'Utilities' fallback
+  visibility: 'public' | 'internal';  // internal = owner-only (backend-filtered for non-owner)
 }
 
 export interface SkillCreateRequest {

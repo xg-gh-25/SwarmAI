@@ -33,6 +33,8 @@ export const toCamelCase = (data: Record<string, unknown>): Skill => {
     sourceTier: (data.source_tier as 'built-in' | 'user' | 'plugin') || 'user',
     readOnly: (data.read_only as boolean) ?? false,
     content: data.content as string | undefined,
+    category: (data.category as string) || 'Utilities',
+    visibility: (data.visibility as 'public' | 'internal') || 'public',
   };
 };
 

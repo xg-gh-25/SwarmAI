@@ -79,6 +79,11 @@ UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     "show-history": {"event": "swarm:show-history", "target": "window"},
     "show-todo": {"event": "swarm:show-todo", "target": "window"},
     "show-jobs": {"event": "swarm:show-jobs", "target": "window"},
+    # Capabilities domain (run_b5d98151) — opens the CapabilitiesOverlay
+    # ("what your AI can do" — skills + connections). Payload-less show-only:
+    # frontend derives event/target from its own table, never trusts wire data;
+    # internal-skill filtering is enforced backend-side regardless of opener.
+    "show-capabilities": {"event": "swarm:show-capabilities", "target": "window"},
     # New Brain launcher — non-destructive: opens the collect-modal only; "Create"
     # still routes through chat (autoSend:false, human reviews before send). Safe
     # for the agent to open per the Run-2 nav/display charter.

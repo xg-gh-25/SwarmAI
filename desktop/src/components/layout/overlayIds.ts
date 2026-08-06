@@ -40,6 +40,7 @@ export const OVERLAY_IDS = [
   'jobs',
   'pipeline',
   'pollinate',
+  'capabilities',
   // SYSTEM region
   'hive',
   'settings',

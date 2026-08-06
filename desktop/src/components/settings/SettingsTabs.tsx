@@ -1,9 +1,13 @@
 /**
  * Settings page tab layout wrapper.
  *
- * 11 tabs (10 in non-desktop builds — Hive Accounts is desktop-only): General, AI &
- * Models, Channels, Skills, MCP Servers, Hive Accounts, Backup, Core Engine, System,
- * Capabilities, About. The Hive Accounts tab is the slim AWS-account-config surface;
+ * 9 tabs (8 in non-desktop builds — Hive Accounts is desktop-only): General, AI &
+ * Models, Channels, Hive Accounts, Backup, Core Engine, System, Capabilities, About.
+ * Skills + MCP Servers moved OUT to the first-class "Capabilities" nav card/overlay
+ * (CapabilitiesOverlay, run_b5d98151) — user-facing ability browsing lives there now,
+ * not in a Settings data-table. The "Capabilities" tab here is the runtime OS-eval
+ * readout (dev diagnostics), a DIFFERENT surface from the Capabilities domain.
+ * The Hive Accounts tab is the slim AWS-account-config surface;
  * fleet/instance MANAGEMENT lives in the first-class "Hive" nav card (HiveFleetOverlay,
  * run_b450108e) — R27 dual-entry convergence, shared components (settings/hiveComponents).
  * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
@@ -12,8 +16,6 @@ import { useState, useEffect, useMemo } from 'react';
 import GeneralTab from './GeneralTab';
 import AIModelsTab from './AIModelsTab';
 import ChannelsTab from './ChannelsTab';
-import SkillsSettingsTab from './SkillsTab';
-import MCPServersTab from './MCPServersTab';
 import SystemTab from './SystemTab';
 import CapabilitiesTab from './CapabilitiesTab';
 import EngineMetricsTab from './EngineMetricsTab';
@@ -24,16 +26,15 @@ import { isDesktop } from '../../services/tauri';
 
 /**
  * Width tiers:
- * - 'full'  — no max-width, own padding (data tables like Skills)
- * - '6xl'   — max-w-5xl 1024px (card grids: MCP, Hive, Engine)
+ * - '6xl'   — max-w-5xl 1024px (card grids: Engine)
  * - '4xl'   — max-w-3xl 768px  (forms: General, AI, Channels, etc.)
+ * ('full' is retained in WIDTH_CLASSES for any future full-bleed tab; no tab uses it
+ *  now that Skills moved to the Capabilities overlay.)
  */
 const ALL_TABS = [
   { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
   { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy', width: '4xl' as const },
   { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
-  { id: 'skills', label: 'Skills', icon: 'extension', width: 'full' as const },
-  { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub', width: '6xl' as const },
   { id: 'hive', label: 'Hive Accounts', icon: 'cloud', desktopOnly: true, width: '4xl' as const },
   { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
   { id: 'engine', label: 'Core Engine', icon: 'psychology', width: '6xl' as const },
@@ -106,8 +107,6 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
               {activeTab === 'general' && <GeneralTab />}
               {activeTab === 'ai-models' && <AIModelsTab />}
               {activeTab === 'channels' && <ChannelsTab />}
-              {activeTab === 'skills' && <SkillsSettingsTab />}
-              {activeTab === 'mcp-servers' && <MCPServersTab />}
               {activeTab === 'hive' && <HiveTab />}
               {activeTab === 'backup' && <BackupTab />}
               {activeTab === 'engine' && <EngineMetricsTab />}

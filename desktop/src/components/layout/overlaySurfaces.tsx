@@ -19,6 +19,7 @@ import { NewBrainContent } from './NewBrainOverlay';
 import { HistoryContent } from './HistoryOverlay';
 import { ToDoContent } from './ToDoOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
+import { CapabilitiesContent } from './CapabilitiesOverlay';
 import { PipelineContent } from './PipelineOverlay';
 import { PollinateContent } from './PollinateOverlay';
 import { HiveFleetContent } from './HiveFleetOverlay';
@@ -204,6 +205,22 @@ registerOverlay({
   tint: TINT_WORK,
   render: ({ close, dispatchPrompt }) => (
     <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+  ),
+});
+
+// ── capabilities ("what your AI can do") — Work zone (run_b5d98151) ───────────────────
+// Promotes Capabilities from a Settings tab to a first-class user-facing domain. Skills
+// (browse by category + heroes) | Connections (status-first MCP). Agent-openable
+// (swarm:show-capabilities). dispatchPrompt lands the "teach a new skill" chat flow.
+registerOverlay({
+  id: 'capabilities',
+  title: 'Capabilities — what your AI can do',
+  mode: 'CAPABILITIES',
+  width: 'xl',
+  sourceCardTestId: 'nav-capabilities',
+  tint: TINT_WORK,
+  render: ({ close, dispatchPrompt }) => (
+    <CapabilitiesContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
   ),
 });
 

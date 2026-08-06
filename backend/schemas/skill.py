@@ -27,6 +27,11 @@ class SkillResponse(BaseModel):
     source_tier: Literal["built-in", "ddd", "user", "plugin"]
     read_only: bool
     content: str | None = None
+    # Capabilities-domain (run_b5d98151): user-facing group + visibility.
+    # Computed per-skill; internal skills are omitted for non-owner (hive/
+    # unknown) run modes at the list endpoint (backend-primary, fail-closed).
+    category: str = "Utilities"
+    visibility: Literal["public", "internal"] = "public"
 
 
 class SkillCreateRequest(BaseModel):

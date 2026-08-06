@@ -79,9 +79,9 @@ const DOMAIN_ORDER = [
   // / agent command), not a nav card (run_990b0a03).
   'nav-pipeline',
   'nav-pollinate',
+  'nav-capabilities',  // Work: ability front-door, moved from System (run_b5d98151)
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-hive',      // System: Hive Fleet, directly below Jobs & Runs (run_b450108e)
-  'nav-capabilities',
   'nav-eval',
   'nav-settings',
   'nav-community',

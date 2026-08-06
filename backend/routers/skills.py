@@ -24,6 +24,7 @@ Requirements: 5.1–5.12
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from core import session_registry  # Skill creator uses SessionRouter
 from core.initialization_manager import initialization_manager
 from core.projection_layer import ProjectionLayer
 from core.skill_manager import SkillInfo, skill_manager
+from core.skill_registry import derive_category, derive_visibility
 from schemas.skill import (
     SkillCreateRequest,
     SkillResponse,
@@ -60,7 +62,12 @@ def _skill_info_to_response(
     info: SkillInfo,
     include_content: bool = False,
 ) -> SkillResponse:
-    """Convert a ``SkillInfo`` to the API ``SkillResponse`` model."""
+    """Convert a ``SkillInfo`` to the API ``SkillResponse`` model.
+
+    Category + visibility are derived purely from the folder name (with an
+    optional frontmatter override carried on ``SkillInfo``) — no session
+    context needed (run_b5d98151).
+    """
     return SkillResponse(
         folder_name=info.folder_name,
         name=info.name,
@@ -69,7 +76,57 @@ def _skill_info_to_response(
         source_tier=info.source_tier,
         read_only=info.source_tier != "user",
         content=info.content if include_content else None,
+        category=derive_category(info.folder_name, info.category),
+        visibility=derive_visibility(info.folder_name, info.visibility),
     )
+
+
+# Run modes where the caller is the LOCAL-DESKTOP OWNER (internal skills are
+# served). Any other mode (hive / unknown) fails closed to public-only — a
+# non-owner surface never receives an internal skill name (Gate-1 adopted,
+# backend-primary; the route is unauthenticated + context-free so we key on
+# the process run mode, the existing desktop-vs-hive discriminator, NOT a
+# spoofable request header). See ddd_brain.py:27 (no per-router auth) +
+# hive/Caddyfile (Hive proxies as loopback, so client-IP is not a safe signal).
+_OWNER_RUN_MODES = frozenset({"daemon", "subprocess", "dev"})
+
+
+def _is_owner_session() -> bool:
+    """True only when this process is a local-desktop owner runtime.
+
+    Fail-closed: an unset/unknown SWARMAI_MODE is treated as NON-owner.
+    """
+    return os.environ.get("SWARMAI_MODE", "") in _OWNER_RUN_MODES
+
+
+def _reject_internal_folder_name(folder_name: str) -> None:
+    """Refuse to CREATE a skill whose name derives internal visibility.
+
+    Two things at once (Gate-2 security): (1) a user-tier skill named with an
+    internal prefix (s_cmhk-/s_ivt-/s_internal-/meddpicc) would derive
+    visibility=internal and become invisible to the very user who made it; (2) a
+    UNIFORM rejection here — BEFORE any existence check — closes the enumeration
+    leak (an internal name returns the SAME 400 whether or not it already exists,
+    so the create/generate 409 can't be used to probe which internal skills
+    exist). Built-in internal skills ship on disk, never via this API, so this
+    never blocks a legitimate create.
+    """
+    if derive_visibility(folder_name) == "internal":
+        raise HTTPException(
+            status_code=400,
+            detail="Skill name uses a reserved (internal) prefix and cannot be created.",
+        )
+
+
+def _visible_to_caller(response: SkillResponse) -> bool:
+    """A single skill is visible iff it is public OR the caller is the owner.
+
+    The internal-skill gate. Applied at EVERY read surface that returns a
+    SkillResponse (list, rescan, single-detail) — not just the list. LIST and
+    DETAIL are independent leak surfaces (the eval denylist-twice / C041 lesson):
+    filtering only the list leaves the by-name detail endpoint as an open bypass.
+    """
+    return response.visibility != "internal" or _is_owner_session()
 
 
 async def _trigger_projection() -> None:
@@ -99,6 +156,11 @@ async def list_skills():
         _skill_info_to_response(info, include_content=False)
         for info in cache.values()
     ]
+    # Backend-primary internal filter (Gate-1 adopted, fail-closed): a non-owner
+    # runtime (hive / unknown SWARMAI_MODE) never receives an internal skill.
+    # The frontend then CONSUMES this verdict (groups + renders), never
+    # re-derives it — the established backend-owns-the-discriminator pattern.
+    responses = [r for r in responses if _visible_to_caller(r)]
     responses.sort(key=lambda r: r.folder_name)
     return responses
 
@@ -109,6 +171,9 @@ async def create_skill(request: SkillCreateRequest):
 
     Requirements: 5.3, 5.7
     """
+    # Reject internal-prefix names BEFORE the collision check (uniform 400 closes
+    # the 409-enumeration leak + prevents a self-invisible user skill).
+    _reject_internal_folder_name(request.folder_name)
     info = await skill_manager.create_skill(
         folder_name=request.folder_name,
         name=request.name,
@@ -132,6 +197,8 @@ async def rescan_skills():
         _skill_info_to_response(info, include_content=False)
         for info in cache.values()
     ]
+    # Same internal-skill gate as list_skills — rescan is a parallel read surface.
+    responses = [r for r in responses if _visible_to_caller(r)]
     responses.sort(key=lambda r: r.folder_name)
     return responses
 
@@ -171,6 +238,10 @@ async def generate_skill_with_agent(request: Request):
 
         # Sanitize skill name for use as folder name
         sanitized_name = re.sub(r"[^a-zA-Z0-9_-]", "-", skill_name.lower())
+
+        # Reject internal-prefix names BEFORE the conflict check — a uniform 400
+        # (same whether or not the skill exists) closes the 409-enumeration leak.
+        _reject_internal_folder_name(sanitized_name)
 
         # Check for name conflict — 409 if target directory already exists
         existing = await skill_manager.get_skill(sanitized_name)
@@ -246,7 +317,16 @@ async def get_skill(folder_name: str):
             status_code=404,
             detail=f"Skill '{folder_name}' not found",
         )
-    return _skill_info_to_response(info, include_content=True)
+    response = _skill_info_to_response(info, include_content=True)
+    # LEAK GUARD (detail is a SEPARATE surface from list): a non-owner must NOT
+    # fetch an internal skill's full content by name. 404 (not 403) so we don't
+    # even confirm the internal skill exists.
+    if not _visible_to_caller(response):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{folder_name}' not found",
+        )
+    return response
 
 
 @router.put("/{folder_name}", response_model=SkillResponse)

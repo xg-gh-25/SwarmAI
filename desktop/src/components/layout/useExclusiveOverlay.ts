@@ -33,6 +33,7 @@ export const ALL_SHOW_EVENTS = [
   'swarm:show-history',
   'swarm:show-todo',
   'swarm:show-jobs',
+  'swarm:show-capabilities',
   'swarm:show-new-brain',
 ] as const;
 

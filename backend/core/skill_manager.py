@@ -87,6 +87,10 @@ class SkillInfo:
     content: str | None = None
     consumes_artifacts: tuple[str, ...] = ()
     produces_artifact: str | None = None
+    # Optional frontmatter overrides for the Capabilities domain (run_b5d98151).
+    # When None, the router derives category/visibility from the folder name.
+    category: str | None = None
+    visibility: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +286,20 @@ def parse_skill_md(
     produces_raw = meta.get("produces_artifact") if meta else None
     produces = str(produces_raw).strip() if produces_raw else None
 
+    # --- Capabilities-domain overrides (optional, run_b5d98151) ---
+    # A skill MAY declare `category:` / `visibility:` in frontmatter to override
+    # the name-derived defaults. Left None here → router derives from folder name.
+    category_raw = meta.get("category") if meta else None
+    category = str(category_raw).strip() if category_raw else None
+    visibility_raw = meta.get("visibility") if meta else None
+    visibility = str(visibility_raw).strip().lower() if visibility_raw else None
+    if visibility not in (None, "public", "internal"):
+        logger.warning(
+            "SKILL.md at %s has unknown visibility '%s'; ignoring (deriving from name)",
+            path, visibility,
+        )
+        visibility = None
+
     return SkillInfo(
         folder_name=folder_name,
         name=str(name),
@@ -293,6 +311,8 @@ def parse_skill_md(
         content=body if load_content else None,
         consumes_artifacts=consumes,
         produces_artifact=produces,
+        category=category,
+        visibility=visibility,
     )
 
 

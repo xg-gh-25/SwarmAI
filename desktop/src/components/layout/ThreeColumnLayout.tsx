@@ -206,19 +206,6 @@ function LeftSidebar() {
   // (meta-review HIGH, run_b450108e).
   const hiveEnabled = isDesktop();
 
-  // Skills and MCP now open Settings with the corresponding tab pre-selected
-  // Toggle: if already on that tab, close the modal
-  const handleNavClick = (target: 'skills' | 'mcp' | 'engine') => {
-    const tabMap = { skills: 'skills', mcp: 'mcp-servers', engine: 'engine' };
-    const targetTab = tabMap[target];
-    if (newActiveOverlay === 'settings' && settingsTab === targetTab) {
-      closeOverlay();
-    } else {
-      setSettingsTab(targetTab);
-      openOverlay('settings'); // host closes any other overlay; efferent BACK_TO_CHAT covers legacy
-    }
-  };
-
   // Open the LATEST signal digest. The digest is written by a scheduled job, so
   // today's file often doesn't exist yet (esp. early in the day / weekends) —
   // hardcoding `<today>-digest.md` produced a file-not-found (run_a73566c4). We
@@ -249,11 +236,6 @@ function LeftSidebar() {
   // clickable while a modal is open, so without this a window overlay would stack
   // on top of a still-open Settings/Eval modal (mirror of the Settings-clears-
   // window-highlight fix; run_ad7b32f6 Gate-1 Finding 2).
-  // Capabilities overlay folds Skills + MCP + jobs (A10). Opening it lands on the
-  // Settings modal's skills tab as the concrete surface (Run-2 wiring; a dedicated
-  // Capabilities overlay is a later cycle). Engine Metrics → Settings tab (choice A).
-  const openCapabilities = () => handleNavClick('skills');
-
   // Community folds Signals (choice A): the domain card opens the latest signal
   // digest (the community/GitHub surface is external — the card is a soft entry).
   const openCommunity = () => { void handleSignalsClick(); };
@@ -354,6 +336,10 @@ function LeftSidebar() {
               header unmute toggle (FileViewerPanel), not a global nav button. */}
           <A10Card icon="pipeline" label="Pipeline" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pipeline'} onClick={() => { if (activeModal) closeModal(); openOverlay('pipeline'); }} data-testid="nav-pipeline" />
           <A10Card icon="hive" label="Pollinate" tint={A10_GROUP.work} isActive={newActiveOverlay === 'pollinate'} onClick={() => { if (activeModal) closeModal(); openOverlay('pollinate'); }} data-testid="nav-pollinate" />
+          {/* Capabilities — "what your AI can do" (skills + connections). In the Work
+              zone (run_b5d98151): it is the ability front-door, not a low-attention
+              setting, and sits alongside Pipeline/Pollinate which ARE capabilities. */}
+          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.work} isActive={newActiveOverlay === 'capabilities'} onClick={() => { if (activeModal) closeModal(); openOverlay('capabilities'); }} data-testid="nav-capabilities" />
         </A10Group>
 
         <A10Group label="System" tint={A10_GROUP.system} dimCards>
@@ -361,7 +347,6 @@ function LeftSidebar() {
           {hiveEnabled && (
             <A10Card icon="cloud" label="Hive" tint={A10_GROUP.system} statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => { if (activeModal) closeModal(); openOverlay('hive'); }} data-testid="nav-hive" />
           )}
-          <A10Card icon="extension" label="Capabilities" tint={A10_GROUP.system} onClick={openCapabilities} data-testid="nav-capabilities" />
           <A10Card icon="heartbeat" label="OS Eval" tint={A10_GROUP.system} isActive={newActiveOverlay === 'eval'} onClick={() => { if (newActiveOverlay === 'eval') { closeOverlay(); } else { openOverlay('eval'); } }} data-testid="nav-eval" />
           <A10Card icon="gear" label="Settings" tint={A10_GROUP.system} isActive={newActiveOverlay === 'settings' && !settingsTab} onClick={() => { if (newActiveOverlay === 'settings') { closeOverlay(); } else { setSettingsTab(undefined); openOverlay('settings'); } }} data-testid="nav-settings" />
           <A10Card icon="public" label="Community" tint={A10_GROUP.system} onClick={openCommunity} data-testid="nav-community" />

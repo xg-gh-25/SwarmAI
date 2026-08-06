@@ -615,7 +615,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     // A10 redesign: the modal-opening domain cards are Settings (nav-settings ->
     // settings modal) and OS Eval (nav-eval -> eval modal). Each is an INDEPENDENT
     // single modal that toggles open/closed on click (no settings-tab machine —
-    // Skills/MCP folded into Capabilities, which routes elsewhere).
+    // Skills/MCP now live in the first-class Capabilities overlay (run_b5d98151),
+    // which opens via swarm:show-capabilities like the other domain overlays).
     const navModalTypes = ['settings', 'eval'] as const;
     type NavModalType = typeof navModalTypes[number];
 
@@ -1095,9 +1096,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       // NOTE: no nav-canvas — Canvas is output-triggered, not a nav card (run_990b0a03).
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
+      { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-hive', label: 'Hive' },
-      { testId: 'nav-capabilities', label: 'Capabilities' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },
       { testId: 'nav-community', label: 'Community' },
