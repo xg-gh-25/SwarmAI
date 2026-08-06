@@ -65,6 +65,7 @@ python3 scripts/search.py "touch target accessibility" --domain ux
 | `data/slide_bold_templates.csv` | 34 | Bold-template taste index — id/name/scheme/mood/colors/fonts/use-case (reference shortlist, not full CSS) |
 | `data/animation_feelings.csv` | 6 | Mood → animation approach + timing + palette hint + background effect (Dramatic/Techy/Playful/Professional/Calm/Editorial) |
 | `data/anti_slop.md` | — | Anti-AI-slop rules: banned patterns (fonts/colors/layouts/decoration) + positive counter-rules. Read before any deck/landing generation. |
+| `data/design-judgment.md` | — | **The info-density + surface-pattern judgment skeleton.** The 5-check pre-ship checklist (does every element earn its place / erase redundant + non-data ink / one thing stands out / compared-to-what) distilled from Laws of UX + Refactoring UI + Tufte + Apple HIG, PLUS 7 surface patterns (chat / artifact-canvas / command-palette / nav-shell / knowledge / agent-panel / whiteboard) with invariants + anti-patterns. **Read BEFORE laying out any info-dense card / dashboard / detail panel / gallery, or before designing a named surface.** |
 | `data/slide_bold_previews/<id>.md` | 34 | Per-template preview cards for the 34 bold templates — palette hex, typography, signature moves, best-for/avoid-for. One file per `slide_bold_templates.csv` id. Load ONLY the shortlisted candidates' cards (progressive disclosure). |
 
 **Slide / deck work:** when the brief is a presentation or slide deck (not a landing
@@ -98,6 +99,7 @@ The biggest risk with AI-generated UI is looking like every other AI-generated U
 2. **Commit to the recommended style fully** -- half-measures look worse than generic
 3. **Follow anti-patterns** -- the database tells you what NOT to do for each industry
 4. **Read `data/anti_slop.md`** -- the anti-AI-slop checklist: banned fonts (Inter/Roboto/Arial as display, over-converged Space Grotesk), banned colors (generic indigo `#6366f1`, purple-on-white gradients), banned layouts (all-centered, identical card grids, cookie-cutter dashboards), banned decoration (realistic illustrations, gratuitous glassmorphism) — plus the positive counter-rules (distinctive type, cohesive palette with dominant+accent, atmospheric layered backgrounds).
+5. **Read `data/design-judgment.md` BEFORE laying out any info-dense surface** — a card, dashboard, detail panel, gallery, report, or a named surface (chat / canvas / palette / nav / agent-panel). It is the density skeleton (the 5-check pre-ship checklist) + the 7 surface-pattern references. The single most common failure of a capable builder is "surface every signal" → a data-dump that reads as broken even when every number is correct; this file is the antidote. The tell you need it: you're about to render a grid of equal-weight tiles or a per-row diagnostics block "because we have the data."
 
 ### Aesthetic Directions (67 styles in database)
 

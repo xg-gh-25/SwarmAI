@@ -41,6 +41,25 @@ Each result includes: **Category**, **Issue**, **Platform**, **Description**, **
 
 Use these results to enrich your audit findings with specific Do/Don't guidance and code examples. If the script is unavailable, fall back to the built-in checklists below.
 
+### Step 2.6: Load the Info-Density + Surface-Pattern Judgment Skeleton
+
+For any info-dense surface (card / dashboard / detail panel / gallery) or a named
+surface (chat / canvas / command-palette / nav-shell / agent-panel), read the shared
+judgment skeleton — the SINGLE source, owned by the frontend-design skill so build
+and review never drift:
+
+```
+.claude/skills/s_frontend-design/data/design-judgment.md
+```
+
+It carries the 5-check pre-ship checklist (does every element earn its place / erase
+redundant + non-data ink / exactly one thing stands out / compared-to-what /
+spacing-first) and the 7 surface patterns with their invariants + anti-patterns. Use
+it as the primary reference for the density + surface-shape dimension of the audit.
+**Data-dump tell to flag:** a grid of equal-weight tiles, a per-row diagnostics wall,
+a redundant count-header, or every tile bold+boxed so nothing stands out. If the file
+is unavailable, fall back to the built-in checklists below.
+
 ### Step 3: Run the Audit
 
 Review each file against all categories. For every finding, record:
