@@ -12,8 +12,9 @@
  * placeholder void (NavCard+Overlay standard §4). Mount registration/indexing is
  * wired by later cycles.
  *
- * Data is backend-primary: Browse/Recent CONSUME GET /api/library/native +
- * /recent + /mounts (live filesystem reads; the frontend invents no counts, R30).
+ * Data is backend-primary: Browse/Recent CONSUME GET /library/native +
+ * /recent + /mounts via the shared axios instance whose baseURL already supplies
+ * the /api prefix (live filesystem reads; the frontend invents no counts, R30).
  * Opens on the `swarm:show-library` window event via useExclusiveOverlay
  * (single-overlay mux + back-to-chat). Mirrors CMBrainOverlay's shell so the two
  * cognition cards feel like one system.
@@ -78,19 +79,19 @@ export function LibraryContent() {
     data: native, isLoading: nativeLoading, isError: nativeError, refetch: refetchNative,
   } = useQuery<NativeStore>({
     queryKey: ['library-native'],
-    queryFn: async () => (await api.get<NativeStore>('/api/library/native')).data,
+    queryFn: async () => (await api.get<NativeStore>('/library/native')).data,
     staleTime: 30_000, enabled: true,
   });
   const {
     data: recent, isLoading: recentLoading, isError: recentError, refetch: refetchRecent,
   } = useQuery<RecentFeed>({
     queryKey: ['library-recent'],
-    queryFn: async () => (await api.get<RecentFeed>('/api/library/recent')).data,
+    queryFn: async () => (await api.get<RecentFeed>('/library/recent')).data,
     staleTime: 30_000, enabled: true,
   });
   const { data: mounts } = useQuery<MountsList>({
     queryKey: ['library-mounts'],
-    queryFn: async () => (await api.get<MountsList>('/api/library/mounts')).data,
+    queryFn: async () => (await api.get<MountsList>('/library/mounts')).data,
     staleTime: 30_000, enabled: true,
   });
 
@@ -203,7 +204,7 @@ function BrowseTab({
   // Search runs the SAME recall path the Guide tab describes (library+codeintel).
   const { data: search, isFetching } = useQuery<SearchResult>({
     queryKey: ['library-search', submitted],
-    queryFn: async () => (await api.get<SearchResult>(`/api/library/search?q=${encodeURIComponent(submitted)}`)).data,
+    queryFn: async () => (await api.get<SearchResult>(`/library/search?q=${encodeURIComponent(submitted)}`)).data,
     enabled: submitted.trim().length > 0,
     staleTime: 30_000,
   });
@@ -359,7 +360,7 @@ function MountRowView({ m }: { m: MountRow }) {
 }
 
 // "+ Add Folder" — native folder picker (Tauri dialog plugin) → POST
-// /api/library/mounts, which judges kind + registers + indexes (code inline,
+// /library/mounts (axios baseURL adds /api), which judges kind + registers + indexes (code inline,
 // docs handed to chat). On success the mounts list refreshes so the new row shows.
 function AddFolderButton() {
   const [busy, setBusy] = useState(false);
@@ -372,7 +373,7 @@ function AddFolderButton() {
       if (typeof picked === 'string') {
         try {
           const res = await api.post<{ kind: string; symbols?: number; next?: string }>(
-            `/api/library/mounts?path=${encodeURIComponent(picked)}`,
+            `/library/mounts?path=${encodeURIComponent(picked)}`,
           );
           const d = res.data;
           const msg = d.kind === 'code'

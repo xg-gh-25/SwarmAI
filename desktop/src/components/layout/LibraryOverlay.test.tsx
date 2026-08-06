@@ -14,6 +14,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn(), post: vi.fn() },
@@ -180,5 +182,47 @@ describe('LibraryOverlay — Recent three-state', () => {
     const panel = await openRecent();
     await waitFor(() => expect(panel.textContent).toMatch(/Nothing new in the last week/i));
     expect(screen.queryByTestId('library-recent-error')).toBeNull();
+  });
+});
+
+// Regression guard for the double-/api bug (run_b41d0c2a): the shared axios
+// instance's interceptor already prepends /api to baseURL, so every call MUST pass
+// a bare `/library/*` path. A leading `/api/library/*` double-prefixes to
+// /api/api/library/* → 404 → all tabs showed "Couldn't load categories".
+// The prior three-state mock matched url.includes('/native') — a substring true for
+// BOTH the buggy and correct URL, so it never caught this. These assertions inspect
+// the ACTUAL request path (get AND post) and go RED if any call reverts to /api/.
+describe('LibraryOverlay — API path convention (no double /api)', () => {
+  it('every mount-time api.get uses a bare /library/* path (never /api/library)', async () => {
+    // native + recent + mounts fire on mount. Assert the ACTUAL request path — the
+    // three-state mock above matched url.includes('/native'), a substring true for
+    // BOTH /library/native and the buggy /api/library/native, so it masked this.
+    renderOverlay();
+    await screen.findByTestId('library-overlay');
+    await waitFor(() => {
+      const libCalls = (api.get as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.replace(/\?.*$/, '').includes('/library/'));
+      expect(libCalls.length).toBeGreaterThanOrEqual(3); // native + recent + mounts
+      for (const url of libCalls) {
+        expect(url.startsWith('/library/')).toBe(true);  // bare path
+        expect(url).not.toMatch(/^\/api\/library/);       // never double-prefixed
+      }
+    });
+  });
+
+  it('NO api.get/api.post literal in the component carries a leading /api (covers search + AddFolder POST)', () => {
+    // Source-level net over ALL 5 calls — incl. the search GET and the AddFolder POST
+    // that jsdom cannot drive (Tauri dialog import fails → falls back to a toast).
+    // Reverting ANY of the 5 to `/api/library/*` makes one of these assertions RED.
+    // vitest cwd = desktop/ ; resolve the component relative to it.
+    const src = readFileSync(
+      resolve(process.cwd(), 'src/components/layout/LibraryOverlay.tsx'),
+      'utf8',
+    );
+    expect(src).not.toMatch(/api\.(get|post)\s*(<[^>]*>)?\s*\(\s*[`'"]\/api\/library/);
+    // and the two easy-to-regress calls are specifically bare
+    expect(src).toMatch(/api\.get\s*<[^>]*>\s*\(\s*`\/library\/search\?q=/);
+    expect(src).toMatch(/api\.post\s*<[^>]*>\s*\(\s*\n?\s*`\/library\/mounts\?path=/);
   });
 });
