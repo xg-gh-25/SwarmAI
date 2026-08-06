@@ -124,6 +124,23 @@ class TestBuildHealthMap:
         assert m["s_never"]["success_rate"] is None
         assert m["s_never"]["last_used"] is None
 
+    def test_bare_metrics_name_matches_prefixed_folder(self):
+        # Gate-2 HIGH (run_a85e6641): the metrics store records skill_name in BOTH formats
+        # — bare ("pdf", from the SDK tool_use input path) and s_-prefixed ("s_pdf", from the
+        # summary-parse path). The visible skill list is always folder_name ("s_pdf"). Without
+        # canonicalizing the join, a heavily-used skill recorded under the bare name would
+        # falsely fold to never_used. Verified against prod DB: 9 bare + 53 prefixed names live.
+        stats = [_stats(name="pdf", invocation_count=10, success_rate=1.0)]
+        m = build_health_map(stats, ["s_pdf"])
+        assert m["s_pdf"]["status"] == "healthy", "bare metrics name must match s_-prefixed folder"
+
+    def test_prefixed_metrics_name_still_matches_prefixed_folder(self):
+        # The other recording path (summary → "s_pdf") must ALSO match — canonicalization
+        # must not break the already-matching case.
+        stats = [_stats(name="s_autonomous-pipeline", invocation_count=10, success_rate=1.0)]
+        m = build_health_map(stats, ["s_autonomous-pipeline"])
+        assert m["s_autonomous-pipeline"]["status"] == "healthy"
+
 
 class TestHealthEndpointFailSafe:
     def test_health_endpoint_returns_map(self, client):

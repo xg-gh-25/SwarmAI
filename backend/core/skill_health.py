@@ -109,11 +109,22 @@ def build_health_map(
 
     ``success_rate``/``last_used`` are carried for the DETAIL drawer; the row uses only
     ``status`` (no raw counts on the scannable surface — R30#4).
+
+    NAME CANONICALIZATION (Gate-2 HIGH, run_a85e6641): the metrics store records
+    ``skill_name`` in BOTH formats — bare (``pdf``, from the SDK tool_use input path) and
+    ``s_``-prefixed (``s_pdf``, from the summary-parse path); the prod DB has both live.
+    The visible list is always ``folder_name`` (``s_pdf``). So the join is keyed on the
+    ``s_``-STRIPPED canonical name on BOTH sides — else a skill recorded under its bare
+    name would falsely fold to ``never_used`` despite heavy use. (Same canonicalization the
+    recorder already uses for eval JSONL — skill_metrics_hook ``removeprefix('s_')``.)
     """
-    by_name = {s.skill_name: s for s in all_stats}
+    def _canon(n: str) -> str:
+        return n[2:] if n.startswith("s_") else n
+
+    by_name = {_canon(s.skill_name): s for s in all_stats}
     result: dict[str, dict] = {}
     for name in skill_names:
-        stats = by_name.get(name)
+        stats = by_name.get(_canon(name))
         result[name] = {
             "status": fold_status(stats, staleness_days),
             "success_rate": stats.success_rate if stats else None,

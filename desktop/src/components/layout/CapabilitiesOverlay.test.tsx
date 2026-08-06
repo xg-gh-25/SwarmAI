@@ -127,8 +127,9 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
 
   it('renders a health dot per skill row once /skills/health resolves (lazy)', async () => {
     listSkills.mockResolvedValue(twoSkills);
+    // Health map is keyed by the exact folderName the backend returns (canonicalized
+    // server-side); the frontend just looks up by folderName. No underscore/hyphen dual key.
     const health: SkillHealthMap = {
-      s_deep_research: { status: 'healthy', success_rate: 0.9, last_used: '2026-08-06' },
       's_deep-research': { status: 'healthy', success_rate: 0.9, last_used: '2026-08-06' },
       's_narrative-writing': { status: 'never_used', success_rate: null, last_used: null },
     };
