@@ -264,6 +264,61 @@ export class MessageStore {
   }
 
   /**
+   * Guarded INITIAL-LOAD seed from a paginated DB fetch (OT01 rescue b, Scope B,
+   * run_2aea0237). Like replace() — a full Message[] initial load, phase-gated,
+   * invalidates in-flight reconciles — EXCEPT it applies the SAME persist-lag
+   * "more-complete-wins" rule the reconcile path uses: if the store already holds
+   * a SAME-ID last-assistant that is FULLER than the loaded one (a just-streamed
+   * answer the backend hasn't finished persisting → a shorter paginated row), the
+   * store's fuller content is preserved for that one message. This closes the
+   * source of TabView rescue (b) (TabView.tsx:301-303): `loadSessionMessages`
+   * (ChatPage.tsx) previously called `replace(formatted)` UNCONDITIONALLY, and
+   * several of its 6 call sites are NOT gated on an empty store (session-open,
+   * task-drag, active-restore) — so a persist-lagged shorter row could clobber a
+   * fuller store. Falls through to a plain replace when the store is empty or the
+   * load is not-shorter (the common case) — so it is a safe drop-in for replace()
+   * at the initial-load seam. NOT for the recovery path (reconcileTabFromDb keeps
+   * its unconditional replace by design — Gate-1: merging there would let a frozen
+   * partial survive).
+   */
+  seedFromLoad(messages: Message[]): void {
+    if (this._destroyed) return;
+    if (this._phase === 'streaming') {
+      console.warn('[MessageStore] seedFromLoad() called during streaming — ignored');
+      return;
+    }
+    // Guard the last-assistant against a persist-lagged shorter row.
+    const loaded = messages;
+    const prevLastAsst = [...this._messages].reverse().find((m) => m.role === 'assistant');
+    if (prevLastAsst) {
+      const loadedIdx = loaded.map((m, i) => (m.role === 'assistant' ? i : -1)).filter((i) => i >= 0).pop();
+      if (loadedIdx !== undefined) {
+        const loadedLastAsst = loaded[loadedIdx];
+        // Correlate store↔load last-assistant by exact id OR client_id — MIRRORS the
+        // reconcile path (_applyMerge:846-895). The just-streamed store bubble carries
+        // a client-side id `${clientId}-asst` while the persist-lagged DB row arrives
+        // under its real UUID with metadata.client_id set. Exact-id-only matching
+        // (Gate-2 catch, run_2aea0237) silently misses the PRE-rename race — the common
+        // one — and clobbers the fuller store content. Match if: same id, OR the load's
+        // client_id points at the store bubble's id, OR both carry the same client_id.
+        const loadedCid = loadedLastAsst.metadata?.client_id;
+        const prevCid = prevLastAsst.metadata?.client_id;
+        const sameMsg =
+          loadedLastAsst.id === prevLastAsst.id ||
+          (!!loadedCid && (loadedCid === prevLastAsst.id || loadedCid === prevCid));
+        // store fuller → keep the store's complete content for that one message
+        if (sameMsg && MessageStore._textLen(prevLastAsst) > MessageStore._textLen(loadedLastAsst)) {
+          const merged = loaded.slice();
+          merged[loadedIdx] = MessageStore._mergePreservingInteractive(loadedLastAsst, prevLastAsst);
+          this.replace(merged);
+          return;
+        }
+      }
+    }
+    this.replace(loaded);
+  }
+
+  /**
    * Remove messages matching a predicate. Always succeeds.
    * Used for: cancel queued, remove orphans, cleanup.
    */

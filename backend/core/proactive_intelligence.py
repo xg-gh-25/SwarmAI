@@ -1716,7 +1716,7 @@ def _extract_jobs_summary() -> dict[str, Any]:
 
 
 def _extract_working_items(workspace: Path) -> list[dict]:
-    """Extract actionable work items from morning-inbox, morning-reflect, channel-monitor.
+    """Extract actionable work items from morning-reflect, channel-monitor.
 
     Parses RADAR_TODOS JSON blocks from job result markdown files.
     Falls back to extracting "Urgent" section items from morning-reflect.
@@ -1731,8 +1731,8 @@ def _extract_working_items(workspace: Path) -> list[dict]:
     if not results_dir.is_dir():
         return items
 
-    # Try morning-inbox RADAR_TODOS first (structured JSON)
-    for job_id in ("morning-inbox", "morning-reflect", "channel-monitor"):
+    # Parse RADAR_TODOS blocks (structured JSON) from job results
+    for job_id in ("morning-reflect", "channel-monitor"):
         result_file = results_dir / f"{today_str}-{job_id}.md"
         if not result_file.exists():
             # Try yesterday

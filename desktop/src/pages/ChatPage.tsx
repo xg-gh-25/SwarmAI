@@ -511,8 +511,13 @@ export default function ChatPage() {
           tab.messages = formattedMessages;
           // Seed the store too — keep store and tabState.messages in sync so the
           // store→React sync effect doesn't later clobber React with an empty
-          // snapshot on the next tab switch.
-          messageStoreRegistry.getOrCreate(currentTabId).replace(formattedMessages);
+          // snapshot on the next tab switch. seedFromLoad (NOT replace): several of
+          // loadSessionMessages's call sites are not gated on an empty store
+          // (session-open/task-drag/active-restore), so a persist-lagged shorter
+          // paginated row must NOT clobber a fuller just-streamed last-assistant
+          // already in the store — the source of TabView rescue (b). (OT01 Scope B,
+          // run_2aea0237; more-complete-wins guard reused from the reconcile path.)
+          messageStoreRegistry.getOrCreate(currentTabId).seedFromLoad(formattedMessages);
         }
       }
     } catch (error) {
