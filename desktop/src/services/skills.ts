@@ -12,7 +12,7 @@
  */
 import api from './api';
 import { getApiBaseUrl } from './tauri';
-import type { Skill, SkillCreateRequest, StreamEvent } from '../types';
+import type { Skill, SkillCreateRequest, SkillHealthMap, StreamEvent } from '../types';
 
 // Request type for skill generation with agent
 export interface SkillGenerateWithAgentRequest {
@@ -30,11 +30,12 @@ export const toCamelCase = (data: Record<string, unknown>): Skill => {
     name: (data.name as string) ?? '',
     description: (data.description as string) || '',
     version: (data.version as string) || '1.0.0',
-    sourceTier: (data.source_tier as 'built-in' | 'user' | 'plugin') || 'user',
+    sourceTier: (data.source_tier as 'built-in' | 'ddd' | 'user' | 'plugin') || 'user',
     readOnly: (data.read_only as boolean) ?? false,
     content: data.content as string | undefined,
     category: (data.category as string) || 'Utilities',
     visibility: (data.visibility as 'public' | 'internal') || 'public',
+    tier: (data.tier as 'always' | 'lazy') || 'lazy',
   };
 };
 
@@ -49,6 +50,15 @@ export const skillsService = {
   async get(folderName: string): Promise<Skill> {
     const response = await api.get<Record<string, unknown>>(`/skills/${folderName}`);
     return toCamelCase(response.data);
+  },
+
+  // Per-skill qualitative health status (Capabilities panel scannable dot, run_a85e6641).
+  // LAZY-loaded separately from list() so the skill list renders instantly; the caller
+  // is responsible for fail-safe (catch → render no dots) — the backend already returns
+  // {} rather than 500 on any metrics-DB error.
+  async getHealth(): Promise<SkillHealthMap> {
+    const response = await api.get<SkillHealthMap>('/skills/health');
+    return response.data ?? {};
   },
 
   // Create a new user skill

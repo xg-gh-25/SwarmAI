@@ -8,9 +8,34 @@
  *   • signature skills are pulled into heroes (not double-rendered as rows);
  *   • Internal is ordered LAST.
  */
-import { describe, it, expect } from 'vitest';
-import { groupSkills, orderedCategories } from './CapabilitiesOverlay';
-import type { Skill } from '../../types';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { groupSkills, orderedCategories, CapabilitiesContent } from './CapabilitiesOverlay';
+import type { Skill, SkillHealthMap } from '../../types';
+
+// jsdom lacks ResizeObserver.
+class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
+(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+const listSkills = vi.fn();
+const getHealth = vi.fn();
+vi.mock('../../services/skills', () => ({
+  skillsService: {
+    list: () => listSkills(),
+    getHealth: () => getHealth(),
+  },
+}));
+const listAllMcp = vi.fn(() => Promise.resolve([]));
+vi.mock('../../services/mcpConfig', () => ({
+  mcpConfigService: {
+    listAll: () => listAllMcp(),
+    updateCatalogEntry: vi.fn(),
+    updateDevEntry: vi.fn(),
+  },
+}));
+vi.mock('../../services/api', () => ({
+  classifyLoadError: (_e: unknown, ctx: string) => `${ctx} failed`,
+}));
 
 function skill(partial: Partial<Skill> & { folderName: string }): Skill {
   return {
@@ -21,6 +46,7 @@ function skill(partial: Partial<Skill> & { folderName: string }): Skill {
     readOnly: true,
     category: 'Utilities',
     visibility: 'public',
+    tier: 'lazy',
     ...partial,
   };
 }
@@ -85,5 +111,63 @@ describe('groupSkills — fail-safe (§5)', () => {
     const { heroes, groups } = groupSkills([]);
     expect(heroes).toEqual([]);
     expect(groups).toEqual([]);
+  });
+});
+
+describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (run_a85e6641)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  const twoSkills: Skill[] = [
+    skill({ folderName: 's_deep-research', category: 'Research', tier: 'always' }),
+    skill({ folderName: 's_narrative-writing', category: 'Writing', tier: 'lazy' }),
+  ];
+
+  it('renders a health dot per skill row once /skills/health resolves (lazy)', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    const health: SkillHealthMap = {
+      s_deep_research: { status: 'healthy', success_rate: 0.9, last_used: '2026-08-06' },
+      's_deep-research': { status: 'healthy', success_rate: 0.9, last_used: '2026-08-06' },
+      's_narrative-writing': { status: 'never_used', success_rate: null, last_used: null },
+    };
+    getHealth.mockResolvedValue(health);
+
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+
+    // List renders first (from list()), independent of health.
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    // Dots light up after the lazy health fetch resolves.
+    await waitFor(() => {
+      expect(screen.getByTestId('cap-health-s_deep-research')).toBeTruthy();
+      expect(screen.getByTestId('cap-health-s_narrative-writing')).toBeTruthy();
+    });
+    expect(screen.getByTestId('cap-health-s_narrative-writing').getAttribute('data-status')).toBe('never_used');
+  });
+
+  it('FAIL-SAFE: health fetch REJECTS → rows still render, NO dot, no crash', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    getHealth.mockRejectedValue(new Error('network down'));
+
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+
+    // The skill list is fully usable even though health failed.
+    await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
+    // Give the rejected health promise a tick to settle.
+    await waitFor(() => expect(getHealth).toHaveBeenCalled());
+    // No dot rendered for a row when health is absent (fail-safe).
+    expect(screen.queryByTestId('cap-health-s_deep-research')).toBeNull();
+    // Row is still present + clickable.
+    expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy();
+  });
+
+  it('renders a faint tier marker per row (always/lazy)', async () => {
+    listSkills.mockResolvedValue(twoSkills);
+    getHealth.mockResolvedValue({});
+    render(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('cap-tier-s_deep-research')).toBeTruthy());
+    expect(screen.getByTestId('cap-tier-s_deep-research').getAttribute('data-tier')).toBe('always');
+    expect(screen.getByTestId('cap-tier-s_narrative-writing').getAttribute('data-tier')).toBe('lazy');
   });
 });

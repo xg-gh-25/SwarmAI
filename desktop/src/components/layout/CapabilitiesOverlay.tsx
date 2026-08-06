@@ -19,9 +19,18 @@
  *                   connectionType/config JSON is NOT here (it lives in Settings'
  *                   advanced path); this view is about "is this tool on?".
  *
+ * SCANNABLE SIGNALS (run_a85e6641): each skill row carries a HEALTH dot (the one standout —
+ * 🟢 healthy / 🔴 low_success / 🟡 stale / ⚪️ never_used) and a FAINT tier marker (⚡ always /
+ * 💤 lazy, deliberately muted so it never competes with the dot). Health is LAZY-loaded in a
+ * SEPARATE effect from the skill list and is FAIL-SAFE: a rejected/slow /api/skills/health
+ * leaves rows fully rendered + clickable with NO dot — it never blocks or crashes the list.
+ * MCP rows carry an honest connected(enabled)/available(off) dot — NO auth/liveness state is
+ * fabricated (ConfigEntry has none). never_used dots surface dead skills as a retire signal.
+ *
  * DETAIL DRAWER: clicking a skill row opens an absolute right-side drawer (layered,
  * NOT a flex sibling — the list never compresses). It carries the plain description,
- * the trigger phrase, and THEN the demoted dev metadata (tier / version / folder).
+ * the trigger phrase, and THEN the demoted dev metadata (load-tier / version / health
+ * detail incl. success-rate + last-used / folder id).
  *
  * CTAs (bottom): "Teach Swarm a new skill" (dispatches the AI-native create flow to a
  * chat tab — the preferred path) and "Connect a tool" (Connections view). Create-skill
@@ -38,8 +47,23 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { skillsService } from '../../services/skills';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import { classifyLoadError } from '../../services/api';
-import type { Skill } from '../../types';
+import type { Skill, SkillHealthMap, SkillHealthStatus } from '../../types';
 import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+
+/** Health dot presentation — the ONE scannable standout (Von Restorff). Qualitative only;
+ *  no raw counts on the row (R30#4). Keyed by the qualitative status the backend folds. */
+const HEALTH_DOT: Record<SkillHealthStatus, { color: string; label: string }> = {
+  healthy: { color: 'var(--color-success, #4ade80)', label: 'Healthy — recently used, succeeding' },
+  low_success: { color: 'var(--color-danger, #f87171)', label: 'Low success rate' },
+  stale: { color: 'var(--color-warning, #fbbf24)', label: 'Stale — not used recently' },
+  never_used: { color: 'var(--color-border-strong)', label: 'Never used — candidate to retire' },
+};
+
+/** Faint tier marker — deliberately muted so it does NOT compete with the health dot. */
+const TIER_MARK: Record<'always' | 'lazy', { icon: string; label: string }> = {
+  always: { icon: '⚡', label: 'Always loaded' },
+  lazy: { icon: '💤', label: 'Lazy — loaded on use' },
+};
 
 export interface CapabilitiesContentProps {
   /** Land a prompt into a chat tab (used by "Teach Swarm a new skill"). Returns true
@@ -99,6 +123,9 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Skill | null>(null);
+  // Health is LAZY + independent of the skill list: it loads in its own effect and its
+  // failure NEVER blocks/crashes the list (fail-safe). Absent key → no dot for that row.
+  const [health, setHealth] = useState<SkillHealthMap>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,6 +146,34 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
   // load() is a stable useCallback (deps []); depending on it here fetches once on mount.
   useEffect(() => { void load(); }, [load]);
+
+  // LAZY + FAIL-SAFE health fetch — SEPARATE from load() so the skill list is never
+  // coupled to it. A rejection is swallowed (rows just render no dot); it never throws,
+  // never blocks the list, never 500s the panel (backend also returns {} on error).
+  useEffect(() => {
+    let alive = true;
+    skillsService
+      .getHealth()
+      .then((h) => { if (alive) setHealth(h); })
+      .catch(() => { if (alive) setHealth({}); });
+    return () => { alive = false; };
+  }, []);
+
+  const dotFor = useCallback((s: Skill) => {
+    const st = health[s.folderName]?.status;
+    if (!st || !(st in HEALTH_DOT)) return null; // fail-safe: absent → no dot
+    const d = HEALTH_DOT[st];
+    return (
+      <span
+        data-testid={`cap-health-${s.folderName}`}
+        data-status={st}
+        title={d.label}
+        aria-label={d.label}
+        className="inline-block w-2 h-2 rounded-full shrink-0 mt-1.5"
+        style={{ background: d.color }}
+      />
+    );
+  }, [health]);
 
   // Search filters the visible skill set; grouping + hero extraction happen after.
   const visibleSkills = useMemo(() => {
@@ -247,8 +302,20 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                       onClick={() => setSelected(s)}
                       className="text-left flex items-start gap-2 px-2 py-2 rounded-md hover:bg-[var(--color-hover)] min-w-0"
                     >
+                      {/* Health dot — the ONE standout (lazy, fail-safe: absent → nothing) */}
+                      {dotFor(s)}
                       <span className="text-[var(--color-text)] text-sm font-medium truncate">{s.name}</span>
-                      <span className="text-xs text-[var(--color-text-faint)] truncate">{s.description}</span>
+                      <span className="text-xs text-[var(--color-text-faint)] truncate min-w-0">{s.description}</span>
+                      {/* Faint tier marker — muted, does NOT compete with the health dot */}
+                      <span
+                        data-testid={`cap-tier-${s.folderName}`}
+                        data-tier={s.tier}
+                        title={TIER_MARK[s.tier]?.label ?? s.tier}
+                        aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
+                        className="ml-auto shrink-0 text-[10px] text-[var(--color-text-faint)] opacity-50"
+                      >
+                        {TIER_MARK[s.tier]?.icon ?? ''}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -286,7 +353,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           </button>
         ) : (
           <span className="text-[11px] text-[var(--color-text-faint)]">
-            A greyed connection means auth expired (e.g. Midway) — re-auth from the tool's Enable button.
+            A greyed connection is turned off — toggle it on to connect. (Auth/liveness is not shown here.)
           </span>
         )}
       </div>
@@ -309,6 +376,15 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               <div className="pt-3 border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-faint)] font-mono space-y-1">
                 <div>source: {selected.sourceTier}</div>
                 <div>version: {selected.version}</div>
+                <div>load: {selected.tier}{selected.tier === 'always' ? ' (at startup)' : ' (on use)'}</div>
+                {health[selected.folderName] && (
+                  <div>health: {health[selected.folderName].status}
+                    {typeof health[selected.folderName].success_rate === 'number'
+                      ? ` · ${Math.round((health[selected.folderName].success_rate as number) * 100)}% success`
+                      : ''}
+                    {health[selected.folderName].last_used ? ` · last used ${health[selected.folderName].last_used}` : ''}
+                  </div>
+                )}
                 <div>id: {selected.folderName}</div>
                 {selected.visibility === 'internal' && <div className="text-[var(--color-text-muted)]">🔒 internal (owner-only)</div>}
               </div>
@@ -339,6 +415,15 @@ function ConnGroup({
       </h2>
       {entries.map((m) => (
         <div key={m.id} className="flex items-center gap-3 px-2 py-3 rounded-md hover:bg-[var(--color-hover)]">
+          {/* Honest status dot: connected(enabled)=green / available(off)=muted. ConfigEntry
+              carries NO live-auth signal, so NO auth/expired state is fabricated (R30#4). */}
+          <span
+            data-testid={`cap-conn-dot-${m.id}`}
+            data-status={m.enabled ? 'connected' : 'available'}
+            aria-label={m.enabled ? 'connected' : 'available'}
+            className="inline-block w-2 h-2 rounded-full shrink-0"
+            style={{ background: m.enabled ? 'var(--color-success, #4ade80)' : 'var(--color-border-strong)' }}
+          />
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{m.name}</div>
             {m.description && <div className="text-xs text-[var(--color-text-faint)] truncate">{m.description}</div>}

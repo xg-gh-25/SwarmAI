@@ -75,12 +75,23 @@ export interface Skill {
   name: string;
   description: string;
   version: string;
-  sourceTier: 'built-in' | 'user' | 'plugin';
+  sourceTier: 'built-in' | 'ddd' | 'user' | 'plugin';  // 'ddd' = DDD-owned domain skill (backend has it; was missing here)
   readOnly: boolean;        // true for built-in and plugin
   content?: string;         // only present in detail endpoint
   category: string;         // user-facing group (Capabilities domain); 'Utilities' fallback
   visibility: 'public' | 'internal';  // internal = owner-only (backend-filtered for non-owner)
+  tier: 'always' | 'lazy';  // load tier (Capabilities panel faint marker); 'lazy' fallback
 }
+
+// Skill health (Capabilities panel scannable dot, run_a85e6641). Qualitative status only
+// on the row (no raw counts — R30#4); success_rate/last_used are for the detail drawer.
+export type SkillHealthStatus = 'healthy' | 'low_success' | 'never_used' | 'stale';
+export interface SkillHealth {
+  status: SkillHealthStatus;
+  success_rate: number | null;
+  last_used: string | null;
+}
+export type SkillHealthMap = Record<string, SkillHealth>;  // keyed by folderName
 
 export interface SkillCreateRequest {
   folderName: string;
