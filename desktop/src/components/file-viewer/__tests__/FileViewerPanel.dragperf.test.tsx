@@ -72,6 +72,8 @@ const STABLE = {
   muted: false,
   onToggleMute: () => {},
   referencedFiles: { written: [] },
+  collapse: { railed: false, outputsCollapsed: false },
+  setCollapse: () => {},
 };
 
 function setInnerWidth(px: number) {

@@ -48,6 +48,10 @@ const STABLE = {
   onToggleMute: () => {},
   referencedFiles: { written: [] },
   tabScopeKey: 'tab-1',
+  // Bug 2: stable collapse view-object + setter (mirrors useCanvasHost's memoized
+  // `collapse` + useCallback `setCollapse` — the real call site's stability contract).
+  collapse: { railed: false, outputsCollapsed: false },
+  setCollapse: () => {},
 };
 
 beforeEach(() => {

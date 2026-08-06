@@ -72,6 +72,46 @@ describe('useCanvasHost — per-tab Canvas state (bug2)', () => {
     expect(result.current.muted).toBe(false); // A was never muted; B's mute must not bleed
   });
 
+  it('keeps collapse state (railed/outputsCollapsed) independent per tab and restores on switch-back', () => {
+    // Bug 2: railed/outputsCollapsed were panel-local + GLOBAL localStorage, and the
+    // panel never remounts on tab switch → collapse state bled across all chat tabs.
+    // They now live in the per-tab slice via setCollapse.
+    let tabId = 'A';
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: tabId } },
+    );
+
+    // Tab A: rail the Canvas + fold the outputs list
+    act(() => result.current.setCollapse({ railed: true, outputsCollapsed: true }));
+    expect(result.current.collapse.railed).toBe(true);
+    expect(result.current.collapse.outputsCollapsed).toBe(true);
+
+    // Switch to tab B → B has its own (un-collapsed) Canvas, A's collapse does NOT bleed
+    tabId = 'B';
+    rerender({ t: tabId });
+    expect(result.current.collapse.railed).toBe(false);
+    expect(result.current.collapse.outputsCollapsed).toBe(false);
+
+    // Switch back to A → A's collapse state restored, not lost
+    tabId = 'A';
+    rerender({ t: tabId });
+    expect(result.current.collapse.railed).toBe(true);
+    expect(result.current.collapse.outputsCollapsed).toBe(true);
+  });
+
+  it('setCollapse is a referentially stable callback (memo-safe for FileViewerPanel)', () => {
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'A' } },
+    );
+    const first = result.current.setCollapse;
+    // A re-render that does NOT change activeTabId must keep the same setCollapse ref
+    // (else FileViewerPanel's load-bearing memo breaks → keystroke re-render / input lag).
+    rerender({ t: 'A' });
+    expect(result.current.setCollapse).toBe(first);
+  });
+
   it('manual open (swarm:open-canvas) sets manuallyOpen on the active tab only', () => {
     const { result, rerender } = renderHook(
       ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),

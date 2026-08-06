@@ -29,6 +29,8 @@ const baseProps = {
   muted: false,
   onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
+  collapse: { railed: false, outputsCollapsed: false },
+  setCollapse: vi.fn(),
 };
 
 const { MIN_WIDTH, MAX_WIDTH, STORAGE_KEY, DEFAULT_FRACTION } = PANEL_CONSTANTS;

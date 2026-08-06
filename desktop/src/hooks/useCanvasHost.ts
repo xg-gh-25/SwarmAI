@@ -27,7 +27,7 @@
  *
  * @exports useCanvasHost
  */
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface } from './useCanvasAutoSurface';
 import { useReferencedFiles, countOutputs, type GroupedReferencedFiles } from './useReferencedFiles';
@@ -62,6 +62,16 @@ interface CanvasTabState {
    *  In-memory per session (NOT persisted) — outputCount itself is session-scoped, and a
    *  reload legitimately re-surfaces "here's what this tab produced" (lastSeen resets to 0). */
   lastSeenOutputCount: number;
+  /** Whether the whole Canvas is collapsed to the thin vertical rail (Bug 2). Per-tab:
+   *  the panel does NOT remount on tab switch (tabScopeKey, not React key), so this used
+   *  to be panel-local useState + a GLOBAL localStorage key → collapsing tab A's Canvas
+   *  left tab B collapsed too. In the slice it restores/clears per tab like file/pinned.
+   *  In-memory (NOT persisted): a transient view pref — matches the sanctioned pattern
+   *  (run_6fb6708c: move the drifting field INTO the container, don't reset()). */
+  railed: boolean;
+  /** Whether ONLY the output LIST is folded (panel keeps full width). Per-tab, same
+   *  bleed + fix as railed (Bug 2). In-memory. */
+  outputsCollapsed: boolean;
 }
 
 const EMPTY: CanvasTabState = {
@@ -70,7 +80,19 @@ const EMPTY: CanvasTabState = {
   muted: false,
   manuallyOpen: false,
   lastSeenOutputCount: 0,
+  railed: false,
+  outputsCollapsed: false,
 };
+
+/** The per-tab collapse view-state the panel reads (Bug 2). `expanded`/`width` are
+ *  deliberately NOT here — they are a coupled panel-GLOBAL sizing preference (width is
+ *  a high-frequency rAF drag target; expanded snaps width to max + restores via a
+ *  preExpand ref). Lifting expanded per-tab while width stays global corrupts the
+ *  restore (Gate-1 finding), so only the two true collapse flags are per-tab. */
+export interface CanvasCollapse {
+  railed: boolean;
+  outputsCollapsed: boolean;
+}
 
 export interface UseCanvasHostArgs {
   /** Active tab id — the per-tab Map key. Stable per tab (exists before the
@@ -102,6 +124,12 @@ export interface CanvasHostApi {
   /** outputCount at the last time this tab's Canvas was open (run_9dd59523). The pill
    *  shows only when outputCount > this, so it stops nagging once outputs are reviewed. */
   lastSeenOutputCount: number;
+  /** The active tab's collapse view-state (railed / outputsCollapsed) — Bug 2. Read
+   *  by FileViewerPanel; stable across a keystroke render (mirrors the slice). */
+  collapse: CanvasCollapse;
+  /** Patch the active tab's collapse state (Bug 2). useCallback-stable — FileViewerPanel
+   *  is memo'd on referentially-stable props, so this MUST NOT be a fresh fn per render. */
+  setCollapse: (p: Partial<CanvasCollapse>) => void;
   setFile: (f: CanvasFile | null) => void;
   setPinned: (v: boolean) => void;
   setMuted: (v: boolean) => void;
@@ -154,6 +182,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     setSlice(next);
   }, [activeTabId]);
 
+  const setCollapse = useCallback((p: Partial<CanvasCollapse>) => patch(p), [patch]);
   const setFile = useCallback((f: CanvasFile | null) => patch({ file: f }), [patch]);
   const setPinned = useCallback((v: boolean) => patch({ pinned: v }), [patch]);
   const setMuted = useCallback((v: boolean) => patch({ muted: v }), [patch]);
@@ -166,6 +195,15 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const close = useCallback(() => patch({ file: null, manuallyOpen: false }), [patch]);
 
   const isOpen = !!(slice.file || slice.manuallyOpen);
+
+  // Stable collapse view-object for the memo'd panel: a fresh {railed, outputsCollapsed}
+  // literal every render would defeat FileViewerPanel's load-bearing memo (keystroke
+  // re-render → input lag). Memoize on the two primitive fields so identity only
+  // changes when a value actually changes.
+  const collapse = useMemo<CanvasCollapse>(
+    () => ({ railed: slice.railed, outputsCollapsed: slice.outputsCollapsed }),
+    [slice.railed, slice.outputsCollapsed],
+  );
 
   // ── Mark outputs "seen" while Canvas is open (run_9dd59523, Gate-1 #3) ────────
   // The ChatHeader pill shows only when outputCount > lastSeenOutputCount. Two rules:
@@ -349,6 +387,8 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     referencedFiles,
     outputCount,
     lastSeenOutputCount: slice.lastSeenOutputCount,
+    collapse,
+    setCollapse,
     setFile,
     setPinned,
     setMuted,

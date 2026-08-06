@@ -3411,6 +3411,10 @@ export default function ChatPage() {
             muted={canvas.muted}
             onToggleMute={canvas.toggleMute}
             referencedFiles={canvas.referencedFiles}
+            // Bug 2: per-tab collapse state (railed/outputsCollapsed) — stable refs
+            // (memoized slice + useCallback) so the load-bearing memo below is intact.
+            collapse={canvas.collapse}
+            setCollapse={canvas.setCollapse}
           />
         )}
 

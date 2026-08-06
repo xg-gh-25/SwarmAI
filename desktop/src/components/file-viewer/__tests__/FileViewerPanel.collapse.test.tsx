@@ -1,19 +1,29 @@
 /**
- * FileViewerPanel two-level collapse (v6 Canvas redesign, run_09431085).
+ * FileViewerPanel two-level collapse (v6 Canvas redesign, run_09431085;
+ * per-tab lift run_5f5e7675 / Bug 2).
  *
  * (1) caret in the OUTPUTS bar folds ONLY the output list (panel stays full width;
- *     list is mounted-but-hidden so counts stay live). Persists to localStorage
- *     'canvasOutputsCollapsed'.
+ *     list is mounted-but-hidden so counts stay live).
  * (2) window "Collapse Canvas" rails the WHOLE panel to a thin vertical strip
  *     ([data-testid=canvas-rail]) showing 'Canvas · Outputs'; clicking the strip
- *     expands back. Persists to 'canvasRailed'. This is NOT the removed bug6 dock
- *     (a stunted half-panel) — it's an explicit clickable rail with an expand icon.
+ *     expands back. This is NOT the removed bug6 dock (a stunted half-panel) — it's
+ *     an explicit clickable rail with an expand icon.
+ *
+ * Bug 2: railed/outputsCollapsed used to be panel-local useState + GLOBAL localStorage
+ * (canvasRailed/canvasOutputsCollapsed), which bled across chat tabs (the panel never
+ * remounts on tab switch). They are now PER-TAB, owned by useCanvasHost's CanvasTabState
+ * slice and passed in via the `collapse` prop + written via `setCollapse`. So this file
+ * asserts the PANEL's controlled behavior: it renders from `collapse` and calls
+ * `setCollapse` with the right patch on each toggle. The per-tab ISOLATION + restore
+ * (the actual bleed fix) is covered in useCanvasHost.test.ts.
  *
  * FileViewer + CanvasOutputRail are leaf-stubbed.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { useState, useCallback } from 'react';
 import FileViewerPanel from '../FileViewerPanel';
+import type { CanvasCollapse } from '../../../hooks/useCanvasHost';
 
 vi.mock('../FileViewer', () => ({ default: () => <div data-testid="file-viewer-stub" /> }));
 vi.mock('../CanvasOutputRail', () => ({
@@ -21,7 +31,6 @@ vi.mock('../CanvasOutputRail', () => ({
 }));
 
 const baseProps = {
-  // run_26aa6caa: rail scope key is the owning tabId (tabScopeKey), not sessionId.
   tabScopeKey: 'tab-1',
   onClose: vi.fn(),
   pinned: false,
@@ -31,11 +40,45 @@ const baseProps = {
   referencedFiles: { written: [] },
 };
 
-beforeEach(() => localStorage.clear());
+/** Controlled harness — mirrors the ChatPage/useCanvasHost seam: holds the per-tab
+ *  collapse state and passes it + a stable setCollapse down, so a toggle actually
+ *  re-renders the panel with the new collapse value (like the real slice does). */
+function Controlled({
+  initial = { railed: false, outputsCollapsed: false },
+  initialFile,
+  onCollapseChange,
+  tabScopeKey = 'tab-1',
+}: {
+  initial?: CanvasCollapse;
+  initialFile?: { filePath: string; fileName: string };
+  onCollapseChange?: (c: CanvasCollapse) => void;
+  tabScopeKey?: string;
+}) {
+  const [collapse, setC] = useState<CanvasCollapse>(initial);
+  const setCollapse = useCallback((p: Partial<CanvasCollapse>) => {
+    setC((prev) => {
+      const next = { ...prev, ...p };
+      onCollapseChange?.(next);
+      return next;
+    });
+  }, [onCollapseChange]);
+  return (
+    <FileViewerPanel
+      {...baseProps}
+      tabScopeKey={tabScopeKey}
+      initialFile={initialFile}
+      collapse={collapse}
+      setCollapse={setCollapse}
+    />
+  );
+}
 
-describe('FileViewerPanel — two-level collapse (v6)', () => {
-  it('caret folds only the output list (panel + bar stay), and persists', () => {
-    render(<FileViewerPanel {...baseProps} />);
+beforeEach(() => vi.clearAllMocks());
+
+describe('FileViewerPanel — two-level collapse (v6, per-tab props)', () => {
+  it('caret folds only the output list (panel + bar stay); calls setCollapse', () => {
+    const onCollapseChange = vi.fn();
+    render(<Controlled onCollapseChange={onCollapseChange} />);
     // List visible initially.
     expect(screen.getByTestId('canvas-outputs-list').className).not.toContain('hidden');
     fireEvent.click(screen.getByTestId('canvas-outputs-caret'));
@@ -43,34 +86,33 @@ describe('FileViewerPanel — two-level collapse (v6)', () => {
     expect(screen.getByTestId('canvas-outputs-list').className).toContain('hidden');
     expect(screen.getByTestId('canvas-region-outputs')).toBeTruthy();
     expect(screen.getByTestId('file-viewer-panel')).toBeTruthy();
-    expect(localStorage.getItem('canvasOutputsCollapsed')).toBe('1');
+    expect(onCollapseChange).toHaveBeenCalledWith({ railed: false, outputsCollapsed: true });
   });
 
-  it('restores the folded-list state from localStorage on mount', () => {
-    localStorage.setItem('canvasOutputsCollapsed', '1');
-    render(<FileViewerPanel {...baseProps} />);
+  it('renders the folded-list state from the collapse prop', () => {
+    render(<Controlled initial={{ railed: false, outputsCollapsed: true }} />);
     expect(screen.getByTestId('canvas-outputs-list').className).toContain('hidden');
   });
 
-  it('Collapse Canvas rails the whole panel to a vertical strip; clicking it expands back', () => {
-    render(<FileViewerPanel {...baseProps} />);
+  it('Collapse Canvas rails the whole panel; clicking the rail expands back; setCollapse called both ways', () => {
+    const onCollapseChange = vi.fn();
+    render(<Controlled onCollapseChange={onCollapseChange} />);
     // Full panel: no rail, region-outputs present.
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
     fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
     // Railed: the vertical strip is shown, the full OUTPUTS region is gone.
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
     expect(screen.queryByTestId('canvas-region-outputs')).toBeNull();
-    expect(localStorage.getItem('canvasRailed')).toBe('1');
+    expect(onCollapseChange).toHaveBeenCalledWith({ railed: true, outputsCollapsed: false });
     // Click the rail → expand back to full panel.
     fireEvent.click(screen.getByTestId('canvas-rail'));
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
     expect(screen.getByTestId('canvas-region-outputs')).toBeTruthy();
-    expect(localStorage.getItem('canvasRailed')).toBe('0');
+    expect(onCollapseChange).toHaveBeenLastCalledWith({ railed: false, outputsCollapsed: false });
   });
 
-  it('restores the railed state from localStorage on mount', () => {
-    localStorage.setItem('canvasRailed', '1');
-    render(<FileViewerPanel {...baseProps} />);
+  it('renders the railed state from the collapse prop on mount', () => {
+    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} />);
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
   });
 
@@ -78,82 +120,89 @@ describe('FileViewerPanel — two-level collapse (v6)', () => {
     // The rail strip shows counts.total, but CanvasOutputRail is the only source
     // of counts. If it unmounts when railed, a file written while collapsed would
     // not update the strip (self-suppressing-count class, IMPROVEMENT.md:7).
-    localStorage.setItem('canvasRailed', '1');
-    render(<FileViewerPanel {...baseProps} />);
+    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} />);
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
     // The rail (counts source) is still in the tree, just visually hidden.
     expect(screen.getByTestId('rail-stub')).toBeTruthy();
   });
 
   it('does NOT re-introduce the bug6 200px collapsed dock', () => {
-    render(<FileViewerPanel {...baseProps} />);
+    render(<Controlled />);
     expect(screen.queryByTestId('file-viewer-panel-collapsed')).toBeNull();
   });
 
   // ── un-rail on new file arrival (run_83bc289d) ──
-  // Bug: user rails Canvas to a strip, then clicks a new file → Canvas stayed
-  // railed (railed is panel-local + localStorage-persisted, nothing reset it on
-  // a new file). A new file arriving IS the "I want to see this" intent → un-rail.
+  // Bug: user rails Canvas to a strip, then a new file arrives → Canvas must un-rail
+  // (a new file IS the "I want to see this" intent). Now that railed is per-tab, this
+  // must fire ONLY on a same-tab new-file transition, NOT on a tab switch (which also
+  // changes the file but must preserve the incoming tab's restored railed state).
   const FILE_A = { filePath: '/ws/a.md', fileName: 'a.md' };
   const FILE_B = { filePath: '/ws/b.md', fileName: 'b.md' };
 
-  it('un-rails when a NEW file arrives while railed (the reported bug)', () => {
-    // Reach `railed` via a MANUAL collapse, NOT localStorage+mount-with-file — the
-    // latter setup depended on the run_ca6ae4e7 seed bug (mount-with-file used to
-    // stay railed), which is now fixed, so that setup would un-rail on mount and
-    // never establish the railed precondition (PIT21: a setup encoding old behavior).
-    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+  it('un-rails when a NEW file arrives while railed (same tab — the reported bug)', () => {
+    // One Controlled instance (same tabScopeKey), internal collapse state. Rail via the
+    // button (state→railed:true), then a DIFFERENT file arrives via a new initialFile
+    // prop → the un-rail effect fires (same tab, path changed) → setCollapse({railed:false}).
+    const { rerender } = render(
+      <Controlled initial={{ railed: false, outputsCollapsed: false }} initialFile={FILE_A} />,
+    );
     fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-    // A DIFFERENT file arrives → Canvas auto-expands.
-    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_B} />);
+    // Same tab, new file → auto-expand (initialFile IS a live prop, so this changes it).
+    rerender(<Controlled initial={{ railed: false, outputsCollapsed: false }} initialFile={FILE_B} />);
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
-    expect(screen.getByTestId('canvas-content-column')).toBeTruthy();
-    // localStorage cleared too, so a cold reload isn't stuck railed.
-    expect(localStorage.getItem('canvasRailed')).toBe('0');
   });
 
-  it('un-rails on a FRESH mount that ALREADY has a file while railed=1 (the cold-mount seed bug)', () => {
-    // run_ca6ae4e7: the panel unmounts when isOpen goes false (canvas.close /
-    // nav away) while canvasRailed=1 persists. A later swarm:open-file flips
-    // isOpen true → the panel remounts FRESH with initialFile ALREADY set. The
-    // un-rail effect must still fire — but with prevFileRef seeded to the current
-    // file it saw selectedPath===prev on mount and no-op'd, leaving the just-
-    // opened file stranded as a 38px strip (observed live via ui_action open).
-    // Seeding prevFileRef=undefined makes undefined→file a real transition → un-rail.
-    localStorage.setItem('canvasRailed', '1');
-    render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
+  it('un-rails on a fresh mount that ALREADY has a file while railed=1 (cold-mount seed bug)', () => {
+    // run_ca6ae4e7: a remount with initialFile set + railed must still reveal the file
+    // (prevFileRef/prevRailTabRef seeded so undefined→file on the SAME tab is a real
+    // transition). The un-rail calls setCollapse({railed:false}).
+    const onCollapseChange = vi.fn();
+    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} initialFile={FILE_A} onCollapseChange={onCollapseChange} />);
     // Opening a file IS the intent to see it — must reveal, not strip.
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
     expect(screen.getByTestId('canvas-content-column')).toBeTruthy();
-    expect(localStorage.getItem('canvasRailed')).toBe('0');
+    expect(onCollapseChange).toHaveBeenCalledWith({ railed: false, outputsCollapsed: false });
   });
 
   it('STAYS railed on a fresh mount with NO file (manual-open-no-file preference honored)', () => {
-    // The undefined-seed fix must NOT over-fire: mounting railed with no file
-    // (a manual rail with no open document) has selectedPath===undefined, so the
-    // `selectedPath && ...` guard is falsy → it must NOT auto-un-rail.
-    localStorage.setItem('canvasRailed', '1');
-    render(<FileViewerPanel {...baseProps} />);
+    // The undefined-seed fix must NOT over-fire: mounting railed with no file has
+    // selectedPath===undefined, so the `selectedPath && ...` guard is falsy.
+    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} />);
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
   });
 
-  it('does NOT un-rail on a re-render with the SAME file (no false-trigger)', () => {
-    // Reach railed via manual collapse while viewing FILE_A (not the old
-    // localStorage+mount-with-file setup — see PIT21 note above).
-    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
-    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn')); // re-rail deliberately
-    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-    // A re-render with the SAME file (e.g. parent re-render) must NOT pop it open.
-    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
-    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-  });
-
-  it('un-rails after the user manually rails, then opens a different file', () => {
-    const { rerender } = render(<FileViewerPanel {...baseProps} initialFile={FILE_A} />);
-    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
-    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-    rerender(<FileViewerPanel {...baseProps} initialFile={FILE_B} />);
+  it('does NOT un-rail on a TAB SWITCH that restores a railed tab (Bug 2 — per-tab railed preserved)', () => {
+    // The key Bug-2 regression guard: a tab switch changes BOTH tabScopeKey AND the
+    // restored file, but the incoming tab's railed state must survive (NOT be popped
+    // open by the un-rail effect — Gate-1 finding). Harness mirrors useCanvasHost:
+    // a per-tab collapse map, switching activeTab restores that tab's slice.
+    const perTab: Record<string, CanvasCollapse> = {
+      'tab-A': { railed: false, outputsCollapsed: false },
+      'tab-B': { railed: true, outputsCollapsed: false }, // tab B was left railed
+    };
+    const perTabFile: Record<string, { filePath: string; fileName: string }> = {
+      'tab-A': FILE_A,
+      'tab-B': FILE_B,
+    };
+    function SwitchHarness({ activeTab }: { activeTab: string }) {
+      return (
+        <FileViewerPanel
+          {...baseProps}
+          tabScopeKey={activeTab}
+          initialFile={perTabFile[activeTab]}
+          collapse={perTab[activeTab]}
+          setCollapse={(p) => { perTab[activeTab] = { ...perTab[activeTab], ...p }; }}
+        />
+      );
+    }
+    const { rerender } = render(<SwitchHarness activeTab="tab-A" />);
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
+    // Switch to tab-B: tabScopeKey changes AND the restored collapse is railed=true.
+    // The un-rail effect must see tabSwitched=true and NOT un-rail → stays railed.
+    rerender(<SwitchHarness activeTab="tab-B" />);
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
+    // And tab B's railed state was NOT written to false by an un-rail.
+    expect(perTab['tab-B'].railed).toBe(true);
   });
 });

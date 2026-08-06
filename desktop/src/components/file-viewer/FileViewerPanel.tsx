@@ -15,6 +15,7 @@ import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
+import type { CanvasCollapse } from '../../hooks/useCanvasHost';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 
 export const PANEL_CONSTANTS = {
@@ -74,8 +75,11 @@ function responsiveDefaultWidth(): number {
 
 /** Width of the collapsed vertical rail (whole panel → a thin clickable strip). */
 const RAIL_WIDTH = 38;
-const OUTPUTS_COLLAPSED_KEY = 'canvasOutputsCollapsed';
-const RAILED_KEY = 'canvasRailed';
+// railed / outputsCollapsed are NO LONGER panel-local + global-localStorage (Bug 2:
+// that bled collapse state across all chat tabs because the panel never remounts on
+// tab switch). They now live in the per-tab CanvasTabState slice, passed in via the
+// `collapse` prop + written via `setCollapse`. The former canvasRailed /
+// canvasOutputsCollapsed localStorage keys are DELETED.
 
 function getStoredWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
@@ -95,11 +99,6 @@ function getStoredWidth(): number {
   );
 }
 
-function getStoredBool(key: string): boolean {
-  if (typeof window === 'undefined') return false;
-  return localStorage.getItem(key) === '1';
-}
-
 /**
  * Build the count tooltip / expanded-count words from the new/modified split.
  * Pure — unit-tested. Omits a zero part; returns "" when both are 0 so an
@@ -112,12 +111,6 @@ export function canvasCountTitle(neu: number, upd: number): string {
   if (neu > 0) parts.push(`${neu} new`);
   if (upd > 0) parts.push(`${upd} modified`);
   return parts.join(', ');
-}
-
-function setStoredBool(key: string, val: boolean): void {
-  try {
-    localStorage.setItem(key, val ? '1' : '0');
-  } catch { /* quota — no-op */ }
 }
 
 type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
@@ -134,6 +127,13 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
    *  panel no longer hosts the swarm:file-changed listener, so a write that lands
    *  while this panel is unmounted (Canvas closed) is still captured upstream. */
   referencedFiles: GroupedReferencedFiles;
+  /** Per-tab collapse view-state (Bug 2): railed / outputsCollapsed, owned by the
+   *  per-tab CanvasTabState slice in useCanvasHost. Was panel-local useState + global
+   *  localStorage → bled across tabs (the panel never remounts on tab switch). */
+  collapse: CanvasCollapse;
+  /** Patch the active tab's collapse state (Bug 2). Must be referentially stable —
+   *  this component is memo'd on stable props (see the memo note at the bottom). */
+  setCollapse: (p: Partial<CanvasCollapse>) => void;
 };
 
 function FileViewerPanelImpl({
@@ -142,6 +142,8 @@ function FileViewerPanelImpl({
   muted,
   onToggleMute,
   referencedFiles,
+  collapse,
+  setCollapse,
   ...props
 }: FileViewerPanelProps) {
   // Rail scope key = the owning TAB id (run_26aa6caa). props.tabScopeKey (the same
@@ -224,13 +226,13 @@ function FileViewerPanelImpl({
   //     rotated "Canvas · Outputs" + count; click the strip to expand. This is
   //     NOT the removed bug6 dock (a stunted HALF-panel that read as broken) — it
   //     is an intentional, obviously-clickable rail with a clear expand affordance.
-  const [outputsCollapsed, setOutputsCollapsed] = useState(() => getStoredBool(OUTPUTS_COLLAPSED_KEY));
-  const [railed, setRailed] = useState(() => getStoredBool(RAILED_KEY));
-  const toggleOutputs = useCallback(() => {
-    setOutputsCollapsed((v) => { const n = !v; setStoredBool(OUTPUTS_COLLAPSED_KEY, n); return n; });
-  }, []);
-  const collapseToRail = useCallback(() => { setRailed(true); setStoredBool(RAILED_KEY, true); }, []);
-  const expandFromRail = useCallback(() => { setRailed(false); setStoredBool(RAILED_KEY, false); }, []);
+  // railed / outputsCollapsed are now PER-TAB (Bug 2): read from the `collapse` prop
+  // (the active tab's CanvasTabState slice), written via `setCollapse`. No panel-local
+  // useState, no localStorage — so collapsing tab A's Canvas no longer bleeds to tab B.
+  const { railed, outputsCollapsed } = collapse;
+  const toggleOutputs = useCallback(() => setCollapse({ outputsCollapsed: !outputsCollapsed }), [setCollapse, outputsCollapsed]);
+  const collapseToRail = useCallback(() => setCollapse({ railed: true }), [setCollapse]);
+  const expandFromRail = useCallback(() => setCollapse({ railed: false }), [setCollapse]);
 
   // The file shown in Region B — drives the accent left-bar on its output row.
   const selectedPath = props.initialFile?.filePath;
@@ -238,46 +240,40 @@ function FileViewerPanelImpl({
   // ── Un-rail on new file arrival (run_83bc289d) ──
   // A new file reaching Canvas — user click (swarm:open-file) OR agent auto-surface
   // — is an explicit "I want to see this" intent, so a railed (collapsed-to-strip)
-  // Canvas must expand to show it. `railed` is panel-local + localStorage-persisted
-  // and nothing reset it on a new file, so a collapsed Canvas stayed a strip and the
-  // file landed MOUNTED-but-hidden (the reported bug). Guard with prevFileRef so this
-  // fires ONLY on a transition to a DIFFERENT non-empty path — never on a re-render
-  // with the same file (which would fight a deliberate manual re-rail). Clear the
-  // localStorage flag too, else a cold reload restores the strip. (Mirrors the
-  // prevInitialFileRef pattern in FileViewer.tsx.)
-  // BENIGN EXTRA TRIGGER (adversarial review, run_83bc289d): `railed` is panel-local
-  // + a single global localStorage key (NOT per-tab — same as `expanded`), so a
-  // TAB SWITCH also changes selectedPath (useCanvasHost restores the incoming tab's
-  // file) and thus un-rails. Accepted, not fixed: railed was ALWAYS global (no
-  // per-tab rail memory to regress), and this only ever REVEALS content (never hides
-  // it) — so an extra click to re-rail is the worst case. Gating on a tab-switch-vs-
-  // -new-file signal would add a mechanism to guard a benign edge (C042); not worth it.
-  // Seed UNDEFINED, not selectedPath (run_ca6ae4e7 root fix). The panel unmounts
-  // when isOpen goes false (canvas.close / nav away) while canvasRailed=1 persists;
-  // a later swarm:open-file flips isOpen true → the panel REMOUNTS FRESH with
-  // initialFile ALREADY set. Seeding prevFileRef=selectedPath made that mount see
-  // selectedPath===prev on the first effect run → no-op → the just-opened file was
-  // stranded as a railed strip (observed live). Undefined makes undefined→file a
-  // real transition, so opening a file (the "I want to see this" intent) always
-  // reveals. A fresh mount with NO file has selectedPath===undefined → the
-  // `selectedPath && …` guard stays falsy → a manual rail-with-no-file is honored.
+  // Canvas must expand to show it. Nothing else resets `railed` on a new file, so a
+  // collapsed Canvas would otherwise stay a strip and the file land MOUNTED-but-hidden.
+  // Guard with prevFileRef so this fires ONLY on a transition to a DIFFERENT non-empty
+  // path — never on a re-render with the same file (which would fight a deliberate
+  // manual re-rail). (Mirrors the prevInitialFileRef pattern in FileViewer.tsx.)
+  //
+  // ⚠️ TAB-SWITCH GUARD (Bug 2 — now that `railed` is PER-TAB): a chat-tab switch
+  // ALSO changes selectedPath (useCanvasHost restores the incoming tab's file) AND
+  // railTabId. Before railed was per-tab this un-rail-on-switch was a documented-benign
+  // extra trigger; now it would DESTROY the incoming tab's RESTORED railed state (Gate-1
+  // finding). So: if railTabId changed, this is a tab-switch (restore), NOT a new-file
+  // intent → do NOT un-rail; just sync the refs to the restored state. Only a same-tab
+  // path change is a genuine "open this file" intent that un-rails.
+  //
+  // Seed UNDEFINED, not selectedPath (run_ca6ae4e7 root fix). The panel unmounts when
+  // isOpen goes false (canvas.close / nav away); a later swarm:open-file remounts it
+  // FRESH with initialFile ALREADY set. Seeding prevFileRef=selectedPath made that mount
+  // see selectedPath===prev → no-op → the just-opened file stranded as a railed strip.
+  // Undefined makes undefined→file a real transition → opening a file always reveals.
   const prevFileRef = useRef<string | undefined>(undefined);
+  const prevRailTabRef = useRef<string | undefined>(railTabId);
   useEffect(() => {
-    // PRIMARY gate: the `[selectedPath]` dep — a primitive-string dep means this
-    // effect only runs when the path actually CHANGES, so a same-file parent
-    // re-render never reaches here (that is what protects a deliberate manual
-    // re-rail from being popped open; Gate-2 adversarial confirmed the dep, not
-    // the `!==` below, is what the same-file-re-render test exercises).
-    // DEFENSE (kept intentionally, not redundant-to-delete): the `!== prevFileRef`
-    // check fails-safe if this effect is ever re-run for an UNCHANGED path (a future
-    // added dep, a StrictMode/remount edge) — without it, such a re-run would wrongly
-    // un-rail a Canvas the user just collapsed. Cheap, self-documenting, zero-cost.
-    if (selectedPath && selectedPath !== prevFileRef.current) {
-      setRailed(false);
-      setStoredBool(RAILED_KEY, false);
+    const tabSwitched = railTabId !== prevRailTabRef.current;
+    // Un-rail ONLY on a genuine same-tab new-file transition. A tab switch that
+    // happens to change selectedPath must NOT un-rail (it would clobber the incoming
+    // tab's restored per-tab railed state). A same-file re-render also must not
+    // (prevFileRef guard). On a fresh mount railTabId===prev (ref seeded from it) so
+    // tabSwitched is false → opening a file on mount still reveals (cold-mount seed fix).
+    if (!tabSwitched && selectedPath && selectedPath !== prevFileRef.current) {
+      setCollapse({ railed: false });
     }
     prevFileRef.current = selectedPath;
-  }, [selectedPath]);
+    prevRailTabRef.current = railTabId;
+  }, [selectedPath, railTabId, setCollapse]);
 
   // Panel-local output counts (neu/upd BREAKDOWN) published by the rail — drives the
   // header summary line + the collapsed-rail "N files · M new" display. This is

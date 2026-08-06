@@ -37,6 +37,8 @@ const baseProps = {
   muted: false,
   onToggleMute: vi.fn(),
   referencedFiles: { written: [] },
+  collapse: { railed: false, outputsCollapsed: false },
+  setCollapse: vi.fn(),
 };
 
 describe('FileViewerPanel — control redesign (bug6)', () => {

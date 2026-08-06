@@ -63,6 +63,8 @@ function Harness() {
           muted={false}
           onToggleMute={vi.fn()}
           referencedFiles={{ written: [] }}
+          collapse={{ railed: false, outputsCollapsed: false }}
+          setCollapse={() => {}}
         />
       )}
     </div>
@@ -123,6 +125,8 @@ function HarnessBoth() {
           muted={false}
           onToggleMute={vi.fn()}
           referencedFiles={{ written: [] }}
+          collapse={{ railed: false, outputsCollapsed: false }}
+          setCollapse={() => {}}
         />
       )}
     </div>
