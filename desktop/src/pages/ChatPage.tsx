@@ -63,7 +63,9 @@ import { OverlayHost } from '../components/layout/OverlayHost';
 // ToDo / Jobs & Runs / Pipeline / Pollinate + NewBrain overlays retired (M3+M4):
 // all migrated to the OverlayHost registry (overlaySurfaces.tsx); dispatch reaches
 // them via the ctx bridge (setOverlayCtxBridge below).
-import { resolveResumeTarget, type ResumeTabInfo } from './chat/resumeTarget';
+import { type ResumeTabInfo } from './chat/resumeTarget';
+import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
+import { dispatchInjectChatInput } from './chat/injectChatInput';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
 import { useRadarAttention } from '../hooks/useRadarAttention';
@@ -1150,58 +1152,96 @@ export default function ChatPage() {
   // dispatches to the same tab before send can't silently overwrite each other
   // (Gate-1 HIGH). Each entry filled exactly once (filled flag).
 
+  // Shared landing helpers (run_754fe3e8): the 3 handlers below used to each
+  // re-implement build-tabs → resolveResumeTarget → toast → draft-guard. That
+  // prefix now lives in the PURE classifyLanding (pages/chat/landPromptInTab.ts);
+  // this thin wrapper turns a `blocked` verdict into the ONE toast per reason
+  // (streaming gets its own text), parametrized only by the action verb.
+  const tabsSnapshot = useCallback((): ResumeTabInfo[] =>
+    Array.from(tabMapRef.current.values()).map((t) => ({
+      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
+    })), [tabMapRef]);
+
+  const landingToast = useCallback((v: Extract<LandingVerdict, { kind: 'blocked' }>, verb: string): void => {
+    let message: string;
+    if (v.reason === 'draft') {
+      message = `This tab has an unsent draft — send or clear it, or open a new tab, then ${verb}.`;
+    } else if (v.reason === 'busy') {
+      // Never leak the raw machine status token (e.g. "permission_needed") to the
+      // user. Map to a human phrase + the right action. A completed/errored tab is
+      // NOT "busy" and cannot be "finished" — it just needs closing/replacing.
+      switch (v.busyStatus) {
+        case 'streaming':
+          message = `The current tab is still streaming a response — wait for it to finish (or close a tab), then ${verb}.`;
+          break;
+        case 'waiting_input':
+          message = `The current tab is waiting for your input — answer or close it (or open a new tab), then ${verb}.`;
+          break;
+        case 'permission_needed':
+          message = `The current tab is waiting for a permission decision — resolve or close it (or open a new tab), then ${verb}.`;
+          break;
+        case 'complete_unread':
+          message = `The current tab has an unread response — open a new tab (or close this one), then ${verb}.`;
+          break;
+        case 'error':
+          message = `The current tab is in an error state — close it (or open a new tab), then ${verb}.`;
+          break;
+        default:
+          message = `The current tab is busy — finish or close it (or open a new tab), then ${verb}.`;
+      }
+    } else { // cap
+      message = `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for one to finish), then ${verb}.`;
+    }
+    addToast({ severity: 'warning', message, autoDismiss: true });
+  }, [addToast, maxTabsInfo.chatMax]);
+
+  const activeTabHasDraft = useCallback((): boolean =>
+    inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0,
+    [inputValueRef, attachmentsRef]);
+
   // Dispatch a todo into a chat tab: land via the shared resolver (newtab /
   // reuse-current / needs-close — never focus, a todo is new work), inject its
   // text (not auto-sent), write the dead snapshot, and (when the tab already has
   // a session) set dispatched_session_id now; else defer to first-send backfill.
   // Returns true if it landed (caller auto-closes the overlay), false on needs-close.
-  const handleDispatchTodo = useCallback((todo: ToDo): boolean => {
-    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
-      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
-    }));
-    // A sentinel sessionId that never matches an open tab → dispatch never takes
-    // the `focus` branch (a todo has no existing session to focus).
-    const decision = resolveResumeTarget(`__dispatch__${todo.id}`, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
-
-    if (decision.action === 'needs-close') {
-      addToast({
-        severity: 'warning',
-        message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for it to finish), then Dispatch.`,
-        autoDismiss: true,
-      });
-      return false;
-    }
-
-    let targetTabId: string;
-    if (decision.action === 'reuse-current') {
-      // Gate-2 HIGH: reuse-current CLEARS the active idle tab. If it holds a draft
-      // (typed input or attachments), clearing would silently lose the user's work.
-      // isReusableIdle only guards against in-flight streaming, NOT draft state — so
-      // guard it here: refuse + toast rather than destroy a draft. (The active tab's
-      // live draft is inputValueRef / attachmentsRef.)
-      const hasDraft = inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0;
-      if (hasDraft) {
-        addToast({
-          severity: 'warning',
-          message: 'This tab has an unsent draft — send or clear it, or open a new tab, then Dispatch.',
-          autoDismiss: true,
-        });
-        return false;
+  // Execute a fresh-work landing verdict (dispatch = new work, so mode is only ever
+  // reuse or newtab — focus is impossible for a sentinel key). Seeds the target tab
+  // empty and returns its id, or null if a newtab race lost the last slot. Shared by
+  // the two dispatch handlers (todo + jobprompt); resume does NOT use this (its
+  // body loads a session, not an empty tab).
+  const setupDispatchTarget = useCallback(
+    (verdict: Extract<LandingVerdict, { kind: 'land' }>): string | null => {
+      if (verdict.mode === 'reuse') {
+        const targetTabId = verdict.tabId;
+        initTabState(targetTabId, []);
+        updateTabState(targetTabId, { sessionId: undefined });
+        setSessionId(undefined);
+        setMessages([]);
+        return targetTabId;
       }
-      targetTabId = decision.tabId;
-      initTabState(targetTabId, []);
-      updateTabState(targetTabId, { sessionId: undefined });
-      setSessionId(undefined);
-      setMessages([]);
-    } else { // newtab
+      // newtab
       const newTab = addTab(selectedAgentId || 'default');
       if (!newTab) {
         addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
-        return false;
+        return null;
       }
-      targetTabId = newTab.id;
-      initTabState(targetTabId, []);
-    }
+      initTabState(newTab.id, []);
+      return newTab.id;
+    },
+    [initTabState, updateTabState, setSessionId, setMessages, addTab, selectedAgentId, addToast],
+  );
+
+  const handleDispatchTodo = useCallback((todo: ToDo): boolean => {
+    // Sentinel key never matches an open session → focus branch unreachable (a todo
+    // is new work). Dispatch opts INTO the draft guard (reuse would clobber a draft).
+    const verdict = classifyLanding(
+      `__dispatch__${todo.id}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
+      { hasDraft: activeTabHasDraft(), applyDraftGuard: true },
+    );
+    if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
+
+    const targetTabId = setupDispatchTarget(verdict);
+    if (targetTabId == null) return false;
 
     const tabIdx = openTabsRef.current.findIndex((t) => t.id === targetTabId);
     const tabLabel = `Tab ${tabIdx >= 0 ? tabIdx + 1 : openTabsRef.current.length}`;
@@ -1212,9 +1252,7 @@ export default function ChatPage() {
     // a rich packet and got a one-line title. Now we assemble the whole packet so
     // the agent lands with all context. Falls back to just the title when there's
     // no linked context (parity with old behavior for a bare todo).
-    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
-      detail: { text: buildDispatchPrompt(todo), focus: true, autoSend: false },
-    }));
+    dispatchInjectChatInput({ text: buildDispatchPrompt(todo), focus: true, autoSend: false });
     // Snapshot: tab_label + timestamp now; session_id now if the tab already has
     // one (reuse-current of a tab that previously sent), else backfill at send.
     void todosService.dispatch(todo.id, tabLabel, existingSid).catch(() => {/* non-fatal */});
@@ -1225,8 +1263,7 @@ export default function ChatPage() {
       dispatchPendingRef.current.push({ tabId: targetTabId, todoId: todo.id, tabLabel });
     }
     return true;
-  }, [tabMapRef, maxTabsInfo.chatMax, activeTabIdRef, addToast, initTabState, updateTabState,
-      setSessionId, setMessages, addTab, selectedAgentId]);
+  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, landingToast, setupDispatchTarget]);
 
   // Land an arbitrary prompt into a chat tab (Jobs & Runs overlay: create/pause/
   // edit/delete → chat, since s_job-manager owns user-jobs.yaml integrity).
@@ -1235,39 +1272,18 @@ export default function ChatPage() {
   // listener only sets the ACTIVE tab's input, it doesn't create/switch tabs.
   // So we resolve+activate a tab FIRST, THEN inject. Returns true if it landed.
   const handleDispatchJobPrompt = useCallback((prompt: string): boolean => {
-    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
-      id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming,
-    }));
-    const decision = resolveResumeTarget(`__jobprompt__${prompt.slice(0, 24)}`, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
-    if (decision.action === 'needs-close') {
-      addToast({ severity: 'warning', message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close one, then try again.`, autoDismiss: true });
-      return false;
-    }
-    if (decision.action === 'reuse-current') {
-      const hasDraft = inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0;
-      if (hasDraft) {
-        addToast({ severity: 'warning', message: 'This tab has an unsent draft — send or clear it, or open a new tab.', autoDismiss: true });
-        return false;
-      }
-      initTabState(decision.tabId, []);
-      updateTabState(decision.tabId, { sessionId: undefined });
-      setSessionId(undefined);
-      setMessages([]);
-    } else { // newtab
-      const newTab = addTab(selectedAgentId || 'default');
-      if (!newTab) {
-        addToast({ severity: 'warning', message: 'Could not open a new tab — all tabs are busy.', autoDismiss: true });
-        return false;
-      }
-      initTabState(newTab.id, []);
-    }
+    // Same fresh-work landing as todo (sentinel key, opt into the draft guard).
+    const verdict = classifyLanding(
+      `__jobprompt__${prompt.slice(0, 24)}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
+      { hasDraft: activeTabHasDraft(), applyDraftGuard: true },
+    );
+    if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
+
+    if (setupDispatchTarget(verdict) == null) return false;
     // Tab is now active — inject the prompt (not auto-sent; user reviews + sends).
-    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
-      detail: { text: prompt, focus: true, autoSend: false },
-    }));
+    dispatchInjectChatInput({ text: prompt, focus: true, autoSend: false });
     return true;
-  }, [tabMapRef, maxTabsInfo.chatMax, activeTabIdRef, addToast, initTabState, updateTabState,
-      setSessionId, setMessages, addTab, selectedAgentId, inputValueRef, attachmentsRef]);
+  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, landingToast, setupDispatchTarget]);
 
   // Resume a session from the History overlay into a chat tab (方案 B).
   // Pure decision (resolveResumeTarget) + real execution via handleTabSelect —
@@ -1275,29 +1291,21 @@ export default function ChatPage() {
   // streaming tab is never left in the old half-state. Returns whether it
   // landed; the overlay closes only on true (all-busy → toast + stay open).
   const handleResumeSession = useCallback((session: ChatSession): boolean => {
-    const tabs: ResumeTabInfo[] = Array.from(tabMapRef.current.values()).map((t) => ({
-      id: t.id,
-      sessionId: t.sessionId,
-      status: t.status,
-      isStreaming: t.isStreaming,
-    }));
-    const decision = resolveResumeTarget(session.id, tabs, maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined);
-
-    if (decision.action === 'needs-close') {
-      addToast({
-        severity: 'warning',
-        message: `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for it to finish), then Resume.`,
-        autoDismiss: true,
-      });
-      return false;
-    }
+    // Resume passes the REAL session id (can hit focus) and does NOT opt into the
+    // draft guard — it never had one, and adding it would change behavior (Gate-1).
+    const verdict = classifyLanding(
+      session.id, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
+      { hasDraft: false, applyDraftGuard: false },
+    );
+    if (verdict.kind === 'blocked') { landingToast(verdict, 'Resume'); return false; }
 
     // focus: the session is already open with its messages loaded — switching
     // to it goes through handleTabSelect (it IS in the captured openTabs).
-    if (decision.action === 'focus') {
-      void handleTabSelect(decision.tabId);
+    if (verdict.mode === 'focus') {
+      void handleTabSelect(verdict.tabId);
       return true;
     }
+    const decision = verdict; // mode: 'reuse' | 'newtab' — its own load-session body below
 
     // reuse / newtab: agent switch happens BEFORE we activate, but AFTER the
     // decision — never leaving a streaming tab half-loaded (the old bug). We do
@@ -1323,7 +1331,7 @@ export default function ChatPage() {
     }
 
     let targetTabId: string;
-    if (decision.action === 'reuse-current') {
+    if (decision.mode === 'reuse') {
       // The active idle tab, cleared + reused (the only reuse we allow — never a
       // background idle tab with a different session; A2 Gate-1 CRITICAL fix).
       targetTabId = decision.tabId;
@@ -1363,9 +1371,9 @@ export default function ChatPage() {
       selectTab(targetTabId); // activeTabId change → sync effect loads the session
     }
     return true;
-  }, [tabMapRef, maxTabsInfo.chatMax, addToast, handleTabSelect, updateTabSessionId, addTab, initTabState,
-      selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion, selectedAgentId,
-      loadSessionMessages]);
+  }, [tabsSnapshot, tabMapRef, maxTabsInfo.chatMax, landingToast, addToast, handleTabSelect, updateTabSessionId,
+      addTab, initTabState, selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion,
+      selectedAgentId, loadSessionMessages]);
 
   // Publish ChatPage's tab-owned closures + agent scope to the OverlayHost bridge
   // (decision B): dispatch/resume/delete are ChatPage responsibilities (it owns the

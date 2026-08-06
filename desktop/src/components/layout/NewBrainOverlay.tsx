@@ -19,6 +19,7 @@
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
 import { useCallback, useState } from 'react';
+import { useOverlayDraft } from '../../hooks/useOverlayDraft';
 import {
   classifyStarterItem,
   buildBrainManifest,
@@ -71,6 +72,15 @@ interface RowItem extends StarterItem {
   displayKind: string;
 }
 
+/** The persisted draft shape for the New Brain form (useOverlayDraft). */
+interface BrainForm {
+  name: string;
+  governs: GovernsKind;
+  items: RowItem[];
+  draft: string;
+}
+const EMPTY_FORM: BrainForm = { name: '', governs: 'codebase', items: [], draft: '' };
+
 /**
  * NewBrainContent — the "grow a new brain" launcher content (M3: migrated to the
  * OverlayHost registry). Fresh, empty birth every open is now automatic: the host
@@ -80,12 +90,24 @@ interface RowItem extends StarterItem {
  * and `open` didn't observably transition on rapid reopen) is no longer needed.
  */
 export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
-  const [name, setName] = useState('');
-  const [governs, setGoverns] = useState<GovernsKind>('codebase');
-  const [items, setItems] = useState<RowItem[]>([]);
-  const [draft, setDraft] = useState('');
+  // Draft memory (run_754fe3e8): the overlay UNMOUNTS on close (OverlayHost
+  // renderedId→null), so component-local useState is destroyed — an accidental
+  // Esc used to discard everything. useOverlayDraft parks the form in a
+  // module-level in-memory store (NOT localStorage — items are local abs paths),
+  // restored on reopen, cleared ONLY on a successful dispatch (Esc/backdrop keep).
+  const [form, setForm, clearForm] = useOverlayDraft<BrainForm>('new-brain', EMPTY_FORM);
+  const { name, governs, items, draft } = form;
+  const setName = useCallback((v: string) => setForm((f) => ({ ...f, name: v })), [setForm]);
+  const setGoverns = useCallback((v: GovernsKind) => setForm((f) => ({ ...f, governs: v })), [setForm]);
+  const setItems = useCallback(
+    (up: RowItem[] | ((prev: RowItem[]) => RowItem[])) =>
+      setForm((f) => ({ ...f, items: typeof up === 'function' ? up(f.items) : up })),
+    [setForm],
+  );
+  const setDraft = useCallback((v: string) => setForm((f) => ({ ...f, draft: v })), [setForm]);
   // Guards against a second native dialog opening while one is already pending
   // (rapid double-click). Mirrors LibraryOverlay.AddFolderButton's `busy` flag.
+  // NOT part of the persisted draft — transient in-flight UI state.
   const [picking, setPicking] = useState(false);
 
   const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
@@ -97,7 +119,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
       const role = classifyStarterItem({ value, kind });
       return [...prev, { id: ++itemSeq, value, kind, role, displayKind: kind }];
     });
-  }, []);
+  }, [setItems]);
 
   const commitDraft = useCallback(() => {
     // Allow pasting several lines at once — one item per line.
@@ -146,7 +168,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
 
   const removeItem = useCallback((id: number) => {
     setItems((prev) => prev.filter((it) => it.id !== id));
-  }, []);
+  }, [setItems]);
 
   const cycleRole = useCallback((id: number) => {
     setItems((prev) =>
@@ -156,7 +178,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
           : it,
       ),
     );
-  }, []);
+  }, [setItems]);
 
   // Create: build ONE manifest → dispatch → close ONLY if it landed (F4: the
   // boolean guards the deferred close; a refusal keeps the launcher open).
@@ -175,8 +197,19 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
     } catch {
       landed = false;
     }
-    if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
-  }, [name, governs, items, onDispatch, close]);
+    if (landed) {
+      // Work handed off → discard the parked draft so the NEXT open is a fresh
+      // birth. A refusal (all tabs busy / draft guard) or a THROW keeps the draft
+      // so nothing is lost — only a successful landing clears (Esc/backdrop too keep).
+      // ORDER: close FIRST, clear AFTER (inside the same rAF chain). clearForm()
+      // runs setValueState(EMPTY_FORM) on the still-mounted surface — the host keeps
+      // it mounted ~300ms for the exit transition — so clearing BEFORE close would
+      // render the form empty and animate THAT blank state out (flash of empty form
+      // on a successful Create). Clearing after close() wipes the parked draft before
+      // any reopen without the visible form ever rendering empty during the fade.
+      requestAnimationFrame(() => requestAnimationFrame(() => { close(); clearForm(); }));
+    }
+  }, [name, governs, items, onDispatch, close, clearForm]);
 
   const onDropZoneDrop = useCallback(
     (e: React.DragEvent) => {

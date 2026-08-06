@@ -13,6 +13,7 @@ import { todosService } from '../../../services/todos';
 import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
 import { VoiceConversationIndicator } from '../../../components/chat/VoiceConversationIndicator';
 import type { VoiceConversationState } from '../../../hooks/useVoiceConversation';
+import { INJECT_CHAT_INPUT, type InjectChatInputDetail } from '../injectChatInput';
 
 /** The (value, width, expanded) triple that the textarea's wrapped height is a
  *  pure function of. applyHeight skips the forced-reflow measure when the current
@@ -289,7 +290,7 @@ export function ChatInput({
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const { text, focus, autoSend } = (e as CustomEvent<{ text: string; focus?: boolean; autoSend?: boolean }>).detail ?? {};
+      const { text, focus, autoSend } = (e as CustomEvent<InjectChatInputDetail>).detail ?? { text: '' };
       if (text) {
         onInputChange(text);
         // Sync to per-tab draft storage so the injected text survives tab switches
@@ -304,8 +305,8 @@ export function ChatInput({
         }
       }
     };
-    window.addEventListener('swarm:inject-chat-input', handler);
-    return () => window.removeEventListener('swarm:inject-chat-input', handler);
+    window.addEventListener(INJECT_CHAT_INPUT, handler);
+    return () => window.removeEventListener(INJECT_CHAT_INPUT, handler);
   }, [onInputChange, activeTabIdRef, inputValueMapRef]);
 
   // Phase 2: fire onSend after React has committed the input state update

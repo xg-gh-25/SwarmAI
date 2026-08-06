@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { NewBrainContent } from '../NewBrainOverlay';
+import { __resetOverlayDraftsForTest } from '../../../hooks/useOverlayDraft';
 
 // Native file-picker mock. NewBrainOverlay dynamic-imports @tauri-apps/plugin-dialog
 // (mirrors LibraryOverlay.AddFolderButton) — mock `open` so the picker buttons are
@@ -37,6 +38,9 @@ beforeEach(() => {
     return 0;
   });
   mockOpen.mockReset();
+  // The overlay draft store is module-level + process-lived by design (survives
+  // unmount so a reopen restores). That crosses test cases, so reset it per test.
+  __resetOverlayDraftsForTest();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -237,6 +241,50 @@ describe('NewBrainOverlay', () => {
     // empty-state prompt is still shown — nothing was added
     expect(screen.getByTestId('new-brain-overlay')).toBeTruthy();
     expect(screen.queryByText(/^\//)).toBeNull(); // no absolute-path item rendered
+  });
+
+  // ── Draft memory (AC6) — reopen restores; successful dispatch clears ──
+
+  it('draft memory: name + items survive an unmount → remount (accidental close does not lose work)', async () => {
+    const first = renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme Payments' } });
+    const input = screen.getByTestId('new-brain-material-input');
+    fireEvent.change(input, { target: { value: 'github.com/acme/payments' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByText('github.com/acme/payments');
+    // Simulate Esc/backdrop close = the OverlayHost unmounts the surface.
+    first.unmount();
+
+    // Reopen: a fresh mount must restore the parked draft.
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).value).toBe('Acme Payments');
+    expect(screen.getByText('github.com/acme/payments')).toBeTruthy();
+  });
+
+  it('draft memory: a SUCCESSFUL dispatch clears the draft → next open is empty', async () => {
+    const first = renderContent(() => true); // onDispatch returns true = landed
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByTestId('new-brain-create'));
+    first.unmount();
+
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).value).toBe(''); // cleared
+  });
+
+  it('draft memory: a FAILED dispatch (onDispatch false) PRESERVES the draft', async () => {
+    const first = renderContent(() => false); // all tabs busy = not landed
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Keep Me' } });
+    fireEvent.click(screen.getByTestId('new-brain-create'));
+    first.unmount();
+
+    renderContent(() => false);
+    await screen.findByTestId('new-brain-overlay');
+    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).value).toBe('Keep Me'); // preserved
   });
 
   it('busy-guard: a second click while the picker is still open does NOT open a second dialog', async () => {
