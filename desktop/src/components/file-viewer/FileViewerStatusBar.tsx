@@ -118,7 +118,9 @@ export default function FileViewerStatusBar({
             be closable (Bug 1). */}
         {(filePath || onClose) && (
           <>
-            <span className="opacity-40">&middot;</span>
+            {/* Separator only when there's a path-op (copy/attach) to separate FROM;
+                a close-only cluster (onClose, no filePath) needs no leading dot. */}
+            {filePath && <span className="opacity-40">&middot;</span>}
             {onAttach && filePath && (
               <button
                 onClick={onAttach}
