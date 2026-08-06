@@ -103,6 +103,59 @@ describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wi
     expect(asstText(store, 'cur-1')).toBe(COMPLETE);
   });
 
+  it('reconcile-tail MID-TURN CUT (#4 residual): a tail whose merged id DIFFERS from the local bubble id must NOT duplicate — client_id fallback matches', () => {
+    // THE SCENARIO external review flagged my tests missed: the backend persists
+    // ONE row per assistant SSE event, all carrying the SAME metadata.client_id
+    // ("<clientId>-asst"). The endpoint's _merge_consecutive_assistant_messages
+    // folds consecutive rows and uses the FIRST-IN-RESULT row's id as the bubble
+    // id. So a 50-row tail that cuts mid-turn (returns A3..A5 instead of A1..A5)
+    // yields a merged bubble with a DIFFERENT id (A3, not the full-load's A1) —
+    // BUT it still carries the same client_id, because every row does.
+    //
+    // The frontend bubble's id is `local-<clientId>-asst` (never renamed to any
+    // DB id). Matching is by CLIENT_ID (MessageStore:825-826), not by id — so the
+    // id change is irrelevant and the fallback still correlates → ONE bubble.
+    // If matching were id-based, this would produce two bubbles (the bug).
+    const clientLocalId = 'local-XYZ-asst';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg(clientLocalId, 'assistant', 'the complete streamed turn answer'));
+
+    // Tail-cut merged DB row: id is the mid-turn A3 (NOT clientLocalId), but the
+    // same client_id rides in metadata (every persisted row carried it).
+    const midTurnRow: ChatMessage = {
+      id: 'A3', sessionId: 'sess-1', role: 'assistant',
+      content: [{ type: 'text', text: 'the complete streamed turn answer' }] as any,
+      createdAt: new Date().toISOString(),
+      metadata: { client_id: 'local-XYZ-asst' } as any,
+    };
+    store.reconcile([midTurnRow]);
+
+    const assistants = store.messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(1); // NOT two — the residual duplicate does not occur
+  });
+
+  it('reconcile-tail MID-TURN CUT on a NO-client_id continuation turn: numeric placeholder dropped by H2, no duplicate', () => {
+    // The one path where client_id CANNOT rescue: continuation turns
+    // (continue_with_answer / continue_with_permission) persist assistant rows
+    // WITHOUT a client_id (session_router.py:2477/2501), and the frontend
+    // placeholder is a NUMERIC id (Date.now()+1). A tail cut here yields a merged
+    // DB row with a fresh mid-turn id and NO client_id — so neither id-match nor
+    // client_id fallback correlates. The H2 backstop (MessageStore:876-880) is
+    // the guard: a numeric-id assistant placeholder is dropped once a real DB
+    // assistant row exists (hasRealAssistant). A mid-turn cut still returns real
+    // non-empty rows → hasRealAssistant=true → placeholder dropped → ONE bubble.
+    const numericPlaceholderId = String(Date.now() + 1);
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg(numericPlaceholderId, 'assistant', 'continuation answer text'));
+
+    // tail-cut merged DB row: fresh mid-turn id, NO client_id (continuation path)
+    store.reconcile([makeChatMsg('A7', 'assistant', 'continuation answer text (canonical)')]);
+
+    const assistants = store.messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(1); // H2 drops the numeric placeholder — no dup
+    expect(assistants[0].id).toBe('A7'); // the canonical DB row is the surviving bubble
+  });
+
   it('churn across an async in-flight fetch: stale read loses, drained re-run with full DB lands (drive real _fetchAndReconcile)', async () => {
     // Couples the churn with the async fetch path: the first (in-flight) fetch
     // returns a STALE shorter row; a reconcile re-queues behind it; the drained
