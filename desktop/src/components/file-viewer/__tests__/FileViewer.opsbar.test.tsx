@@ -61,13 +61,16 @@ describe('FileViewer — non-text file-op cluster', () => {
     }
   });
 
-  it('html file (panel): status bar shows a Close button; clicking it closes the Canvas (onClose)', async () => {
-    // Bug 1: non-text files were unclosable in panel variant (no tab bar, header × only
-    // collapses). The status-bar close → FileViewer.handleCloseActive → last tab → onClose.
+  it('html file (panel): close is in the unified file-chrome header, NOT the status bar (run_f49d3ff3 R2)', async () => {
+    // R2 reclaimed the run_5f5e7675 status-bar close patch. Close is now ONE
+    // type-agnostic affordance in FileViewer's file-chrome header; clicking it →
+    // handleCloseActive → onClose (canvas.close) for a non-editor type.
     const onClose = vi.fn();
     render(<FileViewer {...base('deck.html')} onClose={onClose} />);
-    await waitFor(() => expect(screen.getByTestId('statusbar-close')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('statusbar-close'));
+    await waitFor(() => expect(screen.getByTestId('file-chrome-close')).toBeTruthy());
+    // The status bar no longer has a close.
+    expect(screen.queryByTestId('statusbar-close')).toBeNull();
+    fireEvent.click(screen.getByTestId('file-chrome-close'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

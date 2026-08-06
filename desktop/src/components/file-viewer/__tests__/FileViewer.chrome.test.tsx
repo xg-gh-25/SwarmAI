@@ -92,4 +92,36 @@ describe('FileViewer — chrome dedup (v6)', () => {
     render(<FileViewer {...base('pic.png')} />);
     await waitFor(() => expect(screen.getByTestId('file-viewer-statusbar-stub')).toBeTruthy());
   });
+
+  // ── R2 (run_f49d3ff3): unified type-agnostic file-chrome close header ──
+  // Every viewType shows ONE close in the panel's file-chrome header, regardless of
+  // whether it routes to FileEditorCore (text) or a lazy renderer (html/img/pdf/csv).
+  it.each([
+    ['app.ts', 'text→FileEditorCore'],
+    ['notes.md', 'markdown→FileEditorCore'],
+    ['icon.svg', 'svg→FileEditorCore'],
+    ['deck.html', 'html→HtmlRenderer'],
+    ['pic.png', 'image→ImageRenderer'],
+    ['doc.pdf', 'pdf→PdfRenderer'],
+    ['data.csv', 'csv→CsvRenderer'],
+    ['blob.bin', 'unsupported→UnsupportedRenderer'],
+  ])('shows the unified file-chrome close for %s (%s) in panel variant', async (fileName) => {
+    render(<FileViewer {...base(fileName)} />);
+    await waitFor(() => expect(screen.getByTestId('file-chrome-header')).toBeTruthy());
+    expect(screen.getByTestId('file-chrome-close')).toBeTruthy();
+  });
+
+  it('the unified close is PANEL-only — modal variant does NOT render the file-chrome header (amendment 3)', async () => {
+    render(<FileViewer {...base('deck.html')} variant="modal" />);
+    await waitFor(() => expect(screen.getByTestId('file-viewer-tabbar-stub')).toBeTruthy());
+    expect(screen.queryByTestId('file-chrome-header')).toBeNull();
+  });
+
+  it('non-editor type: clicking the unified close fires onClose directly (canvas.close)', async () => {
+    const onClose = vi.fn();
+    render(<FileViewer {...base('deck.html')} onClose={onClose} />);
+    await waitFor(() => expect(screen.getByTestId('file-chrome-close')).toBeTruthy());
+    screen.getByTestId('file-chrome-close').click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

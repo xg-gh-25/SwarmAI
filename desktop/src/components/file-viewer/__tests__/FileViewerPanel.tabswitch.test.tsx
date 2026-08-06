@@ -16,7 +16,7 @@
  * label is the bleed assertion handle.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import FileViewerPanel from '../FileViewerPanel';
 
@@ -80,25 +80,26 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe('Canvas cross-tab bleed (real FileViewer render path)', () => {
   it('opening a file on tab A then switching to tab B does NOT leave A\'s file showing', async () => {
     render(<Harness />);
-    // open alpha.md on tab A
+    // open alpha.md on tab A. NB: since run_f49d3ff3 R2, "alpha.md" appears in BOTH the
+    // unified file-chrome header AND the editor stub → use queryAllByText (multi-match).
     await act(async () => { screen.getByTestId('open-A').click(); });
-    await screen.findByText('alpha.md');   // tab strip shows it → Canvas open on A
+    await waitFor(() => expect(screen.queryAllByText('alpha.md').length).toBeGreaterThan(0)); // Canvas open on A
 
     // switch to tab B (B has no canvas file → panel should be gone / not showing alpha)
     await act(async () => { screen.getByTestId('to-B').click(); });
 
-    // THE BLEED: alpha.md must NOT be visible on tab B
-    expect(screen.queryByText('alpha.md')).toBeNull();
+    // THE BLEED: alpha.md must NOT be visible anywhere on tab B
+    expect(screen.queryAllByText('alpha.md')).toHaveLength(0);
   });
 
   it('BOTH tabs have a file: switching A→B shows ONLY B\'s file, never A\'s (the real bleed)', async () => {
     render(<HarnessBoth />);
     await act(async () => { screen.getByTestId('open-A').click(); });
-    await screen.findByText('alpha.md');
+    await waitFor(() => expect(screen.queryAllByText('alpha.md').length).toBeGreaterThan(0));
     await act(async () => { screen.getByTestId('open-B-and-switch').click(); });
     // On tab B: beta.md shows, alpha.md must be GONE (not lingering as a stale tab)
-    await screen.findByText('beta.md');
-    expect(screen.queryByText('alpha.md')).toBeNull();
+    await waitFor(() => expect(screen.queryAllByText('beta.md').length).toBeGreaterThan(0));
+    expect(screen.queryAllByText('alpha.md')).toHaveLength(0);
   });
 });
 

@@ -35,6 +35,7 @@ import type { FileTab } from './hooks/useFileViewerTabs';
 import FileViewerTabBar from './FileViewerTabBar';
 import FileViewerStatusBar from './FileViewerStatusBar';
 import FileEditorCore from '../common/FileEditorCore';
+import { fileIcon, fileIconColor } from '../../utils/fileUtils';
 import api from '../../services/api';
 
 /* ------------------------------------------------------------------ */
@@ -171,6 +172,19 @@ function FileViewerImpl({
   // so the fetch effect below (deps [filePath, viewType, …]) would NOT re-run on a
   // cache delete. Bumping this nonce is what actually forces the re-fetch.
   const [refetchNonce, setRefetchNonce] = useState(0);
+
+  /* ---- Unified close: closeSignal (run_f49d3ff3 R2) ---- */
+  // The type-agnostic file-chrome header (below) owns the ONE close affordance for
+  // ALL viewTypes. For editor types (text/md/svg → FileEditorCore) the close MUST go
+  // through FileEditorCore's existing unsaved-changes guard (handleCloseAttempt) — so
+  // instead of calling handleCloseActive directly (which would silently no-op a dirty
+  // tab, useFileViewerTabs:107), we bump this counter, passed to FileEditorCore, whose
+  // effect runs its guarded close. For non-editor types (read-only, never dirty) the
+  // header calls handleCloseActive directly. Gate-1 amendment 1: FileEditorCore is
+  // rendered with key={filePath} (below), so a tab switch REMOUNTS it fresh — a stale
+  // counter meant for tab A cannot fire on tab B (the new instance treats the current
+  // value as its mount baseline and the >0/skip-mount guard in FileEditorCore ignores it).
+  const [closeSignal, setCloseSignal] = useState(0);
 
   /* ---- workspaceId placeholder (FileEditorCore needs it) ---- */
   // The unified viewer does not depend on workspaceId for routing, but
@@ -599,6 +613,11 @@ function FileViewerImpl({
           onToggleMode={onToggleMode}
           onSaveWithDiff={onSaveWithDiff}
           onContentChange={handleContentChange}
+          // R2: the unified file-chrome header (panel) owns close. In panel variant
+          // FileEditorCore suppresses its OWN filename+close (keeps its control cluster),
+          // and the header's close bumps closeSignal → FileEditorCore runs its existing
+          // guarded close (handleCloseAttempt), so the unsaved-changes dialog is preserved.
+          closeSignal={closeSignal}
         />
       );
     }
@@ -661,6 +680,21 @@ function FileViewerImpl({
       activeTab.viewType === 'markdown' ||
       activeTab.viewType === 'svg');
 
+  // Editor types (FileEditorCore) are the ONLY ones that can be dirty; their close
+  // must run FileEditorCore's unsaved-guard. Non-editor renderers are read-only.
+  const isEditorType =
+    activeTab != null &&
+    (activeTab.viewType === 'text' ||
+      activeTab.viewType === 'markdown' ||
+      activeTab.viewType === 'svg');
+
+  // The ONE close affordance (run_f49d3ff3 R2, panel variant). Editor type → delegate
+  // to FileEditorCore's guarded close via closeSignal; non-editor → close directly.
+  const handleUnifiedClose = useCallback(() => {
+    if (isEditorType) setCloseSignal((n) => n + 1);
+    else handleCloseActive();
+  }, [isEditorType, handleCloseActive]);
+
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]">
       {/* Tab bar — the Canvas OUTPUTS list is the file selector in panel variant,
@@ -673,6 +707,48 @@ function FileViewerImpl({
           onSwitch={switchTab}
           onClose={handleCloseTab}
         />
+      )}
+
+      {/* Unified file-chrome header (run_f49d3ff3 R2) — the ONE type-agnostic close
+          affordance for EVERY viewType in the Canvas PANEL. Before this, close was
+          scattered: FileEditorCore's own header (text/md/svg), FileViewerStatusBar's
+          footer (the reclaimed run_5f5e7675 patch, html/img/pdf/csv), and NO close at
+          all in the panel's top chrome. Now every open file — regardless of type —
+          closes from here. PANEL-ONLY (Gate-1 amendment 3): the modal variant keeps its
+          tab-bar × + FileEditorCore's own header, so this row must NOT stack there. */}
+      {variant === 'panel' && activeTab && (
+        <div
+          className="flex items-center gap-2 px-3 h-9 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg)]"
+          data-testid="file-chrome-header"
+        >
+          <span
+            className="material-symbols-outlined text-[15px] leading-none shrink-0"
+            style={{ color: fileIconColor(activeTab.fileName) }}
+            aria-hidden="true"
+          >
+            {fileIcon(activeTab.fileName)}
+          </span>
+          <span className="text-[13px] font-medium truncate min-w-0 flex-1 text-[var(--color-text)]" title={activeTab.filePath}>
+            {activeTab.fileName}
+          </span>
+          {activeTab.isDirty && (
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] shrink-0"
+              title="Unsaved changes"
+              data-testid="file-chrome-dirty"
+              aria-label="Unsaved changes"
+            />
+          )}
+          <button
+            onClick={handleUnifiedClose}
+            className="shrink-0 p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            title="Close this file"
+            aria-label="Close file"
+            data-testid="file-chrome-close"
+          >
+            <span className="material-symbols-outlined text-[16px] leading-none">close</span>
+          </button>
+        </div>
       )}
 
       {/* Renderer area */}
@@ -709,12 +785,9 @@ function FileViewerImpl({
             if (onAttachToChat) onAttachToChat(item);
             else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
           }}
-          // Bug 1: non-text renderers (html/image/pdf/csv) have no footer of their
-          // own, so — unlike text/md/svg which close via FileEditorCore's footer —
-          // they had NO close affordance in panel variant (the header × collapses to
-          // the rail, it does not unmount; run_26aa6caa). Wire the SAME close FileEditorCore
-          // uses: handleCloseActive → closes the active tab → onClose (canvas.close) when last.
-          onClose={handleCloseActive}
+          // NOTE (run_f49d3ff3 R2): the status-bar close button (added run_5f5e7675)
+          // is REMOVED. Close is now a single type-agnostic affordance in the unified
+          // file-chrome header above — the status bar is info + copy/attach only again.
         />
       )}
     </div>

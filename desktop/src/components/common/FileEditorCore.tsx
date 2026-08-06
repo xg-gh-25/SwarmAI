@@ -37,6 +37,7 @@ import { useReviewMode } from '../../hooks/useReviewMode';
 import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
 import CommentPopover from './CommentPopover';
+import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 
 /**
  * Character-count ceiling above which O(n) main-thread text work is skipped to
@@ -99,6 +100,12 @@ export interface FileEditorCoreProps {
   /** Called on every content change so parent can track live edits.
    *  Used to preserve content across panel ↔ modal mode switches. */
   onContentChange?: (content: string) => void;
+  /** Imperative close trigger from a parent-owned header (run_f49d3ff3 R2). When this
+   *  counter INCREASES, FileEditorCore runs its OWN guarded close (handleCloseAttempt),
+   *  so the unsaved-changes dialog is reused (not reimplemented). Used by FileViewer's
+   *  unified file-chrome header in panel variant, where FileEditorCore's own filename+
+   *  close chrome is suppressed. Undefined/0 = no external close (mount baseline). */
+  closeSignal?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -552,6 +559,7 @@ export default function FileEditorCore({
   onToggleMode,
   onSaveWithDiff,
   onContentChange,
+  closeSignal,
 }: FileEditorCoreProps) {
   // File-type flags — computed from fileName (a prop) ONLY, so they're stable
   // across renders and safe to read at useState-init time. Hoisted above the
@@ -834,11 +842,7 @@ export default function FileEditorCore({
         // Fallback: no selection, just file + comment
         message = `[File Review: \`${filePath}\`]\n\nInstruction: ${comment}`;
       }
-      window.dispatchEvent(
-        new CustomEvent('swarm:inject-chat-input', {
-          detail: { text: message, focus: true, autoSend: true },
-        }),
-      );
+      dispatchInjectChatInput({ text: message, focus: true, autoSend: true });
       // Clear selection state after send
       setSelectionText('');
       setSelectionPopoverPos(null);
@@ -874,6 +878,24 @@ export default function FileEditorCore({
       onClose();
     }
   }, [hasUnsavedEdits, onClose]);
+
+  // R2 (run_f49d3ff3): a parent-owned unified header (FileViewer, panel variant)
+  // triggers this editor's GUARDED close by increasing closeSignal. Reuse the existing
+  // guard so the unsaved-changes dialog is preserved (no reimpl, no dialog-lift).
+  // Amendment 1: skip the mount/0 baseline so a fresh mount (or a tab-switch remount —
+  // FileViewer keys FileEditorCore on filePath) never auto-closes. Amendment 2: read the
+  // dirty flag through hasUnsavedEditsRef (kept fresh above) rather than the
+  // handleCloseAttempt closure, so a stale closure can't mis-judge dirty at fire time.
+  const prevCloseSignalRef = useRef(closeSignal);
+  useEffect(() => {
+    if (closeSignal === undefined) return;
+    if (prevCloseSignalRef.current === undefined) { prevCloseSignalRef.current = closeSignal; return; }
+    if (closeSignal > prevCloseSignalRef.current) {
+      prevCloseSignalRef.current = closeSignal;
+      if (hasUnsavedEditsRef.current) setShowUnsavedWarning(true);
+      else onClose();
+    }
+  }, [closeSignal, onClose]);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
@@ -1207,31 +1229,43 @@ export default function FileEditorCore({
         data-testid="file-editor-core"
       >
         {/* Header */}
+        {/* R2 (run_f49d3ff3): in PANEL variant (iconOnly), FileViewer renders the
+            unified file-chrome header (icon + filename + dirty + close) ABOVE this
+            component, so this header's LEFT identity cluster (icon / git badge /
+            breadcrumb / Modified) is SUPPRESSED to avoid a double header. The RIGHT
+            control cluster (preview/diff/review/copy/attach/mode-toggle) STAYS — those
+            are editor-specific actions the unified header does not own. In MODAL variant
+            (FileEditorModal renders FileEditorCore directly) the full left cluster shows,
+            unchanged. */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <span
-              className="material-symbols-outlined text-lg shrink-0"
-              style={{ color: fileIconColor(fileName) }}
-            >
-              {fileIcon(fileName)}
-            </span>
-            {gitStatus && (() => {
-              const badge = gitStatusBadge(gitStatus);
-              if (!badge) return null;
-              return (
+            {!iconOnly && (
+              <>
                 <span
-                  className="text-[10px] font-bold px-1 py-0.5 rounded shrink-0"
-                  style={{ color: badge.color, backgroundColor: badge.bg }}
+                  className="material-symbols-outlined text-lg shrink-0"
+                  style={{ color: fileIconColor(fileName) }}
                 >
-                  {badge.label}
+                  {fileIcon(fileName)}
                 </span>
-              );
-            })()}
-            <BreadcrumbBar filePath={filePath} />
-            {hasUnsavedEdits && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-warning)] bg-opacity-20 text-[var(--color-warning)] shrink-0">
-                Modified
-              </span>
+                {gitStatus && (() => {
+                  const badge = gitStatusBadge(gitStatus);
+                  if (!badge) return null;
+                  return (
+                    <span
+                      className="text-[10px] font-bold px-1 py-0.5 rounded shrink-0"
+                      style={{ color: badge.color, backgroundColor: badge.bg }}
+                    >
+                      {badge.label}
+                    </span>
+                  );
+                })()}
+                <BreadcrumbBar filePath={filePath} />
+                {hasUnsavedEdits && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-warning)] bg-opacity-20 text-[var(--color-warning)] shrink-0">
+                    Modified
+                  </span>
+                )}
+              </>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 ml-2">
@@ -1437,14 +1471,19 @@ export default function FileEditorCore({
                 </span>
               </button>
             )}
-            {/* Close */}
-            <button
-              onClick={handleCloseAttempt}
-              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-              aria-label="Close"
-            >
-              <span className="material-symbols-outlined">close</span>
-            </button>
+            {/* Close — suppressed in PANEL variant (R2): the unified FileViewer
+                file-chrome header owns close there (routed back to this component's
+                guarded close via closeSignal). Kept in MODAL variant (FileEditorModal),
+                which has no FileViewer header. */}
+            {!iconOnly && (
+              <button
+                onClick={handleCloseAttempt}
+                className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                aria-label="Close"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            )}
           </div>
         </div>
 

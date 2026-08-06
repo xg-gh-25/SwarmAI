@@ -26,13 +26,9 @@ export interface FileViewerStatusBarProps {
   /** Attach-to-chat handler — when provided (alongside filePath), an attach button
    *  is shown. Omitted → no attach button (copy-path still shown if filePath set). */
   onAttach?: () => void;
-  /** Close handler — when provided, a close button is rendered (Bug 1: non-text
-   *  renderers, html/image/pdf/csv, had NO close affordance in panel variant — only
-   *  FileEditorCore's text/md/svg footer could close. This brings them to parity).
-   *  NOT gated on filePath: a close must be reachable even for a file with no path.
-   *  Wired to FileViewer.handleCloseActive → closes the active tab (→ canvas.close
-   *  when it's the last tab). Omitted → no close button (default, unchanged). */
-  onClose?: () => void;
+  // NOTE (run_f49d3ff3 R2): the former `onClose` close button (added run_5f5e7675) is
+  // REMOVED. Close is now a single type-agnostic affordance in FileViewer's unified
+  // file-chrome header — the status bar is info + copy-path/attach only again.
 }
 
 /** Format bytes into a human-readable string (KB / MB / GB). */
@@ -52,7 +48,6 @@ export default function FileViewerStatusBar({
   extraInfo,
   filePath,
   onAttach,
-  onClose,
 }: FileViewerStatusBarProps) {
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
@@ -111,17 +106,14 @@ export default function FileViewerStatusBar({
           </span>
         ))}
 
-        {/* File-operation cluster — parity with FileEditorCore's header actions
-            for renderers (html/image/pdf/csv) that have no footer of their own.
-            Shows when the file has a path (copy/attach) OR a close handler is wired
-            (close). Close is NOT gated on filePath — a file with no path must still
-            be closable (Bug 1). */}
-        {(filePath || onClose) && (
+        {/* File-operation cluster — copy-path + attach for renderers (html/image/
+            pdf/csv) that have no footer of their own. Close is NOT here anymore
+            (run_f49d3ff3 R2): it moved to FileViewer's unified file-chrome header,
+            one type-agnostic affordance for all types. */}
+        {filePath && (
           <>
-            {/* Separator only when there's a path-op (copy/attach) to separate FROM;
-                a close-only cluster (onClose, no filePath) needs no leading dot. */}
-            {filePath && <span className="opacity-40">&middot;</span>}
-            {onAttach && filePath && (
+            <span className="opacity-40">&middot;</span>
+            {onAttach && (
               <button
                 onClick={onAttach}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
@@ -132,30 +124,17 @@ export default function FileViewerStatusBar({
                 <span className="material-symbols-outlined text-[13px] leading-none">attach_file</span>
               </button>
             )}
-            {filePath && (
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-                title={copied ? 'Copied!' : 'Copy absolute file path'}
-                aria-label="Copy file path"
-                data-testid="statusbar-copy-path"
-              >
-                <span className="material-symbols-outlined text-[13px] leading-none">
-                  {copied ? 'check' : 'content_copy'}
-                </span>
-              </button>
-            )}
-            {onClose && (
-              <button
-                onClick={onClose}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-                title="Close this file"
-                aria-label="Close file"
-                data-testid="statusbar-close"
-              >
-                <span className="material-symbols-outlined text-[13px] leading-none">close</span>
-              </button>
-            )}
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+              title={copied ? 'Copied!' : 'Copy absolute file path'}
+              aria-label="Copy file path"
+              data-testid="statusbar-copy-path"
+            >
+              <span className="material-symbols-outlined text-[13px] leading-none">
+                {copied ? 'check' : 'content_copy'}
+              </span>
+            </button>
           </>
         )}
       </div>
