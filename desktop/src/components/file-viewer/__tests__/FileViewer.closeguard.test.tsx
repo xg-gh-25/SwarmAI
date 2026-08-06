@@ -70,12 +70,16 @@ describe('FileViewer — unified close dirty-guard (R2 AC4)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('FileEditorCore does NOT render its OWN filename/close in panel variant (no double header)', async () => {
+  it('editor type in panel has EXACTLY ONE close affordance (no header-close, no footer Close — truly unified)', async () => {
     render(<FileViewer {...base('app.ts')} />);
     await waitFor(() => expect(screen.getByTestId('file-editor-textarea')).toBeTruthy());
-    // The unified header exists exactly once...
+    // The unified file-chrome header close exists exactly once...
     expect(screen.getAllByTestId('file-chrome-close')).toHaveLength(1);
-    // ...and FileEditorCore's own header Close (aria-label="Close") is suppressed in panel.
+    // ...FileEditorCore's own HEADER close (aria-label="Close") is suppressed in panel...
     expect(screen.queryByLabelText('Close')).toBeNull();
+    // ...and its FOOTER Close/Cancel button is ALSO suppressed in panel (R2 review LOW-3:
+    // a footer "Close" would be a 2nd close affordance for editor types). Save stays.
+    expect(screen.queryByTestId('file-editor-cancel')).toBeNull();
+    expect(screen.getByTestId('file-editor-save')).toBeTruthy();
   });
 });

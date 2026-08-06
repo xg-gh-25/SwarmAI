@@ -1816,15 +1816,22 @@ export default function FileEditorCore({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleCancel}
-              disabled={isSaving}
-              data-testid="file-editor-cancel"
-            >
-              {variant === 'panel' ? 'Close' : 'Cancel'}
-            </Button>
+            {/* Footer Close/Cancel — suppressed in PANEL variant (run_f49d3ff3 R2):
+                the unified FileViewer file-chrome header owns the ONE close there, so a
+                footer "Close" would be a SECOND close affordance for editor types (the
+                exact non-unification the refactor removes). Save STAYS (editor-specific).
+                MODAL keeps "Cancel" (its header close + this are the modal's own chrome). */}
+            {!iconOnly && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleCancel}
+                disabled={isSaving}
+                data-testid="file-editor-cancel"
+              >
+                Cancel
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
