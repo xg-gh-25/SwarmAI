@@ -290,3 +290,116 @@ OpenUI · Hue · Open Design · thesys — the bet that agents will GENERATE UI 
 The pattern to watch is "design-system-as-constraint for generated UI" — the
 generator is only as good as the token/component system it's constrained by. Early
 and unproven; named so a future strategy call has the reference, not adopted now.
+
+---
+
+## Part 7 — Foundation layer (the mechanisms BENEATH the surfaces)
+
+Part 6 governs what SHAPE each surface takes. This part governs the reusable
+foundation every surface is built ON — token architecture, the interactive-primitive
+contract, declarative a11y, cross-surface state binding, block storage, sandboxed
+generative UI, and heavy-canvas rendering. Source-verified across 32 world-class
+open-source products (IBM Carbon · Ant/TDesign · React Aria · Zag/Ark UI · Base UI ·
+Headless UI · USWDS · OpenHands · Continue.dev · Appsmith/ToolJet/Budibase · AFFiNE ·
+Logseq · Focalboard · OpenUI · Penpot …). Where Part 6 says WHAT, Part 7 says HOW the
+substrate is structured.
+
+### F1 — Token architecture: derive, don't hard-code
+Color/elevation/theme is a DERIVED, contextual token system, not per-component hex.
+Three convergent mechanisms: **(1) Seed→Map→Alias** — a tiny seed set (accent, radius,
+base spacing/font) is expanded by algorithm functions into map + alias tokens, so
+dark / compact / high-contrast are *algorithms over one seed*, not parallel
+hand-authored stylesheets (Ant Design v5). **(2) Two-layer indirection** — authoring
+alias → runtime CSS custom property (`var(--x)`) with semantic background LAYERS
+(page / container / component) + per-state hover/active variants, so theme is a single
+`:root[theme-mode]` attribute swap with zero recompile and zero component branching
+(TDesign). **(3) Contextual elevation stepping** — a `Layer` wrapper auto-steps an
+elevation counter on nesting (level 0→1→2 via a `useLayer()`-style hook) so a nested
+surface picks the correct stepped background for its depth WITHOUT knowing its own
+context; paint is decoupled from depth-tracking via an opt-in `withBackground` prop
+(IBM Carbon). **(4) Fail-closed contrast gate** — a validator resolves token refs and
+computes REAL WCAG contrast on resolved text/bg pairs, blocking ship on <4.5:1 —
+correctness is a program-gate, not a prose checklist (Hue). *Anti-pattern:* per-component
+hard-coded color; parallel hand-authored dark/light stylesheets; contrast "checked by eye."
+
+### F2 — Headless primitive contract: state-hook / behavior-hook / prop-getter
+Push "projection of ONE authority" DOWN to the component-primitive level. Every
+interactive primitive splits into a platform-agnostic **STATE authority** (a statechart
+/ state-hook that owns truth with no DOM/ARIA) and a thin **BEHAVIOR layer** that only
+PROJECTS that state into spreadable DOM prop-getters whose handlers call back into
+state actions (React Aria `useX`; Zag `connect(service, normalizeProps) → api.getRootProps()`).
+ALL aria/focus/keyboard live in the machine and cannot drift per-render. Two sharpenings:
+**(a) one unified activation event** carrying a `pointerType` discriminator
+(mouse|touch|keyboard|virtual) absorbs device quirks (touch-before-emulated-mouse dedupe;
+drag-off clears pressed unlike CSS `:active`; virtual/screen-reader clicks via
+`detail===0`) so `onClick`/`onKeyDown`/`onTouch` are never wired separately (React Aria).
+**(b) dual state channel** — every state exposed BOTH as a CSS-targetable `data-*`
+attribute (`data-open`, `data-selected`, `data-enter/leave`) AND a JS render-prop/slot
+value, plus one polymorphic `render`/`asChild` escape hatch — so styling never
+re-derives state and consumers restyle inner parts without forking (Base UI · Headless
+UI · Ark UI). *Anti-pattern:* aria/keyboard logic scattered in render; separate
+click/key/touch handlers; CSS re-deriving open/selected from props.
+
+### F3 — Overlay focus-ownership contract + exit-animation lifecycle
+An overlay/panel owns an explicit ACCESSIBILITY focus contract distinct from visual
+layering (Part 6's motion rule covers neither). On open: **trap focus** (skipping to
+the panel), and mark the obscured shell `aria-hidden`/`inert` so keyboard + assistive
+tech cannot wander into content the user can't see. On close: **restore focus** to the
+invoking element, and run the exit animation as an explicit lifecycle state
+(`data-closed`/`data-leave` + a "still mounted while animating out" phase) so the node
+isn't yanked mid-transition (USWDS modal · Base UI · Headless UI transitions).
+*Anti-pattern:* an overlay that leaves focus in the hidden shell; unmounting on close
+before the exit animation finishes; visual dimming without AT-level hiding.
+
+### F4 — Streaming as a SEPARATE ephemeral event class, reconciled into the durable authority
+Split live streaming into TWO event classes with explicit reconciliation instead of
+mutating one buffer: an **ephemeral** stream delta (may be reasoning-only, may be
+revised) and the **durable** authoritative event that SUPERSEDES it via ordered
+text-segment matching. The UI renders the ephemeral for liveness, then swaps to the
+durable without a from-scratch re-render or a double-render (OpenHands
+action/observation stream · Continue.dev). Two recipes that make "never diverge" hold:
+**(a) sender-scoped deltas** — each delta is tagged with its producer so a sub-agent's
+live tokens are never concatenated onto the main agent's final event (Continue.dev).
+**(b) tense-template status** — each tool/action declares its state as `wouldLikeTo` /
+`isCurrently` / `hasAlready` so the card's live label derives from an explicit lifecycle,
+not a guessed boolean (Continue.dev). *Anti-pattern:* one mutable buffer that both
+the live stream and the final authority write to (they drift; the classic reconcile
+race); a frontend boolean guessing "done" instead of a durable event marking it.
+
+### F5 — Cross-surface state as a reactive named-entity binding graph
+Model cross-surface state as ONE global named-entity DataTree where any node publishes
+a typed namespaced state (`entityA.field`) and any other surface references it by
+`{{...}}` dot-path. Evaluation is **topologically sorted** with **first-class cycle
+diagnostics** (a reference cycle is a named, surfaced error, not a stack overflow)
+(Appsmith · ToolJet · Budibase binding models). *Anti-pattern:* ad-hoc prop-drilling
+between surfaces; a cycle that manifests as an infinite render instead of a diagnostic.
+
+### F6 — "One store, many projections" as a DATA MODEL, not an aspiration
+Four convergent storage recipes make the Part-6 knowledge-view law concrete:
+**(1) projection membership + geometry ON the node** — each block/node stores which
+views it belongs to + optional `xywh`, so doc / graph / canvas are render-time FILTERS
+(switching view ≠ migrating data). **(2) fractional-index ordering** — order is a
+between-keys fractional index so reordering is a single-node write, not a re-index of
+siblings. **(3) param-only view records** — a "view" is just a stored set of filter/
+sort/group params over the shared store, not a copy. **(4) type→builder registry** —
+a node's `type` maps to a renderer via a registry, so new block/view types are
+additive (AFFiNE/BlockSuite · Logseq · Focalboard · Vikunja). *Anti-pattern:* a
+separate table per view; integer position columns re-written on every reorder;
+divergent copies per projection.
+
+### F7 — Generative UI: sandbox + hydrate, never inject
+LLM-generated (untrusted) UI code renders as a durable artifact inside a **cross-origin
+sandboxed iframe**, hydrated via `postMessage`, NEVER injected into the host DOM. All
+inbound events cross the message boundary; the host stays isolated from generated code.
+Pair with a **select-then-refine editing loop** (select a rendered element → refine
+just that region) rather than regenerating the whole surface (OpenUI). *Anti-pattern:*
+`dangerouslySetInnerHTML` of model output into the app; regenerating the entire artifact
+for a local edit.
+
+### F8 — Heavy canvas: tiled invalidated raster path decoupled from the node model
+When a canvas/output surface gets heavy (many artifacts/shapes), the render path is a
+projection of the addressable node tree onto a **TILED, cached RASTER surface** rendered
+by a dedicated engine, with a `region→node` index so only invalidated tiles re-paint.
+The addressable model (selection, hit-testing, edits) stays separate from the raster
+cache (Penpot). *Anti-pattern:* re-painting the whole canvas on any change; coupling
+hit-testing to the raster layer.
