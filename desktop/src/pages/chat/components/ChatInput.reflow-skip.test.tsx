@@ -30,7 +30,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ChatInput, heightMeasureUnchanged, cacheableMeasureSig, type HeightMeasureSig } from './ChatInput';
+import { ChatInput, heightMeasureUnchanged, cacheableMeasureSig, supportsFieldSizing, type HeightMeasureSig } from './ChatInput';
 import type { UnifiedAttachment } from '../../../types';
 
 vi.mock('react-i18next', () => ({
@@ -166,4 +166,57 @@ describe('ChatInput reflow behavior (real component)', () => {
   // term turns it RED); the guard is only reachable through applyHeight, so the
   // predicate test covers the logic honestly without theater. The auto-grow test below
   // proves the measure still RUNS + writes when the value legitimately changes (AC3).
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layer 3: field-sizing elimination (run_26172836 — the ROOT fix)
+//
+// When the browser natively auto-sizes via CSS `field-sizing:content`, the JS
+// autogrow measure (the `height='auto'` write → `scrollHeight` read that forces a
+// per-keystroke synchronous document reflow — the Canvas-open lag root cause) MUST
+// be skipped. This asserts: with field-sizing supported, a value GROWTH produces
+// ZERO inline px height writes (the reflow is eliminated). It is the exact
+// complement of the "writes a px height when the value grows" test above — that one
+// proves the JS FALLBACK still works when field-sizing is unsupported (jsdom default).
+//
+// Mutation check: remove `if (fieldSizingRef.current) return;` from applyHeight →
+// this test goes RED (a px write happens even under native sizing).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('ChatInput field-sizing elimination (root fix)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 1; });
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('supportsFieldSizing() reflects CSS.supports(field-sizing, content)', () => {
+    const spy = vi.fn((prop: string, val: string) =>
+      prop === 'field-sizing' && val === 'content');
+    vi.stubGlobal('CSS', { supports: spy } as unknown as typeof CSS);
+    expect(supportsFieldSizing()).toBe(true);
+    spy.mockReturnValue(false);
+    expect(supportsFieldSizing()).toBe(false);
+  });
+
+  it('does NOT write an inline px height on value growth when field-sizing is supported', () => {
+    // Force CSS.supports(field-sizing) = true so the component takes the native path.
+    vi.stubGlobal('CSS', {
+      supports: (prop: string, val: string) => prop === 'field-sizing' && val === 'content',
+    } as unknown as typeof CSS);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}><ChatInput {...baseProps({ inputValue: '' })} /></QueryClientProvider>,
+    );
+    const el = textarea();
+    const state = instrument(el);
+    state.pxWrites = 0;
+    state.scrollHeight = 120; // would grow under the JS path
+    rerender(
+      <QueryClientProvider client={qc}><ChatInput {...baseProps({ inputValue: 'l1\nl2\nl3\nl4' })} /></QueryClientProvider>,
+    );
+    // Native field-sizing → CSS sizes the control → the JS measure is skipped entirely.
+    expect(state.pxWrites).toBe(0);
+    // And the native sizing CSS is actually applied to the element.
+    expect(el.style.getPropertyValue('field-sizing') || (el.style as unknown as Record<string, string>)['fieldSizing']).toBeTruthy();
+  });
 });

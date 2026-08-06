@@ -3202,8 +3202,21 @@ export default function ChatPage() {
           onClose={() => setCloseConfirmTab(null)}
         />
 
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Main Chat Area.
+            `contain:layout` (run_26172836) SEVERS the layout coupling between this
+            column and the Canvas (FileViewerPanel) — its sibling in the parent flex
+            row above. Root fix for the recurring "Canvas 开着时 chat input 输入卡死":
+            the chat textarea's autogrow (on older WebKit without field-sizing) writes
+            style.height and reads scrollHeight, forcing a synchronous flush of the
+            shared row that re-lays-out the large Canvas surface. Layout containment on
+            THIS column (the reflow SOURCE) means its internal reflow can no longer
+            propagate to the row/Canvas sibling — belt-and-suspenders with the
+            field-sizing elimination in ChatInput (which removes the reflow entirely on
+            modern WebKit). The prior fix contained the Canvas side (the amplifier); this
+            contains the source side (Gate-1 finding). Safe: the column is flex-1 +
+            overflow-hidden, so its size is imposed by the row, not by content — plain
+            `contain:layout` (NOT size) needs no explicit dimensions. */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]">
           <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">

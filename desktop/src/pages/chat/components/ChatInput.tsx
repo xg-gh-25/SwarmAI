@@ -51,6 +51,31 @@ export function cacheableMeasureSig(sig: HeightMeasureSig): HeightMeasureSig | n
   return sig.width > 0 ? sig : null;
 }
 
+/** True iff the WebKit/browser natively auto-sizes a textarea via CSS
+ *  `field-sizing: content` — in which case the JS autogrow (a per-keystroke
+ *  `height='auto'` write → `scrollHeight` read → forced synchronous document
+ *  reflow) is unnecessary and MUST be disabled so the two mechanisms don't fight.
+ *
+ *  ROOT FIX (run_26172836) for the recurring "Canvas 开着时 chat input 输入卡死": the
+ *  chat textarea is a flex sibling of the Canvas in one shared row (ChatPage.tsx),
+ *  so the per-keystroke forced reflow flushes that row and re-lays-out the large
+ *  un-virtualized Canvas surface. `field-sizing:content` sizes the control natively
+ *  with ZERO scriptable measurement — eliminating the reflow at its source rather
+ *  than trying (as 3 prior fixes did, unsuccessfully) to make the Canvas cheaper to
+ *  re-lay-out. Supported in WebKit 26.0+ (macOS 26 Safari engine) / Chromium 123+.
+ *  On older WebKit (Tauri uses the system WKWebView), this returns false and the
+ *  JS autogrow fallback runs unchanged. Guarded for non-DOM/test envs where
+ *  `CSS`/`CSS.supports` may be absent (jsdom → false → the JS path is exercised by
+ *  the existing autogrow/reflow-skip suites). */
+export function supportsFieldSizing(): boolean {
+  try {
+    return typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+      && CSS.supports('field-sizing', 'content');
+  } catch {
+    return false;
+  }
+}
+
 interface ChatInputProps {
   inputValue: string;
   onInputChange: (value: string) => void;
@@ -185,6 +210,11 @@ export function ChatInput({
   // still re-measures even when the value is unchanged (run_1cb87e1a Gate-1 FLAW4).
   // Reset to null on send-reset (height cleared to '') so the next measure recomputes.
   const lastMeasureRef = useRef<{ value: string; width: number; expanded: boolean } | null>(null);
+  // Native CSS auto-sizing available? If so, the JS autogrow path (which forces a
+  // per-keystroke synchronous document reflow — the ROOT of the Canvas-open input
+  // lag) is disabled entirely; CSS `field-sizing:content` + `max-height` do the
+  // sizing. Computed ONCE (support is process-stable). run_26172836.
+  const fieldSizingRef = useRef<boolean>(supportsFieldSizing());
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
@@ -262,6 +292,18 @@ export function ChatInput({
   const applyHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Line count drives the expand-toggle button (`lineCount > 3`) — it is a pure
+    // string op (no reflow), so compute it on BOTH paths (before the field-sizing
+    // early-return) or the toggle would never appear under native sizing.
+    const lines = el.value.split('\n').length;
+    setLineCount(prev => prev !== lines ? lines : prev);
+    // ROOT FIX (run_26172836): when the browser auto-sizes via `field-sizing:content`
+    // (see the textarea's inline style), do NOT run the JS measure — the whole point
+    // is to eliminate the `height='auto'` write → `scrollHeight` read that forces a
+    // synchronous document reflow every keystroke (which, with Canvas open, re-lays-out
+    // the large Canvas surface that shares the flex row). CSS `max-height` + `overflow-y`
+    // handle the clamp/scroll natively. Falls through to the JS autogrow on older WebKit.
+    if (fieldSizingRef.current) return;
     const maxHeight = isExpanded ? window.innerHeight * 0.6 : maxHeightRef.current;
     // Skip the forced-reflow measure (`height='auto'` write → `scrollHeight` read)
     // when NOTHING that can change the wrapped height changed since the last apply:
@@ -288,9 +330,6 @@ export function ChatInput({
     // else a later width-only recovery with the value unchanged would match-and-skip,
     // freezing the height (Gate-2 correctness MED, run_1cb87e1a). See cacheableMeasureSig.
     lastMeasureRef.current = cacheableMeasureSig(sig);
-    // Update line count — only trigger re-render when the value actually changes
-    const lines = el.value.split('\n').length;
-    setLineCount(prev => prev !== lines ? lines : prev);
   }, [isExpanded]);
 
   // Deferred variant: coalesce into a single animation frame so a burst of
@@ -819,6 +858,21 @@ export function ChatInput({
               }
               rows={3}
               disabled={disabled}
+              // Native auto-sizing (run_26172836): when `field-sizing:content` is
+              // supported, CSS grows the textarea with content — no JS scrollHeight
+              // read, so no per-keystroke forced document reflow (the Canvas-open lag
+              // root cause). max-height clamps growth (60vh expanded / MAX_ROWS px
+              // collapsed — mirrors the JS maxHeight) and overflow-y:auto scrolls past
+              // it. `fieldSizing` is set only when supported so on older WebKit the
+              // property is absent and the JS autogrow (which writes inline height)
+              // stays in charge. clsx omits `resize-none`? no — kept below.
+              style={fieldSizingRef.current ? {
+                // `fieldSizing` is not yet in React's CSSProperties typings — set via
+                // an index cast so tsc doesn't reject the (valid, supported) property.
+                ['fieldSizing' as string]: 'content',
+                maxHeight: isExpanded ? '60vh' : `${maxHeightRef.current}px`,
+                overflowY: 'auto',
+              } as React.CSSProperties : undefined}
               className={clsx(
                 'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2',
                 disabled && 'opacity-50 cursor-not-allowed'
