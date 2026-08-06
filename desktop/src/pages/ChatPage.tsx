@@ -2439,26 +2439,43 @@ export default function ChatPage() {
     tabState._queuedAt = undefined;     // clear queue timestamp (reconcile immunity ends)
     tabState.userStopped = false; // prevent stale flag from suppressing new stream errors
 
-    // Remove the "queued" badge from the user message — route through store
-    // for consistency (store subscription propagates to React + tabState).
+    // Key this drained turn like the main send: the request carries `clientId`,
+    // the assistant placeholder is `${clientId}-asst`, AND — the fix for the
+    // user-row dup (run_cba89e65) — the QUEUED USER BUBBLE is stamped with the
+    // SAME clientId in metadata.client_id. The main path keeps them in sync by
+    // using `id === clientId` on the user bubble; the queued bubble's id is
+    // `queued-{uuid}` (assigned at queue time, before any clientId exists), so
+    // instead we carry the key in metadata. Without it the DB user row (which
+    // the backend stamps with this request's client_id, session_router.py:1958)
+    // correlates with the queued bubble by neither id nor client_id nor the H2
+    // numeric-placeholder guard → a full-history reconcile renders TWO user
+    // bubbles. `_applyMerge` indexes carried metadata.client_id role-agnostically,
+    // so stamping it here makes the queued bubble correlate exactly like the main
+    // path. Generated HERE (before the badge-clear) so both writes are one update.
+    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Remove the "queued" badge from the user message + stamp the correlation key
+    // — route through store for consistency (subscription propagates to React + tabState).
     const drainStore = messageStoreRegistry.get(tabId);
     if (drainStore) {
-      drainStore.updateById(queued.messageId, (m) => ({ ...m, isQueued: false }));
+      drainStore.updateById(queued.messageId, (m) => ({
+        ...m,
+        isQueued: false,
+        metadata: { ...(m.metadata ?? {}), client_id: clientId },
+      }));
     } else {
       // Fallback: no store (rare edge case)
+      const stampQueued = (m: Message): Message =>
+        m.id === queued.messageId
+          ? { ...m, isQueued: false, metadata: { ...(m.metadata ?? {}), client_id: clientId } }
+          : m;
       const isActive = activeTabIdRef.current === tabId;
       if (isActive) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === queued.messageId ? { ...m, isQueued: false } : m
-          )
-        );
+        setMessages((prev) => prev.map(stampQueued));
       }
       const drainTab = tabMapRef.current.get(tabId);
       if (drainTab?.messages) {
-        drainTab.messages = drainTab.messages.map((m) =>
-          m.id === queued.messageId ? { ...m, isQueued: false } : m
-        );
+        drainTab.messages = drainTab.messages.map(stampQueued);
       }
     }
 
@@ -2485,10 +2502,11 @@ export default function ChatPage() {
       incrementStreamGen();
       resetUserScroll();
 
-      // Key this drained turn like the main send: clientId + `${clientId}-asst`
-      // placeholder + clientId on the request. Without it the whole turn persists
-      // keyless and a later reconcile-tail cut duplicates the bubble (run_7263ff67).
-      const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // clientId was generated above (before the badge-clear) so the queued user
+      // bubble could be stamped with it. The assistant placeholder shares it via
+      // the `${clientId}-asst` suffix; the request carries `clientId`. Without any
+      // of these the turn persists keyless and a later reconcile-tail cut
+      // duplicates the bubble (run_7263ff67 assistant side, run_cba89e65 user side).
       const assistantMessageId = `${clientId}-asst`;
       const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
 

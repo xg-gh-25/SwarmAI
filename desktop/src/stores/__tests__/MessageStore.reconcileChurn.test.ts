@@ -275,4 +275,31 @@ describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wi
     expect(asstText(store, 'a1')).not.toBe('trunc');
     expect(call).toBeGreaterThanOrEqual(2); // proves the re-queued thunk drained
   });
+
+  // run_cba89e65: the DRAIN-PATH user-row duplicate (Gate-2 item 4 from run_7263ff67).
+  // A queued send's optimistic user bubble has id=`queued-{uuid}` and NO client_id.
+  // At drain the code generates a fresh clientId, sends it, and the backend stamps
+  // the persisted DB USER row with metadata.client_id = that clientId. The fix stamps
+  // the SAME clientId onto the queued bubble at drain time so _applyMerge correlates
+  // them (role-agnostic carried-client_id index) instead of rendering two user bubbles.
+  it('drained queued user bubble stamped with client_id correlates to its DB user row → ONE user bubble', () => {
+    const drainCid = 'local-drain-xyz';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    // Optimistic queued bubble AFTER the drain-time stamp (the fix): queued-{uuid}
+    // id but carrying the drain's clientId in metadata.
+    store.append({
+      id: 'queued-abc', role: 'user',
+      content: [{ type: 'text', text: 'hello' }],
+      timestamp: new Date().toISOString(),
+      metadata: { client_id: drainCid },
+    } as Message);
+    // Reconcile: DB user row (UUID id) carries the SAME clientId the drain sent.
+    store.reconcile([{
+      id: 'U1', sessionId: 'sess-1', role: 'user',
+      content: [{ type: 'text', text: 'hello' }] as any,
+      createdAt: new Date().toISOString(),
+      metadata: { client_id: drainCid } as any,
+    } as unknown as ChatMessage]);
+    expect(store.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
 });
