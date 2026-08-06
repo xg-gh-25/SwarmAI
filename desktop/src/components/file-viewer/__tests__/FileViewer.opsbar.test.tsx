@@ -61,6 +61,16 @@ describe('FileViewer — non-text file-op cluster', () => {
     }
   });
 
+  it('html file (panel): status bar shows a Close button; clicking it closes the Canvas (onClose)', async () => {
+    // Bug 1: non-text files were unclosable in panel variant (no tab bar, header × only
+    // collapses). The status-bar close → FileViewer.handleCloseActive → last tab → onClose.
+    const onClose = vi.fn();
+    render(<FileViewer {...base('deck.html')} onClose={onClose} />);
+    await waitFor(() => expect(screen.getByTestId('statusbar-close')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('statusbar-close'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('text file: NO status bar (FileEditorCore owns its footer — no double footer)', async () => {
     render(<FileViewer {...base('app.ts')} />);
     await waitFor(() => expect(screen.getByTestId('file-editor-core-stub')).toBeTruthy());

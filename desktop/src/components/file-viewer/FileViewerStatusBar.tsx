@@ -26,6 +26,13 @@ export interface FileViewerStatusBarProps {
   /** Attach-to-chat handler — when provided (alongside filePath), an attach button
    *  is shown. Omitted → no attach button (copy-path still shown if filePath set). */
   onAttach?: () => void;
+  /** Close handler — when provided, a close button is rendered (Bug 1: non-text
+   *  renderers, html/image/pdf/csv, had NO close affordance in panel variant — only
+   *  FileEditorCore's text/md/svg footer could close. This brings them to parity).
+   *  NOT gated on filePath: a close must be reachable even for a file with no path.
+   *  Wired to FileViewer.handleCloseActive → closes the active tab (→ canvas.close
+   *  when it's the last tab). Omitted → no close button (default, unchanged). */
+  onClose?: () => void;
 }
 
 /** Format bytes into a human-readable string (KB / MB / GB). */
@@ -45,6 +52,7 @@ export default function FileViewerStatusBar({
   extraInfo,
   filePath,
   onAttach,
+  onClose,
 }: FileViewerStatusBarProps) {
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
@@ -104,11 +112,14 @@ export default function FileViewerStatusBar({
         ))}
 
         {/* File-operation cluster — parity with FileEditorCore's header actions
-            for renderers (html/image/pdf/csv) that have no footer of their own. */}
-        {filePath && (
+            for renderers (html/image/pdf/csv) that have no footer of their own.
+            Shows when the file has a path (copy/attach) OR a close handler is wired
+            (close). Close is NOT gated on filePath — a file with no path must still
+            be closable (Bug 1). */}
+        {(filePath || onClose) && (
           <>
             <span className="opacity-40">&middot;</span>
-            {onAttach && (
+            {onAttach && filePath && (
               <button
                 onClick={onAttach}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
@@ -119,17 +130,30 @@ export default function FileViewerStatusBar({
                 <span className="material-symbols-outlined text-[13px] leading-none">attach_file</span>
               </button>
             )}
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-              title={copied ? 'Copied!' : 'Copy absolute file path'}
-              aria-label="Copy file path"
-              data-testid="statusbar-copy-path"
-            >
-              <span className="material-symbols-outlined text-[13px] leading-none">
-                {copied ? 'check' : 'content_copy'}
-              </span>
-            </button>
+            {filePath && (
+              <button
+                onClick={handleCopy}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+                title={copied ? 'Copied!' : 'Copy absolute file path'}
+                aria-label="Copy file path"
+                data-testid="statusbar-copy-path"
+              >
+                <span className="material-symbols-outlined text-[13px] leading-none">
+                  {copied ? 'check' : 'content_copy'}
+                </span>
+              </button>
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+                title="Close this file"
+                aria-label="Close file"
+                data-testid="statusbar-close"
+              >
+                <span className="material-symbols-outlined text-[13px] leading-none">close</span>
+              </button>
+            )}
           </>
         )}
       </div>

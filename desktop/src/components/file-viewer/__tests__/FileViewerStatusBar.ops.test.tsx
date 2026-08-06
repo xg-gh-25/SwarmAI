@@ -81,4 +81,38 @@ describe('FileViewerStatusBar — file-operation cluster', () => {
     expect(screen.getByTestId('statusbar-copy-path')).toBeTruthy();
     expect(screen.queryByTestId('statusbar-attach')).toBeNull();
   });
+
+  // ── close button (Bug 1: non-text files were unclosable in panel variant) ──
+  it('renders a close button when onClose is provided; clicking fires it', () => {
+    const onClose = vi.fn();
+    render(
+      <FileViewerStatusBar
+        fileName="deck.html"
+        fileSize={100}
+        viewType="html-preview"
+        filePath="/ws/out/deck.html"
+        onClose={onClose}
+      />,
+    );
+    const btn = screen.getByTestId('statusbar-close');
+    fireEvent.click(btn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the close button even when filePath is absent (close is not gated on filePath)', () => {
+    const onClose = vi.fn();
+    render(
+      <FileViewerStatusBar fileName="deck.html" fileSize={100} viewType="html-preview" onClose={onClose} />,
+    );
+    expect(screen.getByTestId('statusbar-close')).toBeTruthy();
+    // still no copy/attach without filePath
+    expect(screen.queryByTestId('statusbar-copy-path')).toBeNull();
+  });
+
+  it('omits the close button when onClose is not provided', () => {
+    render(
+      <FileViewerStatusBar fileName="deck.html" fileSize={100} viewType="html-preview" filePath="/ws/out/deck.html" />,
+    );
+    expect(screen.queryByTestId('statusbar-close')).toBeNull();
+  });
 });

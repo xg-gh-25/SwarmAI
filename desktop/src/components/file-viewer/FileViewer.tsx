@@ -709,6 +709,12 @@ function FileViewerImpl({
             if (onAttachToChat) onAttachToChat(item);
             else window.dispatchEvent(new CustomEvent('swarm:attach-file', { detail: item }));
           }}
+          // Bug 1: non-text renderers (html/image/pdf/csv) have no footer of their
+          // own, so — unlike text/md/svg which close via FileEditorCore's footer —
+          // they had NO close affordance in panel variant (the header × collapses to
+          // the rail, it does not unmount; run_26aa6caa). Wire the SAME close FileEditorCore
+          // uses: handleCloseActive → closes the active tab → onClose (canvas.close) when last.
+          onClose={handleCloseActive}
         />
       )}
     </div>
