@@ -704,13 +704,32 @@ class SessionUnit:
         # the answer/permission-continue path clears them.
         self._pending_tool_use_id: Optional[str] = None
         self._pending_question: Optional[dict] = None
-        # Originating turn's client_id (set by SessionRouter.send_message before the
-        # send loop). Continuation paths (answer/permission) run on THIS same unit —
-        # guaranteed by their WAITING_INPUT state guard — and reuse it so their
-        # persisted assistant rows carry the SAME `{client_id}-asst` correlation key
-        # as the main-path rows. Without this, a continuation row is keyless and a
+        # Originating turn's client_id (set in the send loop AFTER admission —
+        # session_router.py:2293, guarded `if client_id`). Continuation paths
+        # (answer/permission) run on THIS same unit and reuse it so their persisted
+        # assistant rows carry the SAME `{client_id}-asst` correlation key as the
+        # main-path rows. Without this, a continuation row is keyless and a
         # reconcile-tail cut landing on it produces a duplicate bubble (run_9bbf1761).
-        # Lives exactly as long as the WAITING_INPUT state that gates its readers.
+        #
+        # ⚠️ LOAD-BEARING INVARIANT / STALE-KEY DEPENDENCY (run_2aea0237 retro):
+        # this field is NEVER reset to None — it is set once at init and only ever
+        # UPDATED (never cleared) at router:2294. It therefore holds the LAST keyed
+        # turn's client_id for the unit's whole lifetime. The readers (router:2505/
+        # 2533) stamp `{_turn_client_id}-asst` on EVERY persisted assistant row.
+        # Safety today rests on ONE premise: within a single unit, no *keyed* turn is
+        # ever followed by a *keyless main-path* turn. If that premise breaks — a
+        # future keyless send path on a desktop unit that previously had a keyed turn
+        # — the keyless turn's row would be stamped with the PRIOR turn's key →
+        # content attached to the wrong bubble (worse than a dup). Currently
+        # unreachable: (a) all desktop send paths carry a key after run_2aea0237's
+        # 5-entrance sweep (drain/retry/reconnect/continuation); (b) channel sessions
+        # are a SEPARATE unit (is_channel_session, own channel_sessions mapping) that
+        # is keyless for its whole life → stash stays None → rows get client_id=None
+        # (safe no-match, never a stale key). The `if client_id` guard at router:2293
+        # additionally prevents a keyless turn from CLOBBERING a valid stash. If a
+        # new keyless-main-path desktop entrance is ever added, reset this to None at
+        # that turn's admission (NOT pre-loop — pre-loop reset re-opens the
+        # WAITING_INPUT/SessionBusyError clobber the 2293 guard closed).
         self._turn_client_id: Optional[str] = None
         # Seqs of the most recently drained pending set, surfaced to the frontend
         # mirror by the streaming-state read API (L5/2A). Best-effort hint.
