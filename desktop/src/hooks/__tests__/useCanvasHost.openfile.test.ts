@@ -22,6 +22,48 @@ function openFile(path: string, tabId?: string) {
 beforeEach(() => { sessionStorage.clear(); });
 afterEach(() => { vi.restoreAllMocks(); });
 
+describe('useCanvasHost — invalid file does NOT open Canvas (run_f49d3ff3 R1)', () => {
+  it('a path that resolves 404 does NOT open Canvas (no empty render) and emits a toast', async () => {
+    const api = (await import('../../services/api')).default;
+    (api.get as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      const err = new Error('not found') as Error & { response?: { status?: number } };
+      err.response = { status: 404 };
+      throw err;
+    });
+    const toasts: string[] = [];
+    const onToast = (e: Event) => toasts.push((e as CustomEvent).detail?.message);
+    document.addEventListener('swarm:toast', onToast);
+    try {
+      const { result } = renderHook(() =>
+        useCanvasHost({ activeTabId: 'tab-A', sessionId: 's-A', isStreaming: false }),
+      );
+      await act(async () => { openFile('nope/ghost.json'); await Promise.resolve(); await Promise.resolve(); });
+      // Invalid file → Canvas stays closed, no empty render.
+      expect(result.current.file).toBeNull();
+      expect(result.current.isOpen).toBe(false);
+      // User sees why.
+      expect(toasts.some((m) => m && m.includes('ghost.json'))).toBe(true);
+    } finally {
+      document.removeEventListener('swarm:toast', onToast);
+    }
+  });
+
+  it('a 500/network error still falls through to the raw path (NOT treated as invalid — amendment 4)', async () => {
+    const api = (await import('../../services/api')).default;
+    (api.get as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      const err = new Error('server error') as Error & { response?: { status?: number } };
+      err.response = { status: 500 };
+      throw err;
+    });
+    const { result } = renderHook(() =>
+      useCanvasHost({ activeTabId: 'tab-A', sessionId: 's-A', isStreaming: false }),
+    );
+    await act(async () => { openFile('real/exists.md'); await Promise.resolve(); await Promise.resolve(); });
+    // 500 is transient/unknown, NOT "file invalid" → keep the existing fall-through (opens on raw path).
+    await waitFor(() => expect(result.current.file?.fileName).toBe('exists.md'));
+  });
+});
+
 describe('useCanvasHost — open-file then switch tab (real event path)', () => {
   it('a file opened on tab A does NOT appear on tab B after switch', async () => {
     const { result, rerender } = renderHook(

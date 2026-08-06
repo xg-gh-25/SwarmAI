@@ -332,7 +332,20 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         if (!mounted) return;
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status === 400) return; // path traversal / invalid — drop
-        // 404 → fall through to raw path; other errors just use the raw path.
+        // 404 = the exhaustive resolve cascade found the file NOWHERE → it is
+        // genuinely nonexistent. DROP it (run_f49d3ff3 R1): the old fall-through to
+        // the raw path opened Canvas onto a file /workspace/file also can't read →
+        // an empty render (the reported bug). Surface a lightweight notice so the
+        // user sees WHY nothing opened. NOTE (Gate-1 amendment 4): ONLY 404 drops —
+        // a 500/network/transient error is NOT "file invalid", so it keeps the
+        // existing fall-through (open on the raw path; the fetch layer retries/errors).
+        if (status === 404) {
+          document.dispatchEvent(new CustomEvent('swarm:toast', {
+            detail: { message: `File not found: ${filePath}` },
+          }));
+          return;
+        }
+        // other errors (500/network) → fall through to raw path (unchanged).
       }
       // Stale-resolve guard (B): a newer open on the SAME origin tab superseded us.
       if (openGenRef.current.get(k) !== gen) return;
