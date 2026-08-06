@@ -95,6 +95,19 @@ const STALL_THRESHOLD_TEXT_MS = 60_000;
 /** Stall threshold during tool execution — tools like Bash/Read can take minutes. */
 const STALL_THRESHOLD_TOOL_MS = 180_000;
 
+/**
+ * Tail size for turn-end reconcile fetches. The reconcile sites below only need
+ * the NEWEST rows (the just-streamed assistant turn + any drained rows) — the
+ * persist-lag guard and dedup both match by id on the tail, and `_applyMerge`
+ * preserves any older local message NOT present in a partial DB fetch
+ * (MessageStore "DB may be paginated" invariant). So reconcile fetches the last
+ * RECONCILE_TAIL rows via `getSessionMessagesPaginated`, NOT the full history —
+ * dropping per-turn pull+camelCase parse from O(N) (a heavy session is ~1000+
+ * rows) to a constant. 50 ≫ the 1–3 rows a single turn produces, so the newest
+ * turn is always within the tail. Backend caps limit at 200; 50 is well under.
+ */
+const RECONCILE_TAIL = 50;
+
 // ---------------------------------------------------------------------------
 // Self-healing grace period
 // ---------------------------------------------------------------------------
@@ -1295,7 +1308,7 @@ export function useChatStreamingLifecycle(
               // retries on the next tick instead of orphaning the restored queue.
               if (pdSid) {
                 chatService.invalidateMessageCache(pdSid);
-                chatService.getSessionMessages(pdSid).then((msgs) => {
+                chatService.getSessionMessagesReconcileTail(pdSid, RECONCILE_TAIL).then((msgs) => {
                   if (cancelled) return;
                   const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: pdSid });
                   store.reconcile(msgs);
@@ -1448,7 +1461,7 @@ export function useChatStreamingLifecycle(
                 : null;
               if (drainSid) {
                 chatService.invalidateMessageCache(drainSid);
-                chatService.getSessionMessages(drainSid).then((msgs) => {
+                chatService.getSessionMessagesReconcileTail(drainSid, RECONCILE_TAIL).then((msgs) => {
                   if (cancelled) return;
                   const s = messageStoreRegistry.getOrCreate(tabId, { sessionId: drainSid });
                   // Remove the optimistic bubble only now (fetch succeeded) so a
@@ -1595,7 +1608,7 @@ export function useChatStreamingLifecycle(
           // Phase-gated via MessageStore.reconcile(): preserves local-only
           // messages (queued, synthetic) and respects streaming gate.
           chatService.invalidateMessageCache(sid);
-          chatService.getSessionMessages(sid).then((msgs) => {
+          chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL).then((msgs) => {
             if (cancelled) return;
             // Route through store — reconcile handles dedup by ID, preserves
             // local-only queued messages, and phase-gates (NO-OP if streaming
@@ -1831,7 +1844,7 @@ export function useChatStreamingLifecycle(
       const reconcileTabId = tabId;
       const timer = setTimeout(() => {
         chatService.invalidateMessageCache(reconcileSid);
-        chatService.getSessionMessages(reconcileSid).then((msgs) => {
+        chatService.getSessionMessagesReconcileTail(reconcileSid, RECONCILE_TAIL).then((msgs) => {
           const s = messageStoreRegistry.get(reconcileTabId);
           if (!s) return;
           s.reconcile(msgs);
@@ -2615,7 +2628,14 @@ export function useChatStreamingLifecycle(
           // path-carrying cmd, then the workspace-scoped /workspace/file/resolve
           // filters it. Pure-nav cmds stay payload-less (run_c0550cc2).
           const _uev = event as unknown as Record<string, unknown>;
-          dispatchUiCommand(_uev.cmd, _uev.path);
+          // Pass this stream's CAPTURED origin tab (capturedTabId — the same value
+          // _stampTab aliases for the file_changed sibling above) so an agent
+          // open-canvas-file lands on the INITIATING tab, not whatever tab is active
+          // when this mid-stream event fires. A background tab's stream reaches here
+          // with capturedTabId = its own tab while activeTabIdRef may be another tab —
+          // without this the file bled onto the active tab (run_48a29fc2). Frontend-
+          // captured, NOT wire-derived → no new untrusted-input surface.
+          dispatchUiCommand(_uev.cmd, _uev.path, capturedTabId ?? undefined);
         }
 
         if (event.type === 'session_start' && event.sessionId) {
@@ -3270,7 +3290,7 @@ export function useChatStreamingLifecycle(
                   // Surface current DB truth every tick (cheap; dedups by id;
                   // phase-gated NO-OP if a live stream restarted).
                   chatService.invalidateMessageCache(pollSessionId);
-                  const msgs = await chatService.getSessionMessages(pollSessionId);
+                  const msgs = await chatService.getSessionMessagesReconcileTail(pollSessionId, RECONCILE_TAIL);
                   const busyStore = messageStoreRegistry.getOrCreate(capturedTabId, { sessionId: pollSessionId });
                   busyStore.reconcile(msgs);
                   if (busyStore.phase === 'idle') {
@@ -4349,7 +4369,7 @@ export function useChatStreamingLifecycle(
             if (sid) {
               try {
                 chatService.invalidateMessageCache(sid);
-                const msgs = await chatService.getSessionMessages(sid);
+                const msgs = await chatService.getSessionMessagesReconcileTail(sid, RECONCILE_TAIL);
                 // Guard: store may have been destroyed between await calls
                 const recoveryStore = messageStoreRegistry.get(capturedTabId);
                 if (recoveryStore) recoveryStore.reconcile(msgs);

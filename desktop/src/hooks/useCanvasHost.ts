@@ -239,14 +239,20 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   useEffect(() => {
     let mounted = true;
     const handleOpenFile = async (e: Event) => {
-      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string }>).detail ?? {};
+      const { path: filePath, autoDiff, gitStatus, workspaceId, baseRef, tabId: stampedTab } = (e as CustomEvent<{ path: string; autoDiff?: boolean; gitStatus?: GitStatus; workspaceId?: string; baseRef?: string; tabId?: string }>).detail ?? {};
       if (!filePath) return;
-      // CAPTURE the ORIGIN tab BEFORE the await (run_a9806ea0 bleed fix). The click
-      // targets whatever tab is active NOW; the async /resolve below may complete
-      // AFTER the user switches tabs, and reading activeTabIdRef *after* the await
-      // would land the file on the DESTINATION tab (the observed cross-tab bleed —
-      // a file opened on tab A appeared on tab B when the switch raced the resolve).
-      const landingTab = activeTabIdRef.current;
+      // Landing tab = the event's STAMPED origin tab if present, else the live active
+      // tab. Two distinct origin cases:
+      //  · USER CLICK (run_a9806ea0): dispatches {path} with NO tabId → fire is
+      //    synchronous with the click, so activeTabIdRef.current IS the origin tab.
+      //    The capture-before-await below then pins it against a switch-during-/resolve.
+      //  · AGENT ui_command (run_48a29fc2): the swarm:open-file fires MID-STREAM,
+      //    seconds after send, from the ORIGINATING tab's (possibly background) stream
+      //    handler. By then the user may have switched tabs, so activeTabIdRef.current
+      //    is the WRONG tab. The producer stamps detail.tabId = the stream's captured
+      //    origin tab (mirroring the file_changed sibling), which we MUST prefer — else
+      //    the file lands on whatever tab is active at fire time (the observed bleed).
+      const landingTab = stampedTab ?? activeTabIdRef.current;
       const k = keyFor(landingTab);
       const gen = (openGenRef.current.get(k) ?? 0) + 1;
       openGenRef.current.set(k, gen);

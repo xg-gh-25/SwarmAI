@@ -79,7 +79,14 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
  */
 const PATH_CARRYING_CMDS = new Set(['open-canvas-file']);
 
-export function dispatchUiCommand(cmd: unknown, path?: unknown): boolean {
+// originTabId (run_48a29fc2): the FRONTEND-captured origin tab of the stream that
+// emitted this ui_command (the caller passes _stampTab / capturedTabId — NEVER a
+// value from the SSE wire). It rides swarm:open-file's detail.tabId so
+// useCanvasHost lands the file on the tab that INITIATED the open, not whatever
+// tab is active when the mid-stream event fires (the cross-tab bleed). Because it
+// is caller-supplied (not wire-derived), it does NOT widen the untrusted-input
+// surface the PAYLOAD POLICY above guards — the routing is still table-derived.
+export function dispatchUiCommand(cmd: unknown, path?: unknown, originTabId?: string): boolean {
   if (typeof cmd !== 'string' || !cmd) {
     console.warn('[ui_command] rejected non-string cmd:', cmd);
     return false;
@@ -107,7 +114,13 @@ export function dispatchUiCommand(cmd: unknown, path?: unknown): boolean {
       console.warn(`[ui_command] '${cmd}' rejected non-workspace-relative path`);
       return false;
     }
-    targetObj.dispatchEvent(new CustomEvent(entry.event, { detail: { path } }));
+    // originTabId (a valid non-empty string) rides as detail.tabId so the file lands
+    // on the initiating tab. Omitted when absent → handleOpenFile falls back to the
+    // active tab (correct for the synchronous user-click path, which never stamps).
+    const detail = (typeof originTabId === 'string' && originTabId)
+      ? { path, tabId: originTabId }
+      : { path };
+    targetObj.dispatchEvent(new CustomEvent(entry.event, { detail }));
     return true;
   }
   // Pure-nav command: payload-less (a supplied path is ignored by design).

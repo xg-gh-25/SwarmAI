@@ -15,8 +15,8 @@ vi.mock('../../services/api', () => ({
   default: { get: vi.fn(async (_url: string, opts?: { params?: { path?: string } }) => ({ data: { resolved_path: opts?.params?.path ?? '' } })) },
 }));
 
-function openFile(path: string) {
-  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path } }));
+function openFile(path: string, tabId?: string) {
+  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: tabId ? { path, tabId } : { path } }));
 }
 
 beforeEach(() => { sessionStorage.clear(); });
@@ -90,6 +90,26 @@ describe('useCanvasHost — open-file then switch tab (real event path)', () => 
     // now the STALE file1 resolve finally completes — it must NOT overwrite file2
     await act(async () => { release1(null); await p1; });
     expect(result.current.file?.fileName).toBe('file2.md');
+  });
+
+  it('an agent-stamped open-file (detail.tabId=A) lands on tab A even when tab B is active at fire time', async () => {
+    // run_48a29fc2: the agent (ui_command→swarm:open-file) fires the event MID-STREAM,
+    // seconds after send. If the user switched to B during the turn, activeTabIdRef is
+    // now B — but the file's ORIGIN is A. The event carries detail.tabId=A (the stream's
+    // captured origin tab, mirroring file_changed's _stampTab), which handleOpenFile must
+    // prefer over the live active tab. Without the fix, landingTab=activeTabIdRef=B → the
+    // file lands on B (the observed cross-tab bleed).
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-B' } },  // user is on B when the agent's event fires
+    );
+    // agent's event carries its origin tab A (not the active B)
+    await act(async () => { openFile('a/alpha.md', 'tab-A'); });
+    // B is active but the file was stamped for A → B must NOT show it
+    expect(result.current.file).toBeNull();
+    // switch to A → the file is there (landed on its stamped origin tab)
+    act(() => { rerender({ t: 'tab-A' }); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
   });
 
   it('open-file while activeTabId is momentarily null lands correctly once a real tab is active', async () => {
