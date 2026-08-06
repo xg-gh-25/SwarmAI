@@ -14,6 +14,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+# Module-scope (not lazy): both /context-health and /context-health/lite use it, and
+# it lets tests monkeypatch `routers.eval.build_context_token_block`. context_brain has
+# no import-time side effects / no routers import (verified: no circular). Keep it here —
+# don't "optimize" back to a local import.
+from core.context_brain import build_context_token_block
 from core.ddd_paths import ddd_path
 from core.eval_service import get_eval_service
 
@@ -251,6 +256,75 @@ async def reload_eval_data():
 # ─── Context Health (DDD & Memory Auto-Refresh) ────────────────────────────
 
 
+def _format_proposals_for_health(proposals: list) -> list:
+    """Shared proposal→dict mapping for BOTH /context-health and its /lite twin.
+
+    Extracted (run_2eb74e15, Gate-1) so the lite endpoint can NOT silently drift
+    from the full endpoint's proposal shape: one mapping, one cap, two consumers.
+    Returns the first 10 proposals mapped to the frontend Review-list shape.
+    """
+    return [
+        {
+            "id": p.id,
+            "target_doc": p.target_doc,
+            "target_section": p.target_section,
+            "content": p.content[:200],
+            "created_at": p.created_at,
+            "confidence": p.confidence,
+        }
+        for p in proposals[:10]
+    ]
+
+
+@router.get("/context-health/lite")
+async def get_context_health_lite():
+    """Thin first-paint twin of /context-health for the C&M Global Brain overlay.
+
+    Returns ONLY the three things the overlay needs on open — the calibrated
+    token_block (Context tab + load rail), the pending_proposals list (Review),
+    and a governance-pending count (Approve). It deliberately does NOT run the
+    five heavy read ops the full endpoint does (read_refresh_log 56d,
+    _ch_ddd_staleness, get_semantic_drift, _build_learning_dashboard) — those
+    feed EvalDashboard, not the overlay, and stay on GET /context-health.
+
+    ⚠️ DISTINCT schema from /context-health (3 keys, not 7). Fail-soft: any read
+    error / missing workspace → 200 with safe defaults (token_block null,
+    [], 0), never a 500 (matches the full endpoint's swallow-and-continue pattern).
+    """
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+
+    result = {"token_block": None, "pending_proposals": [], "governance_pending_count": 0}
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return result
+    root = Path(ws_path)
+
+    # 1. Calibrated per-file token block (the one unavoidable cost — bounded file reads).
+    try:
+        result["token_block"] = build_context_token_block(root / ".context")
+    except Exception as exc:
+        logger.debug("context-health/lite: token block failed: %s", exc)
+
+    # 2. Pending DDD proposals (Review) — same mapping+cap as the full endpoint.
+    try:
+        from core.ddd_cultivation import read_pending_proposals
+        result["pending_proposals"] = _format_proposals_for_health(
+            read_pending_proposals(root, "SwarmAI")
+        )
+    except Exception as exc:
+        logger.debug("context-health/lite: proposals read failed: %s", exc)
+
+    # 3. Governance-pending count (Approve) — same source as the overlay badge.
+    try:
+        result["governance_pending_count"] = get_eval_service().get_pending_governance()["total"]
+    except Exception as exc:
+        logger.debug("context-health/lite: governance count failed: %s", exc)
+
+    return result
+
+
 @router.get("/context-health")
 async def get_context_health():
     """Read-only context freshness report for the Eval dashboard.
@@ -315,17 +389,7 @@ async def get_context_health():
     try:
         from core.ddd_cultivation import read_pending_proposals
         proposals = read_pending_proposals(root, "SwarmAI")
-        result["pending_proposals"] = [
-            {
-                "id": p.id,
-                "target_doc": p.target_doc,
-                "target_section": p.target_section,
-                "content": p.content[:200],
-                "created_at": p.created_at,
-                "confidence": p.confidence,
-            }
-            for p in proposals[:10]
-        ]
+        result["pending_proposals"] = _format_proposals_for_health(proposals)
     except Exception as exc:
         logger.debug("context-health: proposals read failed: %s", exc)
 
