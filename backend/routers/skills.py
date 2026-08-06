@@ -231,24 +231,31 @@ async def skills_health() -> dict[str, dict]:
     fast /api/skills list and renders a status dot per row (raw counts stay off the row —
     R30#4; success_rate/last_used are for the detail drawer).
 
-    Two load-bearing properties:
+    Three load-bearing properties:
     - FAIL-SAFE (AC7 / Gate-1): any error reading the metrics DB → an EMPTY map + 200,
       NEVER a 500. A missing/locked metrics DB must not break the panel — the dots just
       don't light up.
     - VISIBILITY (Gate-1 BLOCK-3): the map is folded over the SAME _visible_to_caller
       skill list that GET /skills returns, so a non-owner (hive) never receives an
       internal skill NAME as a map key (map keys = a subset of the visible list).
+    - NO-DATA vs NEVER-USED (meta-review MED): if the metrics table is entirely empty
+      (fresh install, or a hive/EC2 DB where metrics are recorded only on the desktop),
+      return {} so the panel renders NO dots — rather than a wall of grey `never_used`
+      dots that misread as "everything is broken/unused". never_used is meaningful only
+      when SOME skills have data to contrast against.
     """
     from core.skill_health import build_health_map
 
     try:
+        all_stats = _load_skill_health_stats()
+        if not all_stats:
+            return {}  # no metrics at all → no dots, not a grey wall
         cache = await skill_manager.get_cache()
         visible_names = [
             info.folder_name
             for info in cache.values()
             if _visible_to_caller(_skill_info_to_response(info, include_content=False))
         ]
-        all_stats = _load_skill_health_stats()
         return build_health_map(all_stats, visible_names)
     except Exception as e:  # noqa: BLE001 — fail-safe: never 500 the panel
         logger.warning("skills_health failed (non-blocking, returning empty): %s", e)

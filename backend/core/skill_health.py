@@ -110,21 +110,53 @@ def build_health_map(
     ``success_rate``/``last_used`` are carried for the DETAIL drawer; the row uses only
     ``status`` (no raw counts on the scannable surface — R30#4).
 
-    NAME CANONICALIZATION (Gate-2 HIGH, run_a85e6641): the metrics store records
-    ``skill_name`` in BOTH formats — bare (``pdf``, from the SDK tool_use input path) and
-    ``s_``-prefixed (``s_pdf``, from the summary-parse path); the prod DB has both live.
-    The visible list is always ``folder_name`` (``s_pdf``). So the join is keyed on the
-    ``s_``-STRIPPED canonical name on BOTH sides — else a skill recorded under its bare
-    name would falsely fold to ``never_used`` despite heavy use. (Same canonicalization the
-    recorder already uses for eval JSONL — skill_metrics_hook ``removeprefix('s_')``.)
+    NAME CANONICALIZATION + MERGE (Gate-2 HIGH + meta-review cross-fix HIGH, run_a85e6641):
+    the metrics store records ``skill_name`` in BOTH formats — bare (``pdf``, from the SDK
+    tool_use input path) and ``s_``-prefixed (``s_pdf``, from the summary-parse path); the
+    prod DB has BOTH live for the same skill (6 collision pairs, e.g. deep-research: a bare
+    row with 199 recent invocations AND an s_ row with 17 old ones). The visible list is
+    always ``folder_name`` (``s_pdf``). So two things:
+    (1) the join is keyed on the ``s_``-STRIPPED canonical name on BOTH sides — else a skill
+        recorded under its bare name folds to ``never_used`` despite heavy use;
+    (2) colliding rows are MERGED, not last-write-replaced — a naive
+        ``{canon: s for s in all_stats}`` silently drops one row (SQL GROUP BY order decides
+        which, non-deterministic across SQLite versions), so deep-research would take the OLD
+        minority row → a wrong/stale dot for a healthy skill. Merge = SUM invocations,
+        invocation-WEIGHTED success_rate, MAX(last_used).
+    (Same ``removeprefix('s_')`` canonicalization the recorder uses for eval JSONL.)
     """
     def _canon(n: str) -> str:
         return n[2:] if n.startswith("s_") else n
 
-    by_name = {_canon(s.skill_name): s for s in all_stats}
+    # Merge all metrics rows sharing a canonical name into one aggregate (SUM invocations,
+    # invocation-weighted success_rate, MAX last_used) — never last-write-replace.
+    merged: dict[str, SkillStats] = {}
+    for s in all_stats:
+        key = _canon(s.skill_name)
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = s
+            continue
+        total = prev.invocation_count + s.invocation_count
+        weighted = (
+            (prev.success_rate * prev.invocation_count + s.success_rate * s.invocation_count) / total
+            if total else 0.0
+        )
+        merged[key] = SkillStats(
+            skill_name=key,
+            invocation_count=total,
+            success_rate=weighted,
+            avg_duration=max(prev.avg_duration, s.avg_duration),
+            correction_rate=(
+                (prev.correction_rate * prev.invocation_count + s.correction_rate * s.invocation_count) / total
+                if total else 0.0
+            ),
+            last_used=max(prev.last_used or "", s.last_used or ""),  # ISO date strings sort correctly
+        )
+
     result: dict[str, dict] = {}
     for name in skill_names:
-        stats = by_name.get(_canon(name))
+        stats = merged.get(_canon(name))
         result[name] = {
             "status": fold_status(stats, staleness_days),
             "success_rate": stats.success_rate if stats else None,

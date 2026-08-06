@@ -141,6 +141,40 @@ class TestBuildHealthMap:
         m = build_health_map(stats, ["s_autonomous-pipeline"])
         assert m["s_autonomous-pipeline"]["status"] == "healthy"
 
+    def test_colliding_rows_are_MERGED_not_replaced(self):
+        # Meta-review cross-fix HIGH (run_a85e6641): a skill with BOTH a bare and an
+        # s_-prefixed metrics row (6 live in prod, e.g. deep-research: bare 199 recent +
+        # s_ 17 old) must MERGE, not last-write-win. Replace would drop the dominant recent
+        # row → wrong/stale dot for a healthy skill. Verify the merge honors the UNION:
+        # invocations summed, MAX(last_used) taken.
+        recent = date.today().isoformat()
+        old = (date.today() - timedelta(days=STALENESS_DAYS + 40)).isoformat()
+        stats = [
+            # dominant, recent bare row (like deep-research bare: 199 / recent)
+            _stats(name="deep-research", invocation_count=199, success_rate=1.0, last_used=recent),
+            # minority, OLD s_-prefixed row (like s_deep-research: 17 / old)
+            _stats(name="s_deep-research", invocation_count=17, success_rate=1.0, last_used=old),
+        ]
+        m = build_health_map(stats, ["s_deep-research"])
+        # MAX(last_used) = recent → NOT stale (the bug: replace picks the old row → stale)
+        assert m["s_deep-research"]["status"] == "healthy", (
+            "colliding rows must merge (MAX last_used = recent), not drop the dominant recent row"
+        )
+        assert m["s_deep-research"]["last_used"] == recent
+
+    def test_merge_weights_success_rate_by_invocations(self):
+        # Merged success_rate must be invocation-weighted, not a naive average, so a
+        # low-success row is not masked/amplified by a small counterpart.
+        recent = date.today().isoformat()
+        stats = [
+            _stats(name="x", invocation_count=90, success_rate=0.5, last_used=recent),   # 45 successes
+            _stats(name="s_x", invocation_count=10, success_rate=1.0, last_used=recent),  # 10 successes
+        ]
+        m = build_health_map(stats, ["s_x"])
+        # weighted = (45+10)/100 = 0.55 < 0.7 AND 100>=5 → low_success
+        assert m["s_x"]["status"] == "low_success"
+        assert abs(m["s_x"]["success_rate"] - 0.55) < 1e-9
+
 
 class TestHealthEndpointFailSafe:
     def test_health_endpoint_returns_map(self, client):
@@ -162,6 +196,15 @@ class TestHealthEndpointFailSafe:
         resp = client.get("/api/skills/health")
         assert resp.status_code == 200
         assert resp.json() == {}
+
+    def test_health_endpoint_empty_metrics_returns_empty_no_grey_wall(self, client, monkeypatch):
+        # meta-review MED: an entirely-empty metrics table (fresh install / hive DB) must
+        # return {} → NO dots, not a wall of grey never_used dots.
+        import routers.skills as skills_router
+        monkeypatch.setattr(skills_router, "_load_skill_health_stats", lambda: [])
+        resp = client.get("/api/skills/health")
+        assert resp.status_code == 200
+        assert resp.json() == {}, "empty metrics must yield {} (no dots), not all-never_used"
 
     def test_health_endpoint_omits_internal_for_non_owner(self, client, monkeypatch):
         # Gate-1 BLOCK-3 (leak guard): a non-owner (hive) session must NOT receive an internal
