@@ -51,6 +51,29 @@ export function cacheableMeasureSig(sig: HeightMeasureSig): HeightMeasureSig | n
   return sig.width > 0 ? sig : null;
 }
 
+/** The collapsed (empty-input) minimum height in px for `rows` rows of text.
+ *
+ *  ROOT FIX (run_17d708f4) for the "3-row default height disappeared" regression:
+ *  under CSS `field-sizing: content` the browser sizes the textarea to its CONTENT
+ *  height and the `rows={DEFAULT_ROWS}` HTML attribute is NOT honored as a minimum, so
+ *  an empty input collapsed to ~1 row on WebKit 26+ (where field-sizing IS supported).
+ *  The JS-autogrow fallback path still gets its minimum from `rows`, so this minHeight
+ *  is applied ONLY in the field-sizing style branch.
+ *
+ *  The textarea is border-box (Tailwind preflight) and carries `py-2` (vertical
+ *  padding), so a `min-height` covering `rows` CONTENT rows must ADD that vertical
+ *  padding — otherwise it would clamp to `rows*lineHeight` of BORDER-box, showing
+ *  fewer than `rows` content rows. Pure (line-height + padding in, px out) so the
+ *  border-box math is unit-tested deterministically. */
+export function computeCollapsedMinHeight(
+  lineHeight: number,
+  paddingTop: number,
+  paddingBottom: number,
+  rows: number = DEFAULT_ROWS,
+): number {
+  return Math.round(rows * lineHeight) + paddingTop + paddingBottom;
+}
+
 /** True iff the WebKit/browser natively auto-sizes a textarea via CSS
  *  `field-sizing: content` — in which case the JS autogrow (a per-keystroke
  *  `height='auto'` write → `scrollHeight` read → forced synchronous document
@@ -124,6 +147,15 @@ interface ChatInputProps {
 }
 
 const MAX_ROWS = 20;
+/** Default (empty-input) visible rows. The single source of truth for both the
+ *  `rows={DEFAULT_ROWS}` attribute (JS-autogrow path minimum) and the field-sizing
+ *  branch's computed `minHeight` (run_17d708f4). */
+const DEFAULT_ROWS = 3;
+/** Fallback collapsed minHeight (px) before the mount effect measures the real
+ *  computed line-height + padding: DEFAULT_ROWS*20 + py-2 (8+8). Safe because Tailwind
+ *  preflight loads before React paints; the mount effect overwrites it with the
+ *  real computed value. */
+const DEFAULT_MIN_HEIGHT_PX = DEFAULT_ROWS * 20 + 16;
 
 /**
  * Chat Input Component with file attachments and slash commands
@@ -221,15 +253,30 @@ export function ChatInput({
   // does. Seeds at 400 (=MAX_ROWS default) and updates to the real computed value on
   // mount. (REVIEW F1, run_26172836.)
   const [maxHeightPx, setMaxHeightPx] = useState(400);
+  // Reactive collapsed minHeight for the field-sizing CSS branch (run_17d708f4). Under
+  // `field-sizing:content` the rows={DEFAULT_ROWS} attribute is NOT honored as a min, so
+  // an empty input collapses to 1 row without this. Seeds at the DEFAULT_ROWS fallback
+  // and updates to the real computed (line-height + padding) value at mount. The
+  // JS-autogrow path gets its min from rows={DEFAULT_ROWS}, so this is applied ONLY in
+  // the field-sizing style branch.
+  const [minHeightPx, setMinHeightPx] = useState(DEFAULT_MIN_HEIGHT_PX);
 
-  // Compute maxHeight once from actual computed line-height at mount
+  // Compute max/min height once from actual computed line-height + padding at mount
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
+    const cs = getComputedStyle(el);
+    const lineHeight = parseFloat(cs.lineHeight) || 20;
     const px = MAX_ROWS * lineHeight;
     maxHeightRef.current = px;
     setMaxHeightPx(px);
+    // border-box + py-2: the DEFAULT_ROWS-row minimum must include vertical padding.
+    // Fallback to 8 (py-2 = 0.5rem) when unreadable, mirroring the lineHeight `|| 20`
+    // fallback — so the computed value matches DEFAULT_MIN_HEIGHT_PX's assumption and
+    // never diverges DOWNWARD from the seed (adversarial MED, run_17d708f4).
+    const padTop = parseFloat(cs.paddingTop) || 8;
+    const padBottom = parseFloat(cs.paddingBottom) || 8;
+    setMinHeightPx(computeCollapsedMinHeight(lineHeight, padTop, padBottom));
   }, []);
 
   // L2: Listen for auto-diff injection from FileEditorPanel save
@@ -696,7 +743,7 @@ export function ChatInput({
     if (!fieldSizingRef.current) {
       const el = textareaRef.current;
       if (el) {
-        el.style.height = '';       // clear inline style, rows={3} reasserts minimum
+        el.style.height = '';       // clear inline style, rows={DEFAULT_ROWS} reasserts minimum
         el.style.overflowY = 'hidden';
       }
       // Invalidate the measure cache: height was just reset to '' (native rows min),
@@ -870,7 +917,7 @@ export function ChatInput({
                       ? 'Type to queue a follow-up...'
                       : 'Ask Swarm anything...'
               }
-              rows={3}
+              rows={DEFAULT_ROWS}
               disabled={disabled}
               // Native auto-sizing (run_26172836): when `field-sizing:content` is
               // supported, CSS grows the textarea with content — no JS scrollHeight
@@ -878,13 +925,18 @@ export function ChatInput({
               // root cause). max-height clamps growth (60vh expanded / MAX_ROWS px
               // collapsed — mirrors the JS maxHeight, via the reactive maxHeightPx so it
               // refreshes after the mount line-height measure) and overflow-y:auto
-              // scrolls past it. Set only when supported, so on older WebKit the
-              // property is absent and the JS autogrow (which writes inline height)
+              // scrolls past it. min-height enforces the DEFAULT_ROWS-row default that
+              // field-sizing would otherwise ignore (rows={} is not a min under
+              // field-sizing — run_17d708f4). Set only when supported, so on older WebKit
+              // the property is absent and the JS autogrow (which writes inline height)
               // stays in charge.
               style={fieldSizingRef.current ? {
                 // `fieldSizing` is not yet in React's CSSProperties typings — set via
                 // an index cast so tsc doesn't reject the (valid, supported) property.
                 ['fieldSizing' as string]: 'content',
+                // DEFAULT_ROWS-row floor: field-sizing does NOT honor rows={} as a min,
+                // so without this an empty input collapses to 1 row (run_17d708f4).
+                minHeight: `${minHeightPx}px`,
                 maxHeight: isExpanded ? '60vh' : `${maxHeightPx}px`,
                 overflowY: 'auto',
               } as React.CSSProperties : undefined}

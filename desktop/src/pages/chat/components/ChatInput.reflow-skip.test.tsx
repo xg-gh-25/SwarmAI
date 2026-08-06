@@ -30,7 +30,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ChatInput, heightMeasureUnchanged, cacheableMeasureSig, supportsFieldSizing, type HeightMeasureSig } from './ChatInput';
+import { ChatInput, heightMeasureUnchanged, cacheableMeasureSig, supportsFieldSizing, computeCollapsedMinHeight, type HeightMeasureSig } from './ChatInput';
 import type { UnifiedAttachment } from '../../../types';
 
 vi.mock('react-i18next', () => ({
@@ -64,6 +64,46 @@ describe('heightMeasureUnchanged (reflow-skip predicate)', () => {
 
   it('is false when expanded mode toggled (maxHeight changed)', () => {
     expect(heightMeasureUnchanged(sig({ expanded: false }), sig({ expanded: true }))).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeCollapsedMinHeight (run_17d708f4 — the 3-row default-height regression fix)
+//
+// Under CSS `field-sizing:content` the browser sizes the textarea to its CONTENT
+// height and the `rows={3}` HTML attribute is NOT honored as a minimum, so an empty
+// input collapsed to ~1 row on WebKit 26+. The fix computes a minHeight = rows ×
+// line-height + vertical padding (border-box) and applies it in the field-sizing
+// style branch, matching the 3-row default the JS-autogrow path (rows={3}) gives.
+// This pure helper is the engine-agnostic math, tested directly.
+//
+// Mutation check: drop the padding terms (return only rows*lineHeight) → the
+// "includes vertical padding" case goes RED.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('computeCollapsedMinHeight (3-row default-height, border-box)', () => {
+  it('is rows*lineHeight + top + bottom padding (default 3 rows)', () => {
+    // 3 * 20 + 8 + 8 = 76 (the py-2 = 8px top/bottom case)
+    expect(computeCollapsedMinHeight(20, 8, 8)).toBe(76);
+  });
+
+  it('scales with the real computed line-height (theme-agnostic)', () => {
+    // 3 * 24 + 8 + 8 = 88
+    expect(computeCollapsedMinHeight(24, 8, 8)).toBe(88);
+  });
+
+  it('includes vertical padding (border-box) — not just rows*lineHeight', () => {
+    // If the fix dropped padding, this would be 60, not 76 — the collapse-by-padding bug.
+    expect(computeCollapsedMinHeight(20, 8, 8)).toBeGreaterThan(20 * 3);
+  });
+
+  it('honors an explicit rows argument', () => {
+    expect(computeCollapsedMinHeight(20, 0, 0, 1)).toBe(20);
+    expect(computeCollapsedMinHeight(20, 0, 0, 5)).toBe(100);
+  });
+
+  it('rounds a fractional line-height to a whole px', () => {
+    // 3 * 20.5 = 61.5 → round → 62, + 0 padding
+    expect(computeCollapsedMinHeight(20.5, 0, 0)).toBe(62);
   });
 });
 
@@ -218,5 +258,33 @@ describe('ChatInput field-sizing elimination (root fix)', () => {
     expect(state.pxWrites).toBe(0);
     // And the native sizing CSS is actually applied to the element.
     expect(el.style.getPropertyValue('field-sizing') || (el.style as unknown as Record<string, string>)['fieldSizing']).toBeTruthy();
+  });
+
+  it('applies an inline minHeight in the field-sizing branch (3-row default, run_17d708f4)', () => {
+    // Regression guard: under field-sizing the textarea has no rows-based minimum, so
+    // an EMPTY input needs an explicit minHeight or it collapses to 1 row (WebKit 26+).
+    // Mutation check: remove minHeight from the field-sizing style branch → RED.
+    vi.stubGlobal('CSS', {
+      supports: (prop: string, val: string) => prop === 'field-sizing' && val === 'content',
+    } as unknown as typeof CSS);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={qc}><ChatInput {...baseProps({ inputValue: '' })} /></QueryClientProvider>,
+    );
+    const el = textarea();
+    expect(el.style.minHeight).toBeTruthy();
+    // Seeded/computed value is a positive px (≥ 1 row + no negative).
+    expect(parseFloat(el.style.minHeight)).toBeGreaterThan(0);
+  });
+
+  it('does NOT apply an inline minHeight when field-sizing is unsupported (JS-autogrow path uses rows={3})', () => {
+    // jsdom default: CSS.supports absent → supportsFieldSizing() false → style branch
+    // is undefined, so no inline minHeight (rows={3} provides the min on that path).
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(
+      <QueryClientProvider client={qc}><ChatInput {...baseProps({ inputValue: '' })} /></QueryClientProvider>,
+    );
+    const el = textarea();
+    expect(el.style.minHeight).toBe('');
   });
 });
