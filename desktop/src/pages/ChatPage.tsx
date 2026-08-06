@@ -2349,6 +2349,11 @@ export default function ChatPage() {
         sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
+        // Carry the SAME clientId as the initial send (placeholder is
+        // `${clientId}-asst`) — a reconnect-resend re-persists the assistant row,
+        // and without clientId that row is keyless, so a later reconcile-tail cut
+        // landing on it duplicates the bubble (run_7263ff67, the 5th entrance).
+        clientId,
         ...(uiStateRef.current && { editorContext: uiStateRef.current }),
         ...(terminalContextRef.current ? { terminalContext: terminalContextRef.current } : {}),
       };
@@ -2480,7 +2485,11 @@ export default function ChatPage() {
       incrementStreamGen();
       resetUserScroll();
 
-      const assistantMessageId = (Date.now() + 1).toString();
+      // Key this drained turn like the main send: clientId + `${clientId}-asst`
+      // placeholder + clientId on the request. Without it the whole turn persists
+      // keyless and a later reconcile-tail cut duplicates the bubble (run_7263ff67).
+      const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const assistantMessageId = `${clientId}-asst`;
       const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
 
       // SINGLE-WRITER: route through the store so streaming deltas land
@@ -2501,6 +2510,7 @@ export default function ChatPage() {
           sessionId: resolvedSessionId,
           enableSkills,
           enableMCP,
+          clientId,
           ...(uiStateRef.current && { editorContext: uiStateRef.current }),
           ...(terminalContextRef.current && { terminalContext: terminalContextRef.current }),
         },
@@ -2735,7 +2745,11 @@ export default function ChatPage() {
     setIsStreaming(true, tabId);
     if (tabId) updateTabStatus(tabId, 'streaming');
 
-    const assistantMessageId = Date.now().toString();
+    // Key this retry like the main send (run_7263ff67): clientId +
+    // `${clientId}-asst` placeholder + clientId on the request — otherwise the
+    // re-sent turn persists keyless and a later reconcile-tail cut duplicates it.
+    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const assistantMessageId = `${clientId}-asst`;
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
     // SINGLE-WRITER: clear the error from the store, then append the placeholder
     // so streaming deltas land (see insertOptimisticMessages).
@@ -2754,6 +2768,7 @@ export default function ChatPage() {
         ...(retry.content ? { content: retry.content as ContentBlock[] } : { message: retry.userMessage ?? '' }),
         enableSkills,
         enableMCP,
+        clientId,
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, tabId),
