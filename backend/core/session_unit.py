@@ -704,6 +704,14 @@ class SessionUnit:
         # the answer/permission-continue path clears them.
         self._pending_tool_use_id: Optional[str] = None
         self._pending_question: Optional[dict] = None
+        # Originating turn's client_id (set by SessionRouter.send_message before the
+        # send loop). Continuation paths (answer/permission) run on THIS same unit —
+        # guaranteed by their WAITING_INPUT state guard — and reuse it so their
+        # persisted assistant rows carry the SAME `{client_id}-asst` correlation key
+        # as the main-path rows. Without this, a continuation row is keyless and a
+        # reconcile-tail cut landing on it produces a duplicate bubble (run_9bbf1761).
+        # Lives exactly as long as the WAITING_INPUT state that gates its readers.
+        self._turn_client_id: Optional[str] = None
         # Seqs of the most recently drained pending set, surfaced to the frontend
         # mirror by the streaming-state read API (L5/2A). Best-effort hint.
         self._last_drained_seqs: list[int] = []

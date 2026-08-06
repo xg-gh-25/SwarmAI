@@ -2272,6 +2272,26 @@ class SessionRouter:
                 app_session_id=session_id,
                 config=self._config,
             ):
+                # Stash the turn client_id on the unit so continuation paths
+                # (answer/permission), which run on THIS same unit, reuse it to key
+                # their persisted rows with the SAME `{client_id}-asst` as the
+                # main-path rows — otherwise a continuation row is keyless and a
+                # reconcile-tail cut landing on it duplicates the bubble (run_9bbf1761).
+                #
+                # WHY INSIDE THE LOOP, GUARDED (Gate-2 BLOCK fix): a pre-loop
+                # `unit._turn_client_id = client_id` overwrites the stash BEFORE
+                # unit.send()'s WAITING_INPUT guard runs — so a NEW message sent
+                # while an earlier turn's question is still pending (multi-tab /
+                # eager typing) rewrites the stash to the WRONG turn's cid, then
+                # send() raises SessionBusyError and never restores it → answering
+                # the original question keys the row to the wrong turn → dup again.
+                # Writing here means the stash only updates once send() has ADMITTED
+                # this turn (first streamed event past the busy guard). And the
+                # `if client_id` guard prevents a drain/channel turn (client_id=None)
+                # from CLOBBERING a still-valid stash from the turn that owns the
+                # open question.
+                if client_id and unit._turn_client_id != client_id:
+                    unit._turn_client_id = client_id
                 # Persist assistant content blocks immediately — crash-safe.
                 # The assistant row's correlation key is the turn client_id with
                 # an "-asst" suffix, matching the frontend's assistant placeholder
@@ -2477,6 +2497,12 @@ class SessionRouter:
                 await self._persist_assistant_blocks(
                     session_id, event["content"], event.get("model"),
                     label="answer",
+                    # Reuse the originating turn's client_id (stashed by
+                    # send_message) so this continuation row carries the SAME
+                    # `{client_id}-asst` key as the turn's main-path rows — keeping
+                    # the merged bubble correlatable no matter where a reconcile-tail
+                    # cut lands (run_9bbf1761).
+                    client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
                 )
             yield event
 
@@ -2501,6 +2527,10 @@ class SessionRouter:
                 await self._persist_assistant_blocks(
                     session_id, event["content"], event.get("model"),
                     label="permission",
+                    # Reuse the originating turn's client_id (stashed by
+                    # send_message) — same rationale as continue_with_answer above
+                    # (run_9bbf1761): keeps the continuation row keyed to the turn.
+                    client_id=(f"{unit._turn_client_id}-asst" if unit._turn_client_id else None),
                 )
             yield event
 
