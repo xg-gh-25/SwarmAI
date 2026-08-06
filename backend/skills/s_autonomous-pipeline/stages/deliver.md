@@ -338,6 +338,13 @@ git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD
 
 **For bugfix profile:** Only dispatch Correctness + Security.
 
+**⚠️ EXCEPTION — `understanding.work_type == refactor` (architecture task):** do NOT
+apply the bugfix narrowing above even when the profile resolved to bugfix. A refactor's
+risk is structural, not just correctness — dispatch the architecture-relevant set:
+**Correctness + API-Contract + Integration + Red-Team** (Red-Team unconditionally, so a
+patch-shaped or wrong-layer delivery is attacked head-on). This makes the specialist set
+work_type-driven rather than relying only on the line-count proxy below.
+
 **🚨 MECHANICAL OVERRIDE: diff > 100 lines = full tier, regardless of profile.**
 
 ```bash
@@ -662,6 +669,12 @@ Where this code runs: <hook/endpoint/cron/startup/CLI — infer from file path>
    - Is the first-run behavior safe (won't corrupt, won't flood)?
 
 5. ARCHITECTURAL INTEGRITY (No-Patch Gate)
+   - **This gate is work-type-agnostic and fires post-build for EVERY profile — it is
+     the backstop.** For `work_type == refactor`, the front-line defense is now Gate-1
+     SSA (`build.md` Check 4, INVERTED polarity: any PATCH = BLOCK, pre-build) — so a
+     refactor-patch should already have been caught before code was written. If one
+     reaches HERE, Gate-1 leaked; block it and note the leak. For bugfix/feature this
+     gate remains the primary structural check (Gate-1 SSA tolerates a deferred patch there).
    - Does this fix ADD net complexity (lines, files, /tmp coordination,
      new guard clauses, new state to manage)? If yes → likely a patch.
    - Is the problem being fixed at the layer where it OCCURS (symptom)

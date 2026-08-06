@@ -100,7 +100,7 @@ If no `build_injection_recommendations` exist, skip this section.
 
 ### Input Context (Feed to Sub-Agent)
 
-Assemble these 5 inputs before spawning (any can be empty — sub-agent handles missing gracefully):
+Assemble these 6 inputs before spawning (any can be empty — sub-agent handles missing gracefully):
 
 1. **Plan artifact** — the design_doc from PLAN stage (`discover --types design_doc --full`)
 2. **Rejected alternatives** — from THINK stage research artifact, the "alternatives considered
@@ -113,6 +113,12 @@ Assemble these 5 inputs before spawning (any can be empty — sub-agent handles 
 5. **EVALUATE anti-repetition verdict** — if EVALUATE's Anti-Repetition Check found a match
    but passed with reasoning ("PROCEED — structural difference: X"), include that verdict.
    Prevents Gate 1 from re-litigating what EVALUATE already resolved.
+6. **`understanding.work_type`** — from the EVALUATE artifact's `understanding` block
+   (`bugfix | existing-feature | greenfield | refactor | research | docs`). **REQUIRED — Check 4
+   (SSA) polarity depends on it.** The sub-agent has zero session context, so it cannot infer the
+   work_type; you MUST feed it verbatim (mirrors how evaluate.md's M3 skeptic is fed `Work type: <work_type>`).
+   If absent, the sub-agent defaults to the bugfix/patch-tolerant polarity — so a refactor whose
+   work_type is not fed silently loses its inverted-polarity protection.
 
 ### Sub-Agent Prompt (Skeptic + SSA)
 
@@ -120,6 +126,11 @@ Spawn a fresh-context sub-agent with this system prompt:
 
 ```markdown
 ## Role: Plan Skeptic + Structural Solution Assessor
+
+**Work type of this task: <work_type>** (from EVALUATE; one of bugfix | existing-feature |
+greenfield | refactor | research | docs). This drives Check 4 (SSA) polarity — for a
+`refactor`, a PATCH is a BLOCK, not a WARN (see Check 4). If this says `<work_type>`
+unsubstituted or empty, treat as bugfix (patch-tolerant default) and note the missing input.
 
 You receive a code generation plan. Your job is to find reasons this plan will
 FAIL or WASTE EFFORT before any code is written. You are NOT building — you are
@@ -166,6 +177,17 @@ Signals of over-engineering:
 
 If over-engineered → WARN with simpler alternative suggested.
 
+**⚠️ Refactor lens (work_type = `refactor` / architecture task) — do NOT mistake a
+root structural change for over-engineering.** When the task IS the restructure, a
+new abstraction/module that *removes a whole class of problem* (unifies duplicated
+paths, moves an invariant to the layer that owns it, deletes an "N callers must
+remember" contract) is the POINT, not YAGNI. Judge the abstraction against the
+refactor's goal, not against a smallest-diff default. This check must NOT push a
+refactor toward the smaller patch — that is the exact pro-patch pressure the
+work_type=refactor SSA polarity (Check 4) exists to counter. Still flag genuine
+over-engineering (an extension point the refactor did not require); the carve-out
+is only for abstractions that serve the stated structural goal.
+
 ### Check 4: Structural Solution Assessment (SSA)
 
 For bugfix/modification plans ONLY (skip for greenfield features):
@@ -174,12 +196,32 @@ For bugfix/modification plans ONLY (skip for greenfield features):
 - Does the plan add UNDERSTANDING to the system (type constraint, invariant, schema)
   or just a CHECK (null guard, try/except, fallback)?
 
-Verdict:
+**⚠️ Read `understanding.work_type` FIRST — it flips the PATCH polarity below.**
+The default rubric here is *bugfix-shaped*: a bugfix's goal is to make the broken
+behavior correct, so shipping a patch and deferring the structural fix is
+acceptable tech debt (WARN). **But for `work_type` = `refactor` (an
+architecture/sustainability/de-patch task), the STRUCTURAL CHANGE IS THE
+ACCEPTANCE CRITERION** — the user asked to remove a whole class of problem at the
+root. There, a patch is not deferred tech debt; it is the task *not done*. So the
+verdict polarity INVERTS by work_type:
+
+**Verdict — DEFAULT (work_type = bugfix / existing-feature):**
 - STRUCTURAL → no concern (root cause addressed)
 - PATCH (ACCEPTABLE) → WARN: "Root cause known but structural fix deferred.
   Recommend logging tech debt todo: {description}"
 - PATCH (BLOCKING) → BLOCK: "Root cause unknown or fix in wrong layer.
   Structural alternative: {proposal}"
+
+**Verdict — REFACTOR polarity (work_type = `refactor` / architecture task) — INVERTED:**
+- STRUCTURAL → PASS (this is the expected outcome — the root-level change the task asked for)
+- PATCH → **BLOCK** (not WARN): "This is a refactor — the structural change IS the
+  acceptance criterion. A fix that leaves ANY named structural problem standing
+  (a symptom patched, one instance fixed, complexity ADDED, an 'N callers must
+  remember' invariant left in place) means the refactor did not happen. Root
+  structural alternative: {proposal}." There is no ACCEPTABLE-patch tier for a
+  refactor — a deferred structural fix defeats the task's whole purpose.
+- The tell (from R5 Patch-Instinct): if the plan pitches "the minimal / low-blast-radius
+  option" for a refactor, that pitch IS the finding — BLOCK and demand the subsystem-level fix.
 
 ### Check 5: API Existence Verification
 
@@ -202,6 +244,7 @@ Checks:
   2. Failure Pattern: [PASS | WARN: ... | BLOCK: ...]
   3. Simplicity:      [PASS | WARN: ... | BLOCK: ...]
   4. SSA:             [PASS | WARN: ... | BLOCK: ... | N/A (greenfield)]
+                      (work_type=refactor → INVERTED polarity: any PATCH = BLOCK, not WARN)
   5. API Existence:   [PASS | WARN: ... | BLOCK: ...]
 
 Overall: [PASS — proceed to BUILD | WARN — proceed with noted concerns | BLOCK — revise PLAN]

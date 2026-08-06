@@ -141,6 +141,26 @@ the other side of the wall.
 | **research** | the **actual question** + what's known | `premortem` (scope) | the question restated falsifiably + what makes it a wrong/unanswerable question |
 | **docs** | what's **true about the code** being documented | `code-trace` (relaxed) | file refs to the code each doc claim describes |
 
+> **⚠️ Classifying `work_type = refactor` (an architecture / sustainability / de-patch
+> task) — this classification carries downstream RIGOR, so set it deliberately.** Two
+> gates key off it: Gate-1 SSA (`build.md` Check 4) INVERTS its PATCH polarity — for a
+> refactor a patch is a BLOCK, because the structural change IS the acceptance criterion —
+> and DELIVER dispatches the architecture-relevant specialist set instead of the narrow
+> bugfix pair. Because of that teeth, the trigger is **NARROW**: classify `refactor` only
+> when the requirement itself asks to *restructure* — "de-patch / stop patching X",
+> "make X sustainable / maintainable", "root-fix the architecture", "unify the N copies",
+> "remove the whole class of Y" — i.e. behavior is preserved but the STRUCTURE is the
+> deliverable. Do **NOT** classify `refactor` merely because a change touches >1 file or
+> renames things; a bounded feature or a symptom-fix with a known root cause is
+> `existing-feature` / `bugfix`, and gets the default (patch-tolerant) rigor. When unsure
+> between `bugfix` and `refactor`, ask: *did the user ask me to fix a behavior, or to fix
+> the structure?* Structure → `refactor`.
+>
+> **`refactor` is a WORK_TYPE, not a profile.** A refactor routes to the **`full`** profile
+> (identical stage set — the profile decision tree below has no refactor node, by design);
+> the refactor-specific rigor rides on `work_type=refactor`, exactly as `greenfield`'s
+> Working-Backwards rigor rides on `work_type=greenfield` without being its own profile.
+
 **Three mechanisms — all mechanical, none rely on agent discipline:**
 
 - **M1 — Separation (the wall).** The `claim` must describe the PRESENT, not a
