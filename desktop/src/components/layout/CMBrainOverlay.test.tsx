@@ -17,7 +17,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mock the api client BEFORE importing the component.
 vi.mock('../../services/api', () => ({
-  default: { get: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn() },
 }));
 import api from '../../services/api';
 import { CMBrainContent } from './CMBrainOverlay';
@@ -36,21 +36,35 @@ const TOKEN_BLOCK = {
   ],
 };
 
-function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[] } = {}) {
-  const health = {
-    refresh_log: [],
-    staleness: [],
-    pending_proposals: [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }],
-    weeks_available: 0,
-    semantic_drift: { report_date: null, findings: [], drift_count: 0, at_risk_cases: [] },
+// Real-shaped Review proposals (DDD cultivation) — the fields the card renders.
+const REVIEW_PROPS = [
+  { id: 'proposal_a8e14d', target_doc: 'IMPROVEMENT.md', target_section: 'What Failed', content: 'Trace the decisive line before asserting a root cause.', confidence: 0.82 },
+  { id: 'proposal_1d7c2e', target_doc: 'TECH.md', target_section: 'Architecture', content: 'Record the lite-endpoint split as a TECH decision.', confidence: 0.71 },
+  { id: 'proposal_e65e4b', target_doc: 'PRODUCT.md', target_section: 'C&M overlay', content: 'Locked context files open read-only in Canvas.', confidence: 0.64 },
+];
+// Real-shaped governance (Approve) proposals — source_class/occurrence/proposed_rule.
+const GOV_PROPS = [
+  { id: 'CLASS_B:rule', source_class: 'CLASS_B', proposal_kind: 'rule', occurrence_count: 6, proposed_rule: 'Any runtime/deploy-state claim must cite a same-turn observation.', confidence: 0.9 },
+  { id: 'CLASS_A:gate', source_class: 'CLASS_A', proposal_kind: 'gate', occurrence_count: 5, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', confidence: 0.85 },
+];
+
+// lite endpoint shape: exactly { token_block, pending_proposals, governance_pending_count }
+function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[]; reviewProps?: unknown[] } = {}) {
+  const reviewProps = opts.reviewProps ?? REVIEW_PROPS;
+  const govN = opts.governancePending ?? 0;
+  const lite = {
     token_block: TOKEN_BLOCK,
+    pending_proposals: reviewProps,
+    governance_pending_count: govN,
     ...overrides,
   };
-  const govN = opts.governancePending ?? 0;
   const points = opts.trendPoints ?? [];
   (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    if (url.includes('context-health/lite')) {
+      return Promise.resolve({ data: lite });
+    }
     if (url.includes('governance/pending')) {
-      return Promise.resolve({ data: { proposals: Array.from({ length: govN }, (_, i) => ({ id: `g${i}` })), total: govN } });
+      return Promise.resolve({ data: { proposals: GOV_PROPS.slice(0, govN), total: govN } });
     }
     if (url.includes('brain-trend')) {
       return Promise.resolve({ data: { points, count: points.length, launch_date: (points[0] as { date?: string } | undefined)?.date ?? null } });
@@ -58,8 +72,9 @@ function mockHealth(overrides: Record<string, unknown> = {}, opts: { governanceP
     if (url.includes('brain-graph')) {
       return Promise.resolve({ data: { nodes: [], drill: {}, total: 0 } });
     }
-    return Promise.resolve({ data: health }); // context-health
+    return Promise.resolve({ data: lite }); // fallback
   });
+  (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
 }
 
 // M3: CMBrainOverlay → CMBrainContent (OverlayHost registry). The content component
@@ -122,8 +137,8 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
     (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('brain-graph')) return Promise.resolve({ data: GRAPH });
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      // context-health (default)
-      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK } });
+      // lite (default)
+      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
   }
 
@@ -177,7 +192,7 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
           { type: 'model', count: 0, active: 0, dormant: 0 },
         ], drill: {}, total: 0 } });
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK } });
+      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
     renderOverlay();
     openOverlay();
@@ -346,7 +361,7 @@ describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4
     expect(await screen.findByTestId('cm-rail-trend-svg')).toBeInTheDocument();
   });
 
-  it('clicking a Needs-you button filters the main area to that list + back-to-tab returns', async () => {
+  it('clicking a Needs-you button filters the main area to that list + back returns + rail active', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();
     openOverlay();
@@ -356,10 +371,187 @@ describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4
     const list = await screen.findByTestId('cm-needs-list');
     expect(list).toBeInTheDocument();
     expect(screen.queryByTestId('cm-panel-context')).toBeNull(); // tab content hidden
-    // back-to-tab returns to the Context tab
-    act(() => { screen.getByTestId('cm-needs-back').click(); });
+    // AC6: the rail Review button shows an ACTIVE state while its list is open
+    expect(screen.getByTestId('cm-needs-review').getAttribute('data-active')).toBe('true');
+    // AC6: an explicit Back header (breadcrumb) exists, labeled with the return target
+    const back = await screen.findByTestId('cm-needs-back');
+    expect(back.textContent).toMatch(/back/i);
+    // back returns to the Context tab + clears rail active
+    act(() => { back.click(); });
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
     expect(screen.queryByTestId('cm-needs-list')).toBeNull();
+    expect(screen.getByTestId('cm-needs-review').getAttribute('data-active')).toBe('false');
+  });
+});
+
+describe('CMBrainOverlay — AC1 lite endpoint wiring', () => {
+  it('first paint queries /eval/context-health/lite, never the heavy /eval/context-health', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    await waitFor(() => expect(screen.getByTestId('cm-file-row-SWARMAI.md')).toBeInTheDocument());
+    const urls = (api.get as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u.includes('/eval/context-health/lite'))).toBe(true);
+    // the heavy endpoint (exact, without /lite) must NOT be fetched on first paint
+    expect(urls.some((u) => /\/eval\/context-health(?!\/lite)/.test(u))).toBe(false);
+  });
+
+  it('Approve count comes from lite governance_pending_count (no first-paint governance/pending fetch)', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    // the governance LIST is lazy — not fetched until Approve is opened
+    const urls = (api.get as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u.includes('governance/pending'))).toBe(false);
+  });
+});
+
+describe('CMBrainOverlay — AC2 rows open in Canvas', () => {
+  it('clicking a file row dispatches swarm:open-file for that .context file', async () => {
+    mockHealth();
+    const seen: Array<{ path?: string }> = [];
+    const handler = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener('swarm:open-file', handler);
+    try {
+      renderOverlay();
+      openOverlay();
+      await screen.findByTestId('cm-panel-context');
+      const row = await screen.findByTestId('cm-file-row-MEMORY.md');
+      act(() => { row.click(); });
+      expect(seen.some((d) => d.path === '.context/MEMORY.md')).toBe(true);
+    } finally {
+      document.removeEventListener('swarm:open-file', handler);
+    }
+  });
+
+  it('LOCKED files are ALSO openable (read-only is server-driven, not a dead lock)', async () => {
+    mockHealth();
+    const seen: Array<{ path?: string }> = [];
+    const handler = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener('swarm:open-file', handler);
+    try {
+      renderOverlay();
+      openOverlay();
+      await screen.findByTestId('cm-panel-context');
+      const locked = await screen.findByTestId('cm-file-row-SWARMAI.md');
+      act(() => { locked.click(); });
+      expect(seen.some((d) => d.path === '.context/SWARMAI.md')).toBe(true);
+    } finally {
+      document.removeEventListener('swarm:open-file', handler);
+    }
+  });
+});
+
+describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () => {
+  it('Review cards render real fields (target_doc/section/content), not a raw id subject', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    const list = await screen.findByTestId('cm-needs-list');
+    // the human-readable target + content appear
+    expect(list.textContent).toMatch(/IMPROVEMENT\.md/);
+    expect(list.textContent).toMatch(/What Failed/);
+    expect(list.textContent).toMatch(/decisive line/);
+    // the id is NOT the card's headline (it may appear as a demoted footnote only)
+    const card = await screen.findByTestId('cm-proposal-proposal_a8e14d');
+    const head = card.querySelector('[data-testid="cm-card-what"]');
+    expect(head).not.toBeNull();
+    expect(head!.textContent).not.toContain('proposal_a8e14d');
+  });
+
+  it('Review Accept POSTs the cultivation route (not governance)', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    const card = await screen.findByTestId('cm-proposal-proposal_a8e14d');
+    act(() => { (card.querySelector('[data-testid="cm-card-accept"]') as HTMLElement).click(); });
+    await waitFor(() => {
+      const posts = (api.post as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(posts.some((u) => u.includes('/api/cultivation/proposals/proposal_a8e14d/approve'))).toBe(true);
+    });
+  });
+
+  it('Approve cards render governance fields + Defer POSTs the governance route', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    await screen.findByTestId('cm-needs-list');
+    // the governance LIST is lazy (fetched only when Approve opens) — wait for the card
+    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule');
+    const list = screen.getByTestId('cm-needs-list');
+    expect(list.textContent).toMatch(/CLASS_B/);
+    expect(list.textContent).toMatch(/same-turn observation/);
+    // governance card has a Defer action (cultivation does not)
+    act(() => { (card.querySelector('[data-testid="cm-card-defer"]') as HTMLElement).click(); });
+    await waitFor(() => {
+      const calls = (api.post as ReturnType<typeof vi.fn>).mock.calls;
+      const gov = calls.find((c) => (c[0] as string).includes('/eval/governance/decision'));
+      expect(gov).toBeTruthy();
+      expect((gov![1] as { proposal_id: string; decision: string }).decision).toBe('defer');
+      expect((gov![1] as { proposal_id: string }).proposal_id).toBe('CLASS_B:rule');
+    });
+  });
+});
+
+describe('CMBrainOverlay — Gate-2: lazy Approve list shows loading, not a false empty', () => {
+  it('shows a loading state (never "nothing to approve") while the governance list is in flight', async () => {
+    // governance/pending resolves on a deferred promise so we can observe the in-flight state
+    let resolveGov: (v: unknown) => void = () => {};
+    const govPromise = new Promise((r) => { resolveGov = r; });
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 2 } });
+      if (url.includes('governance/pending')) return govPromise.then(() => ({ data: { proposals: GOV_PROPS, total: 2 } }));
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 2 } });
+    });
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    // while in flight: a loading indicator, NOT the false "nothing to approve"
+    const loading = await screen.findByTestId('cm-needs-loading');
+    expect(loading).toBeInTheDocument();
+    expect(screen.getByTestId('cm-needs-list').textContent).not.toMatch(/nothing/i);
+    // resolve → cards appear
+    await act(async () => { resolveGov(null); });
+    await screen.findByTestId('cm-proposal-CLASS_B:rule');
+  });
+});
+
+describe('CMBrainOverlay — AC7 honest over-budget alert', () => {
+  it('shows over-by amount + names the top oversized files + an open action', async () => {
+    mockHealth(); // TOKEN_BLOCK is over_budget (100K vs 91K), MEMORY.md oversized 48K
+    renderOverlay();
+    openOverlay();
+    const rail = await screen.findByTestId('cm-overview-rail');
+    const alert = await screen.findByTestId('cm-budget-alert');
+    // over-by amount (100K-91K = 9K) surfaced, not just "over budget"
+    expect(alert.textContent).toMatch(/9[,.]?0?K|9000/);
+    // names the biggest offender file
+    expect(alert.textContent).toMatch(/MEMORY\.md/);
+    void rail;
+  });
+
+  it('slims Context rows — no redundant percent column alongside the token count', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
+    // AC7: the redundant composition-% cell is dropped (token count is the one fact)
+    expect(row.querySelector('[data-testid="cm-file-pct"]')).toBeNull();
   });
 });
 

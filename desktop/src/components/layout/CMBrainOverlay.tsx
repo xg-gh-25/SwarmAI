@@ -18,8 +18,8 @@
  *
  * @exports CMBrainOverlay
  */
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api, { classifyLoadError } from '../../services/api';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
@@ -50,9 +50,12 @@ interface TokenBlock {
   over_budget: boolean;
   per_file: TokenFileRow[];
 }
-interface ContextHealth {
-  pending_proposals?: Array<Record<string, unknown>>;
+// Lite first-paint payload (GET /eval/context-health/lite) — exactly 3 keys, no
+// heavy scans. The overlay's Context tab + rail + Review count consume this.
+interface ContextHealthLite {
   token_block?: TokenBlock | null;
+  pending_proposals?: Array<Record<string, unknown>>;
+  governance_pending_count?: number;
 }
 
 type TabKey = 'context' | 'memory' | 'guideline';
@@ -77,13 +80,16 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+const LITE_QUERY_KEY = ['cm-brain-context-health-lite'];
+
 function useContextHealth(enabled: boolean) {
-  return useQuery<ContextHealth>({
-    queryKey: ['cm-brain-context-health'],
-    queryFn: async () => (await api.get<ContextHealth>('/eval/context-health')).data,
+  return useQuery<ContextHealthLite>({
+    queryKey: LITE_QUERY_KEY,
+    // AC1: first paint hits the THIN endpoint (token_block + counts only) so the
+    // overlay opens instantly — the heavy /eval/context-health (5 scans) is never
+    // fetched here. Memory tab keeps its own lazy brain-graph/brain-trend queries.
+    queryFn: async () => (await api.get<ContextHealthLite>('/eval/context-health/lite')).data,
     staleTime: 30_000,
-    // Gate on `open` so a closed overlay never fetches (the overlay is always
-    // mounted in ThreeColumnLayout; without this the query would fire on app boot).
     enabled,
   });
 }
@@ -97,25 +103,30 @@ function useContextHealth(enabled: boolean) {
  */
 export function CMBrainContent() {
   const [tab, setTab] = useState<TabKey>('context');
+  const qc = useQueryClient();
 
   // Always fetch: the host mounts this only while the surface is open.
   const { data, isError: healthErr, error: healthError, refetch: refetchHealth } = useContextHealth(true);
   const block = data?.token_block ?? null;
   const reviewCount = data?.pending_proposals?.length ?? 0;
+  // AC1: Approve BADGE count comes from the lite payload — no first-paint
+  // governance/pending fetch. The governance LIST is fetched lazily (below) only
+  // when the user opens the Approve list.
+  const approveCount = data?.governance_pending_count ?? 0;
 
-  // Needs-you Approve: real governance-pending queue (Gate-1: {proposals,total}, a
-  // DIFFERENT queue from pending_proposals which drives Review). Approve = proposals
-  // awaiting yes/no. (An 'Action' bucket that duplicated this same queue was removed
-  // 2026-08-03 — see the needsMeta note below.)
+  // Which Needs-you list is filtered into the main area (null = show the tab).
+  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve'>(null);
+
+  // Lazy governance LIST — only fetched once the Approve list is opened (the badge
+  // count already came from lite). Keeps first paint to a single lite request.
   const { data: gov, isError: govErr, error: govError, refetch: refetchGov } = useQuery<{ proposals: unknown[]; total: number }>({
     queryKey: ['cm-governance-pending'],
     queryFn: async () => (await api.get<{ proposals: unknown[]; total: number }>('/eval/governance/pending')).data,
-    staleTime: 30_000, enabled: true,
+    staleTime: 30_000,
+    enabled: needsFilter === 'approve',
   });
-  const approveCount = gov?.total ?? 0;
-  // B1: a failed governance/health fetch used to fall back to 0 / '—' silently —
-  // the user believed all-clear when the backend actually errored. Surface it.
-  const needsErr = healthErr || govErr;
+  // B1: a failed fetch used to fall back to 0 / '—' silently — surface it.
+  const needsErr = healthErr || (needsFilter === 'approve' && govErr);
 
   // Growth-trend series for the rail (same source as the Memory size-trend).
   const { data: trend } = useQuery<BrainTrend>({
@@ -124,15 +135,30 @@ export function CMBrainContent() {
     staleTime: 30_000, enabled: true,
   });
 
-  // Which Needs-you list is filtered into the main area (null = show the tab).
-  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve'>(null);
+  // Dual-route decision handler (AC3/AC4): Review items (DDD cultivation) and Approve
+  // items (governance) live in DIFFERENT queues with DIFFERENT endpoints — a single
+  // endpoint would 404. On success, invalidate the lite query (Review count + badge)
+  // and the governance list (Approve).
+  async function decide(kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') {
+    if (kind === 'review') {
+      // cultivation: accept→approve, reject→reject (no defer); query-param route, no body.
+      const verb = decision === 'accept' ? 'approve' : 'reject';
+      await api.post(`/api/cultivation/proposals/${encodeURIComponent(id)}/${verb}?project=SwarmAI`);
+    } else {
+      await api.post('/eval/governance/decision', { proposal_id: id, decision });
+    }
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: LITE_QUERY_KEY }),
+      qc.invalidateQueries({ queryKey: ['cm-governance-pending'] }),
+    ]);
+  }
 
-  // NOTE: an 'action' bucket was removed (2026-08-03) — it reused Approve's exact
-  // count + items (same queue, two labels), which read as duplicated/fake. Re-add
-  // only if a distinct action queue with its OWN source exists.
+  // items:null == "still loading" (distinct from [] == "loaded, empty") so the list
+  // never shows a FALSE "nothing to approve" during the lazy governance fetch (Gate-2 HIGH-1).
+  const govLoading = needsFilter === 'approve' && gov === undefined && !govErr;
   const needsMeta = {
-    review: { label: 'Review', count: reviewCount, items: data?.pending_proposals ?? [] },
-    approve: { label: 'Approve', count: approveCount, items: (gov?.proposals ?? []) as Array<Record<string, unknown>> },
+    review: { label: 'Review', count: reviewCount, items: (data?.pending_proposals ?? []) as Array<Record<string, unknown>> },
+    approve: { label: 'Approve', count: approveCount, items: govLoading ? null : ((gov?.proposals ?? []) as Array<Record<string, unknown>>) },
   };
 
   return (
@@ -145,19 +171,20 @@ export function CMBrainContent() {
           <div>
             <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">Current load</div>
             <div className="mt-1 flex items-baseline gap-1.5">
-              <span className="text-2xl font-semibold text-[var(--color-text)]">
+              <span
+                className="text-2xl font-semibold"
+                style={{ color: block?.over_budget ? '#d0524a' : 'var(--color-text)' }}
+              >
                 {block ? fmtTokens(block.total_tokens) : '—'}
               </span>
               <span className="text-xs text-[var(--color-text-muted)]">
                 / {block ? fmtTokens(block.budget) : '—'} budget
               </span>
             </div>
-            {block?.over_budget && (
-              <div className="mt-1 text-[11px] font-medium text-[#d08a4a]">over assembly budget</div>
-            )}
             {healthErr && !block && (
               <div className="mt-1 text-[11px] text-[#d08a4a]">couldn’t load — not “0”</div>
             )}
+            {block?.over_budget && <BudgetAlert block={block} />}
           </div>
 
           {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
@@ -185,8 +212,8 @@ export function CMBrainContent() {
               </div>
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
-                <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" onClick={() => setNeedsFilter('review')} />
-                <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" onClick={() => setNeedsFilter('approve')} />
+                <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
+                <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
               </div>
             )}
           </div>
@@ -195,7 +222,13 @@ export function CMBrainContent() {
         {/* ── Main area: tabs + panel, OR the Needs-you filtered list ── */}
         <div className="flex-1 min-w-0 flex flex-col">
           {needsFilter ? (
-            <NeedsList meta={needsMeta[needsFilter]} onBack={() => setNeedsFilter(null)} />
+            <NeedsList
+              kind={needsFilter}
+              meta={needsMeta[needsFilter]}
+              backLabel={tab === 'context' ? 'Context' : tab === 'memory' ? 'Memory' : 'Guideline'}
+              onBack={() => setNeedsFilter(null)}
+              onDecide={decide}
+            />
           ) : (
             <>
               <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
@@ -243,22 +276,144 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   );
 }
 
-// Needs-you filtered list — swaps into the main area; "← back to tab" returns.
-function NeedsList({ meta, onBack }: { meta: { label: string; count: number; items: Array<Record<string, unknown>> }; onBack: () => void }) {
+// Over-budget alert (AC7) — honest: how much over + which files carry the load +
+// an OPEN action (never a fake "distill" that does nothing). Only rendered when
+// block.over_budget is true.
+function BudgetAlert({ block }: { block: TokenBlock }) {
+  const over = block.total_tokens - block.budget;
+  // The offenders: biggest files that are growing/oversized (the ones worth acting on).
+  const offenders = [...block.per_file]
+    .filter((f) => f.health === 'oversized' || f.health === 'growing')
+    .sort((a, b) => b.tokens - a.tokens)
+    .slice(0, 2);
+  const top = offenders.length ? offenders : [...block.per_file].sort((a, b) => b.tokens - a.tokens).slice(0, 2);
+  return (
+    <div
+      data-testid="cm-budget-alert"
+      className="mt-2 rounded-md border px-2.5 py-2"
+      style={{ borderColor: 'color-mix(in srgb, #d0524a 45%, var(--color-border))', background: 'color-mix(in srgb, #d0524a 8%, transparent)' }}
+    >
+      <div className="text-[11px] font-semibold" style={{ color: '#d0524a' }}>
+        ⚠ Over budget by {fmtTokens(over)}
+      </div>
+      <div className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
+        {top.map((f) => (
+          <span key={f.name} className="block">
+            <span className="font-medium text-[var(--color-text)]">{f.name}</span> {fmtTokens(f.tokens)}
+            {f.health && <span style={{ color: HEALTH_TINT[f.health] }}> ({f.health})</span>}
+          </span>
+        ))}
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {top.map((f) => (
+          <button
+            key={f.name}
+            data-testid={`cm-budget-open-${f.name}`}
+            onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))}
+            className="rounded px-2 py-0.5 text-[10px] font-medium text-white"
+            style={{ background: '#d0524a' }}
+          >
+            Open {f.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// A Need-You proposal rendered as a What / Where / Why card with actions — the id is
+// a demoted footnote, never the subject. Review (DDD cultivation) and Approve
+// (governance) have different fields + different action routes (dual-route).
+function ProposalCard({
+  kind, item, onDecide,
+}: {
+  kind: 'review' | 'approve';
+  item: Record<string, unknown>;
+  onDecide: (kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
+}) {
+  const id = String(item.id ?? 'unknown');
+  const [state, setState] = useState<null | string>(null);
+  const conf = typeof item.confidence === 'number' ? (item.confidence as number) : null;
+
+  // What / Where / Why differ by queue.
+  let what: string, where: ReactNode, why: string, tag: ReactNode = null;
+  if (kind === 'review') {
+    const doc = String(item.target_doc ?? '');
+    const section = String(item.target_section ?? '');
+    what = `Add to ${doc || 'a DDD doc'}`;
+    where = <>propose in <span className="font-mono" style={{ color: '#4a8fb0' }}>{doc}{section ? ` › ${section}` : ''}</span></>;
+    why = String(item.content ?? '');
+  } else {
+    const cls = String(item.source_class ?? '');
+    const occ = item.occurrence_count;
+    const proposalKind = String(item.proposal_kind ?? 'rule');
+    what = `Add ${proposalKind}: ${String(item.proposed_rule ?? '(no rule text)')}`;
+    where = <>governance {proposalKind}</>;
+    why = cls ? `${cls}${typeof occ === 'number' ? ` · recurred ${occ}×` : ''}` : '';
+    if (cls) tag = <span className="mr-1.5 rounded px-1.5 py-[1px] font-mono text-[10px] font-bold" style={{ color: '#d0524a', background: 'color-mix(in srgb, #d0524a 14%, transparent)' }}>{cls}{typeof occ === 'number' ? ` ·${occ}×` : ''}</span>;
+  }
+
+  async function act(decision: 'accept' | 'reject' | 'defer') {
+    setState(decision);
+    try { await onDecide(kind, id, decision); } catch { setState(null); }
+  }
+
+  return (
+    <div data-testid={`cm-proposal-${id}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3.5 py-3" style={{ opacity: state ? 0.4 : 1 }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div data-testid="cm-card-what" className="text-sm font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
+          <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{where}</div>
+        </div>
+        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-medium text-[var(--color-text-faint)]">conf {conf}</span>}
+      </div>
+      {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
+      <div className="mt-2.5 flex items-center justify-between">
+        <span className="font-mono text-[10px] text-[var(--color-text-faint)]">{id}</span>
+        {state ? (
+          <span className="text-[11px] text-[var(--color-text-muted)]">{state}ed ✓</span>
+        ) : (
+          <div className="flex gap-1.5">
+            {/* Gate-2 MEDIUM: disabled during an in-flight decision — no double-submit. */}
+            <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="rounded px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50" style={{ color: '#5fc99a', background: 'color-mix(in srgb, #5fc99a 16%, transparent)', border: '1px solid color-mix(in srgb, #5fc99a 45%, var(--color-border))' }}>Accept</button>
+            <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-text-muted)] disabled:opacity-50">Reject</button>
+            {kind === 'approve' && <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-text-faint)] disabled:opacity-50">Defer</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Needs-you filtered list — swaps into the main area with an explicit Back header +
+// breadcrumb; the rail button stays active (AC6). Items render as ProposalCards.
+function NeedsList({
+  kind, meta, backLabel, onBack, onDecide,
+}: {
+  kind: 'review' | 'approve';
+  meta: { label: string; count: number; items: Array<Record<string, unknown>> | null };
+  backLabel: string;
+  onBack: () => void;
+  onDecide: (kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
+}) {
+  const items = meta.items;
   return (
     <>
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2.5">
+      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
+        <button data-testid="cm-needs-back" onClick={onBack} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]">← Back to {backLabel}</button>
         <span className="text-sm font-semibold text-[var(--color-text)]">{meta.label} <span className="font-mono text-[var(--color-text-faint)]">({meta.count})</span></span>
-        <button data-testid="cm-needs-back" onClick={onBack} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">← back to tab</button>
       </div>
-      <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-1.5">
-        {meta.items.length === 0 ? (
+      <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2.5">
+        {items === null ? (
+          // Gate-2 HIGH-1: loading ≠ empty — never a false "nothing to approve".
+          <div data-testid="cm-needs-loading" className="text-[11px] text-[var(--color-text-faint)]">Loading {meta.label.toLowerCase()}…</div>
+        ) : items.length === 0 ? (
           <div className="text-[11px] text-[var(--color-text-faint)]">Nothing in {meta.label.toLowerCase()} right now.</div>
         ) : (
-          meta.items.map((it, i) => (
-            <div key={i} className="rounded-md border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text)]">
-              {String(it.title ?? it.id ?? it.summary ?? `item ${i + 1}`)}
-            </div>
+          items.map((it, i) => (
+            // key includes kind — a re-appearing same-id in a DIFFERENT queue remounts
+            // fresh (Gate-2 HIGH-2: no stale optimistic state carried across refetch).
+            <ProposalCard key={`${kind}-${String(it.id ?? i)}`} kind={kind} item={it} onDecide={onDecide} />
           ))
         )}
       </div>
@@ -275,7 +430,8 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         over budget → cut from the bottom up.
       </div>
       <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
-        🔒 P0–P2 never truncated · over budget → cut from P10 upward · Health: fresh / idle / growing / oversized
+        🔒 P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
+        Health: fresh / idle / growing / oversized
       </div>
       {rows.length === 0 && (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">
@@ -283,19 +439,22 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         </div>
       )}
       {rows.map((f) => (
-        <div
+        // AC2: the WHOLE row opens the file in Canvas (locked files open read-only —
+        // that is server-driven by /workspace/file, NOT decided here; the 🔒 badge is
+        // truncation-priority, not an editability gate). AC7: slimmed — the redundant
+        // composition bar + % columns are gone (the token count is the one fact);
+        // hierarchy is name → tokens → health. Name keeps flex-1 min-w-0 truncate (the
+        // truncation bound). Row is a button so the whole thing is the affordance.
+        <button
           key={f.name}
+          type="button"
           data-testid={`cm-file-row-${f.name}`}
           data-owner={f.owner}
-          // §4 group+cap: cap the row width (max-w-3xl) so the metadata cluster sits
-          // adjacent to the filename instead of a screen away on a wide (xl) panel —
-          // kills the dead-space void. The name span KEEPS `flex-1 min-w-0 truncate`
-          // (Gate-1: that pairing IS the truncation bound — dropping flex-1 would let a
-          // long filename overflow instead of truncating); inside the cap the residual
-          // it absorbs is small, so no stretch-band. NOTE (out of scope, follow-up): at
-          // the 320px min panel width the fixed columns (~416px) already overflow — a
-          // CSS-grid rework is the correct long-term fix for that pre-existing edge.
-          className="flex items-center gap-3 rounded-md px-3 py-2 max-w-3xl hover:bg-[var(--color-hover)]"
+          title={`Open ${f.name} in Canvas${f.locked ? ' (read-only)' : ''}`}
+          onClick={() =>
+            document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
+          }
+          className="flex w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
         >
           <span className="w-8 shrink-0 font-mono text-xs text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
@@ -305,13 +464,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           />
           <span className="flex-1 min-w-0 truncate text-sm font-medium text-[var(--color-text)]">{f.name}</span>
           <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
-          <span className="w-24 shrink-0">
-            <span className="block h-1.5 rounded-full bg-[var(--color-border)]">
-              <span className="block h-1.5 rounded-full" style={{ width: `${Math.max(2, f.pct)}%`, background: OWNER_TINT[f.owner] }} />
-            </span>
-          </span>
           <span className="w-14 shrink-0 text-right font-mono text-xs text-[var(--color-text-muted)]">{fmtTokens(f.tokens)}</span>
-          <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[var(--color-text-faint)]">{f.pct}%</span>
           {f.health && (
             <span
               data-testid="cm-health"
@@ -321,20 +474,10 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
               {f.health}
             </span>
           )}
-          {f.locked ? (
-            <span data-testid="cm-lock" className="w-6 shrink-0 text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated">🔒</span>
-          ) : (
-            <button
-              className="w-6 shrink-0 text-center text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-              title={`Open ${f.name}`}
-              onClick={() =>
-                document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
-              }
-            >
-              ✎
-            </button>
+          {f.locked && (
+            <span data-testid="cm-lock" className="w-6 shrink-0 text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">🔒</span>
           )}
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -642,12 +785,18 @@ function TabBtn({
   );
 }
 
-function NeedsBtn({ testid, label, count, tint, onClick }: { testid: string; label: string; count: number; tint: string; onClick?: () => void }) {
+function NeedsBtn({ testid, label, count, tint, active, onClick }: { testid: string; label: string; count: number; tint: string; active?: boolean; onClick?: () => void }) {
   return (
     <button
       data-testid={testid}
+      data-active={active ? 'true' : 'false'}
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-sm text-left hover:bg-[var(--color-hover)] transition-colors"
+      className={
+        'flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm text-left transition-colors ' +
+        (active
+          ? 'border-[color-mix(in_srgb,#5fc99a_50%,var(--color-border))] bg-[var(--color-hover)]'
+          : 'border-[var(--color-border)] hover:bg-[var(--color-hover)]')
+      }
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} aria-hidden />
       <span className="flex-1 text-[var(--color-text-muted)]">{label}</span>
