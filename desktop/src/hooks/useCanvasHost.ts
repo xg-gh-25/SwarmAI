@@ -219,12 +219,32 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     };
   }, [activeTabId, outputCount]);
 
-  // ── swarm:open-canvas (window) — manual open on the ACTIVE tab ──────────────
+  // ── swarm:open-canvas (window) — manual open on the ORIGIN tab ──────────────
+  // Two origin cases, mirroring handleOpenFile (run_48a29fc2):
+  //  · USER CLICK (ChatPage): bare event, NO detail.tabId → fires synchronously with
+  //    the click, so activeTabIdRef.current IS the origin tab (fallback is correct).
+  //  · AGENT ui_command (run_10c51cac): the swarm:open-canvas fires MID-STREAM from
+  //    the ORIGINATING tab's (possibly background) stream handler; by then the user
+  //    may have switched, so activeTabIdRef.current is the WRONG tab. The producer
+  //    stamps detail.tabId = the stream's captured origin tab (same value the
+  //    file_changed/open-file siblings carry), which we MUST prefer — else the manual
+  //    open lands on whatever tab is active at fire time (the same cross-tab bleed).
+  // Uses activeTabIdRef (not a patch() closure) so the deps-[] listener reads the
+  // LIVE active tab at fire time. Lands manuallyOpen on the origin tab's slice and
+  // only mirrors into React state when that origin tab is still active.
   useEffect(() => {
-    const onOpenCanvas = () => patch({ manuallyOpen: true });
+    const onOpenCanvas = (e: Event) => {
+      const stampedTab = (e as CustomEvent<{ tabId?: string }>).detail?.tabId;
+      const landingTab = stampedTab ?? activeTabIdRef.current;
+      const k = keyFor(landingTab);
+      const cur = mapRef.current.get(k) ?? EMPTY;
+      const next = { ...cur, manuallyOpen: true };
+      mapRef.current.set(k, next);
+      if (activeTabIdRef.current === landingTab) setSlice(next);
+    };
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
-  }, [patch]);
+  }, []);
 
   // ── swarm:open-file (DOCUMENT — Gate-1 Risk 4) — resolve + set active file ──
   // Preserves the resolve-then-open path that lived in ThreeColumnLayout: chat

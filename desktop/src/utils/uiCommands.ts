@@ -79,6 +79,16 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
  */
 const PATH_CARRYING_CMDS = new Set(['open-canvas-file']);
 
+// TAB_STAMPED_CMDS (run_10c51cac): commands that carry NO path but MUST land on the
+// stream's ORIGIN tab, not whatever tab is active when the mid-stream event fires.
+// These forward ONLY { tabId: originTabId } (caller-supplied, never wire-derived) so
+// useCanvasHost patches the initiating tab. Distinct from PATH_CARRYING_CMDS because
+// open-canvas has no path → the path-required gate would wrongly reject it. Without
+// this, an agent open-canvas from a background tab opened the ACTIVE tab's Canvas
+// (the sibling of the open-canvas-file bleed). Bare user-click dispatch (no
+// originTabId) falls back to the active tab in useCanvasHost — unchanged.
+const TAB_STAMPED_CMDS = new Set(['open-canvas']);
+
 // originTabId (run_48a29fc2): the FRONTEND-captured origin tab of the stream that
 // emitted this ui_command (the caller passes _stampTab / capturedTabId — NEVER a
 // value from the SSE wire). It rides swarm:open-file's detail.tabId so
@@ -121,6 +131,15 @@ export function dispatchUiCommand(cmd: unknown, path?: unknown, originTabId?: st
       ? { path, tabId: originTabId }
       : { path };
     targetObj.dispatchEvent(new CustomEvent(entry.event, { detail }));
+    return true;
+  }
+  if (TAB_STAMPED_CMDS.has(cmd)) {
+    // Carries ONLY the caller-supplied origin tab (never a wire value) so the
+    // command lands on the INITIATING tab. Omitted when absent → useCanvasHost falls
+    // back to the active tab (correct for the synchronous user-click path). No path,
+    // so no workspace-relative filtering applies.
+    const detail = (typeof originTabId === 'string' && originTabId) ? { tabId: originTabId } : undefined;
+    targetObj.dispatchEvent(new CustomEvent(entry.event, detail ? { detail } : undefined));
     return true;
   }
   // Pure-nav command: payload-less (a supplied path is ignored by design).

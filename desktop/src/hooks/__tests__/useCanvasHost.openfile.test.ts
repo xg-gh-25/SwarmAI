@@ -112,6 +112,38 @@ describe('useCanvasHost — open-file then switch tab (real event path)', () => 
     await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
   });
 
+  it('an agent-stamped open-canvas (detail.tabId=A) opens A even when tab B is active (sibling bleed, run_10c51cac)', () => {
+    // The bare manual-open command has the SAME cross-tab bleed as open-file
+    // (run_48a29fc2): the agent's ui_command → swarm:open-canvas fires MID-STREAM
+    // from the ORIGINATING tab's stream, seconds after send. If the user switched
+    // to B, onOpenCanvas would patch B (the live active tab) instead of A (the
+    // origin). The producer now stamps detail.tabId; onOpenCanvas must prefer it.
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-B' } }, // user is on B when the agent's event fires
+    );
+    // agent's open-canvas carries its origin tab A (not the active B)
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas', { detail: { tabId: 'tab-A' } })); });
+    // B is active but the open was stamped for A → B must NOT open
+    expect(result.current.isOpen).toBe(false);
+    // switch to A → Canvas is open there (manuallyOpen landed on its origin tab)
+    act(() => { rerender({ t: 'tab-A' }); });
+    expect(result.current.isOpen).toBe(true);
+  });
+
+  it('a bare open-canvas (no detail.tabId) still opens the ACTIVE tab (user-click path unchanged)', () => {
+    // ChatPage's onOpenCanvas dispatches bare swarm:open-canvas synchronously with
+    // the click → no tabId → must fall back to the active tab (regression guard).
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'A' } },
+    );
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:open-canvas')); });
+    expect(result.current.isOpen).toBe(true);
+    rerender({ t: 'B' });
+    expect(result.current.isOpen).toBe(false);
+  });
+
   it('open-file while activeTabId is momentarily null lands correctly once a real tab is active', async () => {
     // Simulates the manual-open race: the click fires before/around a tab resolve.
     const { result, rerender } = renderHook(

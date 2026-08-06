@@ -110,6 +110,26 @@ describe('dispatchUiCommand', () => {
     expect(ev.detail).toBeNull();
   });
 
+  // ── open-canvas origin-tab stamp (run_10c51cac): forwards ONLY {tabId} ──
+  it('open-canvas forwards the caller-supplied originTabId as detail.tabId (cross-tab bleed fix)', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    const ok = dispatchUiCommand('open-canvas', undefined, 'tab-A');
+    expect(ok).toBe(true);
+    const ev = spy.mock.calls[0][0] as CustomEvent;
+    expect(ev.type).toBe('swarm:open-canvas');
+    // ONLY the origin tab — no path, no event/target from the wire (crux intact).
+    expect(ev.detail).toEqual({ tabId: 'tab-A' });
+  });
+
+  it('open-canvas with NO originTabId dispatches detail-less (user-click path → active-tab fallback)', () => {
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    const ok = dispatchUiCommand('open-canvas'); // no originTabId (bare user click)
+    expect(ok).toBe(true);
+    const ev = spy.mock.calls[0][0] as CustomEvent;
+    expect(ev.type).toBe('swarm:open-canvas');
+    expect(ev.detail).toBeNull(); // useCanvasHost falls back to the active tab
+  });
+
   // ── open-canvas-file (run_c0550cc2): the ONE path-carrying command ──
   it('open-canvas-file dispatches swarm:open-file on DOCUMENT with the path in detail', () => {
     const winSpy = vi.spyOn(window, 'dispatchEvent');
