@@ -44,6 +44,61 @@ describe('useCanvasHost — open-file then switch tab (real event path)', () => 
     expect(result.current.file?.fileName).toBe('alpha.md');
   });
 
+  // ── Un-rail AT THE WRITE (Bug 2 root fix, run_5f5e7675) ──────────────────────
+  // A new file landing on a tab un-rails THAT tab's slice in the same write. This
+  // replaces the render-timing-fragile panel effect. These tests drive the REAL
+  // swarm:open-file chokepoint where the invariant now lives.
+  it('opening a NEW file un-rails the owning tab (railed → reveal)', async () => {
+    const { result } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-A' } },
+    );
+    // Rail tab A, then open a file → un-rails (the "I want to see this" intent).
+    act(() => result.current.setCollapse({ railed: true }));
+    expect(result.current.collapse.railed).toBe(true);
+    await act(async () => { openFile('a/alpha.md'); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
+    expect(result.current.collapse.railed).toBe(false);
+  });
+
+  it('re-opening the SAME file does NOT un-rail (a deliberate manual re-rail is honored)', async () => {
+    const { result } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-A' } },
+    );
+    await act(async () => { openFile('a/alpha.md'); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
+    // User rails while viewing alpha.md, then the SAME path is re-dispatched (e.g. a
+    // re-render/re-emit) → must NOT pop open (path unchanged = not a new-file intent).
+    act(() => result.current.setCollapse({ railed: true }));
+    await act(async () => { openFile('a/alpha.md'); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
+    expect(result.current.collapse.railed).toBe(true);
+  });
+
+  it('REGRESSION (adversarial HIGH): switching back to a railed tab does NOT un-rail it', async () => {
+    // The two-commit race the old panel effect had: railTabId (immediate) vs slice
+    // (restored one commit later) diverged on switch, false-firing un-rail. With the
+    // invariant at the write chokepoint, a tab SWITCH never runs open-file → a
+    // restored railed tab stays railed. This is the real production scenario.
+    const { result, rerender } = renderHook(
+      ({ t }) => useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false }),
+      { initialProps: { t: 'tab-A' } },
+    );
+    // Tab A: open a file, then rail it.
+    await act(async () => { openFile('a/alpha.md'); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('alpha.md'));
+    act(() => result.current.setCollapse({ railed: true }));
+    // Tab B: open its own file (B is not railed).
+    act(() => { rerender({ t: 'tab-B' }); });
+    await act(async () => { openFile('b/beta.md', 'tab-B'); });
+    await waitFor(() => expect(result.current.file?.fileName).toBe('beta.md'));
+    // Switch BACK to A → A's railed state must be preserved (NOT popped open).
+    act(() => { rerender({ t: 'tab-A' }); });
+    expect(result.current.collapse.railed).toBe(true);
+    expect(result.current.file?.fileName).toBe('alpha.md');
+  });
+
   it('switching tab DURING the async /resolve lands the file on the ORIGIN tab, not the destination (the real bleed)', async () => {
     // Make /resolve controllable so we can switch tabs WHILE it is in flight.
     let releaseResolve: (v: unknown) => void = () => {};

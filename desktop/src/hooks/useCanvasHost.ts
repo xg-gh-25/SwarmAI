@@ -334,7 +334,22 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // and never disturbs B. `cur` is re-read HERE (post-await) so any patch() that
       // ran during the resolve (pin/mute toggle) is preserved, not clobbered (C).
       const cur = mapRef.current.get(k) ?? EMPTY;
-      const next = { ...cur, file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef } };
+      // UN-RAIL AT THE WRITE (Bug 2 root fix, run_5f5e7675): a new file arriving IS the
+      // "I want to see this" intent, so reveal a railed Canvas. This lives HERE — the
+      // single per-tab chokepoint where a file is SET — NOT in a panel render effect.
+      // The panel-effect approach was render-timing-fragile: railTabId (=activeTabId,
+      // immediate) and the file/collapse (=slice, restored one commit later) diverge on
+      // a tab switch, so a switch-back to a railed tab false-fired the un-rail and popped
+      // it open (adversarial HIGH). Keying the invariant to the actual file-set on the
+      // owning tab's slice is timing-independent: a tab SWITCH never runs this handler,
+      // so a restored railed tab is never un-railed. Only un-rail when the file actually
+      // CHANGES (a re-open of the same path must not fight a deliberate manual re-rail).
+      const fileChanged = cur.file?.filePath !== resolvedPath;
+      const next = {
+        ...cur,
+        file: { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef },
+        ...(fileChanged ? { railed: false } : {}),
+      };
       mapRef.current.set(k, next);
       if (activeTabIdRef.current === landingTab) setSlice(next);
     };

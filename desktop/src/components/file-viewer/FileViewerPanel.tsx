@@ -237,43 +237,19 @@ function FileViewerPanelImpl({
   // The file shown in Region B — drives the accent left-bar on its output row.
   const selectedPath = props.initialFile?.filePath;
 
-  // ── Un-rail on new file arrival (run_83bc289d) ──
-  // A new file reaching Canvas — user click (swarm:open-file) OR agent auto-surface
-  // — is an explicit "I want to see this" intent, so a railed (collapsed-to-strip)
-  // Canvas must expand to show it. Nothing else resets `railed` on a new file, so a
-  // collapsed Canvas would otherwise stay a strip and the file land MOUNTED-but-hidden.
-  // Guard with prevFileRef so this fires ONLY on a transition to a DIFFERENT non-empty
-  // path — never on a re-render with the same file (which would fight a deliberate
-  // manual re-rail). (Mirrors the prevInitialFileRef pattern in FileViewer.tsx.)
-  //
-  // ⚠️ TAB-SWITCH GUARD (Bug 2 — now that `railed` is PER-TAB): a chat-tab switch
-  // ALSO changes selectedPath (useCanvasHost restores the incoming tab's file) AND
-  // railTabId. Before railed was per-tab this un-rail-on-switch was a documented-benign
-  // extra trigger; now it would DESTROY the incoming tab's RESTORED railed state (Gate-1
-  // finding). So: if railTabId changed, this is a tab-switch (restore), NOT a new-file
-  // intent → do NOT un-rail; just sync the refs to the restored state. Only a same-tab
-  // path change is a genuine "open this file" intent that un-rails.
-  //
-  // Seed UNDEFINED, not selectedPath (run_ca6ae4e7 root fix). The panel unmounts when
-  // isOpen goes false (canvas.close / nav away); a later swarm:open-file remounts it
-  // FRESH with initialFile ALREADY set. Seeding prevFileRef=selectedPath made that mount
-  // see selectedPath===prev → no-op → the just-opened file stranded as a railed strip.
-  // Undefined makes undefined→file a real transition → opening a file always reveals.
-  const prevFileRef = useRef<string | undefined>(undefined);
-  const prevRailTabRef = useRef<string | undefined>(railTabId);
-  useEffect(() => {
-    const tabSwitched = railTabId !== prevRailTabRef.current;
-    // Un-rail ONLY on a genuine same-tab new-file transition. A tab switch that
-    // happens to change selectedPath must NOT un-rail (it would clobber the incoming
-    // tab's restored per-tab railed state). A same-file re-render also must not
-    // (prevFileRef guard). On a fresh mount railTabId===prev (ref seeded from it) so
-    // tabSwitched is false → opening a file on mount still reveals (cold-mount seed fix).
-    if (!tabSwitched && selectedPath && selectedPath !== prevFileRef.current) {
-      setCollapse({ railed: false });
-    }
-    prevFileRef.current = selectedPath;
-    prevRailTabRef.current = railTabId;
-  }, [selectedPath, railTabId, setCollapse]);
+  // ── Un-rail on new file arrival — MOVED to the write side (Bug 2 root fix, run_5f5e7675) ──
+  // A new file reaching Canvas is the "I want to see this" intent → a railed Canvas
+  // must reveal. This USED to be a panel render effect keyed on [selectedPath, railTabId],
+  // but once `railed` became per-tab that was render-timing-fragile: on a tab switch,
+  // railTabId (=activeTabId, immediate) and selectedPath (=slice.file, restored one
+  // commit later) diverge across two commits, so a switch-back to a railed tab
+  // false-fired the un-rail and popped it open (adversarial HIGH, run_5f5e7675).
+  // The invariant now lives at the SINGLE per-tab WRITE chokepoint — useCanvasHost's
+  // swarm:open-file handler sets `railed:false` on the owning tab's slice IN THE SAME
+  // write that sets the file, only when the path actually changes. A tab SWITCH never
+  // runs that handler, so a restored railed tab is never disturbed. No panel effect,
+  // no prevFileRef/prevRailTabRef, no cross-commit race. (Capstone lesson: move an
+  // invariant to the point where the entity is PRODUCED, don't guard read-side entrances.)
 
   // Panel-local output counts (neu/upd BREAKDOWN) published by the rail — drives the
   // header summary line + the collapsed-rail "N files · M new" display. This is

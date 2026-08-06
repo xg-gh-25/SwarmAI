@@ -131,78 +131,43 @@ describe('FileViewerPanel — two-level collapse (v6, per-tab props)', () => {
     expect(screen.queryByTestId('file-viewer-panel-collapsed')).toBeNull();
   });
 
-  // ── un-rail on new file arrival (run_83bc289d) ──
-  // Bug: user rails Canvas to a strip, then a new file arrives → Canvas must un-rail
-  // (a new file IS the "I want to see this" intent). Now that railed is per-tab, this
-  // must fire ONLY on a same-tab new-file transition, NOT on a tab switch (which also
-  // changes the file but must preserve the incoming tab's restored railed state).
+  // ── Un-rail moved to the WRITE side (Bug 2 root fix, run_5f5e7675) ──
+  // The panel NO LONGER un-rails itself. A new file arriving un-rails the owning tab
+  // at the single write chokepoint in useCanvasHost (its swarm:open-file handler sets
+  // railed:false in the same slice write). This removed a render-timing-fragile panel
+  // effect that false-fired on tab switch (adversarial HIGH). So the panel is now purely
+  // presentational for collapse: it renders `collapse` and calls `setCollapse` on toggle,
+  // and MUST NOT flip railed on its own. The un-rail-on-new-file + tab-switch-preservation
+  // behavior is tested in useCanvasHost.openfile.test.ts (the real write chokepoint).
   const FILE_A = { filePath: '/ws/a.md', fileName: 'a.md' };
   const FILE_B = { filePath: '/ws/b.md', fileName: 'b.md' };
 
-  it('un-rails when a NEW file arrives while railed (same tab — the reported bug)', () => {
-    // One Controlled instance (same tabScopeKey), internal collapse state. Rail via the
-    // button (state→railed:true), then a DIFFERENT file arrives via a new initialFile
-    // prop → the un-rail effect fires (same tab, path changed) → setCollapse({railed:false}).
+  it('does NOT un-rail on its own when a new initialFile prop arrives (write-side owns un-rail now)', () => {
+    // The panel must NOT contain the un-rail logic anymore. Rail via the button, then a
+    // new initialFile prop arrives — the panel must STAY railed (it does not call
+    // setCollapse({railed:false}) itself; only the hook's write chokepoint does).
+    const onCollapseChange = vi.fn();
     const { rerender } = render(
-      <Controlled initial={{ railed: false, outputsCollapsed: false }} initialFile={FILE_A} />,
+      <Controlled initial={{ railed: true, outputsCollapsed: false }} initialFile={FILE_A} onCollapseChange={onCollapseChange} />,
     );
-    fireEvent.click(screen.getByTestId('canvas-collapse-rail-btn'));
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-    // Same tab, new file → auto-expand (initialFile IS a live prop, so this changes it).
-    rerender(<Controlled initial={{ railed: false, outputsCollapsed: false }} initialFile={FILE_B} />);
-    expect(screen.queryByTestId('canvas-rail')).toBeNull();
+    onCollapseChange.mockClear();
+    rerender(<Controlled initial={{ railed: true, outputsCollapsed: false }} initialFile={FILE_B} onCollapseChange={onCollapseChange} />);
+    // Panel did NOT self-un-rail on the prop change.
+    expect(onCollapseChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
   });
 
-  it('un-rails on a fresh mount that ALREADY has a file while railed=1 (cold-mount seed bug)', () => {
-    // run_ca6ae4e7: a remount with initialFile set + railed must still reveal the file
-    // (prevFileRef/prevRailTabRef seeded so undefined→file on the SAME tab is a real
-    // transition). The un-rail calls setCollapse({railed:false}).
-    const onCollapseChange = vi.fn();
-    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} initialFile={FILE_A} onCollapseChange={onCollapseChange} />);
-    // Opening a file IS the intent to see it — must reveal, not strip.
+  it('renders railed=false from the prop as an expanded panel (write-side already un-railed)', () => {
+    // When the hook un-rails at the write, the panel just receives railed:false and
+    // renders the full panel — no panel-side logic involved.
+    render(<Controlled initial={{ railed: false, outputsCollapsed: false }} initialFile={FILE_A} />);
     expect(screen.queryByTestId('canvas-rail')).toBeNull();
     expect(screen.getByTestId('canvas-content-column')).toBeTruthy();
-    expect(onCollapseChange).toHaveBeenCalledWith({ railed: false, outputsCollapsed: false });
   });
 
-  it('STAYS railed on a fresh mount with NO file (manual-open-no-file preference honored)', () => {
-    // The undefined-seed fix must NOT over-fire: mounting railed with no file has
-    // selectedPath===undefined, so the `selectedPath && ...` guard is falsy.
-    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} />);
+  it('STAYS railed on mount with railed=true prop (no self-un-rail, with or without a file)', () => {
+    render(<Controlled initial={{ railed: true, outputsCollapsed: false }} initialFile={FILE_A} />);
     expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-  });
-
-  it('does NOT un-rail on a TAB SWITCH that restores a railed tab (Bug 2 — per-tab railed preserved)', () => {
-    // The key Bug-2 regression guard: a tab switch changes BOTH tabScopeKey AND the
-    // restored file, but the incoming tab's railed state must survive (NOT be popped
-    // open by the un-rail effect — Gate-1 finding). Harness mirrors useCanvasHost:
-    // a per-tab collapse map, switching activeTab restores that tab's slice.
-    const perTab: Record<string, CanvasCollapse> = {
-      'tab-A': { railed: false, outputsCollapsed: false },
-      'tab-B': { railed: true, outputsCollapsed: false }, // tab B was left railed
-    };
-    const perTabFile: Record<string, { filePath: string; fileName: string }> = {
-      'tab-A': FILE_A,
-      'tab-B': FILE_B,
-    };
-    function SwitchHarness({ activeTab }: { activeTab: string }) {
-      return (
-        <FileViewerPanel
-          {...baseProps}
-          tabScopeKey={activeTab}
-          initialFile={perTabFile[activeTab]}
-          collapse={perTab[activeTab]}
-          setCollapse={(p) => { perTab[activeTab] = { ...perTab[activeTab], ...p }; }}
-        />
-      );
-    }
-    const { rerender } = render(<SwitchHarness activeTab="tab-A" />);
-    expect(screen.queryByTestId('canvas-rail')).toBeNull();
-    // Switch to tab-B: tabScopeKey changes AND the restored collapse is railed=true.
-    // The un-rail effect must see tabSwitched=true and NOT un-rail → stays railed.
-    rerender(<SwitchHarness activeTab="tab-B" />);
-    expect(screen.getByTestId('canvas-rail')).toBeTruthy();
-    // And tab B's railed state was NOT written to false by an un-rail.
-    expect(perTab['tab-B'].railed).toBe(true);
   });
 });
