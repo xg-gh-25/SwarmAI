@@ -70,6 +70,26 @@ describe('FileViewer — unified close dirty-guard (R2 AC4)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('discarding a dirty editor tab clears its dirty flag so it can actually close (Gate-2 HIGH)', async () => {
+    // The bug: discard reverted content + called onClose but never cleared the tab-store
+    // dirty flag → useFileViewerTabs.closeTab no-op'd on the dirty guard (single-tab
+    // masked it via the tabs.length<=1 fallback; multi-tab left the tab silently open).
+    // The fix feeds the baseline back through onContentChange → markDirty(false). Here we
+    // assert the OBSERVABLE seam: after discard the tab is NOT dirty (dirty dot gone) AND
+    // onClose fired. The mechanism that closeTab removes a clean tab is unit-tested in
+    // useFileViewerTabs; the missing link this fix restores is "discard marks it clean".
+    const onClose = vi.fn();
+    render(<FileViewer {...base('app.ts')} onClose={onClose} />);
+    const ta = await screen.findByTestId('file-editor-textarea');
+    await act(async () => { fireEvent.change(ta, { target: { value: 'hello EDITED' } }); });
+    // Dirty dot now shows in the unified header.
+    await waitFor(() => expect(screen.getByTestId('file-chrome-dirty')).toBeTruthy());
+    await act(async () => { fireEvent.click(screen.getByTestId('file-chrome-close')); });
+    await waitFor(() => expect(screen.getByTestId('unsaved-warning-discard')).toBeTruthy());
+    await act(async () => { fireEvent.click(screen.getByTestId('unsaved-warning-discard')); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('editor type in panel has EXACTLY ONE close affordance (no header-close, no footer Close — truly unified)', async () => {
     render(<FileViewer {...base('app.ts')} />);
     await waitFor(() => expect(screen.getByTestId('file-editor-textarea')).toBeTruthy());

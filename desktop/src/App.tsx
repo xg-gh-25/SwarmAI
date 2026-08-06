@@ -11,6 +11,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider, useToast } from './contexts/ToastContext';
+import type { ToastSeverity } from './types';
 import { HealthProvider } from './contexts/HealthContext';
 import { BackendStartupOverlay, BackendUpgradeBanner, CredentialBanner, UpdateNotification, ShutdownOverlay } from './components/common';
 import { getApiBaseUrl, isDesktop } from './services/tauri';
@@ -153,6 +154,10 @@ export default function App() {
           <ErrorBoundary fallback={null}><CredentialBanner /></ErrorBoundary>
           {/* Update notification — Desktop only (Tauri plugin imports) */}
           {!isDev && isDesktop() && <ErrorBoundary fallback={null}><UpdateNotification /></ErrorBoundary>}
+          {/* swarm:toast document-event → ToastContext bridge — always mounted (not
+              backend-gated), so decoupled dispatchers (Canvas 404 notice, overlays)
+              surface real toasts even before routes render. */}
+          <ErrorBoundary fallback={null}><SwarmToastBridge /></ErrorBoundary>
           {/* Post-update welcome toast (both Desktop and Hive) — inside backend gate */}
           {/* Only render routes after backend is ready to prevent race conditions */}
           {isBackendReady && <>
@@ -208,6 +213,35 @@ function PostUpdateToast() {
     return () => clearTimeout(timer);
   }, [addToast]);
 
+  return null;
+}
+
+/**
+ * SwarmToastBridge — the ONE document `swarm:toast` → ToastContext bridge.
+ *
+ * Several decoupled surfaces (useCanvasHost's 404 notice, LibraryOverlay, NewBrainOverlay)
+ * dispatch a `document` CustomEvent `swarm:toast` instead of threading `useToast()` down —
+ * a decoupled-producer pattern. But NOTHING was listening (the toast system is React-Context
+ * only), so every `swarm:toast` was a DEAD event and its notice never rendered (Gate-2 HIGH,
+ * run_f49d3ff3). This mounts the single listener that turns those events into real toasts, so
+ * the pattern works for ALL current + future dispatchers. Must be inside ToastProvider.
+ */
+export function SwarmToastBridge() {
+  const { addToast } = useToast();
+  useEffect(() => {
+    const onToast = (e: Event) => {
+      const detail = (e as CustomEvent<{ message?: string; severity?: ToastSeverity; durationMs?: number; id?: string }>).detail;
+      if (!detail?.message) return;
+      addToast({
+        severity: detail.severity ?? 'info',
+        message: detail.message,
+        ...(detail.durationMs !== undefined ? { durationMs: detail.durationMs } : {}),
+        ...(detail.id ? { id: detail.id } : {}),
+      });
+    };
+    document.addEventListener('swarm:toast', onToast);
+    return () => document.removeEventListener('swarm:toast', onToast);
+  }, [addToast]);
   return null;
 }
 

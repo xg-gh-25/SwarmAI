@@ -1072,9 +1072,19 @@ export default function FileEditorCore({
     // Revert to the last-saved baseline (savedContent) if there was an in-session
     // save, else the mount content — matches the hasUnsavedEdits baseline so a
     // prior save isn't visually lost on discard.
-    setContent(savedContent ?? initialContent);
+    const baseline = savedContent ?? initialContent;
+    setContent(baseline);
+    onContentChange?.(baseline);
+    // CLEAR the tab-store dirty flag BEFORE onClose (run_f49d3ff3 Gate-2 HIGH). The
+    // parent (FileViewer) tracks per-tab isDirty via onContentChange→markDirty, and
+    // useFileViewerTabs.closeTab NO-OPS on a dirty tab ("caller must confirm first").
+    // The confirmed discard IS that confirmation — but without propagating the revert
+    // to the parent, closeTab refused to remove the tab: single-tab masked it (viewer
+    // closed via the tabs.length<=1 fallback) but multi-tab left the discarded tab
+    // silently open. Feeding the baseline back through onContentChange makes the parent
+    // mark it clean (baseline === cached.content), so closeTab actually removes it.
     onClose();
-  }, [savedContent, initialContent, onClose]);
+  }, [savedContent, initialContent, onClose, onContentChange]);
 
   const handleContinueEditing = useCallback(() => {
     setShowUnsavedWarning(false);
