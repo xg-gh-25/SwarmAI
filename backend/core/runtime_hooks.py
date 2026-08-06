@@ -35,6 +35,26 @@ _DEFAULT_CORRECTIONS_PATH = str(
 # Consecutive failure threshold before injecting a hint
 _FAILURE_HINT_THRESHOLD = 2
 
+# ── Enforcement injector (run_e57b7554) — per-turn UserPromptSubmit reminders ──
+# Direct-mode triggers (CN + EN). A match means the user explicitly asked to skip
+# the pipeline / "just do it" — the ONE sanctioned bypass (STEERING #13 / R1) —
+# which is exactly the moment the adversarial-review-still-mandatory reminder must
+# fire. Case-insensitive; word-anchored on the EN side so "adjust it" etc. don't hit.
+_DIRECT_MODE_RE = re.compile(
+    r"直接做|直接干|直接改|跳过\s*pipeline|不走\s*pipeline|别走\s*pipeline|别用\s*pipeline|不用\s*pipeline"
+    r"|\bjust do it\b|\bskip (?:the )?pipeline\b|\bskip the ceremony\b",
+    re.IGNORECASE,
+)
+# CJK share of SEMANTIC UNITS (cjk_chars / (cjk_chars + latin_words)) at/above which
+# a message that contains CJK is treated as Chinese. Weighing CJK-chars against
+# Latin-WORDS (not a raw char ratio) is deliberate: it keeps XG's normal
+# Chinese-with-English-tech-terms style ("帮我 review 这个 CI log") classified as
+# Chinese, while a lone CJK quote inside a many-word English sentence stays English.
+# 0.30 = a message needs meaningfully more CJK structure than English words to flip
+# to Chinese, but a handful of English terms can't drag real Chinese to English.
+# Boundary-tested in test_runtime_hooks.py.
+_LANG_CJK_WEIGHT_THRESHOLD = 0.30
+
 # Rotation: keep the newest N entries when file exceeds MAX_SIZE_BYTES.
 # 500 entries × ~1.5KB = ~750KB — well within reason for a local log.
 _MAX_CORRECTIONS_ENTRIES = 500
@@ -821,6 +841,121 @@ def create_post_compact_injection(
 
 
 # ---------------------------------------------------------------------------
+# UserPromptSubmit: per-turn enforcement injector (A: symmetric language,
+# B: direct-mode adversarial reminder) — run_e57b7554
+# ---------------------------------------------------------------------------
+
+def _classify_message_language(prompt: str) -> Optional[str]:
+    """Return "zh" if the message is CJK-majority, "en" if it is clearly Latin
+    text, or None when ambiguous (too short / symbol-only) — in which case NO
+    language reminder is injected (silence beats a wrong flip).
+
+    REUSES the single canonical full-range CJK detector
+    ``ContextDirectoryLoader._CJK_RE`` (the ONE object, imported — NOT copied:
+    context_directory_loader.py documents that the way to avoid detector
+    divergence, run_3f25a73a, is to import the single source, never re-declare a
+    parallel regex). "zh" here is shorthand for "a CJK-like language" — the full
+    range includes Kana/Hangul, all of which are correctly NOT-English.
+    """
+    stripped = "".join(prompt.split())
+    if len(stripped) < 3:
+        return None  # too short to classify — stay silent
+    from core.context_directory_loader import ContextDirectoryLoader
+    cjk = len(ContextDirectoryLoader._CJK_RE.findall(prompt))
+    latin_words = len(re.findall(r"[A-Za-z]{2,}", prompt))
+
+    # Compare SEMANTIC UNITS, not a char ratio: 1 CJK char ≈ 1 word of meaning
+    # (the tokenizer weights them similarly — CJK ~1.1 tok/char vs Latin ~1 tok/word).
+    # A char-ratio is the WRONG tool here — it can't separate "English + a CJK quote"
+    # from "Chinese + English technical terms" (the latter is XG's normal style:
+    # "帮我 review 这个 CI log"), and mis-flipping THAT to English is the exact R19
+    # bug this hook exists to prevent. Weighing CJK-chars vs Latin-WORDS protects it:
+    # a few English tech terms can't outvote CJK sentence structure, and a lone CJK
+    # quote in an English sentence can't outvote many English words.
+    if cjk == 0:
+        return "en" if latin_words >= 1 else None  # pure Latin (or symbols → silent)
+    # CJK present. It's Chinese UNLESS the CJK is a tiny embedded fraction of a
+    # clearly-Latin-dominant message (a quoted term), i.e. Latin words vastly
+    # outnumber CJK chars.
+    weight = cjk / (cjk + latin_words)          # CJK share of semantic units
+    if weight >= _LANG_CJK_WEIGHT_THRESHOLD:
+        return "zh"
+    if latin_words >= 1:
+        return "en"                              # Latin-dominant, CJK is incidental
+    return None
+
+
+def create_enforcement_injector(session_context: Optional[dict] = None):
+    """Factory: a UserPromptSubmit hook that injects per-turn enforcement
+    reminders into ``additionalContext`` — moving machine-decidable, per-turn
+    rules OFF decaying static prose and INTO the reading path just before I
+    generate (O003 + P7). Two signals, composed into one additionalContext:
+
+    - **A — symmetric language (R19).** Detect THIS message's language and remind
+      me to reply in the SAME language. SYMMETRIC + input-derived — a CJK message
+      injects "respond in Chinese", an English message injects "respond in
+      English". NEVER hardcoded to one language (hardcoding rebuilds the exact bug
+      that motivated the hook: R19 is *match the input language*, not "reply in
+      Chinese").
+    - **B — direct-mode guard (R1 / STEERING #13).** If the message carries a
+      direct-mode trigger (直接做 / just do it / skip pipeline), remind me that
+      adversarial review stays MANDATORY even in direct mode
+      (code → test → adversarial → commit) — the one moment I'm most tempted to
+      skip it.
+
+    Observe-only + fail-safe: any internal error returns ``{}`` so the hook chain
+    is never broken. Mirrors the additionalContext shape of
+    ``create_post_compact_injection`` so it rides the same in-turn merge path.
+    """
+    _ = session_context  # reserved for parity with sibling factories; unused today
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        try:
+            prompt = _extract_field(input_data, "prompt", "")
+            if not prompt:
+                return {}
+
+            parts: list[str] = []
+
+            # Signal A — symmetric language reminder
+            lang = _classify_message_language(prompt)
+            if lang == "zh":
+                parts.append(
+                    "⚠️ 用户这条消息是中文 → 本轮必须用中文回复(R19:匹配用户输入语言)。"
+                )
+            elif lang == "en":
+                parts.append(
+                    "⚠️ The user's message is in English → respond in English this "
+                    "turn (R19: match the user's input language)."
+                )
+
+            # Signal B — direct-mode adversarial guard
+            if _DIRECT_MODE_RE.search(prompt):
+                parts.append(
+                    "⚠️ Direct-mode request detected: adversarial review is STILL "
+                    "mandatory before commit (sequence: code → test → adversarial → "
+                    "commit). 'Too simple for adversarial' is the signal it's needed "
+                    "(R1 / STEERING #13). Cut ceremony, never cut the adversarial gate."
+                )
+
+            if not parts:
+                return {}
+
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": " ".join(parts),
+                }
+            }
+        except Exception:
+            # Observe-only: never break the hook chain on a classifier error.
+            logger.debug("enforcement_injector failed", exc_info=True)
+            return {}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
 # UserPromptSubmit: high-signal observation capture → DailyActivity
 # ---------------------------------------------------------------------------
 
@@ -1238,6 +1373,15 @@ def register_runtime_hooks(
         "UserPromptSubmit",
         create_persist_skill_tracker_reset(session_context),
         "persist_skill_tracker_reset",
+    )
+
+    # UserPromptSubmit: per-turn enforcement injector (run_e57b7554) — symmetric
+    # language reminder (R19) + direct-mode adversarial guard (R1). Moves per-turn,
+    # machine-decidable rules off decaying static prose into the reading path (O003/P7).
+    registry.register(
+        "UserPromptSubmit",
+        create_enforcement_injector(session_context),
+        "enforcement_injector",
     )
 
     # Observation hooks (LAST in chain — after all other hooks)

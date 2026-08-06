@@ -1779,3 +1779,150 @@ class TestMemoryWorthyCorrectionGate:
 
         assert mem.read_text().count("TAURI_SIGNING") == 1, \
             "duplicate lesson must not be appended twice"
+
+
+# ---------------------------------------------------------------------------
+# UserPromptSubmit: per-turn enforcement injector (A: symmetric language,
+# B: direct-mode adversarial reminder) — run_e57b7554
+# ---------------------------------------------------------------------------
+
+class TestEnforcementInjector:
+    """create_enforcement_injector — a UserPromptSubmit hook that injects a
+    per-turn additionalContext reminder. Signal A = SYMMETRIC input-derived
+    language (CJK ratio → respond-in-that-language, never hardcoded); Signal B
+    = direct-mode triggers → adversarial-still-mandatory. Observe-only.
+    """
+
+    def _hook(self, session_context):
+        from core.runtime_hooks import create_enforcement_injector
+        return create_enforcement_injector(session_context)
+
+    @pytest.mark.asyncio
+    async def test_A_cjk_message_injects_chinese_reminder(self, session_context):
+        """A CJK-majority message → additionalContext tells me to respond in Chinese."""
+        hook = self._hook(session_context)
+        result = await hook({"prompt": "你能不能重新设计一下这个组件的布局"}, None, MagicMock())
+        ac = result["hookSpecificOutput"]["additionalContext"]
+        assert result["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+        assert "中文" in ac or "Chinese" in ac
+
+    @pytest.mark.asyncio
+    async def test_A_english_message_injects_english_reminder(self, session_context):
+        """An English message → additionalContext tells me to respond in English.
+        SYMMETRY: this is the exact half the motivating bug got wrong."""
+        hook = self._hook(session_context)
+        result = await hook({"prompt": "please redesign the layout of this component"}, None, MagicMock())
+        ac = result["hookSpecificOutput"]["additionalContext"]
+        assert "English" in ac
+        assert "Chinese" not in ac and "中文" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_symmetry_not_hardcoded_to_one_language(self, session_context):
+        """The two directions must produce DIFFERENT reminders — proves A is
+        input-derived, not a hardcoded single-language string."""
+        hook = self._hook(session_context)
+        zh = (await hook({"prompt": "帮我看看这个函数有没有问题"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        en = (await hook({"prompt": "check this function for any problems please"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert zh != en
+
+    @pytest.mark.asyncio
+    async def test_A_mostly_english_with_few_cjk_terms_stays_english(self, session_context):
+        """Ratio-based, NOT any-CJK-present: an English sentence quoting a couple
+        CJK product terms must NOT flip to Chinese."""
+        hook = self._hook(session_context)
+        result = await hook(
+            {"prompt": "refactor the DddCard component and keep the 大脑 ontology bar intact for now"},
+            None, MagicMock(),
+        )
+        ac = result.get("hookSpecificOutput", {}).get("additionalContext", "")
+        # must not tell me to respond in Chinese on a mostly-English message
+        assert "中文" not in ac
+        assert "respond in Chinese" not in ac.lower()
+
+    @pytest.mark.asyncio
+    async def test_A_english_sentence_with_cjk_quote_stays_english(self, session_context):
+        """Gate-2 adversarial dead-zone: a clearly-English sentence quoting a couple
+        CJK terms must classify as English (NOT silent, NOT Chinese). The char-ratio
+        approach left this a 5-20% no-man's-land; weighing CJK-chars vs Latin-WORDS
+        fixes it."""
+        hook = self._hook(session_context)
+        for msg in ("Quick reference for the 快速 lookup path please",
+                    "fix the code here, there is a bug near 这里 in the parser"):
+            ac = (await hook({"prompt": msg}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+            assert "English" in ac
+            assert "中文" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_chinese_with_english_tech_terms_stays_chinese(self, session_context):
+        """The PROTECTED case (XG's normal style): Chinese sentence structure with
+        embedded English technical terms must stay Chinese — the exact R19 bug this
+        hook exists to prevent. A char-ratio would mis-flip these to English."""
+        hook = self._hook(session_context)
+        for msg in ("帮我 review 一下这个 CI log 有没有问题",
+                    "这个 pipeline 的 adversarial gate 为什么没触发 你 debug 一下"):
+            ac = (await hook({"prompt": msg}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+            assert ("中文" in ac or "Chinese" in ac)
+            assert "English" not in ac
+
+    @pytest.mark.asyncio
+    async def test_A_full_range_kana_and_hangul_are_non_english(self, session_context):
+        """AC3: full-range detector — Kana/Hangul also count as non-English (they
+        must NOT be treated as English)."""
+        hook = self._hook(session_context)
+        for msg in ("こんにちは、これをレビューしてください", "이것을 검토해 주세요 제발"):
+            ac = (await hook({"prompt": msg}, None, MagicMock())).get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "English" not in ac  # not classified as English
+
+    @pytest.mark.asyncio
+    async def test_B_direct_mode_trigger_injects_adversarial_reminder(self, session_context):
+        """B: 'just do it' / '直接做' → reminder that adversarial review stays mandatory."""
+        hook = self._hook(session_context)
+        for msg in ("just do it, skip the ceremony", "直接做 别走 pipeline 了"):
+            ac = (await hook({"prompt": msg}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+            assert "adversarial" in ac.lower()
+
+    @pytest.mark.asyncio
+    async def test_AB_compose_chinese_direct_mode(self, session_context):
+        """A + B compose: a Chinese direct-mode message injects BOTH the language
+        line AND the adversarial line in one additionalContext."""
+        hook = self._hook(session_context)
+        ac = (await hook({"prompt": "直接做 别用 pipeline 了 帮我改一下"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
+        assert ("中文" in ac or "Chinese" in ac)
+        assert "adversarial" in ac.lower()
+
+    @pytest.mark.asyncio
+    async def test_empty_prompt_returns_empty(self, session_context):
+        """Empty prompt → {} (no injection)."""
+        hook = self._hook(session_context)
+        assert await hook({"prompt": ""}, None, MagicMock()) == {}
+
+    @pytest.mark.asyncio
+    async def test_neutral_message_no_language_line(self, session_context):
+        """A short ambiguous/symbol-only message → no Chinese flip (silent A is ok)."""
+        hook = self._hook(session_context)
+        ac = (await hook({"prompt": "ok"}, None, MagicMock())).get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "中文" not in ac
+
+    @pytest.mark.asyncio
+    async def test_failsafe_never_raises(self, session_context, monkeypatch):
+        """Observe-only + fail-safe: an internal error returns {} , never propagates."""
+        import core.runtime_hooks as rh
+        hook = self._hook(session_context)
+        # force the language classifier to blow up
+        monkeypatch.setattr(rh, "_classify_message_language", lambda p: (_ for _ in ()).throw(RuntimeError("boom")), raising=False)
+        result = await hook({"prompt": "你好 just do it"}, None, MagicMock())
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_same_turn_shape_matches_post_compact_precedent(self, session_context):
+        """AC6: the injected shape matches what create_post_compact_injection returns
+        (rides the same in-turn additionalContext merge path)."""
+        from core.runtime_hooks import create_enforcement_injector, create_post_compact_injection
+        enf = create_enforcement_injector(session_context)
+        enf_out = await enf({"prompt": "你好帮我看看"}, None, MagicMock())
+        # build the precedent's shape
+        ctx = {"_compacted": True, "_files_touched": {"a.py"}}
+        pc_out = await create_post_compact_injection(ctx)({"prompt": "x"}, None, MagicMock())
+        assert set(enf_out.keys()) == set(pc_out.keys()) == {"hookSpecificOutput"}
+        assert enf_out["hookSpecificOutput"]["hookEventName"] == pc_out["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+        assert isinstance(enf_out["hookSpecificOutput"]["additionalContext"], str)
