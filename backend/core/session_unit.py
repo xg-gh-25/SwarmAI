@@ -479,7 +479,18 @@ class SessionUnit:
         self.last_used: float = time.time()
         # True when this unit serves channel conversations (Slack, etc.)
         # Channel units use a dedicated slot pool, separate from chat tabs.
+        # NOTE: this is deliberately False for an OWNER messaging via a channel
+        # (owner uses the chat pool for routing) — do NOT use it as a
+        # "trusted local desktop" signal. Use _has_channel_context for that.
         self.is_channel_session: bool = False
+        # True when this unit is driven by ANY channel_context (owner OR
+        # non-owner). The correct "true local desktop tab" test is
+        # `not _has_channel_context` — a desktop tab never carries a
+        # channel_context, while owner-over-channel DOES (is_owner=True).
+        # Load-bearing for the open-canvas-file abs-path gate: an absolute host
+        # path may reach the resolver ONLY on a genuine local desktop session,
+        # never on any channel (C041 information-leak defense).
+        self._has_channel_context: bool = False
         # True after the first message with history injection has been
         # processed.  Prevents re-injecting on every subsequent message
         # within the same daemon lifecycle (channel resume fix).

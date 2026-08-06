@@ -1023,8 +1023,21 @@ class StreamingOrchestrator:
                         # own event+target from cmd; a non-allowlisted cmd yields None
                         # here → nothing emitted (fail-closed at the source).
                         if block.name == UI_ACTION_FULL_TOOL_NAME and isinstance(block.input, dict):
+                            # allow_abs: absolute host paths may reach the resolver
+                            # ONLY on a genuine local-desktop session. _has_channel_context
+                            # is True for ANY channel (owner-over-channel included), so
+                            # `not _has_channel_context` == true local desktop. NOT
+                            # is_channel_session (that is False for owner-over-channel →
+                            # would leak abs paths into the owner's remote stream, C041).
+                            # getattr default True → if the flag were ever absent, we
+                            # treat it as "has channel context" → allow_abs False →
+                            # fail CLOSED (reject abs). The attr is always init'd in
+                            # SessionUnit.__init__, so this is belt-and-suspenders.
+                            _has_chan = getattr(self._parent, "_has_channel_context", True)
                             _ui_ev = build_ui_command_event(
-                                block.input.get("cmd"), block.input.get("path")
+                                block.input.get("cmd"),
+                                block.input.get("path"),
+                                allow_abs=not _has_chan,
                             )
                             if _ui_ev is not None:
                                 yield _ui_ev

@@ -138,18 +138,42 @@ def test_open_canvas_file_without_path_still_builds_but_no_path_key():
 
 def test_open_canvas_file_rejects_absolute_paths_infoleak_guard():
     # CRITICAL (Gate-2, run_c0550cc2): the agent efferent channel must be
-    # workspace-RELATIVE only. resolve_path_to_physical happily resolves an absolute
-    # host path (/etc/passwd, ~/.aws/credentials) — that branch exists for USER-CLICK
-    # opens of source-repo files, but the AGENT must not reach it (Gate-1 BLOCK 3
-    # infoleak by another name). build_ui_command_event drops an absolute-path
-    # open-canvas-file → no event (fail-closed).
+    # workspace-RELATIVE only BY DEFAULT (allow_abs defaults False). resolve_path_to_physical
+    # happily resolves an absolute host path (/etc/passwd, ~/.aws/credentials) — that branch
+    # exists for USER-CLICK opens of source-repo files, but the AGENT must not reach it on any
+    # channel (Gate-1 BLOCK 3 infoleak by another name). build_ui_command_event drops an
+    # absolute-path open-canvas-file → no event (fail-closed) when allow_abs is not set.
     assert build_ui_command_event("open-canvas-file", "/etc/passwd") is None
     assert build_ui_command_event("open-canvas-file", "/Users/gawan/.aws/credentials") is None
     # traversal likewise
     assert build_ui_command_event("open-canvas-file", "../../../etc/passwd") is None
-    # a legit workspace-relative path still builds
+    # a legit workspace-relative path still builds (default, no allow_abs)
     ev = build_ui_command_event("open-canvas-file", "Knowledge/Designs/x.md")
     assert ev is not None and ev["path"] == "Knowledge/Designs/x.md"
+    assert "allowAbs" not in ev  # relative path never sets the flag
+
+
+def test_open_canvas_file_allows_absolute_only_when_allow_abs_true():
+    # run_cbaecb86: a genuine LOCAL DESKTOP session (allow_abs=True) may open an absolute
+    # host path — the owner can already reach any file via the picker there. The event
+    # carries allowAbs=True so the frontend's independent leading-/ reject knows this
+    # abs path was session-type-authorized.
+    ev = build_ui_command_event("open-canvas-file", "/Users/gawan/x.md", allow_abs=True)
+    assert ev is not None and ev["path"] == "/Users/gawan/x.md"
+    assert ev["allowAbs"] is True
+    # ..traversal is STILL rejected even with allow_abs=True (never a valid shape)
+    assert build_ui_command_event("open-canvas-file", "../../../etc/passwd", allow_abs=True) is None
+    assert build_ui_command_event("open-canvas-file", "foo/../../etc/passwd", allow_abs=True) is None
+    # a relative path with allow_abs=True builds but does NOT set allowAbs (it's not abs)
+    ev2 = build_ui_command_event("open-canvas-file", "Knowledge/Designs/x.md", allow_abs=True)
+    assert ev2 is not None and ev2["path"] == "Knowledge/Designs/x.md"
+    assert "allowAbs" not in ev2
+
+
+def test_open_canvas_file_abs_dropped_when_allow_abs_false_explicit():
+    # The channel / owner-over-channel case: allow_abs=False (explicit) → abs dropped,
+    # matching the default. This is the C041 leak defense for ANY channel session.
+    assert build_ui_command_event("open-canvas-file", "/etc/passwd", allow_abs=False) is None
 
 
 def test_payload_less_commands_never_carry_a_path():

@@ -2644,7 +2644,17 @@ export function useChatStreamingLifecycle(
           // with capturedTabId = its own tab while activeTabIdRef may be another tab —
           // without this the file bled onto the active tab (run_48a29fc2). Frontend-
           // captured, NOT wire-derived → no new untrusted-input surface.
-          dispatchUiCommand(_uev.cmd, _uev.path, capturedTabId ?? undefined);
+          // allowAbs: backend-authored flag (present+true ONLY when the backend's
+          // build_ui_command_event admitted an absolute path for a local-desktop owner
+          // session). It relaxes ONLY the frontend's leading-`/` reject; ~ and .. stay
+          // rejected unconditionally. Same trust class as path — a data flag scoped to
+          // path filtering, never used to derive event/target (run_cbaecb86).
+          dispatchUiCommand(
+            _uev.cmd,
+            _uev.path,
+            capturedTabId ?? undefined,
+            _uev.allowAbs === true,
+          );
         }
 
         if (event.type === 'session_start' && event.sessionId) {

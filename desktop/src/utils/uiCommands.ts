@@ -96,7 +96,12 @@ const TAB_STAMPED_CMDS = new Set(['open-canvas']);
 // tab is active when the mid-stream event fires (the cross-tab bleed). Because it
 // is caller-supplied (not wire-derived), it does NOT widen the untrusted-input
 // surface the PAYLOAD POLICY above guards — the routing is still table-derived.
-export function dispatchUiCommand(cmd: unknown, path?: unknown, originTabId?: string): boolean {
+export function dispatchUiCommand(
+  cmd: unknown,
+  path?: unknown,
+  originTabId?: string,
+  allowAbs?: boolean,
+): boolean {
   if (typeof cmd !== 'string' || !cmd) {
     console.warn('[ui_command] rejected non-string cmd:', cmd);
     return false;
@@ -114,14 +119,27 @@ export function dispatchUiCommand(cmd: unknown, path?: unknown, originTabId?: st
       console.warn(`[ui_command] '${cmd}' needs a path — dispatching nothing`);
       return false;
     }
-    // SECURITY (Gate-2 CRITICAL, run_c0550cc2) — defense in depth: the agent channel
-    // is workspace-RELATIVE only. The `path` arrives from the SSE wire (untrusted per
-    // this module's crux), and the downstream /workspace/file/resolve WILL resolve an
-    // absolute host path (/etc/passwd, ~/.aws/credentials). The backend
-    // build_ui_command_event already drops abs/`..` paths; we re-reject here so a
-    // crafted wire event can't reach open-file with a host path either.
-    if (path.startsWith('/') || path.startsWith('~') || path.includes('..')) {
-      console.warn(`[ui_command] '${cmd}' rejected non-workspace-relative path`);
+    // SECURITY (Gate-2 CRITICAL, run_c0550cc2 + run_cbaecb86) — defense in depth: the
+    // agent channel is workspace-RELATIVE only, EXCEPT a genuine local-desktop owner
+    // session where absolute paths are legitimate. The `path` arrives from the SSE
+    // wire (untrusted per this module's crux), and the downstream
+    // /workspace/file/resolve WILL resolve an absolute host path (/etc/passwd,
+    // ~/.aws/credentials). The BACKEND build_ui_command_event is the sole session-type
+    // authority: it drops abs/`..` for any channel and, ONLY for local-desktop, admits
+    // an absolute path and marks the event allowAbs=true.
+    //   * `~` and `..` are rejected UNCONDITIONALLY here — these are escape/traversal
+    //     shapes with no legitimate session-type nuance (a `~` never resolves anyway;
+    //     `..` is a traversal attack). No wire flag can relax them.
+    //   * a leading `/` (absolute) is relaxed ONLY when the backend authored
+    //     allowAbs===true. This is the ONE dimension the frontend cannot decide alone
+    //     (session-type is backend-only knowledge), so it defers to the backend flag
+    //     for that single check while keeping the independent ~/`..` guard intact.
+    if (path.startsWith('~') || path.includes('..')) {
+      console.warn(`[ui_command] '${cmd}' rejected ~ or .. path (always workspace-relative)`);
+      return false;
+    }
+    if (path.startsWith('/') && allowAbs !== true) {
+      console.warn(`[ui_command] '${cmd}' rejected absolute path (not a local-desktop owner session)`);
       return false;
     }
     // originTabId (a valid non-empty string) rides as detail.tabId so the file lands

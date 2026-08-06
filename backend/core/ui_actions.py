@@ -175,7 +175,9 @@ def build_ui_ack(cmd: object, path: object = None) -> Optional[str]:
 _PATH_CARRYING_CMDS = frozenset({"open-canvas-file"})
 
 
-def build_ui_command_event(cmd: object, path: object = None) -> Optional[dict]:
+def build_ui_command_event(
+    cmd: object, path: object = None, allow_abs: bool = False
+) -> Optional[dict]:
     """Build the ``ui_command`` SSE payload for *cmd*, or None if not allowlisted.
 
     Fail-closed at the source: a non-allowlisted cmd yields no event. The payload
@@ -183,10 +185,22 @@ def build_ui_command_event(cmd: object, path: object = None) -> Optional[dict]:
     but the frontend re-derives its own dispatch from its own table (never trusts
     these fields blindly).
 
-    ``path`` is PASSED THROUGH verbatim for the path-carrying commands
-    (open-canvas-file) and IGNORED for every other (pure-nav) command. No path
-    validation happens here by design — the generic swarm:open-file resolver is the
-    workspace-scoped filter (run_c0550cc2).
+    ``path`` is attached ONLY for the path-carrying commands (open-canvas-file)
+    and IGNORED for every other (pure-nav) command. This function IS a
+    session-type security gate for the path (run_c0550cc2 / run_cbaecb86) — it is
+    the *sole authority* on whether the agent may reach the resolver with an
+    absolute host path:
+
+      * ``..`` traversal is ALWAYS rejected (every session type).
+      * an ABSOLUTE path is rejected UNLESS ``allow_abs`` is True. The caller sets
+        ``allow_abs = not self._parent._has_channel_context`` — i.e. True only on a
+        genuine LOCAL DESKTOP session (owner already has host file-picker access
+        there), False on ANY channel incl. owner-over-channel (C041 leak defense).
+
+    When ``allow_abs`` is True and an absolute path is admitted, the event carries
+    ``allowAbs: True`` so the frontend's independent leading-``/`` reject (defense
+    in depth) knows this backend-authored path was session-type-authorized. The
+    frontend STILL rejects ``~`` and ``..`` unconditionally.
     """
     entry = validate_ui_command(cmd)
     if entry is None:
@@ -200,22 +214,36 @@ def build_ui_command_event(cmd: object, path: object = None) -> Optional[dict]:
     }
     # Attach path ONLY for a path-carrying cmd AND only when a non-empty str given.
     if cmd in _PATH_CARRYING_CMDS and isinstance(path, str) and path:
-        # SECURITY (Gate-2 CRITICAL, run_c0550cc2): the AGENT efferent channel is
-        # workspace-RELATIVE only. The downstream /workspace/file/resolve HAPPILY
-        # resolves an ABSOLUTE host path (/etc/passwd, ~/.aws/credentials) — that
-        # branch exists for USER-CLICK opens of source-repo files, but the agent must
-        # NOT reach it (that is exactly the Gate-1 BLOCK 3 open-file infoleak, by
-        # another name). So we reject an absolute or `..`-traversal path HERE, at the
-        # agent's entry point, and fail-closed (drop the whole event → no open). This
-        # does NOT touch the generic resolver (user clicks keep their abs-path opens).
+        # SECURITY (Gate-2 CRITICAL, run_c0550cc2 + run_cbaecb86): the AGENT efferent
+        # channel is workspace-RELATIVE only, EXCEPT a genuine local-desktop owner
+        # session (allow_abs=True) where absolute paths are legitimate (the owner can
+        # already open any host file via the picker). The downstream
+        # /workspace/file/resolve HAPPILY resolves an ABSOLUTE host path
+        # (/etc/passwd, ~/.aws/credentials) — that branch exists for USER-CLICK opens
+        # of source-repo files, and the agent must NOT reach it on ANY channel
+        # (owner-over-channel included: the owner on Slack can't browse the host FS,
+        # so a prompt-injected turn could exfiltrate a host file into the channel —
+        # the exact C041/Gate-1-BLOCK-3 infoleak). `..` traversal is rejected in ALL
+        # cases. Fail-closed: reject → drop the whole event (no open).
         _norm = os.path.normpath(path)
-        if os.path.isabs(_norm) or _norm.startswith(".."):
+        _is_abs = os.path.isabs(_norm)
+        if _norm.startswith("..") or (_is_abs and not allow_abs):
             logger.warning(
                 "ui_action: rejected open-canvas-file with non-workspace-relative "
-                "path %r (agent channel is workspace-relative only)", path
+                "path %r (allow_abs=%s — agent channel is workspace-relative unless "
+                "local-desktop owner)", path, allow_abs
             )
             return None
         ev["path"] = path
+        if _is_abs:
+            # Audit trail: a sensitive capability (absolute host-file open) was
+            # authorized for a local-desktop session. Also tells the frontend this
+            # abs path was session-type-authorized (relaxes its leading-/ reject).
+            logger.info(
+                "ui_action: ALLOWED open-canvas-file absolute path %r "
+                "(local-desktop owner session, allow_abs=True)", path
+            )
+            ev["allowAbs"] = True
     return ev
 
 

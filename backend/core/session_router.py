@@ -1921,6 +1921,15 @@ class SessionRouter:
         is_owner = channel_context.get("is_owner", False) if channel_context else False
         if channel_context and not is_owner and not unit.is_channel_session:
             unit.is_channel_session = True
+        # Sticky "this unit is driven by a channel" flag — set for ANY
+        # channel_context (owner OR non-owner), unlike is_channel_session which
+        # excludes owners for slot-pool routing. `not _has_channel_context` is
+        # the ONLY correct "true local desktop tab" test. Load-bearing for the
+        # open-canvas-file abs-path gate (C041): owner-over-channel must NOT be
+        # treated as local desktop. Sticky so a mid-lifecycle non-channel resume
+        # can't clear it.
+        if channel_context and not unit._has_channel_context:
+            unit._has_channel_context = True
 
         # Sync the HealthSensor turn threshold to the channel CLI ceiling for
         # ALL channel sessions — keyed off channel_context, NOT the is_channel_session

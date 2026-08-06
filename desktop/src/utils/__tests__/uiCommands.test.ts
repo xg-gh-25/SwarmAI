@@ -160,7 +160,7 @@ describe('dispatchUiCommand', () => {
     expect(docSpy).not.toHaveBeenCalled();
   });
 
-  it('SECURITY: open-canvas-file rejects absolute / traversal paths (infoleak guard)', () => {
+  it('SECURITY: open-canvas-file rejects absolute / traversal paths by default (no allowAbs)', () => {
     const docSpy = vi.spyOn(document, 'dispatchEvent');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (const bad of ['/etc/passwd', '/Users/gawan/.aws/credentials', '~/.ssh/id_rsa', '../../etc/passwd']) {
@@ -170,6 +170,28 @@ describe('dispatchUiCommand', () => {
     // a workspace-relative path still opens
     expect(dispatchUiCommand('open-canvas-file', 'Knowledge/Designs/x.md')).toBe(true);
     expect(docSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('SECURITY: allowAbs=true relaxes ONLY leading-/, never ~ or .. (run_cbaecb86)', () => {
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // ~ and .. stay rejected EVEN with allowAbs=true (escape/traversal, no session nuance)
+    expect(dispatchUiCommand('open-canvas-file', '~/.ssh/id_rsa', undefined, true)).toBe(false);
+    expect(dispatchUiCommand('open-canvas-file', '../../etc/passwd', undefined, true)).toBe(false);
+    expect(dispatchUiCommand('open-canvas-file', 'foo/../../etc/passwd', undefined, true)).toBe(false);
+    expect(docSpy).not.toHaveBeenCalled();
+    // an absolute path IS admitted when allowAbs=true (local-desktop owner)
+    expect(dispatchUiCommand('open-canvas-file', '/Users/gawan/x.md', undefined, true)).toBe(true);
+    expect(docSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('SECURITY: allowAbs falsy (channel) still rejects absolute paths — C041', () => {
+    const docSpy = vi.spyOn(document, 'dispatchEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // explicit false AND undefined must both reject an abs path
+    expect(dispatchUiCommand('open-canvas-file', '/etc/passwd', undefined, false)).toBe(false);
+    expect(dispatchUiCommand('open-canvas-file', '/etc/passwd', undefined, undefined)).toBe(false);
+    expect(docSpy).not.toHaveBeenCalled();
   });
 
   it('FAIL-CLOSED on a raw swarm:* string passed as cmd', () => {
