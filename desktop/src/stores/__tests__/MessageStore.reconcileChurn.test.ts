@@ -78,6 +78,31 @@ describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wi
     expect(asstText(store, 'a1')).toBe(LONGER);
   });
 
+  it('reconcile-tail (#4): a 50-row TAIL that omits an older turn does NOT drop it, and a shorter tail row does NOT truncate the streamed answer', () => {
+    // Models the #4 tail-fetch: reconcile now fetches only the newest RECONCILE_TAIL
+    // rows, not full history. Two properties must hold together:
+    //  (1) an OLDER local message absent from the tail is PRESERVED (_applyMerge
+    //      "DB may be paginated" invariant, MessageStore.ts:652) — not dropped;
+    //  (2) if the tail's row for the just-streamed turn is stale/shorter (persist
+    //      lag, or a >50-raw-row turn whose START fell outside the tail), the
+    //      complete local content still wins.
+    const OLD = 'an older turn that is NOT in the newest-50 tail';
+    const COMPLETE = 'the just-streamed complete answer for the current turn';
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(makeMsg('old-1', 'assistant', OLD));   // older history, outside the tail
+    store.append(makeMsg('cur-1', 'assistant', COMPLETE)); // current turn, fully streamed
+
+    // The tail fetch returns ONLY the current turn's row (old-1 not in the tail),
+    // and that row is stale/shorter (persist lag or truncated >50-row turn).
+    store.reconcile([makeChatMsg('cur-1', 'assistant', 'the just-streamed')]);
+
+    // (1) older message survives despite being absent from the partial tail
+    expect(store.messages.find((m) => m.id === 'old-1')).toBeDefined();
+    expect(asstText(store, 'old-1')).toBe(OLD);
+    // (2) current turn's complete content is not truncated by the shorter tail row
+    expect(asstText(store, 'cur-1')).toBe(COMPLETE);
+  });
+
   it('churn across an async in-flight fetch: stale read loses, drained re-run with full DB lands (drive real _fetchAndReconcile)', async () => {
     // Couples the churn with the async fetch path: the first (in-flight) fetch
     // returns a STALE shorter row; a reconcile re-queues behind it; the drained

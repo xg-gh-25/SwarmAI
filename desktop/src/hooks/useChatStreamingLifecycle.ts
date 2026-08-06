@@ -101,10 +101,19 @@ const STALL_THRESHOLD_TOOL_MS = 180_000;
  * persist-lag guard and dedup both match by id on the tail, and `_applyMerge`
  * preserves any older local message NOT present in a partial DB fetch
  * (MessageStore "DB may be paginated" invariant). So reconcile fetches the last
- * RECONCILE_TAIL rows via `getSessionMessagesPaginated`, NOT the full history —
- * dropping per-turn pull+camelCase parse from O(N) (a heavy session is ~1000+
- * rows) to a constant. 50 ≫ the 1–3 rows a single turn produces, so the newest
- * turn is always within the tail. Backend caps limit at 200; 50 is well under.
+ * RECONCILE_TAIL rows via `getSessionMessagesReconcileTail`, NOT the full history
+ * — dropping per-turn pull+camelCase parse from O(N) (a heavy session is ~1000+
+ * rows) to a constant. Backend caps limit at 200; 50 is well under.
+ *
+ * ⚠️ 50 counts RAW DB ROWS, not merged bubbles. The backend persists ONE row per
+ * `assistant` SSE event (crash-safety), so a long agentic tool-loop turn can emit
+ * 5–20+ raw rows that `_merge_consecutive_assistant_messages` later folds into one
+ * bubble. Keep 50 comfortably ABOVE the max raw-rows-per-turn — do NOT lower it.
+ * Even if a pathological >50-row turn's START falls outside the tail, correctness
+ * still holds: every row carries the same `{client_id}-asst`, and the persist-lag
+ * guard (_mergePreservingInteractive: more-complete-content-wins by id) keeps the
+ * complete local content; a later cold initial-load (200-cap) restores the full
+ * turn. The tail is a perf floor, not a correctness boundary.
  */
 const RECONCILE_TAIL = 50;
 

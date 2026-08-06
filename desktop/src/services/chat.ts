@@ -604,6 +604,40 @@ export const chatService = {
     return messages;
   },
 
+  /**
+   * Turn-end RECONCILE tail fetch — the newest `limit` rows, deliberately
+   * BYPASSING the ETag cache (never sends If-None-Match, never writes the
+   * shared cache slot).
+   *
+   * WHY reconcile must NOT touch the cache: the single per-session cache slot
+   * (`_messageEtags`) is keyed by the backend ETag `"session:count"`, which is
+   * LIMIT-AGNOSTIC (chat.py:1158-1163 computes it from count only and returns
+   * 304 on a match regardless of `limit`). If a `limit`-capped reconcile wrote
+   * its small slice into that slot, a subsequent FULL initial-load
+   * (`getSessionMessagesPaginated(sid, 200)`) would send the same etag, get a
+   * 304 (count unchanged), and receive the cached *50-row* slice instead of 200
+   * — silently truncating visible history on tab-switch/restore AND hiding the
+   * "Load earlier messages" button (len === 200 → false). The bug surfaces
+   * OUTSIDE the reconcile path, so a persist-lag regression test can't catch it.
+   *
+   * Cost of bypassing: ~zero. Reconcile always runs after a send + a preceding
+   * `invalidateMessageCache`, so the count has changed and a 304 would almost
+   * never hit anyway. Leaving the cache exclusively to initial-load removes the
+   * poisoning vector entirely.
+   */
+  async getSessionMessagesReconcileTail(
+    sessionId: string,
+    limit: number,
+  ): Promise<ChatMessage[]> {
+    // No If-None-Match header → backend never returns 304 → always 200 with the
+    // capped tail. No cache write → the shared slot stays owned by initial-load.
+    const response = await api.get<Record<string, unknown>[]>(
+      `/chat/sessions/${sessionId}/messages?limit=${limit}`,
+      { validateStatus: (s: number) => s === 200 },
+    );
+    return (response.data ?? []).map(toMessageCamelCase);
+  },
+
   // Invalidate ETag cache for a session (call after sending a message)
   invalidateMessageCache(sessionId: string): void {
     this._messageEtags.delete(sessionId);
