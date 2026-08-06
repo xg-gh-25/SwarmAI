@@ -402,3 +402,203 @@ class TestUsageDecay:
         # float usage (post-decay) must not crash and must still damp
         m = build_usage_ref_map(memory, {"MOD00": 51.7})
         assert m[("Models", "Hot")] == round(math.log2(52.7))
+
+# ── SSoT Prefix Coverage (regression: the extinct-prefix blind spot) ──────────
+
+
+class TestSSoTPrefixCoverage:
+    """The entry-ID patterns MUST cover every MEMORY_SECTIONS SSoT prefix.
+
+    Regression guard for the write-side-trim outage: _ENTRY_ID_RE and
+    _ENTRY_HEADER_RE were hardcoded to the pre-PRI01 set `KD|LL|RC|COE|OT`.
+    After PRI01 renamed the sections the live prefixes became PRI/COR/DEC/GUI/
+    PIT/PRC/MOD/COE/OT/SP, so the literal matched only COE and OT — and both of
+    those sections are evergreen (decay-immune). Of 323 live body entries, 0
+    decay-ELIGIBLE ones matched, so scan/bump could never write a single `ref:`
+    comment, which starved _enforce_section_caps' decay-ranked eviction and let
+    .context grow unbounded.
+
+    These tests fail loudly if a future prefix rename outruns the patterns again.
+    """
+
+    def test_every_ssot_prefix_matches_entry_header(self):
+        """Every SSoT prefix must match the body-entry header pattern."""
+        from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
+        from core.memory_decay import _ENTRY_HEADER_RE
+
+        uncovered = sorted(
+            p for p in MEMORY_PREFIX_TO_SECTION
+            if not _ENTRY_HEADER_RE.match(f"- [{p}01]")
+        )
+        assert uncovered == [], (
+            f"SSoT prefixes invisible to _ENTRY_HEADER_RE: {uncovered}. "
+            "Entries in those sections can never earn decay metadata."
+        )
+
+    def test_every_ssot_prefix_matches_inline_id(self):
+        """Every SSoT prefix must be detectable when cited inline in a transcript."""
+        from core.ddd_entry_lifecycle import MEMORY_PREFIX_TO_SECTION
+        from core.memory_decay import _ENTRY_ID_RE
+
+        uncovered = sorted(
+            p for p in MEMORY_PREFIX_TO_SECTION
+            if _ENTRY_ID_RE.findall(f"as noted in {p}42 we should") != [f"{p}42"]
+        )
+        assert uncovered == [], f"SSoT prefixes invisible to _ENTRY_ID_RE: {uncovered}"
+
+    def test_high_volume_decay_eligible_prefixes_covered(self):
+        """GUI/PIT/DEC carry the bulk of decay-eligible entries — named explicitly.
+
+        These three are the non-evergreen, high-churn sections (~283 of 323 live
+        body entries). They are exactly what the old literal missed, so assert
+        them by name to make a regression's failure message unambiguous.
+        """
+        from core.memory_decay import _ENTRY_HEADER_RE, _ENTRY_ID_RE
+
+        for entry_id in ("GUI138", "PIT106", "DEC39"):
+            assert _ENTRY_HEADER_RE.match(f"- [{entry_id}] some entry"), entry_id
+            assert entry_id in _ENTRY_ID_RE.findall(f"see {entry_id} for detail")
+
+    def test_both_patterns_share_one_prefix_alternation(self):
+        """Structural anti-drift: the two patterns are built from one constant.
+
+        The original code carried a comment warning they must stay "aligned" —
+        a rule a human had to remember. Sharing _ID_PREFIX_ALT makes divergence
+        impossible rather than merely discouraged.
+        """
+        from core.memory_decay import _ID_PREFIX_ALT, _ENTRY_HEADER_RE, _ENTRY_ID_RE
+
+        for prefix in _ID_PREFIX_ALT.split("|"):
+            assert _ENTRY_HEADER_RE.match(f"- [{prefix}07]"), prefix
+            assert _ENTRY_ID_RE.findall(f"{prefix}07") == [f"{prefix}07"], prefix
+
+    def test_legacy_prefixes_still_parse_for_archives(self):
+        """Pre-PRI01 IDs must still parse so archived files remain readable."""
+        from core.memory_decay import _ENTRY_HEADER_RE
+
+        for entry_id in ("KD01", "LL08", "RC15"):
+            assert _ENTRY_HEADER_RE.match(f"- [{entry_id}] archived entry"), entry_id
+
+    def test_legacy_prefix_set_is_closed(self):
+        """The legacy set is historical and must never grow — new prefixes go in the SSoT."""
+        from core.memory_decay import _LEGACY_ID_PREFIXES
+
+        assert _LEGACY_ID_PREFIXES == frozenset({"KD", "LL", "RC"})
+
+    def test_prose_does_not_produce_false_ids(self):
+        """Bare prefixes without digits must not be mistaken for entry IDs."""
+        from core.memory_decay import _ENTRY_ID_RE
+
+        prose = "knowledge discovery, DECIDE quickly, SPARC review, PRINCIPLES doc"
+        assert _ENTRY_ID_RE.findall(prose) == []
+
+
+# ── Producer → Consumer chain (INV-5: a test that ACTUALLY enters the path) ───
+
+
+class TestDecayMetadataProducerConsumerChain:
+    """End-to-end: transcript citation → scan → bump → decay-ranked eviction.
+
+    Why this test exists. The pre-existing eviction test
+    (test_memory_promotion.TestUsageBasedEviction) HAND-WROTE the 5-field decay
+    metadata into its fixture, so it verified the consumer's math while the
+    producer was structurally incapable of emitting that metadata for any live
+    prefix. Green consumer + dead producer is exactly how this outage shipped
+    unnoticed: nothing tested the seam between them.
+
+    This test drives the REAL producer (scan_session_for_memory_refs →
+    bump_entry_references) and only then hands off to the REAL consumer
+    (_enforce_section_caps), using CURRENT SSoT prefixes.
+
+    Against the old `KD|LL|RC|COE|OT` pattern it fails: scan finds nothing, bump
+    is a no-op, decay_available stays False, and eviction degrades to
+    position-only (bottom-first) — dropping GUI03 instead of preserving it.
+    """
+
+    @staticmethod
+    def _memory_with_guidelines() -> str:
+        return (
+            "# Memory\n\n"
+            "## Guidelines\n"
+            "- [GUI01] 2026-01-01: Prefer SSoT-derived patterns\n"
+            "- [GUI02] 2026-01-02: Uncited filler A\n"
+            "- [GUI03] 2026-01-03: Commit your own files immediately\n"
+            "- [GUI04] 2026-01-04: Uncited filler B\n"
+        )
+
+    @staticmethod
+    def _transcript() -> list[dict]:
+        return [
+            {"role": "user", "content": "does GUI01 still hold?"},
+            {"role": "assistant", "content": "Yes — and GUI03 applies here too."},
+        ]
+
+    def test_producer_step1_scan_finds_current_prefix_ids(self):
+        """Step 1: a transcript citing GUI ids yields exactly those ids."""
+        from core.memory_decay import scan_session_for_memory_refs, _ENTRY_HEADER_RE
+
+        content = self._memory_with_guidelines()
+        entry_ids = set(_ENTRY_HEADER_RE.findall(content))
+        assert entry_ids == {"GUI01", "GUI02", "GUI03", "GUI04"}
+
+        found = scan_session_for_memory_refs(self._transcript(), entry_ids)
+        assert found == {"GUI01", "GUI03"}
+
+    def test_producer_step2_bump_emits_parseable_five_field_metadata(self):
+        """Step 2: bump emits the exact comment shape the CONSUMER's parser reads.
+
+        Asserted via the consumer's own _META_RE rather than a substring match,
+        so a format drift between producer and consumer cannot pass.
+        """
+        from core.memory_decay import bump_entry_references, _META_RE
+
+        result = bump_entry_references(
+            self._memory_with_guidelines(), {"GUI01", "GUI03"}, date(2026, 8, 6)
+        )
+        assert result.count("<!-- ref:") == 2
+
+        parsed = _META_RE.findall(result)
+        assert len(parsed) == 2, "consumer parser must accept what the producer wrote"
+        assert all(fields[1] == "1" for fields in parsed)   # ref:1
+        assert all(fields[2] == "2026-08-06" for fields in parsed)  # last:
+        assert all(fields[4] == "1" for fields in parsed)   # sessions:1
+
+    def test_consumer_evicts_uncited_and_keeps_cited(self, tmp_path):
+        """Step 3 (the seam): real producer output drives decay-ranked eviction.
+
+        Cited entries score ~1.0; uncited ones fall to the neutral 0.5 default,
+        so the cap trims the uncited pair. Under the old pattern the producer
+        emitted nothing and the consumer fell back to position-only eviction,
+        which drops GUI03/GUI04 — so this assertion is what discriminates the fix.
+        """
+        import hooks.distillation_hook as dh
+        from hooks.distillation_hook import DistillationTriggerHook
+        from core.memory_decay import (
+            _ENTRY_HEADER_RE,
+            bump_entry_references,
+            scan_session_for_memory_refs,
+        )
+
+        content = self._memory_with_guidelines()
+        entry_ids = set(_ENTRY_HEADER_RE.findall(content))
+        referenced = scan_session_for_memory_refs(self._transcript(), entry_ids)
+        # Real producer output — NOT a hand-written fixture.
+        bumped = bump_entry_references(content, referenced, date.today())
+
+        memory_path = tmp_path / "MEMORY.md"
+        memory_path.write_text(bumped, encoding="utf-8")
+        (tmp_path / "Knowledge" / "Archives").mkdir(parents=True, exist_ok=True)
+
+        original_caps = dh.SECTION_CAPS.copy()
+        try:
+            dh.SECTION_CAPS["Guidelines"] = 2
+            DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
+        finally:
+            dh.SECTION_CAPS.clear()
+            dh.SECTION_CAPS.update(original_caps)
+
+        result = memory_path.read_text(encoding="utf-8")
+        assert "[GUI01]" in result, "cited entry must survive decay-ranked eviction"
+        assert "[GUI03]" in result, "cited entry must survive decay-ranked eviction"
+        assert "[GUI02]" not in result, "uncited entry should be evicted"
+        assert "[GUI04]" not in result, "uncited entry should be evicted"

@@ -277,6 +277,12 @@ class TestUsageBasedEviction:
             dh.SECTION_CAPS["Recent Context"] = 3
             DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
         finally:
+            # clear() before update(): these tests INSERT a key ("Recent
+            # Context", a section removed in PRI01) that update() alone cannot
+            # remove, leaking a dead key into the module-level SECTION_CAPS and
+            # failing test_distill_write_targets' SSoT-key validation whenever it
+            # ran later in the same process.
+            dh.SECTION_CAPS.clear()
             dh.SECTION_CAPS.update(original_caps)
 
         result = memory_path.read_text(encoding="utf-8")
@@ -306,6 +312,12 @@ class TestUsageBasedEviction:
             dh.SECTION_CAPS["Recent Context"] = 2
             DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
         finally:
+            # clear() before update(): these tests INSERT a key ("Recent
+            # Context", a section removed in PRI01) that update() alone cannot
+            # remove, leaking a dead key into the module-level SECTION_CAPS and
+            # failing test_distill_write_targets' SSoT-key validation whenever it
+            # ran later in the same process.
+            dh.SECTION_CAPS.clear()
             dh.SECTION_CAPS.update(original_caps)
 
         result = memory_path.read_text(encoding="utf-8")

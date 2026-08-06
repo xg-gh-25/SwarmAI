@@ -24,11 +24,14 @@ Public API:
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -44,10 +47,42 @@ MAX_STABILITY = 10.0        # Cap so no entry becomes immortal
 # removed in PRI01, so it protected nothing real (R3 write-governance fix). The
 # SSoT deliberately makes Decisions NON-evergreen (decisions decay); evergreen =
 # {Principles, Corrections, COE Registry, Open Threads, Standing Preferences}.
-from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS as PERMANENT_SECTIONS
+from core.ddd_entry_lifecycle import (
+    MEMORY_EVERGREEN_SECTIONS as PERMANENT_SECTIONS,
+    MEMORY_PREFIX_TO_SECTION,
+)
 
-# Regex for MEMORY entry IDs (KD01, LL03, RC15, COE02, OT01)
-_ENTRY_ID_RE = re.compile(r"\b((?:KD|LL|RC|COE|OT)\d{2,3})\b")
+# ── Entry-ID prefix set (SSoT-derived) ───────────────────────────────────────
+# The ID prefixes MUST come from the MEMORY_SECTIONS SSoT, not a literal. The
+# old hardcoded `KD|LL|RC|COE|OT` was the pre-PRI01 prefix set: after PRI01
+# renamed the sections, the live prefixes became PRI/COR/DEC/GUI/PIT/PRC/MOD/
+# COE/OT/SP, so the literal matched only COE and OT — and BOTH of those are
+# evergreen (decay-immune). Net effect: of 323 live body entries, 18 matched and
+# 0 decay-eligible ones did, so scan/bump could never write a single `ref:`
+# metadata comment. That starved _enforce_section_caps' decay-ranked eviction
+# (it needs the 5-field `sessions:` metadata), permanently degrading it to
+# position-only oldest-first capped at BULK_EVICT_LIMIT — the write-side trim
+# that context_directory_loader explicitly defers to ("size governance is
+# write-side") silently did nothing, and .context grew unbounded.
+#
+# Same bug class as the PERMANENT_SECTIONS literal fixed above in R3 ("the old
+# literal referenced 'Key Decisions' ... so it protected nothing real"): that
+# fix SSoT-derived the *sections* but left these *ID regexes* on legacy
+# prefixes. Deriving both from one shared alternation makes the asymmetry the
+# original comment warned about structurally impossible, and a future prefix
+# rename now propagates automatically instead of silently orphaning entries.
+#
+# _LEGACY_ID_PREFIXES is a CLOSED historical set (pre-PRI01 IDs) kept only so
+# archived files still parse. It must never grow — new prefixes belong in the
+# SSoT. Zero live entries use these.
+_LEGACY_ID_PREFIXES = frozenset({"KD", "LL", "RC"})
+_ID_PREFIXES = frozenset(MEMORY_PREFIX_TO_SECTION) | _LEGACY_ID_PREFIXES
+# Longest-first so a shorter prefix can never shadow a longer one that shares
+# its leading chars (deterministic, and future-proof if such a pair is added).
+_ID_PREFIX_ALT = "|".join(sorted(_ID_PREFIXES, key=lambda p: (-len(p), p)))
+
+# Regex for MEMORY entry IDs (e.g. GUI138, PIT106, DEC39, COE02, OT01)
+_ENTRY_ID_RE = re.compile(rf"\b((?:{_ID_PREFIX_ALT})\d{{2,3}})\b")
 
 # Metadata comment format (extends ddd_entry_lifecycle convention)
 _META_RE = re.compile(
@@ -55,12 +90,32 @@ _META_RE = re.compile(
     re.MULTILINE,
 )
 
-# Entry header pattern (matches MEMORY.md bullet format)
-# Aligned with _ENTRY_ID_RE to prevent asymmetric matching
+# Entry header pattern (matches MEMORY.md bullet format).
+# Shares _ID_PREFIX_ALT with _ENTRY_ID_RE so the two can never drift apart.
 _ENTRY_HEADER_RE = re.compile(
-    r"^- \[((?:KD|LL|RC|COE|OT)\d{2,3})\]",
+    rf"^- \[((?:{_ID_PREFIX_ALT})\d{{2,3}})\]",
     re.MULTILINE,
 )
+
+# Fail-loud guard: every SSoT prefix must actually match the compiled header
+# pattern. A behavioural check (not just a set comparison) so a bad alternation
+# or a quoting slip surfaces too. logger.error (not raise) — mirrors the
+# distillation SECTION_CAPS guard: a drift must surface in logs/health, never
+# crash memory maintenance.
+try:
+    _unmatched_prefixes = sorted(
+        p for p in MEMORY_PREFIX_TO_SECTION
+        if not _ENTRY_HEADER_RE.match(f"- [{p}01]")
+    )
+    if _unmatched_prefixes:
+        logger.error(
+            "memory_decay entry-ID pattern does not cover MEMORY_SECTIONS SSoT "
+            "prefixes %s — entries in those sections can never earn decay "
+            "metadata and will be invisible to decay-ranked eviction",
+            _unmatched_prefixes,
+        )
+except Exception as _e:  # pragma: no cover — SSoT import should always succeed
+    logger.error("memory_decay: could not validate entry-ID pattern against SSoT: %s", _e)
 
 
 # ── Data Structures ──────────────────────────────────────────────────────────
