@@ -307,8 +307,17 @@ export interface ChatRequest {
   /** Attached integrated-terminal output (P2) — read-only context for the agent.
    *  Set only when the user explicitly attaches a terminal (terminal → session). */
   terminalContext?: { bufferTail: string; cwd: string };
-  /** Correlation ID for optimistic message dedup — echoed in result event */
-  clientId?: string;
+  /** Correlation ID for optimistic message dedup — echoed in result event.
+   *  REQUIRED (run_c598f640): every send MUST carry a key. This is the OT01
+   *  key-chain invariant enforced at COMPILE TIME — a keyless persisted row is
+   *  the source of the reconcile-tail duplicate bubble, and a keyless send path
+   *  (a new one added in a hook) would escape the regex source-scan guard (which
+   *  only scans ChatPage.tsx). Making the field required makes "every send carries
+   *  a key" structurally impossible to violate, not merely caught. Continuation
+   *  paths (streamAnswerQuestion / streamCmdPermissionContinue) use SEPARATE
+   *  request types and are unaffected; channels use the backend run_conversation
+   *  path (not ChatRequest) and are a distinct keyless-for-life axis. */
+  clientId: string;
 }
 
 // ============== File Attachment Types ==============
