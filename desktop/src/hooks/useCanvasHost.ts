@@ -340,8 +340,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         // a 500/network/transient error is NOT "file invalid", so it keeps the
         // existing fall-through (open on the raw path; the fetch layer retries/errors).
         if (status === 404) {
+          // Stable id → rapid repeated bad-path opens collapse into ONE refreshed toast
+          // instead of stacking (meta-review LOW; ToastContext dedups by id).
           document.dispatchEvent(new CustomEvent('swarm:toast', {
-            detail: { message: `File not found: ${filePath}` },
+            detail: { message: `File not found: ${filePath}`, severity: 'warning', id: 'canvas-file-not-found' },
           }));
           return;
         }
