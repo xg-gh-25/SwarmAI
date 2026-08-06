@@ -215,13 +215,21 @@ export function ChatInput({
   // lag) is disabled entirely; CSS `field-sizing:content` + `max-height` do the
   // sizing. Computed ONCE (support is process-stable). run_26172836.
   const fieldSizingRef = useRef<boolean>(supportsFieldSizing());
+  // Reactive mirror of maxHeightRef for the field-sizing CSS `max-height` (which is
+  // read at RENDER time in JSX — a ref write wouldn't refresh it). The JS autogrow
+  // path reads maxHeightRef.current live so it doesn't need this; only the CSS path
+  // does. Seeds at 400 (=MAX_ROWS default) and updates to the real computed value on
+  // mount. (REVIEW F1, run_26172836.)
+  const [maxHeightPx, setMaxHeightPx] = useState(400);
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
-    maxHeightRef.current = MAX_ROWS * lineHeight;
+    const px = MAX_ROWS * lineHeight;
+    maxHeightRef.current = px;
+    setMaxHeightPx(px);
   }, []);
 
   // L2: Listen for auto-diff injection from FileEditorPanel save
@@ -681,14 +689,20 @@ export function ChatInput({
       onExpandedChange(false);
     }
     onSend();
-    const el = textareaRef.current;
-    if (el) {
-      el.style.height = '';       // clear inline style, rows={3} reasserts minimum
-      el.style.overflowY = 'hidden';
+    // Under field-sizing (native auto-sizing) NO inline height/overflow is ever
+    // written, so there is nothing to reset — and the CSS `overflow-y:auto` must not
+    // be clobbered to 'hidden' (would momentarily clip a >maxHeight draft until React
+    // re-commits). Only the JS-autogrow path needs the imperative reset. (REVIEW F2/F3.)
+    if (!fieldSizingRef.current) {
+      const el = textareaRef.current;
+      if (el) {
+        el.style.height = '';       // clear inline style, rows={3} reasserts minimum
+        el.style.overflowY = 'hidden';
+      }
+      // Invalidate the measure cache: height was just reset to '' (native rows min),
+      // so the next applyHeight MUST re-measure rather than skip on a stale signature.
+      lastMeasureRef.current = null;
     }
-    // Invalidate the measure cache: height was just reset to '' (native rows min),
-    // so the next applyHeight MUST re-measure rather than skip on a stale signature.
-    lastMeasureRef.current = null;
   }, [onSend, isExpanded, onExpandedChange, applyTransition]);
 
   const hasAttachments = attachments.some((a) => !a.error && !a.isLoading);
@@ -862,15 +876,16 @@ export function ChatInput({
               // supported, CSS grows the textarea with content — no JS scrollHeight
               // read, so no per-keystroke forced document reflow (the Canvas-open lag
               // root cause). max-height clamps growth (60vh expanded / MAX_ROWS px
-              // collapsed — mirrors the JS maxHeight) and overflow-y:auto scrolls past
-              // it. `fieldSizing` is set only when supported so on older WebKit the
+              // collapsed — mirrors the JS maxHeight, via the reactive maxHeightPx so it
+              // refreshes after the mount line-height measure) and overflow-y:auto
+              // scrolls past it. Set only when supported, so on older WebKit the
               // property is absent and the JS autogrow (which writes inline height)
-              // stays in charge. clsx omits `resize-none`? no — kept below.
+              // stays in charge.
               style={fieldSizingRef.current ? {
                 // `fieldSizing` is not yet in React's CSSProperties typings — set via
                 // an index cast so tsc doesn't reject the (valid, supported) property.
                 ['fieldSizing' as string]: 'content',
-                maxHeight: isExpanded ? '60vh' : `${maxHeightRef.current}px`,
+                maxHeight: isExpanded ? '60vh' : `${maxHeightPx}px`,
                 overflowY: 'auto',
               } as React.CSSProperties : undefined}
               className={clsx(
