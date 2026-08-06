@@ -14,7 +14,8 @@ import type { PendingQuestion } from './types';
  * unconfirmed blocks).
  */
 export function toDisplayMessage(
-  msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string },
+  msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string;
+         metadata?: { client_id?: string; [key: string]: unknown } },
 ): Message {
   return {
     id: msg.id,
@@ -26,6 +27,15 @@ export function toDisplayMessage(
     ),
     timestamp: msg.createdAt,
     model: msg.model,
+    // Preserve the backend correlation key. toMessageCamelCase already carries
+    // metadata.client_id on every DB fetch; this converter is the ONE seam that
+    // used to DROP it — so an initial-load / load-older bubble arrived KEYLESS and
+    // a later mid-turn-cut reconcile (whose merged DB id differs from this bubble's
+    // id — the backend uses the first-in-tail row id) could not correlate → a
+    // DUPLICATE half-bubble. Carrying client_id here closes that entrance at the
+    // single chokepoint every DB-load path funnels through (run_03d6ee38). The
+    // display id stays the canonical DB id (pagination `before_id` cursor unaffected).
+    ...(msg.metadata ? { metadata: msg.metadata } : {}),
   };
 }
 

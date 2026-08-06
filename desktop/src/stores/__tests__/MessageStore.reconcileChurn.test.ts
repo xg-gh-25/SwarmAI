@@ -21,6 +21,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { MessageStore } from '../MessageStore';
+import { toDisplayMessage } from '../../pages/chat/utils';
 import type { Message, ChatMessage } from '../../types';
 
 function makeMsg(id: string, role: 'user' | 'assistant' | 'system' = 'assistant', text = 'hello'): Message {
@@ -154,6 +155,37 @@ describe('MessageStore — rapid reconcile churn (persist-lag / more-complete-wi
     const assistants = store.messages.filter((m) => m.role === 'assistant');
     expect(assistants).toHaveLength(1); // H2 drops the numeric placeholder — no dup
     expect(assistants[0].id).toBe('A7'); // the canonical DB row is the surviving bubble
+  });
+
+  it('reconcile-tail INITIAL-LOAD entrance (run_03d6ee38): a bubble loaded via toDisplayMessage must carry its client_id so the FIRST mid-cut reconcile correlates — ONE bubble', () => {
+    // The entrance the run_f62f4b80 fix MISSED: initial-load / tab-switch bubbles
+    // come through toDisplayMessage, which USED TO strip metadata → they arrived
+    // KEYLESS (id=canonical DB id, no client_id). A first mid-turn-cut reconcile
+    // (merged DB id A3 ≠ the loaded A1, because the backend uses the first-in-tail
+    // row id) then matched nothing (id≠, no key, A3 is a UUID so H2 skips) →
+    // duplicate on the VERY FIRST reconcile after opening the session (no
+    // accumulation needed). Fix: toDisplayMessage now preserves metadata.client_id.
+    // This test drives the REAL initial-load converter (toDisplayMessage), not a
+    // hand-built message — if the converter drops the key again, this goes RED.
+    const dbRowCamel = {
+      id: 'A1', sessionId: 'sess-1', role: 'assistant',
+      content: [{ type: 'text', text: 'the full turn answer' }],
+      createdAt: new Date().toISOString(),
+      metadata: { client_id: 'local-XYZ-asst' },
+    } as unknown as Parameters<typeof toDisplayMessage>[0];
+    store = new MessageStore({ sessionId: 'sess-1' });
+    store.append(toDisplayMessage(dbRowCamel));          // initial-load path (real converter)
+    // the loaded bubble must have retained the correlation key
+    expect(store.messages.find((m) => m.role === 'assistant')?.metadata?.client_id).toBe('local-XYZ-asst');
+
+    // first tail reconcile cuts mid-turn → merged id A3, same client_id
+    const midCut: ChatMessage = {
+      id: 'A3', sessionId: 'sess-1', role: 'assistant',
+      content: [{ type: 'text', text: 'answer tail only' }] as any,
+      createdAt: new Date().toISOString(), metadata: { client_id: 'local-XYZ-asst' } as any,
+    };
+    store.reconcile([midCut]);
+    expect(store.messages.filter((m) => m.role === 'assistant')).toHaveLength(1); // ONE — no dup
   });
 
   it('reconcile-tail SECOND mid-turn-cut (run_f62f4b80): rename on #1 must NOT consume the correlation key — #2 cut still matches, ONE bubble', () => {

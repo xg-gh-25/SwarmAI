@@ -974,6 +974,13 @@ export class MessageStore {
       content: msg.content as ContentBlock[],
       timestamp: msg.createdAt,
       model: msg.model,
+      // Preserve the client_id correlation key — mirrors toDisplayMessage (the
+      // production converter). Harmless today (prod never injects this fallback,
+      // and reconcile reads client_id from the RAW dbMessages), but keeping the
+      // two converters in lockstep removes a latent trap: if this fallback is
+      // ever wired as the local-bubble converter, a stripped key would silently
+      // re-open the mid-turn-cut duplicate (run_03d6ee38).
+      ...(msg.metadata ? { metadata: msg.metadata } : {}),
     };
   }
 
