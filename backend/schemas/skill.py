@@ -32,6 +32,10 @@ class SkillResponse(BaseModel):
     # unknown) run modes at the list endpoint (backend-primary, fail-closed).
     category: str = "Utilities"
     visibility: Literal["public", "internal"] = "public"
+    # Load tier (run_a85e6641): always (full SKILL.md at session start) or lazy
+    # (stub + on-invocation Read). resolve_tier CLAMPS to these two values so a
+    # malformed manifest.yaml tier can never crash this Literal (Gate-1 BLOCK-5).
+    tier: Literal["always", "lazy"] = "lazy"
 
 
 class SkillCreateRequest(BaseModel):

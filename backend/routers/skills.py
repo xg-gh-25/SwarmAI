@@ -78,6 +78,7 @@ def _skill_info_to_response(
         content=info.content if include_content else None,
         category=derive_category(info.folder_name, info.category),
         visibility=derive_visibility(info.folder_name, info.visibility),
+        tier=info.tier,
     )
 
 
@@ -127,6 +128,24 @@ def _visible_to_caller(response: SkillResponse) -> bool:
     filtering only the list leaves the by-name detail endpoint as an open bypass.
     """
     return response.visibility != "internal" or _is_owner_session()
+
+
+def _load_skill_health_stats() -> list:
+    """Read per-skill stats from the production metrics DB (READ-ONLY).
+
+    Isolated into its own function so the health endpoint can be tested fail-safe
+    (the test monkeypatches this to raise, asserting the endpoint still 200s). Opens
+    a short-lived ``SkillMetricsStore`` on the app data.db and closes it. Never
+    mutates the HIGH-risk store queries — calls ``get_all_stats()`` only.
+    """
+    from config import get_app_data_dir
+    from core.skill_metrics import SkillMetricsStore
+
+    store = SkillMetricsStore(get_app_data_dir() / "data.db")
+    try:
+        return store.get_all_stats()
+    finally:
+        store.close()
 
 
 async def _trigger_projection() -> None:
@@ -201,6 +220,39 @@ async def rescan_skills():
     responses = [r for r in responses if _visible_to_caller(r)]
     responses.sort(key=lambda r: r.folder_name)
     return responses
+
+
+@router.get("/health")
+async def skills_health() -> dict[str, dict]:
+    """Per-skill qualitative health status for the Capabilities panel (run_a85e6641).
+
+    Returns ``{folder_name: {status, success_rate, last_used}}`` where status is one of
+    healthy / low_success / never_used / stale. The panel LAZY-fetches this after the
+    fast /api/skills list and renders a status dot per row (raw counts stay off the row —
+    R30#4; success_rate/last_used are for the detail drawer).
+
+    Two load-bearing properties:
+    - FAIL-SAFE (AC7 / Gate-1): any error reading the metrics DB → an EMPTY map + 200,
+      NEVER a 500. A missing/locked metrics DB must not break the panel — the dots just
+      don't light up.
+    - VISIBILITY (Gate-1 BLOCK-3): the map is folded over the SAME _visible_to_caller
+      skill list that GET /skills returns, so a non-owner (hive) never receives an
+      internal skill NAME as a map key (map keys = a subset of the visible list).
+    """
+    from core.skill_health import build_health_map
+
+    try:
+        cache = await skill_manager.get_cache()
+        visible_names = [
+            info.folder_name
+            for info in cache.values()
+            if _visible_to_caller(_skill_info_to_response(info, include_content=False))
+        ]
+        all_stats = _load_skill_health_stats()
+        return build_health_map(all_stats, visible_names)
+    except Exception as e:  # noqa: BLE001 — fail-safe: never 500 the panel
+        logger.warning("skills_health failed (non-blocking, returning empty): %s", e)
+        return {}
 
 
 @router.post("/generate-with-agent")

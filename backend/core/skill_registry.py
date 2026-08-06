@@ -57,6 +57,40 @@ for _cat, _skills in SKILL_CATEGORIES.items():
 # list. Consumed by routers/skills.py::_skill_info_to_response.
 # ---------------------------------------------------------------------------
 
+# Valid load tiers. A skill is `always` (full SKILL.md loaded at session start) or
+# `lazy` (stub + on-invocation Read). Anything else is clamped to `lazy` (see resolve_tier).
+_VALID_TIERS: tuple[str, ...] = ("always", "lazy")
+DEFAULT_TIER = "lazy"
+
+
+def resolve_tier(
+    manifest_present: bool,
+    manifest_tier: Optional[str] = None,
+    frontmatter_tier: Optional[str] = None,
+) -> str:
+    """Resolve a skill's load tier — the SINGLE source of precedence + clamping.
+
+    Precedence (mirrors the original ``SkillRegistry._read_tier`` short-circuit):
+    ``manifest.yaml`` is TERMINAL when present (even if its ``tier`` defaulted to
+    ``lazy``, it wins over any frontmatter value) > SKILL.md frontmatter ``tier`` >
+    ``DEFAULT_TIER``.
+
+    CLAMP (run_a85e6641 Gate-1 BLOCK-5): ``SkillManifest.tier`` is an UNVALIDATED
+    ``str`` — a ``manifest.yaml`` with ``tier: eager`` (typo) would otherwise flow
+    verbatim into ``SkillResponse.tier`` (a ``Literal["always","lazy"]``) and raise a
+    pydantic ValidationError → 500 on the WHOLE skills list. So any value not in
+    ``_VALID_TIERS`` is clamped to ``DEFAULT_TIER``. Shared by ``_read_tier`` and
+    ``parse_skill_md`` so tier resolution can never diverge between them.
+    """
+    if manifest_present:
+        chosen = manifest_tier
+    elif frontmatter_tier is not None:
+        chosen = frontmatter_tier
+    else:
+        chosen = DEFAULT_TIER
+    return chosen if chosen in _VALID_TIERS else DEFAULT_TIER
+
+
 # The fallback category — a skill with no mapping never vanishes from the UI.
 DEFAULT_CATEGORY = "Utilities"
 
@@ -250,24 +284,33 @@ class SkillRegistry:
 
         Follows single source of truth: manifest.yaml is authoritative
         when present; SKILL.md frontmatter is fallback for simple skills.
+        Delegates the precedence + clamping to the module-level
+        :func:`resolve_tier` so ``parse_skill_md`` (skill_manager.py) and this
+        method share ONE definition of "what tier is this skill".
         """
         skill_dir = self._skills_dir / f"s_{name}"
 
-        # 1. Try manifest.yaml (authoritative)
         manifest = ManifestLoader.load(skill_dir)
-        if manifest is not None:
-            return manifest.tier
+        manifest_tier = manifest.tier if manifest is not None else None
+        manifest_present = manifest is not None
 
-        # 2. Fallback: parse SKILL.md frontmatter for tier field
-        skill_md = skill_dir / "SKILL.md"
-        if skill_md.exists():
-            try:
-                content = skill_md.read_text(encoding="utf-8")
-                return self._extract_tier_from_frontmatter(content)
-            except Exception:
-                pass
+        # Frontmatter tier is only consulted when no manifest is present (matches
+        # the original short-circuit: manifest, when present, is terminal).
+        frontmatter_tier = None
+        if not manifest_present:
+            skill_md = skill_dir / "SKILL.md"
+            if skill_md.exists():
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                    frontmatter_tier = self._extract_tier_from_frontmatter(content)
+                except Exception:
+                    frontmatter_tier = None
 
-        return "lazy"  # Conservative default
+        return resolve_tier(
+            manifest_present=manifest_present,
+            manifest_tier=manifest_tier,
+            frontmatter_tier=frontmatter_tier,
+        )
 
     @staticmethod
     def _extract_tier_from_frontmatter(content: str) -> str:

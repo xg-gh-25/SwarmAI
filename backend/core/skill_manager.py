@@ -91,6 +91,11 @@ class SkillInfo:
     # When None, the router derives category/visibility from the folder name.
     category: str | None = None
     visibility: str | None = None
+    # Load tier (run_a85e6641): "always" (full SKILL.md at session start) or "lazy"
+    # (stub + on-invocation Read). Populated at parse time via resolve_tier (manifest >
+    # frontmatter > "lazy", clamped) so the Capabilities panel can show it without a
+    # per-skill filesystem read in the endpoint.
+    tier: str = "lazy"
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +305,20 @@ def parse_skill_md(
         )
         visibility = None
 
+    # --- Load tier (run_a85e6641) — manifest > frontmatter > "lazy", clamped ---
+    # The file is already open here (cache-build path), so lifting tier now avoids a
+    # per-skill filesystem read in the /api/skills endpoint (Gate-1 perf refinement).
+    # Local imports avoid a module-level cycle (skill_registry → manifest_loader).
+    from core.manifest_loader import ManifestLoader
+    from core.skill_registry import resolve_tier
+
+    _manifest = ManifestLoader.load(path.parent)
+    tier = resolve_tier(
+        manifest_present=_manifest is not None,
+        manifest_tier=_manifest.tier if _manifest is not None else None,
+        frontmatter_tier=(str(meta.get("tier")).strip().lower() if meta and meta.get("tier") else None),
+    )
+
     return SkillInfo(
         folder_name=folder_name,
         name=str(name),
@@ -313,6 +332,7 @@ def parse_skill_md(
         produces_artifact=produces,
         category=category,
         visibility=visibility,
+        tier=tier,
     )
 
 
