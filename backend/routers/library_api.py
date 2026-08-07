@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -210,6 +211,33 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
         raise HTTPException(status_code=500, detail=f"mount failed: {exc}")
 
 
+def _normalize_hit_source(domain: str, source: str) -> str:
+    """Make a search hit's `source` resolvable by /workspace/file/resolve.
+
+    ONLY library-domain hits need fixing: their `source` comes from
+    knowledge_store.source_file, which is Knowledge-relative WITHOUT the
+    `Knowledge/` prefix (e.g. ``Notes/x.md``). resolve()'s Stage-1 direct lookup
+    misses (real file is at ``Knowledge/Notes/x.md``) and its Stage-3/4 bare-name
+    walk is skipped for slashed paths → 404. Prefixing `Knowledge/` makes the
+    direct lookup hit. (Bug: Browse search-hit click showed "File not found".)
+
+    Domain-scoped + guarded so it NEVER touches the other domains' sources:
+    - codeintel hits carry `file_path` (project-relative → resolve Stage-2
+      ``Projects/{name}/{path}``) — must NOT be prefixed.
+    - mount hits carry `mount_path` (absolute → resolve Stage-0) — must NOT be prefixed.
+    So: only prefix when domain=="library" AND source is non-empty AND not already
+    Knowledge/-prefixed AND not absolute (future docs-mount safety, Gate-1 SSA).
+    """
+    if (
+        domain == "library"
+        and source
+        and not source.startswith("Knowledge/")
+        and not os.path.isabs(source)
+    ):
+        return f"Knowledge/{source}"
+    return source
+
+
 @router.get("/search")
 async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL")) -> dict:
     """Search the library the SAME way recall does (the Guide tab's promise made
@@ -223,10 +251,17 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
         hits: list[dict] = []
         for domain in ("library", "codeintel"):
             for h in (result.buckets.get(domain) or []):
+                raw_source = h.get("source") or h.get("file_path") or h.get("mount_path") or ""
+                # Normalize the COMPOSED source (post-fallback) ONCE so the frontend's
+                # swarm:open-file → /workspace/file/resolve can locate the file, and so
+                # the title fallback shows the SAME spelling as the source column
+                # (Gate-2 api-contract: a heading-less hit must not show title
+                # "Notes/x.md" beside source "Knowledge/Notes/x.md", run_b4120a78).
+                norm_source = _normalize_hit_source(domain, raw_source)
                 hits.append({
                     "domain": domain,
-                    "title": h.get("heading") or h.get("name") or h.get("source") or "",
-                    "source": h.get("source") or h.get("file_path") or h.get("mount_path") or "",
+                    "title": h.get("heading") or h.get("name") or norm_source or "",
+                    "source": norm_source,
                     "content": (h.get("content") or "")[:400],
                     "mount_id": h.get("mount_id"),
                 })

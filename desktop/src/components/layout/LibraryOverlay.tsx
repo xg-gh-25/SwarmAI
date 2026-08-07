@@ -75,7 +75,9 @@ function fmtWhen(mtime: number): string {
  * are enabled: true because the component only exists while the surface is open.
  */
 export function LibraryContent() {
-  const [tab, setTab] = useState<TabKey>('browse');
+  // Default to Recent: it's the higher-frequency surface (what changed lately),
+  // so it opens first (run_b4120a78).
+  const [tab, setTab] = useState<TabKey>('recent');
 
   // Native store stats (rail totals + Browse tab badge). The Browse body itself is
   // now a live file tree (LibraryTree) off /workspace/tree — it owns its own
@@ -146,8 +148,9 @@ export function LibraryContent() {
         {/* ── Main area: tabs + panel ── */}
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
-            <TabBtn testid="library-tab-browse" label="Browse" active={tab === 'browse'} onClick={() => setTab('browse')} badge={native?.category_count} />
+            {/* Recent first — higher-frequency surface (run_b4120a78). */}
             <TabBtn testid="library-tab-recent" label="Recent" active={tab === 'recent'} onClick={() => setTab('recent')} badge={recent?.count} />
+            <TabBtn testid="library-tab-browse" label="Browse" active={tab === 'browse'} onClick={() => setTab('browse')} badge={native?.category_count} />
             <TabBtn testid="library-tab-guide" label="Guide" active={tab === 'guide'} onClick={() => setTab('guide')} />
           </div>
 
@@ -241,7 +244,11 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
             <div className="flex flex-col gap-1">
               {(search?.hits ?? []).map((h, i) => (
                 <button
-                  key={i}
+                  // Composite key: recall can return multiple distinct chunks of the
+                  // SAME file (identical h.source), so source alone collides. The
+                  // list is replaced wholesale per query (never reordered), so the
+                  // index disambiguates safely. (Gate-2 correctness, run_b4120a78.)
+                  key={`${h.source || 'hit'}#${i}`}
                   data-testid="library-search-hit"
                   onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
                   className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
@@ -374,12 +381,33 @@ function RecentTab({
   recent: RecentFeed | undefined; loading: boolean; error: boolean; onRetry: () => void;
 }) {
   const items = recent?.items ?? [];
+  // Client-side substring filter over the already-loaded last-7-days feed (path or
+  // category, case-insensitive) — instant, no backend call (run_b4120a78). The
+  // filter is applied ONLY in the list branch; the empty-WEEK guard below keys off
+  // the RAW `items.length` so a zero-match filter never renders the "nothing new"
+  // lie (Gate-1 adopted: empty-filter ≠ empty-week).
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? items.filter((it) => it.path.toLowerCase().includes(q) || it.category.toLowerCase().includes(q))
+    : items;
   return (
     <div data-testid="library-panel-recent" className="flex flex-col gap-3 max-w-3xl">
       <div className="text-sm text-[var(--color-text-muted)]">
         Added or edited in the last {recent?.window_days ?? 7} days — session backflow (🤖),
         your saves (⬆), and job output (⏱). Nothing to "process"; read what you want.
       </div>
+      {/* Search box — filters the loaded feed locally; only shown when there IS a feed. */}
+      {!error && !loading && items.length > 0 && (
+        <input
+          data-testid="library-recent-search"
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="🔍 Filter recent by name or category (last 7 days, local)…"
+          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
+        />
+      )}
       {error ? (
         <FetchError
           testid="library-recent-error"
@@ -391,9 +419,11 @@ function RecentTab({
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Loading…</div>
       ) : items.length === 0 ? (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">Nothing new in the last week.</div>
+      ) : filtered.length === 0 ? (
+        <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">No matches for “{query}”.</div>
       ) : (
         <div className="flex flex-col gap-1">
-          {items.map((it) => {
+          {filtered.map((it) => {
             const meta = SOURCE_META[it.source];
             return (
               <button

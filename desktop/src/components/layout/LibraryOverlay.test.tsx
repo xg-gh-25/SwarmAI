@@ -45,6 +45,7 @@ const RECENT_OK = {
 };
 const RECENT_EMPTY = { window_days: 7, count: 0, items: [] };
 const MOUNTS_OK = { count: 0, mounts: [], registry_ready: true };
+const HEALTH_OK = { generated_at: 1, root: 'Knowledge/', clean: true, findings: [] };
 
 // Workspace tree fixture: root → Knowledge → {Designs(dir, truncated), readme.md(file)}
 const TREE_OK: TreeNode[] = [
@@ -75,6 +76,7 @@ function mockAllOk() {
     if (url.includes('/native')) return Promise.resolve({ data: NATIVE_OK });
     if (url.includes('/recent')) return Promise.resolve({ data: RECENT_OK });
     if (url.includes('/mounts')) return Promise.resolve({ data: MOUNTS_OK });
+    if (url.includes('/health')) return Promise.resolve({ data: HEALTH_OK });
     return Promise.resolve({ data: {} });
   });
 }
@@ -90,6 +92,13 @@ function renderOverlay() {
   );
 }
 function openOverlay() { /* no-op: LibraryContent renders immediately (host-owned open) */ }
+// Recent is now the DEFAULT tab (run_b4120a78); Browse-tree tests must click into
+// Browse first. Idempotent: safe even if Browse were already active.
+async function openBrowse() {
+  await screen.findByTestId('library-overlay');
+  act(() => { screen.getByTestId('library-tab-browse').click(); });
+  return screen.findByTestId('library-panel-browse');
+}
 
 beforeEach(() => {
   mockAllOk();
@@ -104,7 +113,7 @@ describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
   it('renders the Knowledge/ tree roots (dir + file) from /workspace/tree', async () => {
     renderOverlay();
     openOverlay();
-    await screen.findByTestId('library-overlay');
+    await openBrowse();
     await screen.findByTestId('library-tree');
     // both top-level Knowledge children render as tree rows
     expect(await screen.findByText('Designs')).toBeInTheDocument();
@@ -118,6 +127,7 @@ describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
     document.addEventListener('swarm:open-file', onOpen as EventListener);
     renderOverlay();
     openOverlay();
+    await openBrowse();
     await screen.findByTestId('library-tree');
     const fileRow = await screen.findByText('readme.md');
     act(() => { fileRow.click(); });
@@ -132,6 +142,7 @@ describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
     document.addEventListener('swarm:open-file', onOpen as EventListener);
     renderOverlay();
     openOverlay();
+    await openBrowse();
     await screen.findByTestId('library-tree');
     const dirRow = await screen.findByText('Designs');
     act(() => { dirRow.click(); });
@@ -149,7 +160,7 @@ describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
     (workspaceService.getTree as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('503 workspace not init'));
     renderOverlay();
     openOverlay();
-    await screen.findByTestId('library-overlay');
+    await openBrowse();
     const err = await screen.findByTestId('library-tree-error');
     expect(err).toBeInTheDocument();
     expect(screen.queryByText(/Loading tree/i)).toBeNull();
@@ -167,7 +178,7 @@ describe('LibraryOverlay — Browse is a live Knowledge/ tree', () => {
     ]);
     renderOverlay();
     openOverlay();
-    await screen.findByTestId('library-overlay');
+    await openBrowse();
     expect(await screen.findByTestId('library-tree-empty')).toBeInTheDocument();
   });
 });
@@ -183,6 +194,7 @@ describe('LibraryOverlay — Recent three-state', () => {
     mockApi((url: string) => {
       if (url.includes('/native')) return Promise.resolve({ data: NATIVE_OK });
       if (url.includes('/recent')) return Promise.reject(new Error('boom'));
+      if (url.includes('/health')) return Promise.resolve({ data: HEALTH_OK });
       return Promise.resolve({ data: MOUNTS_OK });
     });
     renderOverlay();
@@ -204,6 +216,7 @@ describe('LibraryOverlay — Recent three-state', () => {
     mockApi((url: string) => {
       if (url.includes('/native')) return Promise.resolve({ data: NATIVE_OK });
       if (url.includes('/recent')) return Promise.resolve({ data: RECENT_EMPTY });
+      if (url.includes('/health')) return Promise.resolve({ data: HEALTH_OK });
       return Promise.resolve({ data: MOUNTS_OK });
     });
     renderOverlay();
@@ -211,6 +224,75 @@ describe('LibraryOverlay — Recent three-state', () => {
     const panel = await openRecent();
     await waitFor(() => expect(panel.textContent).toMatch(/Nothing new in the last week/i));
     expect(screen.queryByTestId('library-recent-error')).toBeNull();
+  });
+});
+
+describe('LibraryOverlay — Recent-first + Recent search (run_b4120a78)', () => {
+  const RECENT_MANY = {
+    window_days: 7, count: 3,
+    items: [
+      { path: 'Knowledge/Notes/widget.md', category: 'Notes', mtime: 1785600000, size: 100, source: 'session' },
+      { path: 'Knowledge/Designs/gadget.md', category: 'Designs', mtime: 1785600001, size: 200, source: 'you' },
+      { path: 'Knowledge/Reports/widget-q2.md', category: 'Reports', mtime: 1785600002, size: 300, source: 'job' },
+    ],
+  };
+  function mockRecentMany() {
+    mockApi((url: string) => {
+      if (url.includes('/native')) return Promise.resolve({ data: NATIVE_OK });
+      if (url.includes('/recent')) return Promise.resolve({ data: RECENT_MANY });
+      if (url.includes('/health')) return Promise.resolve({ data: HEALTH_OK });
+      return Promise.resolve({ data: MOUNTS_OK });
+    });
+  }
+
+  it('opens on the Recent panel by DEFAULT (Recent is the high-frequency tab)', async () => {
+    renderOverlay();
+    await screen.findByTestId('library-overlay');
+    // Recent panel is mounted WITHOUT any click; Browse panel is not.
+    expect(await screen.findByTestId('library-panel-recent')).toBeInTheDocument();
+    expect(screen.queryByTestId('library-panel-browse')).toBeNull();
+  });
+
+  it('renders the Recent tab BEFORE the Browse tab (order swap)', async () => {
+    renderOverlay();
+    await screen.findByTestId('library-overlay');
+    const recent = screen.getByTestId('library-tab-recent');
+    const browse = screen.getByTestId('library-tab-browse');
+    // DOCUMENT_POSITION_FOLLOWING (4) set on Browse means Recent comes first.
+    expect(recent.compareDocumentPosition(browse) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('Recent search filters rendered rows by path/category substring (case-insensitive)', async () => {
+    mockRecentMany();
+    renderOverlay();
+    await screen.findByTestId('library-panel-recent');
+    await waitFor(() => expect(screen.getAllByTestId('library-recent-item').length).toBe(3));
+    const box = screen.getByTestId('library-recent-search');
+    act(() => {
+      const input = box as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'WIDGET');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // 2 of 3 match "widget" (widget.md, widget-q2.md); gadget.md is filtered out.
+    await waitFor(() => expect(screen.getAllByTestId('library-recent-item').length).toBe(2));
+  });
+
+  it('Recent search with NO matches shows a distinct no-match message, NOT the empty-week copy', async () => {
+    mockRecentMany();
+    renderOverlay();
+    const panel = await screen.findByTestId('library-panel-recent');
+    await waitFor(() => expect(screen.getAllByTestId('library-recent-item').length).toBe(3));
+    const box = screen.getByTestId('library-recent-search') as HTMLInputElement;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(box, 'zzzznomatch');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await waitFor(() => expect(screen.queryAllByTestId('library-recent-item').length).toBe(0));
+    // empty-FILTER ≠ empty-WEEK: must NOT lie with "Nothing new in the last week"
+    expect(panel.textContent).not.toMatch(/Nothing new in the last week/i);
+    expect(panel.textContent).toMatch(/no matches/i);
   });
 });
 
