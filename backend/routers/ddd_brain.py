@@ -252,10 +252,20 @@ def _relative_time(iso: Optional[str]) -> str:
 # ─── Pending proposals (read-only) ───────────────────────────────────────────
 
 def _pending_count(project_name: str) -> int:
-    try:
-        from core.ddd_cultivation import read_pending_proposals
+    """Count of items in THIS brain's Need You queue.
 
-        return len(read_pending_proposals(_workspace_root(), project_name))
+    Asks the unified AttentionAuthority (per-brain query) — NOT just cultivation.
+    Historically this only counted `read_pending_proposals` (cultivation), so a
+    brain with an open L2 escalation or a paused-decision run still showed
+    "✓ Nothing needs you" — a lying badge (design 2026-08-08 §1 root cause #1).
+    The authority's per-brain query includes escalation + cultivation + paused
+    runs for this brain, and correctly EXCLUDES OS-level governance (brain=None),
+    which does not belong to any single brain.
+    """
+    try:
+        from core.attention_authority import collect
+
+        return len(collect(_workspace_root(), brain=project_name).items)
     except Exception:  # pragma: no cover - defensive
         return 0
 

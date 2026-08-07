@@ -275,7 +275,7 @@ save_escalation(WORKSPACE_ROOT, esc)
 Swarm proceeds with its recommendation. Human has 24h to override via Radar todo.
 
 ```python
-from core.escalation import consult, Option, build_sse_event, save_escalation, create_radar_todo
+from core.escalation import consult, Option, build_sse_event, save_escalation
 esc = consult(
     title="DEFER recommended: UI performance investigation",
     situation="ROI 2.8 — aligned with priorities but effort is high (architectural). Historical: no prior attempt. Proceeding with DEFER unless overridden.",
@@ -292,7 +292,10 @@ esc = consult(
     timeout_hours=24,
 )
 save_escalation(WORKSPACE_ROOT, esc)
-create_radar_todo(esc)
+# NOTE (2026-08-08 unified Need You): do NOT create_radar_todo — a saved escalation
+# surfaces in the unified Need You channel (GET /api/attention, L1→tier=REVIEW)
+# automatically. A ToDo too would double-surface the same item; escalation goes to
+# Need You ONLY, no longer to ToDo (design §2 / R27 migration).
 ```
 
 **Triggers:** `LOW_CONFIDENCE_ROI`, `CONFLICTING_PRIORITIES`
@@ -306,10 +309,10 @@ create_radar_todo(esc)
 - **High-risk decision**: Architecture change, data migration, public API change
 - **Resource contention**: PROJECT.md shows too many open items
 
-Pipeline PAUSES. Creates a high-priority Radar todo.
+Pipeline PAUSES. Surfaces as a high-priority BLOCKING item in the unified Need You channel.
 
 ```python
-from core.escalation import block, Option, build_sse_event, save_escalation, create_radar_todo
+from core.escalation import block, Option, build_sse_event, save_escalation
 esc = block(
     title="Cannot evaluate: ambiguous scope",
     situation="'Improve performance' — of what? API latency, UI render, or build speed? Each leads to a different recommendation.",
@@ -326,7 +329,9 @@ esc = block(
     evidence=["PRODUCT.md: 'performance' listed but not specified"],
 )
 save_escalation(WORKSPACE_ROOT, esc)
-create_radar_todo(esc)
+# NOTE (2026-08-08 unified Need You): do NOT create_radar_todo — a saved L2 escalation
+# surfaces as a BLOCKING item in Need You (GET /api/attention) automatically. Escalation
+# goes to Need You ONLY, no longer to ToDo (design §2 / R27 migration).
 ```
 
 **Triggers:** `AMBIGUOUS_SCOPE`, `CONFLICTING_PRIORITIES`, `MISSING_INFORMATION`

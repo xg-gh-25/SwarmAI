@@ -19,6 +19,7 @@ from .projects import router as projects_router
 from .tscc import tscc_router as tscc_router
 from .artifacts import router as artifacts_router
 from .escalations import router as escalations_router
+from .attention import router as attention_router
 from .voice import router as voice_router
 from .hive import router as hive_router
 
@@ -43,6 +44,7 @@ __all__ = [
     "tscc_router",
     "artifacts_router",
     "escalations_router",
+    "attention_router",
     "voice_router",
     "hive_router",
 ]

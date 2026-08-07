@@ -88,6 +88,10 @@ UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     # still routes through chat (autoSend:false, human reviews before send). Safe
     # for the agent to open per the Run-2 nav/display charter.
     "show-new-brain": {"event": "swarm:show-new-brain", "target": "window"},
+    # Unified Need You channel (2026-08-08) — opens the needs-you overlay (the
+    # AlertsPill's fullscreen view). Payload-less show-only nav; the agent uses it
+    # to ACT on its own attention queue when the user says "show me Need You".
+    "show-needs-you": {"event": "swarm:show-needs-you", "target": "window"},
 }
 
 # The enum the agent chooses from — sorted for a stable tool schema.
@@ -266,11 +270,21 @@ def build_ui_command_event(
 # COMPLETE turn instead. The tool reads run.json.commits (populated by run-commit),
 # NOT agent-supplied paths — so it cannot fabricate rows for arbitrary files.
 
-# Files that are surfaced immediately per-change (knowledge/report) must NOT be
-# re-emitted in the finish batch (they already have a row). The batch is source only.
+# Live-surfaced knowledge/content files (DDD/design docs written by an agent Write
+# tool) already have a rail row and must NOT be re-emitted here. But the run's
+# REPORT.md is the EXCEPTION (run_14e560ed): it is written by the run-report CLI
+# subprocess, so the live emit never observed it and it is NOT in commits[].files —
+# it has no other channel, so it IS appended here (LAST, kind=knowledge). The
+# committed-source batch itself stays source-only.
 def build_surface_events(run_id: object, workspace_root: object = None) -> list[dict]:
-    """Build the finish-time batch of file_changed SSE events for a run's committed
-    source files. Returns [] on any problem (fail-safe — never crashes the turn).
+    """Build the finish-time batch of file_changed SSE events for a run.
+
+    Emits, in order: (1) one ``kind=source-final`` event per committed source file
+    from ``run.json.commits[].files`` (repo-relative paths the run actually
+    committed), then (2) — appended LAST — the run's ``REPORT.md`` as a
+    ``kind=knowledge`` event when it exists on disk, so the Canvas auto-selects and
+    renders the report as CONTENT (last-write-wins) while source files stay as rows.
+    Returns [] on any problem (fail-safe — never crashes the turn).
 
     Reads ``run.json.commits[].files`` (repo-relative paths the run actually
     committed) for ``run_id``, resolves each to a workspace-relative display path,
@@ -331,6 +345,31 @@ def build_surface_events(run_id: object, workspace_root: object = None) -> list[
                 if base_ref:
                     ev["baseRef"] = base_ref
                 events.append(ev)
+        # ── Append the run's REPORT.md LAST (run_14e560ed) ────────────────────
+        # The pipeline REPORT.md is written by the run-report CLI subprocess, so
+        # the SDK never sees a Write tool for it (the live _build_file_write_events
+        # emit can't observe it) and it is NOT in commits[].files — it has NO other
+        # surface channel. Append it here as the LAST event: the frontend debounce
+        # is last-write-wins, so REPORT.md becomes the auto-SELECTED file at finish,
+        # while the source rows above stay as rows the user clicks. kind=knowledge
+        # (rail-kept + auto-pop eligible) + NO baseRef → renders CONTENT, not a diff.
+        # exists-guarded: surface_run_outputs may be called before run-report writes
+        # the file in some orderings — skip cleanly if absent (fail-safe, req2 degrades
+        # to source-only auto-open, never a broken row).
+        report_path = run_json.parent / "REPORT.md"
+        if report_path.exists():
+            try:
+                display = str(report_path.relative_to(ws))
+            except ValueError:
+                display = str(report_path)
+            events.append({
+                "type": "file_changed",
+                "path": display,
+                "absolutePath": str(report_path),
+                "operation": "written",
+                "relevance": "deliverable",
+                "kind": "knowledge",
+            })
         return events
     except Exception as e:  # noqa: BLE001 — hot-path fail-safe
         logger.warning("build_surface_events failed for run %r: %s", run_id, e)

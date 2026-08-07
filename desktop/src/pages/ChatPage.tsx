@@ -68,7 +68,7 @@ import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
 import { dispatchInjectChatInput } from './chat/injectChatInput';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
-import { useRadarAttention } from '../hooks/useRadarAttention';
+import { useAttentionQueue } from '../hooks/useAttentionQueue';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
 import { mergeOlderMessages, toDisplayMessage } from './chat/utils';
@@ -3153,9 +3153,13 @@ export default function ChatPage() {
   };
 
   // 🔔 Attention queue — polled ONCE here (single 30s poll). Feeds the Alerts
-  // "Needs You" pill, which is portaled into the left-sidebar slot (run_2bdc68ad;
-  // was the ChatHeader pill in run_843962a5). One poll, one consumer — no duplicate.
-  const { attentionItems } = useRadarAttention(sessionId, openTabs);
+  // "Needs You" pill badge (count). 2026-08-08: unified backend authority
+  // (GET /api/attention) via useAttentionQueue — replaces the old 3-source
+  // frontend merge (paused+jobs+waiting-tabs); the waiting/streaming coupling is
+  // GONE (Need You is decoupled from chat). Clicking the pill opens the fullscreen
+  // needs-you overlay, which loads + dispatches items itself.
+  const { counts: attentionCounts } = useAttentionQueue();
+  const attentionCount = attentionCounts.blocking + attentionCounts.review;
 
   // 🔔 Alerts pill lives in the LEFT SIDEBAR (run_2bdc68ad), not the tab row —
   // the attention signal is GLOBAL (cross-tab / paused runs / failing jobs), so
@@ -3217,18 +3221,7 @@ export default function ChatPage() {
           every overlay closes on), else the user acts but keeps seeing the overlay,
           not the result. Fires only when an overlay is actually open. */}
       {alertsSlot && createPortal(
-        <AlertsPill
-          items={attentionItems}
-          onItemClick={(message, context) => {
-            if (activeOverlay) window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
-            handleItemClick(message, context);
-          }}
-          onSelectTab={(tabId) => {
-            if (activeOverlay) window.dispatchEvent(new CustomEvent(BACK_TO_CHAT_EVENT));
-            selectTab(tabId);
-          }}
-          placement="left-flyout"
-        />,
+        <AlertsPill count={attentionCount} />,
         alertsSlot,
       )}
 

@@ -1,89 +1,47 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AlertsPill } from './AlertsPill';
-import type { AttentionItem } from './RightSidebar/types';
 
 /**
- * Tests for AlertsPill (🔔 Needs You) — run_843962a5.
- * Verifies the calm/alert states, the popover open + rich content, and that
- * item clicks route to onItemClick / onSelectTab (reusing AttentionList).
+ * Tests for AlertsPill (🔔 Needs You) — 2026-08-08 unified Need You channel.
+ * The pill is now a count-only entry point: calm/alert states + click OPENS the
+ * fullscreen needs-you overlay via dispatchUiCommand('needs-you'). There is no
+ * local popover anymore (the overlay holds the full double-axis queue).
  */
 describe('AlertsPill', () => {
-  const paused: AttentionItem = {
-    kind: 'paused', id: 'run_x', title: 'do a thing', project: 'SwarmAI',
-    stage: 'build', reason: 'Gate-1 BLOCK: decide X?',
-  };
-  const waiting: AttentionItem = {
-    kind: 'waiting', id: 'tab-42', title: 'Tab · abc12345', question: 'Pick A/B/C',
-  };
 
-  it('CALM: 0 items → pill shows no count badge', () => {
-    render(<AlertsPill items={[]} />);
-    // The label is present…
+  it('CALM: count 0 → pill shows no count badge', () => {
+    render(<AlertsPill count={0} />);
     expect(screen.getByText('Needs You')).toBeTruthy();
-    // …but there is no numeric badge (calm state).
     expect(screen.queryByText(/^\d+$/)).toBeNull();
   });
 
-  it('ALERT: N items → pill shows the count badge', () => {
-    render(<AlertsPill items={[paused, waiting]} />);
+  it('ALERT: count N → pill shows the count badge', () => {
+    render(<AlertsPill count={2} />);
     expect(screen.getByText('2')).toBeTruthy();
   });
 
-  it('does not render the popover until the pill is clicked', () => {
-    render(<AlertsPill items={[paused]} />);
+  it('click actually fires swarm:show-needs-you (cmd id RESOLVES, not just called)', () => {
+    // Non-vacuous: use the REAL dispatchUiCommand (no mock) and assert the window
+    // event actually fires. A mock that only checks the arg string would pass even
+    // if the cmd id is not in UI_COMMAND_TABLE (fail-closed → nothing dispatched) —
+    // that is exactly the bug the adversarial gate caught (id was 'needs-you', the
+    // allowlist key is 'show-needs-you'). This test now goes RED if the id is wrong.
+    const fired: string[] = [];
+    const listener = (e: Event) => fired.push(e.type);
+    window.addEventListener('swarm:show-needs-you', listener);
+    try {
+      render(<AlertsPill count={3} />);
+      fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
+      expect(fired).toContain('swarm:show-needs-you');
+    } finally {
+      window.removeEventListener('swarm:show-needs-you', listener);
+    }
+  });
+
+  it('does NOT render a local popover (overlay replaces it)', () => {
+    render(<AlertsPill count={3} />);
+    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    expect(screen.getByRole('dialog')).toBeTruthy();
-  });
-
-  it('open popover reuses AttentionList — paused click → onItemClick, closes popover', () => {
-    const onItemClick = vi.fn();
-    const onSelectTab = vi.fn();
-    render(<AlertsPill items={[paused]} onItemClick={onItemClick} onSelectTab={onSelectTab} />);
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    fireEvent.click(screen.getByText('do a thing'));
-    expect(onItemClick).toHaveBeenCalledTimes(1);
-    const [msg, ctx] = onItemClick.mock.calls[0];
-    expect(msg).toContain('run_x');
-    expect(ctx).toContain('Gate-1 BLOCK: decide X?');
-    expect(onSelectTab).not.toHaveBeenCalled();
-    // clicking an item closes the popover
-    expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('waiting click → onSelectTab(tabId), never onItemClick', () => {
-    const onItemClick = vi.fn();
-    const onSelectTab = vi.fn();
-    render(<AlertsPill items={[waiting]} onItemClick={onItemClick} onSelectTab={onSelectTab} />);
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    fireEvent.click(screen.getByText(/is waiting for you/));
-    expect(onSelectTab).toHaveBeenCalledWith('tab-42');
-    expect(onItemClick).not.toHaveBeenCalled();
-  });
-
-  it('CALM popover shows the "nothing needs you" empty state', () => {
-    render(<AlertsPill items={[]} />);
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    expect(screen.getByText(/Nothing needs you right now/)).toBeTruthy();
-  });
-
-  // placement — the sidebar relocation (run_2bdc68ad) opens the popover to the
-  // RIGHT of the pill (left-flyout) instead of below-right (the old ChatHeader
-  // position). z-[60] keeps the flyout above the fullscreen overlay scrim (z-50).
-  it('placement="left-flyout" opens the popover to the RIGHT of the pill, above overlays', () => {
-    render(<AlertsPill items={[paused]} placement="left-flyout" />);
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    const dialog = screen.getByRole('dialog');
-    expect(dialog.className).toContain('left-[calc(100%+8px)]');
-    expect(dialog.className).toContain('z-[60]');
-    expect(dialog.className).not.toContain('right-0');
-  });
-
-  it('placement defaults to left-flyout (sidebar is the sole consumer)', () => {
-    render(<AlertsPill items={[paused]} />);
-    fireEvent.click(screen.getByRole('button', { name: /Alerts/i }));
-    const dialog = screen.getByRole('dialog');
-    expect(dialog.className).toContain('left-[calc(100%+8px)]');
   });
 });

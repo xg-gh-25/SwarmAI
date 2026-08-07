@@ -18,6 +18,7 @@ import { LibraryContent } from './LibraryOverlay';
 import { NewBrainContent } from './NewBrainOverlay';
 import { HistoryContent } from './HistoryOverlay';
 import { ToDoContent } from './ToDoOverlay';
+import { NeedYouContent } from './NeedYouOverlay';
 import { JobsRunsContent } from './JobsRunsOverlay';
 import { CapabilitiesContent } from './CapabilitiesOverlay';
 import { PipelineContent } from './PipelineOverlay';
@@ -82,7 +83,10 @@ registerOverlay({
   id: 'swarmws',
   title: 'SwarmWS — workspace explorer',
   mode: 'WORKSPACE',
-  width: 'xl',
+  // File tree = narrow single-column content → 'm' (max 760px), not 'xl' (max
+  // 1200px). 'xl' left a large right-side whitespace gap (the tree only fills
+  // ~45% of an xl panel). Sized to content, not to the widest tier.
+  width: 'm',
   sourceCardTestId: 'nav-swarmws',
   render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="swarmws-overlay">
@@ -172,6 +176,26 @@ registerOverlay({
   tint: TINT_WORK,
   render: ({ close, dispatchTodo }) => (
     <ToDoContent onDispatch={(t: ToDo) => (dispatchTodo ? dispatchTodo(t) : false)} close={close} />
+  ),
+});
+
+// ── needs-you (unified Need You channel, 2026-08-08) ──────────────────────────
+// The AlertsPill's fullscreen view. Consumes GET /api/attention (backend
+// AttentionAuthority). Action = dispatch the item's message into chat via
+// dispatchPrompt (existing inject mechanism — no /act, no new channel).
+// width 'm' — narrow single-column list, same as swarmws (NOT xl: attention
+// cards are narrower than a file tree; xl leaves a large right-side void).
+registerOverlay({
+  id: 'needs-you',
+  title: 'Need You',
+  mode: 'ATTENTION',
+  width: 'm',
+  sourceCardTestId: 'sidebar-alerts-slot',
+  render: ({ close, dispatchPrompt }) => (
+    <NeedYouContent
+      onDispatch={(msg: string) => (dispatchPrompt ? dispatchPrompt(msg) : false)}
+      close={close}
+    />
   ),
 });
 
