@@ -277,15 +277,43 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(screen.queryByTestId('library-tree-mock')).toBeNull();
   });
 
-  it('AC1 fixed order in Overview: ① healthstrip → ② need-you → ③ core-docs, same for any brain', async () => {
-    await openBrain();
+  // Helper: assert the fixed §①→②→③ order via the STABLE slot testids (ontology
+  // slot / need-you / core-docs). Uses brainhub-ontology (the always-present §① slot),
+  // NOT brainhub-healthstrip (which only appears when health.noise is present).
+  function assertFixedOrder() {
     const ov = screen.getByTestId('brainhub-overview');
-    const order = ['brainhub-healthstrip', 'brainhub-needyou', 'brainhub-coredocs']
+    const order = ['brainhub-ontology', 'brainhub-needyou', 'brainhub-coredocs']
       .map((id) => Array.from(ov.querySelectorAll('[data-testid]')).findIndex((el) => el.getAttribute('data-testid') === id));
-    // strictly ascending → the three sections appear in the fixed order
-    expect(order[0]).toBeGreaterThanOrEqual(0);
-    expect(order[1]).toBeGreaterThan(order[0]);
-    expect(order[2]).toBeGreaterThan(order[1]);
+    expect(order[0]).toBeGreaterThanOrEqual(0);   // §① slot present
+    expect(order[1]).toBeGreaterThan(order[0]);    // §② after §①
+    expect(order[2]).toBeGreaterThan(order[1]);    // §③ after §②
+  }
+
+  it('AC1 fixed order in Overview: ① ontology slot → ② need-you → ③ core-docs (healthy brain)', async () => {
+    await openBrain();
+    assertFixedOrder();
+    expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();  // health.noise → strip tier
+  });
+
+  // Gate-2 HIGH: the §① slot must be FIXED for EVERY brain, incl. degenerate ones.
+  // Before the fix, gating all of §① on detail.health?.noise let it VANISH (old
+  // daemon / partial health) → §② became first → per-brain structural drift.
+  it('AC1 fixed order holds for a DEGENERATE brain (health undefined — old daemon)', async () => {
+    const { health: _omit, ...noHealth } = DETAIL;
+    mockGetBrainDetail.mockResolvedValue(noHealth);
+    await openBrain();
+    // §① slot still present + still FIRST (renders ontology-only from entries)
+    assertFixedOrder();
+    expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();   // no strip tier...
+    expect(screen.getByTestId('ddd-ontology')).toBeTruthy();           // ...but ontology still shows
+  });
+
+  it('AC1 fixed order holds for a brain with NO entries at all (muted anchor tier)', async () => {
+    const sections = DETAIL.sections.map((s) => s.key === 'knowledge' ? { ...s, entries: [], members: [] } : { ...s, entries: [] });
+    const { health: _omit, ...noHealth } = DETAIL;
+    mockGetBrainDetail.mockResolvedValue({ ...noHealth, sections });
+    await openBrain();
+    assertFixedOrder();   // slot still occupies §① even with the muted "not yet computed" anchor
   });
 
   // ── AC6: Browse tab — tree + toggle moved verbatim (one extra click to reach) ──

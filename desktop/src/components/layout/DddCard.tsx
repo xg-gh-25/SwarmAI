@@ -351,7 +351,7 @@ function MetricsSkeleton() {
  * brain's cognitive "shape" legible (the whole reason the redesign exists). Honest
  * label: covers the ② canonical docs, not "the whole brain". Omitted if empty.
  */
-function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number> }) {
+export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number> }) {
   const t = layerTotals(typeCounts);
   const total = t.meta + t.cognitive + t.operational;
   if (total === 0) return null;

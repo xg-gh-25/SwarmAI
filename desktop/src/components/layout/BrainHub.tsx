@@ -27,7 +27,7 @@ import type {
   BrainSummary, BrainDetail,
   ReviewData, ReviewHunk, PendingProposal, DistributionState,
 } from '../../services/ddd';
-import { DddCard } from './DddCard';
+import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
@@ -456,18 +456,43 @@ function BrainOverview(
   const members = knowledge?.members ?? [];
   const signals = docSignalMap(members, review);
   const pending = detail.health?.escalationPending ?? 0;
+  // §① ontology counts — used for the no-health fallback tier (renders the 3×7
+  // ontology from typeCounts alone). undefined when there are no entries at all.
+  const ontologyCounts = aggregateTypeCounts(detail.sections);
 
   return (
     <div className="flex-1 overflow-auto px-4 pb-4 flex flex-col gap-3" data-testid="brainhub-overview">
       {/* §① Ontology — RELOCATED, not rebuilt (Gate-0 C046): the existing
           DddCard density=full IS the 3-layer×7-type ontology + needs-you verdict.
-          Same daemon-skew guard as before (detail.health?.noise). */}
-      {detail.health?.noise && (
-        <div data-testid="brainhub-healthstrip">
-          <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
-            typeCounts={aggregateTypeCounts(detail.sections)} />
-        </div>
-      )}
+          FIXED SLOT — always the FIRST child so the §①→②→③ order is invariant for
+          EVERY brain (Gate-2 HIGH: gating the whole §① on detail.health?.noise let
+          it VANISH for a degenerate/old-daemon brain → §② became first → per-brain
+          structural drift, the exact "dynamic makes users lost" failure). Three
+          graceful tiers, all in the same slot position:
+            • health.noise present → the full health-strip (ontology + needs-you verdict)
+            • no health but typeCounts present → ontology-only (DddCard FullBody renders
+              the 3×7 ontology from typeCounts alone, no metrics needed)
+            • neither → a muted anchor so the slot still occupies §①'s position. */}
+      <div data-testid="brainhub-ontology">
+        {detail.health?.noise ? (
+          <div data-testid="brainhub-healthstrip">
+            <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
+              typeCounts={aggregateTypeCounts(detail.sections)} />
+          </div>
+        ) : ontologyCounts ? (
+          // No scored health (old daemon / not-yet-computed) but we DO have the
+          // entry ontology — render the 3×7 ontology directly (NOT via DddCard
+          // FullBody, which would show a perpetual MetricsSkeleton waiting for
+          // metrics that never arrive). Wrapped to match the strip's card frame.
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+            <Ontology typeCounts={ontologyCounts} />
+          </div>
+        ) : (
+          <div className="text-[11px] text-[var(--color-text-faint)] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
+            Knowledge ontology not yet computed for this brain.
+          </div>
+        )}
+      </div>
 
       {/* §② Need-You — FIXED-position block, never removed. Content varies; the
           block (and its slot) is always present so its position is a stable anchor. */}
