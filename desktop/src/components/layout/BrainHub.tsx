@@ -12,9 +12,11 @@
  *   ② Brain   — six-section tree (grouped ①..⑥, each file with curator label +
  *      git-status dot), 7-type chips + decay coloring from real parse_entries,
  *      an empty ③Gates explicitly marked "complete, not broken" (R31). Clicking
- *      a file opens the existing read-only FilePreviewModal.
+ *      a file opens it in the app-level CANVAS (close-overlay → swarm:open-file,
+ *      the SwarmWS-explorer precedent), NOT an in-hub modal. ② knowledge members
+ *      carry live mtime + entryCount (run_a607f2b0, Approach A).
  *
- * Reuses: FilePreviewModal (read-only file viewer). No new tree/editor built.
+ * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -26,8 +28,6 @@ import type {
   ReviewData, ReviewHunk, PendingProposal, DistributionState,
 } from '../../services/ddd';
 import { DddCard } from './DddCard';
-import { agentsService } from '../../services/agents';
-import { FilePreviewModal } from '../workspace/FilePreviewModal';
 import { CodeGraph } from '../code-intel/CodeGraph';
 import { getCodeIntelSummary, type CodeIntelSummary } from '../../services/codeIntel';
 
@@ -74,7 +74,12 @@ const GIT_DOT: Record<string, string> = {
 
 type Tab = 'gallery' | 'brain' | 'review' | 'distribute';
 
-export function BrainHub() {
+/** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
+ *  Approach A (run_a607f2b0): opening a DDD doc closes THIS overlay first, then
+ *  dispatches `swarm:open-file` so the Canvas/FileViewer isn't rendered UNDER the
+ *  host (the SwarmWS-explorer z-index precedent). OPTIONAL: tests / a non-overlay
+ *  mount omit it — file-open then just dispatches without a close (still correct). */
+export function BrainHub({ onRequestClose }: { onRequestClose?: () => void } = {}) {
   const [tab, setTab] = useState<Tab>('gallery');
   const [brains, setBrains] = useState<BrainSummary[] | null>(null);
   const [pinned, setPinned] = useState<string[]>([]);
@@ -85,7 +90,6 @@ export function BrainHub() {
   const [error, setError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0); // B10: retry trigger for getBrains
   const [selected, setSelected] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState<string>('');
 
   useEffect(() => {
     let alive = true;
@@ -106,10 +110,6 @@ export function BrainHub() {
         }
       },
       (e) => alive && setError(String(e?.message ?? e)),
-    );
-    agentsService.getDefault().then(
-      (a) => alive && setAgentId(a?.id ?? ''),
-      () => {/* preview just won't open without an agent — non-fatal */},
     );
     return () => { alive = false; };
   }, [reloadTick]);
@@ -171,7 +171,7 @@ export function BrainHub() {
             the brain view) from surviving a stale activeKey='asset:codeintel' and
             transiently firing CodeIntelPanel's O(n) fetch for the new brain. Cheap +
             intent-clear; no test asserts it because the transient isn't reachable yet. */}
-        {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} agentId={agentId} />}
+        {!error && tab === 'brain' && selected && <BrainView key={selected} name={selected} onRequestClose={onRequestClose} />}
         {!error && tab === 'review' && selected && <ReviewView name={selected} />}
         {!error && tab === 'distribute' && selected && <DistributeView name={selected} />}
       </div>
@@ -259,7 +259,8 @@ function Gallery(
         <DddCard density="full" name={primary.name} kind={primary.kind}
           metrics={primaryDetail?.health}
           health={primary.health}
-          typeCounts={primaryTypeCounts} />
+          typeCounts={primaryTypeCounts}
+          onOpen={onOpen} />
         {rightPins.length > 0 && (
           <div className="flex flex-col gap-3">
             {rightPins.map((b) => <CompactBrain key={b.name} b={b} onOpen={onOpen} />)}
@@ -312,10 +313,9 @@ function ZonedGrid({ brains, onOpen }: { brains: BrainSummary[]; onOpen: (n: str
 
 // ── Brain view ─────────────────────────────────────────────────────────────────
 
-function BrainView({ name, agentId }: { name: string; agentId: string }) {
+function BrainView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
   const [detail, setDetail] = useState<BrainDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
   // #8 2-pane: which nav item is shown in the right content pane — a section
   // OR an asset projection (Specs / Code Intelligence). Asset keys ride a
   // separate channel from SectionKey (see AssetKey) so they never collide.
@@ -354,16 +354,19 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
     return () => document.removeEventListener('keydown', onKeyDownCapture, true);
   }, [showGraph]);
 
-  const openFile = useCallback((sectionMemberPath: string) => {
-    // FilePreviewModal's readFile resolves `path` against the DEFAULT workspace
-    // root (get_workspace_root returns the cached SwarmWS path when basePath is
-    // absent). A relative basePath="Projects/<name>" would be taken as the fs
-    // root verbatim (workspace.py:133 → Path(base_path)) and resolve against the
-    // backend CWD → 404. So we pass NO basePath and a workspace-relative path.
+  const openFile = useCallback((sectionMemberPath: string, gitStatus?: string) => {
+    // Approach A (run_a607f2b0): open a DDD doc in the app-level CANVAS, not an
+    // in-hub modal — the SwarmWS-explorer precedent. useCanvasHost's swarm:open-file
+    // resolver takes `path` against the cached SwarmWS root, so we pass a
+    // WORKSPACE-RELATIVE path (Projects/<name>/<member>); a bare/absolute path 404s.
+    // Z-index (Gate-1, swarmws precedent): close THIS overlay BEFORE the dispatch so
+    // the Canvas/FileViewer is never rendered under the host.
     const workspaceRelPath = `Projects/${name}/${sectionMemberPath}`;
-    const parts = sectionMemberPath.split('/');
-    setPreviewFile({ path: workspaceRelPath, name: parts[parts.length - 1] });
-  }, [name]);
+    onRequestClose?.();
+    document.dispatchEvent(new CustomEvent('swarm:open-file', {
+      detail: { path: workspaceRelPath, gitStatus },
+    }));
+  }, [name, onRequestClose]);
 
   if (error) return <div className="p-4 text-[#ef4444] text-[13px]">Failed to load brain: {error}</div>;
   if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-[13px]">Loading {name}…</div>;
@@ -500,16 +503,10 @@ function BrainView({ name, agentId }: { name: string; agentId: string }) {
         </div>
       </div>
 
-      <FilePreviewModal
-        isOpen={!!previewFile}
-        onClose={() => setPreviewFile(null)}
-        agentId={agentId}
-        file={previewFile}
-      />
-
       {/* #10 — sibling-mount the existing full-screen CodeGraph overlay (BottomBar
-          pattern). Proven safe nested in this Modal (FilePreviewModal is the same
-          shape). project={name} — NEVER a hardcoded literal (Gate-1 flag). */}
+          pattern). Rendered as a sibling inside the host overlay; it owns its own
+          ESC handling via the capture-phase guard above. project={name} — NEVER a
+          hardcoded literal (Gate-1 flag). */}
       {showGraph && (
         <CodeGraph project={name} onClose={() => setShowGraph(false)} />
       )}
@@ -544,8 +541,8 @@ function AssetNavItem({
 
 // Specs panel — spec-details/*.spec.md filenames (AC1/AC2). Now rendered in the
 // right content pane when the "Specs" nav item is selected (no self-toggle — the
-// nav selection IS the show/hide). Clicking a spec opens it via the same
-// FilePreviewModal path the section members use.
+// nav selection IS the show/hide). Clicking a spec opens it in the Canvas via the
+// same onOpenFile path the section members use (close-overlay → swarm:open-file).
 function SpecsPanel({ specs, onOpenFile }: { specs: string[]; onOpenFile: (p: string) => void }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid="specs-panel">
@@ -623,7 +620,7 @@ function CodeIntelPanel({ project }: { project: string }) {
   );
 }
 
-function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFile: (p: string) => void }) {
+function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFile: (p: string, gitStatus?: string) => void }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2.5" data-testid={`section-${section.key}`}>
       <div className="flex items-center gap-2 mb-1.5 text-[12px]">
@@ -644,12 +641,21 @@ function SectionCard({ section, onOpenFile }: { section: BrainSection; onOpenFil
           {section.members.map((m) => (
             <button
               key={m.path}
-              onClick={() => onOpenFile(m.path)}
+              onClick={() => onOpenFile(m.path, m.gitStatus)}
               data-testid={`member-${m.path}`}
               className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-left px-1 py-0.5 rounded hover:bg-[var(--color-hover)]"
             >
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: GIT_DOT[m.gitStatus] ?? 'transparent' }} title={m.gitStatus} />
               <span className="font-mono truncate">{m.path.split('/').pop()}</span>
+              {/* ② knowledge members carry live mtime + entryCount (run_a607f2b0);
+                  other sections omit them (undefined → nothing rendered, daemon-skew
+                  safe). "Is this doc active, and how big" without opening it. */}
+              {(m.mtime || m.entryCount != null) && (
+                <span className="ml-auto flex items-center gap-1.5 text-[9px] text-[var(--color-text-faint)] flex-shrink-0">
+                  {m.entryCount != null && <span data-testid={`member-entrycount-${m.path}`}>{m.entryCount} entries</span>}
+                  {m.mtime && <span data-testid={`member-mtime-${m.path}`}>{m.mtime}</span>}
+                </span>
+              )}
             </button>
           ))}
         </div>

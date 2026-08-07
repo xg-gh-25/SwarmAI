@@ -60,9 +60,12 @@ registerOverlay({
   mode: 'BRAIN',
   width: 'xl',
   sourceCardTestId: 'nav-brain-hub',
-  render: () => (
+  render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="brain-hub-overlay">
-      <BrainHub />
+      {/* onRequestClose=close (run_a607f2b0): opening a DDD doc closes this overlay
+          BEFORE dispatching swarm:open-file so the Canvas isn't rendered under the
+          host — the swarmws z-index precedent. */}
+      <BrainHub onRequestClose={close} />
     </div>
   ),
 });

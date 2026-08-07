@@ -295,19 +295,76 @@ describe('BrainHub — Brain view (AC4)', () => {
     expect(screen.getByTestId('typebar-pitfall')).toBeTruthy();
   });
 
-  it('opens the file preview with a workspace-relative path (Projects/<name>/<member>)', async () => {
-    // Regression for the REVIEW CRITICAL-1: the preview path MUST be workspace-
-    // relative (get_workspace_root resolves it against the cached SwarmWS root
-    // only when no basePath is passed). A bare member path or a relative basePath
-    // would resolve against the backend CWD → 404.
-    await openSection('identity');   // AGENTS.md lives under ① identity (the default active)
-    fireEvent.click(screen.getByTestId('member-AGENTS.md'));
-    await waitFor(() => expect(screen.getByTestId('file-preview-open')).toBeTruthy());
-    // the mock echoes props.file.path — assert the resolvable full path.
-    expect(screen.getByTestId('file-preview-open').textContent).toBe('Projects/SwarmAI/AGENTS.md');
-    // and NO basePath was passed (would be taken as the fs root verbatim).
-    const lastCall = mockPreview.mock.calls[mockPreview.mock.calls.length - 1][0];
-    expect(lastCall.basePath).toBeUndefined();
+  it('opens a member in the CANVAS via swarm:open-file with a workspace-relative path (Approach A, run_a607f2b0)', async () => {
+    // A-delta: clicking a member no longer opens the in-hub FilePreviewModal — it
+    // opens the file in the app-level Canvas (the SwarmWS-explorer precedent), so a
+    // DDD doc reads in the same surface as any workspace file. The dispatched path
+    // MUST be workspace-relative (Projects/<name>/<member>) — useCanvasHost's
+    // resolver takes it against the cached SwarmWS root; a bare/absolute path 404s.
+    const openEvents: CustomEvent[] = [];
+    const onOpen = (e: Event) => openEvents.push(e as CustomEvent);
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      await openSection('identity');   // AGENTS.md lives under ① identity (the default active)
+      fireEvent.click(screen.getByTestId('member-AGENTS.md'));
+      await waitFor(() => expect(openEvents.length).toBe(1));
+      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/AGENTS.md');
+      expect(openEvents[0].detail.gitStatus).toBe('clean');  // member's git dot carried through
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
+  });
+
+  it('closes the overlay BEFORE dispatching open-file so Canvas is not rendered under the host (z-index precedent)', async () => {
+    // Gate-1 z-index (swarmws precedent): onRequestClose() MUST run before the
+    // swarm:open-file dispatch. Order is observable: capture the sequence.
+    const seq: string[] = [];
+    const onRequestClose = vi.fn(() => seq.push('close'));
+    const onOpen = () => seq.push('open');
+    document.addEventListener('swarm:open-file', onOpen);
+    try {
+      render(<BrainHub onRequestClose={onRequestClose} />);
+      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('nav-item-identity'));
+      fireEvent.click(screen.getByTestId('member-AGENTS.md'));
+      await waitFor(() => expect(seq).toEqual(['close', 'open']));
+    } finally {
+      document.removeEventListener('swarm:open-file', onOpen);
+    }
+  });
+
+  it('AC5: ② knowledge members show live mtime + entryCount; other sections do not', async () => {
+    // Backend enriches ONLY ② knowledge members with mtime (fs "N ago") + entryCount.
+    mockGetBrainDetail.mockResolvedValue({
+      ...DETAIL,
+      sections: DETAIL.sections.map((s) =>
+        s.key === 'knowledge'
+          ? { ...s, members: [{ path: '2-understanding/TECH.md', gitStatus: 'modified', mtime: '2h ago', entryCount: 47 }] }
+          : s,
+      ),
+    });
+    await openSection('knowledge');
+    const row = screen.getByTestId('member-2-understanding/TECH.md');
+    expect(row.textContent).toContain('2h ago');
+    expect(row.textContent).toContain('47');
+    // identity members carry no mtime/entryCount → no such meta rendered
+    fireEvent.click(screen.getByTestId('nav-item-identity'));
+    await waitFor(() => expect(screen.getByTestId('member-AGENTS.md')).toBeTruthy());
+    expect(screen.getByTestId('member-AGENTS.md').textContent).not.toContain('ago');
+  });
+});
+
+describe('BrainHub — Gallery primary hero is clickable (AC6, run_a607f2b0)', () => {
+  it('clicking the FULL-density primary hero opens its brain view', async () => {
+    // AC6: the pinned primary hero (full DddCard) must open the brain, same as a
+    // compact card. Pin SwarmAI so it renders as the full primary (not flat-grid).
+    mockGetPinned.mockReturnValue(['SwarmAI']);
+    render(<BrainHub />);
+    await waitFor(() => expect(screen.getByTestId('brainhub-pinned-row')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
   });
 });
 

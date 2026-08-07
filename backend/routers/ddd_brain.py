@@ -375,6 +375,31 @@ def _entry_count(project_dir: Path) -> int:
     return total
 
 
+def _file_entry_count(fp: Path) -> int:
+    """Entry count for a SINGLE ② doc (per-file, NOT the project total _entry_count
+    returns). Used to give each DDD-doc hero card its own entry volume. Pure read;
+    parse failure → 0 (never 500s a brain view)."""
+    try:
+        return len(parse_entries(fp.read_text(encoding="utf-8")))
+    except (OSError, ValueError, UnicodeError):
+        return 0
+
+
+def _file_mtime_relative(fp: Path) -> str:
+    """Human 'N ago' of a file's FILESYSTEM mtime (NOT git-commit time).
+
+    Filesystem stat is the correct source for the DDD-doc hero cards' "last
+    updated": non-SwarmAI DDD projects are gitignored (STEERING #5), so a
+    git-commit time would be empty/wrong for them, while st_mtime is always real.
+    Computed live (never stored — R30#4). Feeds the existing _relative_time
+    formatter via an ISO string. Missing/unstattable file → "unknown"."""
+    try:
+        ts = datetime.fromtimestamp(fp.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return "unknown"
+    return _relative_time(ts)
+
+
 def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
     """All parsed entries across the ② canonical docs (shared by health metrics).
 
@@ -658,6 +683,15 @@ def _brain_detail(project_dir: Path) -> dict:
             {"path": rel, "gitStatus": _file_git_status(project_dir, rel)}
             for rel in member_rels
         ]
+        # ② knowledge members are the 4 canonical DDD docs surfaced as hero cards
+        # (run_a607f2b0): enrich each with its own last-updated (fs mtime) + entry
+        # count so the card answers "is this doc active, and how big". DETAIL-only —
+        # never on the cheap gallery projection (build_brain_state with_noise=False).
+        if key == "knowledge":
+            for m in members:
+                fp = project_dir / m["path"]
+                m["mtime"] = _file_mtime_relative(fp)
+                m["entryCount"] = _file_entry_count(fp)
         section = {
             "key": key,
             "num": num,

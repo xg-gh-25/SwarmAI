@@ -87,6 +87,15 @@ export interface BrainSummary {
 export interface SectionMember {
   path: string;      // project-relative
   gitStatus: string; // clean | modified | untracked | added | deleted | renamed | conflicting
+  /** ② knowledge members ONLY (the 4 DDD-doc hero cards, run_a607f2b0): human
+   *  "N ago" of the file's FILESYSTEM mtime (not git — works for gitignored
+   *  projects), computed live. OPTIONAL by design: other sections omit it, and a
+   *  pre-deploy daemon omits it everywhere — consumers MUST guard (undefined →
+   *  render nothing), same contract as BrainDetail.specs/health. */
+  mtime?: string;
+  /** ② knowledge members ONLY: this doc's own entry count (per-file, not the
+   *  project total). OPTIONAL — same daemon-skew guard as mtime. */
+  entryCount?: number;
 }
 
 export type EntryType =

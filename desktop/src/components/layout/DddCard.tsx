@@ -90,6 +90,11 @@ interface FullProps extends CommonProps {
   health?: BrainHealth;
   metrics?: DetailHealth;
   typeCounts?: Record<EntryType, number>;
+  /** AC6 (run_a607f2b0): when supplied, the hero is CLICKABLE (opens the brain,
+   *  same as a compact card). OMITTED for the in-BrainView health-strip use — it's
+   *  already inside the brain, so navigating to itself would be wrong. Presence of
+   *  onOpen is the discriminator: button vs plain div. */
+  onOpen?: (name: string) => void;
 }
 type DddCardProps = CompactProps | FullProps;
 
@@ -206,10 +211,26 @@ export function DddCard(props: DddCardProps) {
   // (ontology + needs-you + facts) IS the signal. pending comes from metrics OR
   // cheap health, whichever the caller supplied.
   const pending = props.metrics?.escalationPending ?? props.health?.pending;
-  return (
-    <div data-testid={`dddcard-${name}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+  const body = (
+    <>
       <CardHeader name={name} kind={kind} verdict={pending != null ? <VerdictDot pending={pending} /> : undefined} />
       <FullBody metrics={props.metrics} health={props.health} typeCounts={props.typeCounts} />
+    </>
+  );
+  // AC6: clickable hero when onOpen is supplied (gallery), plain div otherwise
+  // (in-BrainView health-strip — navigating to the brain it's already inside is wrong).
+  if (props.onOpen) {
+    const onOpen = props.onOpen;
+    return (
+      <button onClick={() => onOpen(name)} data-testid={`dddcard-${name}`}
+        className="text-left w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3 hover:border-[#3b4552] transition-colors">
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div data-testid={`dddcard-${name}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+      {body}
     </div>
   );
 }

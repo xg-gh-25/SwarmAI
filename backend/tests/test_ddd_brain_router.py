@@ -235,6 +235,34 @@ class TestBrainDetail:
         assert by_key["knowledge"]["ownGovern"] == "OWN"
         assert by_key["delivery"]["ownGovern"] == "GOVERN"
 
+    def test_knowledge_members_carry_mtime_and_entrycount(self, client):
+        """run_a607f2b0: the 4 DDD-doc hero cards need per-doc last-updated + entry
+        count. The knowledge-section members MUST carry mtime (human relative, from
+        filesystem stat — works for gitignored projects) + entryCount (per-file).
+        Non-knowledge members (identity/delivery/…) do NOT get these fields."""
+        detail = client.get("/api/ddd/brains/SwarmAI").json()
+        by_key = {s["key"]: s for s in detail["sections"]}
+        kmembers = by_key["knowledge"]["members"]
+        assert kmembers, "SwarmAI must have canonical ② docs"
+        for m in kmembers:
+            assert "mtime" in m and isinstance(m["mtime"], str) and m["mtime"], \
+                f"knowledge member {m['path']} missing human mtime"
+            assert "entryCount" in m and isinstance(m["entryCount"], int), \
+                f"knowledge member {m['path']} missing per-file entryCount"
+        # per-file entryCount must equal a direct parse of THAT file (not the project total)
+        from core.ddd_entry_lifecycle import parse_entries
+        from core.ddd_paths import ddd_path
+        tech = next((m for m in kmembers if m["path"].endswith("TECH.md")), None)
+        if tech:
+            p = ddd_path(_swarmai_dir(), "TECH.md")
+            assert tech["entryCount"] == len(parse_entries(p.read_text()))
+
+    def test_gallery_members_have_no_mtime(self, client):
+        """The mtime/entryCount enrichment is DETAIL-only — the cheap gallery
+        projection must not carry it (it has no sections/members at all)."""
+        b = {x["name"]: x for x in client.get("/api/ddd/brains").json()["brains"]}["SwarmAI"]
+        assert "sections" not in b  # gallery is the cheap projection, no member enrichment
+
     def test_delivery_and_refresher_are_single_files_not_root_dump(self, client):
         """Gate-1 revision: ⑤/⑥ resolve to '.' (root) — must be enumerated as the
         single well-known file, NEVER by iterdir-ing the whole project root."""
