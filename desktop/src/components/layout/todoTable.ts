@@ -6,14 +6,19 @@
  * ALL functions are pure + React-free so they unit-test independently. The React
  * surface (ToDoContent) is a thin renderer over these.
  *
- * Status derivation mirrors the old zoneOf precedence (todoZones.ts) collapsed to
- * 4 flat labels — review dimension is orthogonal to status, and a terminal
- * review/handled state wins over a dispatch signal (a dispatched-then-confirmed
- * todo is Completed, not In Progress):
- *   Completed  reviewState in (completed,confirmed,rejected) OR status=handled
- *   Cancelled  status in (cancelled, deleted)
+ * Status derivation collapses (status, reviewState, dispatched_*) to 4 flat labels.
+ * A terminal state wins over a dispatch signal (a dispatched-then-confirmed todo is
+ * Completed, not In Progress). Precedence (Gate-2 correctness fix):
+ *   Completed  status=handled OR reviewState in (confirmed, completed)
+ *   Cancelled  status in (cancelled, deleted) OR reviewState=rejected
  *   In Progress dispatched (session/tab/at) OR status=in_discussion
  *   Pending    everything else (pending / overdue)
+ *
+ * ⚠️ `reviewState='rejected'` is CANCELLED, not Completed. The backend reject flow
+ * sets status=cancelled + reviewState=rejected AND spawns a fresh pending todo — the
+ * rejected original was NOT completed (work was rejected), so among the 4 labels it is
+ * Cancelled. Lumping it into Completed (green) mislabels a rejected item as done — a
+ * real case because history() surfaces rejected terminal todos into the table.
  */
 import type { ToDo } from '../../types/todo';
 
@@ -40,15 +45,15 @@ const STATUS_RANK: Record<TodoStatusLabel, number> = {
 
 /** Derive the flat table status label from the raw ToDo (precedence-ordered). */
 export function deriveStatus(t: ToDo): TodoStatusLabel {
-  if (
-    t.reviewState === 'completed' ||
-    t.reviewState === 'confirmed' ||
-    t.reviewState === 'rejected' ||
-    t.status === 'handled'
-  ) {
+  // Cancelled is terminal-not-done: an explicit cancel/delete OR a REJECTED review
+  // (backend reject sets status=cancelled + reviewState=rejected). Checked BEFORE the
+  // Completed branch so a rejected item never renders as green "Completed" (Gate-2 HIGH).
+  if (t.status === 'cancelled' || t.status === 'deleted' || t.reviewState === 'rejected') {
+    return 'Cancelled';
+  }
+  if (t.status === 'handled' || t.reviewState === 'confirmed' || t.reviewState === 'completed') {
     return 'Completed';
   }
-  if (t.status === 'cancelled' || t.status === 'deleted') return 'Cancelled';
   if (t.dispatchedAt || t.dispatchedSessionId || t.dispatchedTabLabel || t.status === 'in_discussion') {
     return 'In Progress';
   }

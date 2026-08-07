@@ -34,15 +34,18 @@ function mk(over: Partial<ToDo> = {}): ToDo {
 const NOW = new Date('2026-08-07T12:00:00+00:00');
 
 describe('deriveStatus', () => {
-  it('Completed when reviewState is completed/confirmed/rejected OR status=handled', () => {
+  it('Completed when reviewState is completed/confirmed OR status=handled', () => {
     expect(deriveStatus(mk({ reviewState: 'completed' }))).toBe('Completed');
     expect(deriveStatus(mk({ reviewState: 'confirmed' }))).toBe('Completed');
-    expect(deriveStatus(mk({ reviewState: 'rejected' }))).toBe('Completed');
     expect(deriveStatus(mk({ status: 'handled' }))).toBe('Completed');
   });
-  it('Cancelled when status is cancelled or deleted', () => {
+  it('Cancelled when status is cancelled/deleted OR reviewState=rejected (terminal-not-done)', () => {
     expect(deriveStatus(mk({ status: 'cancelled' }))).toBe('Cancelled');
     expect(deriveStatus(mk({ status: 'deleted' }))).toBe('Cancelled');
+    // Gate-2 HIGH: a REJECTED review is Cancelled, NOT green Completed — the backend
+    // reject flow sets status=cancelled + reviewState=rejected; the work was rejected.
+    expect(deriveStatus(mk({ reviewState: 'rejected' }))).toBe('Cancelled');
+    expect(deriveStatus(mk({ status: 'cancelled', reviewState: 'rejected' }))).toBe('Cancelled');
   });
   it('In Progress when dispatched (any signal) or in_discussion', () => {
     expect(deriveStatus(mk({ dispatchedAt: '2026-08-02T00:00:00+00:00' }))).toBe('In Progress');
@@ -57,6 +60,8 @@ describe('deriveStatus', () => {
   it('Completed/Cancelled take precedence over a dispatch signal', () => {
     // a dispatched todo that got confirmed is Completed, not In Progress
     expect(deriveStatus(mk({ dispatchedAt: '2026-08-02T00:00:00+00:00', reviewState: 'confirmed' }))).toBe('Completed');
+    // a dispatched todo that got REJECTED is Cancelled, not In Progress
+    expect(deriveStatus(mk({ dispatchedAt: '2026-08-02T00:00:00+00:00', reviewState: 'rejected' }))).toBe('Cancelled');
   });
 });
 
