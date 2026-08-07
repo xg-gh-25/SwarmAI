@@ -232,11 +232,17 @@ describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () 
     expect(screen.getByTestId('cm-guideline-manual').textContent).toMatch(/STEERING|USER|[Ss]kill/);
   });
 
-  it('renders reference chips for the real hooks + skills that drive the brain', async () => {
+  it('describes the machinery as WHAT-IT-DOES, not as raw source-symbol identifiers', async () => {
     await openGuideline();
-    const chips = screen.getByTestId('cm-guideline-chips');
-    expect(chips.textContent).toMatch(/context_health|ddd_cultivation|correction_capture/);
-    expect(chips.textContent).toMatch(/s_persist|s_self-evolution/);
+    const machinery = screen.getByTestId('cm-guideline-chips');
+    // Redesign: the raw source symbols (context_health, s_persist, ...) are noise to
+    // a non-technical user (R20). The section now names what each mechanism DOES.
+    const txt = machinery.textContent ?? '';
+    // no raw hook/skill identifiers surfaced as content
+    expect(txt).not.toMatch(/context_health|memory_edit_guard|ddd_cultivation|knowledge_backflow|correction_capture|high_signal_capture/);
+    expect(txt).not.toMatch(/s_persist|s_memory-distill|s_self-evolution|s_project-manager|s_golden-case/);
+    // it still teaches the machinery — in plain language
+    expect(txt.length).toBeGreaterThan(20);
   });
 
   it('R30: bakes NO drifty numeric counts into the static content', async () => {
@@ -551,6 +557,130 @@ describe('CMBrainOverlay — AC7 honest over-budget alert', () => {
     await screen.findByTestId('cm-panel-context');
     const row = await screen.findByTestId('cm-file-row-MEMORY.md');
     // AC7: the redundant composition-% cell is dropped (token count is the one fact)
+    expect(row.querySelector('[data-testid="cm-file-pct"]')).toBeNull();
+  });
+});
+
+describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion + pct tint', () => {
+  // AC1: each opened queue carries an intent-bearing heading + a one-line explainer
+  // that states WHAT it governs and WHAT its conf means (knowledge vs governance).
+  it('Review (knowledge) list shows an intent-bearing heading + a conf-meaning explainer', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    await screen.findByTestId('cm-needs-list');
+    const explainer = await screen.findByTestId('cm-needs-explainer');
+    // states what this queue governs (knowledge sedimentation → DDD docs) …
+    expect(explainer.textContent).toMatch(/knowledge|sediment|DDD|doc/i);
+    // … and what conf means HERE (extraction quality, not should-sediment)
+    expect(explainer.textContent).toMatch(/extract/i);
+  });
+
+  it('Approve (governance) list shows an intent-bearing heading + a recurrence-conf explainer', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    await screen.findByTestId('cm-needs-list');
+    const explainer = await screen.findByTestId('cm-needs-explainer');
+    // governs rules/gates …
+    expect(explainer.textContent).toMatch(/rule|gate|govern/i);
+    // … conf here = recurrence confidence
+    expect(explainer.textContent).toMatch(/recurr/i);
+  });
+
+  // AC2: source_class rendered as a human phrase, not the raw CLASS_x token as the subject.
+  it('Approve card renders a human phrase for source_class (not raw CLASS_B as the subject)', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule');
+    // a human phrase for CLASS_B (infer-without-verify / verification family) appears
+    const cls = card.querySelector('[data-testid="cm-class-phrase"]');
+    expect(cls).not.toBeNull();
+    expect(cls!.textContent!.toLowerCase()).toMatch(/verif|observ|infer/);
+    // the phrase text is not merely the raw token
+    expect(cls!.textContent).not.toBe('CLASS_B');
+  });
+
+  it('source_class resolver falls back gracefully for an unmapped class code', async () => {
+    mockHealth({}, { governancePending: 1 });
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 1 } });
+      if (url.includes('governance/pending')) return Promise.resolve({ data: { proposals: [{ id: 'CLASS_Z:rule', source_class: 'CLASS_Z', proposal_kind: 'rule', occurrence_count: 3, proposed_rule: 'Some unmapped-class rule.', confidence: 0.9 }], total: 1 } });
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 1 } });
+    });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    const card = await screen.findByTestId('cm-proposal-CLASS_Z:rule');
+    // does not crash; the class-phrase slot renders SOMETHING readable (the raw code as graceful fallback is allowed)
+    const cls = card.querySelector('[data-testid="cm-class-phrase"]');
+    expect(cls).not.toBeNull();
+    expect(cls!.textContent!.length).toBeGreaterThan(0);
+  });
+
+  // AC3: low-confidence governance items are visually demoted (Approve branch only).
+  it('demotes a low-confidence governance item (conf < 0.7) as not-yet-actionable', async () => {
+    mockHealth({}, { governancePending: 1 });
+    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 1 } });
+      if (url.includes('governance/pending')) return Promise.resolve({ data: { proposals: [{ id: 'CLASS_C:rule', source_class: 'CLASS_C', proposal_kind: 'rule', occurrence_count: 3, proposed_rule: 'A low-confidence emerging rule.', confidence: 0.5 }], total: 1 } });
+      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 1 } });
+    });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    const card = await screen.findByTestId('cm-proposal-CLASS_C:rule');
+    // demoted marker present
+    expect(card.querySelector('[data-testid="cm-demoted"]')).not.toBeNull();
+  });
+
+  it('does NOT demote a high-confidence governance item (conf >= 0.7)', async () => {
+    mockHealth({}, { governancePending: 2 });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule'); // conf 0.9
+    expect(card.querySelector('[data-testid="cm-demoted"]')).toBeNull();
+  });
+
+  it('does NOT apply the demotion cut to Review items (Review conf = extraction quality)', async () => {
+    mockHealth(); // REVIEW_PROPS includes a 0.64 item
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    // the 0.64 Review proposal must NOT be demoted (0.7 cut is Approve-only)
+    const card = await screen.findByTestId('cm-proposal-proposal_e65e4b');
+    expect(card.querySelector('[data-testid="cm-demoted"]')).toBeNull();
+  });
+
+  // AC4: a thin pct-derived composition tint on the EXISTING token cell — NOT a new column.
+  it('renders a pct composition tint on the token cell without adding a percent column', async () => {
+    mockHealth();
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
+    const tint = row.querySelector('[data-testid="cm-pct-tint"]');
+    expect(tint).not.toBeNull();
+    // width encodes pct (48%) — sourced from payload, not invented
+    expect((tint as HTMLElement).style.width).toMatch(/48/);
+    // AC7 guard still holds: no redundant percent COLUMN element
     expect(row.querySelector('[data-testid="cm-file-pct"]')).toBeNull();
   });
 });

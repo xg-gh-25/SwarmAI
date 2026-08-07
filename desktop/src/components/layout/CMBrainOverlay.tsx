@@ -60,6 +60,45 @@ interface ContextHealthLite {
 
 type TabKey = 'context' | 'memory' | 'guideline';
 
+// ── Governance source_class → human phrase (R20: never surface a raw CLASS_x token
+// as the subject). Keyed on the canonical class name the backend serves. An unmapped
+// code falls back to a readable generic (never crashes, never a bare token as subject).
+// SOURCE OF TRUTH: backend/core/evolution/class_key.py + judgment_classifier — only
+// cognitive classes (CLASS_A/B/C, SESSION_LOW_QUALITY) reach the Approve queue today
+// (is_cognitive_class filters OPERATIONAL/UNCLASSIFIED). If the backend adds a class
+// (e.g. CLASS_D), add it here — until then the fallback below renders it gracefully.
+const CLASS_PHRASE: Record<string, string> = {
+  CLASS_A: 'over-confidence → skipped a step',
+  CLASS_B: 'inferred without verifying',
+  CLASS_C: 'fixed the wrong layer',
+  SESSION_LOW_QUALITY: 'low-quality session signal',
+};
+function classPhrase(sourceClass: string): string {
+  if (!sourceClass) return 'recurring pattern';
+  return CLASS_PHRASE[sourceClass] ?? `recurring pattern (${sourceClass})`;
+}
+
+// Below this recurrence-confidence, a governance proposal is not-yet-actionable and
+// is visually DEMOTED (display-only — the backend still serves it). Approve-queue ONLY:
+// Review conf is extraction quality, a different axis, and is never cut here.
+const GOV_ACTIONABLE_CONF = 0.7;
+
+// Per-queue meta: the intent-bearing label + a one-line explainer stating WHAT the
+// queue governs AND what its `conf` means there — the two queues govern different
+// objects (knowledge sedimentation vs rule/gate governance) and their conf axes differ.
+const QUEUE_META: Record<'review' | 'approve', { label: string; conf_meaning: string; explainer: string }> = {
+  review: {
+    label: 'Knowledge',
+    conf_meaning: 'extraction quality',
+    explainer: 'Proposals to sediment learning into the DDD knowledge docs. Here “conf” = extraction quality (how cleanly the point was captured), not whether it should be kept — that judgment is yours.',
+  },
+  approve: {
+    label: 'Governance',
+    conf_meaning: 'recurrence confidence',
+    explainer: 'Proposed rules/gates to govern how the agent behaves. Here “conf” = recurrence confidence (how sure a real, repeating pattern warrants a rule). Low-confidence items are still emerging — demoted below.',
+  },
+};
+
 const OWNER_LABEL: Record<TokenFileRow['owner'], string> = {
   system: 'system',
   user: 'user',
@@ -212,8 +251,8 @@ export function CMBrainContent() {
               </div>
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
-                <NeedsBtn testid="cm-needs-review" label="Review" count={reviewCount} tint="#5fc99a" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
-                <NeedsBtn testid="cm-needs-approve" label="Approve" count={approveCount} tint="#d08a4a" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
+                <NeedsBtn testid="cm-needs-review" label={QUEUE_META.review.label} count={reviewCount} tint="#5fc99a" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
+                <NeedsBtn testid="cm-needs-approve" label={QUEUE_META.approve.label} count={approveCount} tint="#d08a4a" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
               </div>
             )}
           </div>
@@ -335,8 +374,12 @@ function ProposalCard({
   const [state, setState] = useState<null | string>(null);
   const conf = typeof item.confidence === 'number' ? (item.confidence as number) : null;
 
+  // Approve-queue ONLY: demote a below-threshold (not-yet-actionable) governance item.
+  // Review conf is extraction quality (different axis) → never demoted here.
+  const demoted = kind === 'approve' && conf != null && conf < GOV_ACTIONABLE_CONF;
+
   // What / Where / Why differ by queue.
-  let what: string, where: ReactNode, why: string, tag: ReactNode = null;
+  let what: string, where: ReactNode, why: string, tag: ReactNode = null, classPhraseNode: ReactNode = null;
   if (kind === 'review') {
     const doc = String(item.target_doc ?? '');
     const section = String(item.target_section ?? '');
@@ -347,10 +390,23 @@ function ProposalCard({
     const cls = String(item.source_class ?? '');
     const occ = item.occurrence_count;
     const proposalKind = String(item.proposal_kind ?? 'rule');
+    const phrase = classPhrase(cls);
     what = `Add ${proposalKind}: ${String(item.proposed_rule ?? '(no rule text)')}`;
     where = <>governance {proposalKind}</>;
-    why = cls ? `${cls}${typeof occ === 'number' ? ` · recurred ${occ}×` : ''}` : '';
-    if (cls) tag = <span className="mr-1.5 rounded px-1.5 py-[1px] font-mono text-[10px] font-bold" style={{ color: '#d0524a', background: 'color-mix(in srgb, #d0524a 14%, transparent)' }}>{cls}{typeof occ === 'number' ? ` ·${occ}×` : ''}</span>;
+    // Why = the human-readable failure pattern + how often it recurred (no raw CLASS_x subject).
+    why = `${phrase}${typeof occ === 'number' ? ` · recurred ${occ}×` : ''}`;
+    // Tag carries the human phrase (data-testid=cm-class-phrase), the raw code demoted to a title tooltip.
+    classPhraseNode = (
+      <span
+        data-testid="cm-class-phrase"
+        title={cls}
+        className="mr-1.5 rounded px-1.5 py-[1px] text-[10px] font-semibold"
+        style={{ color: '#d0524a', background: 'color-mix(in srgb, #d0524a 14%, transparent)' }}
+      >
+        {phrase}
+      </span>
+    );
+    tag = classPhraseNode;
   }
 
   async function act(decision: 'accept' | 'reject' | 'defer') {
@@ -359,13 +415,22 @@ function ProposalCard({
   }
 
   return (
-    <div data-testid={`cm-proposal-${id}`} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3.5 py-3" style={{ opacity: state ? 0.4 : 1 }}>
+    <div
+      data-testid={`cm-proposal-${id}`}
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3.5 py-3"
+      style={{ opacity: state ? 0.4 : demoted ? 0.6 : 1 }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div data-testid="cm-card-what" className="text-sm font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
           <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{where}</div>
+          {demoted && (
+            <div data-testid="cm-demoted" className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-[1px] text-[10px] font-medium" style={{ color: '#7c8194', background: 'color-mix(in srgb, #7c8194 12%, transparent)' }}>
+              ⏳ still emerging — not yet actionable
+            </div>
+          )}
         </div>
-        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-medium text-[var(--color-text-faint)]">conf {conf}</span>}
+        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-[10px] font-medium text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
       </div>
       {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-[12px] leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
       <div className="mt-2.5 flex items-center justify-between">
@@ -397,18 +462,23 @@ function NeedsList({
   onDecide: (kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
 }) {
   const items = meta.items;
+  const qm = QUEUE_META[kind];
   return (
     <>
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
         <button data-testid="cm-needs-back" onClick={onBack} className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]">← Back to {backLabel}</button>
-        <span className="text-sm font-semibold text-[var(--color-text)]">{meta.label} <span className="font-mono text-[var(--color-text-faint)]">({meta.count})</span></span>
+        <span className="text-sm font-semibold text-[var(--color-text)]">{qm.label} <span className="font-mono text-[var(--color-text-faint)]">({meta.count})</span></span>
+      </div>
+      {/* AC1: one-line explainer — what this queue governs + what its conf means here. */}
+      <div data-testid="cm-needs-explainer" className="border-b border-[var(--color-border)] px-4 py-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+        {qm.explainer}
       </div>
       <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2.5">
         {items === null ? (
           // Gate-2 HIGH-1: loading ≠ empty — never a false "nothing to approve".
-          <div data-testid="cm-needs-loading" className="text-[11px] text-[var(--color-text-faint)]">Loading {meta.label.toLowerCase()}…</div>
+          <div data-testid="cm-needs-loading" className="text-[11px] text-[var(--color-text-faint)]">Loading {qm.label.toLowerCase()}…</div>
         ) : items.length === 0 ? (
-          <div className="text-[11px] text-[var(--color-text-faint)]">Nothing in {meta.label.toLowerCase()} right now.</div>
+          <div className="text-[11px] text-[var(--color-text-faint)]">Nothing in {qm.label.toLowerCase()} right now.</div>
         ) : (
           items.map((it, i) => (
             // key includes kind — a re-appearing same-id in a DIFFERENT queue remounts
@@ -431,7 +501,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
       </div>
       <div className="mb-3 text-[11px] text-[var(--color-text-faint)]">
         🔒 P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
-        Health: fresh / idle / growing / oversized
+        token-cell tint = share of the budget · Health: fresh / idle / growing / oversized
       </div>
       {rows.length === 0 && (
         <div className="py-8 text-center text-sm text-[var(--color-text-faint)]">
@@ -464,7 +534,27 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           />
           <span className="flex-1 min-w-0 truncate text-sm font-medium text-[var(--color-text)]">{f.name}</span>
           <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
-          <span className="w-14 shrink-0 text-right font-mono text-xs text-[var(--color-text-muted)]">{fmtTokens(f.tokens)}</span>
+          {/* AC4: composition tint — the served pct as a thin owner-tinted underlay behind
+              the EXISTING token cell (answers "compared to what?"). NOT a new column: no
+              width added, no cm-file-pct element (AC7's redundant-%-column stays deleted).
+              Gate-2 UX: LEFT-anchored + 13% opacity (matches the health-pill wash) so it
+              reads as a subtle share cue, not a right-hugging progress bar behind the
+              right-aligned number; min 4% width so a tiny pct is a wash, never a sub-glyph
+              sliver. Title decodes the cue (the tint is otherwise unlabeled). */}
+          <span
+            className="relative w-14 shrink-0 overflow-hidden rounded-sm text-right font-mono text-xs text-[var(--color-text-muted)]"
+            title={typeof f.pct === 'number' ? `${f.pct}% of the context budget` : undefined}
+          >
+            {typeof f.pct === 'number' && f.pct > 0 && (
+              <span
+                data-testid="cm-pct-tint"
+                aria-hidden
+                className="pointer-events-none absolute inset-y-0 left-0 rounded-sm"
+                style={{ width: `${Math.max(4, Math.min(100, f.pct))}%`, background: `color-mix(in srgb, ${OWNER_TINT[f.owner]} 13%, transparent)` }}
+              />
+            )}
+            <span className="relative">{fmtTokens(f.tokens)}</span>
+          </span>
           {f.health && (
             <span
               data-testid="cm-health"
@@ -672,8 +762,21 @@ const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: strin
   { icon: '🔌', name: 'MCP tiers', desc: 'always-on vs on-demand tool servers', tag: 'config' },
   { icon: '🗂', name: 'Create a DDD', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
 ];
-const HOOK_CHIPS = ['context_health', 'memory_edit_guard', 'ddd_cultivation', 'knowledge_backflow', 'correction_capture', 'session_briefing', 'high_signal_capture'];
-const SKILL_CHIPS = ['s_persist', 's_memory-distill', 's_self-evolution', 's_project-manager', 's_ddd-*', 's_golden-case'];
+// The machinery, described by WHAT IT DOES — not by raw source-symbol names (R20:
+// context_health / s_persist mean nothing to a non-technical user). Each line is a
+// plain-language capability; the underlying hook/skill is deliberately not surfaced.
+const MACHINERY_AUTO = [
+  'Guards the context budget + keeps the knowledge index fresh',
+  'Grows the DDD docs from each session (quality-gated)',
+  'Decays idle knowledge, archives what stops earning its place',
+  'Captures corrections + detects repeating failure patterns',
+];
+const MACHINERY_MANUAL = [
+  'Save a lesson or decision into memory / a DDD doc',
+  'Distill raw session activity into curated memory',
+  'Propose or retire a governance rule',
+  'Create a project brain + validate its knowledge quality',
+];
 
 function GuidelineTab() {
   return (
@@ -722,16 +825,22 @@ function GuidelineTab() {
           Under the hood — the machinery
         </div>
         <div data-testid="cm-guideline-chips" className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[11px] text-[var(--color-text-muted)]">Hooks (fire automatically):</span>
-            {HOOK_CHIPS.map((c) => (
-              <span key={c} className="rounded-md border border-[color-mix(in_srgb,#5fc99a_35%,var(--color-border))] px-1.5 py-[1px] font-mono text-[10px] text-[var(--color-text-muted)]">{c}</span>
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-[var(--color-text-muted)]">Runs automatically:</span>
+            {MACHINERY_AUTO.map((c) => (
+              <div key={c} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: '#5fc99a' }} aria-hidden />
+                <span>{c}</span>
+              </div>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-[11px] text-[var(--color-text-muted)]">Skills (you invoke):</span>
-            {SKILL_CHIPS.map((c) => (
-              <span key={c} className="rounded-md border border-[color-mix(in_srgb,#4a8fb0_35%,var(--color-border))] px-1.5 py-[1px] font-mono text-[10px] text-[var(--color-text-muted)]">{c}</span>
+          <div className="mt-1 flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-[var(--color-text-muted)]">You trigger:</span>
+            {MACHINERY_MANUAL.map((c) => (
+              <div key={c} className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: '#4a8fb0' }} aria-hidden />
+                <span>{c}</span>
+              </div>
             ))}
           </div>
         </div>
